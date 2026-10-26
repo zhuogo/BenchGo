@@ -5,7 +5,16 @@ on:
     tags:
       - 'benchgo-v*'
   workflow_dispatch:
-
+    inputs:
+      package:
+        description: Package directory to publish
+        required: true
+        default: plugins/commander
+        type: choice
+        options:
+          - plugins/commander
+          - packages/benchgo-cli
+          - packages/benchgo-relay
 permissions:
   contents: read
   id-token: write
@@ -15,10 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        package:
-          - packages/benchgo-cli
-          - packages/benchgo-relay
-          - plugins/commander
+        package: ${{ github.event_name == 'workflow_dispatch' && fromJSON(format('["{0}"]', inputs.package)) || fromJSON('["packages/benchgo-cli","packages/benchgo-relay","plugins/commander"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
