@@ -56,7 +56,7 @@ try {
     const incoming = join(base, '.seed-' + randomUUID()); await mkdir(incoming, { mode: 0o700 });
     try {
       await run('tar', ['-xzf', archive, '-C', incoming, '--no-same-owner', '--no-same-permissions']);
-      const helper = await import(pathToFileURL(join(incoming, 'node_modules/benchgo/shared/plugin-install.mjs')).href);
+      const helper = await import(pathToFileURL(join(incoming, 'node_modules/benchgo-plugin/shared/plugin-install.mjs')).href);
       const profile = join(base, 'home/profiles/web');
       if (!(await present(join(profile, 'package.json')))) {
         const boot = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js')).href);

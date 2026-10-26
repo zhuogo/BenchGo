@@ -18,10 +18,10 @@ async function fixture(t) {
   const seed = async (version, shared = []) => {
     const prefix = `seed-${version}`;
     await put(`${prefix}/release.json`, { schemaVersion: 1, version, platform: process.platform, arch: process.arch, shared });
-    await put(`${prefix}/node_modules/benchgo/package.json`, { name: 'benchgo', version, type: 'module', main: './src/plugin.mjs' });
-    for (const file of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'voice/src/plugin.mjs', 'cordis.patch.yml']) await put(`${prefix}/node_modules/benchgo/${file}`, 'export default true;');
+    await put(`${prefix}/node_modules/benchgo-plugin/package.json`, { name: 'benchgo-plugin', version, type: 'module', main: './src/plugin.mjs' });
+    for (const file of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'voice/src/plugin.mjs', 'cordis.patch.yml']) await put(`${prefix}/node_modules/benchgo-plugin/${file}`, 'export default true;');
     const bundleName = releaseBundleName(version);
-    await put(`${prefix}/node_modules/${bundleName}/package.json`, { name: bundleName, version, dependencies: { 'benchgo': version }, dsh: { bundle: { patch: './cordis.patch.yml' } } });
+    await put(`${prefix}/node_modules/${bundleName}/package.json`, { name: bundleName, version, dependencies: { 'benchgo-plugin': version }, dsh: { bundle: { patch: './cordis.patch.yml' } } });
     await put(`${prefix}/node_modules/${bundleName}/cordis.patch.yml`, '[]\n');
     const directory = join(root, prefix), archive = join(root, `${version}.tar.gz`);
     await tar.c({ file: archive, cwd: directory, gzip: true }, ['release.json', 'node_modules']);
@@ -37,7 +37,7 @@ test('complete archive installs offline, activates atomically and rolls back wit
   let state = await activateRelease({ profile, release: first, enabled: true, appVersion: '0.1.0' });
   assert.equal(state.enabled, true);
   const wrapperRequire = createRequire(await realpath(join(profile, 'node_modules', state.bundleName, 'package.json')));
-  assert.equal(await realpath(wrapperRequire.resolve('benchgo')), await realpath(join(first.pluginPath, 'src/plugin.mjs')));
+  assert.equal(await realpath(wrapperRequire.resolve('benchgo-plugin')), await realpath(join(first.pluginPath, 'src/plugin.mjs')));
   const second = await prepareRelease(await seed('0.1.1'));
   state = await activateRelease({ profile, release: second });
   assert.equal(state.version, '0.1.1');
@@ -153,7 +153,7 @@ test('shared services link to matching official runtime and conflicting old seal
   const options = await seed('0.1.0', [{ name: '@deepseek-ai/dsh-llm', version: '0.2.1-alpha.3' }]);
   const release = await prepareRelease({ ...options, runtime });
   assert.equal(await realpath(join(release.directory, 'node_modules/@deepseek-ai/dsh-llm')), await realpath(join(runtime, 'node_modules/@deepseek-ai/dsh-llm')));
-  await put('runtime/node_modules/benchgo/package.json', { name: 'benchgo', version: '0.0.1' });
+  await put('runtime/node_modules/benchgo-plugin/package.json', { name: 'benchgo-plugin', version: '0.0.1' });
   await assert.rejects(prepareRelease({ ...await seed('0.1.1'), runtime }), /新版应用/);
   assert.equal((await getInstallState(profile)).managed, false);
 });

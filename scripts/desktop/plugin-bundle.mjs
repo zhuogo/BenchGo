@@ -9,9 +9,9 @@ const helperBase = existsSync(fileURLToPath(new URL('./shared/plugin-install.mjs
 const { activateRelease, getInstallState, prepareRelease, releaseBundleName } = await import(new URL(`${helperBase}plugin-install.mjs`, import.meta.url));
 const { compareVersions } = await import(new URL(`${helperBase}update-feed.mjs`, import.meta.url));
 
-const PLUS = 'benchgo';
+const PLUS = 'benchgo-plugin';
 const LEGACY_PLUS = '@dowork/commander';
-const LEGACY_NAMES = [LEGACY_PLUS];
+const LEGACY_NAMES = ['benchgo', LEGACY_PLUS];
 const COMPOSITION = '@dowork/benchgo-desktop';
 const MARKER = '.benchgo-enrolled.json';
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));

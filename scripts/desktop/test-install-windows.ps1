@@ -141,13 +141,13 @@ const ctx = new Context();
 try {
   await ctx.plugin(PluginPackages, { resolution });
   const parent = pathToFileURL(join(profile, 'package.json')).href;
-  const selected = ctx.pluginPackages.packageOf('benchgo', parent);
+  const selected = ctx.pluginPackages.packageOf('benchgo-plugin', parent);
   assert.equal(selected?.version, expectedVersion, 'actual plugin metadata must match the installed version');
   assert.equal(realpathSync.native(selected.dir), realpathSync.native(join(expectedDirectory, 'node_modules/benchgo-plugin')));
   const require = createRequire(parent);
-  assert.equal(JSON.parse(readFileSync(require.resolve('benchgo/package.json'), 'utf8')).version, expectedVersion);
-  assert.equal(realpathSync.native(require.resolve('benchgo')), realpathSync.native(join(selected.dir, 'src/plugin.mjs')));
-  assert.equal(realpathSync.native(require.resolve('benchgo/client')), realpathSync.native(join(selected.dir, 'lib/client.js')));
+  assert.equal(JSON.parse(readFileSync(require.resolve('benchgo-plugin/package.json'), 'utf8')).version, expectedVersion);
+  assert.equal(realpathSync.native(require.resolve('benchgo-plugin')), realpathSync.native(join(selected.dir, 'src/plugin.mjs')));
+  assert.equal(realpathSync.native(require.resolve('benchgo-plugin/client')), realpathSync.native(join(selected.dir, 'lib/client.js')));
   console.log(`Actual profile plugin resolution passed: ${expectedVersion}`);
 } finally { await ctx.fiber.dispose(); }
 '@
@@ -161,7 +161,7 @@ try {
     } finally { $env:ELECTRON_RUN_AS_NODE = $previousNode }
 }
 function Add-LegacyPluginShadow {
-    $directory = Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/benchgo-plugin'
+    $directory = Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/benchgo'
     if (Test-Path $directory) { throw 'Legacy shadow fixture must not overwrite an existing package' }
     New-Item (Join-Path $directory 'src') -ItemType Directory -Force | Out-Null
     New-Item (Join-Path $directory 'lib') -ItemType Directory -Force | Out-Null
@@ -179,7 +179,7 @@ try {
     Assert-PluginResolution $installed '0.1.6' (Join-Path $env:DSH_HOME 'profiles/desktop')
     Install-Silently $installer.FullName
     Assert-Plus $installed
-    if (Test-Path (Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/benchgo-plugin')) { throw 'Reinstall left a legacy physical plugin shadow' }
+    if (Test-Path (Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/benchgo')) { throw 'Reinstall left a legacy physical plugin shadow' }
     Write-Output 'Same-version reinstall repaired the legacy physical plugin and resolved the current version.'
 
     if ($PreviousInstaller) {

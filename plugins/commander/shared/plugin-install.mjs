@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { compareVersions } from './update-feed.mjs';
 
 export const PLUS_PACKAGE = 'benchgo-plugin';
+export const LEGACY_PLUGIN_PACKAGE = 'benchgo';
 export const LEGACY_BUNDLES = ['@dowork/benchgo-desktop', '@dowork/commander', 'benchgo'];
 export const releaseBundleName = version => `@benchgo/desktop-${createHash('sha256').update(version).digest('hex').slice(0, 16)}`;
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
@@ -54,7 +55,7 @@ async function attachOfficialPackages(release, runtime) {
       if (dirname(current) === current) return null;
     }
   };
-  if (await findPackage(PLUS_PACKAGE)) throw new Error('此桌面版本仍内置锁定插件，请先安装支持独立插件更新的新版应用');
+  if (await findPackage(PLUS_PACKAGE) || await findPackage(LEGACY_PLUGIN_PACKAGE)) throw new Error('此桌面版本仍内置锁定插件，请先安装支持独立插件更新的新版应用');
   for (const item of release.shared) {
     const name = typeof item === 'string' ? item : item.name;
     if (typeof name !== 'string' || !/^@deepseek-ai\/[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error('插件声明了不受支持的共享服务');
@@ -166,11 +167,13 @@ async function activateLocked({ profile, release, enabled, appVersion, migrateLe
   manifest.dsh.plusInstall = { schemaVersion: 1, version: checked.version, directory: checked.directory, bundleName: checked.bundleName, root: checked.root, previous, appVersion: appVersion ?? before.appVersion ?? null };
   // Native lookup inside the profile wins over the selected bundle's fallback.
   // Only the offline installer may move an old package a running Host can import.
-  const shadow = join(profile, 'node_modules', PLUS_PACKAGE);
-  let backup;
-  if (await present(shadow)) {
+  const shadows = [LEGACY_PLUGIN_PACKAGE, PLUS_PACKAGE].filter((name, index, names) => names.indexOf(name) === index).map(name => ({ name, path: join(profile, 'node_modules', name) }));
+  let shadow, backup;
+  for (const candidate of shadows) if (await present(candidate.path)) {
+    if (shadow) throw new Error('插件安装位置被其他内容占用，原文件已保留');
+    shadow = candidate.path;
     const legacy = await json(join(shadow, 'package.json'));
-    if (legacy.name !== PLUS_PACKAGE) throw new Error('插件安装位置被其他内容占用，原文件已保留');
+    if (legacy.name !== candidate.name) throw new Error('插件安装位置被其他内容占用，原文件已保留');
     assertReleaseVersion(legacy.version);
     if (migrateLegacy || await realpath(shadow) !== await realpath(checked.pluginPath)) {
       if (!migrateLegacy) throw new Error('检测到旧版插件残留，请关闭BenchGo并重新运行新版安装程序');

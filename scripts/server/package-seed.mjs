@@ -27,7 +27,7 @@ export async function packageServerSeed({ output = join(root, 'plugins/link/dist
     await symlink(join(plugin, 'node_modules'), join(clean, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     const seed = join(temporary, 'seed');
     const staged = stagePluginBundle({ plugin: clean, output: seed, platform: 'linux', arch: 'x64' });
-    await rm(join(seed, 'node_modules/benchgo/node_modules/@anthropic-ai'), { recursive: true, force: true });
+    await rm(join(seed, 'node_modules/benchgo-plugin/node_modules/@anthropic-ai'), { recursive: true, force: true });
     // The payload has no platform bindings; optional native SDK is installed separately when needed.
     const releaseFile = join(seed, 'release.json');
     const release = JSON.parse(await readFile(releaseFile)); delete release.arch;

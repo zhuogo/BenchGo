@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "harnessVersion": "0.2.1-alpha.3",
   "harnessCommit": "571902028a75c64c1d767f4ae5fd099485f0ddf0",
-  "pluginVersion": "0.0.1",
-  "bundle": "@benchgo/desktop-ee51afda5e1e26e6",
-  "sha256": "8a2dae05b9cdadf4142d45b8b3c1153a8e25f2ce1ddea7ab3cff5dcc3bd32a44"
+  "pluginVersion": "0.1.0",
+  "bundle": "@benchgo/desktop-6ad9613a455798d6",
+  "sha256": "0133b2da525502917cea971c13e122c4a2d680bddb05961f85b3c944206f3c14"
 }

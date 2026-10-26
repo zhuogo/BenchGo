@@ -16,7 +16,7 @@ try {
  const home=join(dir,'home'), profile=join(home,'profiles/web'), workspace=join(dir,'workspace');
  await mkdir(profile,{recursive:true});await mkdir(workspace);await mkdir(join(dir,'commander/link'),{recursive:true});await writeFile(join(dir,'commander/link/devices.json'),JSON.stringify({enabled:true,host:'127.0.0.1',port:0,publicUrl:publicOrigin,devices:[]}));
  await symlink(dependencies,join(profile,'node_modules'),process.platform === 'win32' ? 'junction' : 'dir');
- await writeFile(join(profile,'package.json'),JSON.stringify({name:'link-assembly-probe',private:true,dependencies:{'benchgo':`link:${root}/plugins/commander`},dsh:{profile:{bundles:['@deepseek-ai/dsh-base','@deepseek-ai/dsh-web-app','benchgo']}}}));
+ await writeFile(join(profile,'package.json'),JSON.stringify({name:'link-assembly-probe',private:true,dependencies:{'benchgo-plugin':`link:${root}/plugins/commander`},dsh:{profile:{bundles:['@deepseek-ai/dsh-base','@deepseek-ai/dsh-web-app','benchgo-plugin']}}}));
  const probe=join(dir,'probe.mjs');
  await writeFile(probe,`export const inject=['connection']; export function apply(ctx) { ctx.effect(()=>ctx.connection.fetch.register({path:'/api/assembly-probe',methods:['POST'],requestBody:'buffered',fetch:()=>Response.json({services:Object.fromEntries(['connection','workspaceRegistry','typertGateway','sessionController','webServer','clientModules','commander'].map(k=>[k,Boolean(ctx.get(k))])),entries:Array.from(ctx.loader.entries()).filter(entry=>['commander','commander-link','connection','modules','session-controller','typert-gateway'].includes(entry.options.id)).map(entry=>({id:entry.options.id,disabled:entry.disabled,state:entry.fiber?.state}))})}));}`);
  await writeFile(join(profile,'cordis.yml'),'[]\n');

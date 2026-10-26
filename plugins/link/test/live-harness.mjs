@@ -52,7 +52,7 @@ try {
   await new Promise(resolve => modelServer.listen(0, '127.0.0.1', resolve));
   const modelUrl = `http://127.0.0.1:${modelServer.address().port}/v1`;
   await mkdir(profile, { recursive: true }); await mkdir(workspace);
-  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-link-live-profile', private: true, dependencies: { 'benchgo': `link:${root}/plugins/commander` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'benchgo'] } } }));
+  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-link-live-profile', private: true, dependencies: { 'benchgo-plugin': `link:${root}/plugins/commander` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'benchgo-plugin'] } } }));
   await writeFile(join(profile, 'cordis.yml'), '[]\n');
   await writeFile(join(profile, 'cordis.patch.yml'), [
     '- id: commander', `  config:`, `    dataDir: ${JSON.stringify(join(directory, 'commander'))}`,

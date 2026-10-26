@@ -21,9 +21,9 @@ try {
   await symlink(join(root, 'deepseek-harness/apps/cli'), join(runtime, 'node_modules/@deepseek-ai/dsh'), 'dir');
   for (const name of ['dsh-app-boot', 'dsh-atomic-write']) await symlink(join(root, 'deepseek-harness/apps/cli/node_modules/@deepseek-ai', name), join(runtime, 'node_modules/@deepseek-ai', name), 'dir');
   await mkdir(profile, { recursive: true });
-  await writeFile(join(profile, 'package.json'), JSON.stringify({ private: true, dependencies: { 'benchgo': 'link:' + join(root, 'plugins/commander') }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'benchgo'] } } }));
+  await writeFile(join(profile, 'package.json'), JSON.stringify({ private: true, dependencies: { 'benchgo-plugin': 'link:' + join(root, 'plugins/commander') }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'benchgo-plugin'] } } }));
   await mkdir(join(profile, 'node_modules'), { recursive: true });
-  await symlink(join(root, 'plugins/commander'), join(profile, 'node_modules/benchgo'), 'dir');
+  await symlink(join(root, 'plugins/commander'), join(profile, 'node_modules/benchgo-plugin'), 'dir');
   await writeFile(join(profile, 'cordis.yml'), '[]\n');
   await writeFile(join(profile, 'cordis.patch.yml'), ['- id: commander', '  config:', '    dataDir: ' + JSON.stringify(dataDir), '- id: session-log-deepseek', '  config:', '    enabled: false', '- id: session-telemetry-otel', '  disabled: true', ''].join('\n'));
   const webPort = await port(), linkPort = await port();
