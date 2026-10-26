@@ -1,4 +1,4 @@
-# @benchgo/relay
+# benchgo-relay
 
 BenchGo 自托管中继运行时边界。中继独立于工作台，不包含项目、会话、模型或 owner
 数据；运行时只转发已授权设备的 Link 流量。

@@ -1,5 +1,5 @@
 {
-  "name": "@benchgo/relay",
+  "name": "benchgo-relay",
   "version": "0.0.1",
   "repository": { "type": "git", "url": "https://github.com/zhuogo/BenchGo.git" },
   "publishConfig": { "access": "public" },

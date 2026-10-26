@@ -25,5 +25,5 @@ test('rejects unknown scopes', async () => {
 });
 
 test('refuses to install a relay from the workbench package', async () => {
-  await assert.rejects(() => run(['relay', 'install', '--config', '/tmp/relay.json']), /@benchgo\/relay/);
+  await assert.rejects(() => run(['relay', 'install', '--config', '/tmp/relay.json']), /benchgo-relay/);
 });

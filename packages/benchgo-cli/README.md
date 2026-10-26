@@ -18,7 +18,7 @@ benchgo server <install|update|status|start|stop|restart>
 中继服务器是另一个包：
 
 ```sh
-npm install -g @benchgo/relay
+npm install -g benchgo-relay
 benchgo-relay install --config /path/to/relay.json
 ```
 

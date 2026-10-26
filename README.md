@@ -13,7 +13,7 @@ BenchGo 基于官方 DeepSeek Harness，不修改其源码。桌面、网页和 
 | | BenchGo | BenchGo Relay |
 | --- | --- | --- |
 | 是什么 | 完整工作台 | 中继服务器 |
-| 安装包 | `benchgo` | `@benchgo/relay` |
+| 安装包 | `benchgo` | `benchgo-relay` |
 | 做什么 | 项目、会话、模型、设备连接 | 只转发已授权设备的流量 |
 | 中继 | 可以连接一台外部中继，本身不是中继 | 单独安装，不含工作台 |
 
@@ -37,7 +37,7 @@ benchgo install
 只在单独的中继服务器上执行：
 
 ```sh
-npm install -g @benchgo/relay
+npm install -g benchgo-relay
 benchgo-relay install --config /path/to/relay.json
 ```
 

@@ -25,7 +25,7 @@ function usage() {
 
 说明:
   本命令安装和管工作台。工作台可以连接外部中继，但不安装中继服务。
-  中继服务器使用独立包 @benchgo/relay 的 benchgo-relay。`;
+  中继服务器使用独立包 benchgo-relay 的 benchgo-relay。`;
 }
 
 function parseArgs(argv) {
@@ -114,7 +114,7 @@ export async function run(argv) {
   const [scope, action] = positionals;
   if (scope === 'install' || scope === 'update') return serverCommand(scope, options);
   if (scope === 'server') return serverCommand(action, options);
-  if (scope === 'relay') throw new Error('中继服务器不随工作台安装。请使用 npm install -g @benchgo/relay，然后运行 benchgo-relay');
+  if (scope === 'relay') throw new Error('中继服务器不随工作台安装。请使用 npm install -g benchgo-relay，然后运行 benchgo-relay');
   throw new Error(`未知命令：${scope}`);
 }
 
