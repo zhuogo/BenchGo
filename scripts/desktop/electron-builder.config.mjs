@@ -33,11 +33,11 @@ config.beforeBuild = async (...args) => {
   await copyFile(`${root}/deepseek-harness/apps/desktop/.desktop-build/targets/win-x64/installer-ui/window-frame.dll`, `${brandOutput}/window-frame.dll`);
   return result;
 };
-config.win.icon = `${root}/assets/brand/benchgo-logo.png`;
+config.win.icon = `${brandOutput}/benchgo-icon.png`;
 config.nsis.installerIcon = config.nsis.uninstallerIcon = `${brandOutput}/benchgo.ico`;
 config.nsis.installerSidebar = config.nsis.uninstallerSidebar = `${brandOutput}/uninstaller-sidebar.bmp`;
 config.extraResources = config.extraResources.map(resource => resource.to === 'icon.png'
-  ? { from: `${root}/assets/brand/benchgo-logo.png`, to: 'icon.png' }
+  ? { from: `${brandOutput}/benchgo-icon.png`, to: 'icon.png' }
   : resource.to === 'tray.ico' ? { from: `${brandOutput}/benchgo.ico`, to: 'tray.ico' } : resource);
 // electron-builder drops file mappings whose source is outside the desktop app dir.
 // Swap the compiled entry in only while app files are collected, then restore the official build.
