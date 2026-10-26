@@ -18,7 +18,6 @@
     "./link-plugin": "./src/link-plugin.mjs",
     "./runtime": "./src/runtime.mjs",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json",
     "./icon": "./assets/icon.svg",
     "./locale/*.json": "./locale/*.json"
   },
