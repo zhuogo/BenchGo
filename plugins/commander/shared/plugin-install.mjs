@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { compareVersions } from './update-feed.mjs';
 
-export const PLUS_PACKAGE = 'benchgo';
+export const PLUS_PACKAGE = 'benchgo-plugin';
 export const LEGACY_BUNDLES = ['@dowork/benchgo-desktop', '@dowork/commander', 'benchgo'];
 export const releaseBundleName = version => `@benchgo/desktop-${createHash('sha256').update(version).digest('hex').slice(0, 16)}`;
 const json = async file => JSON.parse(await readFile(file, 'utf8'));

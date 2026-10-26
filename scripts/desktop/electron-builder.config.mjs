@@ -91,7 +91,7 @@ config.afterPack = async context => {
   verifyStartupBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
   extractFile(`${context.appOutDir}/resources/app.asar`, 'renderer/splash.html');
   const seed = `${context.appOutDir}/resources/benchgo/seed`;
-  for (const file of ['release.json', 'node_modules/benchgo/package.json', 'node_modules/benchgo/src/plugin.mjs', 'node_modules/benchgo/lib/client.js', 'node_modules/benchgo/lib/link.mjs', 'node_modules/benchgo/lib/link-web/index.html', 'node_modules/benchgo/voice/src/plugin.mjs']) {
+  for (const file of ['release.json', 'node_modules/benchgo-plugin/package.json', 'node_modules/benchgo-plugin/src/plugin.mjs', 'node_modules/benchgo-plugin/lib/client.js', 'node_modules/benchgo-plugin/lib/link.mjs', 'node_modules/benchgo-plugin/lib/link-web/index.html', 'node_modules/benchgo-plugin/voice/src/plugin.mjs']) {
     await access(`${seed}/${file}`);
   }
 };

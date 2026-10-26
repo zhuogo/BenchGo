@@ -52,7 +52,7 @@ try {
   if (!Array.isArray(sidebar.projects) || !Array.isArray(sidebar.sessions)) throw new Error('Packaged sidebar state is incomplete');
   const recent = await sidebarCall({ action: 'ensureRecent' });
   if (!recent.workspaceId || !recent.path || !(await sidebarCall({ action: 'state' })).projects.some(project => project.id === recent.workspaceId)) throw new Error('Packaged sidebar could not recover its recent workspace');
-  const fontManifest = JSON.parse(await readFile(join(state.directory, 'node_modules/benchgo/assets/fonts/manifest.json')));
+  const fontManifest = JSON.parse(await readFile(join(state.directory, 'node_modules/benchgo-plugin/assets/fonts/manifest.json')));
   const font = await fetch(new URL('/api/commander-fonts/' + fontManifest[0].file, ready.url), { headers: { cookie } });
   if (!font.ok || Buffer.from(await font.arrayBuffer()).subarray(0, 4).toString() !== 'wOF2') throw new Error('Packaged sidebar font could not be loaded');
   console.log('Packaged authenticated sidebar state, recent workspace recovery and font asset passed.');

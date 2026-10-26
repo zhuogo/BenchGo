@@ -104,10 +104,10 @@ function Assert-Plus([System.IO.FileInfo]$Installed) {
     if (-not (Test-Path (Join-Path $Installed.DirectoryName 'resources/benchgo/seed/release.json'))) { throw 'The offline plugin seed is missing' }
     $seed = Get-Content (Join-Path $Installed.DirectoryName 'resources/benchgo/seed/release.json') -Raw | ConvertFrom-Json
     if (-not $seed.version -or $state.version -ne $seed.version) { throw "Installed profile plugin version $($state.version) does not match installer seed $($seed.version)" }
-    $plugin = Get-Content (Join-Path $state.directory 'node_modules/benchgo/package.json') -Raw | ConvertFrom-Json
-    if ($plugin.name -ne 'benchgo' -or $plugin.version -ne $seed.version) { throw "Active plugin payload version $($plugin.version) does not match installer seed $($seed.version)" }
+    $plugin = Get-Content (Join-Path $state.directory 'node_modules/benchgo-plugin/package.json') -Raw | ConvertFrom-Json
+    if ($plugin.name -ne 'benchgo-plugin' -or $plugin.version -ne $seed.version) { throw "Active plugin payload version $($plugin.version) does not match installer seed $($seed.version)" }
     Assert-PluginResolution $Installed $state.version $state.directory
-    if (Test-Path (Join-Path $Installed.DirectoryName 'resources/app.asar.unpacked/dsh/node_modules/benchgo/package.json')) { throw 'BenchGo must be external to the sealed engine runtime' }
+    if (Test-Path (Join-Path $Installed.DirectoryName 'resources/app.asar.unpacked/dsh/node_modules/benchgo-plugin/package.json')) { throw 'BenchGo must be external to the sealed engine runtime' }
     if ($Installed.VersionInfo.ProductName -ne 'BenchGo') { throw 'Executable product name is not BenchGo' }
     $entries = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object { $_.InstallLocation -eq $Installed.DirectoryName })
     if ($entries.Count -ne 1 -or $entries[0].DisplayName -notlike 'BenchGo *') { throw 'Uninstall entry must display BenchGo' }
@@ -143,7 +143,7 @@ try {
   const parent = pathToFileURL(join(profile, 'package.json')).href;
   const selected = ctx.pluginPackages.packageOf('benchgo', parent);
   assert.equal(selected?.version, expectedVersion, 'actual plugin metadata must match the installed version');
-  assert.equal(realpathSync.native(selected.dir), realpathSync.native(join(expectedDirectory, 'node_modules/benchgo')));
+  assert.equal(realpathSync.native(selected.dir), realpathSync.native(join(expectedDirectory, 'node_modules/benchgo-plugin')));
   const require = createRequire(parent);
   assert.equal(JSON.parse(readFileSync(require.resolve('benchgo/package.json'), 'utf8')).version, expectedVersion);
   assert.equal(realpathSync.native(require.resolve('benchgo')), realpathSync.native(join(selected.dir, 'src/plugin.mjs')));
@@ -161,7 +161,7 @@ try {
     } finally { $env:ELECTRON_RUN_AS_NODE = $previousNode }
 }
 function Add-LegacyPluginShadow {
-    $directory = Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/benchgo'
+    $directory = Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/benchgo-plugin'
     if (Test-Path $directory) { throw 'Legacy shadow fixture must not overwrite an existing package' }
     New-Item (Join-Path $directory 'src') -ItemType Directory -Force | Out-Null
     New-Item (Join-Path $directory 'lib') -ItemType Directory -Force | Out-Null
@@ -179,7 +179,7 @@ try {
     Assert-PluginResolution $installed '0.1.6' (Join-Path $env:DSH_HOME 'profiles/desktop')
     Install-Silently $installer.FullName
     Assert-Plus $installed
-    if (Test-Path (Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/benchgo')) { throw 'Reinstall left a legacy physical plugin shadow' }
+    if (Test-Path (Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/benchgo-plugin')) { throw 'Reinstall left a legacy physical plugin shadow' }
     Write-Output 'Same-version reinstall repaired the legacy physical plugin and resolved the current version.'
 
     if ($PreviousInstaller) {
