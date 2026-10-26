@@ -229,7 +229,7 @@ test('old enrollment migrates physically into profile while preserving enabled a
 
 test('old sealed runtime cannot claim to support overriding its in-box Plus package', enrollmentOptions, async t => {
   const { put, options } = enrollmentFixture(t);
-  put('runtime/node_modules/benchgo/package.json', { name: 'benchgo', version: '0.1.0' });
+  put('runtime/node_modules/benchgo-plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0' });
   await assert.rejects(initializePluginProfile(options), /新版桌面应用/);
 });
 

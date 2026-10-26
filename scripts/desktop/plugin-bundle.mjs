@@ -128,7 +128,7 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
 /** Enroll or upgrade Plus offline; preserve user settings and later disable/recovery choices. */
 export async function initializePluginProfile({ runtime, resources, profile, seed }) {
   runtime = resolve(runtime ?? [join(resources, 'app.asar.unpacked', 'dsh'), join(resources, 'app.asar', 'dsh')].find(path => existsSync(join(path, 'node_modules/@deepseek-ai/dsh-app-boot/package.json'))) ?? join(resources, 'app.asar.unpacked', 'dsh'));
-  if (existsSync(join(runtime, 'node_modules', PLUS, 'package.json'))) throw new Error('BenchGo: 此应用仍内置锁定插件，请安装新版桌面应用以迁移');
+  if (existsSync(join(runtime, 'node_modules', 'benchgo-plugin', 'package.json'))) throw new Error('BenchGo: 此应用仍内置锁定插件，请安装新版桌面应用以迁移');
   seed = resolve(seed ?? join(resources, 'benchgo', 'seed'));
   const seedMetadata = readJson(join(seed, 'release.json'));
   const boot = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js')).href);
