@@ -56,7 +56,7 @@ jobs:
           if ($tags.Count -eq 0) {
             'No previous application release; skipping in-place upgrade verification.'
           } else {
-            $previousTag = ($tags | Sort-Object { [version]($_.Substring(1)) })[-1]
+          $previousTag = @($tags | Sort-Object { [version]($_.Substring(1)) })[-1]
             $previousVersion = $previousTag.Substring(1)
             gh release download $previousTag --repo $env:GITHUB_REPOSITORY --pattern "benchgo-$previousVersion-win-x64-setup.exe" --dir previous
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
