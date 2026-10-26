@@ -1,9 +1,10 @@
 {
-  "name": "benchgo",
+  "name": "benchgo-plugin",
   "displayName": "BenchGo",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
+  "version": "0.0.2",
+  "private": false,
+  "repository": { "type": "git", "url": "https://github.com/zhuogo/BenchGo.git" },
+  "publishConfig": { "access": "public" },
   "description": "BenchGo native coding agents, shared projects, voice and enhanced Harness UI",
   "license": "MIT",
   "main": "src/plugin.mjs",
@@ -13,6 +14,7 @@
     "./runtime": "./src/runtime.mjs",
     "./client": "./lib/client.js",
     "./package.json": "./package.json",
+    "./icon": "./assets/icon.svg",
     "./locale/*.json": "./locale/*.json"
   },
   "bin": {
