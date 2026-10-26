@@ -31,7 +31,7 @@ function sharedPackage(name) { return name.startsWith('@deepseek-ai/'); }
 export function stagePluginBundle({ runtime, output, plugin = resolve(import.meta.dirname, '../../plugins/commander'), platform = process.platform, arch = process.arch }) {
   runtime = runtime ? resolve(runtime) : null; plugin = resolve(plugin);
   const manifest = readJson(join(plugin, 'package.json'));
-  if (manifest.name !== PLUS || !manifest.dsh?.bundle?.patch) throw new Error('Plus bundle: expected the BenchGo bundle package');
+  if (!['benchgo', 'benchgo-plugin'].includes(manifest.name) || !manifest.dsh?.bundle?.patch) throw new Error('Plus bundle: expected the BenchGo bundle package');
   output = resolve(output ?? join(runtime ? dirname(runtime) : dirname(plugin), 'plus-seed'));
   const relativeOutput = runtime ? relative(runtime, output) : '..';
   if (runtime && (!relativeOutput || (relativeOutput !== '..' && !relativeOutput.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && !isAbsolute(relativeOutput)))) throw new Error('Plus bundle: seed must be outside the sealed engine runtime');
