@@ -1,0 +1,36 @@
+name: Publish BenchGo CLI packages
+
+on:
+  push:
+    tags:
+      - 'benchgo-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - packages/benchgo-cli
+          - packages/benchgo-relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package.json
+      - name: Verify package archive
+        working-directory: ${{ matrix.package }}
+        run: npm pack --dry-run --ignore-scripts
+      - name: Publish package with provenance
+        working-directory: ${{ matrix.package }}
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

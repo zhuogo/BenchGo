@@ -1,8 +1,8 @@
 /* Native-only, read-only appearance probe. Device management is never exposed. */
 (() => {
-  if (window.top !== window || window.__xiaojiaoAppearance) return;
+  if (window.top !== window || window.__benchgoAppearance) return;
   let pending = false, previous = '', surface;
-  const channel = window.XiaojiaoAppearance;
+  const channel = window.BenchGoAppearance;
   const dark = matchMedia('(prefers-color-scheme: dark)');
   const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
   const context = canvas.getContext('2d');
@@ -59,5 +59,5 @@
   document.addEventListener('transitionend', schedule, true);
   window.addEventListener('pageshow', schedule);
   dark.addEventListener('change', schedule);
-  window.__xiaojiaoAppearance = { read };
+  window.__benchgoAppearance = { read };
 })();

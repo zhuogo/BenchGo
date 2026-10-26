@@ -103,7 +103,7 @@ export class ACPProvider {
       })().catch(error => { if (!closing) host.failure(error); });
     });
     try {
-      const initialized = await wire.request('initialize', { protocolVersion: 1, clientInfo: { name: 'dsh-plus', version: '0.1.0' }, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } });
+      const initialized = await wire.request('initialize', { protocolVersion: 1, clientInfo: { name: 'benchgo', version: '0.1.0' }, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } });
       if (initialized?.protocolVersion !== 1) throw new Error('Unsupported ACP protocol version');
       caps = initialized.agentCapabilities ?? {};
       if (session.nativeId && !caps.loadSession) throw new Error('This ACP agent does not support session resume; refusing to create a replacement session');
@@ -111,7 +111,7 @@ export class ACPProvider {
       try {
         result = await wire.request(session.nativeId ? 'session/load' : 'session/new', { ...(session.nativeId ? { sessionId: session.nativeId } : {}), cwd: session.cwd, mcpServers });
       } catch (error) {
-        if (delegation) throw new Error('ACP session with DSH-Plus delegation MCP failed: ' + error.message, { cause: error });
+        if (delegation) throw new Error('ACP session with BenchGo delegation MCP failed: ' + error.message, { cause: error });
         throw error;
       }
       if (!session.nativeId && (typeof result?.sessionId !== 'string' || !result.sessionId)) throw new Error('ACP agent did not return a durable session id');

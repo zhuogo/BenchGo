@@ -104,9 +104,9 @@ test('wide and rail footer keep shortcuts ordered and open GitHub in the externa
     assert.equal(button.props['aria-label'], '在浏览器中打开 GitHub 项目');
     assert.equal(button.props.children.type, LinkIconMedium);
     assert.equal(button.props.children.props.kind, 'url');
-    assert.equal(button.props.children.props.href, 'https://github.com/draftgo/dsh-plus');
+    assert.equal(button.props.children.props.href, 'https://github.com/zhuogo/BenchGo');
     button.props.onClick();
-    assert.deepEqual(opened.at(-1), ['https://github.com/draftgo/dsh-plus', '_blank', 'noopener,noreferrer']);
+    assert.deepEqual(opened.at(-1), ['https://github.com/zhuogo/BenchGo', '_blank', 'noopener,noreferrer']);
   }
   assert.equal(opened.length, 2);
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));

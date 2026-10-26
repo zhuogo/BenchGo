@@ -1,11 +1,11 @@
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
-export const UPDATE_REPOSITORY = 'draftgo/dsh-plus';
+export const UPDATE_REPOSITORY = 'zhuogo/BenchGo';
 export const DEFAULT_UPDATE_CONFIG = Object.freeze({ source: 'mirror', mirrorUrl: 'https://ghfast.top/' });
 export const MAX_PLUGIN_BYTES = 256 * 1024 * 1024;
 const releaseBase = `https://github.com/${UPDATE_REPOSITORY}/releases/`;
-const metadataUrl = `${releaseBase}download/plugin-updates/dsh-plus-update.json`;
+const metadataUrl = `${releaseBase}download/plugin-updates/benchgo-update.json`;
 
 export class UpdateFeedError extends Error {
   constructor(code, message, options) { super(message, options); this.name = 'UpdateFeedError'; this.code = code; }
@@ -38,7 +38,7 @@ export function filenameFromReleaseUrl(value, { metadata = false } = {}) {
   if (typeof value !== 'string' || !value.startsWith(releaseBase)) fail('UPDATE_URL', '仅支持本仓库的 GitHub Release 下载地址');
   const suffix = value.slice(releaseBase.length);
   const match = suffix.match(/^download\/([a-zA-Z0-9][a-zA-Z0-9._+-]*)\/([a-zA-Z0-9][a-zA-Z0-9._-]*)$/)
-    || (metadata && suffix.match(/^(latest)\/download\/(dsh-plus-update\.json(?:\.sig)?)$/));
+    || (metadata && suffix.match(/^(latest)\/download\/(benchgo-update\.json(?:\.sig)?)$/));
   if (!match) fail('UPDATE_URL', '更新下载地址无效');
   return match[2];
 }

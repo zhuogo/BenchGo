@@ -29,7 +29,7 @@ test('managed launches isolate both config and history without copying or mutati
   assert.notEqual(a.env.CODEX_HOME, b.env.CODEX_HOME);
   assert.equal(a.env.HOME, undefined);
   assert.equal(a.commandArgs.join(' ').includes('secret-a'), false);
-  assert.equal(a.env.DSH_PLUS_SESSION_API_KEY, 'secret-a');
+  assert.equal(a.env.BENCHGO_SESSION_API_KEY, 'secret-a');
   assert.equal((await stat(a.env.CODEX_HOME)).mode & 0o777, 0o700);
   assert.equal(await readFile(join(native, 'config.toml'), 'utf8'), before);
   assert.deepEqual({ HOME: process.env.HOME, CODEX_HOME: process.env.CODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR }, oldEnv);
@@ -44,7 +44,7 @@ test('endpoint, source protocol and credential identity changes refuse reconnect
   const { directory, routes, entries } = await fixture(t), route = await routes.capture({ tool: 'codex', providerId: 'a', model: 'm' }), sessionId = randomUUID();
   t.after(() => rm(directory, { recursive: true, force: true }));
   entries.a.apiKey = 'rotated';
-  assert.equal((await routes.launch({ tool: 'codex', route, sessionId })).env.DSH_PLUS_SESSION_API_KEY, 'rotated');
+  assert.equal((await routes.launch({ tool: 'codex', route, sessionId })).env.BENCHGO_SESSION_API_KEY, 'rotated');
   const original = { ...entries.a };
   for (const change of [{ baseURL: 'https://new.example' }, { protocol: 'other' }, { credentialRef: 'new-key' }]) {
     Object.assign(entries.a, original, change);
@@ -101,15 +101,15 @@ test('A/B sessions and restart retain routes; default changes only affect new se
   defaults = [{ tool: 'codex', providerId: 'b', model: 'model-b' }];
   const b = await runtime.create({ provider: 'codex' });
   await runtime.disconnect(a.id); await runtime.connect(a.id);
-  assert.equal(launches.at(-1).env.DSH_PLUS_SESSION_API_KEY, 'secret-a');
+  assert.equal(launches.at(-1).env.BENCHGO_SESSION_API_KEY, 'secret-a');
   assert.equal(launches.at(-1).model, 'model-a');
   await runtime.close();
   runtime = await new Commander({ dataDir: join(directory, 'state'), routeService: routes }).open();
   t.after(async () => { await runtime.close(); await rm(directory, { recursive: true, force: true }); }); runtime.providers.set('codex', new Fake());
   runtime.toolProfiles = { list: () => { throw Error('reconnect must not read default'); } };
   await runtime.connect(a.id); await runtime.connect(b.id);
-  assert.equal(launches.at(-2).env.DSH_PLUS_SESSION_API_KEY, 'secret-a');
-  assert.equal(launches.at(-1).env.DSH_PLUS_SESSION_API_KEY, 'secret-b');
+  assert.equal(launches.at(-2).env.BENCHGO_SESSION_API_KEY, 'secret-a');
+  assert.equal(launches.at(-1).env.BENCHGO_SESSION_API_KEY, 'secret-b');
   await runtime.disconnect(a.id); fail = true;
   await assert.rejects(runtime.connect(a.id), /隔离工具启动失败/);
   assert.equal(JSON.stringify(runtime.list()).includes('secret-a'), false);

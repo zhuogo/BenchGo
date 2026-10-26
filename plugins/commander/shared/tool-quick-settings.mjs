@@ -42,7 +42,7 @@ const schema = {
     field('effort', '推理强度', 'select', ['agent', 'reasoning_effort'], { options: choices(['low', 'medium', 'high']) }),
   ],
   grok: [
-    field('contextWindow', '上下文窗口', 'number', ['model', 'dsh-plus', 'context_window'], { min: 1024, max: 10000000 }),
+    field('contextWindow', '上下文窗口', 'number', ['model', 'benchgo', 'context_window'], { min: 1024, max: 10000000 }),
   ],
 };
 export function quickSettingsFor(tool) { return structuredClone(schema[tool] || []); }

@@ -160,58 +160,15 @@ test('top tabs scroll on a left drag without changing tabs, while clicks still w
   } finally { view.close(); }
 });
 
-for (const action of ['install', 'update', 'reinstall']) for (const source of ['mirror', 'official']) test('npm ' + action + ' uses ' + source + ' and locks it while running', async () => {
-  const calls = [], managed = action !== 'install';
-  const catalog = { tools: [{ id: 'codex', name: 'Codex', installer: 'npm', installed: managed, managedInstalled: managed, source: managed ? 'managed' : 'none', canInstall: !managed, canUpdate: managed, canReinstall: managed, canUninstall: managed, runtimeNotice: '将自动准备 Node.js 与 npm' }], profiles: [], capabilities: [] };
-  const fetch = async (_url, options) => {
-    const input = JSON.parse(options.body); calls.push(input);
-    const body = input.action === 'catalog' ? catalog : input.action === 'providers' ? { providers: [] } : { job: { id: 'job', toolId: 'codex', action, source: input.source, status: 'running', message: '正在准备 Node.js 环境' } };
-    return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
-  };
+for (const action of ['install', 'update', 'reinstall']) test('npm ' + action + ' uses detected system source and locks it while running', async () => {
+  const calls = [], installed = action !== 'install';
+  const catalog = { tools: [{ id: 'codex', name: 'Codex', installer: 'npm', installed, installations: installed ? [{ path: '/usr/bin/codex', realpath: '/usr/bin/codex', source: 'npm', version: '1.2.3' }] : [], source: installed ? 'npm' : 'none', canInstall: !installed, canUpdate: installed, canReinstall: installed, canUninstall: installed }], profiles: [], capabilities: [{ tool: 'codex', configSupported: false, chatSupported: true }] };
+  const fetch = async (_url, options) => { const input = JSON.parse(options.body); calls.push(input); const body = input.action === 'catalog' ? catalog : input.action === 'providers' ? { providers: [] } : { job: { id: 'job', toolId: 'codex', action, status: 'running', message: '正在执行' } }; return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } }); };
   const view = mount('ToolSettingsSection', {}, { fetch });
-  try {
-    await view.flush();
-    const radios = [...view.document.querySelectorAll('[role=radio]')];
-    assert.equal(radios.length, 2);
-    assert.equal(radios[0].textContent, '国内加速');
-    assert.equal(radios[0].getAttribute('aria-checked'), 'true');
-    assert.match(view.document.body.textContent, /将自动准备 Node.js 与 npm/);
-    const buttons = () => [...view.document.querySelectorAll('button')];
-    const installButton = buttons().find(button => button.textContent === ({ install: '安装', update: '更新副本', reinstall: '重装' })[action]);
-    assert.equal(installButton.disabled, false, 'missing Node.js must not disable installation');
-    assert.equal(radios[0].tabIndex, 0);
-    assert.equal(radios[1].tabIndex, -1);
-    React.act(() => radios[0].dispatchEvent(new view.document.defaultView.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
-    assert.equal(radios[1].getAttribute('aria-checked'), 'true');
-    assert.equal(view.document.activeElement, radios[1]);
-    React.act(() => radios[1].dispatchEvent(new view.document.defaultView.KeyboardEvent('keydown', { key: 'Home', bubbles: true })));
-    assert.equal(radios[0].getAttribute('aria-checked'), 'true');
-    if (source === 'official') view.click(radios[1]);
-    view.click(installButton);
-    if (action === 'reinstall') view.click(buttons().find(button => button.textContent === '确认'));
-    await view.flush();
-    assert.deepEqual(calls.find(input => input.action === action), { action, tool: 'codex', source });
-    assert(radios.every(button => button.disabled));
-    assert.match(view.document.body.textContent, /正在准备 Node.js 环境/);
-  } finally { view.close(); }
+  try { await view.flush(); assert.equal(view.document.querySelectorAll('[role=radio]').length, 0); assert.match(view.document.body.textContent, /系统工具的登录与配置由原工具管理/); const buttons = () => [...view.document.querySelectorAll('button')]; const button = buttons().find(item => item.textContent === ({ install: '安装', update: '更新系统工具', reinstall: '重装' })[action]); assert.equal(button.disabled, false); view.click(button); if (action === 'reinstall') view.click(buttons().find(item => item.textContent === '确认')); await view.flush(); assert.deepEqual(calls.find(input => input.action === action), { action, tool: 'codex' }); assert.match(view.document.body.textContent, /正在执行/); } finally { view.close(); }
 });
 
-test('running installation restores its selected source and non-npm tools omit the download selector', async () => {
-  for (const installer of ['npm', 'uv']) {
-    const fetch = async (_url, options) => {
-      const { action } = JSON.parse(options.body);
-      const body = action === 'providers' ? { providers: [] } : { tools: [{ id: 'codex', name: 'Codex', installer, canInstall: true, job: { id: 'running', toolId: 'codex', source: 'official', status: 'running', message: '安装中' } }], profiles: [] };
-      return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
-    };
-    const view = mount('ToolSettingsSection', {}, { fetch });
-    try {
-      await view.flush();
-      const radios = [...view.document.querySelectorAll('[role=radio]')];
-      assert.equal(radios.length, installer === 'npm' ? 2 : 0);
-      if (installer === 'npm') {
-        assert.equal(radios[1].getAttribute('aria-checked'), 'true');
-        assert(radios.every(button => button.disabled));
-      }
-    } finally { view.close(); }
-  }
+test('running installation has no download source selector', async () => {
+  const fetch = async (_url, options) => { const { action } = JSON.parse(options.body); const body = action === 'providers' ? { providers: [] } : { tools: [{ id: 'codex', name: 'Codex', installer: 'npm', canInstall: true, job: { id: 'running', toolId: 'codex', status: 'running', message: '安装中' } }], profiles: [] }; return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } }); };
+  const view = mount('ToolSettingsSection', {}, { fetch }); try { await view.flush(); assert.equal(view.document.querySelectorAll('[role=radio]').length, 0); } finally { view.close(); }
 });

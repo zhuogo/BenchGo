@@ -36,7 +36,9 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
   let origin, closed = false;
   const manager = await managerFactory({ directory, onRelay: async value => {
     if (typeof hostAdmin !== 'function') throw fail('此客户端不支持配置主机中继');
-    await hostAdmin({ action: 'relay-configure', url: value.url, token: value.token, enabled: true });
+    const current = await hostAdmin({ action: 'status' });
+    const nodes = Array.isArray(current.relay?.nodes) ? current.relay.nodes : [];
+    await hostAdmin({ action: 'relay-pool-configure', nodes: [...nodes, { id: 'relay-' + Date.now().toString(36), url: value.url, token: value.token, priority: nodes.length, enabled: true }] });
   }, runtimeRoot: new URL('../server/', webRoot), onDevice: async device => {
     if (device.status === 'offline') { try { registry.mark(device.id, 'offline', device.lastError); } catch {} return; }
     const proxy = proxies.get(device.id); if (proxy) { proxies.delete(device.id); await proxy.close(); }
@@ -45,11 +47,11 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
   const idOf = input => input.deviceId || input.targetId || input.id;
   const api = async input => {
     const id = idOf(input);
-    if (input.action === 'list') return { ...registry.list(), capabilities: { ssh: Boolean(manager), relayDeploy: Boolean(manager?.deployRelay) && typeof hostAdmin === 'function', hostAdmin: typeof hostAdmin === 'function' } };
-    const hostActions = { hostRelayConfigure: 'relay-configure', hostCloudAccess: 'cloud-access', hostStatus: 'status', hostConfigure: 'configure', hostPairing: 'pairing', hostConfirm: 'confirm', hostReject: 'reject', hostRevoke: 'revoke' };
+    if (input.action === 'list') return { ...registry.list(), relayJob: manager?.activeRelayJob?.() ?? null, capabilities: { ssh: Boolean(manager), relayDeploy: Boolean(manager?.deployRelay) && typeof hostAdmin === 'function', hostAdmin: typeof hostAdmin === 'function' } };
+    const hostActions = { hostRelayConfigure: 'relay-configure', hostRelayPoolConfigure: 'relay-pool-configure', hostStatus: 'status', hostConfigure: 'configure', hostPairing: 'pairing', hostConfirm: 'confirm', hostReject: 'reject', hostRevoke: 'revoke' };
     if (Object.hasOwn(hostActions, input.action)) {
       if (typeof hostAdmin !== 'function') throw fail('此客户端不支持本机连接管理，请更新应用');
-      const fields = { hostRelayConfigure: ['url', 'token', 'enabled'], hostCloudAccess: ['operation', 'key'], hostStatus: [], hostConfigure: ['enabled', 'host', 'port', 'publicUrl'], hostPairing: ['mode', 'address'], hostConfirm: ['id'], hostReject: ['id'], hostRevoke: ['id'] }[input.action];
+      const fields = { hostRelayConfigure: ['url', 'token', 'enabled'], hostRelayPoolConfigure: ['nodes'], hostStatus: [], hostConfigure: ['enabled', 'host', 'port', 'publicUrl'], hostPairing: ['mode', 'address'], hostConfirm: ['id'], hostReject: ['id'], hostRevoke: ['id'] }[input.action];
       return hostAdmin({ action: hostActions[input.action], ...Object.fromEntries(fields.filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]])) });
     }
     if (input.action === 'pair') {
@@ -73,7 +75,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
       if (id === 'local') return { device: await registry.select(id), url: null };
       if (publicOrigin && !workbenchOrigin) throw fail('请先配置独立 HTTPS 工作台域名，云端连接不能使用本机地址', 409);
       const savedTarget = registry.get(id);
-      const target = await selectRoute(savedTarget);
+      const target = await selectRoute(savedTarget, { onHealth: (route, health, details) => registry.markRouteHealth(id, route.relayId || route.id || route.url, health, details) });
       let proxy = proxies.get(id);
       if (proxy && proxy.routeKey !== `${target.url}|${target.pin || ''}`) { proxies.delete(id); await proxy.close(); proxy = undefined; }
       try {
@@ -96,6 +98,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
       return manager.deployRelay(input);
     }
     if (input.action === 'relayAction') return manager.manageRelay(input);
+    if (input.action === 'relayJobDismiss') return manager.dismissRelayJob(input.jobId);
     if (input.action === 'sshProbe') return manager.probe(input);
     if (input.action === 'sshConnect') return manager.connect(input);
     if (input.action === 'job') return manager.job(input.jobId || input.id);

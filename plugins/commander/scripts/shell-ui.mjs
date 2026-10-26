@@ -18,7 +18,7 @@ export function shellUi(){return {name:'commander-shell-ui',setup(build){
     source=once(source,'function navIcon(id: string) {',
       'function navIcon(id: string) {\n'+
       '  if (id === "link") return <span className={css.navIcon} style={{ display: "inline-flex", width: 16, height: 16 }} aria-hidden="true" dangerouslySetInnerHTML={{ __html: '+JSON.stringify(linkIcon)+' }} />\n'+
-      '  if (id === "harness-tools") return <svg className={css.navIcon} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 6a5 5 0 0 0-6 6L3 17a2.8 2.8 0 0 0 4 4l5-5a5 5 0 0 0 6-6l-3 3-4-4 3-3Z" /></svg>\n'+
+      '  if (id === "harness-tools") return <svg className={css.navIcon} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></svg>\n'+
       '  if (id === "voice") return <svg className={css.navIcon} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="M3 10v4m4-7v10m5-14v18m5-14v10m4-7v4" /></svg>');
     return {contents:source,loader:'tsx',resolveDir:dirname(path)};
   });

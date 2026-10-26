@@ -5,7 +5,6 @@ import { UIIcon } from '../../commander/client/iconsax.jsx';
 import { managementCall as call } from './api.mjs';
 import { PairQr } from './qr.jsx';
 import { connectionDefaults } from './connection-mode.mjs';
-import { CloudAccessSettings } from './cloud-access.jsx';
 import css from './style.css';
 import { deviceIcon } from './device-state.mjs';
 import { DeviceLoading } from './device-loading.jsx';
@@ -83,7 +82,6 @@ export function LinkSettings({ ctx, management = call, embedded = false }) {
     <ErrorText>{error || statusError || status?.error}</ErrorText>
     {diagnostic && <details className="link-error-detail"><summary>查看详情</summary><p>{diagnostic}</p></details>}
     <details className="link-advanced"><summary>高级设置</summary><p className="link-advanced-note">{defaults.mode === 'public' ? '已根据当前工作台域名优先使用 HTTPS 连接。也可手动改为同网络连接。' : '默认使用同网络 Android App 扫码，无需公网或手动选择地址。浏览器连接需可达的 HTTPS 地址。'}</p>
-    {<CloudAccessSettings management={management} value={status?.cloudAccess} loading={loading} failed={!!statusError} onRetry={refreshStatus} onChanged={value => { ++request.current; applyStatus(value); }} disabled={unavailable} />}
       <form className="link-form" onSubmit={configure}>
         <label className="link-field"><span>监听地址</span><input value={form.host} onChange={e => setForm(v => ({ ...v, host: e.target.value }))} placeholder="0.0.0.0" disabled={unavailable} /></label>
         <label className="link-field"><span>端口</span><input inputMode="numeric" value={form.port} onChange={e => setForm(v => ({ ...v, port: e.target.value }))} disabled={unavailable} /></label>

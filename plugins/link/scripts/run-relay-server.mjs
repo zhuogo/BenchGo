@@ -7,6 +7,7 @@ const args = process.argv.slice(2);
 if (args.length !== 2 || args[0] !== '--config') {
   fail('用法: node run-relay-server.mjs --config /path/to/relay.json');
 } else {
+  (async () => {
   let relay;
   try {
     const configPath = resolve(args[1]), configStat = await stat(configPath);
@@ -23,4 +24,5 @@ if (args.length !== 2 || args[0] !== '--config') {
     const stop = () => { void relay.close().finally(() => process.exit()); };
     process.once('SIGINT', stop); process.once('SIGTERM', stop);
   } catch (error) { fail(error.message); }
+  })();
 }

@@ -114,7 +114,7 @@
 
 - MiMo `mimo-v2.5-asr`、Step `stepaudio-2.5-asr`：正确接口均为 `POST /audio/transcriptions`，multipart `file/model/response_format=json/stream=true`，`Accept: text/event-stream`。真实均 200，收到多个 `transcript.text.delta` 和最终 `transcript.text.done`；测试音正确转写。模型列表支持 ASR 不表示网关支持厂商私有路径。
 - 2026-10-17 同一段 2.84 秒测试音复测：MiMo 首 partial/final 为 2253/2439 ms；Step `stepaudio-2.5-asr` 为 4365/4388 ms；Step `stepaudio-3-asr-max` 为 4845/4911 ms。此前对 RouterGo 旧路径的 404/503 探测已被纠正：正确 `/api/v1/realtime` 路由可完成 101 握手。
-- RouterGo `stepaudio-2.5-asr-stream`（实时转写）和 `stepaudio-3-realtime-preview`（实时对话）均已确认可 101 升级；前者可通过 DSH-Plus 的 Step adapter 与显式实时路由配置接入，后者是完整双向对话协议，当前自有 Agent + ASR + TTS 架构暂不直接使用。
+- RouterGo `stepaudio-2.5-asr-stream`（实时转写）和 `stepaudio-3-realtime-preview`（实时对话）均已确认可 101 升级；前者可通过 BenchGo 的 Step adapter 与显式实时路由配置接入，后者是完整双向对话协议，当前自有 Agent + ASR + TTS 架构暂不直接使用。
 - 早期 `/chat/completions` MiMo 请求仍返回 503 `model_unavailable`，私有 Step `/audio/asr/sse` 使用正确非 stream 模型也为 404。因此新增明确的 `transcriptions-sse` 协议，不再将两个失败接口误判为 ASR 模型本身不可用。
 - 插件真实处理器复测：Step TTS 200，41 个 PCM 包、122880 字节；合成音进入 MiMo ASR 后，NDJSON 返回 8 次 partial 和 final，文本为“你好，这是流式语音测试。”。单样本 TTS 首包约 3226 ms，ASR 首 partial 约 3171 ms、final 3422 ms；只是当次服务端时间，不是浏览器端整轮延迟或性能保证。
 - ASR 属于持续采集、分段提交、响应增量的组合架构。RouterGo 原生双向 WSS 已完成握手验证，完整音频事件闭环仍待真实账号联调；不能将 SSE 描述为持续 PCM 双向识别。

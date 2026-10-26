@@ -39,7 +39,7 @@ const responseHeaders = headers => {
 /** One TLS origin and one registered Link host. TLS ends here; HTTP content is visible to this relay. */
 export async function createRelayServer({ host = '0.0.0.0', port, identity, publicUrl, token, onError = () => {} }) {
   if (!identity?.key || !identity?.cert) throw new Error('中继 TLS 证书无效');
-  if (typeof token !== 'string' || token.length < 32 || token.length > 256) throw new Error('中继主机密钥至少需要 32 个字符');
+  if (typeof token !== 'string' || token.length < 6 || token.length > 256) throw new Error('中继主机密钥至少需要 6 个字符');
   const publicOrigin = new URL(publicUrl);
   if (publicOrigin.protocol !== 'https:' || publicOrigin.origin !== publicUrl || publicOrigin.username || publicOrigin.password) throw new Error('中继公网地址必须是独立 HTTPS origin');
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('中继监听端口无效');

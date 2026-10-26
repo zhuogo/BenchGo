@@ -108,9 +108,9 @@ export function UpdateLauncher({ host, wide = true }) {
       <header className="cmd-update-header"><div><h2>更新</h2><p>当前连接主机 · {globalThis.location?.hostname || '本机'}</p></div><button type="button" className="cmd-update-icon-button" aria-label="关闭更新" onClick={close}><UIIcon name="close" size={16} /></button></header>
       <div className="cmd-update-content">
         <section className="cmd-update-plugin" aria-labelledby={`${id}-plugin`}>
-          <div className="cmd-update-card-heading"><span className="cmd-update-plugin-mark"><img src={brandIcon} width="38" height="38" alt="小角" /></span><div><h3 id={`${id}-plugin`}>DSH-Plus <small>插件</small></h3><p>{data?.current?.plugin ? `v${data.current.plugin}` : '读取版本中…'}{pluginAvailable && !restart && <><span aria-hidden="true"> → </span><strong>v{plugin.version}</strong></>}</p></div><span className="cmd-update-chip">界面与功能</span></div>
+          <div className="cmd-update-card-heading"><span className="cmd-update-plugin-mark"><img src={brandIcon} width="38" height="38" alt="BenchGo" /></span><div><h3 id={`${id}-plugin`}>BenchGo <small>插件</small></h3><p>{data?.current?.plugin ? `v${data.current.plugin}` : '读取版本中…'}{pluginAvailable && !restart && <><span aria-hidden="true"> → </span><strong>v{plugin.version}</strong></>}</p></div><span className="cmd-update-chip">界面与功能</span></div>
           <p className="cmd-update-description">{serverDeployment ? '主机更新后，刷新工作台即可使用新版。' : '日常更新只需升级插件，手机同步生效。'}</p>
-          {restart ? <div className="cmd-update-notice" role="status"><UIIcon name="check" size={16} /><div><strong>已准备好，重启主机应用后生效</strong><p>先结束任务，再退出并重新打开主机上的小角。</p></div></div> : <>
+          {restart ? <div className="cmd-update-notice" role="status"><UIIcon name="check" size={16} /><div><strong>已准备好，重启主机应用后生效</strong><p>先结束任务，再退出并重新打开主机上的BenchGo。</p></div></div> : <>
             {pluginAvailable && !plugin.compatible && <p className="cmd-update-warning">{plugin.reason || (serverManaged ? '此插件与当前引擎不兼容，请由服务器部署更新。' : '此插件需要新版应用，请先升级应用。')}</p>}
             {data?.managed === false && <p className="cmd-update-warning">{serverManaged ? '此主机由服务器部署管理' : '当前安装方式不支持独立更新，请先安装新版应用。'}</p>}
             {data?.busy && <p className="cmd-update-warning" role="status">有任务正在运行，结束后即可更新。</p>}

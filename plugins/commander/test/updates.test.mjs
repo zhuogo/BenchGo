@@ -11,8 +11,8 @@ async function fixture(t, options = {}) {
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const artifact = Buffer.from('verified plugin bytes');
-  const manifest = { schemaVersion: 1, version: options.version || '0.1.3', engine: options.engine || { min: '1.2.3', max: '1.2.3' }, plugin: { version: options.version || '0.1.3', url: 'https://github.com/draftgo/dsh-plus/releases/download/plugin-v0.1.3/dsh-plus-0.1.3-plugin.tar.gz', size: artifact.length, sha256: createHash('sha256').update(artifact).digest('hex') } };
-  if (options.appVersionInFeed) manifest.app = { version: options.appVersionInFeed, url: `https://github.com/draftgo/dsh-plus/releases/download/v${options.appVersionInFeed}/xiaojiao-setup.exe` };
+  const manifest = { schemaVersion: 1, version: options.version || '0.1.3', engine: options.engine || { min: '1.2.3', max: '1.2.3' }, plugin: { version: options.version || '0.1.3', url: 'https://github.com/zhuogo/BenchGo/releases/download/plugin-v0.1.3/benchgo-0.1.3-plugin.tar.gz', size: artifact.length, sha256: createHash('sha256').update(artifact).digest('hex') } };
+  if (options.appVersionInFeed) manifest.app = { version: options.appVersionInFeed, url: `https://github.com/zhuogo/BenchGo/releases/download/v${options.appVersionInFeed}/benchgo-setup.exe` };
   const bytes = Buffer.from(JSON.stringify(manifest)), signature = sign(null, bytes, privateKey).toString('base64');
   const state = { managed: true, root: join(directory, 'releases'), version: '0.1.2', appVersion: '0.1.2', previous: '0.1.1', ...options.state };
   let activated = 0, busy = false, downloads = 0;
@@ -96,13 +96,13 @@ test('loading the prepared plugin after a restart clears the staged update', asy
   assert.equal(status.canInstall, false);
 });
 
-test('desktop application version uses only the installed DSH-Plus application metadata', async () => {
+test('desktop application version uses only the installed BenchGo application metadata', async () => {
   let requested;
-  assert.equal(await desktopApplicationVersion('/installed/DSH-Plus.exe', async file => { requested = file; return { name: 'dsh-plus-desktop', version: '0.1.3' }; }), '0.1.3');
+  assert.equal(await desktopApplicationVersion('/installed/BenchGo.exe', async file => { requested = file; return { name: 'benchgo-desktop', version: '0.1.3' }; }), '0.1.3');
   assert.equal(requested, join('/installed', 'resources', 'app.asar', 'package.json'));
   assert.equal(await desktopApplicationVersion('/installed/node', async () => ({ name: 'node', version: '22.0.0' })), undefined);
-  assert.equal(await desktopApplicationVersion('/installed/DSH-Plus.exe', async () => ({ name: 'dsh-plus-desktop', version: 'invalid' })), undefined);
-  assert.equal(await desktopApplicationVersion('/installed/DSH-Plus.exe', async () => { throw Error('missing'); }), undefined);
+  assert.equal(await desktopApplicationVersion('/installed/BenchGo.exe', async () => ({ name: 'benchgo-desktop', version: 'invalid' })), undefined);
+  assert.equal(await desktopApplicationVersion('/installed/BenchGo.exe', async () => { throw Error('missing'); }), undefined);
 });
 
 test('unmanaged installations and running tasks cannot mutate plugin versions', async t => {

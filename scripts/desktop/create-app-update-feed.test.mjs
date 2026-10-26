@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createAppUpdateFeed } from './create-app-update-feed.mjs';
 
-for (const prefix of ['xiaojiao', 'dsh-plus']) test(`${prefix} application feed keeps installer names and electron-updater hashes`, async t => {
+for (const prefix of ['benchgo']) test(`${prefix} application feed keeps installer names and electron-updater hashes`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-app-feed-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const installer = join(directory, `${prefix}-0.1.2-win-x64-setup.exe`), bytes = Buffer.from('MZtest executable');
   await writeFile(installer, bytes);

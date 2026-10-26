@@ -1,14 +1,15 @@
 {
-  "name": "dsh-plus",
-  "displayName": "DSH-Plus",
-  "version": "0.1.13",
+  "name": "benchgo",
+  "displayName": "BenchGo",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "DSH-Plus native coding agents, shared projects, voice and enhanced Harness UI",
+  "description": "BenchGo native coding agents, shared projects, voice and enhanced Harness UI",
   "license": "MIT",
   "main": "src/plugin.mjs",
   "exports": {
     ".": "./src/plugin.mjs",
+    "./link-plugin": "./src/link-plugin.mjs",
     "./runtime": "./src/runtime.mjs",
     "./client": "./lib/client.js",
     "./package.json": "./package.json",
@@ -16,7 +17,7 @@
   },
   "bin": {
     "commander": "src/cli.mjs",
-    "dsh-plus": "src/cli.mjs"
+    "benchgo": "src/cli.mjs"
   },
   "files": [
     "src",

@@ -24,7 +24,7 @@ function page() {
     getElementById() { return root; }, querySelector() { return activeSurface; },
     addEventListener(name, callback) { events.set(name, callback); },
   };
-  const window = { XiaojiaoAppearance: { postMessage: raw => messages.push(JSON.parse(raw)) }, addEventListener(name, callback) { events.set(name, callback); } };
+  const window = { BenchGoAppearance: { postMessage: raw => messages.push(JSON.parse(raw)) }, addEventListener(name, callback) { events.set(name, callback); } };
   window.top = window; window.window = window;
   const state = { token: 'transparent' };
   const sandbox = { window, document, location: { href: 'https://work.example/link/workbench/' }, matchMedia: () => media,
@@ -67,5 +67,5 @@ test('Harness base token takes precedence over overlays and device page uses own
 });
 test('subframes cannot install an appearance reporter', () => {
   const window = { top: {} }; vm.runInNewContext(source, { window });
-  assert.equal(window.__xiaojiaoAppearance, undefined);
+  assert.equal(window.__benchgoAppearance, undefined);
 });

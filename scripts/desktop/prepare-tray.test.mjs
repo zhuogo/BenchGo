@@ -33,7 +33,7 @@ test('compile transform only accepts the exact official tray input and exactly o
 });
 
 test('the actual main bundle preserves show, quit, relabel and disposal through package mapping', async t => {
-  const output = await mkdtemp(join(tmpdir(), 'xiaojiao-tray-'));
+  const output = await mkdtemp(join(tmpdir(), 'benchgo-tray-'));
   t.after(() => rm(output, { recursive: true, force: true }));
   const officialMain = join(root, 'deepseek-harness/apps/desktop/lib/main.js');
   const originals = await Promise.all([readFile(trayPath), readFile(officialMain)]);

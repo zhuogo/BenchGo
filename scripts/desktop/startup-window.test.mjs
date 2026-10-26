@@ -75,8 +75,8 @@ test('compile integration targets one official entry and rejects changed lifecyc
   assert.equal(plugin.transform(source, '/other.js'), null);
   assert.throws(() => plugin.generateBundle(), /got 0/);
   const code = plugin.transform(source, path.pathname).code;
-  assert.ok(code.indexOf('closeXiaojiaoStartup = await') < code.indexOf('const desktopSettings ='));
-  assert.match(code, /function reportFatal\(error, source\) \{\n    closeXiaojiaoStartup\?\.\(\);/);
+  assert.ok(code.indexOf('closeBenchgoStartup = await') < code.indexOf('const desktopSettings ='));
+  assert.match(code, /function reportFatal\(error, source\) \{\n    closeBenchgoStartup\?\.\(\);/);
   plugin.generateBundle();
   assert.throws(() => plugin.transform(source.replace('async function main()', 'async function changed()'), path.pathname), /Official startup changed/);
 });

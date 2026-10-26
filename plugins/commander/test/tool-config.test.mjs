@@ -77,7 +77,14 @@ test('preview checksum protects external edits and restore preserves original by
     const saved = await service.save({ tool: 'codex', providerId: 'official', model: 'new' }); const preview = await service.preview({ tool: 'codex' });
     await writeFile(path, original + 'other = true\n'); await assert.rejects(service.apply({ tool: 'codex', confirmNativeWrite: true, revision: preview.revision, checksums: Object.fromEntries(preview.files.map(x => [x.path, x.checksum])) }), { status: 409 });
     await writeFile(path, original); const applied = await applyNative(service, { tool: 'codex', revision: saved.revision });
-    assert.match(await readFile(path, 'utf8'), /new/); await service.restore({ confirmNativeWrite: true, backupId: applied.backupId }); assert.equal(await readFile(path, 'utf8'), original);
+    const syncedText = await readFile(path, 'utf8'); assert.match(syncedText, /new/);
+    const synced = (await service.list()).native.find(item => item.tool === 'codex');
+    assert.ok(synced.lastSyncAt); assert.equal(synced.files.find(item => item.path === path).externalChanged, false);
+    await writeFile(path, original + '# edited by another manager\n');
+    const changed = (await service.list()).native.find(item => item.tool === 'codex');
+    assert.equal(changed.files.find(item => item.path === path).externalChanged, true);
+    await writeFile(path, syncedText);
+    await service.restore({ confirmNativeWrite: true, backupId: applied.backupId }); assert.equal(await readFile(path, 'utf8'), original);
     const again = await applyNative(service, { tool: 'codex' }); await writeFile(path, 'model = "external"\n'); await assert.rejects(service.restore({ confirmNativeWrite: true, backupId: again.backupId }), { status: 409 });
     await assert.rejects(service.save({ tool: 'codex', providerId: 'official', model: 'new', expectedRevision: 'stale' }), { status: 409 });
   } finally { await rm(dir, { recursive: true, force: true }); }

@@ -1,3 +1,5 @@
 - insert:
     - id: commander
-      name: 'dsh-plus'
+      name: 'benchgo'
+    - id: commander-link
+      name: 'benchgo/link-plugin'

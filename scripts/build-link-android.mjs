@@ -11,14 +11,14 @@ if (options.includes('--release') && options.includes('--debug')) throw new Erro
 const debug = options.includes('--debug');
 const env = { ...process.env };
 if (!debug) {
-  const config = join(root, '.local/release-keys/xiaojiao-android-release.env');
+  const config = join(root, '.local/release-keys/benchgo-android-release.env');
   if (existsSync(config)) {
     for (const line of readFileSync(config, 'utf8').split(/\r?\n/)) {
-      const match = /^(DSH_ANDROID_(?:KEYSTORE_PATH|KEYSTORE_PASSWORD|KEY_ALIAS|KEY_PASSWORD))=(.*)$/.exec(line);
+      const match = /^(BENCHGO_ANDROID_(?:KEYSTORE_PATH|KEYSTORE_PASSWORD|KEY_ALIAS|KEY_PASSWORD))=(.*)$/.exec(line);
       if (match && !env[match[1]]) env[match[1]] = match[2];
     }
   }
-  for (const key of ['DSH_ANDROID_KEYSTORE_PATH', 'DSH_ANDROID_KEYSTORE_PASSWORD', 'DSH_ANDROID_KEY_ALIAS', 'DSH_ANDROID_KEY_PASSWORD']) {
+  for (const key of ['BENCHGO_ANDROID_KEYSTORE_PATH', 'BENCHGO_ANDROID_KEYSTORE_PASSWORD', 'BENCHGO_ANDROID_KEY_ALIAS', 'BENCHGO_ANDROID_KEY_PASSWORD']) {
     if (!env[key]) throw new Error('Missing ' + key + '; configure release signing or use --debug for development');
   }
 }

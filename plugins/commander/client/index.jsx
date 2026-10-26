@@ -60,7 +60,7 @@ function SessionIcon({ provider, status }) {
 }
 function SettingsLauncher({ host, wide, settingsOpen, openSettings, settingsShortcut, theme }) {
   const d = useData();
-  return <div className={`cmd-settings-row ${wide ? '' : 'cmd-settings-row-rail'}`}><Tooltip label="设置" side="top" gap={10} delayMs={450} portal><button type="button" className="cmd-settings" aria-label="设置" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-keyshortcuts={settingsShortcut?.aria} onClick={() => openSettings()}><UIIcon name="settings" size={16} selected={settingsOpen} /></button></Tooltip><ThemeLauncher theme={theme} /><UpdateLauncher host={host} wide={false} /><UsageLauncher /><UsageDialog /><Hint side="top" gap={10} label={d.showArchived ? '返回最近对话' : '已归档对话'}><button type="button" className="cmd-archive-launcher" aria-label="查看归档" aria-pressed={!!d.showArchived} disabled={!!d.archiveTransitioning} onClick={() => document.dispatchEvent(new Event('commander:toggle-archive'))}><UIIcon name="archive" size={16} selected={!!d.showArchived} /></button></Hint><Tooltip label="GitHub" side="top" gap={10} delayMs={450} portal><button type="button" className="cmd-archive-launcher" aria-label="在浏览器中打开 GitHub 项目" onClick={() => window.open('https://github.com/draftgo/dsh-plus', '_blank', 'noopener,noreferrer')}><LinkIconMedium kind="url" href="https://github.com/draftgo/dsh-plus" size={16} /></button></Tooltip></div>;
+  return <div className={`cmd-settings-row ${wide ? '' : 'cmd-settings-row-rail'}`}><Tooltip label="设置" side="top" gap={10} delayMs={450} portal><button type="button" className="cmd-settings" aria-label="设置" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-keyshortcuts={settingsShortcut?.aria} onClick={() => openSettings()}><UIIcon name="settings" size={16} selected={settingsOpen} /></button></Tooltip><ThemeLauncher theme={theme} /><UpdateLauncher host={host} wide={false} /><UsageLauncher /><UsageDialog /><Hint side="top" gap={10} label={d.showArchived ? '返回最近对话' : '已归档对话'}><button type="button" className="cmd-archive-launcher" aria-label="查看归档" aria-pressed={!!d.showArchived} disabled={!!d.archiveTransitioning} onClick={() => document.dispatchEvent(new Event('commander:toggle-archive'))}><UIIcon name="archive" size={16} selected={!!d.showArchived} /></button></Hint><Tooltip label="GitHub" side="top" gap={10} delayMs={450} portal><button type="button" className="cmd-archive-launcher" aria-label="在浏览器中打开 GitHub 项目" onClick={() => window.open('https://github.com/zhuogo/BenchGo', '_blank', 'noopener,noreferrer')}><LinkIconMedium kind="url" href="https://github.com/zhuogo/BenchGo" size={16} /></button></Tooltip></div>;
 }
 function Hint({ label, children, side, gap }) { return <Tooltip label={label} side={side} gap={gap} delayMs={450} portal>{children}</Tooltip>; }
 function ErrorLine({ message }) { return message ? <div className="cmd-error" role="alert">{message}</div> : null; }
@@ -134,7 +134,7 @@ function Projects({ host, open, newSession, expandSidebar, wide = true }) {
   const d = useData();
   const workspaceProjects = sidebarWorkspaces(workspaces, d.projects, defaultWorkspaceId);
   const projectsLoaded = workspaces.phase === 'ready' || workspaceProjects.length > 0 || d.loaded;
-  const [actionSession, setActionSession] = useState(null), [confirmDelete, setConfirmDelete] = useState(null);
+  const [actionSession, setActionSession] = useState(null), [confirmDelete, setConfirmDelete] = useState(null), [confirmProjectDelete, setConfirmProjectDelete] = useState(null);
   const actionAnchor = useRef(null);
   const [busy, setBusy] = useState(false), [copyStatus, setCopyStatus] = useState('');
   const [sections, setSections] = useState(() => {
@@ -209,10 +209,26 @@ function Projects({ host, open, newSession, expandSidebar, wide = true }) {
       setActionSession(null); await refresh();
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
+  const togglePin = async s => {
+    if (s.native || busy) return;
+    setBusy(true); setError('');
+    try {
+      const pinned = workspaces.pinnedSessionIds?.includes(s.id);
+      if (pinned) await host.uiWorkspace.unpinSession(s.id); else await host.uiWorkspace.pinSession(s.id);
+      await refresh();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  const deleteProject = async project => {
+    if (!project || project.isDefault || busy) return;
+    setBusy(true); setError('');
+    try { await host.workspaces.delete(project.id); if (data.projectId === project.id) newSession(); setConfirmProjectDelete(null); await refresh(); }
+    catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
   const row = s => {
     const selected = isSidebarSessionSelected(s, activeHarnessId);
     return <div key={s.id} className={`cmd-session-row ${selected ? 'is-selected' : ''}`}>
-    <button type="button" aria-label={wide ? undefined : `${names[s.provider]} · ${s.title || "对话"}`} className={`cmd-session ${liveStates.has(s.status) ? 'cmd-is-active' : ''} ${selected ? 'cmd-selected' : ''}`} aria-current={selected ? 'page' : undefined} onClick={() => { setActionSession(null); if(s.native) open(s.id).catch(e => setError(e.message)); else { update({ selected: null, projectId: s.projectId }); host.uiWorkspace.openSession(s.id); } }}><SessionIcon provider={s.provider} status={s.status} />{wide && <span>{s.title || names[s.provider]}</span>}</button>
+    <button type="button" aria-label={wide ? undefined : `${names[s.provider]} · ${s.title || "对话"}`} className={`cmd-session ${liveStates.has(s.status) ? 'cmd-is-active' : ''} ${selected ? 'cmd-selected' : ''}`} aria-current={selected ? 'page' : undefined} onClick={() => { setActionSession(null); if(s.native) open(s.id).catch(e => setError(e.message)); else { update({ selected: null, projectId: s.projectId }); host.uiWorkspace.openSession(s.id); } }}><SessionIcon provider={s.provider} status={s.status} />{wide && <span onDoubleClick={event => { event.stopPropagation(); if (!s.native) setRenameTarget(s); }}>{s.title || names[s.provider]}</span>}</button>
+    {wide && <div className="cmd-session-quick-actions"><Hint label={workspaces.pinnedSessionIds?.includes(s.id) ? '取消置顶' : '置顶'}><button type="button" className="cmd-session-quick" aria-label={workspaces.pinnedSessionIds?.includes(s.id) ? '取消置顶' : '置顶会话'} onClick={event => { event.stopPropagation(); void togglePin(s); }}>{workspaces.pinnedSessionIds?.includes(s.id) ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />}</button></Hint><Hint label={showArchived ? '取消归档' : '归档'}><button type="button" className="cmd-session-quick" aria-label={showArchived ? '取消归档对话' : '归档对话'} onClick={event => { event.stopPropagation(); void operate(s, 'archive'); }}><UIIcon name="archive" size={14} /></button></Hint></div>}
     {wide && <Tooltip label="对话操作" delayMs={450} portal><button type="button" className="cmd-session-more" aria-label={'对话操作：' + (s.title || names[s.provider])} aria-expanded={actionSession?.id === s.id} aria-haspopup="menu" onClick={event => { actionAnchor.current = event.currentTarget; setActionSession(actionSession?.id === s.id ? null : s); setCopyStatus(''); setError(''); }}><UIIcon name="more" size={16} /></button></Tooltip>}
   </div>;
   };
@@ -224,7 +240,7 @@ function Projects({ host, open, newSession, expandSidebar, wide = true }) {
       <Tooltip label="搜索对话" delayMs={450} portal><button type="button" className="cmd-search-toggle" onClick={() => { if (!wide) expandSidebar?.(); if (wide && searching) setFilter(''); setSearching(!wide || !searching); }} aria-label="搜索对话" aria-expanded={searching} aria-pressed={searching}><UIIcon name="search" size={16} /></button></Tooltip>
     </nav>
     {wide && searching && <div className="cmd-search-panel"><label className="cmd-search-field"><UIIcon name="search" size={16} /><input autoFocus className="cmd-search" placeholder="搜索对话…" aria-label="搜索对话内容" value={filter} onChange={e => setFilter(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') { setSearching(false); setFilter(''); } }} /><Hint label="关闭搜索"><button type="button" aria-label="关闭搜索" onClick={() => { setSearching(false); setFilter(''); }}><UIIcon name="plus" size={14} className="cmd-search-close" /></button></Hint></label></div>}
-    <div className="cmd-sidebar-content">
+    {wide && <div className="cmd-sidebar-content">
     <div className="cmd-section-title">{wide && <button type="button" className="cmd-section-toggle" aria-expanded={sections.projects} aria-controls="cmd-project-section" onClick={() => toggleSection('projects')}><span>项目</span><UIIcon name="chevronDown" size={12} /></button>}<Hint label="添加项目"><button aria-label="添加项目目录" onClick={() => { if (!wide) expandSidebar?.(); setAdding(!wide || !adding); }}><UIIcon name="plus" size={16} /></button></Hint></div>
     {adding && <ProjectPicker host={host} api={api} onClose={() => setAdding(false)} onSelected={async project => { await refresh(); setAdding(false); newSession(project.id); }} />}
 
@@ -233,13 +249,13 @@ function Projects({ host, open, newSession, expandSidebar, wide = true }) {
     {!projectsLoaded && wide && <p className="cmd-sidebar-empty">正在读取项目…</p>}
     {projects.map(p => {
       const activity = workspaceActivity(p, live);
-      return <div className="cmd-project" key={p.id}><div className="cmd-project-name"><button aria-label={wide ? undefined : activity ? `${p.title}，${states[activity]}` : p.title} aria-expanded={!!expanded[p.id]} onClick={() => { if (!wide) expandSidebar?.(); setExpanded(v => ({ ...v, [p.id]: !wide || !v[p.id] })); }}><UIIcon name="folder" size={16} selected={!!expanded[p.id]} />{wide && <span>{p.title}</span>}{activity && <Activity status={activity} className="cmd-project-activity" />}{wide && <UIIcon name="chevronDown" className={expanded[p.id] ? 'cmd-project-chevron cmd-rotated' : 'cmd-project-chevron'} size={12} />}</button><Hint label="新聊天"><button className="cmd-project-new" onClick={() => newSession(p.id)} aria-label={`在 ${p.title} 新聊天`}><UIIcon name="plus" size={16} /></button></Hint></div>{wide && expanded[p.id] && <div className="cmd-project-children">{rows.filter(s => s.projectId === p.id || s.cwd === p.path).map(row)}{!rows.some(s => s.projectId === p.id || s.cwd === p.path) && <p className="cmd-sidebar-empty">还没有对话</p>}</div>}</div>;
+      return <div className="cmd-project" key={p.id}><div className="cmd-project-name"><button aria-label={wide ? undefined : activity ? `${p.title}，${states[activity]}` : p.title} aria-expanded={!!expanded[p.id]} onClick={() => { if (!wide) expandSidebar?.(); setExpanded(v => ({ ...v, [p.id]: !wide || !v[p.id] })); }}><UIIcon name="folder" size={16} selected={!!expanded[p.id]} />{wide && <span>{p.title}</span>}{activity && <Activity status={activity} className="cmd-project-activity" />}{wide && <UIIcon name="chevronDown" className={expanded[p.id] ? 'cmd-project-chevron cmd-rotated' : 'cmd-project-chevron'} size={12} />}</button><Hint label="新聊天"><button className="cmd-project-new" onClick={() => newSession(p.id)} aria-label={`在 ${p.title} 新聊天`}><UIIcon name="plus" size={16} /></button></Hint>{wide && !p.isDefault && <Hint label="删除项目"><button type="button" className="cmd-project-delete" aria-label={`删除项目 ${p.title}`} onClick={() => setConfirmProjectDelete(p)}><UIIcon name="trash" size={14} /></button></Hint>}</div>{wide && expanded[p.id] && <div className="cmd-project-children">{rows.filter(s => s.projectId === p.id || s.cwd === p.path).map(row)}{!rows.some(s => s.projectId === p.id || s.cwd === p.path) && <p className="cmd-sidebar-empty">还没有对话</p>}</div>}</div>;
     })}
     {wide && projectsLoaded && !projects.length && <p className="cmd-sidebar-empty">暂无项目</p>}
     </div></div>
     <div className="cmd-section-title cmd-recent-title">{wide && <button type="button" className="cmd-section-toggle" aria-expanded={sections.recent} aria-controls="cmd-recent-section" onClick={() => toggleSection('recent')}><span className="cmd-section-label">{showArchived ? '已归档' : '最近'}{!showArchived && recentActivity && <Activity status={recentActivity} />}</span><UIIcon name="chevronDown" size={12} /></button>}<Hint label="新聊天"><button type="button" aria-label="最近新聊天" onClick={() => newSession()}><UIIcon name="plus" size={16} /></button></Hint></div>
-    <div id="cmd-recent-section" className="cmd-section-body" data-open={!wide || sections.recent} inert={wide && !sections.recent ? '' : undefined}><div className="cmd-section-inner"><div className="cmd-recents" data-transition={archivePhase}>{recents.map(row)}{wide && d.loaded && !recents.length && (filter || showArchived) && <p className="cmd-sidebar-empty">{filter ? '没有找到对话' : '暂无归档对话'}</p>}</div></div></div>
-    </div>
+    <div id="cmd-recent-section" className="cmd-section-body" data-open={!wide || sections.recent} inert={wide && !sections.recent ? '' : undefined}><div className="cmd-section-inner"><div className="cmd-recents" data-transition={archivePhase}>{wide && recents.map(row)}{wide && d.loaded && !recents.length && (filter || showArchived) && <p className="cmd-sidebar-empty">{filter ? '没有找到对话' : '暂无归档对话'}</p>}</div></div></div>
+    </div>}
     <Menu open={!!actionSession} onClose={() => { if(!busy)setActionSession(null); }} anchor={null} getAnchorRect={() => actionAnchor.current?.getBoundingClientRect() ?? null} side="right" align="end" portal autoFocus compact listClassName="cmd-actions-popover">
       {currentActionSession && <>
         <div className="cmd-session-details"><Icon provider={currentActionSession.provider} size={16} /><span>{names[currentActionSession.provider] || currentActionSession.provider}{currentActionSession.model ? ' · ' + currentActionSession.model : ''}</span></div>
@@ -284,7 +300,8 @@ function Projects({ host, open, newSession, expandSidebar, wide = true }) {
       </>}
     </Menu>
     <SessionRenameDialog target={renameTarget} host={host} onClose={() => setRenameTarget(null)} onRenamed={refresh} />
-    <Modal open={!!confirmDelete} onClose={() => { if(!busy)setConfirmDelete(null); }} title="删除这条对话？" closeLabel="关闭" description="从对话列表移除，并释放 DSH-Plus 管理记录。服务器日志、原生工具历史和项目文件会保留。" footer={<><button className="cmd-dialog-button" disabled={busy} onClick={() => setConfirmDelete(null)}>取消</button><button className="cmd-dialog-button cmd-danger" disabled={busy} onClick={() => void operate(confirmDelete, 'delete')}>{busy ? '删除中…' : '删除对话'}</button></>}><ErrorLine message={error} /></Modal>
+    <Modal open={!!confirmProjectDelete} onClose={() => { if (!busy) setConfirmProjectDelete(null); }} title="删除这个项目？" closeLabel="关闭" description="项目会从侧栏移除，项目文件夹和其中的文件不会被删除。" footer={<><button className="cmd-dialog-button" disabled={busy} onClick={() => setConfirmProjectDelete(null)}>取消</button><button className="cmd-dialog-button cmd-danger" disabled={busy} onClick={() => void deleteProject(confirmProjectDelete)}>{busy ? "删除中…" : "删除项目"}</button></>}><ErrorLine message={error} /></Modal>
+    <Modal open={!!confirmDelete} onClose={() => { if(!busy)setConfirmDelete(null); }} title="删除这条对话？" closeLabel="关闭" description="从对话列表移除，并释放 BenchGo 管理记录。服务器日志、原生工具历史和项目文件会保留。" footer={<><button className="cmd-dialog-button" disabled={busy} onClick={() => setConfirmDelete(null)}>取消</button><button className="cmd-dialog-button cmd-danger" disabled={busy} onClick={() => void operate(confirmDelete, 'delete')}>{busy ? '删除中…' : '删除对话'}</button></>}><ErrorLine message={error} /></Modal>
   </section>;
 }
 

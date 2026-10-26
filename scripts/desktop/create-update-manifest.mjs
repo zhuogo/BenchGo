@@ -7,7 +7,7 @@ import { releaseDownloadUrl, validateReleaseManifest } from '../../plugins/comma
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
 export async function createUpdateManifest({ pluginPath, outDir, version, engineVersion, tag = `plugin-v${version}`, privateKey, publicKey, notes, app } = {}) {
-  if (!privateKey) throw new Error('缺少 DSH_PLUS_UPDATE_PRIVATE_KEY 发布签名密钥');
+  if (!privateKey) throw new Error('缺少 BENCHGO_UPDATE_PRIVATE_KEY 发布签名密钥');
   const key = createPrivateKey(privateKey);
   if (key.asymmetricKeyType !== 'ed25519') throw new Error('发布签名必须使用 Ed25519 密钥');
   const bytes = await readFile(pluginPath);
@@ -29,8 +29,8 @@ export async function createUpdateManifest({ pluginPath, outDir, version, engine
   const trusted = createPublicKey(publicKey ?? await readFile(new URL('../../plugins/commander/shared/update-public-key.pem', import.meta.url)));
   if (trusted.asymmetricKeyType !== 'ed25519' || !verify(null, payload, trusted, signature)) throw new Error('发布密钥与客户端内置信任公钥不匹配');
   await mkdir(outDir, { recursive: true });
-  await writeFile(path.join(outDir, 'dsh-plus-update.json'), payload);
-  await writeFile(path.join(outDir, 'dsh-plus-update.json.sig'), `${signature.toString('base64')}\n`);
+  await writeFile(path.join(outDir, 'benchgo-update.json'), payload);
+  await writeFile(path.join(outDir, 'benchgo-update.json.sig'), `${signature.toString('base64')}\n`);
   return manifest;
 }
 
@@ -50,20 +50,20 @@ async function main() {
   if (options['--app-feed']) {
     const feed = JSON.parse(await readFile(options['--app-feed'], 'utf8'));
     const file = feed.files?.[0];
-    if (!file || ![`xiaojiao-${feed.version}-win-x64-setup.exe`, `dsh-plus-${feed.version}-win-x64-setup.exe`].includes(file.url)) throw new Error('应用更新清单无效');
+    if (!file || file.url !== `benchgo-${feed.version}-win-x64-setup.exe`) throw new Error('应用更新清单无效');
     app = { version: feed.version, url: releaseDownloadUrl(file.url, 'app-updates'), size: file.size };
   }
   const result = await createUpdateManifest({
     app,
-    pluginPath: path.resolve(options['--plugin'] || path.join(outDir, `dsh-plus-${pkg.version}-plugin.tar.gz`)),
+    pluginPath: path.resolve(options['--plugin'] || path.join(outDir, `benchgo-${pkg.version}-plugin.tar.gz`)),
     outDir,
     version: pkg.version,
     engineVersion: upstream.version,
     tag: options['--tag'] || `plugin-v${pkg.version}`,
-    privateKey: process.env.DSH_PLUS_UPDATE_PRIVATE_KEY,
+    privateKey: process.env.BENCHGO_UPDATE_PRIVATE_KEY,
     notes: options['--notes-file'] ? await readFile(options['--notes-file'], 'utf8') : undefined,
   });
-  process.stdout.write(`DSH-Plus ${result.version}: 已生成签名更新清单\n`);
+  process.stdout.write(`BenchGo ${result.version}: 已生成签名更新清单\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { console.error(error.message); process.exitCode = 1; });

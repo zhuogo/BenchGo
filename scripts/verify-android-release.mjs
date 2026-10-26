@@ -21,23 +21,23 @@ function run(command, args, encoding = 'utf8') {
 if (!existsSync(apk)) throw new Error('Missing signed Android release APK');
 const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const metadata = run(join(buildTools, windows ? 'aapt.exe' : 'aapt'), ['dump', 'badging', apk]);
-if (!metadata.includes("package: name='cn.draftgo.dshplus.link'")) throw new Error('Unexpected Android applicationId');
+if (!metadata.includes("package: name='cn.draftgo.benchgo.link'")) throw new Error('Unexpected Android applicationId');
 if (!metadata.includes("versionName='" + version + "'")) throw new Error('Android application version differs from root package');
 const gradle = readFileSync(join(root, 'plugins/link/mobile/android/app/build.gradle'), 'utf8');
 const versionCode = /versionCode\s+(\d+)/.exec(gradle)?.[1];
 if (!versionCode || !metadata.includes("versionCode='" + versionCode + "'")) throw new Error('Unexpected Android versionCode');
-if (!metadata.includes("application-label:'小角'")) throw new Error('Android application label must be 小角');
+if (!metadata.includes("application-label:'BenchGo'")) throw new Error('Android application label must be BenchGo');
 if (metadata.includes('application-debuggable')) throw new Error('Release APK must not be debuggable');
 const signature = run(join(buildTools, windows ? 'apksigner.bat' : 'apksigner'), ['verify', '--verbose', '--print-certs', apk]);
 if (/CN=Android Debug/i.test(signature)) throw new Error('Release APK uses a debug signing certificate');
 const fingerprint = /Signer #1 certificate SHA-256 digest: ([a-f0-9]+)/i.exec(signature)?.[1]?.toLowerCase();
 if (!fingerprint) throw new Error('Missing Android signing certificate');
-for (const key of ['DSH_ANDROID_KEYSTORE_PATH', 'DSH_ANDROID_KEY_ALIAS', 'DSH_ANDROID_KEYSTORE_PASSWORD']) {
+for (const key of ['BENCHGO_ANDROID_KEYSTORE_PATH', 'BENCHGO_ANDROID_KEY_ALIAS', 'BENCHGO_ANDROID_KEYSTORE_PASSWORD']) {
   if (!process.env[key]) throw new Error('Release certificate verification requires ' + key);
 }
 {
   const keytool = process.env.JAVA_HOME ? join(process.env.JAVA_HOME, 'bin', windows ? 'keytool.exe' : 'keytool') : 'keytool';
-  const certificate = run(keytool, ['-exportcert', '-keystore', process.env.DSH_ANDROID_KEYSTORE_PATH, '-alias', process.env.DSH_ANDROID_KEY_ALIAS, '-storepass:env', 'DSH_ANDROID_KEYSTORE_PASSWORD'], null);
+  const certificate = run(keytool, ['-exportcert', '-keystore', process.env.BENCHGO_ANDROID_KEYSTORE_PATH, '-alias', process.env.BENCHGO_ANDROID_KEY_ALIAS, '-storepass:env', 'BENCHGO_ANDROID_KEYSTORE_PASSWORD'], null);
   const expected = new X509Certificate(certificate).fingerprint256.replaceAll(':', '').toLowerCase();
   if (fingerprint !== expected) throw new Error('APK signing certificate differs from the persistent release key');
 }
@@ -77,4 +77,4 @@ for (const [asset, file] of [
   const packed = readAsset(asset);
   if (!packed.equals(readFileSync(join(root, file)))) throw new Error('APK resource differs from current build: ' + asset);
 }
-console.log('Verified 小角 ' + version + ' Android release: non-debuggable, matching release signature and current resources; certificate SHA256 ' + fingerprint);
+console.log('Verified BenchGo ' + version + ' Android release: non-debuggable, matching release signature and current resources; certificate SHA256 ' + fingerprint);

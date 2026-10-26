@@ -5,28 +5,28 @@ plugins {
 
 def linkWebDir = file('../../../dist/web')
 def generatedAssets = layout.buildDirectory.dir('generated/linkAssets')
-def releaseSigning = ['DSH_ANDROID_KEYSTORE_PATH', 'DSH_ANDROID_KEYSTORE_PASSWORD', 'DSH_ANDROID_KEY_ALIAS', 'DSH_ANDROID_KEY_PASSWORD'].collectEntries { [(it): System.getenv(it)] }
+def releaseSigning = ['BENCHGO_ANDROID_KEYSTORE_PATH', 'BENCHGO_ANDROID_KEYSTORE_PASSWORD', 'BENCHGO_ANDROID_KEY_ALIAS', 'BENCHGO_ANDROID_KEY_PASSWORD'].collectEntries { [(it): System.getenv(it)] }
 def hasReleaseSigning = releaseSigning.values().every { it }
 
 android {
-    namespace 'cn.draftgo.dshplus.link'
+    namespace 'cn.draftgo.benchgo.link'
     compileSdk 35
     buildToolsVersion '35.0.0'
 
     defaultConfig {
-        applicationId 'cn.draftgo.dshplus.link'
+        applicationId 'cn.draftgo.benchgo.link'
         minSdk 26
         targetSdk 35
-        versionCode 11
-        versionName '0.1.11'
+        versionCode 1
+        versionName '0.0.1'
     }
     signingConfigs {
         release {
             if (hasReleaseSigning) {
-                storeFile file(releaseSigning.DSH_ANDROID_KEYSTORE_PATH)
-                storePassword releaseSigning.DSH_ANDROID_KEYSTORE_PASSWORD
-                keyAlias releaseSigning.DSH_ANDROID_KEY_ALIAS
-                keyPassword releaseSigning.DSH_ANDROID_KEY_PASSWORD
+                storeFile file(releaseSigning.BENCHGO_ANDROID_KEYSTORE_PATH)
+                storePassword releaseSigning.BENCHGO_ANDROID_KEYSTORE_PASSWORD
+                keyAlias releaseSigning.BENCHGO_ANDROID_KEY_ALIAS
+                keyPassword releaseSigning.BENCHGO_ANDROID_KEY_PASSWORD
             }
         }
     }
@@ -56,8 +56,8 @@ android {
 
 tasks.register('validateReleaseSigning') {
     doLast {
-        if (!hasReleaseSigning) throw new GradleException('Release signing requires DSH_ANDROID_KEYSTORE_PATH, DSH_ANDROID_KEYSTORE_PASSWORD, DSH_ANDROID_KEY_ALIAS and DSH_ANDROID_KEY_PASSWORD')
-        if (!file(releaseSigning.DSH_ANDROID_KEYSTORE_PATH).isFile()) throw new GradleException('Android release keystore does not exist')
+        if (!hasReleaseSigning) throw new GradleException('Release signing requires BENCHGO_ANDROID_KEYSTORE_PATH, BENCHGO_ANDROID_KEYSTORE_PASSWORD, BENCHGO_ANDROID_KEY_ALIAS and BENCHGO_ANDROID_KEY_PASSWORD')
+        if (!file(releaseSigning.BENCHGO_ANDROID_KEYSTORE_PATH).isFile()) throw new GradleException('Android release keystore does not exist')
     }
 }
 tasks.configureEach { task ->

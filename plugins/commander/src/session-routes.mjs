@@ -59,7 +59,7 @@ export function createSessionRoutes({ directory, providers, profiles } = {}) {
       if (route.mode === 'subscription') {
         if (access?.authMode !== 'subscription' || access.configured !== true) fail('绑定供应商的订阅登录已失效，请重新登录。');
         const quick = quickSettingsPatches(tool, route.quickSettings), managedProfile = { configured: true, isolated: false, subscription: true, providerId: route.providerId, model: route.model };
-        if (tool === 'codex') return { managedProfile, commandArgs: [...configArgs({ ...quick.config, model: route.model, model_provider: 'openai', force_login_method: 'chatgpt' }), '-c', 'model_providers.openai={name="OpenAI",base_url="https://api.openai.com/v1",wire_api="responses",requires_openai_auth=true}'], env: { OPENAI_API_KEY: undefined, OPENAI_BASE_URL: undefined, CODEX_API_KEY: undefined, DSH_PLUS_SESSION_API_KEY: undefined } };
+        if (tool === 'codex') return { managedProfile, commandArgs: [...configArgs({ ...quick.config, model: route.model, model_provider: 'openai', force_login_method: 'chatgpt' }), '-c', 'model_providers.openai={name="OpenAI",base_url="https://api.openai.com/v1",wire_api="responses",requires_openai_auth=true}'], env: { OPENAI_API_KEY: undefined, OPENAI_BASE_URL: undefined, CODEX_API_KEY: undefined, BENCHGO_SESSION_API_KEY: undefined } };
         const env = { ANTHROPIC_BASE_URL: undefined, ANTHROPIC_AUTH_TOKEN: undefined, ANTHROPIC_API_KEY: undefined, ANTHROPIC_MODEL: route.model, ANTHROPIC_DEFAULT_SONNET_MODEL: undefined, ANTHROPIC_DEFAULT_OPUS_MODEL: undefined, ANTHROPIC_DEFAULT_HAIKU_MODEL: undefined, CLAUDE_CODE_SUBAGENT_MODEL: undefined, CLAUDE_CODE_OAUTH_TOKEN: undefined, CLAUDE_CODE_USE_BEDROCK: undefined, CLAUDE_CODE_USE_VERTEX: undefined, CLAUDE_CODE_USE_FOUNDRY: undefined, ...quick.settings?.env };
         return { managedProfile, env, settings: { ...quick.settings, forceLoginMethod: 'claudeai', model: route.model, env }, settingSources: [] };
       }
@@ -72,12 +72,12 @@ export function createSessionRoutes({ directory, providers, profiles } = {}) {
       const managedProfile = { configured: true, isolated: true, providerId: route.providerId, model: route.model, directory: run };
       if (tool === 'codex') {
         const home = await privateDirectory(join(run, 'codex'));
-        const providerId = 'dsh_plus_' + sessionId.replaceAll('-', '');
-        const providerConfig = '{name="DSH-Plus Session",base_url=' + JSON.stringify(route.baseURL) + ',wire_api="responses",env_key="DSH_PLUS_SESSION_API_KEY",requires_openai_auth=false}';
+        const providerId = 'benchgo_' + sessionId.replaceAll('-', '');
+        const providerConfig = '{name="BenchGo Session",base_url=' + JSON.stringify(route.baseURL) + ',wire_api="responses",env_key="BENCHGO_SESSION_API_KEY",requires_openai_auth=false}';
         const overrides = { model: route.model, model_provider: providerId };
         const quickArgs = configArgs(quick.config || {});
         const commandArgs = [...quickArgs, ...Object.entries(overrides).flatMap(([key, value]) => ['-c', key + '=' + JSON.stringify(value)]), '-c', 'model_providers.' + providerId + '=' + providerConfig];
-        return { env: { CODEX_HOME: home, DSH_PLUS_SESSION_API_KEY: value.apiKey }, commandArgs, managedProfile };
+        return { env: { CODEX_HOME: home, BENCHGO_SESSION_API_KEY: value.apiKey }, commandArgs, managedProfile };
       }
       const home = await privateDirectory(join(run, 'claude'));
       const env = { CLAUDE_CONFIG_DIR: home, CLAUDE_CODE_USE_BEDROCK: undefined, CLAUDE_CODE_USE_VERTEX: undefined, CLAUDE_CODE_USE_FOUNDRY: undefined, CLAUDE_CODE_OAUTH_TOKEN: undefined, CLAUDE_CODE_API_KEY_HELPER_TTL_MS: undefined, ANTHROPIC_BASE_URL: route.baseURL, ANTHROPIC_AUTH_TOKEN: value.apiKey, ANTHROPIC_API_KEY: value.apiKey, ANTHROPIC_MODEL: route.model, ANTHROPIC_DEFAULT_SONNET_MODEL: route.model, ANTHROPIC_DEFAULT_OPUS_MODEL: route.model, ANTHROPIC_DEFAULT_HAIKU_MODEL: route.model, CLAUDE_CODE_SUBAGENT_MODEL: route.model };

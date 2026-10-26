@@ -3,17 +3,17 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
-const renderer = await readFile(new URL('./renderer/dsh-plus-startup.js', import.meta.url), 'utf8');
+const renderer = await readFile(new URL('./renderer/benchgo-startup.js', import.meta.url), 'utf8');
 
 test('desktop startup keeps the app identity and local mascot beside the DeepSeek engine label', async () => {
   const html = await readFile(new URL('./renderer/welcome.html', import.meta.url), 'utf8');
-  const css = await readFile(new URL('./renderer/dsh-plus-startup.css', import.meta.url), 'utf8');
-  assert.ok(html.includes('<title>小角</title>'));
-  assert.ok(html.includes('<h1>小角</h1>'));
+  const css = await readFile(new URL('./renderer/benchgo-startup.css', import.meta.url), 'utf8');
+  assert.ok(html.includes('<title>BenchGo</title>'));
+  assert.ok(html.includes('<h1>BenchGo</h1>'));
   assert.ok(html.indexOf('class="startup-mascot"') < html.indexOf('class="startup-copy"'));
   assert.ok(html.indexOf('class="startup-mascot"') < html.indexOf('class="startup-engine"'));
   assert.ok(html.includes('<svg class="startup-mascot"'));
-  assert.ok(html.includes('fill="#F3EBDF"'));
+  assert.ok(html.includes('fill="#F1E8DB"'));
   assert.doesNotMatch(html, /<img[\s>]/);
   assert.ok(html.includes('<span class="startup-engine">DeepSeek</span>'));
   assert.doesNotMatch(html, /(?:src|href)="https?:/);
@@ -27,10 +27,10 @@ test('native splash stays local and only updates its waiting message after 20 se
   const html = await readFile(new URL('./renderer/splash.html', import.meta.url), 'utf8');
   const script = await readFile(new URL('./renderer/splash.js', import.meta.url), 'utf8');
   assert.ok(html.includes('<svg class="startup-mascot"'));
-  assert.ok(html.includes('fill="#F3EBDF"'));
+  assert.ok(html.includes('fill="#F1E8DB"'));
   assert.ok(html.indexOf('class="startup-mascot"') < html.indexOf('class="startup-copy"'));
   assert.doesNotMatch(html, /<img[\s>]/);
-  assert.ok(html.includes('href="dsh-plus-startup.css"'));
+  assert.ok(html.includes('href="benchgo-startup.css"'));
   assert.ok(html.includes('role="status" aria-live="polite"'));
   assert.doesNotMatch(html, /(?:src|href)="https?:/);
   assert.doesNotMatch(script, /dshWelcome|ipcRenderer|require\(|fetch\(/);

@@ -16,9 +16,9 @@ const profileDependencies = resolve(process.env.LINK_HARNESS_NODE_MODULES || joi
 const tsxImport = join(root, 'deepseek-harness/node_modules/tsx/dist/esm/index.mjs');
 for (const [path, mode, hint] of [
   [nodeBinary, constants.X_OK, 'Set LINK_TEST_NODE to a Node.js 24 executable'],
-  [join(profileDependencies, 'dsh-plus/package.json'), constants.R_OK, 'Set LINK_HARNESS_NODE_MODULES to prepared profile node_modules containing dsh-plus'],
+  [join(profileDependencies, 'benchgo/package.json'), constants.R_OK, 'Set LINK_HARNESS_NODE_MODULES to prepared profile node_modules containing benchgo'],
   [tsxImport, constants.R_OK, 'Install the official Harness workspace dependencies (tsx is required)'],
-  [join(root, 'plugins/commander/lib/link.mjs'), constants.R_OK, 'Build the DSH-Plus and Link bundle first'],
+  [join(root, 'plugins/commander/lib/link.mjs'), constants.R_OK, 'Build the BenchGo and Link bundle first'],
 ]) {
   try { await access(path, mode); }
   catch { console.error(`Link live smoke prerequisite missing: ${path}. ${hint}.`); process.exit(1); }
@@ -52,7 +52,7 @@ try {
   await new Promise(resolve => modelServer.listen(0, '127.0.0.1', resolve));
   const modelUrl = `http://127.0.0.1:${modelServer.address().port}/v1`;
   await mkdir(profile, { recursive: true }); await mkdir(workspace);
-  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-link-live-profile', private: true, dependencies: { 'dsh-plus': `link:${root}/plugins/commander` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-plus'] } } }));
+  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-link-live-profile', private: true, dependencies: { 'benchgo': `link:${root}/plugins/commander` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'benchgo'] } } }));
   await writeFile(join(profile, 'cordis.yml'), '[]\n');
   await writeFile(join(profile, 'cordis.patch.yml'), [
     '- id: commander', `  config:`, `    dataDir: ${JSON.stringify(join(directory, 'commander'))}`,

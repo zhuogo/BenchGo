@@ -1,14 +1,14 @@
 param([string]$PreviousInstaller = '')
 $ErrorActionPreference = 'Stop'
-$installers = @(Get-ChildItem -Path (Join-Path $PSScriptRoot '../../artifacts/windows') -Filter 'xiaojiao-*-win-x64-setup.exe')
-if ($installers.Count -ne 1) { throw 'Expected exactly one 小角 installer' }
+$installers = @(Get-ChildItem -Path (Join-Path $PSScriptRoot '../../artifacts/windows') -Filter 'benchgo-*-win-x64-setup.exe')
+if ($installers.Count -ne 1) { throw 'Expected exactly one BenchGo installer' }
 $installer = $installers[0]
 $previousHome = $env:DSH_HOME
-$env:DSH_HOME = Join-Path $env:RUNNER_TEMP 'dsh-plus-installer-smoke'
+$env:DSH_HOME = Join-Path $env:RUNNER_TEMP 'benchgo-installer-smoke'
 
 # WScript.Shell can expose the ANSI shell-link target on non-Chinese Windows.
 # Read IShellLinkW explicitly so the Unicode executable name remains intact.
-if (-not ('XiaojiaoInstallerShortcut' -as [type])) {
+if (-not ('BenchGoInstallerShortcut' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
@@ -17,7 +17,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
 using System.Text;
 
-public static class XiaojiaoInstallerShortcut
+public static class BenchGoInstallerShortcut
 {
     [ComImport, Guid("00021401-0000-0000-C000-000000000046")]
     private class ShellLink { }
@@ -98,28 +98,29 @@ function Get-Installed([string]$Name) {
 function Assert-Plus([System.IO.FileInfo]$Installed) {
     $manifest = Get-Content (Join-Path $env:DSH_HOME 'profiles/desktop/package.json') -Raw | ConvertFrom-Json
     $state = $manifest.dsh.plusInstall
-    if ($null -eq $state -or $manifest.dsh.profile.bundles -notcontains $state.bundleName) { throw 'The installer did not activate managed DSH-Plus' }
+    if ($null -eq $state -or $manifest.dsh.profile.bundles -notcontains $state.bundleName) { throw 'The installer did not activate managed BenchGo' }
     if (-not (Test-Path (Join-Path $env:DSH_HOME "profiles/desktop/node_modules/$($state.bundleName)/package.json"))) { throw 'The profile-local plugin wrapper is missing' }
-    if (-not (Test-Path (Join-Path $Installed.DirectoryName 'resources/dsh-plus/plugin-bundle.mjs'))) { throw 'The offline plugin bootstrap is missing' }
-    if (-not (Test-Path (Join-Path $Installed.DirectoryName 'resources/dsh-plus/seed/release.json'))) { throw 'The offline plugin seed is missing' }
-    $seed = Get-Content (Join-Path $Installed.DirectoryName 'resources/dsh-plus/seed/release.json') -Raw | ConvertFrom-Json
+    if (-not (Test-Path (Join-Path $Installed.DirectoryName 'resources/benchgo/plugin-bundle.mjs'))) { throw 'The offline plugin bootstrap is missing' }
+    if (-not (Test-Path (Join-Path $Installed.DirectoryName 'resources/benchgo/seed/release.json'))) { throw 'The offline plugin seed is missing' }
+    $seed = Get-Content (Join-Path $Installed.DirectoryName 'resources/benchgo/seed/release.json') -Raw | ConvertFrom-Json
     if (-not $seed.version -or $state.version -ne $seed.version) { throw "Installed profile plugin version $($state.version) does not match installer seed $($seed.version)" }
-    $plugin = Get-Content (Join-Path $state.directory 'node_modules/dsh-plus/package.json') -Raw | ConvertFrom-Json
-    if ($plugin.name -ne 'dsh-plus' -or $plugin.version -ne $seed.version) { throw "Active plugin payload version $($plugin.version) does not match installer seed $($seed.version)" }
+    $plugin = Get-Content (Join-Path $state.directory 'node_modules/benchgo/package.json') -Raw | ConvertFrom-Json
+    if ($plugin.name -ne 'benchgo' -or $plugin.version -ne $seed.version) { throw "Active plugin payload version $($plugin.version) does not match installer seed $($seed.version)" }
     Assert-PluginResolution $Installed $state.version $state.directory
-    if (Test-Path (Join-Path $Installed.DirectoryName 'resources/app.asar.unpacked/dsh/node_modules/dsh-plus/package.json')) { throw 'DSH-Plus must be external to the sealed engine runtime' }
-    if ($Installed.VersionInfo.ProductName -ne '小角') { throw 'Executable product name is not 小角' }
+    if (Test-Path (Join-Path $Installed.DirectoryName 'resources/app.asar.unpacked/dsh/node_modules/benchgo/package.json')) { throw 'BenchGo must be external to the sealed engine runtime' }
+    if ($Installed.VersionInfo.ProductName -ne 'BenchGo') { throw 'Executable product name is not BenchGo' }
     $entries = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object { $_.InstallLocation -eq $Installed.DirectoryName })
-    if ($entries.Count -ne 1 -or $entries[0].DisplayName -notlike '小角 *') { throw 'Uninstall entry must display 小角' }
-    $shortcut = Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/小角.lnk'
-    if (-not (Test-Path $shortcut)) { throw '小角 Start Menu shortcut is missing' }
+    if ($entries.Count -ne 1 -or $entries[0].DisplayName -notlike 'BenchGo *') { throw 'Uninstall entry must display BenchGo' }
+    $shortcut = Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/BenchGo.lnk'
+    if (-not (Test-Path $shortcut)) { throw 'BenchGo Start Menu shortcut is missing' }
+
     $shell = New-Object -ComObject WScript.Shell
     $scriptLink = $shell.CreateShortcut($shortcut)
-    $nativeLink = [XiaojiaoInstallerShortcut]::Read($shortcut)
+    $nativeLink = [BenchGoInstallerShortcut]::Read($shortcut)
     Write-Output ([ordered]@{ shortcut = $shortcut; installed = $Installed.FullName; wscriptTarget = $scriptLink.TargetPath; nativeTarget = $nativeLink.TargetPath; arguments = $nativeLink.Arguments; workingDirectory = $nativeLink.WorkingDirectory } | ConvertTo-Json -Compress)
-    $target = [XiaojiaoInstallerShortcut]::ExistingLongPath($nativeLink.TargetPath)
-    $expected = [XiaojiaoInstallerShortcut]::ExistingLongPath($Installed.FullName)
-    if (-not [String]::Equals($target, $expected, [StringComparison]::OrdinalIgnoreCase) -or [System.IO.Path]::GetFileName($target) -ne '小角.exe' -or $nativeLink.Arguments -ne '') { throw 'Start Menu shortcut does not launch 小角.exe without arguments' }
+    $target = [BenchGoInstallerShortcut]::ExistingLongPath($nativeLink.TargetPath)
+    $expected = [BenchGoInstallerShortcut]::ExistingLongPath($Installed.FullName)
+    if (-not [String]::Equals($target, $expected, [StringComparison]::OrdinalIgnoreCase) -or [System.IO.Path]::GetFileName($target) -ne 'BenchGo.exe' -or $nativeLink.Arguments -ne '') { throw 'Start Menu shortcut does not launch BenchGo.exe without arguments' }
 }
 function Assert-PluginResolution([System.IO.FileInfo]$Installed, [string]$ExpectedVersion, [string]$ExpectedDirectory) {
     $code = @'
@@ -140,13 +141,13 @@ const ctx = new Context();
 try {
   await ctx.plugin(PluginPackages, { resolution });
   const parent = pathToFileURL(join(profile, 'package.json')).href;
-  const selected = ctx.pluginPackages.packageOf('dsh-plus', parent);
+  const selected = ctx.pluginPackages.packageOf('benchgo', parent);
   assert.equal(selected?.version, expectedVersion, 'actual plugin metadata must match the installed version');
-  assert.equal(realpathSync.native(selected.dir), realpathSync.native(join(expectedDirectory, 'node_modules/dsh-plus')));
+  assert.equal(realpathSync.native(selected.dir), realpathSync.native(join(expectedDirectory, 'node_modules/benchgo')));
   const require = createRequire(parent);
-  assert.equal(JSON.parse(readFileSync(require.resolve('dsh-plus/package.json'), 'utf8')).version, expectedVersion);
-  assert.equal(realpathSync.native(require.resolve('dsh-plus')), realpathSync.native(join(selected.dir, 'src/plugin.mjs')));
-  assert.equal(realpathSync.native(require.resolve('dsh-plus/client')), realpathSync.native(join(selected.dir, 'lib/client.js')));
+  assert.equal(JSON.parse(readFileSync(require.resolve('benchgo/package.json'), 'utf8')).version, expectedVersion);
+  assert.equal(realpathSync.native(require.resolve('benchgo')), realpathSync.native(join(selected.dir, 'src/plugin.mjs')));
+  assert.equal(realpathSync.native(require.resolve('benchgo/client')), realpathSync.native(join(selected.dir, 'lib/client.js')));
   console.log(`Actual profile plugin resolution passed: ${expectedVersion}`);
 } finally { await ctx.fiber.dispose(); }
 '@
@@ -160,25 +161,25 @@ try {
     } finally { $env:ELECTRON_RUN_AS_NODE = $previousNode }
 }
 function Add-LegacyPluginShadow {
-    $directory = Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/dsh-plus'
+    $directory = Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/benchgo'
     if (Test-Path $directory) { throw 'Legacy shadow fixture must not overwrite an existing package' }
     New-Item (Join-Path $directory 'src') -ItemType Directory -Force | Out-Null
     New-Item (Join-Path $directory 'lib') -ItemType Directory -Force | Out-Null
-    $metadata = '{"name":"dsh-plus","version":"0.1.6","type":"module","main":"./src/plugin.mjs","exports":{".":"./src/plugin.mjs","./client":"./lib/client.js","./package.json":"./package.json"}}'
+    $metadata = '{"name":"benchgo","version":"0.1.6","type":"module","main":"./src/plugin.mjs","exports":{".":"./src/plugin.mjs","./client":"./lib/client.js","./package.json":"./package.json"}}'
     Set-Content (Join-Path $directory 'package.json') $metadata -Encoding utf8NoBOM
     Set-Content (Join-Path $directory 'src/plugin.mjs') 'export default true;' -Encoding utf8NoBOM
     Set-Content (Join-Path $directory 'lib/client.js') 'export default true;' -Encoding utf8NoBOM
 }
 try {
     Install-Silently $installer.FullName
-    $installed = Get-Installed '小角.exe'
+    $installed = Get-Installed 'BenchGo.exe'
     Assert-Plus $installed
     Write-Output "Fresh silent installation passed: $($installed.FullName)"
     Add-LegacyPluginShadow
     Assert-PluginResolution $installed '0.1.6' (Join-Path $env:DSH_HOME 'profiles/desktop')
     Install-Silently $installer.FullName
     Assert-Plus $installed
-    if (Test-Path (Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/dsh-plus')) { throw 'Reinstall left a legacy physical plugin shadow' }
+    if (Test-Path (Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/benchgo')) { throw 'Reinstall left a legacy physical plugin shadow' }
     Write-Output 'Same-version reinstall repaired the legacy physical plugin and resolved the current version.'
 
     if ($PreviousInstaller) {
@@ -186,28 +187,28 @@ try {
         $uninstallers = @(Get-ChildItem $installed.DirectoryName -Filter 'Uninstall*.exe')
         if ($uninstallers.Count -ne 1) { throw 'Expected one uninstaller' }
         # Run a copied NSIS uninstaller directly so -Wait covers its full cleanup.
-        $uninstaller = Join-Path $env:RUNNER_TEMP 'xiaojiao-smoke-uninstall.exe'
+        $uninstaller = Join-Path $env:RUNNER_TEMP 'benchgo-smoke-uninstall.exe'
         Copy-Item $uninstallers[0].FullName $uninstaller -Force
         $process = Start-Process -FilePath $uninstaller -ArgumentList @('/S', "_?=$($installed.DirectoryName)") -Wait -PassThru
         if ($process.ExitCode -ne 0) { throw "Uninstaller exited $($process.ExitCode)" }
         Install-Silently (Resolve-Path $PreviousInstaller).Path
-        $legacy = Get-Installed 'DSH-Plus.exe'
-        $profileMarker = Join-Path $env:DSH_HOME 'xiaojiao-upgrade-marker.txt'
-        $dataDirectory = Join-Path $env:APPDATA 'dsh-plus-desktop'
+        $legacy = Get-Installed 'BenchGo.exe'
+        $profileMarker = Join-Path $env:DSH_HOME 'benchgo-upgrade-marker.txt'
+        $dataDirectory = Join-Path $env:APPDATA 'benchgo-desktop'
         New-Item $dataDirectory -ItemType Directory -Force | Out-Null
-        $dataMarker = Join-Path $dataDirectory 'xiaojiao-upgrade-marker.txt'
+        $dataMarker = Join-Path $dataDirectory 'benchgo-upgrade-marker.txt'
         Set-Content $profileMarker 'keep profile'
         Set-Content $dataMarker 'keep desktop data'
         Install-Silently $installer.FullName
-        $upgraded = Get-Installed '小角.exe'
+        $upgraded = Get-Installed 'BenchGo.exe'
         Assert-Plus $upgraded
         if ($upgraded.DirectoryName -ne $legacy.DirectoryName) { throw 'Upgrade changed the registered installation directory' }
-        if (Test-Path $legacy.FullName) { throw 'The previous DSH-Plus.exe was left behind' }
+        if (Test-Path $legacy.FullName) { throw 'The previous BenchGo.exe was left behind' }
         if ((Get-Content $profileMarker) -ne 'keep profile' -or (Get-Content $dataMarker) -ne 'keep desktop data') { throw 'Upgrade did not preserve user data' }
-        if (Test-Path (Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/DSH-Plus.lnk')) { throw 'The legacy Start Menu shortcut was left behind' }
+        if (Test-Path (Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/BenchGo.lnk')) { throw 'The legacy Start Menu shortcut was left behind' }
         $desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
-        if (Test-Path (Join-Path $desktop 'DSH-Plus.lnk')) { throw 'The legacy Desktop shortcut was left behind' }
-        Write-Output "DSH-Plus to 小角 upgrade passed: $($upgraded.FullName)"
+        if (Test-Path (Join-Path $desktop 'BenchGo.lnk')) { throw 'The legacy Desktop shortcut was left behind' }
+        Write-Output "BenchGo in-place upgrade passed: $($upgraded.FullName)"
     }
 } finally {
     $env:DSH_HOME = $previousHome

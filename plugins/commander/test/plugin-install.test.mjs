@@ -9,19 +9,19 @@ import * as tar from 'tar';
 import { prepareRelease, activateRelease, rollbackRelease, getInstallState, releaseBundleName } from '../shared/plugin-install.mjs';
 
 async function fixture(t) {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-plus-install-'));
+  const root = await mkdtemp(join(tmpdir(), 'benchgo-install-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const put = async (file, value) => { file = join(root, file); await mkdir(dirname(file), { recursive: true }); await writeFile(file, typeof value === 'string' ? value : JSON.stringify(value)); };
-  const profile = join(root, 'profile'), releases = join(profile, '.dsh-plus/releases');
+  const profile = join(root, 'profile'), releases = join(profile, '.benchgo/releases');
   await put('profile/package.json', { name: 'test-profile', private: true, dependencies: { kept: '1.0.0' }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } });
   await put('profile/cordis.patch.yml', '# keep user config\n');
   const seed = async (version, shared = []) => {
     const prefix = `seed-${version}`;
     await put(`${prefix}/release.json`, { schemaVersion: 1, version, platform: process.platform, arch: process.arch, shared });
-    await put(`${prefix}/node_modules/dsh-plus/package.json`, { name: 'dsh-plus', version, type: 'module', main: './src/plugin.mjs' });
-    for (const file of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'voice/src/plugin.mjs', 'cordis.patch.yml']) await put(`${prefix}/node_modules/dsh-plus/${file}`, 'export default true;');
+    await put(`${prefix}/node_modules/benchgo/package.json`, { name: 'benchgo', version, type: 'module', main: './src/plugin.mjs' });
+    for (const file of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'voice/src/plugin.mjs', 'cordis.patch.yml']) await put(`${prefix}/node_modules/benchgo/${file}`, 'export default true;');
     const bundleName = releaseBundleName(version);
-    await put(`${prefix}/node_modules/${bundleName}/package.json`, { name: bundleName, version, dependencies: { 'dsh-plus': version }, dsh: { bundle: { patch: './cordis.patch.yml' } } });
+    await put(`${prefix}/node_modules/${bundleName}/package.json`, { name: bundleName, version, dependencies: { 'benchgo': version }, dsh: { bundle: { patch: './cordis.patch.yml' } } });
     await put(`${prefix}/node_modules/${bundleName}/cordis.patch.yml`, '[]\n');
     const directory = join(root, prefix), archive = join(root, `${version}.tar.gz`);
     await tar.c({ file: archive, cwd: directory, gzip: true }, ['release.json', 'node_modules']);
@@ -37,7 +37,7 @@ test('complete archive installs offline, activates atomically and rolls back wit
   let state = await activateRelease({ profile, release: first, enabled: true, appVersion: '0.1.0' });
   assert.equal(state.enabled, true);
   const wrapperRequire = createRequire(await realpath(join(profile, 'node_modules', state.bundleName, 'package.json')));
-  assert.equal(await realpath(wrapperRequire.resolve('dsh-plus')), await realpath(join(first.pluginPath, 'src/plugin.mjs')));
+  assert.equal(await realpath(wrapperRequire.resolve('benchgo')), await realpath(join(first.pluginPath, 'src/plugin.mjs')));
   const second = await prepareRelease(await seed('0.1.1'));
   state = await activateRelease({ profile, release: second });
   assert.equal(state.version, '0.1.1');
@@ -67,39 +67,39 @@ test('a running plugin cannot silently activate over a legacy physical package',
   const first = await prepareRelease(await seed('0.1.6'));
   await activateRelease({ profile, release: first, enabled: true });
   const before = await readFile(join(profile, 'package.json'), 'utf8');
-  await put('profile/node_modules/dsh-plus/package.json', { name: 'dsh-plus', version: '0.1.6' });
-  await put('profile/node_modules/dsh-plus/keep.txt', 'old plugin files');
+  await put('profile/node_modules/benchgo/package.json', { name: 'benchgo', version: '0.1.6' });
+  await put('profile/node_modules/benchgo/keep.txt', 'old plugin files');
   const next = await prepareRelease(await seed('0.1.9'));
-  await assert.rejects(activateRelease({ profile, release: next }), /关闭小角/);
+  await assert.rejects(activateRelease({ profile, release: next }), /关闭BenchGo/);
   assert.equal(await readFile(join(profile, 'package.json'), 'utf8'), before);
-  assert.equal(await readFile(join(profile, 'node_modules/dsh-plus/keep.txt'), 'utf8'), 'old plugin files');
+  assert.equal(await readFile(join(profile, 'node_modules/benchgo/keep.txt'), 'utf8'), 'old plugin files');
 });
 
 test('offline migration removes a legacy junction without deleting its target or the previous release', async t => {
   const { root, profile, seed, put } = await fixture(t);
   const first = await prepareRelease(await seed('0.1.6'));
   await activateRelease({ profile, release: first, enabled: true });
-  await put('external-plugin/package.json', { name: 'dsh-plus', version: '0.1.6' });
+  await put('external-plugin/package.json', { name: 'benchgo', version: '0.1.6' });
   await put('external-plugin/keep.txt', 'preserve linked target');
-  await symlink(join(root, 'external-plugin'), join(profile, 'node_modules/dsh-plus'), process.platform === 'win32' ? 'junction' : 'dir');
+  await symlink(join(root, 'external-plugin'), join(profile, 'node_modules/benchgo'), process.platform === 'win32' ? 'junction' : 'dir');
   const next = await prepareRelease(await seed('0.1.9'));
   await activateRelease({ profile, release: next, migrateLegacy: true });
-  await assert.rejects(lstat(join(profile, 'node_modules/dsh-plus')), { code: 'ENOENT' });
+  await assert.rejects(lstat(join(profile, 'node_modules/benchgo')), { code: 'ENOENT' });
   assert.equal(await readFile(join(root, 'external-plugin/keep.txt'), 'utf8'), 'preserve linked target');
   assert.equal(JSON.parse(await readFile(join(first.pluginPath, 'package.json'))).version, '0.1.6');
   assert.equal((await rollbackRelease({ profile })).version, '0.1.6');
-  assert.equal((await readdir(join(profile, '.dsh-plus'))).some(name => name.startsWith('.legacy-')), false);
+  assert.equal((await readdir(join(profile, '.benchgo'))).some(name => name.startsWith('.legacy-')), false);
 });
 
 test('offline migration refuses an unrecognized package at the plugin location', async t => {
   const { profile, seed, put } = await fixture(t);
   const release = await prepareRelease(await seed('0.1.9'));
   const before = await readFile(join(profile, 'package.json'), 'utf8');
-  await put('profile/node_modules/dsh-plus/package.json', { name: 'user-owned-package', version: '1.0.0' });
-  await put('profile/node_modules/dsh-plus/keep.txt', 'user data');
+  await put('profile/node_modules/benchgo/package.json', { name: 'user-owned-package', version: '1.0.0' });
+  await put('profile/node_modules/benchgo/keep.txt', 'user data');
   await assert.rejects(activateRelease({ profile, release, migrateLegacy: true }), /原文件已保留/);
   assert.equal(await readFile(join(profile, 'package.json'), 'utf8'), before);
-  assert.equal(await readFile(join(profile, 'node_modules/dsh-plus/keep.txt'), 'utf8'), 'user data');
+  assert.equal(await readFile(join(profile, 'node_modules/benchgo/keep.txt'), 'utf8'), 'user data');
 });
 
 test('failed manifest commit restores the legacy plugin and leaves the selected version unchanged', async t => {
@@ -107,14 +107,14 @@ test('failed manifest commit restores the legacy plugin and leaves the selected 
   const first = await prepareRelease(await seed('0.1.6'));
   await activateRelease({ profile, release: first, enabled: true });
   const before = await readFile(join(profile, 'package.json'), 'utf8');
-  await put('profile/node_modules/dsh-plus/package.json', { name: 'dsh-plus', version: '0.1.6' });
-  await put('profile/node_modules/dsh-plus/keep.txt', 'restore old files');
+  await put('profile/node_modules/benchgo/package.json', { name: 'benchgo', version: '0.1.6' });
+  await put('profile/node_modules/benchgo/keep.txt', 'restore old files');
   const next = await prepareRelease(await seed('0.1.9'));
   const builtin = createRequire(import.meta.url)('node:fs/promises');
   const rename = builtin.rename;
   t.mock.method(builtin, 'rename', async (source, destination) => {
     if (destination === join(profile, 'package.json')) {
-      await assert.rejects(filesystem.lstat(join(profile, 'node_modules/dsh-plus')), { code: 'ENOENT' });
+      await assert.rejects(filesystem.lstat(join(profile, 'node_modules/benchgo')), { code: 'ENOENT' });
       throw Object.assign(new Error('simulated manifest commit failure'), { code: 'EIO' });
     }
     return rename(source, destination);
@@ -124,8 +124,8 @@ test('failed manifest commit restores the legacy plugin and leaves the selected 
     await assert.rejects(activateRelease({ profile, release: next, migrateLegacy: true }), /simulated manifest commit failure/);
   } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
   assert.equal(await readFile(join(profile, 'package.json'), 'utf8'), before);
-  assert.equal(await readFile(join(profile, 'node_modules/dsh-plus/keep.txt'), 'utf8'), 'restore old files');
-  assert.equal((await readdir(join(profile, '.dsh-plus'))).some(name => name.startsWith('.legacy-')), false);
+  assert.equal(await readFile(join(profile, 'node_modules/benchgo/keep.txt'), 'utf8'), 'restore old files');
+  assert.equal((await readdir(join(profile, '.benchgo'))).some(name => name.startsWith('.legacy-')), false);
 });
 
 test('activation coordinates with official plugin-manager writers and preserves their completed changes', async t => {
@@ -153,7 +153,7 @@ test('shared services link to matching official runtime and conflicting old seal
   const options = await seed('0.1.0', [{ name: '@deepseek-ai/dsh-llm', version: '0.2.1-alpha.3' }]);
   const release = await prepareRelease({ ...options, runtime });
   assert.equal(await realpath(join(release.directory, 'node_modules/@deepseek-ai/dsh-llm')), await realpath(join(runtime, 'node_modules/@deepseek-ai/dsh-llm')));
-  await put('runtime/node_modules/dsh-plus/package.json', { name: 'dsh-plus', version: '0.0.1' });
+  await put('runtime/node_modules/benchgo/package.json', { name: 'benchgo', version: '0.0.1' });
   await assert.rejects(prepareRelease({ ...await seed('0.1.1'), runtime }), /新版应用/);
   assert.equal((await getInstallState(profile)).managed, false);
 });

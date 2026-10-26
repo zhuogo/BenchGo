@@ -1,9 +1,9 @@
 {
   "name": "@dowork/link",
-  "version": "0.1.3",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "DSH-Plus paired device connectivity and shared mobile client",
+  "description": "BenchGo paired device connectivity and shared mobile client",
   "license": "MIT",
   "scripts": {
     "build:web": "node scripts/build-web.mjs",

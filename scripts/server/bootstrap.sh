@@ -14,7 +14,7 @@ command -v systemctl >/dev/null || { echo '需要 systemd 用户服务' >&2; exi
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}
 systemctl --user show-environment >/dev/null 2>&1 || { echo 'systemd 用户服务不可用；请启用用户会话服务后重试' >&2; exit 1; }
-node_root="$HOME/.local/share/dsh-plus/node"
+node_root="$HOME/.local/share/benchgo/node"
 node_binary=$(command -v node || true)
 if [ -z "$node_binary" ] || ! "$node_binary" -e 'const [a,b,c]=process.versions.node.split(".").map(Number);process.exit(a>=24||(a===22&&(b>19||(b===19&&c>=0)))?0:1)' >/dev/null 2>&1; then
   node_version=22.22.1

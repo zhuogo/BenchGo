@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { prepareInstallerSources } from './prepare-brand.mjs';
 
 for (const newline of ['\n', '\r\n']) test('installer migration retains registered-directory guard: ' + JSON.stringify(newline), async t => {
-  const root = await mkdtemp(join(tmpdir(), 'xiaojiao-installer-'));
+  const root = await mkdtemp(join(tmpdir(), 'benchgo-installer-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const source = join(root, 'deepseek-harness/apps/desktop/installer');
   const output = join(root, 'packaging');
@@ -23,7 +23,7 @@ for (const newline of ['\n', '\r\n']) test('installer migration retains register
   await writeFile(join(source, 'window-frame.cpp'), 'not an include');
   await prepareInstallerSources(root, output);
   const prepared = await readFile(join(output, 'path.nsh'), 'utf8');
-  assert.ok(prepared.includes('${OrIf} ${FileExists} "$INSTDIR\\DSH-Plus.exe"'));
+  assert.ok(prepared.includes('${OrIf} ${FileExists} "$INSTDIR\\BenchGo.exe"'));
   assert.ok(prepared.includes('${If} $0 != $INSTDIR\n    ${OrIf} $1 != 1'));
   assert.equal(await readFile(join(source, 'path.nsh'), 'utf8'), contents);
   assert.equal(await readFile(join(output, 'pages.nsh'), 'utf8'), 'unchanged');

@@ -24,7 +24,7 @@ html[data-dsh-remote-workbench] .dsh-device-switch-stage{display:block}
 .dsh-device-switch-stage[hidden],.dsh-device-switch-stage iframe[hidden]{display:none!important}`;
 
 function ownerRequest(action, args = {}) {
-  const url = new URL('api/commander-devices', document.baseURI);
+  const url = new URL('/api/commander-devices', location.origin);
   return fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...args }) }).then(response => readJsonResponse(response, url));
 }
 

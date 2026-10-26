@@ -1,13 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import os from 'node:os';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { mountLink } from '../src/index.mjs';
 
-test('device launch supports local and Desktop owners but reports the cloud carrier limit', async t => {
+test('partial cloud gateway settings keep the local device routes available', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'link-partial-cloud-'));
+  const routes = [];
+  const ctx = { get: () => undefined, workspaceRegistry: { list: () => [] }, connection: { fetch: { register: value => { routes.push(value); return () => {}; } } }, effect: fn => fn() };
+  const link = await mountLink(ctx, {
+    directory,
+    env: { DSH_LINK_DEVICE_GATEWAY_PORT: '48723', DSH_LINK_WORKBENCH_ORIGIN: 'https://workbench.example' },
+  });
+  t.after(async () => { await link.close(); await rm(directory, { recursive: true, force: true }); });
+  assert.ok(routes.some(value => value.path === '/api/commander-link'));
+  assert.ok(routes.some(value => value.path === '/api/commander-devices'));
+});
+
+test('device launch only exposes the local owner entry', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'link-device-entry-'));
   const routes = [];
   const ctx = { get: () => undefined, workspaceRegistry: { list: () => [] }, connection: { fetch: { register: value => { routes.push(value); return () => {}; } } }, effect: fn => fn() };
@@ -18,12 +31,9 @@ test('device launch supports local and Desktop owners but reports the cloud carr
   const unsupported = await launch('https://cloud.example');
   assert.equal(unsupported.status, 409);
   assert.equal(unsupported.headers.get('cache-control'), 'no-store');
-  const denied = await unsupported.json();
-  assert.equal(denied.code, 'CLOUD_DEVICE_GATEWAY_REQUIRED');
-  assert.equal(denied.url, undefined);
-  assert.match(denied.error, /本机小角/);
-  assert.equal((await launch('https://cloud.example', 'http://127.0.0.1:8080')).status, 409, 'browser-supplied parent does not disguise the cloud origin');
-  assert.equal((await launch('https://cloud.example', 'dsh-app://app')).status, 409, 'a Desktop label cannot disguise the cloud carrier');
+  assert.match((await unsupported.json()).error, /云端设备网关/);
+  assert.equal((await launch('https://cloud.example', 'http://127.0.0.1:8080')).status, 409, 'browser-supplied parent does not disguise the remote origin');
+  assert.equal((await launch('https://cloud.example', 'dsh-app://app')).status, 409, 'a Desktop label cannot disguise the remote origin');
   for (const [origin, parent] of [['http://127.0.0.1:8080', undefined], ['http://localhost:8080', undefined], ['http://[::1]:8080', undefined], ['http://127.0.0.1:8080', 'dsh-app://app'], ['http://127.0.0.1:8080', 'dsh-app://localhost']]) {
     const response = await launch(origin, parent);
     assert.equal(response.status, 200);
@@ -142,4 +152,20 @@ test('owner relay configuration persists separately without returning credential
   await link.close(); link = await mountLink(ctx, { directory, env: { DSH_LINK_RELAY_URL: 'https://ignored.example' } });
   assert.equal(link.status().relay.url, 'https://relay.example:48730');
   assert.equal(link.status().relay.enabled, false);
+});
+
+test('relay pool configuration persists ordered nodes and exposes only public route metadata', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'link-relay-pool-'));
+  const ctx = { get: () => undefined, workspaceRegistry: { list: () => [] }, connection: { fetch: { register: () => () => {} } }, effect: fn => fn() };
+  const link = await mountLink(ctx, { directory, env: {} });
+  t.after(async () => { await link.close(); await rm(directory, { recursive: true, force: true }); });
+  const token = 'relay-pool-token-'.repeat(3);
+  const value = await link.admin({ action: 'relay-pool-configure', nodes: [
+    { id: 'primary', url: 'https://relay-a.example:48730', token, priority: 0, enabled: false },
+    { id: 'backup', url: 'https://relay-b.example:48730', token, priority: 1, enabled: false },
+  ] });
+  assert.deepEqual(value.relay.nodes.map(node => node.id), ['primary', 'backup']);
+  assert.equal(JSON.stringify(value).includes(token), false);
+  const saved = JSON.parse(await readFile(join(directory, 'devices.json'), 'utf8'));
+  assert.deepEqual(saved.relayPool.map(node => node.id), ['primary', 'backup']);
 });

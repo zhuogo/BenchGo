@@ -10,9 +10,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const MIN_CERTBOT = [5, 4, 0];
 const CERT_NAME = 'dsh-link-ip';
 const TOOL_DIR = 'dsh-link-ip-certificate';
-const TIMER_SERVICE = 'dsh-link-ip-certificate-renew.service';
-const TIMER_UNIT = 'dsh-link-ip-certificate-renew.timer';
-const RELAY_UNIT = 'dsh-link-relay.service';
+const TIMER_SERVICE = 'benchgo-relay-cert-renew.service';
+const TIMER_UNIT = 'benchgo-relay-cert-renew.timer';
+const RELAY_UNIT = 'benchgo-relay.service';
 const UNIT_MARKER = '# Managed by DSH Link IP certificate tool.';
 const TIMER_MANIFEST = '.dsh-link-ip-certificate-renew.json';
 const fail = message => { throw new Error(message); };
@@ -20,7 +20,7 @@ const fail = message => { throw new Error(message); };
 function options(argv) {
   const [operation, ...rest] = argv;
   if (!['issue', 'renew', 'dry-run', 'status', 'install-timer', 'uninstall-timer'].includes(operation)) fail('用法：ip-certificate.mjs <issue|renew|dry-run|status|install-timer|uninstall-timer> [选项]');
-  const allowed = new Set(['--ip', '--email', '--webroot', '--state-dir', '--challenge-port', '--relay-port', '--confirm-public-ip', '--certbot', '--restart-relay-unit']);
+  const allowed = new Set(['--ip','--domain', '--email', '--webroot', '--state-dir', '--challenge-port', '--relay-port', '--confirm-public-ip', '--certbot', '--restart-relay-unit']);
   const values = {};
   for (let i = 0; i < rest.length; i += 2) {
     const key = rest[i], value = rest[i + 1];
@@ -33,7 +33,8 @@ function options(argv) {
   }
   if (!values['--state-dir']) fail('必须指定 --state-dir');
   if (['status', 'install-timer'].includes(operation) && Object.keys(values).some(key => key !== '--state-dir')) fail(operation + ' 只接受 --state-dir');
-  if (!['status', 'install-timer'].includes(operation)) for (const key of ['--ip', '--email', '--webroot', '--challenge-port', '--relay-port', '--confirm-public-ip']) if (!values[key]) fail('必须指定 ' + key);
+  if (!['status', 'install-timer'].includes(operation)) for (const key of ['--webroot', '--challenge-port', '--relay-port', '--confirm-public-ip']) if (!values[key]) fail('必须指定 ' + key);
+  if (!['status','install-timer'].includes(operation) && (!values['--ip'] && !values['--domain'] || values['--ip'] && values['--domain'])) fail('必须指定 IP 或域名');
   if (values['--restart-relay-unit'] && (operation !== 'renew' || values['--restart-relay-unit'] !== RELAY_UNIT)) fail('续期只允许重启本工具管理的 ' + RELAY_UNIT);
   return { operation, values };
 }
@@ -64,10 +65,17 @@ function ipv6Number(ip) {
 
 export function validateConfig(input) {
   const ip = input.ip;
+  const domain = input.domain;
+  if (domain) {
+    if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(domain)) fail('域名格式无效');
+    if (input.confirmPublicIp !== true) fail('请确认域名已解析到此服务器');
+  }
   const family = typeof ip === 'string' ? isIP(ip) : 0;
-  if (!family) fail('必须填写有效的 IP 地址，不能填写域名');
+  if (!family && !domain) fail('必须填写有效的 IP 地址或域名');
   if (input.confirmPublicIp !== true) fail('请确认该 IP 是此服务器实际使用的公网 IP');
-  if (family === 4) {
+  if (domain) {
+    // Domain certificates validate the DNS name; the deployment layer validates its public IP.
+  } else if (family === 4) {
     const value = ipv4Number(ip);
     const blocked = [
       ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
@@ -79,12 +87,13 @@ export function validateConfig(input) {
     const value = ipv6Number(ip);
     if (value === null || (value >> 125n) !== 1n || inCidr(value, ipv6Number('2001::'), 23, 128) || inCidr(value, ipv6Number('2001:db8::'), 32, 128) || inCidr(value, ipv6Number('2001:20::'), 28, 128) || inCidr(value, ipv6Number('3fff::'), 20, 128)) fail('该 IPv6 地址不是可签发证书的公网单播地址');
   }
-  if (!/^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}$/.test(input.email ?? '')) fail('请输入有效的联系邮箱');
+  const email = input.email ?? '';
+  if (email && !/^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}$/.test(email)) fail('请输入有效的联系邮箱');
   if (input.challengePort !== 80) fail('Let’s Encrypt HTTP-01 固定使用公网 80 端口；请让现有反向代理将挑战目录映射到 webroot');
   if (!Number.isInteger(input.relayPort) || input.relayPort < 20000 || input.relayPort > 49151 || [22, 80, 443, 8080, 8443].includes(input.relayPort)) fail('中继业务端口须为 20000–49151 的专用高位端口');
   if (typeof input.webroot !== 'string' || !input.webroot || !input.stateDir) fail('必须指定已存在的 webroot 和状态目录');
   if (input.certbot !== undefined && (typeof input.certbot !== 'string' || !input.certbot || input.certbot.includes('\0'))) fail('Certbot 路径无效');
-  return { ip, family, email: input.email, challengePort: 80, relayPort: input.relayPort, webroot: resolve(input.webroot), stateDir: resolve(input.stateDir), certbot: input.certbot ?? 'certbot' };
+  return { ip, domain, family, email, challengePort: 80, relayPort: input.relayPort, webroot: resolve(input.webroot), stateDir: resolve(input.stateDir), certbot: input.certbot ?? 'certbot' };
 }
 
 async function existingDirectory(path, label, writable = false) {
@@ -118,7 +127,8 @@ function unitDirectory() {
 function timerContents(config, stateDir) {
   const script = fileURLToPath(import.meta.url);
   const args = [
-    process.execPath, script, 'renew', '--state-dir', stateDir, '--ip', config.ip, '--email', config.email,
+    process.execPath, script, 'renew', '--state-dir', stateDir, ...(config.domain ? ['--domain', config.domain] : ['--ip', config.ip]),
+    ...(config.email ? ['--email', config.email] : []),
     '--webroot', config.webroot, '--challenge-port', '80', '--relay-port', String(config.relayPort),
     '--confirm-public-ip', 'true', '--certbot', config.certbot ?? 'certbot', '--restart-relay-unit', RELAY_UNIT,
   ];
@@ -294,20 +304,23 @@ async function saveMarker(stateDir, value) {
 }
 
 function certbotArgs(operation, config, root, hasLineage = false) {
-  const common = ['--non-interactive', '--agree-tos', '--no-eff-email', '--email', config.email, '--config-dir', join(root, 'certbot'), '--work-dir', join(root, 'work'), '--logs-dir', join(root, 'logs')];
-  if (operation === 'issue') return ['certonly', '--authenticator', 'webroot', '--webroot-path', config.webroot, '--preferred-challenges', 'http', '--ip-address', config.ip, '--preferred-profile', 'shortlived', '--cert-name', CERT_NAME, ...common];
+  const registration = config.email ? ['--no-eff-email', '--email', config.email] : ['--register-unsafely-without-email'];
+  const common = ['--non-interactive', '--agree-tos', ...registration, '--config-dir', join(root, 'certbot'), '--work-dir', join(root, 'work'), '--logs-dir', join(root, 'logs')];
+  const subject = config.domain ? ['--domains', config.domain] : ['--ip-address', config.ip, '--preferred-profile', 'shortlived'];
+  if (operation === 'issue') return ['certonly', '--authenticator', 'webroot', '--webroot-path', config.webroot, '--preferred-challenges', 'http', ...subject, '--cert-name', CERT_NAME, ...common];
+  const profile = config.domain ? [] : ['--preferred-profile', 'shortlived'];
   if (operation === 'dry-run') return hasLineage
-    ? ['renew', '--cert-name', CERT_NAME, '--webroot-path', config.webroot, '--preferred-profile', 'shortlived', '--dry-run', ...common]
-    : ['certonly', '--authenticator', 'webroot', '--webroot-path', config.webroot, '--preferred-challenges', 'http', '--ip-address', config.ip, '--preferred-profile', 'shortlived', '--cert-name', CERT_NAME, '--dry-run', ...common];
-  return ['renew', '--cert-name', CERT_NAME, '--webroot-path', config.webroot, '--preferred-profile', 'shortlived', ...common];
+    ? ['renew', '--cert-name', CERT_NAME, '--webroot-path', config.webroot, ...profile, '--dry-run', ...common]
+    : ['certonly', '--authenticator', 'webroot', '--webroot-path', config.webroot, '--preferred-challenges', 'http', ...subject, '--cert-name', CERT_NAME, '--dry-run', ...common];
+  return ['renew', '--cert-name', CERT_NAME, '--webroot-path', config.webroot, ...profile, ...common];
 }
 
-async function readCertificate(certPath, keyPath, ip, { allowExpired = false } = {}) {
+async function readCertificate(certPath, keyPath, subject, { allowExpired = false } = {}) {
   const [cert, key] = await Promise.all([readFile(certPath, 'utf8'), readFile(keyPath, 'utf8')]);
   let certificate;
   try { certificate = new X509Certificate(cert); if (!certificate.checkPrivateKey(createPrivateKey(key))) fail('证书与私钥不匹配'); }
   catch (error) { if (/证书与私钥/.test(error.message)) throw error; fail('Certbot 返回的证书或私钥无效'); }
-  if (!certificate.checkIP(ip)) fail('签发证书的 IP 与配置不匹配');
+  if (subject && (isIP(subject) ? !certificate.checkIP(subject) : !certificate.checkHost(subject))) fail('签发证书的标识与配置不匹配');
   const notBefore = Date.parse(certificate.validFrom), notAfter = Date.parse(certificate.validTo), now = Date.now();
   if (!Number.isFinite(notBefore) || !Number.isFinite(notAfter) || notBefore > now + 5 * 60_000 || (!allowExpired && notAfter <= now)) fail('证书尚未生效或已经过期');
   return { cert, key, notBefore: new Date(notBefore).toISOString(), notAfter: new Date(notAfter).toISOString(), daysRemaining: Math.floor((notAfter - now) / 86400000), expired: notAfter <= now };
@@ -325,14 +338,14 @@ async function activePaths(root) {
   return { cert: join(actual, 'fullchain.pem'), key: join(actual, 'privkey.pem'), link: target };
 }
 
-async function publish(root, data, ip) {
+async function publish(root, data, subject) {
   const releases = join(root, 'releases'); await mkdir(releases, { recursive: true, mode: 0o700 });
   const id = new Date().toISOString().replace(/[:.]/g, '-') + '-' + process.pid;
   const release = join(releases, id); await mkdir(release, { mode: 0o700 });
   try {
     await writeFile(join(release, 'fullchain.pem'), data.cert, { mode: 0o644, flag: 'wx' });
     await writeFile(join(release, 'privkey.pem'), data.key, { mode: 0o600, flag: 'wx' });
-    await writeFile(join(release, 'metadata.json'), JSON.stringify({ ip, notBefore: data.notBefore, notAfter: data.notAfter }) + '\n', { mode: 0o600, flag: 'wx' });
+    await writeFile(join(release, 'metadata.json'), JSON.stringify({ subject, notBefore: data.notBefore, notAfter: data.notAfter }) + '\n', { mode: 0o600, flag: 'wx' });
     const active = join(root, 'active'), current = await activePaths(root), temp = join(root, '.active-' + process.pid + '-' + Date.now());
     await symlink('releases/' + id, temp);
     try { await rename(temp, active); } catch (error) { await rm(temp, { force: true }); throw error; }
@@ -357,11 +370,11 @@ async function main() {
   if (operation === 'install-timer') {
     if (!marker?.config) fail('请先成功签发证书，再安装自动续期');
     const saved = marker.config;
-    const config = validateConfig({ ip: saved.ip, email: saved.email, webroot: saved.webroot, stateDir, challengePort: 80, relayPort: saved.relayPort, confirmPublicIp: true, certbot: saved.certbot });
+    const config = validateConfig({ ip: saved.ip, domain: saved.domain, email: saved.email, webroot: saved.webroot, stateDir, challengePort: 80, relayPort: saved.relayPort, confirmPublicIp: true, certbot: saved.certbot });
     config.webroot = await existingDirectory(config.webroot, 'webroot', true);
     const paths = await activePaths(root);
     if (!paths) fail('尚无本工具管理的有效证书，请先运行 issue');
-    await readCertificate(paths.cert, paths.key, config.ip, { allowExpired: true });
+    await readCertificate(paths.cert, paths.key, config.domain || config.ip, { allowExpired: true });
     await installTimer(config, stateDir);
     output({ state: 'timer-installed', timer: TIMER_UNIT, relayUnit: RELAY_UNIT });
     return;
@@ -372,46 +385,46 @@ async function main() {
     if (!config) { output({ state: 'not-configured' }); return; }
     const paths = await activePaths(root);
     if (!paths) { output({ state: 'certificate-missing', config }); return; }
-    const data = await readCertificate(paths.cert, paths.key, config.ip, { allowExpired: true });
+    const data = await readCertificate(paths.cert, paths.key, config.domain || config.ip, { allowExpired: true });
     output({ state: data.expired ? 'expired' : 'ready', ...config, notBefore: data.notBefore, notAfter: data.notAfter, daysRemaining: data.daysRemaining, cert: paths.cert, key: paths.key, renewalRecommended: data.daysRemaining <= 2 });
     return;
   }
-  const config = validateConfig({ ip: values['--ip'], email: values['--email'], webroot: values['--webroot'], stateDir, challengePort: portNumber(values['--challenge-port']), relayPort: portNumber(values['--relay-port']), confirmPublicIp: values['--confirm-public-ip'] === 'true', certbot: values['--certbot'] });
+  const config = validateConfig({ ip: values['--ip'], domain: values['--domain'], email: values['--email'], webroot: values['--webroot'], stateDir, challengePort: portNumber(values['--challenge-port']), relayPort: portNumber(values['--relay-port']), confirmPublicIp: values['--confirm-public-ip'] === 'true', certbot: values['--certbot'] });
   config.webroot = await existingDirectory(config.webroot, 'webroot', true);
   if (operation === 'renew' && (!marker?.config || !(await activePaths(root)))) fail('尚无本工具管理的有效证书，请先运行 issue');
-  if (marker?.config && marker.config.ip !== config.ip) fail('同一证书状态目录不能更换 IP，请为新 IP 使用独立状态目录');
-  if (marker?.config && operation !== 'issue' && (marker.config.webroot !== config.webroot || marker.config.relayPort !== config.relayPort)) fail('续期配置必须与当前证书的 webroot 和中继端口一致');
+  if (marker?.config && (marker.config.ip !== config.ip || marker.config.domain !== config.domain)) fail('同一证书状态目录不能更换证书标识，请使用独立状态目录');
+  if (marker?.config && operation !== 'issue' && (marker.config.domain !== config.domain || marker.config.webroot !== config.webroot || marker.config.relayPort !== config.relayPort)) fail('续期配置必须与当前证书的 webroot 和中继端口一致');
   const version = await certbotVersion(config.certbot);
   const managed = await ensureOwnedDir(stateDir);
   if (operation === 'dry-run') {
     let hasLineage = false;
     try { await access(join(managed, 'certbot/live', CERT_NAME, 'fullchain.pem')); hasLineage = true; } catch {}
     await command(config.certbot, certbotArgs('dry-run', config, managed, hasLineage));
-    await saveMarker(stateDir, { schemaVersion: 1, tool: 'dsh-link-ip-certificate', certbot: version, config: { ip: config.ip, email: config.email, webroot: config.webroot, challengePort: 80, relayPort: config.relayPort, certbot: config.certbot } });
+    await saveMarker(stateDir, { schemaVersion: 1, tool: 'dsh-link-ip-certificate', certbot: version, config: { ip: config.ip, domain: config.domain, email: config.email, webroot: config.webroot, challengePort: 80, relayPort: config.relayPort, certbot: config.certbot } });
     output({ state: 'dry-run-passed', certbot: version, challenge: 'http-01', challengePort: 80, relayPort: config.relayPort });
     return;
   }
   const previousPaths = operation === 'renew' ? await activePaths(root) : null;
-  const previous = previousPaths ? await readCertificate(previousPaths.cert, previousPaths.key, config.ip, { allowExpired: true }) : null;
+  const previous = previousPaths ? await readCertificate(previousPaths.cert, previousPaths.key, config.domain || config.ip, { allowExpired: true }) : null;
   await mkdir(join(managed, 'certbot'), { recursive: true, mode: 0o700 });
   await mkdir(join(managed, 'work'), { recursive: true, mode: 0o700 });
   await mkdir(join(managed, 'logs'), { recursive: true, mode: 0o700 });
   await command(config.certbot, certbotArgs(operation, config, managed));
-  const raw = await readCertificate(join(managed, 'certbot/live', CERT_NAME, 'fullchain.pem'), join(managed, 'certbot/live', CERT_NAME, 'privkey.pem'), config.ip);
+  const raw = await readCertificate(join(managed, 'certbot/live', CERT_NAME, 'fullchain.pem'), join(managed, 'certbot/live', CERT_NAME, 'privkey.pem'), config.domain || config.ip);
   const changed = operation === 'issue' || !previous || previous.cert !== raw.cert || previous.key !== raw.key;
   if (!changed) {
     if (values['--restart-relay-unit']) await reloadRelayIfPending(root);
-    output({ state: 'ready', changed: false, certbot: version, challenge: 'http-01', challengePort: 80, relayPort: config.relayPort, ip: config.ip, notBefore: raw.notBefore, notAfter: raw.notAfter, daysRemaining: raw.daysRemaining, cert: previousPaths.cert, key: previousPaths.key });
+    output({ state: 'ready', changed: false, certbot: version, challenge: 'http-01', challengePort: 80, relayPort: config.relayPort, ip: config.ip, domain: config.domain, notBefore: raw.notBefore, notAfter: raw.notAfter, daysRemaining: raw.daysRemaining, cert: previousPaths.cert, key: previousPaths.key });
     return;
   }
-  const nextMarker = { schemaVersion: 1, tool: 'dsh-link-ip-certificate', certbot: version, config: { ip: config.ip, email: config.email, webroot: config.webroot, challengePort: 80, relayPort: config.relayPort, certbot: config.certbot } };
+  const nextMarker = { schemaVersion: 1, tool: 'dsh-link-ip-certificate', certbot: version, config: { ip: config.ip, domain: config.domain, email: config.email, webroot: config.webroot, challengePort: 80, relayPort: config.relayPort, certbot: config.certbot } };
   await saveMarker(stateDir, nextMarker);
-  const published = await publish(managed, raw, config.ip);
+  const published = await publish(managed, raw, config.domain || config.ip);
   if (values['--restart-relay-unit']) {
     await markRelayReloadPending(root);
     await reloadRelayIfPending(root);
   }
-  output({ state: 'ready', changed: true, certbot: version, challenge: 'http-01', challengePort: 80, relayPort: config.relayPort, ip: config.ip, notBefore: raw.notBefore, notAfter: raw.notAfter, daysRemaining: raw.daysRemaining, cert: published.cert, key: published.key });
+  output({ state: 'ready', changed: true, certbot: version, challenge: 'http-01', challengePort: 80, relayPort: config.relayPort, ip: config.ip, domain: config.domain, notBefore: raw.notBefore, notAfter: raw.notAfter, daysRemaining: raw.daysRemaining, cert: published.cert, key: published.key });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

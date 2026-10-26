@@ -9,10 +9,11 @@ const helperBase = existsSync(fileURLToPath(new URL('./shared/plugin-install.mjs
 const { activateRelease, getInstallState, prepareRelease, releaseBundleName } = await import(new URL(`${helperBase}plugin-install.mjs`, import.meta.url));
 const { compareVersions } = await import(new URL(`${helperBase}update-feed.mjs`, import.meta.url));
 
-const PLUS = 'dsh-plus';
+const PLUS = 'benchgo';
 const LEGACY_PLUS = '@dowork/commander';
-const COMPOSITION = '@dowork/dsh-plus-desktop';
-const MARKER = '.dsh-plus-enrolled.json';
+const LEGACY_NAMES = [LEGACY_PLUS];
+const COMPOSITION = '@dowork/benchgo-desktop';
+const MARKER = '.benchgo-enrolled.json';
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
 const writeJson = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
 
@@ -30,7 +31,7 @@ function sharedPackage(name) { return name.startsWith('@deepseek-ai/'); }
 export function stagePluginBundle({ runtime, output, plugin = resolve(import.meta.dirname, '../../plugins/commander'), platform = process.platform, arch = process.arch }) {
   runtime = runtime ? resolve(runtime) : null; plugin = resolve(plugin);
   const manifest = readJson(join(plugin, 'package.json'));
-  if (manifest.name !== PLUS || !manifest.dsh?.bundle?.patch) throw new Error('Plus bundle: expected the DSH-Plus bundle package');
+  if (manifest.name !== PLUS || !manifest.dsh?.bundle?.patch) throw new Error('Plus bundle: expected the BenchGo bundle package');
   output = resolve(output ?? join(runtime ? dirname(runtime) : dirname(plugin), 'plus-seed'));
   const relativeOutput = runtime ? relative(runtime, output) : '..';
   if (runtime && (!relativeOutput || (relativeOutput !== '..' && !relativeOutput.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && !isAbsolute(relativeOutput)))) throw new Error('Plus bundle: seed must be outside the sealed engine runtime');
@@ -100,10 +101,10 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
     }
     dependencies(plugin, destination, new Set([plugin]));
     // The official resolver excludes the selected bundle itself. An immutable wrapper carries
-    // DSH-Plus as a dependency, so Host inventory and client injection both resolve it.
+    // BenchGo as a dependency, so Host inventory and client injection both resolve it.
     mkdirSync(composition, { recursive: true });
     writeJson(join(composition, 'package.json'), {
-      name: bundleName, displayName: 'DSH-Plus', version: manifest.version, private: true, type: 'module', license: 'MIT',
+      name: bundleName, displayName: 'BenchGo', version: manifest.version, private: true, type: 'module', license: 'MIT',
       dependencies: { [PLUS]: manifest.version }, dsh: { bundle: { patch: './cordis.patch.yml' } },
       exports: { './package.json': './package.json', './locale/*.json': './locale/*.json' },
     });
@@ -111,7 +112,7 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
     if (existsSync(join(plugin, 'locale'))) cpSync(join(plugin, 'locale'), join(composition, 'locale'), { recursive: true });
     else {
       mkdirSync(join(composition, 'locale'), { recursive: true });
-      writeJson(join(composition, 'locale/en.json'), { meta: { title: 'DSH-Plus', description: 'DSH-Plus plugin updates and desktop features.' } });
+      writeJson(join(composition, 'locale/en.json'), { meta: { title: 'BenchGo', description: 'BenchGo plugin updates and desktop features.' } });
     }
     const services = [...shared].sort(([a], [b]) => a.localeCompare(b)).map(([name, version]) => ({ name, version }));
     writeJson(join(output, 'release.json'), { schemaVersion: 1, version: manifest.version, platform, arch, shared: services });
@@ -127,8 +128,8 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
 /** Enroll or upgrade Plus offline; preserve user settings and later disable/recovery choices. */
 export async function initializePluginProfile({ runtime, resources, profile, seed }) {
   runtime = resolve(runtime ?? [join(resources, 'app.asar.unpacked', 'dsh'), join(resources, 'app.asar', 'dsh')].find(path => existsSync(join(path, 'node_modules/@deepseek-ai/dsh-app-boot/package.json'))) ?? join(resources, 'app.asar.unpacked', 'dsh'));
-  if (existsSync(join(runtime, 'node_modules', PLUS, 'package.json'))) throw new Error('DSH-Plus: 此应用仍内置锁定插件，请安装新版桌面应用以迁移');
-  seed = resolve(seed ?? join(resources, 'dsh-plus', 'seed'));
+  if (existsSync(join(runtime, 'node_modules', PLUS, 'package.json'))) throw new Error('BenchGo: 此应用仍内置锁定插件，请安装新版桌面应用以迁移');
+  seed = resolve(seed ?? join(resources, 'benchgo', 'seed'));
   const seedMetadata = readJson(join(seed, 'release.json'));
   const boot = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js')).href);
   const home = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-home-paths/lib/index.js')).href);
@@ -166,10 +167,10 @@ export async function initializePluginProfile({ runtime, resources, profile, see
     if (!existsSync(manifestPath)) boot.initProfile(profile, boot.PROFILE_TEMPLATES.web.bundles);
     const manifest = readJson(manifestPath);
     const bundles = manifest.dsh?.profile?.bundles;
-    if (!Array.isArray(bundles) || !bundles.every(name => typeof name === 'string')) throw new Error('DSH-Plus: invalid desktop profile bundles; existing configuration was preserved');
-    const previouslyEnabled = bundles.some(name => [PLUS, LEGACY_PLUS, COMPOSITION].includes(name) || name.startsWith('@dsh-plus/desktop-'));
+    if (!Array.isArray(bundles) || !bundles.every(name => typeof name === 'string')) throw new Error('BenchGo: invalid desktop profile bundles; existing configuration was preserved');
+    const previouslyEnabled = bundles.some(name => [PLUS, ...LEGACY_NAMES, COMPOSITION].includes(name) || name.startsWith('@benchgo/desktop-'));
     const enabled = now.managed ? now.enabled : enrolled ? previouslyEnabled : true;
-    const release = await prepareRelease({ directory: seed, root: join(profile, '.dsh-plus', 'releases'), version: seedMetadata.version, runtime });
+    const release = await prepareRelease({ directory: seed, root: join(profile, '.benchgo', 'releases'), version: seedMetadata.version, runtime });
     const state = await activateRelease({ profile, release, enabled, appVersion: seedMetadata.version, migrateLegacy: true });
     writeJson(marker, { schemaVersion: 2, package: PLUS, bundle: state.bundleName, version: state.version });
     return { profile, enrolled: !enrolled, reason: enrolled ? 'migrated' : 'enabled', ...state };

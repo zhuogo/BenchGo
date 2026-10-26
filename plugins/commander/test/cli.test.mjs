@@ -8,9 +8,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-test('CLI help presents the dsh-plus command without changing the underlying entry point', async () => {
+test('CLI help presents the benchgo command without changing the underlying entry point', async () => {
   const { stdout, stderr } = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('../src/cli.mjs', import.meta.url)), '--help']);
-  assert.match(stdout, /^dsh-plus \[--data-dir PATH\]/);
+  assert.match(stdout, /^benchgo \[--data-dir PATH\]/);
   assert.doesNotMatch(stdout, /Commander/);
   assert.equal(stderr, '');
 });

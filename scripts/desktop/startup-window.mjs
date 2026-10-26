@@ -4,7 +4,7 @@ export async function openStartupWindow({ app, BrowserWindow, nativeImage, page,
   const window = new BrowserWindow({
     width: 420, height: 300, useContentSize: true, center: true,
     frame: false, resizable: false, maximizable: false, fullscreenable: false,
-    show: false, backgroundColor: '#171819', title: '小角',
+    show: false, backgroundColor: '#171819', title: 'BenchGo',
     ...(icon && !icon.isEmpty() ? { icon } : {}),
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
   });

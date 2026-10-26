@@ -15,7 +15,7 @@ const text = (value, name, max = 20000) => {
 };
 
 const unavailableResponse = error => Response.json({
-  error: `DSH-Plus 启动失败：${error.message}`,
+  error: `BenchGo 启动失败：${error.message}`,
   code: 'COMMANDER_UNAVAILABLE',
 }, { status: 503, headers: { 'cache-control': 'no-store' } });
 
@@ -32,7 +32,7 @@ export async function mountWeb(ctx, commander, config = {}, dependencies = {}) {
   let dispatch, failure;
   const initialized = Promise.resolve().then(async () => {
     try { dispatch = await initializeWeb(ctx, commander, config, dependencies); }
-    catch (error) { failure = error; ctx.logger?.error?.(`DSH-Plus sidebar startup failed: ${error.message}`); }
+    catch (error) { failure = error; ctx.logger?.error?.(`BenchGo sidebar startup failed: ${error.message}`); }
   });
   ctx.effect(() => ctx.connection.fetch.register({
     path: '/api/commander', methods: ['POST'], requestBody: 'buffered',
@@ -69,7 +69,7 @@ async function initializeWeb(ctx, commander, config, dependencies) {
   let delegationError;
   const unavailable = (name, error) => {
     capabilities[name] = { available: false, error: error.message, ...(error.code ? { code: error.code } : {}) };
-    ctx.logger?.warn?.(`DSH-Plus ${name} unavailable: ${error.message}`);
+    ctx.logger?.warn?.(`BenchGo ${name} unavailable: ${error.message}`);
   };
   const project = id => {
     const p = ctx.workspaceRegistry.get(text(id, 'projectId', 200));
@@ -254,7 +254,7 @@ async function initializeWeb(ctx, commander, config, dependencies) {
     if (action === 'close') return commander.disconnect(s.id);
     if (action === 'history') return { history: await commander.history(s.id) };
     if (action === 'approve') { commander.approve(s.id, text(input.approvalId, 'approvalId', 200), input.answer); return commander.snapshot(s.id); }
-    throw new Error(`Unknown DSH-Plus action: ${action}`);
+    throw new Error(`Unknown BenchGo action: ${action}`);
   };
   // Optional localhost MCP and fonts must not remove the sidebar's core API.
   try {

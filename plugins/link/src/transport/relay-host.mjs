@@ -17,7 +17,7 @@ function validate(options) {
   try { relay = new URL(relayUrl); local = new URL(target?.url); } catch { throw new Error('中继或 Link 主机地址无效'); }
   if (relay.protocol !== 'https:' || relay.origin !== relayUrl || relay.username || relay.password || relay.pathname !== '/' || relay.search || relay.hash) throw new Error('中继地址必须是独立 HTTPS origin');
   if (local.protocol !== 'https:' || local.origin !== target.url || local.username || local.password || local.pathname !== '/' || local.search || local.hash || !['localhost', '127.0.0.1', '[::1]'].includes(local.hostname)) throw new Error('Link 上游必须是固定 HTTPS loopback 地址');
-  if (typeof token !== 'string' || token.length < 32 || token.length > 256) throw new Error('中继主机密钥至少需要 32 个字符');
+  if (typeof token !== 'string' || token.length < 6 || token.length > 256) throw new Error('中继主机密钥至少需要 6 个字符');
   if (typeof target.pin !== 'string' || !/^[A-Za-z0-9+/]{43}=$/.test(target.pin) || Buffer.from(target.pin, 'base64').length !== 32) throw new Error('Link 主机 SPKI 指纹无效');
   if (options.relayCa !== undefined && typeof options.relayCa !== 'string' && !Buffer.isBuffer(options.relayCa)) throw new Error('中继 CA 证书无效');
   return { relay: relay.origin, target: { url: local.origin, pin: target.pin } };

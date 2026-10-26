@@ -49,7 +49,7 @@ test('invalid saved state stays intact and exposes its cause without publishing 
   await new Promise(resolve => setImmediate(resolve));
   const response = await routes.get('/api/commander').fetch(new Request('http://localhost/api/commander', { method: 'POST' }));
   assert.equal(response.status, 503);
-  assert.match((await response.json()).error, /DSH-Plus 启动失败/);
+  assert.match((await response.json()).error, /BenchGo 启动失败/);
   assert.equal(await readFile(join(directory, 'sessions.json'), 'utf8'), data);
   await assert.rejects(readFile(join(directory, 'owner.lock')), { code: 'ENOENT' });
 });

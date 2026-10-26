@@ -14,12 +14,27 @@ export function normalizeRoutes(value) {
   if (!Array.isArray(value) || value.length > 16) throw new Error('设备连接路线无效');
   return value.map(route => {
     if (!route || typeof route !== 'object' || Array.isArray(route)) throw new Error('设备连接路线无效');
-    const allowed = route.kind === 'direct' ? ['kind', 'url', 'pin'] : route.kind === 'relay' ? ['kind', 'url'] : [];
+    const allowed = route.kind === 'direct' ? ['kind', 'url', 'pin'] : route.kind === 'relay' ? ['kind', 'url', 'relayId', 'id', 'priority', 'health', 'cooldownUntil', 'lastError'] : [];
     if (!allowed.length || Object.keys(route).some(key => !allowed.includes(key))) throw new Error('设备连接路线无效');
     const target = normalizeTarget({ url: route.url, pin: route.pin });
     if (route.kind === 'direct' && !target.pin) throw new Error('直连路线必须固定主机指纹');
     if (route.kind === 'relay' && route.pin) throw new Error('中继路线必须使用系统 CA 验证');
-    return route.kind === 'direct' ? { kind: 'direct', ...target } : { kind: 'relay', url: target.url };
+    if (route.kind === 'direct') return { kind: 'direct', ...target };
+    const relayId = route.relayId ?? route.id;
+    if (relayId !== undefined && (typeof relayId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(relayId))) throw new Error('中继 ID 无效');
+    if (route.relayId !== undefined && route.id !== undefined && route.relayId !== route.id) throw new Error('中继 ID 不一致');
+    if (route.priority !== undefined && (!Number.isInteger(route.priority) || route.priority < 0 || route.priority > 1_000_000)) throw new Error('中继优先级无效');
+    if (route.health !== undefined && !['unknown', 'healthy', 'degraded', 'unhealthy'].includes(route.health)) throw new Error('中继健康状态无效');
+    if (route.cooldownUntil !== undefined && (!Number.isInteger(route.cooldownUntil) || route.cooldownUntil < 0)) throw new Error('中继冷却时间无效');
+    if (route.lastError !== undefined && (typeof route.lastError !== 'string' || route.lastError.length > 200)) throw new Error('中继错误信息无效');
+    return {
+      kind: 'relay', url: target.url,
+      ...(relayId === undefined ? {} : { relayId }),
+      ...(route.priority === undefined ? {} : { priority: route.priority }),
+      ...(route.health === undefined ? {} : { health: route.health }),
+      ...(route.cooldownUntil === undefined ? {} : { cooldownUntil: route.cooldownUntil }),
+      ...(route.lastError === undefined ? {} : { lastError: route.lastError }),
+    };
   });
 }
 export async function openDeviceRegistry(directory) {
@@ -54,6 +69,17 @@ export async function openDeviceRegistry(directory) {
     async remove(id) { get(id); state.devices = state.devices.filter(row => row.id !== id); if (state.activeId === id) state.activeId = 'local'; await persist(); },
     mark(id, status, lastError = null) { const value = get(id); value.status = status; value.lastError = lastError; },
     markRoute(id, kind) { if (kind !== 'direct' && kind !== 'relay') throw new Error('设备连接路线无效'); get(id).currentPath = kind; },
+    async markRouteHealth(id, relayId, health, { cooldownUntil = 0, lastError = null } = {}) {
+      if (!['unknown', 'healthy', 'degraded', 'unhealthy'].includes(health)) throw new Error('中继健康状态无效');
+      const value = get(id), route = value.routes?.find(item => item.kind === 'relay' && (item.relayId || item.id || item.url) === relayId);
+      if (!route) throw new Error('中继路线不存在');
+      if (!Number.isInteger(cooldownUntil) || cooldownUntil < 0) throw new Error('中继冷却时间无效');
+      route.health = health; route.cooldownUntil = cooldownUntil;
+      if (lastError == null) delete route.lastError;
+      else if (typeof lastError !== 'string' || lastError.length > 200) throw new Error('中继错误信息无效');
+      else route.lastError = lastError;
+      await persist(); return publicDevice(value);
+    },
     flush: () => writes,
   };
 }

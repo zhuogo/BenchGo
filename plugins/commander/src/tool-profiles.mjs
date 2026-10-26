@@ -23,12 +23,13 @@ export function createToolProfiles({ directory, providers, ...paths }) {
   const state = async () => { const raw = await read(storePath); if (!raw) return { version: 1, profiles: {}, bindings: {}, backups: [] }; try { const data = JSON.parse(raw); if (data.version !== 1 || !object(data.profiles) || !object(data.bindings) || !Array.isArray(data.backups)) throw Error(); validateObject(data); return data; } catch { throw new ToolConfigError('工具配置存储损坏，原文件已保留', 409); } };
   const persist = data => atomic(storePath, JSON.stringify(data, null, 2) + '\n');
   const checkAccess = async (providerId, tool) => assertProviderToolAccess(await providers.describeAccess?.(providerId), tool);
-  const nativeStatus = async () => Promise.all(TOOL_IDS.map(async tool => {
+  const nativeStatus = async data => Promise.all(TOOL_IDS.map(async tool => {
+    const applied = data.applied?.[tool];
     const files = await Promise.all(nativeConfigFiles(tool, paths).map(async spec => {
-      try { await safePath(spec.path); const info = await lstat(spec.path); return { ...spec, exists: info.isFile() }; }
-      catch (error) { return { ...spec, exists: false, ...(error.code !== 'ENOENT' ? { unavailable: true } : {}) }; }
+      try { await safePath(spec.path); const info = await lstat(spec.path); const exists = info.isFile(); const checksum = exists ? hash(await readFile(spec.path, 'utf8')) : null; return { ...spec, exists, ...(applied?.nativeChecksums ? { externalChanged: (applied.nativeChecksums[spec.path] ?? null) !== checksum } : {}) }; }
+      catch (error) { return { ...spec, exists: false, ...(applied?.nativeChecksums ? { externalChanged: (applied.nativeChecksums[spec.path] ?? null) !== null } : {}), ...(error.code !== 'ENOENT' ? { unavailable: true } : {}) }; }
     }));
-    return { tool, files, hasConfiguration: files.some(file => file.exists) };
+    return { tool, files, hasConfiguration: files.some(file => file.exists), ...(applied?.lastSyncAt ? { lastSyncAt: applied.lastSyncAt } : {}) };
   }));
   const sanitize = profile => profile ? structuredClone(profile) : null;
   const build = async (input, data) => {
@@ -48,7 +49,7 @@ export function createToolProfiles({ directory, providers, ...paths }) {
   };
   const publicFiles = files => files.map(x => ({ role: x.role, path: x.path, exists: x.before !== null, checksum: x.checksum, changed: x.before !== x.after }));
   async function transact(data, tool, files, restoreOf, appliedProfile) {
-    const changed = files.filter(x => x.before !== x.after); if (!changed.length) { data.applied ??= {}; if (appliedProfile) data.applied[tool] = structuredClone(appliedProfile); else delete data.applied[tool]; await persist(data); return { tool, backupId: null, files: files.map(x => ({ path: x.path, checksum: x.before === null ? null : hash(x.before) })), warnings: [] }; }
+    const changed = files.filter(x => x.before !== x.after); if (!changed.length) { data.applied ??= {}; if (appliedProfile) data.applied[tool] = { ...structuredClone(appliedProfile), nativeChecksums: { ...(data.applied[tool]?.nativeChecksums || {}), ...Object.fromEntries(files.map(x => [x.path, x.after === null ? null : hash(x.after)])) }, lastSyncAt: new Date().toISOString() }; else delete data.applied[tool]; await persist(data); return { tool, backupId: null, files: files.map(x => ({ path: x.path, checksum: x.before === null ? null : hash(x.before) })), warnings: [] }; }
     const id = randomUUID(), createdAt = new Date().toISOString(), backup = { version: 1, id, tool, appliedProfile: data.applied?.[tool] || null, files: changed.map(x => ({ path: x.path, before: x.before, afterChecksum: x.after === null ? null : hash(x.after) })) };
     await atomic(join(backupDir, id + '.json'), JSON.stringify(backup));
     const written = [];
@@ -57,7 +58,7 @@ export function createToolProfiles({ directory, providers, ...paths }) {
         const actual = await read(item.path); if (actual !== item.before) throw new ToolConfigError('原生配置被其他程序修改，请重新预览', 409);
         if (item.after === null) await rm(item.path); else await atomic(item.path, item.after); written.push(item);
       }
-      data.applied ??= {}; if (appliedProfile) data.applied[tool] = structuredClone(appliedProfile); else delete data.applied[tool];
+      data.applied ??= {}; if (appliedProfile) data.applied[tool] = { ...structuredClone(appliedProfile), nativeChecksums: { ...(data.applied[tool]?.nativeChecksums || {}), ...Object.fromEntries(files.map(x => [x.path, x.after === null ? null : hash(x.after)])) }, lastSyncAt: createdAt }; else delete data.applied[tool];
       data.backups.push({ id, tool, createdAt, files: changed.map(x => x.path), ...(restoreOf ? { restoreOf } : {}) }); await persist(data);
     } catch (error) {
       let conflict = false;
@@ -67,7 +68,7 @@ export function createToolProfiles({ directory, providers, ...paths }) {
     return { tool, backupId: id, files: files.map(x => ({ path: x.path, checksum: x.after === null ? null : hash(x.after) })), warnings: [] };
   }
   return {
-    async list({ includeNative = true } = {}) { const data = await state(); return { profiles: Object.values(data.profiles).map(sanitize), applied: Object.values(data.applied || {}).map(sanitize), backups: data.backups.map(x => structuredClone(x)), capabilities: toolCapabilities(), ...(includeNative ? { native: await nativeStatus() } : {}), bindings: structuredClone(data.bindings), defaults: Object.values(data.defaults || {}).map(sanitize) }; },
+    async list({ includeNative = true } = {}) { const data = await state(); return { profiles: Object.values(data.profiles).map(sanitize), applied: Object.values(data.applied || {}).map(sanitize), backups: data.backups.map(x => structuredClone(x)), capabilities: toolCapabilities(), ...(includeNative ? { native: await nativeStatus(data) } : {}), bindings: structuredClone(data.bindings), defaults: Object.values(data.defaults || {}).map(sanitize) }; },
     async get(tool) { return sanitize((await state()).profiles[toolId(tool)]); },
     async runtime(tool) {
       tool = toolId(tool); const data = await state(), profile = data.applied?.[tool]; if (!profile) return { configured: false, env: {} };
@@ -75,7 +76,7 @@ export function createToolProfiles({ directory, providers, ...paths }) {
       await checkAccess(profile.providerId, tool);
       const { baseURL, apiKey } = await providers.resolve(profile.providerId);
       const env = tool === 'claude' ? { ANTHROPIC_BASE_URL: baseURL, ANTHROPIC_API_KEY: apiKey, ANTHROPIC_AUTH_TOKEN: apiKey, ANTHROPIC_MODEL: profile.model } : tool === 'gemini' ? { GEMINI_API_KEY: apiKey, GOOGLE_GEMINI_BASE_URL: baseURL, GEMINI_MODEL: profile.model } : {};
-      return { configured: true, providerId: profile.providerId, model: profile.model, provider: ['pi', 'opencode'].includes(tool) ? 'dsh-plus' : undefined, env };
+      return { configured: true, providerId: profile.providerId, model: profile.model, provider: ['pi', 'opencode'].includes(tool) ? 'benchgo' : undefined, env };
     },
     setBindings(input) { return exclusive(async () => { const data = await state(), providerId = text(input.providerId, '供应商'); if (!Array.isArray(input.tools) || input.tools.length > TOOL_IDS.length + 1) throw new ToolConfigError('无效的工具绑定'); const tools = [...new Set(input.tools.map(id => id === 'harness' ? id : toolId(id)))]; for (const tool of tools) await checkAccess(providerId, tool); if (!providers.describeAccess) await providers.resolve(providerId); else await providers.describeAccess(providerId); data.bindings[providerId] = tools; await persist(data); return { bindings: structuredClone(data.bindings) }; }); },
     save(input) { return exclusive(async () => {

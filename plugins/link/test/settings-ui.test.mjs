@@ -102,7 +102,7 @@ test('pairing modal owns Escape and Tab focus, restoring its invoking control', 
 
 test('host failure ends loading, disables dependent actions, stops polling and recovers on retry', async () => {
   let fail = true;
-  const view = fixture({ respond: async (_action, _input, status) => { if (fail) throw Object.assign(Error('服务待就绪，请稍后重试'), { detail: 'HTTP 404 · /api/commander-link' }); return { ...status, cloudAccess: { configured: true, ready: true, enabled: false } }; } });
+  const view = fixture({ respond: async (_action, _input, status) => { if (fail) throw Object.assign(Error('服务待就绪，请稍后重试'), { detail: 'HTTP 404 · /api/commander-link' }); return { ...status }; } });
   let tree = view.render();
   assert(nodes(tree).some(node => node.props.label === '正在读取连接状态…'));
   assert.equal(nodes(tree).some(node => textOf(node) === '生成连接信息'), false);
@@ -113,8 +113,6 @@ test('host failure ends loading, disables dependent actions, stops polling and r
   assert.equal(nodes(tree).find(node => node.props.value === undefined && node.props.id === 'link-enabled').props.disabled, true);
   assert.equal(view.timers.size, 0);
   assert(nodes(tree).some(node => node.type === 'details' && node.props.className === 'link-error-detail'));
-  const cloud = nodes(tree).find(node => node.props.onRetry && 'failed' in node.props);
-  assert.equal(cloud.props.loading, false); assert.equal(cloud.props.failed, true); assert.equal(cloud.props.disabled, true);
   fail = false; await view.find(tree, '重试').props.onClick(); tree = view.render();
   assert.equal(view.find(tree, '生成连接信息').props.disabled, false);
   assert.equal(view.timers.size, 1);
@@ -131,7 +129,7 @@ test('embedded settings use owner device transport and keep advanced options col
   await view.find(tree, '生成连接信息').props.onClick();
   assert.equal(calls.at(-1).action, 'pairing');
   const advanced = nodes(tree).find(node => node.type === 'details' && node.props.className === 'link-advanced');
-  assert(advanced); assert.equal(advanced.props.open, undefined); assert(nodes(advanced).some(node => node.props.management === props.management));
+  assert(advanced); assert.equal(advanced.props.open, undefined);
   assert.doesNotMatch(textOf(tree), /连接手机|App 地址/);
 });
 

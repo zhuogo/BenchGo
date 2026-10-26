@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "DSH-Plus Harness 工具管理",
+    "title": "BenchGo Harness 工具管理",
     "version": "1.2.0",
     "description": "官方 owner 通道的侧栏状态与工具设置接口；已配对工作台仅通过 Link 既有转发白名单访问。工具安装与本机配置写入仍受对应权限限制，不通过 MCP 向 Agent 暴露安装或配置写入权限。"
   },
@@ -14,7 +14,7 @@
     "/api/commander/tooling": {
       "post": {
         "summary": "管理工具、隔离会话方案与安装任务",
-        "description": "请求必须通过官方 owner 通道且 Origin 同源。安装、更新、重装的 source 可省略，默认 mirror；npm 工具自动准备缺少的兼容 Node.js/npm。卸载只移除带 DSH-Plus 凭据的独立副本；本机配置写入需 confirmNativeWrite=true。",
+        "description": "请求必须通过官方 owner 通道且 Origin 同源。安装、更新、重装均绑定系统真实安装来源；未知来源禁止自动更新或卸载。旧客户端携带的 source 字段仅为兼容，不改变来源选择；卸载需携带探测快照 snapshot 二次确认。本机配置写入需 confirmNativeWrite=true。",
         "requestBody": {
           "required": true,
           "content": {
@@ -169,7 +169,7 @@
             }
           },
           "503": {
-            "description": "DSH-Plus 存储或侧栏初始化失败（含数据目录占用、无法确认旧锁持有者或损坏持久状态）；明确报告原因，保留已有数据，不返回空会话或缺失路由 404。修复原因后需重启主机。",
+            "description": "BenchGo 存储或侧栏初始化失败（含数据目录占用、无法确认旧锁持有者或损坏持久状态）；明确报告原因，保留已有数据，不返回空会话或缺失路由 404。修复原因后需重启主机。",
             "content": {
               "application/json": {
                 "schema": {
@@ -196,15 +196,6 @@
   },
   "components": {
     "schemas": {
-      "DownloadSource": {
-        "type": "string",
-        "enum": [
-          "mirror",
-          "official"
-        ],
-        "default": "mirror",
-        "description": "mirror 默认国内加速；official 官方直连。仅作用于本次环境准备与安装，不写入用户 npm 配置。"
-      },
       "ToolingRequest": {
         "type": "object",
         "required": [
@@ -223,6 +214,7 @@
               "install",
               "update",
               "reinstall",
+              "uninstallPreview",
               "uninstall",
               "cancel",
               "setDefault",
@@ -285,6 +277,13 @@
           },
           "backupId": {
             "type": "string"
+          },
+          "snapshot": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "卸载预览返回的实际安装来源；仅用于展示和任务结果。"
           }
         },
         "allOf": [
@@ -304,11 +303,7 @@
               "required": [
                 "tool"
               ],
-              "properties": {
-                "source": {
-                  "$ref": "#/components/schemas/DownloadSource"
-                }
-              }
+              "properties": {}
             }
           },
           {
@@ -365,13 +360,6 @@
               "null"
             ]
           },
-          "runtimeNotice": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "环境复用或自动准备提示。缺少 Node.js/npm 不会使受支持的 npm 工具不可安装。"
-          },
           "canInstall": {
             "type": "boolean"
           },
@@ -414,7 +402,8 @@
             ]
           },
           "source": {
-            "$ref": "#/components/schemas/DownloadSource"
+            "type": "string",
+            "description": "实际探测到的安装来源。"
           },
           "status": {
             "type": "string",
@@ -444,9 +433,54 @@
           }
         }
       },
+      "NativeConfigFileStatus": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "unavailable": {
+            "type": "boolean"
+          },
+          "externalChanged": {
+            "type": "boolean",
+            "description": "与最近一次显式同步后的 SHA-256 不同；仅报告，不自动覆盖。"
+          }
+        },
+        "additionalProperties": true
+      },
+      "NativeToolStatus": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "lastSyncAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NativeConfigFileStatus"
+            }
+          }
+        },
+        "additionalProperties": true
+      },
       "ToolingResponse": {
         "type": "object",
         "properties": {
+          "native": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NativeToolStatus"
+            },
+            "description": "只读原生配置状态。externalChanged 表示同步后发生改动，不触发自动合并或写入。"
+          },
           "tools": {
             "type": "array",
             "items": {
@@ -556,6 +590,39 @@
           }
         },
         "additionalProperties": false
+      },
+      "UninstallPreview": {
+        "type": "object",
+        "required": [
+          "available",
+          "snapshot"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "realpath": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "snapshot": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          }
+        }
       }
     }
   }

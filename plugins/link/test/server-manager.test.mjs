@@ -61,10 +61,20 @@ test('real SSH execution and local-only tunnel carry independent streams', async
   const tunnel = await openSshTunnel(client, echo.address().port);
   t.after(async () => { await tunnel.close(); client.end(); await new Promise(resolve => echo.close(resolve)); });
   assert.equal(new URL(tunnel.url).hostname, '127.0.0.1');
-  const result = await execute(client, 'test echo'); assert.deepEqual(result, { code: 0, stdout: 'stdout', stderr: 'stderr' });
+  const chunks = [];
+  const result = await execute(client, 'test echo', { onData: (data, source) => chunks.push([source, data]) }); assert.deepEqual(result, { code: 0, stdout: 'stdout', stderr: 'stderr' });
+  assert.deepEqual(chunks.sort(), [['stderr', 'stderr'], ['stdout', 'stdout']]);
   const socket = tcpConnect(Number(new URL(tunnel.url).port), '127.0.0.1');
   await new Promise((resolve, reject) => { socket.once('error', reject); socket.once('connect', resolve); });
   const value = randomUUID(); const received = new Promise(resolve => socket.once('data', data => resolve(data.toString()))); socket.write(value); assert.equal(await received, value); socket.destroy();
+});
+test('relay deployment jobs can be recovered after the page reloads', async t => {
+  const f = await fixture(t);
+  const { jobId } = await f.manager.deployRelay({ ...f.input, publicIp: '8.8.8.8', relayPort: 24680, email: '', fingerprint: 'SHA256:' + 'A'.repeat(43), password: 'secret' });
+  assert.equal(f.manager.activeRelayJob().id, jobId);
+  const job = await completed(f.manager, jobId);
+  assert.equal(job.state, 'error'); assert.equal(f.manager.activeRelayJob().state, 'error');
+  assert.deepEqual(f.manager.dismissRelayJob(jobId), { ok: true }); assert.equal(f.manager.activeRelayJob(), null);
 });
 test('saved servers reopen offline; disconnect removes private record without deleting host data', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-server-saved-'));

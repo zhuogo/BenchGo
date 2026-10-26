@@ -1,0 +1,20 @@
+{
+  "name": "benchgo",
+  "version": "0.0.1",
+  "repository": { "type": "git", "url": "https://github.com/zhuogo/BenchGo.git" },
+  "publishConfig": { "access": "public" },
+  "description": "BenchGo workbench CLI",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "benchgo": "./bin/benchgo.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "resources"
+  ],
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -14,7 +14,7 @@ const manifest = JSON.parse(await readFile(join(assets, 'manifest.json'), 'utf8'
 if (manifest.schemaVersion !== 1 || !/^[0-9a-f]{64}$/.test(manifest.sha256) || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(manifest.harnessVersion) || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(manifest.pluginVersion)) throw new Error('服务器安装清单无效');
 const archive = join(assets, 'server-seed.tar.gz');
 if (createHash('sha256').update(await readFile(archive)).digest('hex') !== manifest.sha256) throw new Error('服务器插件包校验失败');
-const base = join(homedir(), '.local/share/dsh-plus/server');
+const base = join(homedir(), '.local/share/benchgo/server');
 const stateFile = join(base, 'installation.json'), ownerFile = join(base, 'owner.json');
 const registry = source === 'mirror' ? 'https://registry.npmmirror.com' : 'https://registry.npmjs.org';
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -25,7 +25,11 @@ async function run(command, args, options = {}) {
     let output = '';
     for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { output = (output + data).slice(-12000); });
     child.once('error', reject);
-    child.once('exit', code => code === 0 ? resolve(output) : reject(new Error((command === 'systemctl' ? '服务器服务操作' : '安装依赖') + '失败（' + code + '）')));
+    child.once('exit', code => {
+      if (code === 0) return resolve(output);
+      const detail = output.trim();
+      reject(new Error((command === 'systemctl' ? '服务器服务操作' : '安装依赖') + '失败（' + code + '）' + (detail ? '：\n' + detail : '')));
+    });
   });
 }
 async function atomic(path, value) { const tmp = path + '.' + randomUUID() + '.tmp'; await writeFile(tmp, value, { mode: 0o600 }); await rename(tmp, path); }
@@ -41,41 +45,46 @@ try {
     if (!(await present(join(runtime, 'node_modules/@deepseek-ai/dsh/package.json')))) {
       process.stderr.write('安装固定版本 Harness…\n');
       await mkdir(runtime, { recursive: true, mode: 0o700 });
-      await atomic(join(runtime, 'package.json'), JSON.stringify({ private: true, dependencies: { '@deepseek-ai/dsh': manifest.harnessVersion } }));
+      await atomic(join(runtime, 'package.json'), JSON.stringify({ private: true, dependencies: {
+        '@deepseek-ai/dsh': manifest.harnessVersion,
+        '@deepseek-ai/cordis': '4.0.5-alpha.2',
+        '@deepseek-ai/dsh-atomic-write': manifest.harnessVersion,
+        '@deepseek-ai/dsh-llm': manifest.harnessVersion
+      } }));
       await run('npm', ['install', '--prefix', runtime, '--omit=dev', '--no-audit', '--no-fund', '--registry', registry]);
     }
     const incoming = join(base, '.seed-' + randomUUID()); await mkdir(incoming, { mode: 0o700 });
     try {
       await run('tar', ['-xzf', archive, '-C', incoming, '--no-same-owner', '--no-same-permissions']);
-      const helper = await import(pathToFileURL(join(incoming, 'node_modules/dsh-plus/shared/plugin-install.mjs')).href);
+      const helper = await import(pathToFileURL(join(incoming, 'node_modules/benchgo/shared/plugin-install.mjs')).href);
       const profile = join(base, 'home/profiles/web');
       if (!(await present(join(profile, 'package.json')))) {
         const boot = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js')).href);
         boot.initProfile(profile, boot.PROFILE_TEMPLATES.web.bundles);
       }
-      const release = await helper.prepareRelease({ directory: incoming, root: join(profile, '.dsh-plus/releases'), version: manifest.pluginVersion, runtime });
+      const release = await helper.prepareRelease({ directory: incoming, root: join(profile, '.benchgo/releases'), version: manifest.pluginVersion, runtime });
       const webPort = installed?.webPort ?? await freePort(), port = installed?.port ?? await freePort();
       const dataDir = installed?.dataDir ?? join(base, 'data');
-      if (!installed) await atomic(join(profile, 'cordis.patch.yml'), ['- id: commander', '  config:', '    dataDir: ' + JSON.stringify(dataDir), '    link:', '      directory: ' + JSON.stringify(join(dataDir, 'link')), '- id: session-telemetry-otel', '  disabled: true', ''].join('\n'));
+      if (!installed) await atomic(join(profile, 'cordis.patch.yml'), ['- id: commander', '  config:', '    dataDir: ' + JSON.stringify(dataDir), '- id: commander-link', '  config:', '    directory: ' + JSON.stringify(join(dataDir, 'link')), '- id: session-telemetry-otel', '  disabled: true', ''].join('\n'));
       if (installed) {
         const active = await authorize(installed, false);
         const state = await linkJson(installed, '/link/api/rpc', { action: 'state' }, active.token);
         await ownerAdmin(installed, { action: 'revoke', id: active.deviceId });
         if (state.sessions?.some(session => session.running)) throw new Error('服务器有任务运行中，请结束后再升级');
       }
-      await helper.activateRelease({ profile, release, enabled: true, appVersion: null });
+      await helper.activateRelease({ profile, release, enabled: true, appVersion: null, migrateLegacy: true });
       installed = { schemaVersion: 1, harnessVersion: manifest.harnessVersion, pluginVersion: manifest.pluginVersion, runtime, profile, dataDir, webPort, port };
       await atomic(stateFile, JSON.stringify(installed));
       const launcher = '(' + launchServer.toString() + ')(' + [process.execPath, runtime, ownerFile, base, webPort].map(value => JSON.stringify(value)).join(',') + ');';
       await atomic(join(base, 'start.mjs'), launcher);
       const units = join(homedir(), '.config/systemd/user'); await mkdir(units, { recursive: true, mode: 0o700 });
       const quote = value => JSON.stringify(String(value)).replaceAll('%', '%%');
-      const unit = ['[Unit]', 'Description=DSH-Plus server', 'After=network-online.target', '', '[Service]', 'Type=simple', 'UMask=0077', 'WorkingDirectory=' + quote(base), 'ExecStart=' + quote(process.execPath) + ' ' + quote(join(base, 'start.mjs')), 'Environment=' + quote('PATH=' + process.env.PATH), 'Restart=on-failure', 'RestartSec=3', '', '[Install]', 'WantedBy=default.target', ''].join('\n');
-      await atomic(join(units, 'dsh-plus.service'), unit);
-      await run('systemctl', ['--user', 'daemon-reload']); await run('systemctl', ['--user', 'enable', 'dsh-plus.service']);
-      await rm(ownerFile, { force: true }); await run('systemctl', ['--user', 'restart', 'dsh-plus.service']);
+      const unit = ['[Unit]', 'Description=BenchGo server', 'After=network-online.target', '', '[Service]', 'Type=simple', 'UMask=0077', 'WorkingDirectory=' + base, 'ExecStart=' + quote(process.execPath) + ' ' + quote(join(base, 'start.mjs')), 'Environment=' + quote('PATH=' + process.env.PATH), 'Restart=on-failure', 'RestartSec=3', '', '[Install]', 'WantedBy=default.target', ''].join('\n');
+      await atomic(join(units, 'benchgo.service'), unit);
+      await run('systemctl', ['--user', 'daemon-reload']); await run('systemctl', ['--user', 'enable', 'benchgo.service']);
+      await rm(ownerFile, { force: true }); await run('systemctl', ['--user', 'restart', 'benchgo.service']);
     } finally { await rm(incoming, { recursive: true, force: true }); }
-  } else { process.stderr.write('复用已安装的 DSH-Plus…\n'); await run('systemctl', ['--user', 'start', 'dsh-plus.service']); }
+  } else { process.stderr.write('复用已安装的 BenchGo…\n'); await run('systemctl', ['--user', 'start', 'benchgo.service']); }
   if (operation === 'update') {
     let ready = false;
     for (let i = 0; i < 100; i++) { try { const status = await ownerAdmin(installed, { action: 'status' }); if (status.enabled && status.port === installed.port && status.host === '127.0.0.1') { ready = true; break; } } catch {} await wait(500); }

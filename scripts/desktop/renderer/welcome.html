@@ -4,25 +4,67 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; base-uri 'none'; form-action 'none'">
-    <title>小角</title>
-    <link rel="stylesheet" href="dsh-plus-startup.css">
-    <script src="dsh-plus-startup.js" defer></script>
+    <title>BenchGo</title>
+    <link rel="stylesheet" href="benchgo-startup.css">
+    <script src="benchgo-startup.js" defer></script>
   </head>
   <body>
     <div class="drag-region" aria-hidden="true"></div>
     <main>
       <div class="startup-brand">
-        <svg class="startup-mascot" viewBox="0 0 1024 1024" role="img" aria-label="小角" width="72" height="72">
-          <rect width="1024" height="1024" rx="232" fill="#222222"/>
-          <g transform="translate(167,282) scale(1.15)">
-            <rect width="600" height="400" rx="100" fill="#F3EBDF"/>
-            <path d="M 400 400 L 500 400 A 100 100 0 0 0 600 300 L 600 200 Z" fill="#D44A36"/>
-            <rect x="89" y="141" width="78" height="118" rx="39" fill="#222222"/>
-            <rect x="227" y="141" width="78" height="118" rx="39" fill="#222222"/>
+        <svg class="startup-mascot" viewBox="0 0 1024 1024" role="img" aria-label="BenchGo" width="72" height="72">
+          <g transform="translate(122,274.4) scale(1.3)">
+  <!-- Corner rule (master construction, geometry.json): the cut is a 45-degree
+       diagonal from (410,380) to (600,190); the corner piece keeps the body's
+       R95 rounded bottom-right corner - never a sharp point. Glyph must stay
+       fully inside the piece: clear of the diagonal (line x+y=790) and of the
+       R95 arc (center 505,285). Current glyph: mini window at (543,324),
+       scale 0.9, max radius ~32. If the corner changes, recompute from the
+       master geometry, not from absolute pixels. -->
+  <defs>
+    <clipPath id="bodyClip">
+      <path d="M95,0 H505 A95,95 0 0 1 600,95 V190 L410,380 H95 A95,95 0 0 1 0,285 V95 A95,95 0 0 1 95,0 Z"/>
+    </clipPath>
+    <pattern id="winprint" width="150" height="118" patternUnits="userSpaceOnUse">
+      <g fill="none" stroke="#D9CCAF" stroke-width="2.5" opacity="0.6">
+        <rect x="12" y="14" width="32" height="22" rx="5"/>
+        <rect x="84" y="66" width="32" height="22" rx="5"/>
+      </g>
+      <g fill="#D9CCAF" opacity="0.6">
+        <circle cx="21" cy="22" r="2.8"/><circle cx="31" cy="22" r="2.8"/>
+        <circle cx="93" cy="74" r="2.8"/><circle cx="103" cy="74" r="2.8"/>
+      </g>
+    </pattern>
+  </defs>
+
+  <!-- body -->
+  <path d="M95,0 H505 A95,95 0 0 1 600,95 V190 L410,380 H95 A95,95 0 0 1 0,285 V95 A95,95 0 0 1 95,0 Z" fill="#F1E8DB"/>
+  <rect x="0" y="0" width="600" height="380" fill="url(#winprint)" clip-path="url(#bodyClip)"/>
+
+  <!-- terminal motif >_ -->
+  <g stroke="#EE5A33" stroke-width="17" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <polyline points="472,50 512,79 472,108"/>
+  </g>
+  <rect x="528" y="93" width="42" height="17" rx="8.5" fill="#EE5A33"/>
+
+  <!-- eyes: bean + < (right eye at 88% scale, user-approved 2026-10-26, baked coords) -->
+  <rect x="123" y="125" width="90" height="130" rx="45" fill="#222321"/>
+  <polyline points="342.6,150.1 293.4,195 342.6,239.9" stroke="#222321" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- orange cut corner -->
+  <path d="M410,380 H505 A95,95 0 0 0 600,285 V190 Z" fill="#EE5A33"/>
+  <!-- mini window glyph: centered on corner incenter, max radius ~36 < inradius 51 -->
+  <g transform="translate(543 324) scale(0.9)">
+    <rect x="-26" y="-18" width="52" height="36" rx="9" fill="none" stroke="#F7F1E5" stroke-width="8"/>
+    <circle cx="-9" cy="0" r="4" fill="#F7F1E5"/>
+    <circle cx="9" cy="0" r="4" fill="#F7F1E5"/>
+  </g>
+
+  
           </g>
         </svg>
         <div class="startup-copy">
-          <h1>小角</h1>
+          <h1>BenchGo</h1>
           <span class="startup-engine">DeepSeek</span>
           <p id="startup-status" role="status" aria-live="polite">正在准备工作台…</p>
         </div>

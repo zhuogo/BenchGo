@@ -9,16 +9,16 @@ const { JSDOM } = createRequire(new URL('../../../deepseek-harness/package.json'
 const source = readFileSync(new URL('../../link/client/brand.jsx', import.meta.url), 'utf8');
 const code = transformSync(source, { loader: 'jsx', format: 'cjs' }).code;
 
-test('the shared app icon uses the approved dark-background VI while small favicons retain simplified eyes', () => {
-  const logo = new JSDOM(readFileSync(new URL('../../../assets/brand/dsh-plus-logo.svg', import.meta.url), 'utf8'), { contentType: 'image/svg+xml' });
-  const favicon = new JSDOM(readFileSync(new URL('../../../assets/brand/favicon.svg', import.meta.url), 'utf8'), { contentType: 'image/svg+xml' });
+test('the shared app icon uses the 2026-10-26 BenchGo mark', () => {
+  const logo = new JSDOM(readFileSync(new URL('../../../assets/brand/benchgo-logo.svg', import.meta.url), 'utf8'), { contentType: 'image/svg+xml' });
+  const mark = new JSDOM(readFileSync(new URL('../../../assets/brand/benchgo-mark.svg', import.meta.url), 'utf8'), { contentType: 'image/svg+xml' });
   assert.equal(logo.window.document.documentElement.getAttribute('viewBox'), '0 0 1024 1024');
-  assert.equal(logo.window.document.querySelector('rect').getAttribute('fill'), '#222222');
-  assert.equal(logo.window.document.querySelector('rect').getAttribute('rx'), '232');
-  assert.equal(logo.window.document.querySelector('g').getAttribute('transform'), 'translate(167,282) scale(1.15)');
-  assert.equal(favicon.window.document.querySelectorAll('circle').length, 2);
+  assert.equal(logo.window.document.querySelector('g').getAttribute('transform'), 'translate(122,274.4) scale(1.3)');
+  assert.match(logo.window.document.documentElement.outerHTML, /#F1E8DB/);
+  assert.match(logo.window.document.documentElement.outerHTML, /#EE5A33/);
+  assert.equal(mark.window.document.documentElement.getAttribute('viewBox'), '0 0 600 380');
   logo.window.close();
-  favicon.window.close();
+  mark.window.close();
 });
 
 test('brand favicon replaces both theme variants and restores existing icons when unloaded', () => {
@@ -26,13 +26,13 @@ test('brand favicon replaces both theme variants and restores existing icons whe
     const dom = new JSDOM(`<!doctype html><head>${initial}</head>`), module = { exports: {} };
     const head = dom.window.document.head;
     const before = head.innerHTML;
-    runInNewContext(code, { module, exports: module.exports, document: dom.window.document, require: id => id.endsWith('.svg') ? readFileSync(new URL('../../../assets/brand/' + (id.endsWith('/favicon.svg') ? 'favicon.svg' : 'dsh-plus-logo.svg'), import.meta.url), 'utf8') : {} });
+    runInNewContext(code, { module, exports: module.exports, document: dom.window.document, require: id => id.endsWith('.svg') ? readFileSync(new URL('../../../assets/brand/' + (id.endsWith('/favicon.svg') ? 'favicon.svg' : 'benchgo-logo.svg'), import.meta.url), 'utf8') : {} });
     let dispose;
     module.exports.mountBrand({ effect: callback => { dispose = callback(); } });
     const icons = [...head.querySelectorAll('link[rel="icon"]')];
     assert.equal(icons.length, initial ? 2 : 1);
     assert(icons.every(icon => icon.href.startsWith('data:image/svg+xml,') && icon.type === 'image/svg+xml'));
-    assert(icons.every(icon => decodeURIComponent(icon.href).includes('#D44A36')));
+    assert(icons.every(icon => decodeURIComponent(icon.href).includes('#EE5A33')));
     dispose();
     assert.equal(head.innerHTML, before);
     dom.window.close();

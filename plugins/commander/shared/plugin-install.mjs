@@ -5,9 +5,9 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { compareVersions } from './update-feed.mjs';
 
-export const PLUS_PACKAGE = 'dsh-plus';
-export const LEGACY_BUNDLES = ['@dowork/dsh-plus-desktop', '@dowork/commander', 'dsh-plus'];
-export const releaseBundleName = version => `@dsh-plus/desktop-${createHash('sha256').update(version).digest('hex').slice(0, 16)}`;
+export const PLUS_PACKAGE = 'benchgo';
+export const LEGACY_BUNDLES = ['@dowork/benchgo-desktop', '@dowork/commander', 'benchgo'];
+export const releaseBundleName = version => `@benchgo/desktop-${createHash('sha256').update(version).digest('hex').slice(0, 16)}`;
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
 const present = async file => { try { await lstat(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
 
@@ -154,7 +154,7 @@ async function activateLocked({ profile, release, enabled, appVersion, migrateLe
   } else await symlink(checked.bundlePath, target, process.platform === 'win32' ? 'junction' : 'dir');
   const selected = manifest.dsh.profile.bundles;
   const wasEnabled = enabled ?? (before.managed ? before.enabled : selected.some(name => LEGACY_BUNDLES.includes(name)));
-  const isManagedName = name => LEGACY_BUNDLES.includes(name) || name.startsWith('@dsh-plus/desktop-');
+  const isManagedName = name => LEGACY_BUNDLES.includes(name) || name.startsWith('@benchgo/desktop-');
   manifest.dependencies ??= {};
   for (const name of Object.keys(manifest.dependencies)) if (isManagedName(name)) delete manifest.dependencies[name];
   manifest.dependencies[checked.bundleName] = `link:${checked.bundlePath.replaceAll('\\', '/')}`;
@@ -173,8 +173,8 @@ async function activateLocked({ profile, release, enabled, appVersion, migrateLe
     if (legacy.name !== PLUS_PACKAGE) throw new Error('插件安装位置被其他内容占用，原文件已保留');
     assertReleaseVersion(legacy.version);
     if (migrateLegacy || await realpath(shadow) !== await realpath(checked.pluginPath)) {
-      if (!migrateLegacy) throw new Error('检测到旧版插件残留，请关闭小角并重新运行新版安装程序');
-      const migrationRoot = join(profile, '.dsh-plus');
+      if (!migrateLegacy) throw new Error('检测到旧版插件残留，请关闭BenchGo并重新运行新版安装程序');
+      const migrationRoot = join(profile, '.benchgo');
       await mkdir(migrationRoot, { recursive: true, mode: 0o700 });
       backup = join(migrationRoot, `.legacy-${randomUUID()}`);
       await rename(shadow, backup);

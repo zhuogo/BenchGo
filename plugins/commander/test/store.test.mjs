@@ -54,7 +54,7 @@ test('legacy PID and hostname locks are recovered only after their real owner ex
   const f = await fixture(t), owner = await childStore(t, f.directory);
   const legacy = JSON.stringify({ pid: owner.child.pid, host: hostname() });
   await writeFile(join(f.directory, 'owner.lock'), legacy);
-  await assert.rejects(f.store().open(), error => error.code === 'DSH_PLUS_DATA_LOCKED');
+  await assert.rejects(f.store().open(), error => error.code === 'BENCHGO_DATA_LOCKED');
   assert.equal(await readFile(join(f.directory, 'owner.lock'), 'utf8'), legacy);
   owner.child.kill('SIGKILL'); await owner.exited;
   assert.deepEqual(await f.store().open(), { version: 1, sessions: [] });
@@ -67,7 +67,7 @@ test('concurrent processes recovering the same killed owner admit exactly one wr
   const contenders = await Promise.all(Array.from({ length: 5 }, () => childStore(t, f.directory)));
   const results = await Promise.all(contenders.map(contender => contender.open()));
   assert.equal(results.filter(result => result.opened).length, 1, JSON.stringify(results));
-  assert.ok(results.filter(result => !result.opened).every(result => result.code === 'DSH_PLUS_DATA_LOCKED'));
+  assert.ok(results.filter(result => !result.opened).every(result => result.code === 'BENCHGO_DATA_LOCKED'));
   const winner = contenders[results.findIndex(result => result.opened)];
   assert.equal(JSON.parse(await readFile(join(f.directory, 'owner.lock'), 'utf8')).pid, winner.child.pid);
 });
@@ -87,7 +87,7 @@ test('close refuses to delete a lock with a different ownership token', async t 
   const f = await fixture(t), owner = f.store(); await owner.open();
   const successor = JSON.stringify({ pid: process.pid, host: hostname(), token: 'successor' });
   await writeFile(join(f.directory, 'owner.lock'), successor);
-  await assert.rejects(owner.close(), error => error.code === 'DSH_PLUS_LOCK_OWNERSHIP_CHANGED');
+  await assert.rejects(owner.close(), error => error.code === 'BENCHGO_LOCK_OWNERSHIP_CHANGED');
   assert.equal(await readFile(join(f.directory, 'owner.lock'), 'utf8'), successor);
   await owner.close();
   assert.equal(await readFile(join(f.directory, 'owner.lock'), 'utf8'), successor);
@@ -104,7 +104,7 @@ test('untrusted locks retain their bytes and do not probe invalid or foreign PID
   const probe = t.mock.method(process, 'kill', () => { throw new Error('untrusted PID must not be probed'); });
   for (const record of records) {
     await writeFile(path, record);
-    await assert.rejects(f.store().open(), error => ['DSH_PLUS_LOCK_UNREADABLE', 'DSH_PLUS_LOCK_OTHER_HOST'].includes(error.code));
+    await assert.rejects(f.store().open(), error => ['BENCHGO_LOCK_UNREADABLE', 'BENCHGO_LOCK_OTHER_HOST'].includes(error.code));
     assert.equal(await readFile(path, 'utf8'), record);
   }
   assert.equal(probe.mock.callCount(), 0);
@@ -114,7 +114,7 @@ test('permission-denied owner probes preserve the lock instead of taking over', 
   const f = await fixture(t), path = join(f.directory, 'owner.lock');
   const record = JSON.stringify({ pid: process.pid, host: hostname() }); await writeFile(path, record);
   t.mock.method(process, 'kill', () => { throw Object.assign(new Error('permission denied'), { code: 'EPERM' }); });
-  await assert.rejects(f.store().open(), error => error.code === 'DSH_PLUS_LOCK_PROBE_FAILED' && error.cause.code === 'EPERM');
+  await assert.rejects(f.store().open(), error => error.code === 'BENCHGO_LOCK_PROBE_FAILED' && error.cause.code === 'EPERM');
   assert.equal(await readFile(path, 'utf8'), record);
 });
 

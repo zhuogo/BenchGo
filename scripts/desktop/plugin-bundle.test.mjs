@@ -9,7 +9,7 @@ import { initializePluginProfile, stagePluginBundle } from './plugin-bundle.mjs'
 import { getInstallState, releaseBundleName } from '../../plugins/commander/shared/plugin-install.mjs';
 
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), 'dsh-plus-bundle-'));
+  const root = mkdtempSync(join(tmpdir(), 'benchgo-bundle-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const put = (name, value) => { const path = join(root, name); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value)); };
   return { root, put };
@@ -17,7 +17,7 @@ function fixture(t) {
 
 test('published plugin payload excludes development/private files and contains its required dependency closure', t => {
   const { root, put } = fixture(t);
-  const manifest = { name: 'dsh-plus', version: '0.1.0', type: 'module', files: ['src', 'lib', 'voice', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { 'fixture-required': '1.0.0' }, devDependencies: { 'fixture-dev': '1.0.0' }, optionalDependencies: { 'fixture-linux': '1.0.0' } };
+  const manifest = { name: 'benchgo', version: '0.1.0', type: 'module', files: ['src', 'lib', 'voice', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { 'fixture-required': '1.0.0' }, devDependencies: { 'fixture-dev': '1.0.0' }, optionalDependencies: { 'fixture-linux': '1.0.0' } };
   put('plugin/package.json', manifest);
   for (const name of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.mjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'voice/src/plugin.mjs', 'cordis.patch.yml']) put(`plugin/${name}`, 'fixture');
   put('plugin/private-credentials.txt', 'do-not-package');
@@ -26,11 +26,11 @@ test('published plugin payload excludes development/private files and contains i
     put(`plugin/node_modules/${name}/index.js`, 'export default true;');
   }
   const staged = stagePluginBundle({ runtime: join(root, 'runtime'), plugin: join(root, 'plugin'), platform: 'win32', arch: 'x64' });
-  assert.equal(existsSync(join(root, 'runtime/node_modules/dsh-plus')), false, 'the sealed runtime contains no Plus package');
+  assert.equal(existsSync(join(root, 'runtime/node_modules/benchgo')), false, 'the sealed runtime contains no Plus package');
   assert.ok(existsSync(join(staged.directory, 'release.json')));
   const wrapper = JSON.parse(readFileSync(join(staged.directory, 'node_modules', staged.bundle, 'package.json')));
   assert.equal(wrapper.exports['./locale/*.json'], './locale/*.json');
-  assert.equal(JSON.parse(readFileSync(join(staged.directory, 'node_modules', staged.bundle, 'locale/en.json'))).meta.title, 'DSH-Plus');
+  assert.equal(JSON.parse(readFileSync(join(staged.directory, 'node_modules', staged.bundle, 'locale/en.json'))).meta.title, 'BenchGo');
   assert.deepEqual(staged.dependencies, ['fixture-required']);
   assert.deepEqual(staged.omittedOptionalDependencies, ['fixture-linux']);
   assert.equal(existsSync(join(staged.destination, 'private-credentials.txt')), false);
@@ -42,7 +42,7 @@ test('published plugin payload excludes development/private files and contains i
 const officialRoot = resolve(import.meta.dirname, '../../deepseek-harness');
 test('SSH optional build-machine addons never enter desktop plugin releases', t => {
   const { root, put } = fixture(t);
-  put('plugin/package.json', { name: 'dsh-plus', version: '0.1.0', files: ['src', 'lib', 'voice', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { ssh2: '1.17.0' } });
+  put('plugin/package.json', { name: 'benchgo', version: '0.1.0', files: ['src', 'lib', 'voice', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { ssh2: '1.17.0' } });
   for (const name of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.mjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'voice/src/plugin.mjs', 'cordis.patch.yml']) put('plugin/' + name, 'fixture');
   put('plugin/node_modules/ssh2/package.json', { name: 'ssh2', version: '1.17.0', optionalDependencies: { 'cpu-features': '0.0.10' } });
   put('plugin/node_modules/ssh2/lib/index.js', 'module.exports = {};');
@@ -69,7 +69,7 @@ test('official profile loader resolves the preinstalled Plus bundle and respects
     ['dsh', 'apps/cli'],
     ['dsh-base', 'packages/bundle/base'], ['dsh-web-app', 'packages/bundle/web-app'],
   ]) symlinkSync(join(officialRoot, source), join(modules, '@deepseek-ai', name), 'junction');
-  seedFixture(put, 'resources/dsh-plus/seed');
+  seedFixture(put, 'resources/benchgo/seed');
   const profile = join(root, 'home/profiles/desktop');
   put('home/profiles/desktop/package.json', { private: true, dependencies: { 'kept-plugin': '1.0.0' }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@dowork/commander'] } } });
   put('home/profiles/desktop/cordis.patch.yml', '[]\n');
@@ -83,12 +83,12 @@ test('official profile loader resolves the preinstalled Plus bundle and respects
   assert.ok(plus, 'official loader selected the profile-local Plus bundle');
   assert.equal(plus.patches[0].insert[0].id, 'commander');
   const resolution = await boot.createRuntimeResolution({ installAnchor: join(modules, '@deepseek-ai/dsh/package.json'), profile: loaded, home: join(root, 'home') });
-  assert.ok(resolution.entries.some(entry => entry.name === 'dsh-plus'), 'official runtime resolution supplies the plugin');
+  assert.ok(resolution.entries.some(entry => entry.name === 'benchgo'), 'official runtime resolution supplies the plugin');
   const manifestPath = join(profile, 'package.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   assert.equal(manifest.dependencies['kept-plugin'], '1.0.0');
   assert.equal(manifest.dsh.profile.bundles.includes('@dowork/commander'), false, 'legacy direct bundle is migrated without inserting Commander twice');
-  assert.equal(manifest.dsh.profile.bundles.includes('dsh-plus'), false);
+  assert.equal(manifest.dsh.profile.bundles.includes('benchgo'), false);
   manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(name => name !== state.bundleName);
   writeFileSync(manifestPath, JSON.stringify(manifest));
   assert.equal((await initializePluginProfile(options)).enrolled, false);
@@ -100,11 +100,11 @@ test('official profile loader resolves the preinstalled Plus bundle and respects
 function seedFixture(put, prefix, version = '0.1.0') {
   const bundleName = releaseBundleName(version);
   put(`${prefix}/release.json`, { schemaVersion: 1, version, platform: process.platform, arch: process.arch, shared: [] });
-  put(`${prefix}/node_modules/dsh-plus/package.json`, { name: 'dsh-plus', version, type: 'module', main: './src/plugin.mjs', exports: { '.': './src/plugin.mjs', './client': './lib/client.js', './package.json': './package.json' }, dsh: { bundle: { patch: './cordis.patch.yml' } } });
-  for (const file of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.mjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'voice/src/plugin.mjs']) put(`${prefix}/node_modules/dsh-plus/${file}`, `export const version = ${JSON.stringify(version)}; export default true;`);
-  const patch = "- insert:\n    - id: commander\n      name: 'dsh-plus'\n";
-  put(`${prefix}/node_modules/dsh-plus/cordis.patch.yml`, patch);
-  put(`${prefix}/node_modules/${bundleName}/package.json`, { name: bundleName, displayName: 'DSH-Plus', version, type: 'module', dependencies: { 'dsh-plus': version }, dsh: { bundle: { patch: './cordis.patch.yml' } } });
+  put(`${prefix}/node_modules/benchgo/package.json`, { name: 'benchgo', version, type: 'module', main: './src/plugin.mjs', exports: { '.': './src/plugin.mjs', './client': './lib/client.js', './package.json': './package.json' }, dsh: { bundle: { patch: './cordis.patch.yml' } } });
+  for (const file of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.mjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'voice/src/plugin.mjs']) put(`${prefix}/node_modules/benchgo/${file}`, `export const version = ${JSON.stringify(version)}; export default true;`);
+  const patch = "- insert:\n    - id: commander\n      name: 'benchgo'\n";
+  put(`${prefix}/node_modules/benchgo/cordis.patch.yml`, patch);
+  put(`${prefix}/node_modules/${bundleName}/package.json`, { name: bundleName, displayName: 'BenchGo', version, type: 'module', dependencies: { 'benchgo': version }, dsh: { bundle: { patch: './cordis.patch.yml' } } });
   put(`${prefix}/node_modules/${bundleName}/cordis.patch.yml`, patch);
 }
 
@@ -139,18 +139,18 @@ function resolvedProfilePlugin(root, profile) {
       await ctx.plugin(PluginPackages, { resolution });
       const packages = ctx.pluginPackages;
       const parent = pathToFileURL(join(profile, 'package.json')).href;
-      const selected = packages.packageOf('dsh-plus', parent);
+      const selected = packages.packageOf('benchgo', parent);
       const requireFromProfile = createRequire(parent);
       const addon = officialRequire('node-addon-require-builtin');
       const loader = addon.requireBuiltin('internal/modules/esm/loader').getOrInitializeCascadedLoader();
-      const actual = await loader.import('dsh-plus', parent, {});
-      const client = await loader.import('dsh-plus/client', parent, {});
+      const actual = await loader.import('benchgo', parent, {});
+      const client = await loader.import('benchgo/client', parent, {});
       console.log(JSON.stringify({
-        tableVersion: resolution.entries.find(entry => entry.name === 'dsh-plus')?.version,
+        tableVersion: resolution.entries.find(entry => entry.name === 'benchgo')?.version,
         metadataVersion: selected?.version,
         metadataPath: selected?.dir,
-        manifestVersion: JSON.parse(readFileSync(requireFromProfile.resolve('dsh-plus/package.json'), 'utf8')).version,
-        entryPath: requireFromProfile.resolve('dsh-plus'),
+        manifestVersion: JSON.parse(readFileSync(requireFromProfile.resolve('benchgo/package.json'), 'utf8')).version,
+        entryPath: requireFromProfile.resolve('benchgo'),
         loadedVersion: actual.version, clientVersion: client.version,
       }));
     } finally { await ctx.fiber.dispose(); }
@@ -161,8 +161,8 @@ function resolvedProfilePlugin(root, profile) {
 }
 
 function putLegacyProfilePlugin(put, version = '0.1.6') {
-  put('profile/node_modules/dsh-plus/package.json', { name: 'dsh-plus', version, type: 'module', main: './src/plugin.mjs', exports: { '.': './src/plugin.mjs', './client': './lib/client.js', './package.json': './package.json' } });
-  for (const file of ['src/plugin.mjs', 'lib/client.js']) put(`profile/node_modules/dsh-plus/${file}`, `export const version = ${JSON.stringify(version)};`);
+  put('profile/node_modules/benchgo/package.json', { name: 'benchgo', version, type: 'module', main: './src/plugin.mjs', exports: { '.': './src/plugin.mjs', './client': './lib/client.js', './package.json': './package.json' } });
+  for (const file of ['src/plugin.mjs', 'lib/client.js']) put(`profile/node_modules/benchgo/${file}`, `export const version = ${JSON.stringify(version)};`);
 }
 
 for (const scenario of [
@@ -200,16 +200,16 @@ for (const scenario of [
     assert.equal(actual.manifestVersion, scenario.expected, 'profile-relative manifest resolution uses the selected release');
     assert.equal(actual.loadedVersion, scenario.expected, 'actual ESM plugin loading uses the selected release');
     assert.equal(actual.clientVersion, scenario.expected, 'client subpath uses the selected release');
-    assert.equal(realpathSync.native(actual.metadataPath), realpathSync.native(join(result.directory, 'node_modules/dsh-plus')));
-    assert.equal(realpathSync.native(actual.entryPath), realpathSync.native(join(result.directory, 'node_modules/dsh-plus/src/plugin.mjs')));
+    assert.equal(realpathSync.native(actual.metadataPath), realpathSync.native(join(result.directory, 'node_modules/benchgo')));
+    assert.equal(realpathSync.native(actual.entryPath), realpathSync.native(join(result.directory, 'node_modules/benchgo/src/plugin.mjs')));
   }
 });
 
 test('old enrollment migrates physically into profile while preserving enabled and disabled choices', enrollmentOptions, async t => {
   for (const enabled of [false, true]) {
     const { root, put, options } = enrollmentFixture(t);
-    put('profile/.dsh-plus-enrolled.json', { schemaVersion: 1, package: '@dowork/commander', version: '0.1.0' });
-    put('profile/package.json', { private: true, dependencies: { '@dowork/commander': '0.1.0', 'kept-plugin': '1.0.0' }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', ...(enabled ? ['@dowork/dsh-plus-desktop'] : [])] } } });
+    put('profile/.benchgo-enrolled.json', { schemaVersion: 1, package: '@dowork/commander', version: '0.1.0' });
+    put('profile/package.json', { private: true, dependencies: { '@dowork/commander': '0.1.0', 'kept-plugin': '1.0.0' }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', ...(enabled ? ['@dowork/benchgo-desktop'] : [])] } } });
     assert.equal((await initializePluginProfile(options)).reason, 'migrated');
     const state = await getInstallState(options.profile);
     assert.equal(state.enabled, enabled);
@@ -217,7 +217,7 @@ test('old enrollment migrates physically into profile while preserving enabled a
     const manifest = JSON.parse(readFileSync(join(root, 'profile/package.json'), 'utf8'));
     assert.equal(manifest.dependencies['kept-plugin'], '1.0.0');
     assert.equal(manifest.dependencies['@dowork/commander'], undefined);
-    assert.equal(manifest.dependencies['dsh-plus'], undefined);
+    assert.equal(manifest.dependencies['benchgo'], undefined);
     assert.ok(manifest.dependencies[state.bundleName].startsWith('link:'));
     assert.equal(existsSync(join(options.profile, 'node_modules', state.bundleName, 'package.json')), true);
     assert.equal((await initializePluginProfile(options)).reason, 'already-enrolled');
@@ -227,7 +227,7 @@ test('old enrollment migrates physically into profile while preserving enabled a
 
 test('old sealed runtime cannot claim to support overriding its in-box Plus package', enrollmentOptions, async t => {
   const { put, options } = enrollmentFixture(t);
-  put('runtime/node_modules/dsh-plus/package.json', { name: 'dsh-plus', version: '0.1.0' });
+  put('runtime/node_modules/benchgo/package.json', { name: 'benchgo', version: '0.1.0' });
   await assert.rejects(initializePluginProfile(options), /新版桌面应用/);
 });
 

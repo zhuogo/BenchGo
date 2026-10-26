@@ -8,8 +8,8 @@ const require = createRequire(new URL('../../deepseek-harness/apps/desktop/packa
 export async function prepareDesktopBrand(root, output) {
   const sharp = require('sharp');
   const brand = join(root, 'assets/brand');
-  const logo = join(brand, 'dsh-plus-logo.png');
-  const mascot = (await readFile(join(brand, 'dsh-plus-logo.svg'))).toString('base64');
+  const logo = join(brand, 'benchgo-logo.png');
+  const mascot = (await readFile(join(brand, 'benchgo-logo.svg'))).toString('base64');
   await mkdir(output, { recursive: true });
 
   const sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256];
@@ -27,13 +27,13 @@ export async function prepareDesktopBrand(root, output) {
     directory.writeUInt32LE(offset, entry + 12);
     offset += bitmaps[index].length;
   }
-  await writeFile(join(output, 'dsh-plus.ico'), Buffer.concat([directory, ...bitmaps]));
+  await writeFile(join(output, 'benchgo.ico'), Buffer.concat([directory, ...bitmaps]));
 
   for (const scale of [1, 2]) {
     for (const dark of [false, true]) {
       const width = 600 * scale, height = 196 * scale;
       const background = dark ? '#151517' : '#ffffff';
-      const artwork = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 600 196"><rect width="600" height="196" fill="${background}"/><image href="data:image/svg+xml;base64,${mascot}" x="198" y="50" width="96" height="96"/><text x="314" y="111" font-family="Segoe UI,Microsoft YaHei UI,Microsoft YaHei,Arial,sans-serif" font-size="36" font-weight="600" fill="${dark ? '#ffffff' : '#222222'}">小角</text></svg>`);
+      const artwork = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 600 196"><rect width="600" height="196" fill="${background}"/><image href="data:image/svg+xml;base64,${mascot}" x="198" y="50" width="96" height="96"/><text x="314" y="111" font-family="Segoe UI,Microsoft YaHei UI,Microsoft YaHei,Arial,sans-serif" font-size="36" font-weight="600" fill="${dark ? '#ffffff' : '#222222'}">BenchGo</text></svg>`);
       const image = await sharp(artwork).removeAlpha().raw().toBuffer();
       const name = `brand${dark ? '-dark' : ''}${scale === 2 ? '-2x' : ''}.bmp`;
       await writeFile(join(output, name), bitmap24(image, width, height));
@@ -44,7 +44,7 @@ export async function prepareDesktopBrand(root, output) {
     .removeAlpha().raw().toBuffer();
   await writeFile(join(output, 'uninstaller-sidebar.bmp'), bitmap24(sidebar, 164, 314));
   const strings = await readFile(join(root, 'deepseek-harness/apps/desktop/installer/strings.nsh'), 'utf8');
-  await writeFile(join(output, 'strings-plus.nsh'), strings.replaceAll('DeepSeek Harness', '小角'));
+  await writeFile(join(output, 'strings-plus.nsh'), strings.replaceAll('DeepSeek Harness', 'BenchGo'));
 }
 
 /** NSIS bitmap controls consume bottom-up, padded BGR scanlines. */
@@ -84,13 +84,13 @@ export async function prepareInstallerSources(root, output) {
       const replacement = [
         '    StrCpy $1 0',
         '    ${If} ${FileExists} "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"',
-        '    ${OrIf} ${FileExists} "$INSTDIR\\DSH-Plus.exe"',
+        '    ${OrIf} ${FileExists} "$INSTDIR\\BenchGo.exe"',
         '        StrCpy $1 1',
         '    ${EndIf}',
         '    ${If} $0 != $INSTDIR',
         '    ${OrIf} $1 != 1',
       ].join('\n');
-      if (contents.split(anchor).length !== 2) throw new Error('Official installer ownership check changed; review 小角 migration');
+      if (contents.split(anchor).length !== 2) throw new Error('Official installer ownership check changed; review BenchGo migration');
       contents = contents.replace(anchor, replacement);
     }
     await writeFile(join(output, name), contents);

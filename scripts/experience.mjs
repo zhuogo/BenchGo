@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
-import { readFileSync, existsSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Local launch settings contain machine-specific environment, never committed credentials.
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -10,9 +10,24 @@ if (!existsSync(settingsPath)) {
   process.exit(1)
 }
 const settings = JSON.parse(readFileSync(settingsPath, 'utf8'))
+const hmrPatch = `${root}.local/web/hmr.overlay.yml`
+mkdirSync(`${root}.local/web`, { recursive: true })
+writeFileSync(hmrPatch, [
+  '- id: hmr',
+  '  disabled: false',
+  '  config:',
+  `    base: ${JSON.stringify(pathToFileURL(root).href)}`,
+  '    root:',
+  '      - plugins/commander/src',
+  '      - plugins/commander/voice/src',
+  '      - plugins/commander/lib',
+  '    debounce: 300',
+  '',
+].join('\n'), { mode: 0o600 })
 const child = spawn(process.execPath, [
   `${root}scripts/harness.mjs`, 'start:web',
   '--patch', `${root}.local/web/router.overlay.yml`,
+  '--patch', hmrPatch,
   '--no-open', '--port', '3080', ...process.argv.slice(2),
 ], {
   cwd: root,

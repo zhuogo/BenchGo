@@ -27,7 +27,7 @@ export function trayLabelsPlugin(trayPath) {
   const target = resolve(trayPath);
   let transformed = 0;
   return {
-    name: 'xiaojiao-tray-labels',
+    name: 'benchgo-tray-labels',
     buildStart() { transformed = 0; },
     transform(source, id) {
       if (resolve(id) !== target) return null;
@@ -46,7 +46,7 @@ export function verifyTrayBundle(source) {
   if (matches.length !== 1) throw new Error('Compiled desktop tray section changed; review packaging verification');
   const tray = matches[0][1];
   for (const label of ['label: id === "zh-CN" ? "主窗口" : "Main Window"', 'label: id === "zh-CN" ? "退出" : "Quit"']) {
-    if (tray.split(label).length !== 2) throw new Error('Compiled desktop tray is missing localized 小角 labels');
+    if (tray.split(label).length !== 2) throw new Error('Compiled desktop tray is missing localized BenchGo labels');
   }
   if (tray.includes('label: messages.openApplication') || tray.includes('label: messages.quitApplication')) throw new Error('Compiled desktop tray still uses upstream menu labels');
 }

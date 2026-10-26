@@ -1,89 +1,75 @@
-# 小角 · DSH-Plus
+# BenchGo
 
-<img src="assets/brand/dsh-plus-logo.svg" width="80" height="80" alt="DSH-Plus 吉祥物小角">
+<p align="center">
+  <img src="assets/brand/benchgo-logo.svg" width="128" height="128" alt="BenchGo">
+</p>
 
-为官方 DeepSeek Harness 增加编码 Agent 接管、Voice 语音与 Link 多端直连。保留官方引擎，不修改其源码。
+<p align="center">BenchGo 工作台。项目、会话和模型留在你的机器上，手机和平板连接同一台工作台。</p>
 
-小角是桌面与 Android 应用名称，也是 DSH-Plus 的统一 Logo 与吉祥物 IP，品牌素材见 [assets/brand](assets/brand/README.md)。
+BenchGo 基于官方 DeepSeek Harness，不修改其源码。桌面、网页和 Android 使用同一个 BenchGo 形象。
 
-## 安装插件
+## 两个产品
 
-已安装官方 DSH CLI 的用户，克隆仓库后从根目录执行：
+| | BenchGo | BenchGo Relay |
+| --- | --- | --- |
+| 是什么 | 完整工作台 | 中继服务器 |
+| 安装包 | `benchgo` | `@benchgo/relay` |
+| 做什么 | 项目、会话、模型、设备连接 | 只转发已授权设备的流量 |
+| 中继 | 可以连接一台外部中继，本身不是中继 | 单独安装，不含工作台 |
 
-```sh
-git clone https://github.com/draftgo/dsh-plus.git
-cd dsh-plus
-dsh plugin --profile desktop add ./plugins/commander
-```
+同一局域网直接连接，不需要中继。手机在外网、工作台在内网时，才在另一台 Linux 上安装 Relay。
 
-重启 Desktop，进入「设置 → 远程连接」。Web 用户把 profile 改为 `web`，重启实际使用的 Web Host；安装命令与运行 Host 必须使用相同的 `DSH_HOME`。仓库包含已构建的插件资源，不需要为安装再构建完整官方应用。
+## 安装工作台
 
-局域网：启用 Link，手机安装 Android App，扫码后在桌面确认。无需域名和公共中继，需要同网互通并放行 Link 端口（默认 48721）。
+Windows 安装包见 [Releases](https://github.com/zhuogo/BenchGo/releases)。安装后即包含 BenchGo、Voice 和 Link，不需要再装插件。
 
-公网：配置自己可达的 HTTPS 根地址，按 [Nginx 示例](plugins/link/config/nginx.example.conf) 反代 `/link/`；Android App 或手机/电脑浏览器配对后接入。公网模式不会自动打通家中 NAT；iPhone 首版使用公网网页。
-
-云端工作区可在“设置 → 远程连接 → 云端访问密钥”启用全站密钥，需先按 [部署说明](plugins/link/README.md#云端访问密钥) 接入鉴权服务及全站 Nginx 配置。保护 owner 主页、API、流与资源；Link 配对工作台使用独立设备认证，须同步配套反代配置。设置状态不代表反向代理已接入。
-
-下载正式安装包见 [Releases](https://github.com/draftgo/dsh-plus/releases)。完整 Windows EXE 内置官方 DSH、Plus、Voice 与 Link，安装后无需再装插件；已通过 Windows CI 构建和静默安装。Android 使用独立持久发行签名；旧 debug 验收包首次切换需卸载后安装正式版，后续正式版可覆盖升级；没有 iOS 原生包。人工桌面、手机真机与蜂窝网络验收边界见 [实现记录](Design/01-设备与远程连接/设计.md)。
-
-## 项目结构
-
-```text
-plugins/
-  commander/          DSH-Plus 安装单元，含 Voice；lib 为随包交付的构建资源
-  link/               直连服务、桌面设置、共享移动界面
-    src/pairing/      配对与设备管理
-    src/transport/    TLS 与请求边界
-    src/session/      官方 / 原生会话适配
-    client/           桌面与移动 React 界面、原生桥接
-    mobile/android/   Kotlin App、扫码、OkHttp、Keystore
-    config/           公网反代示例
-    test/             单元测试与可选真实联调
-Design/               设计、开发清单及实际实现记录
-scripts/              官方命令与 Android 构建封装
-artifacts/            本地产物按 plugins / android / windows 分类；二进制忽略 Git，下载走 Releases
-deepseek-harness/     官方 Git 子模块，版本由 upstream.json 锁定
-reference/            可选只读参考，不随仓库交付或参与构建
-```
-
-## 源码开发
-
-使用官方要求的 Node（建议 Node 24）、兼容 pnpm 11 的 Corepack。根目录没有独立依赖树。修改前端需安装官方工作区依赖；官方源码始终保持干净。
+Linux：
 
 ```sh
+npm install -g benchgo
+benchgo install
+```
+
+也可以 `npx benchgo install`。需要 Node.js 22+。
+
+## 安装中继
+
+只在单独的中继服务器上执行：
+
+```sh
+npm install -g @benchgo/relay
+benchgo-relay install --config /path/to/relay.json
+```
+
+`relay.json` 需要已准备的 TLS 证书、私钥和 token。安装工作台不会安装中继。
+
+## 连接
+
+局域网：工作台启用 Link，手机安装 Android App，扫码后在桌面确认。需要同一网络可达，默认端口 48721。
+
+公网：工作台填写自己可达的 HTTPS 地址。Android 首版没有 iOS 原生包，iPhone 使用手机网页。
+
+## 源码
+
+```sh
+git clone https://github.com/zhuogo/BenchGo.git
+cd BenchGo
 git submodule update --init --recursive
 npm run setup
-npm ci --prefix plugins/link
-npm ci --prefix plugins/commander
-npm run build:plus
-npm run test:commander
-npm run test:link
-npm run check
 ```
 
-完整 Windows EXE 构建使用 `npm run package:plus:win`，要求原生 Windows x64。源码与 Actions 流程见 [桌面打包](scripts/desktop/README.md)。
-
-`npm run check` 仅验证版本与入口一致性；`npm run build/dev/start` 转发官方 Desktop 命令，平台与签名要求以官方文档为准。
-
-Android 还需要 JDK 17、Android SDK Platform 35 / Build Tools 35，通过 `ANDROID_HOME` 或本机 `local.properties` 配置：
-
-```sh
-npm run build:android
+```text
+plugins/commander     BenchGo 插件，含 Voice
+plugins/link          设备连接、桌面设置、移动界面和 Android
+packages/benchgo-cli  工作台命令 benchgo
+packages/benchgo-relay 中继命令 benchgo-relay
+assets/brand          BenchGo 形象
+Design                设计与实现记录
+deepseek-harness      官方引擎，子模块，不修改
 ```
 
-命令先构建共享网页，再执行 `assembleDebug`。APK 位于 `plugins/link/mobile/android/app/build/outputs/apk/debug/app-debug.apk`。正式分发需自行配置 release 签名，不提交 keystore 或密码。
-
-## 功能与验证边界
-
-- 官方与 DSH-Plus 会话共用主机状态：项目、模型、新建、历史、流式文本、发送、停止、审批与问题。
-- 设备需桌面确认，授权可撤销；可信设备能操作所有已注册工作区，首版没有逐项目访客权限。
-- Android 一次保存一台主机，支持清除重配；任务留在主机运行，前台短轮询恢复状态。
-- 不含桌面投屏、远程终端/文件编辑、公共中继、穿透、iOS 原生包或后台保活承诺。
-
-详细说明：[DSH-Plus](plugins/commander/README.md) · [Link](plugins/link/README.md) · [移动端](plugins/link/mobile/README.md) · [实现与测试](Design/01-设备与远程连接/设计.md)。
+Windows 安装包、Android APK 和 npm 发布由 GitHub Actions 构建。正式签名密钥不进入仓库。
 
 ## 许可
 
-项目遵循 [MIT](LICENSE)。官方引擎及第三方资产遵循各自许可证；图标、字体与内联依赖说明见 [NOTICE](plugins/commander/NOTICE)。字体不属于本项目 MIT 许可。`reference/` 的仓库不是产品依赖，Link 未复制 Remote 源码。
-
-更新方式、首次 Windows 迁移与签名发布流程见 [更新与发布](Design/05-更新与发布/发布.md)。
+项目遵循 [MIT](LICENSE)。官方引擎、图标和字体遵循各自许可证，见 [NOTICE](plugins/commander/NOTICE)。

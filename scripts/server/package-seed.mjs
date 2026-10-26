@@ -18,7 +18,7 @@ export async function packageServerSeed({ output = join(root, 'plugins/link/dist
   try {
     const clean = join(temporary, 'plugin');
     const packed = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: plugin, encoding: 'utf8', shell: process.platform === 'win32' });
-    if (packed.status !== 0) throw new Error('无法读取 DSH-Plus 插件打包清单');
+    if (packed.status !== 0) throw new Error('无法读取 BenchGo 插件打包清单');
     for (const { path } of JSON.parse(packed.stdout)[0].files) {
       if (path.startsWith('lib/server/') || path.includes('..') || path.startsWith('/')) continue;
       await mkdir(dirname(join(clean, path)), { recursive: true });
@@ -27,7 +27,7 @@ export async function packageServerSeed({ output = join(root, 'plugins/link/dist
     await symlink(join(plugin, 'node_modules'), join(clean, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     const seed = join(temporary, 'seed');
     const staged = stagePluginBundle({ plugin: clean, output: seed, platform: 'linux', arch: 'x64' });
-    await rm(join(seed, 'node_modules/dsh-plus/node_modules/@anthropic-ai'), { recursive: true, force: true });
+    await rm(join(seed, 'node_modules/benchgo/node_modules/@anthropic-ai'), { recursive: true, force: true });
     // The payload has no platform bindings; optional native SDK is installed separately when needed.
     const releaseFile = join(seed, 'release.json');
     const release = JSON.parse(await readFile(releaseFile)); delete release.arch;

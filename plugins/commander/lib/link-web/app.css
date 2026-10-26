@@ -79,36 +79,14 @@ body[data-ds-dark-theme] :is(.link-settings, .link-dialog-backdrop) .link-button
 .link-settings .link-button { white-space: nowrap; }
 @media (max-width: 580px) { .link-settings { padding: 8px 0 28px; }.link-settings .link-heading h2 { font-size: 24px; }.link-status-panel, .link-device-list { padding: 18px; }.link-settings .link-device { flex-wrap: wrap; }.link-settings .link-device > div { min-width: 0; } }
 @media (max-width: 380px) { .link-dialog-backdrop { padding: 12px; }.link-dialog { max-height: calc(100dvh - 24px); padding: 24px 18px; }.link-dialog h3 { font-size: 22px; }.link-qr-surface { padding: 6px; }.link-pair-backup-actions { flex-direction: column; } }
-.link-cloud-access{margin:24px 0;padding:22px 0;border-top:1px solid var(--link-line,#8883);border-bottom:1px solid var(--link-line,#8883)}.link-cloud-access .link-form-actions{display:flex;flex-wrap:wrap;gap:8px}.link-cloud-access .link-mode-notice p{margin-top:0}
 .link-settings .link-status-panel { margin-top: 20px; }
 .link-settings .link-pair-row { margin-top: 22px; padding-bottom: 20px; }
-.link-host-actions, .link-cloud-unavailable { display: flex; align-items: center; gap: 10px; }
-.link-cloud-note, .link-cloud-unavailable p { margin: 10px 0 16px; color: var(--link-muted); font-size: 12px; line-height: 1.6; }
-.link-key-form { display: grid; gap: 12px; margin-top: 16px; }
-.link-key-draft { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
-.link-key-saved { grid-column: 1 / -1; display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer; }
-.link-key-saved input { margin: 0; width: 15px; height: 15px; accent-color: var(--link-accent); }
-.link-key-draft small { font-size: 11px; color: var(--link-muted); }
-.link-key-confirm { margin-top: 14px; padding: 12px; border: 1px solid var(--link-faint); border-radius: 9px; font-size: 12px; }
-.link-key-confirm p { margin: 0 0 10px; }
-.link-key-confirm button + button { margin-inline-start: 8px; }
+.link-host-actions { display: flex; align-items: center; gap: 10px; }
 .link-error-detail { margin: 10px 0; color: var(--link-muted); font-size: 11px; overflow-wrap: anywhere; }
 .link-error-detail summary { cursor: pointer; }
 .link-settings .link-toggle-field input:disabled { cursor: default; }
-@media (max-width: 380px) { .link-key-draft { grid-template-columns: minmax(0, 1fr); }.link-key-draft > button { justify-self: start; } }
 
 @media (any-pointer: coarse) {
   html { -webkit-tap-highlight-color: transparent; }
   :is(button, a, summary, [role="button"], [tabindex]):not(input, textarea, .dowork-select, [contenteditable]):focus:not(:focus-visible) { outline: none; }
 }
-
-.link-cloud-access { padding: 20px; border: 1px solid var(--link-faint); border-radius: 14px; background: var(--link-paper); }
-.link-cloud-access .link-panel-head { align-items: flex-start; gap: 16px; }
-.link-cloud-description { margin: 5px 0 0; color: var(--link-muted); font-size: 12px; }
-.link-cloud-state { flex: none; padding: 4px 9px; border-radius: 999px; background: var(--link-panel); color: var(--link-muted); font-size: 11px; }
-.link-cloud-state.is-enabled { background: var(--link-accent-soft); color: var(--link-accent); }
-.link-key-draft { padding: 14px; border: 1px solid var(--link-faint); border-radius: 10px; background: var(--link-panel); }
-.link-key-draft input:not([type=checkbox]) { font-family: ui-monospace, monospace; }
-.link-key-tools { display: flex; flex-wrap: wrap; gap: 8px; }
-.link-key-confirm { padding: 12px; border: 1px solid var(--link-danger); border-radius: 10px; }
-@media (max-width: 480px) { .link-cloud-access { padding: 14px; } }

@@ -144,29 +144,28 @@ test('device center exposes one add flow and owner pairing through existing sett
   assert(add.nodes().some(node => typeof node.type === 'function' && node.type.name === 'AddServer'));
 });
 
-test('connection management and saved devices occupy separate segment panels', async () => {
+test('devices, connection and relay occupy separate segment panels', async () => {
   const view = fixture('DeviceCenter'); await view.settle();
   const panel = id => view.nodes().find(node => node.props.id === 'dc-panel-' + id);
   const tab = id => view.nodes().find(node => node.props.id === 'dc-tab-' + id);
-  const current = view.nodes().find(node => node.props.className === 'dc-current-device');
-  const remote = view.nodes().find(node => node.props.className === 'dc-other-devices');
-  assert.match(textOf(current), /本机/);
-  assert.match(textOf(current), /本机工作台/);
-  assert.doesNotMatch(textOf(current), /当前工作台|此刻所在/);
-  assert.doesNotMatch(textOf(remote), /本机/);
-  assert.match(textOf(remote), /开发电脑/);
+  const directory = view.nodes().find(node => node.props.className === 'dc-device-directory');
+  assert.match(textOf(directory), /本机/);
+  assert.match(textOf(directory), /开发电脑/);
+  assert.equal(textOf(directory).indexOf('本机') < textOf(directory).indexOf('开发电脑'), true);
   assert.equal(panel('devices').props.hidden, false);
-  assert.equal(panel('connections').props.hidden, true);
+  assert.equal(panel('relay').props.hidden, true);
   assert.equal(tab('devices').props['aria-selected'], true);
   assert.equal(view.nodes().some(node => node.props.className === 'dc-brand'), false);
-  const hostSettings = nodes(panel('connections')).find(node => typeof node.type === 'function' && node.type.name === 'LinkSettings');
+  const hostSettings = nodes(panel('connection')).find(node => typeof node.type === 'function' && node.type.name === 'LinkSettings');
   assert(hostSettings); assert.equal(hostSettings.props.embedded, true);
-  assert.equal(nodes(panel('devices')).some(node => typeof node.type === 'function' && node.type.name === 'LinkSettings'), false);
-  await tab('connections').props.onClick(); await view.settle();
-  assert.equal(panel('connections').props.hidden, false);
+  await tab('relay').props.onClick(); await view.settle();
+  assert.equal(panel('relay').props.hidden, false);
   assert.equal(panel('devices').props.hidden, true);
-  assert.equal(tab('connections').props.tabIndex, 0);
+  assert.equal(tab('relay').props.tabIndex, 0);
   assert.equal(tab('devices').props.tabIndex, -1);
+  await tab('connection').props.onClick(); await view.settle();
+  assert.equal(panel('connection').props.hidden, false);
+  assert.match(textOf(panel('connection')), /本机连接/);
 });
 
 test('segment keyboard navigation focuses the destination and keeps workbench frames', async () => {
@@ -177,8 +176,8 @@ test('segment keyboard navigation focuses the destination and keeps workbench fr
   let focused = '', prevented = false;
   deviceTab.props.onKeyDown({ key: 'Home', preventDefault() { prevented = true; }, currentTarget: { parentElement: { querySelector(selector) { focused = selector; return { focus() {} }; } } } });
   await view.settle();
-  assert.equal(prevented, true); assert.equal(focused, '#dc-tab-connections');
-  assert.equal(view.nodes().find(node => node.props.id === 'dc-panel-connections').props.hidden, false);
+  assert.equal(prevented, true); assert.equal(focused, '#dc-tab-devices');
+  assert.equal(view.nodes().find(node => node.props.id === 'dc-panel-devices').props.hidden, false);
   assert.equal(view.nodes().find(node => node.props.className === 'dc-surface').props.hidden, false);
   assert.equal(view.nodes().find(node => node.type === 'iframe').props.src, frame.props.src);
   await view.nodes().find(node => typeof node.type === 'function' && node.props['aria-label'] === '返回开发电脑工作台').props.onClick(); await view.settle();
@@ -204,13 +203,13 @@ test('embedded device list can return without using the window close control', a
 test('clients without hosting retain their remote device list', async () => {
   const view = fixture('DeviceCenter', { runtime: { async call() { return { devices: [{ id: 'desk', name: '开发电脑', kind: 'computer', status: 'unknown' }], capabilities: { hostAdmin: false, ssh: false } }; } } });
   await view.settle();
-  assert.equal(view.nodes().find(node => node.props.className === 'dc-current-device').props.hidden, true);
-  assert.match(textOf(view.nodes().find(node => node.props.className === 'dc-other-devices')), /开发电脑/);
+  assert.notEqual(view.nodes().find(node => node.props.className === 'dc-device-directory').props.hidden, true);
+  assert.match(textOf(view.nodes().find(node => node.props.className === 'dc-device-directory')), /开发电脑/);
   assert.equal(view.nodes().some(node => typeof node.type === 'function' && node.type.name === 'LinkSettings'), false);
 });
 
 
-test('relay wizard requires SSH fingerprint before deployment and gates pairing on host connectivity', async () => {
+test('relay wizard deploys in one step without requiring email or fingerprint confirmation', async () => {
   const calls = [];
   let connected = false;
   const view = fixture('RelayWizard', { onChanged() {}, runtime: { async call(action, args) {
@@ -224,15 +223,15 @@ test('relay wizard requires SSH fingerprint before deployment and gates pairing 
   } } });
   await view.settle();
   const input = placeholder => view.nodes().find(node => node.type === 'input' && node.props.placeholder === placeholder);
-  input('IP 或域名').props.onChange({ target: { value: '8.8.8.8' } });
-  input('需具备部署权限').props.onChange({ target: { value: 'root' } });
-  input('例如：203.0.113.10').props.onChange({ target: { value: '8.8.8.8' } });
+  assert.equal(input('例如 root 或 ubuntu').props.value, 'root');
+  input('公网 IP 或域名').props.onChange({ target: { value: '8.8.8.8' } });
   await view.settle();
   const submit = async () => { view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle(); };
-  await submit(); assert.equal(calls[0].action, 'relayProbe'); assert(!calls.some(item => item.action === 'relayDeploy'));
   await submit();
   const deployment = calls.find(item => item.action === 'relayDeploy');
-  assert.equal(deployment.args.fingerprint, 'SHA256:relay'); assert.equal(deployment.args.relayPort, 24680); assert.equal(deployment.args.challengeMode, 'standalone');
+  assert.equal(calls[0].action, 'relayProbe'); assert.equal(deployment.args.fingerprint, 'SHA256:relay');
+  assert.equal(deployment.args.email, ''); assert.equal(deployment.args.relayPort, 24680); assert.equal(deployment.args.challengeMode, 'standalone');
+  assert.doesNotMatch(textOf(view.tree), /确认服务器身份|已有中继服务/);
   await view.tick();
   const pairButton = () => view.nodes().find(node => typeof node.type === 'function' && textOf(node) === '生成中继连接信息');
   assert.equal(pairButton().props.disabled, true);
@@ -243,21 +242,32 @@ test('relay wizard requires SSH fingerprint before deployment and gates pairing 
   assert(view.nodes().some(node => node.type === 'textarea' && node.props.readOnly && node.props.value.includes('code=once')));
 });
 
-test('relay deployment exposes explicit challenge webroot and invalidates changed server trust', async () => {
-  const view = fixture('RelayWizard', { onChanged() {}, runtime: { async call(action) { if (action === 'relayProbe') return { fingerprint: 'SHA256:relay' }; return {}; } } });
+test('relay deployment exposes webroot and returns to editable fields after failure', async () => {
+  const calls = [];
+  const view = fixture('RelayWizard', { onChanged() {}, runtime: { async call(action, args) {
+    calls.push({ action, args });
+    if (action === 'relayProbe') return { fingerprint: 'SHA256:relay' };
+    if (action === 'relayDeploy') return { jobId: 'failed-relay' };
+    if (action === 'job') return { id: 'failed-relay', state: 'error', error: 'SSH 认证失败，请检查用户名或密码', steps: [{ name: '连接 SSH', state: 'error' }] };
+    return {};
+  } } });
   await view.settle();
-  const inputs = view.nodes().filter(node => node.type === 'input');
-  inputs[0].props.onChange({ target: { value: 'relay.example.com' } }); inputs[2].props.onChange({ target: { value: 'root' } }); await view.settle();
-  view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
-  assert.match(textOf(view.tree), /确认服务器身份/);
-  view.nodes().find(node => node.type === 'input' && node.props.placeholder === 'IP 或域名').props.onChange({ target: { value: 'other.example.com' } }); await view.settle();
-  assert.doesNotMatch(textOf(view.tree), /确认服务器身份/);
+  view.nodes().find(node => node.type === 'input' && node.props.placeholder === '公网 IP 或域名').props.onChange({ target: { value: 'relay.example.com' } });
+  view.nodes().find(node => node.props.className === 'dc-advanced-toggle').props.onClick(); await view.settle();
   view.nodes().find(node => node.props.value === 'standalone').props.onChange({ target: { value: 'webroot' } }); await view.settle();
   assert(view.nodes().some(node => node.type === 'input' && node.props.placeholder === '/var/www/acme' && node.props.required));
+  view.nodes().find(node => node.props.value === 'webroot').props.onChange({ target: { value: 'standalone' } }); await view.settle();
+  view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle(); await view.tick();
+  assert(view.nodes().some(node => node.props.job?.error === 'SSH 认证失败，请检查用户名或密码')); assert.match(textOf(view.tree), /返回修改/);
+  assert.equal(view.nodes().some(node => node.type === 'form'), false);
+  await view.click('返回修改');
+  assert(view.nodes().some(node => node.type === 'form'));
+  assert.equal(calls.at(-1).action, 'relayJobDismiss');
 });
+
 
 test('relay deployment entry is unavailable when client capability is absent', async () => {
   const view = fixture('DeviceCenter'); await view.settle();
-  const button = view.nodes().find(node => typeof node.type === 'function' && textOf(node) === '配置自有中继');
-  assert.equal(button.props.disabled, true);
+  const panel = view.nodes().find(node => node.props.id === 'dc-panel-relay');
+  assert.match(textOf(panel), /当前客户端不支持中继部署/);
 });

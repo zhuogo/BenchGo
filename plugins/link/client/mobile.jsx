@@ -217,7 +217,7 @@ export function LinkMobileApp({ runtime = nativeRuntime, theme: controlledTheme,
   };
   const currentSession = state?.sessions?.find(item => item.id === session?.id) || session;
   const mainTitle = screen === 'chat' ? currentSession?.title || '新会话' : screen === 'new' ? '新会话' : screen === 'connection' ? '连接管理' : '最近';
-  const mainSubtitle = screen === 'chat' ? (project?.name || '工作区') + (history.running ? ' · 正在处理' : '') : state?.host?.name || '小角';
+  const mainSubtitle = screen === 'chat' ? (project?.name || '工作区') + (history.running ? ' · 正在处理' : '') : state?.host?.name || 'BenchGo';
   return <main ref={viewportRef} className={'link-mobile link-mobile-v3 link-mobile-shell' + (screen === 'chat' ? ' link-mobile-chat' : '')} data-theme={theme}>
     <div className="link-app-content" inert={sidebarOpen ? '' : undefined} aria-hidden={sidebarOpen || undefined}>
       <header className="link-app-header"><button className="link-mobile-icon-button" aria-label="打开侧边栏" aria-controls="link-mobile-sidebar" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(true)}><UIIcon name="collapse" className="link-sidebar-open-icon" size={22} /></button><div className="link-app-heading"><strong>{mainTitle}</strong><small><StatusDot state={connectionState} />{mainSubtitle}</small></div><button className="link-mobile-icon-button" aria-label="新建会话" onClick={openNew} disabled={busy || !!sendPending}><UIIcon name="edit" size={21} /></button></header>
@@ -242,5 +242,5 @@ export function LinkMobileApp({ runtime = nativeRuntime, theme: controlledTheme,
     {sidebarOpen && <MobileSidebar state={state} screen={screen} selectedId={session?.id} onChoose={choose} onNavigate={navigate} onNew={openNew} onClose={closeSidebar} connectionLabel={connectionLabel} connectionState={connectionState} theme={theme} onTheme={() => setTheme(value => value === 'light' ? 'dark' : 'light')} disabled={busy || !!sendPending} />}
   </main>;
 }
-function Brand() { return <div className="link-mobile-brand"><BrandLogo size={28} decorative /><span>小角</span></div>; }
+function Brand() { return <div className="link-mobile-brand"><BrandLogo size={28} decorative /><span>BenchGo</span></div>; }
 function connectionError(message, lan) { if (/[\u3400-\u9fff]/.test(message) || !/failed to connect|timeout|timed out|unreachable/i.test(message)) return message; return lan ? '暂时无法连接电脑。请确认手机和电脑在同一 Wi-Fi，电脑已开启 Link；检查防火墙后可重新连接。' : '暂时无法连接工作台。请确认 HTTPS 地址可从手机访问，并检查服务状态、域名证书与网络转发后重试。'; }

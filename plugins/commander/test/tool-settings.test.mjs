@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { activeJob, toolState, parseOverrides, profileDraft, eligibleProviders, previewChecksums, setQuickSetting, nextToolTab, nativeOnlyDraft } from '../client/tool-settings-state.mjs';
 import { quickSettingsFor, validateQuickSettings } from '../shared/tool-quick-settings.mjs';
-test('tool management separates configuration support, native sessions and install ownership', () => {
-  assert.deepEqual(toolState({ installed: true, source: 'external', configSupported: true, chatSupported: false, canUninstall: false }), { installed: true, installation: '外部安装', configSupported: true, chatSupported: false, canInstall: false, canUpdate: false, canReinstall: false, canUninstall: false });
+test('tool management separates configuration support, native sessions and system lifecycle', () => {
+  assert.deepEqual(toolState({ installed: true, source: 'npm', configSupported: true, chatSupported: false, canUninstall: false }), { installed: true, installation: '系统已安装', configSupported: true, chatSupported: false, canInstall: false, canUpdate: false, canReinstall: false, canUninstall: false });
   assert.equal(toolState({ canInstall: true, job: { status: 'running' } }).canInstall, false);
   assert.equal(toolState({ chatSupported: true }, { sessionSupported: false }).chatSupported, false);
   assert.equal(activeJob({ status: 'queued' }), true); assert.equal(activeJob({ status: 'succeeded' }), false);

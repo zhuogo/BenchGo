@@ -10,7 +10,7 @@ export class Store {
   constructor(directory) { this.directory = directory; this.writes = Promise.resolve(); }
 
   async open() {
-    if (this.lock) throw failure('DSH_PLUS_DATA_LOCKED', 'DSH-Plus store is already open');
+    if (this.lock) throw failure('BENCHGO_DATA_LOCKED', 'BenchGo store is already open');
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     this.lockPath = join(this.directory, 'owner.lock');
     this.guardPath = join(this.directory, 'owner-guard');
@@ -20,7 +20,7 @@ export class Store {
       let existing;
       try {
         const metadata = await lstat(this.lockPath);
-        if (!metadata.isFile() || metadata.isSymbolicLink()) throw failure('DSH_PLUS_LOCK_UNREADABLE', 'DSH-Plus owner lock is not a regular file; existing data was preserved');
+        if (!metadata.isFile() || metadata.isSymbolicLink()) throw failure('BENCHGO_LOCK_UNREADABLE', 'BenchGo owner lock is not a regular file; existing data was preserved');
         existing = await readFile(this.lockPath, 'utf8');
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
@@ -28,18 +28,18 @@ export class Store {
       if (existing !== undefined) {
         let owner;
         try { owner = JSON.parse(existing); }
-        catch (cause) { throw failure('DSH_PLUS_LOCK_UNREADABLE', 'DSH-Plus owner lock is unreadable; existing data was preserved', cause); }
+        catch (cause) { throw failure('BENCHGO_LOCK_UNREADABLE', 'BenchGo owner lock is unreadable; existing data was preserved', cause); }
         if (!owner || typeof owner !== 'object' || !Number.isInteger(owner.pid) || owner.pid <= 0 || owner.pid > 2147483647 || typeof owner.host !== 'string' || !owner.host) {
-          throw failure('DSH_PLUS_LOCK_UNREADABLE', 'DSH-Plus owner lock has an invalid PID or host; existing data was preserved');
+          throw failure('BENCHGO_LOCK_UNREADABLE', 'BenchGo owner lock has an invalid PID or host; existing data was preserved');
         }
-        if (owner.host !== hostname()) throw failure('DSH_PLUS_LOCK_OTHER_HOST', 'DSH-Plus data directory is owned by another host');
+        if (owner.host !== hostname()) throw failure('BENCHGO_LOCK_OTHER_HOST', 'BenchGo data directory is owned by another host');
         let exited = false;
         try { process.kill(owner.pid, 0); }
         catch (cause) {
           if (cause.code === 'ESRCH') exited = true;
-          else throw failure('DSH_PLUS_LOCK_PROBE_FAILED', 'DSH-Plus cannot verify the owner process; existing lock was preserved', cause);
+          else throw failure('BENCHGO_LOCK_PROBE_FAILED', 'BenchGo cannot verify the owner process; existing lock was preserved', cause);
         }
-        if (!exited) throw failure('DSH_PLUS_DATA_LOCKED', 'DSH-Plus data directory is already in use');
+        if (!exited) throw failure('BENCHGO_DATA_LOCKED', 'BenchGo data directory is already in use');
         await rm(this.lockPath);
       }
       const lock = await open(this.lockPath, 'wx', 0o600);
@@ -84,7 +84,7 @@ export class Store {
       let record;
       try { record = await readFile(this.lockPath, 'utf8'); }
       catch (error) { if (error.code === 'ENOENT') return; throw error; }
-      if (record !== this.lockRecord) throw failure('DSH_PLUS_LOCK_OWNERSHIP_CHANGED', 'DSH-Plus owner lock changed; successor lock was preserved');
+      if (record !== this.lockRecord) throw failure('BENCHGO_LOCK_OWNERSHIP_CHANGED', 'BenchGo owner lock changed; successor lock was preserved');
       await rm(this.lockPath);
     });
   }

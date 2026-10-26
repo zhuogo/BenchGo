@@ -24,6 +24,14 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 [class*="_root"]:has(.cmd-projects) [class*="_railMark"] { display: none; }
 [class*="_root"]:has(.cmd-projects) [class*="_toggle"] [class*="_panelIcon"] { display: inline; }
 [class*="_root"]:has(.cmd-projects) > [class*="_regionArea"] { display: contents; }
+/* Keep the collapsed rail's empty workspace seat flexible so footer controls stay at the bottom. */
+[class*="_root"]:has(.cmd-projects.cmd-narrow) > [class*="_regionArea"] {
+  display: flex;
+  flex: none;
+  min-height: 0;
+  flex-direction: column;
+  order: 1;
+}
 [class*="_root"]:has(.cmd-projects) > [class*="_panelList"] {
   display: flex;
   flex-direction: row;
@@ -57,6 +65,8 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
   animation: cmd-reveal 180ms ease both;
 }
 [class*="_root"]:has(.cmd-projects) > [class*="_footArea"] { order: 2; padding-top: 6px; }
+[class*="_root"]:has(.cmd-narrow) > [class*="_panelList"] { order: 2; }
+[class*="_root"]:has(.cmd-narrow) > [class*="_footArea"] { order: 3; margin-top: auto; }
 
 .cmd-projects {
   --cmd-text: var(--dsw-alias-label-primary, #242424);
@@ -339,3 +349,4 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 .cmd-shell-sidebar .cmd-project-name button > span:not(.cmd-ui-icon):not(.cmd-activity) { animation: cmd-sidebar-label-in 200ms ease both; }
 @keyframes cmd-sidebar-label-in { from { opacity: 0; transform: translateX(-5px); } to { opacity: 1; transform: translateX(0); } }
 @media (prefers-reduced-motion: reduce) { .cmd-shell-frame:has(.cmd-projects),.cmd-shell-sidebar:has(.cmd-projects),.cmd-shell-sidebar:has(.cmd-projects) * { transition: none !important; animation: none !important; } }
+.cmd-session-quick-actions{position:absolute;z-index:2;right:31px;top:4px;display:flex;align-items:center;gap:1px;opacity:0;background:var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-base,#fff));box-shadow:-5px 0 8px var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-base,#fff));transition:opacity 140ms ease}.cmd-session-row:hover .cmd-session-quick-actions,.cmd-session-row:focus-within .cmd-session-quick-actions{opacity:1}.cmd-session-quick{display:flex!important;align-items:center;justify-content:center;width:26px;height:28px;padding:6px!important;color:var(--cmd-muted)}.cmd-session-quick:hover{color:var(--cmd-text)}.cmd-project-delete{display:flex;margin-right:3px;padding:5px!important;opacity:0;color:var(--cmd-muted)}.cmd-project-name:hover .cmd-project-delete,.cmd-project-name:focus-within .cmd-project-delete{opacity:1}.cmd-project-delete:hover{color:#c05c59!important}

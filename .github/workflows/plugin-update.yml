@@ -1,4 +1,4 @@
-name: DSH-Plus plugin update
+name: BenchGo plugin update
 on:
   workflow_dispatch:
     inputs:
@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: dsh-plus-plugin-release
+  group: benchgo-plugin-release
   cancel-in-progress: false
 jobs:
   package:
@@ -51,17 +51,17 @@ jobs:
         run: node scripts/desktop/package-plugin-update.mjs --out artifacts/plugins
       - name: Sign update manifest
         env:
-          DSH_PLUS_UPDATE_PRIVATE_KEY: ${{ secrets.DSH_PLUS_UPDATE_PRIVATE_KEY }}
+          BENCHGO_UPDATE_PRIVATE_KEY: ${{ secrets.BENCHGO_UPDATE_PRIVATE_KEY }}
         run: |
           app_feed_args=()
-          if curl -fL --max-time 30 --max-filesize 262144 'https://github.com/draftgo/dsh-plus/releases/download/app-updates/latest.yml' -o app-feed.json; then
+          if curl -fL --max-time 30 --max-filesize 262144 'https://github.com/zhuogo/BenchGo/releases/download/app-updates/latest.yml' -o app-feed.json; then
             app_feed_args=(--app-feed app-feed.json)
           fi
           node scripts/desktop/create-update-manifest.mjs --out artifacts/plugins "${app_feed_args[@]}"
       - name: Retain signed update package
         uses: actions/upload-artifact@v4
         with:
-          name: dsh-plus-plugin-update
+          name: benchgo-plugin-update
           path: artifacts/plugins/*
           if-no-files-found: error
           retention-days: 14
@@ -79,8 +79,8 @@ jobs:
             echo "Version ${version} already exists; increment the plugin version before publishing."
             exit 1
           fi
-          gh release create "$tag" artifacts/plugins/* --target "$GITHUB_SHA" --title "DSH-Plus plugin ${version}" --notes "Signed plugin update for the compatible Harness engine. Existing tasks and settings are preserved." --latest=false
+          gh release create "$tag" artifacts/plugins/* --target "$GITHUB_SHA" --title "BenchGo plugin ${version}" --notes "Signed plugin update for the compatible Harness engine. Existing tasks and settings are preserved." --latest=false
           if ! gh release view plugin-updates --json tagName > /dev/null 2>&1; then
-            gh release create plugin-updates --target "$GITHUB_SHA" --title "DSH-Plus plugin update channel" --notes "Signed metadata for the current compatible plugin release." --latest=false
+            gh release create plugin-updates --target "$GITHUB_SHA" --title "BenchGo plugin update channel" --notes "Signed metadata for the current compatible plugin release." --latest=false
           fi
-          gh release upload plugin-updates artifacts/plugins/dsh-plus-update.json artifacts/plugins/dsh-plus-update.json.sig --clobber
+          gh release upload plugin-updates artifacts/plugins/benchgo-update.json artifacts/plugins/benchgo-update.json.sig --clobber

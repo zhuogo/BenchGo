@@ -4,10 +4,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application
-        android:theme="@style/Theme.DshPlus"
-        android:label="小角"
-        android:icon="@mipmap/ic_dsh_plus"
-        android:roundIcon="@mipmap/ic_dsh_plus"
+        android:theme="@style/Theme.BenchGo"
+        android:label="BenchGo"
+        android:icon="@mipmap/ic_benchgo"
+        android:roundIcon="@mipmap/ic_benchgo"
         android:allowBackup="false"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false">
@@ -15,7 +15,7 @@
             android:name=".LinkScannerActivity"
             android:exported="false"
             android:screenOrientation="portrait"
-            android:theme="@style/Theme.DshPlus.Scanner" />
+            android:theme="@style/Theme.BenchGo.Scanner" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

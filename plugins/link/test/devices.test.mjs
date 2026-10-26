@@ -48,7 +48,7 @@ test('device center exposes only explicit local host administration fields', asy
   assert.deepEqual(calls[0], { action: 'status' });
   assert.deepEqual(calls[1], { action: 'configure', enabled: true });
   assert.deepEqual(calls[2], { action: 'pairing', mode: 'lan' });
-  await assert.rejects(center.api({ action: 'cloud-access' }), /不支持 SSH/);
+  await assert.rejects(center.api({ action: 'unknown-host-action' }), /不支持 SSH/);
 });
 test('local centre requires one-use entry and same-origin JSON, without third-party cookies', async t => {
   const directory = await temp(t);
@@ -161,7 +161,9 @@ test('relay deployment owner callback saves credentials without exposing them in
   t.after(() => center.close());
   assert.equal((await center.api({ action: 'list' })).capabilities.relayDeploy, true);
   assert.deepEqual(await center.api({ action: 'relayDeploy' }), { jobId: 'job' });
-  assert.deepEqual(calls[0], { action: 'relay-configure', url: 'https://relay.test:24680', token: 'private-relay-secret', enabled: true });
+  assert.deepEqual(calls[0], { action: 'status' });
+  assert.equal(calls[1].action, 'relay-pool-configure');
+  assert.deepEqual(calls[1].nodes[0], { id: calls[1].nodes[0].id, url: 'https://relay.test:24680', token: 'private-relay-secret', priority: 0, enabled: true });
   await center.api({ action: 'hostRelayConfigure', enabled: false, operation: 'shell', password: 'discard' });
-  assert.deepEqual(calls[1], { action: 'relay-configure', enabled: false });
+  assert.deepEqual(calls[2], { action: 'relay-configure', enabled: false });
 });

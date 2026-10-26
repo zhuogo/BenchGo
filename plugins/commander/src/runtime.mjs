@@ -34,7 +34,7 @@ export class Commander extends EventEmitter {
   async open() {
     const data = await this.store.open();
     try {
-      if (!data || data.version !== 1 || !Array.isArray(data.sessions)) throw new Error('Unsupported DSH-Plus state format');
+      if (!data || data.version !== 1 || !Array.isArray(data.sessions)) throw new Error('Unsupported BenchGo state format');
       for (const record of data.sessions) {
         if (['running', 'waiting', 'connecting'].includes(record.status)) {
           for (const entry of Object.values(record.receipts)) {
@@ -55,10 +55,10 @@ export class Commander extends EventEmitter {
   }
 
   healthy() {
-    if (this.closing) throw new Error('DSH-Plus is shutting down');
-    if (this.fault) throw new Error(`DSH-Plus persistence failed: ${this.fault.message}`);
+    if (this.closing) throw new Error('BenchGo is shutting down');
+    if (this.fault) throw new Error(`BenchGo persistence failed: ${this.fault.message}`);
   }
-  get(id) { const session = this.sessions.get(id); if (!session) throw new Error(`Unknown DSH-Plus session: ${id}`); return session; }
+  get(id) { const session = this.sessions.get(id); if (!session) throw new Error(`Unknown BenchGo session: ${id}`); return session; }
   list() { return [...this.sessions.values()].map(s => this.snapshot(s.id)); }
   snapshot(id) { const { events, receipts, ...value } = this.get(id); return copy(value); }
   catalog() { return [...this.providers].map(([name, provider]) => ({ name, capabilities: provider.constructor.capabilities })); }
@@ -123,7 +123,7 @@ export class Commander extends EventEmitter {
     this.healthy();
     if (!this.providers.has(provider)) throw new Error(`Unknown provider: ${provider}`);
     if (parentId) this.get(parentId);
-    if (nativeId && [...this.sessions.values()].some(s => s.provider === provider && s.nativeId === nativeId && this.drivers.has(s.id))) throw new Error('Native session already owned by DSH-Plus');
+    if (nativeId && [...this.sessions.values()].some(s => s.provider === provider && s.nativeId === nativeId && this.drivers.has(s.id))) throw new Error('Native session already owned by BenchGo');
     if (route && nativeId) throw new Error('不能为已有原生会话自动绑定隔离供应商，请新建会话。');
     if (nativeMode && route) throw new Error('原生配置模式不能同时指定托管供应商。');
     if (!nativeMode && !nativeId && this.routeService && this.toolProfiles?.list) {
@@ -167,7 +167,7 @@ export class Commander extends EventEmitter {
     const session = this.get(id);
     if (session.archived) throw new Error('Unarchive session before connecting');
     if (session.cursor && !session.nativeId) throw new Error('No durable native handle; refusing to create a replacement session');
-    if (session.nativeId && [...this.sessions.values()].some(s => s.id !== id && s.provider === session.provider && s.nativeId === session.nativeId && (this.drivers.has(s.id) || this.connecting.has(s.id)))) throw new Error('Native session already owned by DSH-Plus');
+    if (session.nativeId && [...this.sessions.values()].some(s => s.id !== id && s.provider === session.provider && s.nativeId === session.nativeId && (this.drivers.has(s.id) || this.connecting.has(s.id)))) throw new Error('Native session already owned by BenchGo');
     session.status = 'connecting';
     const generation = (this.generations.get(id) ?? 0) + 1;
     this.generations.set(id, generation);
@@ -326,7 +326,7 @@ export class Commander extends EventEmitter {
   denyPending(id) { for (const pending of [...this.pending.values()]) if (pending.sessionId === id) pending.finish({ allow: false }); }
 
   async history(id) {
-    const driver = this.drivers.get(id); if (!driver?.history) throw new Error('Native history unavailable; use DSH-Plus events');
+    const driver = this.drivers.get(id); if (!driver?.history) throw new Error('Native history unavailable; use BenchGo events');
     return driver.history();
   }
   async discover(id) {

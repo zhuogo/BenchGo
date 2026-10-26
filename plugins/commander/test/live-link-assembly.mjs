@@ -10,15 +10,15 @@ const root=fileURLToPath(new URL('../../../', import.meta.url));
 const dir=await mkdtemp(join(tmpdir(),'link-assembly-'));
 const node=process.env.LINK_TEST_NODE ?? join(root,'node_modules/.toolchain/node_modules/node/bin/node');
 const dependencies=process.env.LINK_HARNESS_NODE_MODULES ?? join(root,'.local/web/home/profiles/web/node_modules');
-const cloudOrigin='https://link-assembly.invalid';
+const publicOrigin='https://link-assembly.invalid';
 let child,childStopped,spawnFailure,output='';
 try {
  const home=join(dir,'home'), profile=join(home,'profiles/web'), workspace=join(dir,'workspace');
- await mkdir(profile,{recursive:true});await mkdir(workspace);await mkdir(join(dir,'commander/link'),{recursive:true});await writeFile(join(dir,'commander/link/devices.json'),JSON.stringify({enabled:true,host:'127.0.0.1',port:0,publicUrl:cloudOrigin,devices:[]}));
+ await mkdir(profile,{recursive:true});await mkdir(workspace);await mkdir(join(dir,'commander/link'),{recursive:true});await writeFile(join(dir,'commander/link/devices.json'),JSON.stringify({enabled:true,host:'127.0.0.1',port:0,publicUrl:publicOrigin,devices:[]}));
  await symlink(dependencies,join(profile,'node_modules'),process.platform === 'win32' ? 'junction' : 'dir');
- await writeFile(join(profile,'package.json'),JSON.stringify({name:'link-assembly-probe',private:true,dependencies:{'dsh-plus':`link:${root}/plugins/commander`},dsh:{profile:{bundles:['@deepseek-ai/dsh-base','@deepseek-ai/dsh-web-app','dsh-plus']}}}));
+ await writeFile(join(profile,'package.json'),JSON.stringify({name:'link-assembly-probe',private:true,dependencies:{'benchgo':`link:${root}/plugins/commander`},dsh:{profile:{bundles:['@deepseek-ai/dsh-base','@deepseek-ai/dsh-web-app','benchgo']}}}));
  const probe=join(dir,'probe.mjs');
- await writeFile(probe,`export const inject=['connection']; export function apply(ctx) { ctx.effect(()=>ctx.connection.fetch.register({path:'/api/assembly-probe',methods:['POST'],requestBody:'buffered',fetch:()=>Response.json({services:Object.fromEntries(['connection','workspaceRegistry','typertGateway','sessionController','webServer','clientModules','commander'].map(k=>[k,Boolean(ctx.get(k))])),entries:Array.from(ctx.loader.entries()).filter(entry=>['commander','connection','modules','session-controller','typert-gateway'].includes(entry.options.id)).map(entry=>({id:entry.options.id,disabled:entry.disabled,state:entry.fiber?.state}))})}));}`);
+ await writeFile(probe,`export const inject=['connection']; export function apply(ctx) { ctx.effect(()=>ctx.connection.fetch.register({path:'/api/assembly-probe',methods:['POST'],requestBody:'buffered',fetch:()=>Response.json({services:Object.fromEntries(['connection','workspaceRegistry','typertGateway','sessionController','webServer','clientModules','commander'].map(k=>[k,Boolean(ctx.get(k))])),entries:Array.from(ctx.loader.entries()).filter(entry=>['commander','commander-link','connection','modules','session-controller','typert-gateway'].includes(entry.options.id)).map(entry=>({id:entry.options.id,disabled:entry.disabled,state:entry.fiber?.state}))})}));}`);
  await writeFile(join(profile,'cordis.yml'),'[]\n');
  await writeFile(join(profile,'cordis.patch.yml'),`- id: commander
   config:
@@ -32,7 +32,7 @@ try {
     - id: assembly-probe
       name: ${JSON.stringify(probe)}
 `);
- child=spawn(node,['--import',join(root,'deepseek-harness/node_modules/tsx/dist/esm/index.mjs'),join(root,'deepseek-harness/apps/cli/src/bin.ts'),'--profile','web','--host','127.0.0.1','--port','0','--no-open'],{cwd:workspace,env:{PATH:process.env.PATH,HOME:join(dir,'user'),DSH_HOME:home,DSH_AGENTS_HOME:join(dir,'agents'),TSX_TSCONFIG_PATH:join(root,'deepseek-harness/tsconfig.json'),DSH_LINK_CLOUD_ORIGIN:cloudOrigin,DSH_LINK_CLOUD_AUTH_PORT:'0',DSH_TELEMETRY_DISABLED:'1',NO_COLOR:'1'},stdio:['ignore','pipe','pipe']});
+ child=spawn(node,['--import',join(root,'deepseek-harness/node_modules/tsx/dist/esm/index.mjs'),join(root,'deepseek-harness/apps/cli/src/bin.ts'),'--profile','web','--host','127.0.0.1','--port','0','--no-open'],{cwd:workspace,env:{PATH:process.env.PATH,HOME:join(dir,'user'),DSH_HOME:home,DSH_AGENTS_HOME:join(dir,'agents'),TSX_TSCONFIG_PATH:join(root,'deepseek-harness/tsconfig.json'),DSH_TELEMETRY_DISABLED:'1',NO_COLOR:'1'},stdio:['ignore','pipe','pipe']});
  childStopped=new Promise(resolve=>{child.once('close',resolve);child.once('error',error=>{spawnFailure=error;resolve();});});
  for(const stream of [child.stdout,child.stderr])stream.on('data',chunk=>output+=chunk);
  let login; for(let i=0;i<300;i++){const m=output.match(/dsh web: (http:[/][/]127[.]0[.]0[.]1:[0-9]+[/][?]token=[A-Za-z0-9_-]+)/);if(m){login=new URL(m[1]);break;}if(spawnFailure||child.exitCode!==null||child.signalCode!==null)break;await new Promise(r=>setTimeout(r,100));}
@@ -49,7 +49,7 @@ try {
  assert.equal(probeResult.response.status,200);
  const {services,entries}=JSON.parse(probeResult.body);
  assert.ok(Object.values(services).every(Boolean),JSON.stringify(services));
- assert.equal(entries.length,5,'all expected official service entries must exist');
+ assert.equal(entries.length,6,'all expected official service entries must exist');
  assert.ok(entries.every(entry=>!entry.disabled && entry.state===2),JSON.stringify(entries));
  assert.equal((await call('/api/commander-link',{action:'status'},false)).response.status,401);
  const status=await call('/api/commander-link',{action:'status'});
@@ -57,7 +57,6 @@ try {
  assert.equal(status.response.headers.get('cache-control'),'no-store');
  const link=JSON.parse(status.body);
  assert.equal(link.enabled,true); assert.ok(link.port>0); assert.equal(link.error,null);
- assert.equal(link.cloudAccess.configured,true);
  const {cert}=JSON.parse(await readFile(join(dir,'commander/link/tls.json'),'utf8'));
  const tlsHealth=await new Promise((resolve,reject)=>{
   const req=request({hostname:'127.0.0.1',port:link.port,path:'/link/api/info',method:'GET',ca:cert},res=>{
@@ -78,7 +77,7 @@ try {
  assert.equal(disabled.response.status,200,disabled.body);
  assert.equal(JSON.parse(disabled.body).enabled,false);
  assert.equal((await call('/api/commander-link',{action:'status'})).response.status,200,'admin remains mounted after listener shutdown');
- console.log('PASS: real Harness Link injection, official exact Fetch registry, owner authentication, configured cloud carrier, enabled TLS startup, device route and listener shutdown.');
+ console.log('PASS: real Harness Link injection, official exact Fetch registry, owner authentication, enabled TLS startup, device route and listener shutdown.');
 }finally{
  if(child&&!spawnFailure&&child.exitCode===null&&child.signalCode===null){
   child.kill('SIGTERM');

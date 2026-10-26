@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 380" role="img" aria-label="BenchGo">
+  <!-- Corner rule (master construction, geometry.json): the cut is a 45-degree
+       diagonal from (410,380) to (600,190); the corner piece keeps the body's
+       R95 rounded bottom-right corner - never a sharp point. Glyph must stay
+       fully inside the piece: clear of the diagonal (line x+y=790) and of the
+       R95 arc (center 505,285). Current glyph: mini window at (543,324),
+       scale 0.9, max radius ~32. If the corner changes, recompute from the
+       master geometry, not from absolute pixels. -->
+  <defs>
+    <clipPath id="bodyClip">
+      <path d="M95,0 H505 A95,95 0 0 1 600,95 V190 L410,380 H95 A95,95 0 0 1 0,285 V95 A95,95 0 0 1 95,0 Z"/>
+    </clipPath>
+    <pattern id="winprint" width="150" height="118" patternUnits="userSpaceOnUse">
+      <g fill="none" stroke="#D9CCAF" stroke-width="2.5" opacity="0.6">
+        <rect x="12" y="14" width="32" height="22" rx="5"/>
+        <rect x="84" y="66" width="32" height="22" rx="5"/>
+      </g>
+      <g fill="#D9CCAF" opacity="0.6">
+        <circle cx="21" cy="22" r="2.8"/><circle cx="31" cy="22" r="2.8"/>
+        <circle cx="93" cy="74" r="2.8"/><circle cx="103" cy="74" r="2.8"/>
+      </g>
+    </pattern>
+  </defs>
+
+  <!-- body -->
+  <path d="M95,0 H505 A95,95 0 0 1 600,95 V190 L410,380 H95 A95,95 0 0 1 0,285 V95 A95,95 0 0 1 95,0 Z" fill="#F1E8DB"/>
+  <rect x="0" y="0" width="600" height="380" fill="url(#winprint)" clip-path="url(#bodyClip)"/>
+
+  <!-- terminal motif >_ -->
+  <g stroke="#EE5A33" stroke-width="17" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <polyline points="472,50 512,79 472,108"/>
+  </g>
+  <rect x="528" y="93" width="42" height="17" rx="8.5" fill="#EE5A33"/>
+
+  <!-- eyes: bean + < (right eye at 88% scale, user-approved 2026-10-26, baked coords) -->
+  <rect x="123" y="125" width="90" height="130" rx="45" fill="#222321"/>
+  <polyline points="342.6,150.1 293.4,195 342.6,239.9" stroke="#222321" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- orange cut corner -->
+  <path d="M410,380 H505 A95,95 0 0 0 600,285 V190 Z" fill="#EE5A33"/>
+  <!-- mini window glyph: centered on corner incenter, max radius ~36 < inradius 51 -->
+  <g transform="translate(543 324) scale(0.9)">
+    <rect x="-26" y="-18" width="52" height="36" rx="9" fill="none" stroke="#F7F1E5" stroke-width="8"/>
+    <circle cx="-9" cy="0" r="4" fill="#F7F1E5"/>
+    <circle cx="9" cy="0" r="4" fill="#F7F1E5"/>
+  </g>
+</svg>

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:https';
 import { openDeviceRegistry, normalizeRoutes } from '../src/devices/registry.mjs';
-import { selectRoute } from '../src/devices/routes.mjs';
+import { orderRoutes, selectRoute } from '../src/devices/routes.mjs';
 import { probeRemote, remoteJson } from '../src/devices/remote.mjs';
 import { loadIdentity } from '../src/transport/tls.mjs';
 
@@ -18,6 +18,29 @@ test('pairing routes are bounded, strict HTTPS trust records without extra secre
   assert.deepEqual(normalizeRoutes([direct, relay]), [direct, relay]);
   assert.deepEqual(normalizeRoutes([{ ...direct, url: direct.url + '/' }])[0], direct);
   for (const value of [null, {}, Array(17).fill(direct), [{ ...direct, pin: '' }], [{ ...relay, pin }], [{ ...relay, pin: '' }], [{ ...direct, token: 'secret' }], [{ ...relay, password: 'secret' }], [{ ...relay, url: 'http://relay.test' }], [{ ...relay, url: 'https://u:p@relay.test' }], [{ ...relay, url: 'https://relay.test/path' }], [{ ...direct, kind: 'unknown' }]]) assert.throws(() => normalizeRoutes(value));
+});
+
+test('relay metadata normalizes IDs, priority and health while preserving legacy routes', () => {
+  const routes = normalizeRoutes([
+    { kind: 'relay', id: 'backup', url: 'https://backup.test', priority: 20, health: 'degraded', cooldownUntil: 10, lastError: 'timeout' },
+    { kind: 'relay', relayId: 'primary', url: 'https://primary.test', priority: 1, health: 'healthy' },
+    relay,
+  ]);
+  assert.deepEqual(routes[0], { kind: 'relay', url: 'https://backup.test', relayId: 'backup', priority: 20, health: 'degraded', cooldownUntil: 10, lastError: 'timeout' });
+  assert.deepEqual(routes[1], { kind: 'relay', url: 'https://primary.test', relayId: 'primary', priority: 1, health: 'healthy' });
+  assert.deepEqual(routes[2], relay);
+  for (const value of [{ ...relay, relayId: 'bad id' }, { ...relay, priority: -1 }, { ...relay, health: 'dead' }, { ...relay, cooldownUntil: -1 }, { ...relay, lastError: 'x'.repeat(201) }, { ...relay, id: 'a', relayId: 'b' }]) assert.throws(() => normalizeRoutes([value]));
+});
+
+test('relay order honors priority and skips active cooldowns without changing legacy order', () => {
+  const now = Date.now();
+  const routes = normalizeRoutes([
+    { kind: 'relay', relayId: 'third', url: 'https://third.test', priority: 30 },
+    { kind: 'relay', relayId: 'primary', url: 'https://primary.test', priority: 1, cooldownUntil: now + 60_000 },
+    { kind: 'relay', relayId: 'backup', url: 'https://backup.test', priority: 10 },
+  ]);
+  assert.deepEqual(orderRoutes(routes, now).map(route => route.relayId), ['backup', 'third']);
+  assert.deepEqual(orderRoutes(normalizeRoutes([relay, { ...relay, url: 'https://relay-2.test' }]), now).map(route => route.url), [relay.url, 'https://relay-2.test']);
 });
 
 test('registry persists approved route records without leaking them to the device list', async t => {
@@ -34,6 +57,21 @@ test('registry persists approved route records without leaking them to the devic
   assert.equal((JSON.parse(await readFile(join(directory, 'connections.json'), 'utf8'))).devices.length, 1);
 });
 
+test('registry updates relay health and cooldown without exposing route metadata publicly', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-relay-health-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const registry = await openDeviceRegistry(directory);
+  const device = await registry.upsert({ ...target, routes: [{ ...relay, relayId: 'primary', priority: 1 }], name: '电脑' });
+  const cooldownUntil = Date.now() + 30_000;
+  await registry.markRouteHealth(device.id, 'primary', 'unhealthy', { cooldownUntil, lastError: 'timeout' });
+  assert.equal(registry.get(device.id).routes[0].health, 'unhealthy');
+  assert.equal(registry.get(device.id).routes[0].cooldownUntil, cooldownUntil);
+  assert.equal(JSON.stringify(registry.list()).includes('unhealthy'), false);
+  const restored = await openDeviceRegistry(directory);
+  assert.equal(restored.get(device.id).routes[0].relayId, 'primary');
+  await assert.rejects(registry.markRouteHealth(device.id, 'missing', 'healthy'), /中继路线不存在/);
+});
+
 test('route selection prioritizes fixed-pin direct and only falls back for unreachable networks', async () => {
   const calls = [];
   const selected = await selectRoute(target, { probe: async candidate => calls.push(candidate) });
@@ -45,6 +83,37 @@ test('route selection prioritizes fixed-pin direct and only falls back for unrea
     assert.equal(selected.url, relay.url); assert.equal(selected.pin, '');
     assert.deepEqual(calls, [{ url: direct.url, pin }, { url: relay.url, pin: '' }]);
   }
+});
+
+test('route selection fails over relays in configured priority order and stops after success', async () => {
+  const relayOne = { kind: 'relay', url: 'https://relay-one.test' };
+  const relayTwo = { kind: 'relay', url: 'https://relay-two.test' };
+  const calls = [];
+  const selected = await selectRoute({ ...target, routes: [direct, relayOne, relayTwo] }, {
+    probe: async candidate => {
+      calls.push(candidate.url);
+      if (candidate.url !== relayTwo.url) throw Object.assign(new Error('unreachable'), { code: 'ETIMEDOUT' });
+    },
+  });
+  assert.equal(selected.url, relayTwo.url);
+  assert.deepEqual(calls, [direct.url, relayOne.url, relayTwo.url]);
+});
+
+test('route selection reports cooldown when every relay is cooling down', async () => {
+  await assert.rejects(selectRoute({ ...target, routes: [{ ...relay, relayId: 'primary', cooldownUntil: Date.now() + 60_000 }] }, { probe: async () => assert.fail('cooling route must not be probed') }), error => error.code === 'ROUTES_COOLDOWN' && error.retryAt > Date.now());
+});
+
+test('route selection reports relay health transitions for runtime cooldowns', async () => {
+  const events = [];
+  const selected = await selectRoute({ ...target, routes: [{ ...relay, relayId: 'primary' }] }, {
+    probe: async () => { throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); },
+    onHealth: async (route, health, details) => events.push({ id: route.relayId, health, cooldown: details.cooldownUntil > Date.now(), error: details.lastError }),
+  }).catch(error => error);
+  assert.equal(selected.code, 'ETIMEDOUT');
+  assert.deepEqual(events.map(event => event.id), ['primary']);
+  assert.equal(events[0].health, 'unhealthy');
+  assert.equal(events[0].cooldown, true);
+  assert.equal(events[0].error, 'timeout');
 });
 
 test('active path is public runtime state, never persisted and cleared at restart', async t => {

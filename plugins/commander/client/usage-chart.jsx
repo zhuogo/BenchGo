@@ -14,7 +14,6 @@ export function UsageCharts({ timeline }) {
     <div className="cmd-usage-chart-heading"><h3>数据图表</h3>{timeline && <span>按{periods[timeline.interval]}汇总 · 共 {count(calls)} 条记录</span>}</div>
     {!timeline ? <div className="cmd-usage-empty">图表数据暂未提供，请刷新重试</div> : !calls ? <div className="cmd-usage-empty">这个时间段还没有用量记录</div> : <>
       <UsageChart timeline={timeline} />
-      <p className="cmd-usage-chart-note">包含所选日期内的全部记录，不受详细记录分页影响。柱形显示 Token 用量（左轴），折线显示记录数量（右轴）。Token 仅汇总已提供的计数，缺失记录以斜线标记；悬停或聚焦查看详情。</p>
     </>}
   </section>;
 }

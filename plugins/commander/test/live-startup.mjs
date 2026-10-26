@@ -11,8 +11,8 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 const node = resolve(process.env.COMMANDER_TEST_NODE || join(root, 'node_modules/.toolchain/node_modules/node/bin/node'));
 const dependencies = resolve(process.env.COMMANDER_HARNESS_NODE_MODULES || join(root, '.local/web/home/profiles/web/node_modules'));
 const tsx = join(root, 'deepseek-harness/node_modules/tsx/dist/esm/index.mjs');
-for (const path of [node, tsx, join(dependencies, 'dsh-plus/package.json')]) await access(path);
-const directory = await mkdtemp(join(tmpdir(), 'dsh-plus-startup-'));
+for (const path of [node, tsx, join(dependencies, 'benchgo/package.json')]) await access(path);
+const directory = await mkdtemp(join(tmpdir(), 'benchgo-startup-'));
 const home = join(directory, 'user');
 const dshHome = join(home, '.dsh');
 const profile = join(dshHome, 'profiles/web');
@@ -69,7 +69,7 @@ async function stop(signal = 'SIGTERM') {
 try {
   for (const path of [profile, workspace, data]) await mkdir(path, { recursive: true });
   await symlink(dependencies, join(profile, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
-  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-plus-startup-smoke', private: true, dependencies: { 'dsh-plus': `link:${root}plugins/commander` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-plus'] } } }));
+  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'benchgo-startup-smoke', private: true, dependencies: { 'benchgo': `link:${root}plugins/commander` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'benchgo'] } } }));
   await writeFile(join(profile, 'cordis.yml'), '[]\n');
   await writeFile(join(profile, 'cordis.patch.yml'), '- id: session-log-deepseek\n  config:\n    enabled: false\n- id: session-telemetry-otel\n  disabled: true\n');
   const fixture = JSON.stringify({ version: 1, sessions: [{ id: 'preserved-session', provider: 'codex', cwd: workspace, status: 'disconnected', archived: false, cursor: 0, events: [], receipts: {}, pendingApprovals: [], nativeId: 'preserved-native-id' }] });
@@ -100,7 +100,7 @@ try {
   const sidebarFailure = await call('state');
   assert.equal(sidebarFailure.status, 503);
   assert.equal(sidebarFailure.body.code, 'COMMANDER_UNAVAILABLE');
-  assert.match(sidebarFailure.body.error, /DSH-Plus 启动失败/);
+  assert.match(sidebarFailure.body.error, /BenchGo 启动失败/);
   assert.equal(sidebarFailure.cache, 'no-store');
   assert.equal(await readFile(dismissedPath, 'utf8'), corrupt);
   await stop();

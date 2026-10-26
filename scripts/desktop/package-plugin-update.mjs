@@ -13,12 +13,12 @@ const plugin = join(root, 'plugins/commander');
 const manifest = JSON.parse(await readFile(join(plugin, 'package.json')));
 const output = resolve(values.out || join(root, 'artifacts/plugins'));
 const tar = createRequire(join(plugin, 'package.json'))('tar');
-const temporary = await mkdtemp(join(tmpdir(), 'dsh-plus-release-'));
+const temporary = await mkdtemp(join(tmpdir(), 'benchgo-release-'));
 try {
   const seed = join(temporary, 'seed');
   stagePluginBundle({ runtime: values.runtime, plugin, output: seed });
   await mkdir(output, { recursive: true });
-  const filename = join(output, `dsh-plus-${manifest.version}-plugin.tar.gz`);
+  const filename = join(output, `benchgo-${manifest.version}-plugin.tar.gz`);
   await tar.c({ file: filename, cwd: seed, gzip: true, portable: true, noMtime: true }, ['release.json', 'node_modules']);
-  console.log(`DSH-Plus complete plugin payload: ${filename}`);
+  console.log(`BenchGo complete plugin payload: ${filename}`);
 } finally { await rm(temporary, { recursive: true, force: true }); }

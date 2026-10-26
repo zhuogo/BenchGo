@@ -53,7 +53,7 @@ function sshConnect(input, factory, probe = false) {
     } catch (error) { client.destroy(); finish(error); }
   });
 }
-export async function execute(client, command, { timeout = 60000, stdin, maximum = 2 * 1024 * 1024 } = {}) {
+export async function execute(client, command, { timeout = 60000, stdin, maximum = 2 * 1024 * 1024, onData } = {}) {
   return new Promise((resolve, reject) => {
     client.exec(command, (error, stream) => {
       if (error) { reject(error); return; }
@@ -61,7 +61,8 @@ export async function execute(client, command, { timeout = 60000, stdin, maximum
       const finish = (error, value) => { if (settled) return; settled = true; clearTimeout(timer); error ? reject(error) : resolve(value); };
       const timer = setTimeout(() => { stream.close(); finish(new Error('服务器操作超时')); }, timeout); timer.unref?.();
       const append = (text, data) => { const value = text + data; if (Buffer.byteLength(value) > maximum) { stream.close(); finish(new Error('服务器返回内容过大')); } return value; };
-      stream.on('data', data => { output = append(output, data); }); stream.stderr.on('data', data => { stderr = append(stderr, data); });
+      stream.on('data', data => { output = append(output, data); onData?.(data.toString(), 'stdout'); });
+      stream.stderr.on('data', data => { stderr = append(stderr, data); onData?.(data.toString(), 'stderr'); });
       stream.once('error', error => finish(error)); stream.once('close', code => finish(null, { code, stdout: output, stderr }));
       stream.end(stdin);
     });
@@ -115,9 +116,9 @@ export function createServerManager({ directory, onDevice = async () => {}, runt
   const open = async (input, probe = false) => { const client = await sshConnect(input, () => { const value = clientFactory(); clients.add(value); value.once('close', () => clients.delete(value)); return value; }, probe); ensure(); return client; };
   async function install(client, input, operation) {
     const nonce = randomBytes(16).toString('hex');
-    const command = 'umask 077; directory="$HOME/.cache/dsh-plus-bootstrap-' + nonce + '"; mkdir -p -- "$directory"; printf "%s\n" "$directory"';
+    const command = 'umask 077; directory="$HOME/.cache/benchgo-bootstrap-' + nonce + '"; mkdir -p -- "$directory"; printf "%s\n" "$directory"';
     const created = await execute(client, command); const path = created.stdout.trim();
-    if (created.code !== 0 || !path.startsWith('/') || /[\r\n\0]/.test(path) || !path.endsWith('dsh-plus-bootstrap-' + nonce)) throw new Error('无法创建服务器安装目录');
+    if (created.code !== 0 || !path.startsWith('/') || /[\r\n\0]/.test(path) || !path.endsWith('benchgo-bootstrap-' + nonce)) throw new Error('无法创建服务器安装目录');
     try {
       for (const name of ['bootstrap.sh', 'bootstrap.mjs', 'manifest.json', 'server-seed.tar.gz']) await upload(client, join(assets, name), path + '/' + name);
       const result = await execute(client, 'bash ' + shellQuote(path + '/bootstrap.sh') + ' ' + shellQuote(input.source ?? 'mirror') + ' ' + shellQuote(operation), { timeout: 20 * 60 * 1000 });
@@ -127,9 +128,9 @@ export function createServerManager({ directory, onDevice = async () => {}, runt
       return value;
     } finally { await execute(client, 'rm -rf -- ' + shellQuote(path), { timeout: 10000 }).catch(() => {}); }
   }
-  function startJob(work) {
+  function startJob(work, kind = 'server') {
     ensure(); if (jobs.size >= 64) for (const [id, job] of jobs) { if (job.state !== 'running') jobs.delete(id); if (jobs.size < 32) break; }
-    const job = { id: randomUUID(), state: 'running', steps: [{ name: '连接 SSH', state: 'running' }] }; jobs.set(job.id, job);
+    const job = { id: randomUUID(), kind, state: 'running', steps: [{ name: '连接 SSH', state: 'running' }] }; jobs.set(job.id, job);
     const step = name => { for (const old of job.steps) if (old.state === 'running') old.state = 'done'; job.steps.push({ name, state: 'running' }); };
     Promise.resolve().then(() => work(job, step)).then(device => { job.state = 'done'; for (const step of job.steps) if (step.state === 'running') step.state = 'done'; if (device?.relay) job.relay = device.relay; else job.device = publicRecord(device); }).catch(error => { job.state = 'error'; job.error = friendlyError(error); for (const step of job.steps) if (step.state === 'running') step.state = 'error'; });
     return { jobId: job.id };
@@ -157,18 +158,22 @@ export function createServerManager({ directory, onDevice = async () => {}, runt
         let relayAssets = relayAssetsRoot;
         if (!relayAssets) {
           const candidates = [fileURLToPath(new URL('../relay/', import.meta.url)), fileURLToPath(new URL('../../../commander/lib/relay/', import.meta.url)), join(assets, '..', 'relay')];
-          for (const candidate of candidates) { try { await access(join(candidate, 'run-relay-server.mjs')); await access(join(candidate, 'ip-certificate.mjs')); relayAssets = candidate; break; } catch {} }
+          for (const candidate of candidates) { try { await access(join(candidate, 'run-relay-server.cjs')); await access(join(candidate, 'ip-certificate.mjs')); relayAssets = candidate; break; } catch {} }
         }
         if (!relayAssets) throw new Error('未找到打包的中继部署工具');
         return await deployRelay({ client, input, execute, upload, assets: relayAssets, step, onRelay });
-      } catch(error) { throw new Error(redactServerLog(error.message, [input.password,input.privateKey,input.passphrase])); } finally { client?.end(); connecting.delete(key); } });
+      } catch(error) { throw new Error(redactServerLog(error.message, [input.password,input.privateKey,input.passphrase])); } finally { client?.end(); connecting.delete(key); } }, 'relay');
     },
     async manageRelay(input) {
       ensure(); validateSshInput(input, { credentials: true }); const command = relayManagementCommand(input.operation);
       const client = await open(input);
       try { const result = await execute(client, 'if [ "$(id -u)" = 0 ]; then bash -s; else sudo -n bash -s; fi', { stdin: command });
-        if(result.code !== 0 && input.operation !== 'status') throw new Error('中继管理失败：' + redactServerLog(result.stderr, [input.password,input.privateKey,input.passphrase]));
-        return { operation: input.operation, ...(input.operation === 'status' ? { status: result.code === 0 ? result.stdout.trim() : 'inactive' } : {}), ...(input.operation === 'logs' ? { logs: redactServerLog(result.stdout) } : {}) };
+        if(result.code !== 0 && !['status', 'renew-status', 'diagnose'].includes(input.operation)) throw new Error('中继管理失败：' + redactServerLog(result.stderr, [input.password,input.privateKey,input.passphrase]));
+        return {
+          operation: input.operation,
+          ...(['status', 'renew-status'].includes(input.operation) ? { status: result.code === 0 ? result.stdout.trim() : 'inactive' } : {}),
+          ...(input.operation === 'logs' || input.operation === 'diagnose' ? { logs: redactServerLog(result.stdout + (result.stderr || '')) } : {}),
+        };
       } finally { client.end(); }
     },
     async probe(input) { ensure(); validateSshInput(input); return open(input, true); },
@@ -187,12 +192,14 @@ export function createServerManager({ directory, onDevice = async () => {}, runt
       return startJob(async (_job, step) => { const client = await open(value); try { ensure(); step('验证安全工作台'); const channel = await new Promise((resolve, reject) => client.forwardOut('127.0.0.1', 0, '127.0.0.1', device.ssh.remotePort, (error, stream) => error ? reject(error) : resolve(stream))); channel.destroy(); return await attach(client, { ...device }); } catch (error) { client.end(); throw error; } });
     },
     async job(id) { ensure(); const job = jobs.get(typeof id === 'string' ? id : id?.id); if (!job) throw new Error('任务已过期'); return structuredClone(job); },
+    activeRelayJob() { ensure(); const job = [...jobs.values()].reverse().find(item => item.kind === 'relay'); return job ? structuredClone(job) : null; },
+    dismissRelayJob(id) { ensure(); const job = jobs.get(id); if (!job || job.kind !== 'relay') return { ok: true }; if (job.state === 'running') throw new Error('部署仍在进行，暂时不能关闭任务'); jobs.delete(id); return { ok: true }; },
     async manage(input) {
       ensure(); await ready; const device = records.get(input.id), session = sessions.get(input.id); if (device && input.device?.name) device.name = input.device.name; if (!device || !session) throw new Error('请先重新连接服务器');
       const operation = input.operation;
-      if (operation === 'update') return startJob(async (_job, step) => { step('升级 DSH-Plus'); const result = await install(session.client, { source: device.ssh.source }, 'update'); return attach(session.client, { ...device, pin: result.pin, token: result.token ?? device.token, ssh: { ...device.ssh, remotePort: result.port } }); });
+      if (operation === 'update') return startJob(async (_job, step) => { step('升级 BenchGo'); const result = await install(session.client, { source: device.ssh.source }, 'update'); return attach(session.client, { ...device, pin: result.pin, token: result.token ?? device.token, ssh: { ...device.ssh, remotePort: result.port } }); });
       const prefix = 'export XDG_RUNTIME_DIR="/run/user/$(id -u)"; export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"; ';
-      const commands = { status: 'systemctl --user is-active dsh-plus.service', start: 'systemctl --user start dsh-plus.service', stop: 'systemctl --user stop dsh-plus.service', restart: 'systemctl --user restart dsh-plus.service', logs: 'journalctl --user -u dsh-plus.service --no-pager -n 80 -o cat' };
+      const commands = { status: 'systemctl --user is-active benchgo.service', start: 'systemctl --user start benchgo.service', stop: 'systemctl --user stop benchgo.service', restart: 'systemctl --user restart benchgo.service', logs: 'journalctl --user -u benchgo.service --no-pager -n 80 -o cat' };
       if (!Object.hasOwn(commands, operation)) throw new Error('不支持的服务器操作');
       const result = await execute(session.client, prefix + commands[operation]); if (result.code !== 0 && operation !== 'status') throw new Error('服务器服务操作失败');
       return { operation, status: operation === 'status' ? result.stdout.trim() : operation === 'stop' ? 'stopped' : undefined, ...(operation === 'logs' ? { logs: redactServerLog(result.stdout) } : {}) };

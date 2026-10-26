@@ -15,7 +15,7 @@ const { publicKey: publicObject, privateKey } = generateKeyPairSync('ed25519');
 const publicKey = publicObject.export({ type: 'spki', format: 'pem' });
 const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' });
 const artifact = Buffer.from('test signed plugin archive');
-const manifest = () => ({ schemaVersion: 1, version: '0.1.2', engine: { min: '0.2.1-alpha.3', max: '0.2.1-alpha.3' }, plugin: { version: '0.1.2', url: releaseDownloadUrl('dsh-plus-0.1.2-plugin.tar.gz', 'plugin-v0.1.2'), sha256: createHash('sha256').update(artifact).digest('hex'), size: artifact.byteLength } });
+const manifest = () => ({ schemaVersion: 1, version: '0.1.2', engine: { min: '0.2.1-alpha.3', max: '0.2.1-alpha.3' }, plugin: { version: '0.1.2', url: releaseDownloadUrl('benchgo-0.1.2-plugin.tar.gz', 'plugin-v0.1.2'), sha256: createHash('sha256').update(artifact).digest('hex'), size: artifact.byteLength } });
 function feed(data = manifest(), transform) {
   const bytes = Buffer.from(JSON.stringify(data));
   const signature = sign(null, bytes, privateKey).toString('base64');
@@ -23,7 +23,7 @@ function feed(data = manifest(), transform) {
 }
 
 test('default source uses domestic mirror and selected source never silently changes', () => {
-  const url = releaseDownloadUrl('dsh-plus-update.json');
+  const url = releaseDownloadUrl('benchgo-update.json');
   assert.equal(resolveUpdateUrl(url), `https://ghfast.top/${url}`);
   assert.deepEqual(normalizeUpdateConfig(), DEFAULT_UPDATE_CONFIG);
   assert.equal(resolveUpdateUrl(url, { source: 'github', mirrorUrl: 'invalid ignored field' }), url);
@@ -35,20 +35,20 @@ test('source and artifact URLs reject credentials, injected URLs and unsafe base
     assert.throws(() => normalizeUpdateConfig({ source: 'custom', mirrorUrl }), { code: 'UPDATE_SOURCE' });
   }
   assert.throws(() => normalizeUpdateConfig({ source: 'custom' }), { code: 'UPDATE_SOURCE' });
-  for (const url of ['https://github.com/other/repo/releases/download/v1/x.tar.gz', 'https://evil.example/x.tar.gz', 'https://github.com/draftgo/dsh-plus/releases/download/v1/../../evil', 'https://github.com/draftgo/dsh-plus/releases/download/v1/%2e%2e.tar.gz', 'https://github.com/draftgo/dsh-plus/releases/download/v1/x.tar.gz?token=secret']) {
+  for (const url of ['https://github.com/other/repo/releases/download/v1/x.tar.gz', 'https://evil.example/x.tar.gz', 'https://github.com/zhuogo/BenchGo/releases/download/v1/../../evil', 'https://github.com/zhuogo/BenchGo/releases/download/v1/%2e%2e.tar.gz', 'https://github.com/zhuogo/BenchGo/releases/download/v1/x.tar.gz?token=secret']) {
     assert.throws(() => resolveUpdateUrl(url), { code: 'UPDATE_URL' });
   }
 });
 
 test('manifest is authenticated before parsing and validates app independently', async () => {
   const data = manifest();
-  data.app = { version: '0.1.0', url: releaseDownloadUrl('DSH-Plus-Setup.exe', 'v0.1.0') };
+  data.app = { version: '0.1.0', url: releaseDownloadUrl('BenchGo-Setup.exe', 'v0.1.0') };
   const requested = [];
   const fetcher = feed(data);
   assert.deepEqual(await fetchVerifiedRelease({ publicKey, fetcher: url => { requested.push(url); return fetcher(url); } }), data);
   assert.deepEqual(requested, [
-    'https://ghfast.top/https://github.com/draftgo/dsh-plus/releases/download/plugin-updates/dsh-plus-update.json',
-    'https://ghfast.top/https://github.com/draftgo/dsh-plus/releases/download/plugin-updates/dsh-plus-update.json.sig',
+    'https://ghfast.top/https://github.com/zhuogo/BenchGo/releases/download/plugin-updates/benchgo-update.json',
+    'https://ghfast.top/https://github.com/zhuogo/BenchGo/releases/download/plugin-updates/benchgo-update.json.sig',
   ]);
   await assert.rejects(fetchVerifiedRelease({ publicKey, fetcher: feed(data, bytes => Buffer.from(bytes.toString().replace('0.1.2', '0.1.3'))) }), { code: 'UPDATE_SIGNATURE' });
   const other = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' });
@@ -88,7 +88,7 @@ test('semver ordering respects prerelease, numeric identifiers and exact engine 
 });
 
 test('network failures retain source and bound metadata length, timeout and redirects', async () => {
-  const url = releaseDownloadUrl('dsh-plus-update.json');
+  const url = releaseDownloadUrl('benchgo-update.json');
   const calls = [];
   await assert.rejects(fetchUpdateBytes(url, { config: { source: 'github' }, fetcher: async target => { calls.push(target); throw Error('offline'); } }), { code: 'UPDATE_NETWORK' });
   assert.deepEqual(calls, [url]);
@@ -113,14 +113,14 @@ test('plugin bytes must match signed size and SHA256', () => {
 });
 
 test('release generator signs exact output and rejects a mismatched publishing key', async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'dsh-plus-update-'));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'benchgo-update-'));
   try {
-    const pluginPath = path.join(dir, 'dsh-plus-0.1.2-plugin.tar.gz');
+    const pluginPath = path.join(dir, 'benchgo-0.1.2-plugin.tar.gz');
     await writeFile(pluginPath, artifact);
     const options = { pluginPath, outDir: dir, version: '0.1.2', engineVersion: '0.2.1-alpha.3', privateKey: privatePem, publicKey };
     assert.deepEqual(await createUpdateManifest(options), manifest());
-    const bytes = await readFile(path.join(dir, 'dsh-plus-update.json'));
-    const sig = await readFile(path.join(dir, 'dsh-plus-update.json.sig'));
+    const bytes = await readFile(path.join(dir, 'benchgo-update.json'));
+    const sig = await readFile(path.join(dir, 'benchgo-update.json.sig'));
     assert.deepEqual(await fetchVerifiedRelease({ publicKey, fetcher: async url => new Response(url.endsWith('.sig') ? sig : bytes) }), manifest());
     const wrong = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' });
     await assert.rejects(createUpdateManifest({ ...options, publicKey: wrong }), /不匹配/);

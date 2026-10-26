@@ -11,15 +11,15 @@ import { getInstallState } from '../../plugins/commander/shared/plugin-install.m
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const app = join(root, 'artifacts/windows/win-unpacked');
 const resources = join(app, 'resources');
-const executable = join(app, '小角.exe');
+const executable = join(app, 'BenchGo.exe');
 const descriptor = JSON.parse(await readFile(join(root, 'deepseek-harness/apps/desktop/.desktop-build/targets/win-x64/dsh/desktop-runtime.json')));
 await smokePreparedRuntime(join(resources, 'app.asar', 'dsh'), executable, join(resources, 'runtime'), descriptor);
-const temporary = await mkdtemp(join(tmpdir(), 'dsh-plus-installed-'));
+const temporary = await mkdtemp(join(tmpdir(), 'benchgo-installed-'));
 const environment = { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_HOME: temporary, HOME: temporary, USERPROFILE: temporary, APPDATA: temporary, LOCALAPPDATA: temporary, DSH_TELEMETRY_DISABLED: '1' };
 let host;
 try {
   await new Promise((resolve, reject) => {
-    const child = spawn(executable, ['--expose-internals', join(resources, 'dsh-plus/plugin-bundle.mjs'), 'init-profile', '--resources', resources, '--runtime', join(resources, 'app.asar.unpacked/dsh')], { env: environment, stdio: 'inherit' });
+    const child = spawn(executable, ['--expose-internals', join(resources, 'benchgo/plugin-bundle.mjs'), 'init-profile', '--resources', resources, '--runtime', join(resources, 'app.asar.unpacked/dsh')], { env: environment, stdio: 'inherit' });
     child.once('error', reject); child.once('exit', code => code === 0 ? resolve() : reject(new Error(`Packaged Plus enrollment failed: ${code}`)));
   });
   const manifest = JSON.parse(await readFile(join(temporary, 'profiles/desktop/package.json')));
@@ -28,7 +28,7 @@ try {
   if (!state.managed || !state.enabled || !manifest.dependencies?.[state.bundleName]?.startsWith('link:')) throw new Error('Installed profile did not activate managed Plus');
   await readFile(join(profile, 'node_modules', state.bundleName, 'package.json'));
   const inventory = JSON.parse(await readFile(join(resources, 'app.asar.unpacked/dsh/desktop-runtime.json')));
-  if (inventory.sharedPackages.some(item => item.name === 'dsh-plus' || item.name === '@dowork/dsh-plus-desktop')) throw new Error('Plugin is still locked inside the sealed engine');
+  if (inventory.sharedPackages.some(item => item.name === 'benchgo' || item.name === '@dowork/benchgo-desktop')) throw new Error('Plugin is still locked inside the sealed engine');
   // Use the shipped default dataDir under the isolated user's home, as real installs do.
   await writeFile(join(profile, 'cordis.patch.yml'), `- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n`);
   const makeHost = () => new DesktopHostProcess(executable, join(resources, 'app.asar', 'dsh'), profile, undefined, environment, undefined, join(resources, 'runtime/primary-runtime'), { pnpm: join(resources, 'runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs'), nodeBin: join(resources, 'runtime/bin') });
@@ -52,7 +52,7 @@ try {
   if (!Array.isArray(sidebar.projects) || !Array.isArray(sidebar.sessions)) throw new Error('Packaged sidebar state is incomplete');
   const recent = await sidebarCall({ action: 'ensureRecent' });
   if (!recent.workspaceId || !recent.path || !(await sidebarCall({ action: 'state' })).projects.some(project => project.id === recent.workspaceId)) throw new Error('Packaged sidebar could not recover its recent workspace');
-  const fontManifest = JSON.parse(await readFile(join(state.directory, 'node_modules/dsh-plus/assets/fonts/manifest.json')));
+  const fontManifest = JSON.parse(await readFile(join(state.directory, 'node_modules/benchgo/assets/fonts/manifest.json')));
   const font = await fetch(new URL('/api/commander-fonts/' + fontManifest[0].file, ready.url), { headers: { cookie } });
   if (!font.ok || Buffer.from(await font.arrayBuffer()).subarray(0, 4).toString() !== 'wOF2') throw new Error('Packaged sidebar font could not be loaded');
   console.log('Packaged authenticated sidebar state, recent workspace recovery and font asset passed.');

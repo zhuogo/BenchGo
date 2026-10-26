@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Rebuild the running DSH-Plus client and let Harness HMR publish it. */
+/** Rebuild BenchGo client and Link server artifacts for Harness HMR. */
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 

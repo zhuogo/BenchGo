@@ -40,7 +40,7 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
             models.push({ provider, id: model.id, name: model.name, inputModalities: ['text'], ...(Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0 ? { context: { contextWindow: model.contextWindow } } : {}) });
           }
         } catch (error) {
-          ctx.logger?.warn?.(`DSH-Plus ${native} model discovery failed: ${error.message}`);
+          ctx.logger?.warn?.(`BenchGo ${native} model discovery failed: ${error.message}`);
         }
       }
       for (const model of models) metadata.set(`${provider}/${model.id}`, model);
@@ -57,27 +57,27 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
       return metadata.get(`${provider}/${model}`) ?? { provider, id: model, name: model === 'native-default' ? `${this.providerInfo(provider).name} 默认模型` : model, inputModalities: ['text'] };
     }
     async *stream(options) {
-      if (disposed) throw new Error('DSH-Plus adapter is disposed');
-      if (options.purpose) throw new Error(`DSH-Plus native agents do not support auxiliary ${options.purpose} requests`);
+      if (disposed) throw new Error('BenchGo adapter is disposed');
+      if (options.purpose) throw new Error(`BenchGo native agents do not support auxiliary ${options.purpose} requests`);
       if (options.reasoningEffort !== undefined) throw new Error('此工具不支持 API 模型的思考档位，请在设置 → Harness 中配置对应工具的推理强度后新建对话');
       options.signal?.throwIfAborted();
       const agent = ctx.agents.requireInitiator();
       const owner = String(agent.session.id);
-      if (!options.sessionId || String(options.sessionId) !== owner) throw new Error('DSH-Plus requires the initiating Harness session identity');
+      if (!options.sessionId || String(options.sessionId) !== owner) throw new Error('BenchGo requires the initiating Harness session identity');
       const directory = agent.session.header.cwd;
-      if (!directory) throw new Error('DSH-Plus requires a project working directory');
+      if (!directory) throw new Error('BenchGo requires a project working directory');
       const native = options.provider.slice('commander-'.length);
-      if (!Object.hasOwn(providers, native)) throw new Error('Unknown DSH-Plus provider');
+      if (!Object.hasOwn(providers, native)) throw new Error('Unknown BenchGo provider');
       const binding = decodeRouteModelId(options.model);
       const nativeModel = binding?.model ?? (options.model === 'native-default' ? undefined : options.model);
       const human = options.messages.filter(message => message.role === 'user' && message.source?.kind === 'user');
-      if (!human.length) throw new Error('DSH-Plus requires a durable human message');
+      if (!human.length) throw new Error('BenchGo requires a durable human message');
       for (const message of human) {
-        if (!message.id) throw new Error('DSH-Plus requires stable human message identities');
-        if (message.content.some(block => block.type !== 'text')) throw new Error('DSH-Plus currently supports text messages only; attachments are not supported');
+        if (!message.id) throw new Error('BenchGo requires stable human message identities');
+        if (message.content.some(block => block.type !== 'text')) throw new Error('BenchGo currently supports text messages only; attachments are not supported');
       }
       const key = owner;
-      if (active.has(key)) throw new Error('A DSH-Plus request is already active for this conversation and model');
+      if (active.has(key)) throw new Error('A BenchGo request is already active for this conversation and model');
       active.add(key);
       const controller = new AbortController();
       let done;
@@ -92,7 +92,7 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
         version++; wake?.();
         if (id && ['running', 'waiting'].includes(commander.snapshot(id).status)) {
           interrupting = commander.interrupt(id);
-          interrupting.catch(error => { ctx.logger?.warn?.(`DSH-Plus interrupt failed: ${error.message}`); });
+          interrupting.catch(error => { ctx.logger?.warn?.(`BenchGo interrupt failed: ${error.message}`); });
         }
       };
       controller.signal.addEventListener('abort', cancelled);
@@ -155,7 +155,7 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
           controller.signal.throwIfAborted();
           const observed = version;
           const batch = commander.events(id, cursor, 500);
-          if (batch.truncated) throw new Error('DSH-Plus event history was truncated; refusing to replay an incomplete native response');
+          if (batch.truncated) throw new Error('BenchGo event history was truncated; refusing to replay an incomplete native response');
           cursor = batch.cursor;
           for (const event of batch.events) {
             if (event.turnId !== receipt.turnId) continue;
@@ -213,7 +213,7 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
     if (Object.keys(providers).some(provider => route(provider) === options.provider)
       && options.messages.some(message => message.role === 'user' && message.source?.kind === 'user'
         && message.content.some(block => block.type !== 'text'))) {
-      yield { type: 'finish', reason: { kind: 'error', failure: { code: 'UNSUPPORTED_ATTACHMENT', message: 'DSH-Plus currently supports text messages only; attachments are not supported' } } };
+      yield { type: 'finish', reason: { kind: 'error', failure: { code: 'UNSUPPORTED_ATTACHMENT', message: 'BenchGo currently supports text messages only; attachments are not supported' } } };
       return;
     }
     yield* next();
@@ -221,7 +221,7 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
   ctx.effect(() => async () => {
     disposed = true;
     unregister();
-    for (const job of jobs) job.controller.abort(new Error('DSH-Plus adapter disposed'));
+    for (const job of jobs) job.controller.abort(new Error('BenchGo adapter disposed'));
     await Promise.allSettled([...jobs].map(job => job.settled));
   });
   return adapter;

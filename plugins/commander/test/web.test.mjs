@@ -49,7 +49,7 @@ for (const fail of [false, true]) {
       const body = await response.json();
       if (fail) {
         assert.equal(body.code, 'COMMANDER_UNAVAILABLE');
-        assert.match(body.error, /DSH-Plus 启动失败/);
+        assert.match(body.error, /BenchGo 启动失败/);
         assert.doesNotMatch(body.error, /正在初始化/);
       } else assert.ok(body.projects || body.workspaceId);
     }

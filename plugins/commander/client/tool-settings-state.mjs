@@ -5,7 +5,7 @@ export function activeJob(job) { return !!job && activeStates.has(job.status); }
 export function toolState(tool, capability = {}) {
   return {
     installed: !!tool.installed,
-    installation: tool.installed ? (tool.source === 'managed' ? '插件管理' : '外部安装') : '未安装',
+    installation: tool.installed ? '系统已安装' : '未安装',
     configSupported: capability.configSupported ?? tool.configSupported ?? false,
     chatSupported: capability.sessionSupported ?? tool.chatSupported ?? false,
     canInstall: !!tool.canInstall && !activeJob(tool.job),

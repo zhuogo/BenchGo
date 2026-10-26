@@ -4,13 +4,13 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepareInstallerSources } from './prepare-brand.mjs';
 
-if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('DSH-Plus Windows packaging requires a native Windows x64 build host. Use the Windows installer workflow.');
+if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('BenchGo Windows packaging requires a native Windows x64 build host. Use the Windows installer workflow.');
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const engine = join(root, 'deepseek-harness');
 const desktop = join(engine, 'apps/desktop');
 const target = join(desktop, '.desktop-build/targets/win-x64');
 const pnpm = join(desktop, 'node_modules/pnpm/bin/pnpm.cjs');
-const env = { ...process.env, DSH_TELEMETRY_DISABLED: '1', DSH_DESKTOP_APP_ID: 'cn.draftgo.dshplus', DSH_DESKTOP_UNSIGNED: '1', DSH_DESKTOP_TARGET_PLATFORM: 'win32', DSH_DESKTOP_TARGET_ARCH: 'x64', CSC_IDENTITY_AUTO_DISCOVERY: 'false', ELECTRON_BUILDER_7Z_FILTER: 'BCJ' };
+const env = { ...process.env, DSH_TELEMETRY_DISABLED: '1', DSH_DESKTOP_APP_ID: 'cn.draftgo.benchgo', DSH_DESKTOP_UNSIGNED: '1', DSH_DESKTOP_TARGET_PLATFORM: 'win32', DSH_DESKTOP_TARGET_ARCH: 'x64', CSC_IDENTITY_AUTO_DISCOVERY: 'false', ELECTRON_BUILDER_7Z_FILTER: 'BCJ' };
 for (const key of Object.keys(env)) if (/^(?:DSH_DESKTOP_WINDOWS_|(?:WIN_)?CSC_(?!IDENTITY_AUTO_DISCOVERY)|APPLE_)/.test(key)) delete env[key];
 function run(args, cwd = engine) {
   console.log(`\n[Plus packaging] ${args.join(' ')}`);
@@ -62,20 +62,20 @@ Var dshPreviousShortcutName
   Push $1
   ReadEnvStr $R2 ELECTRON_RUN_AS_NODE
   System::Call 'Kernel32::SetEnvironmentVariable(t, t)i("ELECTRON_RUN_AS_NODE", "1").r0'
-  nsExec::ExecToStack '"$INSTDIR\\小角.exe" --expose-internals "$INSTDIR\\resources\\dsh-plus\\plugin-bundle.mjs" init-profile --resources "$INSTDIR\\resources" --runtime "$INSTDIR\\resources\\app.asar.unpacked\\dsh"'
+  nsExec::ExecToStack '"$INSTDIR\\BenchGo.exe" --expose-internals "$INSTDIR\\resources\\benchgo\\plugin-bundle.mjs" init-profile --resources "$INSTDIR\\resources" --runtime "$INSTDIR\\resources\\app.asar.unpacked\\dsh"'
   Pop $R0
   Pop $R1
   System::Call 'Kernel32::SetEnvironmentVariable(t, t)i("ELECTRON_RUN_AS_NODE", "$R2").r1'
   \${If} $R0 != 0
-    MessageBox MB_OK|MB_ICONSTOP "小角初始化失败。请关闭小角后重新运行安装程序。$\\r$\\n$R1" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "BenchGo 初始化失败。请关闭 BenchGo 后重新运行安装程序。$\\r$\\n$R1" /SD IDOK
     SetErrorLevel 2
     Quit
   \${EndIf}
   ; Only remove the old brand's links when upgrading its registered installation.
   \${If} $dshPreviousInstallLocation == $INSTDIR
-  \${AndIf} $dshPreviousShortcutName == "DSH-Plus"
-    Delete "$SMPROGRAMS\\DSH-Plus.lnk"
-    Delete "$DESKTOP\\DSH-Plus.lnk"
+  \${AndIf} $dshPreviousShortcutName == "BenchGo"
+    Delete "$SMPROGRAMS\\BenchGo.lnk"
+    Delete "$DESKTOP\\BenchGo.lnk"
   \${EndIf}
   Pop $1
   Pop $0

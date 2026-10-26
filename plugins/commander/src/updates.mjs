@@ -13,7 +13,7 @@ const conflict = message => Object.assign(new Error(message), { status: 409 });
 export async function desktopApplicationVersion(executable = process.execPath, readJson = json) {
   try {
     const app = await readJson(join(dirname(executable), 'resources', 'app.asar', 'package.json'));
-    if (app.name === 'dsh-plus-desktop' && typeof app.version === 'string') {
+    if (app.name === 'benchgo-desktop' && typeof app.version === 'string') {
       isNewerVersion(app.version, app.version);
       return app.version;
     }

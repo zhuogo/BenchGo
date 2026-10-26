@@ -14,11 +14,11 @@ const deviceName = value => typeof value === 'string' ? value.trim().slice(0, 10
 /** Only the embedding parent initializes navigation; lock its first origin. */
 export function connectDeviceNavigation({ host = globalThis, onChange = () => {}, ready = false } = {}) {
   let parentOrigin = '', disposed = false, current = null;
-  const native = host.XiaojiaoDevices && typeof host.XiaojiaoDevices.postMessage === 'function';
+  const native = host.BenchGoDevices && typeof host.BenchGoDevices.postMessage === 'function';
   const embedded = host.parent && host.parent !== host;
   const publish = name => { current = name ? { name } : null; onChange(current); };
   const send = type => {
-    if (native) host.XiaojiaoDevices.postMessage(JSON.stringify({ type }));
+    if (native) host.BenchGoDevices.postMessage(JSON.stringify({ type }));
     else if (embedded) host.parent.postMessage({ type }, parentOrigin || '*');
   };
   const receive = event => {

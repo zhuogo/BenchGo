@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import { ToolInstaller } from './tool-install.mjs';
 import { createToolProfiles } from './tool-profiles.mjs';
 import { createSessionRoutes } from './session-routes.mjs';
@@ -12,7 +11,7 @@ import { readLimited } from '../voice/src/media.mjs';
 export async function mountTooling(ctx, commander, providers, options = {}) {
   const busy = tool => [...commander.sessions.values()].some(session => session.provider === tool &&
     (commander.drivers.has(session.id) || commander.connecting.has(session.id) || ['running', 'connecting', 'waiting'].includes(session.status)));
-  const installer = options.installer ?? new ToolInstaller({ root: join(commander.store.directory, 'tools'), isRunning: busy });
+  const installer = options.installer ?? new ToolInstaller({ isRunning: busy });
   providers.setNativeAuth?.(createNativeAuth({ installer }));
   const profiles = options.profiles ?? createToolProfiles({ directory: commander.store.directory, providers });
   commander.toolInstaller = installer; commander.toolProfiles = profiles;
@@ -32,11 +31,6 @@ export async function mountTooling(ctx, commander, providers, options = {}) {
     }
     yield* next();
   });
-  const installSource = input => {
-    const source = input.source === undefined ? 'mirror' : input.source;
-    if (!['mirror', 'official'].includes(source)) throw Error('请选择国内加速或官方直连下载源');
-    return { source };
-  };
   const dispatch = async (input, signal) => {
     switch (input.action) {
       case 'pickerCatalog': return pickerCatalog.list();
@@ -45,10 +39,11 @@ export async function mountTooling(ctx, commander, providers, options = {}) {
       case 'providers': return { providers: await providers.list() };
       case 'models': return { models: await providers.models(input.providerId, signal) };
       case 'job': return { job: installer.job(input.id) };
-      case 'install': return { job: installer.install(input.tool, installSource(input)) };
-      case 'update': return { job: installer.updateTool(input.tool, installSource(input)) };
-      case 'reinstall': return { job: installer.reinstall(input.tool, installSource(input)) };
-      case 'uninstall': return { job: installer.uninstall(input.tool) };
+      case 'install': return { job: installer.install(input.tool) };
+      case 'update': return { job: installer.updateTool(input.tool) };
+      case 'reinstall': return { job: installer.reinstall(input.tool) };
+      case 'uninstall': return { job: installer.uninstall(input.tool, { snapshot: input.snapshot }) };
+      case 'uninstallPreview': return { preview: await installer.previewUninstall(input.tool) };
       case 'cancel': return { job: installer.cancel(input.id) };
       case 'setDefault': {
         const profile = (await profiles.list()).profiles?.find(item => item.tool === input.tool);

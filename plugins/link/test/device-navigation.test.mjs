@@ -117,7 +117,7 @@ test('embedded navigation requires parent source and fixes its trusted origin', 
 
 test('native compact navigation reannounces ready on cached-page reactivation', () => {
   const host = eventHost(), messages = []; host.parent = host;
-  host.XiaojiaoDevices = { postMessage: value => messages.push(JSON.parse(value)) }; host.__DSH_DEVICE_NAVIGATION__ = { name: '手机连接' };
+  host.BenchGoDevices = { postMessage: value => messages.push(JSON.parse(value)) }; host.__DSH_DEVICE_NAVIGATION__ = { name: '手机连接' };
   const sidebar = connectDeviceNavigation({ host }); assert.equal(messages.length, 0);
   const nav = connectDeviceNavigation({ host, ready: true }); assert.equal(messages.at(-1).type, 'dsh-devices:ready');
   assert.equal(nav.showDevices(), true); assert.equal(messages.at(-1).type, 'dsh-devices:show');
@@ -127,7 +127,7 @@ test('native compact navigation reannounces ready on cached-page reactivation', 
 
 test('native navigation waits for a late device name before hiding its fallback', () => {
   const host = eventHost(), messages = [], changes = []; host.parent = host;
-  host.XiaojiaoDevices = { postMessage: value => messages.push(JSON.parse(value)) };
+  host.BenchGoDevices = { postMessage: value => messages.push(JSON.parse(value)) };
   const nav = connectDeviceNavigation({ host, ready: true, onChange: value => changes.push(value) });
   assert.equal(messages.length, 0); assert.equal(nav.showDevices(), false);
   host.__DSH_DEVICE_NAVIGATION__ = { name: '稍后注入设备' }; host.emit('dsh-devices:navigation');

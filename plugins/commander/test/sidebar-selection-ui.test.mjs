@@ -29,7 +29,7 @@ function render(activeSessionId, options = {}) {
     uiSession: { sessionStatus: { getSnapshot: () => options.statuses ?? new Map() } },
     uiWorkspace: { openSession: id => options.onOpenSession?.(id) },
   };
-  const tree = module.exports.Projects({ host, open() {}, newSession: options.newSession ?? (() => {}) });
+  const tree = module.exports.Projects({ host, open() {}, newSession: options.newSession ?? (() => {}), wide: options.wide ?? true, expandSidebar() {} });
   const walk = node => {
     if (!node || typeof node !== 'object') return [];
     let resolved = node;
@@ -38,6 +38,13 @@ function render(activeSessionId, options = {}) {
   };
   return walk(tree);
 }
+
+test('collapsed sidebar removes the project and conversation content region', () => {
+  const nodes = render(undefined, { wide: false });
+  assert.equal(nodes.filter(node => node.props.className?.split(' ').includes('cmd-session')).length, 0);
+  assert.equal(nodes.filter(node => node.props.className?.split(' ').includes('cmd-sidebar-content')).length, 0);
+  assert(nodes.some(node => node.props['aria-label'] === '快捷工具栏'));
+});
 
 test('loaded sidebar has no selected row while no conversation is open', () => {
   const nodes = render(undefined);

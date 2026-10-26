@@ -9,4 +9,4 @@ const original = JSON.parse(await readFile(join(runtime, 'desktop-runtime.json')
 await prepareRuntimeManifests(runtime);
 writeDesktopRuntime(runtime, original.release, original.sharedPackages.map(item => item.name), original);
 await verifyDesktopRuntime(runtime, original.release.version, original);
-console.log('Official engine runtime sealed; DSH-Plus is an external profile-managed plugin.');
+console.log('Official engine runtime sealed; BenchGo is an external profile-managed plugin.');
