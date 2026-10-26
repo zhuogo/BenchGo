@@ -1,6 +1,6 @@
 {
   "name": "@dowork/link",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "BenchGo paired device connectivity and shared mobile client",
