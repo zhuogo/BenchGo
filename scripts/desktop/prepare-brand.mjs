@@ -33,7 +33,7 @@ export async function prepareDesktopBrand(root, output) {
     for (const dark of [false, true]) {
       const width = 600 * scale, height = 196 * scale;
       const background = dark ? '#151517' : '#ffffff';
-      const artwork = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 600 196"><rect width="600" height="196" fill="${background}"/><image href="data:image/svg+xml;base64,${mascot}" x="198" y="50" width="96" height="96"/><text x="314" y="111" font-family="Segoe UI,Microsoft YaHei UI,Microsoft YaHei,Arial,sans-serif" font-size="36" font-weight="600" fill="${dark ? '#ffffff' : '#222222'}">BenchGo</text></svg>`);
+      const artwork = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 600 196"><rect width="600" height="196" fill="${background}"/><g transform="translate(186 50)"><image href="data:image/svg+xml;base64,${mascot}" width="96" height="96"/><text x="116" y="61" font-family="Segoe UI,Microsoft YaHei UI,Microsoft YaHei,Arial,sans-serif" font-size="36" font-weight="600" fill="${dark ? '#ffffff' : '#222222'}">BenchGo</text></g></svg>`);
       const image = await sharp(artwork).removeAlpha().raw().toBuffer();
       const name = `brand${dark ? '-dark' : ''}${scale === 2 ? '-2x' : ''}.bmp`;
       await writeFile(join(output, name), bitmap24(image, width, height));
