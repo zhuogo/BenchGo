@@ -1,4 +1,4 @@
-应用名称为“BenchGo”。图标使用 `icon/logo-app-gray.svg`，PC 与 Android 使用同一母版。
+应用名称为“BenchGo”。图标使用 `assets/brand/benchgo-app.svg`，PC 与 Android 使用同一母版。
 
 - `mipmap-*/ic_benchgo.png`：由灰底方标 SVG 栅格化。
 - `drawable/ic_benchgo.xml`：引用上述 PNG。

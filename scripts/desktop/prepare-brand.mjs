@@ -9,7 +9,7 @@ export async function prepareDesktopBrand(root, output) {
   const sharp = require('sharp');
   const brand = join(root, 'assets/brand');
   const logo = join(brand, 'benchgo-logo.png');
-  const mascot = await readFile(join(root, 'icon/logo-app-gray.svg'), 'utf8');
+  const mascot = await readFile(join(brand, 'benchgo-app.svg'), 'utf8');
   await mkdir(output, { recursive: true });
 
   const sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256];
