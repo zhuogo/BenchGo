@@ -32,18 +32,12 @@ test('BenchGo display naming preserves installed application identity and update
   assert.match(config.publish[0].url, /releases\/download\/app-updates\/$/);
 });
 
-test('legacy shortcut cleanup is limited to the original registered brand after successful bootstrap', async () => {
+test('installer keeps the current BenchGo shortcut during same-version repair', async () => {
   const source = await readFile(new URL('./package-windows.mjs', import.meta.url), 'utf8');
   const literal = source.match(/const bootstrap = ([\s\S]+?);\nawait mkdir/)[1];
   const overlay = runInNewContext(literal);
-  assert.match(overlay, /!ifndef BUILD_UNINSTALLER\nVar dshPreviousInstallLocation\nVar dshPreviousShortcutName\n!endif/);
-  assert.match(overlay, /ReadRegStr \$dshPreviousInstallLocation HKCU "\$\{INSTALL_REGISTRY_KEY\}" "InstallLocation"/);
-  assert.match(overlay, /ReadRegStr \$dshPreviousShortcutName HKCU "\$\{INSTALL_REGISTRY_KEY\}" "ShortcutName"/);
-  assert.ok(overlay.indexOf('ReadRegStr $dshPreviousShortcutName') < overlay.indexOf('!insertmacro dshOfficialCustomInit'));
-  assert.match(overlay, /\$\{If\} \$dshPreviousInstallLocation == \$INSTDIR\n  \$\{AndIf\} \$dshPreviousShortcutName == "BenchGo"/);
-  const deletions = [...overlay.matchAll(/Delete "([^"]+)"/g)].map(item => item[1]);
-  assert.deepEqual(deletions, ['$SMPROGRAMS\\BenchGo.lnk', '$DESKTOP\\BenchGo.lnk']);
-  assert.ok(overlay.indexOf('Delete ') > overlay.indexOf('SetErrorLevel 2\n    Quit\n  ${EndIf}'));
+  assert.doesNotMatch(overlay, /Delete "\$SMPROGRAMS\\BenchGo\.lnk"/);
+  assert.doesNotMatch(overlay, /Delete "\$DESKTOP\\BenchGo\.lnk"/);
   const upstream = await readFile(new URL('../../deepseek-harness/apps/desktop/scripts/installer.nsh', import.meta.url), 'utf8');
   for (const hook of ['customInit', 'customInstall']) assert.equal(upstream.replaceAll('\r\n', '\n').split('!macro ' + hook + '\n').length, 2);
 });

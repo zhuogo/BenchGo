@@ -71,12 +71,8 @@ Var dshPreviousShortcutName
     SetErrorLevel 2
     Quit
   \${EndIf}
-  ; Only remove the old brand's links when upgrading its registered installation.
-  \${If} $dshPreviousInstallLocation == $INSTDIR
-  \${AndIf} $dshPreviousShortcutName == "BenchGo"
-    Delete "$SMPROGRAMS\\BenchGo.lnk"
-    Delete "$DESKTOP\\BenchGo.lnk"
-  \${EndIf}
+  ; Current releases use the BenchGo shortcut name. Do not delete it during
+  ; same-version repair; there is no older branded shortcut to migrate.
   Pop $1
   Pop $0
   Pop $R2
