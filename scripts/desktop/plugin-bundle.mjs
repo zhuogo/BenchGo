@@ -36,7 +36,7 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
   const relativeOutput = runtime ? relative(runtime, output) : '..';
   if (runtime && (!relativeOutput || (relativeOutput !== '..' && !relativeOutput.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && !isAbsolute(relativeOutput)))) throw new Error('Plus bundle: seed must be outside the sealed engine runtime');
   const bundleName = releaseBundleName(manifest.version);
-  const destination = join(output, 'node_modules', PLUS);
+  const destination = join(output, 'node_modules', manifest.name);
   const composition = join(output, 'node_modules', bundleName);
   if (existsSync(composition)) throw new Error(`Plus bundle: composition already exists: ${composition}`);
   if (existsSync(destination)) throw new Error(`Plus bundle: destination already exists: ${destination}`);
@@ -105,7 +105,7 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
     mkdirSync(composition, { recursive: true });
     writeJson(join(composition, 'package.json'), {
       name: bundleName, displayName: 'BenchGo', version: manifest.version, private: true, type: 'module', license: 'MIT',
-      dependencies: { [PLUS]: manifest.version }, dsh: { bundle: { patch: './cordis.patch.yml' } },
+      dependencies: { [manifest.name]: manifest.version }, dsh: { bundle: { patch: './cordis.patch.yml' } },
       exports: { './package.json': './package.json', './locale/*.json': './locale/*.json' },
     });
     copyFileSync(join(plugin, 'cordis.patch.yml'), join(composition, 'cordis.patch.yml'));
