@@ -20,7 +20,7 @@
   "scripts": {
     "setup": "node scripts/harness.mjs install",
     "build": "node scripts/harness.mjs build",
-    "dev": "node scripts/harness.mjs dev:desktop",
+    "dev": "node scripts/desktop/prepare-dev.mjs",
     "start": "node scripts/harness.mjs start:desktop",
     "dev:web": "node scripts/harness.mjs dev:web",
     "start:web": "node scripts/harness.mjs start:web",

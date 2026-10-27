@@ -149,7 +149,7 @@ function resolvedProfilePlugin(root, profile) {
         tableVersion: resolution.entries.find(entry => entry.name === 'benchgo-plugin')?.version,
         metadataVersion: selected?.version,
         metadataPath: selected?.dir,
-        manifestVersion: JSON.parse(readFileSync(requireFromProfile.resolve('benchgo-plugin/package.json'), 'utf8')).version,
+        manifestVersion: JSON.parse(readFileSync(join(selected.dir, 'package.json'), 'utf8')).version,
         entryPath: requireFromProfile.resolve('benchgo-plugin'),
         loadedVersion: actual.version, clientVersion: client.version,
       }));

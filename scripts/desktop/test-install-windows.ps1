@@ -145,7 +145,8 @@ try {
   assert.equal(selected?.version, expectedVersion, 'actual plugin metadata must match the installed version');
   assert.equal(realpathSync.native(selected.dir), realpathSync.native(join(expectedDirectory, 'node_modules/benchgo-plugin')));
   const require = createRequire(parent);
-  assert.equal(JSON.parse(readFileSync(require.resolve('benchgo-plugin/package.json'), 'utf8')).version, expectedVersion);
+  const manifestPath = join(selected.dir, 'package.json');
+  assert.equal(JSON.parse(readFileSync(manifestPath, 'utf8')).version, expectedVersion);
   assert.equal(realpathSync.native(require.resolve('benchgo-plugin')), realpathSync.native(join(selected.dir, 'src/plugin.mjs')));
   assert.equal(realpathSync.native(require.resolve('benchgo-plugin/client')), realpathSync.native(join(selected.dir, 'lib/client.js')));
   console.log(`Actual profile plugin resolution passed: ${expectedVersion}`);
@@ -166,17 +167,26 @@ function Add-LegacyPluginShadow {
     New-Item (Join-Path $directory 'src') -ItemType Directory -Force | Out-Null
     New-Item (Join-Path $directory 'lib') -ItemType Directory -Force | Out-Null
     $metadata = '{"name":"benchgo","version":"0.1.6","type":"module","main":"./src/plugin.mjs","exports":{".":"./src/plugin.mjs","./client":"./lib/client.js","./package.json":"./package.json"}}'
-    Set-Content (Join-Path $directory 'package.json') $metadata -Encoding utf8NoBOM
-    Set-Content (Join-Path $directory 'src/plugin.mjs') 'export default true;' -Encoding utf8NoBOM
-    Set-Content (Join-Path $directory 'lib/client.js') 'export default true;' -Encoding utf8NoBOM
+    # Windows PowerShell 5.1 has no utf8NoBOM; UTF8Encoding(false) keeps the same bytes.
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText((Join-Path $directory 'package.json'), $metadata, $utf8)
+    [System.IO.File]::WriteAllText((Join-Path $directory 'src/plugin.mjs'), "export default true;`n", $utf8)
+    [System.IO.File]::WriteAllText((Join-Path $directory 'lib/client.js'), "export default true;`n", $utf8)
 }
 try {
-    Install-Silently $installer.FullName
-    $installed = Get-Installed 'BenchGo.exe'
-    Assert-Plus $installed
-    Write-Output "Fresh silent installation passed: $($installed.FullName)"
+    if ($env:BENCHGO_SKIP_FRESH_INSTALL -eq '1') {
+        $installed = Get-Installed 'BenchGo.exe'
+        Write-Output "Reusing existing installation: $($installed.FullName)"
+    } else {
+        Install-Silently $installer.FullName
+        $installed = Get-Installed 'BenchGo.exe'
+        Assert-Plus $installed
+        Assert-Plus $installed
+        Write-Output "Fresh silent installation passed: $($installed.FullName)"
+    }
     Add-LegacyPluginShadow
-    Assert-PluginResolution $installed '0.1.6' (Join-Path $env:DSH_HOME 'profiles/desktop')
+    $shadowed = Get-Content (Join-Path $env:DSH_HOME 'profiles/desktop/package.json') -Raw | ConvertFrom-Json
+    Assert-PluginResolution $installed $shadowed.dsh.plusInstall.version $shadowed.dsh.plusInstall.directory
     Install-Silently $installer.FullName
     Assert-Plus $installed
     if (Test-Path (Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/benchgo')) { throw 'Reinstall left a legacy physical plugin shadow' }

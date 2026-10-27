@@ -35,14 +35,14 @@ test('native splash stays local and only updates its waiting message after 20 se
   assert.ok(html.includes('role="status" aria-live="polite"'));
   assert.doesNotMatch(html, /(?:src|href)="https?:/);
   assert.doesNotMatch(script, /dshWelcome|ipcRenderer|require\(|fetch\(/);
-  const status = { textContent: '启动中…' };
+  const status = { textContent: '' };
   let delay;
   let waiting;
   vm.runInNewContext(script, {
     document: { getElementById: () => status },
     setTimeout: (callback, milliseconds) => { waiting = callback; delay = milliseconds; },
   });
-  assert.equal(status.textContent, '启动中…');
+  assert.equal(status.textContent, '');
   assert.equal(delay, 20000);
   waiting();
   assert.equal(status.textContent, '仍在准备中，请稍候…');

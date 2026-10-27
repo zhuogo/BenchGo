@@ -9,9 +9,10 @@ main::before { content: ""; position: absolute; inset: 10px; border: 1px solid #
 .startup-copy { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
 h1 { margin: 0; font-size: 25px; line-height: 1.2; font-weight: 600; letter-spacing: 0; }
 p, .startup-engine { margin: 4px 0 0; min-height: 20px; color: #a1aaaf; font-size: 12px; line-height: 20px; text-align: center; }
+.startup-status:empty { display: none; }
 .startup-engine { margin-top: 6px; min-height: 0; color: #7e878d; font-size: 10px; line-height: 16px; }
-.startup-loading { width: 112px; height: 2px; overflow: hidden; margin-top: 30px; background: #292e32; border-radius: 1px; }
-.startup-loading::after { content: ""; display: block; width: 44px; height: 100%; background: #9bd6dd; animation: startup-scan 1.8s ease-in-out infinite; }
+.startup-loading { position: relative; width: 148px; height: 3px; overflow: hidden; margin-top: 28px; background: #23282b; border-radius: 999px; }
+.startup-loading::after { content: ""; position: absolute; top: 0; left: 0; width: 42%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, transparent, #d7e4e6 42%, #9bd6dd 100%); animation: startup-scan 1.35s cubic-bezier(.4, 0, .2, 1) infinite; }
 button { position: relative; pointer-events: auto; -webkit-app-region: no-drag; margin-top: 20px; min-width: 88px; min-height: 34px; padding: 6px 18px; border: 1px solid #444d52; border-radius: 6px; background: #1b2023; color: #e2eaed; font: inherit; font-size: 12px; cursor: pointer; }
 button:hover { background: #282f33; border-color: #6a858c; }
 button:focus-visible { outline: 2px solid #9bd6dd; outline-offset: 3px; }
@@ -22,5 +23,5 @@ button:disabled { opacity: .5; cursor: default; }
 .startup-splash h1 { font-size: 22px; }
 .startup-splash .startup-loading { margin-top: 22px; }
 .startup-splash p { margin-top: 2px; }
-@keyframes startup-scan { 0% { transform: translateX(-44px); } 100% { transform: translateX(112px); } }
-@media (prefers-reduced-motion: reduce) { .startup-loading::after { animation: none; transform: translateX(34px); } }
+@keyframes startup-scan { 0% { transform: translateX(-120%); } 100% { transform: translateX(280%); } }
+@media (prefers-reduced-motion: reduce) { .startup-loading::after { animation: none; left: 29%; width: 42%; transform: none; opacity: .85; } }

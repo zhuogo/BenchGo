@@ -82,7 +82,7 @@ export function ProviderHarnessField({ value, disabled }) {
     <span className="cmd-provider-harness-label">适用工具</span>
     <div className="cmd-provider-harness-options" role="group" aria-label="适用 Harness 工具">{value.tools.map(tool => <Tooltip key={tool.id} label={tool.name} side="top" portal>
       <button type="button" disabled={disabled || value.loading || value.restricted} aria-label={tool.name + (value.current.includes(tool.id) ? '，已启用' : value.restricted ? '，此订阅不支持' : '，未启用')} aria-pressed={value.current.includes(tool.id)} onClick={() => value.toggle(tool.id)}>
-        <ToolBrandIcon tool={tool.id === 'harness' ? 'deepseek' : tool.id} size={20} />
+        <ToolBrandIcon tool={tool.id === 'harness' ? 'deepseek' : tool.id} size={20} muted={tool.id === 'codex' && !value.permitted.includes(tool.id)} tone={tool.id === 'codex' && value.permitted.includes(tool.id) ? '#7A5AF8' : undefined} />
         <span className="cmd-provider-harness-check">{value.current.includes(tool.id) && <UIIcon name="check" size={10} />}</span>
       </button>
     </Tooltip>)}</div>

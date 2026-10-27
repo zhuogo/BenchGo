@@ -22,7 +22,8 @@ const define = Object.fromEntries(['DSH_CLIENT_TITLE', 'DSH_CLIENT_VERSION', 'DS
 const result = await build({ entryPoints: [fileURLToPath(new URL('../client/index.jsx', import.meta.url))], bundle: true, minify: true, write: false, format: 'cjs', platform: 'browser', define, external: ['react-dom', 'react', 'react/jsx-runtime', '@deepseek-ai/*'], plugins: [officialModelsUi(), shellUi()], jsx: 'automatic', target: 'es2022', loader: { '.css': 'text', '.svg': 'text' }, logLevel: 'warning' });
 if (/process.env.DSH_CLIENT_/.test(result.outputFiles[0].text)) throw Error('Unresolved official browser build metadata');
 await mkdir(new URL('../lib/', import.meta.url), { recursive: true });
-await writeFile(out, `window.__ModuleLoader__.load({id: 'benchgo', factory: (require) => { const module = {exports:{}}; const exports = module.exports;\n${result.outputFiles[0].text}\nreturn module.exports; }});\n`);
+const pluginName = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).name;
+await writeFile(out, `window.__ModuleLoader__.load({id: '${pluginName}', factory: (require) => { const module = {exports:{}}; const exports = module.exports;\n${result.outputFiles[0].text}\nreturn module.exports; }});\n`);
 console.log('BenchGo client built');
 
 // Server seed is a release payload. A running web reload only needs the client bundle.

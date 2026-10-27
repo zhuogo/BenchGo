@@ -23,8 +23,9 @@ SOFTWARE.*/
 import React from 'react';
 import icons from './icons.json';
 import brands from './assets/tool-brands/catalog.json';
-export function ToolBrandIcon({ tool, size = 20, muted = false }) {
+export function ToolBrandIcon({ tool, size = 20, muted = false, tone }) {
   const id = tool === 'claude-desktop' || tool === 'claude-code' ? 'claude' : tool;
-  const src = brands[id] || (icons[id] ? 'data:image/svg+xml,' + encodeURIComponent(icons[id]) : null);
+  const markup = tone && icons[id] ? icons[id].replaceAll('fill="#000"', `fill="${tone}"`) : icons[id];
+  const src = !tone && brands[id] || (markup ? 'data:image/svg+xml,' + encodeURIComponent(markup) : null);
   return <span className="cmd-tool-brand" data-muted={muted || undefined} aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, flexShrink: 0, verticalAlign: 'middle' }}>{src ? <img src={src} alt="" width={size} height={size} draggable={false} style={{ display: 'block', width: size, height: size, objectFit: 'contain' }} /> : <span style={{ fontSize: size * .7 }}>⌘</span>}</span>;
 }

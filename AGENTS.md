@@ -14,6 +14,26 @@
 - `npm run check` 只检查版本、工作区与入口一致性，不代表应用构建或运行成功。按变更运行适当验证，不默认执行整个上游测试套件。
 - 图形应用仅在明确要求时启动。保留许可证与第三方版权声明。
 
+# 开发原则
+
+- 开发对象是 BenchGo。官方 `deepseek-harness/` 保持与上游字节级一致，品牌、启动页、托盘、插件注册都放在根目录脚本和 `plugins/`，打包时注入。
+- Windows 开发预览启动已打包的 BenchGo，不启动官方 Desktop。`npm run dev` 进入 `scripts/desktop/prepare-dev.mjs`。
+- 插件包名是 `benchgo-plugin`。客户端模块注册 id 必须与包名一致，禁止再注册 `benchgo`。
+- 供应商模型 ID、工具名和协议值按不透明标识处理。界面状态跟随真实可用性：已安装且可用显示品牌色，不可用显示灰色，不随选中状态改色。
+- 新能力优先复用现有插件、服务和配置。改动保持小而可逆，完成后清掉本次临时文件，保留已有用户修改。
+
+# 文件夹结构
+
+- `plugins/commander/`：BenchGo 插件，含编码 Agent、设置界面和内置 Voice。网页产物在 `lib/`，由 `npm run reload:plus` 重建。
+- `plugins/link/`：多端直连。网页产物在 `dist/`，同样由 `npm run reload:plus` 重建。
+- `scripts/desktop/`：Windows 打包、启动页、品牌注入和开发启动。`renderer/` 是 BenchGo 启动页，不改官方欢迎页。
+- `scripts/server/`：服务端种子与发布辅助。
+- `assets/brand/`：BenchGo Logo、方标和吉祥物的唯一素材来源。
+- `Design/`：设计文档，区分已实现与待实施。
+- `deepseek-harness/`：官方引擎子模块，只更新 pin，不改源码。
+- `reference/`：Hermes、Paseo、CC Switch 参考仓库，不参与构建。
+- `artifacts/`：本地打包结果，不提交安装包和运行目录。
+
 
 
 请结合上下文和项目约定，理解需求并直接推进到完成。普通细节自行判断，关键歧义再询问。
