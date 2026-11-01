@@ -1,6 +1,6 @@
 # benchgo
 
-BenchGo 工作台命令。安装和管工作台，可以连接外部中继，不安装中继服务。
+BenchGo 工作台命令。安装和管理工作台，可以连接外部中继，不安装中继服务。
 
 ```sh
 npm install -g benchgo
