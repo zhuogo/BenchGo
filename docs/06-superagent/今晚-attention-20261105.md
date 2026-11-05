@@ -29,6 +29,17 @@
 
 ## 续做诊断
 
+### 2026-11-06 离线复盘假设清单
+
+| 假设 | 支持证据 | 反证/当前结论 |
+| --- | --- | --- |
+| A. `waiting` Run 没有在答复入队后转为 `prepared` | 现场 fence 从 1 变 2，续跑未出现后续 Worker 请求 | `claimAssignments` 在 Attention continuation ready 时明确把同一 Run 转为 `prepared`；官方 Host 的 Q-user-only、Q-known→Q-user 两条夹具均通过。基本证伪，仍由真实阶段字段复核 |
+| B. 原 Worker session 或 checkpoint 校验失败 | 现场答复后约 1 秒进入 `UNAVAILABLE`，没有后续供应商请求；执行器在 `resume` setup 阶段会校验 transcript、execution effects、checkpoint | attempt-3 已清理隔离 session，无法读取抛错正文；新诊断只记录阶段，不记录敏感异常。尚未证伪 |
+| C. `ctx.userQuestions.answer` 或 Attention 批次身份不匹配 | 真实快照只保留 Q-user resolution，答复后没有 Worker 请求；续跑阶段会校验 callId、sessionId、questionId | 离线官方 Host 已通过 Q-user-only 及 Q-known→Q-user、fence 递增、checkpoint、原 Run/session 续做。尚未用真实新运行证伪 |
+| D. 恢复后首次 followup/模型请求前的宿主异常 | 现场没有任何答复后的 Worker supplier request，且旧记录只有通用 `UNAVAILABLE` | 旧运行未保留 phase；需要新构建真实运行确认，不能提前定为根因 |
+
+本轮原则：先以新阶段诊断在真实路径区分 B/C/D；同一假设两次无新证据即停止，不盲目连续重跑。未定位前不计 Attention 三连。
+
 `attention-1-attempt-3` 的答复已保存，续做失败发生在下一次供应商请求之前。现存 `UNAVAILABLE` 是多种异常的统一映射，隔离会话已清理，不能推断具体根因或自动重放。执行器记录固定的续做阶段标识，失败记录只接受白名单标识，不保存异常正文、路径、问题或模型内容；未知外部效果仍保持 uncertain。以无网络官方宿主夹具分别验证同进程与重启后的原会话续做，夹具结果不代替真实验收。
 
 定向验证 4/4 通过：同进程续做、重启续做、工件篡改拒绝及失败阶段白名单。两种正常续做均保持原 Run/session，且先前工具效果不重放；未复现真实失败，根因仍未知。
