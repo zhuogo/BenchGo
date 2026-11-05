@@ -6,10 +6,12 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { zstdDecompressSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 export async function observeSession(inputDirectory, sessionId, { prefixEvents } = {}) {
 const directory = resolve(inputDirectory || '');
-assert.ok(directory.startsWith(resolve(tmpdir())) && directory.includes('benchgo-p0-real-'));
+const eveningBase = fileURLToPath(new URL('../superagent-evening-20261105/', import.meta.url));
+assert.ok((directory.startsWith(resolve(tmpdir())) && directory.includes('benchgo-p0-real-'))
+  || ((directory.startsWith(resolve(eveningBase) + '\\') || directory.startsWith(resolve(eveningBase) + '/')) && directory.endsWith('isolated-state')));
 assert.match(sessionId || '', /^[a-f0-9-]{36}$/u);
 const base = join(directory, 'user/.dsh/sessions');
 const file = (await readdir(base, { recursive: true })).find(path => path.includes(sessionId) && path.endsWith('.zstd'));
