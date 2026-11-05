@@ -1,0 +1,38 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import SkillRegistry from '../../../deepseek-harness/packages/skill/skill/lib/index.js';
+import { createOwnedSkills } from '../src/owned-skills.mjs';
+import { registerOwnedSkillProvider } from '../src/owned-skill-provider.mjs';
+const require = createRequire(new URL('../../../deepseek-harness/packages/skill/skill/package.json', import.meta.url));
+const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href);
+const body = '## When to Use\nVerify changes.\n## Procedure\nRun targeted checks.\n## Pitfalls\nDo not claim untested behavior.\n## Verification\nRead actual results.';
+
+test('approved skills use the official registry, preserve user precedence and invalidate archived entries', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-owned-skills-'));
+  const ctx = new Context();
+  await ctx.plugin(SkillRegistry);
+  const store = createOwnedSkills({ directory });
+  const provider = registerOwnedSkillProvider({ ctx, skills: ctx.skills, database: store.providerDatabase });
+  const unsubscribe = store.onChange(provider.invalidate);
+  t.after(async () => { unsubscribe(); provider.dispose(); await ctx.fiber.dispose(); store.close(); await rm(directory, { recursive: true, force: true }); });
+  const pending = store.propose({ name: 'check-changes', description: 'Verify code changes', content: body, source: { messageId: 'trusted' }, idempotencyKey: 'review:first' });
+  assert.deepEqual(await ctx.skills.list(), []);
+  const active = store.approve(pending.id, { revision: pending.revision });
+  assert.equal((await ctx.skills.get('check-changes')).content, body);
+  assert.equal(store.audit(active.id).filter(event => event.action === 'use').length, 0);
+  const removeUser = ctx.skills.register({ name: 'check-changes', description: 'User version', content: 'user content', source: 'user-dsh' });
+  assert.equal((await ctx.skills.get('check-changes')).content, 'user content');
+  removeUser();
+  store.curate({ now: active.lastUsedAt + 31 * 86400000 });
+  assert.equal(await ctx.skills.get('check-changes'), undefined);
+  const archived = store.get(active.id);
+  const restored = store.restore(active.id, { revision: archived.revision });
+  assert.equal((await ctx.skills.get('check-changes')).content, body);
+  assert.throws(() => store.pin(active.id, { revision: archived.revision, pinned: true }), /version conflict/);
+  assert.equal(store.get(active.id).revision, restored.revision);
+});

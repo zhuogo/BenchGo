@@ -1,0 +1,47 @@
+{
+  "base": "http://127.0.0.1:53965",
+  "date": "2026-11-03T10:51:58.563Z",
+  "limitation": "仅验证正在运行的打包实例 HTTP 边界；不证明该实例完整业务或 UI 可用。",
+  "cases": [
+    {
+      "title": "未认证读取助手状态",
+      "path": "/api/commander/assistant",
+      "expected": 401,
+      "statusCode": 401,
+      "pass": true,
+      "durationMs": 73
+    },
+    {
+      "title": "跨站 Origin 调用助手",
+      "path": "/api/commander/assistant",
+      "expected": 403,
+      "statusCode": 403,
+      "pass": true,
+      "durationMs": 5
+    },
+    {
+      "title": "未认证读取产物",
+      "path": "/api/commander/assistant/artifact?file=missing.txt",
+      "expected": 401,
+      "statusCode": 401,
+      "pass": true,
+      "durationMs": 4
+    },
+    {
+      "title": "未认证读取人格文档",
+      "path": "/api/commander/assistant/system-file?file=AGENTS.md",
+      "expected": 401,
+      "statusCode": 401,
+      "pass": true,
+      "durationMs": 2
+    },
+    {
+      "title": "未认证读取语音 worklet",
+      "path": "/api/commander/assistant/voice/worklet",
+      "expected": 401,
+      "statusCode": 401,
+      "pass": true,
+      "durationMs": 14
+    }
+  ]
+}

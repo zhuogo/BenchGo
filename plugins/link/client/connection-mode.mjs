@@ -8,3 +8,14 @@ export function connectionDefaults(location) {
   const publicOrigin = location?.protocol === 'https:' && !local ? String(location.origin || '') : '';
   return { mode: publicOrigin ? 'public' : 'lan', publicUrl: publicOrigin };
 }
+
+export function pairingConnection(status, defaults = {}) {
+  const publicUrl = [status?.publicUrl, defaults.publicUrl].find(value => {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash;
+    } catch { return false; }
+  });
+  if (publicUrl) return { mode: 'public', publicUrl: new URL(publicUrl).origin };
+  return { mode: status?.relay?.connected ? 'relay' : 'lan', publicUrl: '' };
+}

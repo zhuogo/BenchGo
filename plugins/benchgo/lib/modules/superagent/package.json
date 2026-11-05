@@ -1,0 +1,23 @@
+{
+  "name": "@benchgo/superagent",
+  "displayName": "SuperAgent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "BenchGo assistant conversations, memory, tasks and goals",
+  "license": "MIT",
+  "main": "src/plugin.mjs",
+  "exports": {
+    ".": "./src/plugin.mjs",
+    "./client": "./client/index.jsx"
+  },
+  "scripts": {
+    "test": "node --import ../../scripts/source-loader.mjs --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-agent-instructions": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-compaction-basic": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-ask-user": "0.2.2-rc.1"
+  }
+}

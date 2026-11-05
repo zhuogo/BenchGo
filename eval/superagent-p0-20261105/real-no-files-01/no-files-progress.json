@@ -1,0 +1,156 @@
+{
+  "scenario": {
+    "id": "no-files",
+    "marker": "P0_NO_FILES",
+    "title": "无文件文本摘要真实交付",
+    "condition": "无故障注入；请求只要求文本结果，不要求文件。",
+    "startedAt": "2026-11-04T16:33:17.119Z",
+    "status": "running",
+    "timeline": [
+      {
+        "at": "2026-11-04T16:33:17.922Z",
+        "routerRunning": true
+      },
+      {
+        "at": "2026-11-04T16:33:36.390Z",
+        "routerRunning": true,
+        "ticketId": "0700aa52-21ea-471e-b557-49469d056ef9",
+        "ticketStatus": "open",
+        "resultVersion": 0,
+        "assignments": [
+          {
+            "id": "desktop:af97de7cd1a9b9af7b6b2f369366e05c74bdaaecc474c77a4c11e3dda9d712c3",
+            "state": "queued",
+            "fence": 0
+          }
+        ],
+        "attentions": [],
+        "deliveries": []
+      },
+      {
+        "at": "2026-11-04T16:33:37.946Z",
+        "routerRunning": true,
+        "ticketId": "0700aa52-21ea-471e-b557-49469d056ef9",
+        "ticketStatus": "open",
+        "resultVersion": 0,
+        "assignments": [
+          {
+            "id": "desktop:af97de7cd1a9b9af7b6b2f369366e05c74bdaaecc474c77a4c11e3dda9d712c3",
+            "state": "claimed",
+            "fence": 1
+          }
+        ],
+        "attentions": [],
+        "deliveries": []
+      },
+      {
+        "at": "2026-11-04T16:33:39.528Z",
+        "routerRunning": false,
+        "ticketId": "0700aa52-21ea-471e-b557-49469d056ef9",
+        "ticketStatus": "open",
+        "resultVersion": 0,
+        "assignments": [
+          {
+            "id": "desktop:af97de7cd1a9b9af7b6b2f369366e05c74bdaaecc474c77a4c11e3dda9d712c3",
+            "state": "claimed",
+            "fence": 1
+          }
+        ],
+        "attentions": [],
+        "deliveries": []
+      },
+      {
+        "at": "2026-11-04T16:43:37.570Z",
+        "routerRunning": false,
+        "ticketId": "0700aa52-21ea-471e-b557-49469d056ef9",
+        "ticketStatus": "open",
+        "resultVersion": 0,
+        "assignments": [
+          {
+            "id": "desktop:af97de7cd1a9b9af7b6b2f369366e05c74bdaaecc474c77a4c11e3dda9d712c3",
+            "state": "uncertain",
+            "fence": 1
+          }
+        ],
+        "attentions": [],
+        "deliveries": []
+      }
+    ],
+    "threadId": "12b7ae2c-90f0-4de9-af85-e8c47b9bf83d",
+    "routerSessionId": "92c95922-191f-40f1-8c2a-deff7eba1c6b",
+    "originalInstruction": "请调研2026年11月4日的新闻热点，整理一份简明中文摘要交给用户。这里是明确的历史日期2026-11-04，不是执行当天。\n要求：\n1. 通过联网搜索/浏览实际抓取该日最新报道，注明信息来源与报道时间，不要凭记忆编造。\n2. 覆盖国内外政治经济、科技（尤其AI）、社会民生等主要领域的6–10条热点，每条1–2句话说明事件与影响。本次选择非生命科学领域新闻。\n3. 区分“已验证有多个可靠来源”与“单一来源/待确认”，转载同一报道不当成独立来源。\n4. 最后给出整体概览，用一句话总结当天的大势。\n5. 若某些渠道无法访问，如实说明缺失部分，不要补写。\n6. 直接在本次聊天中交付中文文本摘要即可，无需创建实际产物文件。热点用1.起的连续阿拉伯数字编号，来源写在对应条目中。\n请自主派工，并在开单时把上述数目、日期、来源、标注和文本交付条件写进工单任务书的验收条件。\n隔离运行编号：P0_NO_FILES_fb1f7684-283d-4c50-af35-5e16e2de0e5a。派工时在任务目标正文保留此编号便于关联；编号不改变验收条件。",
+    "ticketId": "0700aa52-21ea-471e-b557-49469d056ef9",
+    "latest": {
+      "status": "open",
+      "resultVersion": 0,
+      "results": [],
+      "attentions": []
+    }
+  },
+  "history": {
+    "threadId": "12b7ae2c-90f0-4de9-af85-e8c47b9bf83d",
+    "sessionId": "92c95922-191f-40f1-8c2a-deff7eba1c6b",
+    "messages": [
+      {
+        "seq": 8,
+        "id": "33bd66fa-3946-42bc-8a11-4f02cf3d7350",
+        "role": "user",
+        "rpcId": "P0_NO_FILES_fb1f7684-283d-4c50-af35-5e16e2de0e5a",
+        "text": "请调研2026年11月4日的新闻热点，整理一份简明中文摘要交给用户。这里是明确的历史日期2026-11-04，不是执行当天。\n要求：\n1. 通过联网搜索/浏览实际抓取该日最新报道，注明信息来源与报道时间，不要凭记忆编造。\n2. 覆盖国内外政治经济、科技（尤其AI）、社会民生等主要领域的6–10条热点，每条1–2句话说明事件与影响。本次选择非生命科学领域新闻。\n3. 区分“已验证有多个可靠来源”与“单一来源/待确认”，转载同一报道不当成独立来源。\n4. 最后给出整体概览，用一句话总结当天的大势。\n5. 若某些渠道无法访问，如实说明缺失部分，不要补写。\n6. 直接在本次聊天中交付中文文本摘要即可，无需创建实际产物文件。热点用1.起的连续阿拉伯数字编号，来源写在对应条目中。\n请自主派工，并在开单时把上述数目、日期、来源、标注和文本交付条件写进工单任务书的验收条件。\n隔离运行编号：P0_NO_FILES_fb1f7684-283d-4c50-af35-5e16e2de0e5a。派工时在任务目标正文保留此编号便于关联；编号不改变验收条件。",
+        "content": [
+          {
+            "type": "text",
+            "text": "请调研2026年11月4日的新闻热点，整理一份简明中文摘要交给用户。这里是明确的历史日期2026-11-04，不是执行当天。\n要求：\n1. 通过联网搜索/浏览实际抓取该日最新报道，注明信息来源与报道时间，不要凭记忆编造。\n2. 覆盖国内外政治经济、科技（尤其AI）、社会民生等主要领域的6–10条热点，每条1–2句话说明事件与影响。本次选择非生命科学领域新闻。\n3. 区分“已验证有多个可靠来源”与“单一来源/待确认”，转载同一报道不当成独立来源。\n4. 最后给出整体概览，用一句话总结当天的大势。\n5. 若某些渠道无法访问，如实说明缺失部分，不要补写。\n6. 直接在本次聊天中交付中文文本摘要即可，无需创建实际产物文件。热点用1.起的连续阿拉伯数字编号，来源写在对应条目中。\n请自主派工，并在开单时把上述数目、日期、来源、标注和文本交付条件写进工单任务书的验收条件。\n隔离运行编号：P0_NO_FILES_fb1f7684-283d-4c50-af35-5e16e2de0e5a。派工时在任务目标正文保留此编号便于关联；编号不改变验收条件。"
+          }
+        ],
+        "time": 1793809998057
+      },
+      {
+        "seq": 28,
+        "id": "reply:33bd66fa-3946-42bc-8a11-4f02cf3d7350",
+        "role": "assistant",
+        "kind": "final",
+        "requestId": "33bd66fa-3946-42bc-8a11-4f02cf3d7350",
+        "text": "工单已派出，正在后台调研。\n\n**工单**：11月4日新闻摘要（`0700aa52…`）\n**执行模型**：routergo / deepseek-v4.1-flash\n**交付方式**：直接在聊天里给中文文本，不落文件\n\n验收条件已写进任务书：日期锁定 2026-11-04、6–10 条连续编号、非生命科学、每条带来源媒体+报道时间、区分「多源已验证」与「单一来源/待确认」（同稿转载不算独立来源）、末尾一句话大势概览、访问不到的渠道如实说明不补写、仅文本交付无产物文件。\n\n调研需要实际抓取当天的报道并交叉核对来源，完成后摘要会另外送到这个对话里。",
+        "content": [
+          {
+            "type": "text",
+            "text": "工单已派出，正在后台调研。\n\n**工单**：11月4日新闻摘要（`0700aa52…`）\n**执行模型**：routergo / deepseek-v4.1-flash\n**交付方式**：直接在聊天里给中文文本，不落文件\n\n验收条件已写进任务书：日期锁定 2026-11-04、6–10 条连续编号、非生命科学、每条带来源媒体+报道时间、区分「多源已验证」与「单一来源/待确认」（同稿转载不算独立来源）、末尾一句话大势概览、访问不到的渠道如实说明不补写、仅文本交付无产物文件。\n\n调研需要实际抓取当天的报道并交叉核对来源，完成后摘要会另外送到这个对话里。"
+          }
+        ],
+        "time": 1793810019495,
+        "usage": {
+          "inputTokens": 10955,
+          "outputTokens": 165,
+          "totalTokens": 12016,
+          "cacheReadTokens": 896
+        }
+      }
+    ],
+    "requests": [
+      {
+        "threadId": "12b7ae2c-90f0-4de9-af85-e8c47b9bf83d",
+        "sessionId": "92c95922-191f-40f1-8c2a-deff7eba1c6b",
+        "requestId": "P0_NO_FILES_fb1f7684-283d-4c50-af35-5e16e2de0e5a",
+        "messageId": "33bd66fa-3946-42bc-8a11-4f02cf3d7350",
+        "status": "processed",
+        "createdAt": "2026-11-04T16:33:17.434Z",
+        "updatedAt": "2026-11-04T16:33:39.529Z"
+      }
+    ],
+    "images": [],
+    "hasMore": false,
+    "nextBefore": null,
+    "status": "idle",
+    "running": false,
+    "activeReply": null,
+    "error": null,
+    "failures": [],
+    "model": {
+      "providerId": "routergo",
+      "modelId": "deepseek-v4.1-flash"
+    },
+    "reactions": {},
+    "notifications": []
+  }
+}

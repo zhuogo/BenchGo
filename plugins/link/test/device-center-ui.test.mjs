@@ -6,9 +6,9 @@ import { runInNewContext } from 'node:vm';
 import { deviceIcon, deviceKind, deviceStatus, jobFinished, sshInput, workbenchUrl } from '../client/device-state.mjs';
 import { workbenchNavigationMessage } from '../client/device-navigation.mjs';
 
-const require = createRequire(new URL('../../commander/package.json', import.meta.url));
+const require = createRequire(new URL('../../benchgo/package.json', import.meta.url));
 const source = await readFile(new URL('../client/device-center.jsx', import.meta.url), 'utf8');
-const code = require('esbuild').transformSync(source + '\nexport { AddComputer, AddServer, AddDevice, ManageDevice, RelayWizard };', { loader: 'jsx', format: 'cjs' }).code;
+const code = require('esbuild').transformSync(source + '\nexport { AddComputer, AddServer, AddDevice, ManageDevice, RelayWizard, RelayPool };', { loader: 'jsx', format: 'cjs' }).code;
 const nodes = value => value && typeof value === 'object' ? [value, ...(value.children || []).flatMap(nodes)] : [];
 const textOf = value => typeof value === 'object' ? (value?.children || []).map(textOf).join('') : String(value ?? '');
 
@@ -27,7 +27,7 @@ function fixture(component, props = {}) {
     if (action === 'job') return { id: 'job-id', state: 'completed', steps: [{ label: '安装', state: 'completed' }], device: devices[2] };
     if (action === 'reconnect') return { jobId: 'job-id' };
     return {};
-  }, ...props.runtime };
+  }, async hostCall(action, args) { return this.call(action, args); }, ...props.runtime };
   const react = {
     createElement(type, props, ...children) { return { type, props: props || {}, children: children.flat(Infinity).filter(value => value !== false && value != null) }; },
     useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial; return [slots[index], value => { const next = typeof value === 'function' ? value(slots[index]) : value; if (!Object.is(next, slots[index])) { slots[index] = next; dirty = true; } }]; },
@@ -90,9 +90,55 @@ test('opening another device leaves the device list immediately', async () => {
   const opening = view.nodes().find(node => node.props.className === 'dc-device-open').props.onClick();
   await view.settle();
   assert.equal(view.nodes().find(node => node.props.className === 'dc-surface').props.hidden, true);
+  assert(view.nodes().some(node => node.props.className === 'dc-workbench-loading'));
   release();
   await opening; await view.settle();
   assert.equal(view.nodes().find(node => node.type === 'iframe').props.hidden, false);
+  assert(view.nodes().some(node => node.props.className === 'dc-workbench-loading'));
+  view.nodes().find(node => node.type === 'iframe').props.onLoad(); await view.settle();
+  assert.equal(view.nodes().some(node => node.props.className === 'dc-workbench-loading'), false);
+});
+
+test('local device name and remote remarks can be edited and saved independently', async () => {
+  for (const kind of ['local', 'computer']) {
+    let saved;
+    const view = fixture('ManageDevice', { device: { id: kind === 'local' ? 'local' : 'desk', kind, name: '旧名称', status: 'online' }, onChanged() {}, runtime: { async call(action, input) { saved = { action, ...input }; return { device: { name: input.name } }; } } });
+    await view.settle();
+    assert.equal(view.nodes().some(node => node.type === 'input'), false);
+    await view.nodes().find(node => node.props['aria-label'] === '编辑' + (kind === 'local' ? '本机名称' : '备注名称')).props.onClick(); await view.settle();
+    const input = view.nodes().find(node => node.type === 'input');
+    assert.equal(input.props.disabled, false);
+    input.props.onChange({ target: { value: '新的名称' } }); await view.settle();
+    view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
+    assert.equal(saved.action, 'rename'); assert.equal(saved.name, '新的名称');
+    assert.equal(saved.deviceId, kind === 'local' ? 'local' : 'desk');
+    assert.equal(view.nodes().some(node => node.type === 'input'), false);
+    assert.match(textOf(view.tree), /新的名称/);
+  }
+});
+
+test('inline name edits cancel, preserve failures and prevent duplicate saves', async () => {
+  let fail = true, release, count = 0;
+  const view = fixture('ManageDevice', { device: { id: 'desk', kind: 'computer', name: '旧名称' }, onChanged() {}, runtime: { async call() { count++; if (fail) throw Error('保存失败'); await new Promise(resolve => { release = resolve; }); return { device: { name: '新备注' } }; } } });
+  await view.settle();
+  const open = async () => { view.nodes().find(node => node.props['aria-label'] === '编辑备注名称').props.onClick(); await view.settle(); };
+  const input = () => view.nodes().find(node => node.type === 'input');
+  const form = () => view.nodes().find(node => node.props.className === 'dc-name-form');
+  await open(); input().props.onChange({ target: { value: '未保存' } }); await view.settle();
+  view.nodes().find(node => node.props['aria-label'] === '取消修改名称').props.onClick(); await view.settle();
+  await open(); assert.equal(input().props.value, '旧名称');
+  form().props.onKeyDown({ key: 'Escape', preventDefault() {}, stopPropagation() {} }); await view.settle();
+  assert.equal(input(), undefined); assert.equal(count, 0);
+  await open(); input().props.onChange({ target: { value: '新备注' } }); await view.settle();
+  let prevented = false;
+  form().props.onKeyDown({ key: 'Enter', nativeEvent: { isComposing: true }, preventDefault() { prevented = true; }, stopPropagation() {} });
+  assert.equal(prevented, true); assert.equal(count, 0);
+  form().props.onSubmit({ preventDefault() {} }); await view.settle();
+  assert.equal(input().props.value, '新备注'); assert(view.nodes().some(node => node.props.error === '保存失败'));
+  fail = false; const submit = form().props.onSubmit;
+  submit({ preventDefault() {} }); submit({ preventDefault() {} }); await view.settle();
+  assert.equal(count, 2); assert.equal(input().props.disabled, true);
+  release(); await view.settle(); assert.equal(input(), undefined);
 });
 
 test('switching preserves existing iframe when another connection fails', async () => {
@@ -127,7 +173,7 @@ test('mobile centre keeps fallback until valid navigation is ready and retains f
 test('server reconnect remains an explicit job until completion', async () => {
   const view = fixture('ManageDevice', { device: { id: 'server', name: '云端', kind: 'ssh' }, onChanged() {}, onRemoved() {} }); await view.settle();
   await view.click('重新连接隧道');
-  const forms = view.nodes().filter(node => node.type === 'form'); await forms[1].props.onSubmit({ preventDefault() {} }); await view.settle();
+  const form = view.nodes().find(node => node.type === 'form' && nodes(node).some(child => child.type?.name === 'Credentials')); await form.props.onSubmit({ preventDefault() {} }); await view.settle();
   assert(view.nodes().some(node => node.props.job?.id === 'job-id'));
   await view.tick(); assert(view.nodes().some(node => node.props.job?.state === 'completed'));
 });
@@ -144,42 +190,75 @@ test('device center exposes one add flow and owner pairing through existing sett
   assert(add.nodes().some(node => typeof node.type === 'function' && node.type.name === 'AddServer'));
 });
 
-test('devices, connection and relay occupy separate segment panels', async () => {
+test('connection stays above compact device and relay tabs with retained management state', async () => {
   const view = fixture('DeviceCenter'); await view.settle();
   const panel = id => view.nodes().find(node => node.props.id === 'dc-panel-' + id);
-  const tab = id => view.nodes().find(node => node.props.id === 'dc-tab-' + id);
   const directory = view.nodes().find(node => node.props.className === 'dc-device-directory');
-  assert.match(textOf(directory), /本机/);
-  assert.match(textOf(directory), /开发电脑/);
+  assert.match(textOf(directory), /本机/); assert.match(textOf(directory), /开发电脑/);
   assert.equal(textOf(directory).indexOf('本机') < textOf(directory).indexOf('开发电脑'), true);
   assert.equal(panel('devices').props.hidden, false);
+  assert.equal(panel('connection').props.hidden, undefined);
   assert.equal(panel('relay').props.hidden, true);
-  assert.equal(tab('devices').props['aria-selected'], true);
-  assert.equal(view.nodes().some(node => node.props.className === 'dc-brand'), false);
+  const tabs = () => view.nodes().filter(node => node.props.role === 'tab');
+  assert.equal(tabs().map(textOf).join('|'), '设备|中继池');
+  assert.equal(tabs()[0].props['aria-selected'], true);
+  assert(view.nodes().indexOf(panel('connection')) < view.nodes().indexOf(panel('devices')));
   const hostSettings = nodes(panel('connection')).find(node => typeof node.type === 'function' && node.type.name === 'LinkSettings');
   assert(hostSettings); assert.equal(hostSettings.props.embedded, true);
-  await tab('relay').props.onClick(); await view.settle();
-  assert.equal(panel('relay').props.hidden, false);
+  const target = {};
+  view.nodes().find(node => node.props.className === 'dc-connection-details link-settings').props.ref(target); await view.settle();
+  assert.equal(view.nodes().find(node => node.type?.name === 'LinkSettings').props.detailsTarget, target);
+  assert.equal(view.nodes().find(node => node.type?.name === 'RelayPool').props.active, false);
+  await tabs()[1].props.onClick(); await view.settle();
   assert.equal(panel('devices').props.hidden, true);
-  assert.equal(tab('relay').props.tabIndex, 0);
-  assert.equal(tab('devices').props.tabIndex, -1);
-  await tab('connection').props.onClick(); await view.settle();
-  assert.equal(panel('connection').props.hidden, false);
-  assert.match(textOf(panel('connection')), /本机连接/);
+  assert.equal(panel('relay').props.hidden, false);
+  assert.equal(view.nodes().find(node => node.type?.name === 'RelayPool').props.active, true);
+  assert.equal(view.nodes().find(node => node.type?.name === 'LinkSettings').props.detailsTarget, target);
+  await tabs()[0].props.onClick(); await view.settle();
+  assert.equal(panel('devices').props.hidden, false);
+  assert.match(textOf(panel('devices')), /开发电脑/);
 });
 
-test('segment keyboard navigation focuses the destination and keeps workbench frames', async () => {
+test('directory tabs support arrow and Home keys without remounting panels', async () => {
+  const view = fixture('DeviceCenter'); await view.settle();
+  const tabNodes = view.nodes().filter(node => node.props.role === 'tab');
+  let focused, prevented = 0;
+  const elements = tabNodes.map(node => ({ dataset: { tab: node.props['data-tab'] }, focus() { focused = this.dataset.tab; } }));
+  elements.forEach(element => { element.parentElement = { querySelectorAll: () => elements }; });
+  tabNodes[0].props.onKeyDown({ key: 'ArrowRight', currentTarget: elements[0], preventDefault() { prevented++; } }); await view.settle();
+  assert.equal(focused, 'relay');
+  assert.equal(view.nodes().find(node => node.props.id === 'dc-panel-relay').props.hidden, false);
+  tabNodes[1].props.onKeyDown({ key: 'Home', currentTarget: elements[1], preventDefault() { prevented++; } }); await view.settle();
+  assert.equal(focused, 'devices'); assert.equal(prevented, 2);
+  assert.equal(view.nodes().find(node => node.props.id === 'dc-panel-devices').props.hidden, false);
+});
+
+test('saving a new relay selects its pool and refreshes the visible list', async () => {
+  const view = fixture('DeviceCenter', { runtime: { async call() { return { devices: [], capabilities: { hostAdmin: true, relayDeploy: true } }; } } }); await view.settle();
+  const pool = () => view.nodes().find(node => node.type?.name === 'RelayPool');
+  const revision = pool().props.refreshToken;
+  pool().props.onAdd(); await view.settle();
+  const wizard = view.nodes().find(node => node.type?.name === 'RelayWizard');
+  assert.equal(wizard.props.initialTab, 'connect');
+  await wizard.props.onChanged(); await view.settle();
+  assert.equal(pool().props.active, true);
+  assert.equal(pool().props.refreshToken, revision + 1);
+  assert.equal(view.nodes().find(node => node.props.id === 'dc-panel-relay').props.hidden, false);
+  assert.equal(view.nodes().some(node => node.type?.name === 'RelayWizard'), false);
+});
+
+test('returning to device centre retains workbench and relay changes refresh every consumer', async () => {
   const view = fixture('DeviceCenter'); await view.settle();
   await view.nodes().find(node => node.props.className === 'dc-device-open' && textOf(node).includes('开发电脑')).props.onClick(); await view.settle();
   const frame = view.nodes().find(node => node.type === 'iframe');
-  const deviceTab = view.nodes().find(node => node.props.id === 'dc-tab-devices');
-  let focused = '', prevented = false;
-  deviceTab.props.onKeyDown({ key: 'Home', preventDefault() { prevented = true; }, currentTarget: { parentElement: { querySelector(selector) { focused = selector; return { focus() {} }; } } } });
-  await view.settle();
-  assert.equal(prevented, true); assert.equal(focused, '#dc-tab-devices');
-  assert.equal(view.nodes().find(node => node.props.id === 'dc-panel-devices').props.hidden, false);
+  await view.nodes().find(node => node.props['aria-label'] === '返回设备中心').props.onClick(); await view.settle();
   assert.equal(view.nodes().find(node => node.props.className === 'dc-surface').props.hidden, false);
   assert.equal(view.nodes().find(node => node.type === 'iframe').props.src, frame.props.src);
+  const pool = () => view.nodes().find(node => typeof node.type === 'function' && node.type.name === 'RelayPool');
+  const before = pool().props.refreshToken;
+  pool().props.onChanged(); await view.settle();
+  assert.equal(pool().props.refreshToken, before + 1);
+  assert.equal(view.nodes().find(node => typeof node.type === 'function' && node.type.name === 'LinkSettings').props.refreshToken, before + 1);
   await view.nodes().find(node => typeof node.type === 'function' && node.props['aria-label'] === '返回开发电脑工作台').props.onClick(); await view.settle();
   assert.equal(view.nodes().find(node => node.props.className === 'dc-surface').props.hidden, true);
   assert.equal(view.nodes().find(node => node.type === 'iframe').props.src, frame.props.src);
@@ -192,7 +271,8 @@ test('embedded device list can return without using the window close control', a
   assert.equal(textOf(back), '');
   const main = view.nodes().find(node => node.props.className === 'dc-topbar-main');
   assert.equal(main.children[0], back);
-  assert.equal(main.children[1].props.className, 'dc-segment');
+  assert.equal(main.children[1].props.className, 'dc-center-home');
+  assert.equal(main.children[1].type, 'span');
   await back.props.onClick(); await view.settle();
   assert.equal(view.parent.messages.at(-1).data.type, 'dsh-devices:return-local');
   assert.equal(view.parent.messages.at(-1).origin, 'http://127.0.0.1:17770');
@@ -208,6 +288,15 @@ test('clients without hosting retain their remote device list', async () => {
   assert.equal(view.nodes().some(node => typeof node.type === 'function' && node.type.name === 'LinkSettings'), false);
 });
 
+test('a phone local device opens its name settings instead of selecting a workbench', async () => {
+  const view = fixture('DeviceCenter', { runtime: { isNative: () => true } }); await view.settle();
+  const add = view.nodes().find(node => typeof node.type === 'function' && textOf(node) === '添加设备');
+  assert.equal(add.props.icon, undefined);
+  await view.nodes().find(node => node.props.className === 'dc-device-open' && textOf(node).includes('本机')).props.onClick(); await view.settle();
+  assert.equal(view.calls.some(call => call.action === 'select'), false);
+  assert(view.nodes().some(node => typeof node.type === 'function' && node.type.name === 'ManageDevice' && node.props.device.id === 'local'));
+});
+
 
 test('relay wizard deploys in one step without requiring email or fingerprint confirmation', async () => {
   const calls = [];
@@ -217,11 +306,13 @@ test('relay wizard deploys in one step without requiring email or fingerprint co
     if (action === 'relayProbe') return { fingerprint: 'SHA256:relay' };
     if (action === 'relayDeploy') return { jobId: 'relay-job' };
     if (action === 'job') return { id: 'relay-job', state: 'completed', steps: [], relay: { url: 'https://8.8.8.8:24680' } };
-    if (action === 'hostStatus') return { relay: { connected } };
+    if (action === 'hostStatus') return { relay: { connected }, pending: [{ id: 'phone', name: '手机' }] };
+    if (action === 'hostConfirm') return { relay: { connected }, pending: [] };
     if (action === 'hostPairing') return { uri: 'dshlink://pair?code=once' };
     return {};
   } } });
   await view.settle();
+  await view.click('部署');
   const input = placeholder => view.nodes().find(node => node.type === 'input' && node.props.placeholder === placeholder);
   assert.equal(input('例如 root 或 ubuntu').props.value, 'root');
   input('公网 IP 或域名').props.onChange({ target: { value: '8.8.8.8' } });
@@ -239,7 +330,12 @@ test('relay wizard deploys in one step without requiring email or fingerprint co
   assert.equal(pairButton().props.disabled, false);
   await view.click('生成中继连接信息');
   assert.equal(calls.find(item => item.action === 'hostPairing').args.mode, 'relay');
-  assert(view.nodes().some(node => node.type === 'textarea' && node.props.readOnly && node.props.value.includes('code=once')));
+  const pairingDialog = () => view.nodes().find(node => node.props.pairing?.uri?.includes('code=once'));
+  assert(pairingDialog());
+  assert.equal(pairingDialog().props.pending[0].id, 'phone');
+  await pairingDialog().props.onConfirm('phone', 'confirm'); await view.settle();
+  assert.equal(calls.find(item => item.action === 'hostConfirm').args.id, 'phone');
+  assert.equal(pairingDialog().props.pending.length, 0);
 });
 
 test('relay deployment exposes webroot and returns to editable fields after failure', async () => {
@@ -252,6 +348,7 @@ test('relay deployment exposes webroot and returns to editable fields after fail
     return {};
   } } });
   await view.settle();
+  await view.click('部署');
   view.nodes().find(node => node.type === 'input' && node.props.placeholder === '公网 IP 或域名').props.onChange({ target: { value: 'relay.example.com' } });
   view.nodes().find(node => node.props.className === 'dc-advanced-toggle').props.onClick(); await view.settle();
   view.nodes().find(node => node.props.value === 'standalone').props.onChange({ target: { value: 'webroot' } }); await view.settle();
@@ -269,5 +366,83 @@ test('relay deployment exposes webroot and returns to editable fields after fail
 test('relay deployment entry is unavailable when client capability is absent', async () => {
   const view = fixture('DeviceCenter'); await view.settle();
   const panel = view.nodes().find(node => node.props.id === 'dc-panel-relay');
-  assert.match(textOf(panel), /当前客户端不支持中继部署/);
+  const pool = nodes(panel).find(node => typeof node.type === 'function' && node.type.name === 'RelayPool');
+  assert.equal(pool.props.onAdd, undefined);
+});
+
+test('adding a relay defaults to connect, tests without saving and appends existing nodes', async () => {
+  const calls = []; let changed = 0;
+  const view = fixture('RelayWizard', { onChanged() { changed++; }, runtime: { async hostCall(action, input) {
+    calls.push({ action, input });
+    if (action === 'relayTest') return { ok: false, message: '中继拒绝认证' };
+    if (action === 'hostStatus') return { relay: { nodes: [{ id: 'first', url: 'https://first.test', enabled: true }] } };
+    return { relay: {} };
+  } } });
+  await view.settle();
+  assert(view.nodes().some(node => node.props.name === 'url'));
+  assert.equal(view.nodes().some(node => node.props.placeholder === '公网 IP 或域名'), false);
+  view.nodes().find(node => node.props.name === 'url').props.onChange({ target: { value: 'https://second.test' } });
+  view.nodes().find(node => node.props.name === 'token').props.onChange({ target: { value: 'new-secret' } }); await view.settle();
+  await view.click('测试连接');
+  assert.equal(calls.length, 1); assert.equal(calls[0].action, 'relayTest'); assert.equal(changed, 0);
+  assert(view.nodes().some(node => node.props.result?.message === '中继拒绝认证'));
+  await view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
+  const saved = calls.find(item => item.action === 'relayPoolConfigure').input.nodes;
+  assert.equal(saved.length, 2); assert.equal(saved[0].id, 'first'); assert.equal(saved[1].token, 'new-secret');
+  assert.equal(changed, 1);
+});
+
+test('relay list polls channel status, preserves edited secrets and leaves failed edits open', async () => {
+  const calls = []; let connected = false, failSave = true;
+  const status = () => ({ relay: { nodes: [{ id: 'one', url: 'https://relay.test', enabled: true, connected }] } });
+  const view = fixture('RelayPool', { runtime: { async hostCall(action, input) {
+    calls.push({ action, input });
+    if (action === 'hostRelayPoolConfigure' && failSave) throw Error('保存失败');
+    if (action === 'relayTest') return { ok: true, message: '认证通过', latencyMs: 25 };
+    return status();
+  } } }); await view.settle();
+  assert.match(textOf(view.tree), /正在连接/);
+  connected = true; await view.tick(); assert.match(textOf(view.tree), /通道已连接/);
+  await view.click('编辑');
+  const token = () => view.nodes().find(node => node.props.placeholder === '留空以保留当前密钥');
+  await view.nodes().filter(node => typeof node.type === 'function' && textOf(node) === '测试连接').at(-1).props.onClick(); await view.settle();
+  const tested = calls.find(item => item.action === 'relayTest'); assert.equal(tested.input.id, 'one'); assert.equal(tested.input.token, '');
+  token().props.onChange({ target: { value: 'replacement-secret' } }); await view.settle();
+  await view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
+  assert(token()); assert(view.nodes().some(node => node.props.error === '保存失败'));
+  await view.tick(); assert(view.nodes().some(node => node.props.error === '保存失败'));
+  assert.equal(calls.find(item => item.action === 'hostRelayPoolConfigure').input.nodes[0].token, 'replacement-secret');
+  failSave = false;
+  await view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
+  assert.equal(token(), undefined);
+});
+
+test('relay deployment progress survives closing its wizard and refreshes the list on completion', async () => {
+  const view = fixture('DeviceCenter', { runtime: { async call(action) {
+    if (action === 'list') return { devices: [], capabilities: { hostAdmin: true, relayDeploy: true }, relayJob: { id: 'background-job', state: 'running' } };
+    if (action === 'job') return { id: 'background-job', state: 'completed' };
+    return {};
+  } } }); await view.settle();
+  const pool = () => view.nodes().find(node => typeof node.type === 'function' && node.type.name === 'RelayPool');
+  const before = pool().props.refreshToken;
+  await view.tick();
+  assert.equal(pool().props.refreshToken, before + 1);
+  assert.match(textOf(view.tree), /中继部署完成/);
+});
+
+test('relay removal requires disabling and supports deleting the final node', async () => {
+  let current = [{ id: 'only', url: 'https://relay.test', enabled: true }];
+  const view = fixture('RelayPool', { onAdd() {}, runtime: { async hostCall(action, input) {
+    if (action === 'hostRelayPoolConfigure') current = input.nodes;
+    return { relay: { nodes: current } };
+  } } });
+  await view.settle();
+  const remove = () => view.nodes().find(node => node.props['aria-label'] === '删除中继 only');
+  assert.equal(remove().props.disabled, true);
+  assert.equal(view.nodes().find(node => textOf(node) === '添加中继' && typeof node.type === 'function').props.icon, undefined);
+  await view.click('停用');
+  assert.equal(remove().props.disabled, false);
+  await remove().props.onClick(); await view.settle();
+  assert.deepEqual(current, []);
+  assert.match(textOf(view.tree), /尚未添加中继/);
 });

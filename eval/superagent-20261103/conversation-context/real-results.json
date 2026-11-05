@@ -1,0 +1,96 @@
+{
+  "mode": "real",
+  "extra": false,
+  "diagnostic": false,
+  "caseFilter": "R02",
+  "startedAt": "2026-11-03T12:53:54.997Z",
+  "scenarios": [
+    {
+      "id": "R02",
+      "title": "多轮上下文保持",
+      "expected": "第二轮准确取回第一轮随机口令",
+      "layer": "真实模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T12:54:08.311Z",
+      "evidence": {
+        "threadId": "fca35a76-c6b8-4c2f-af50-a8d091a2e5a0",
+        "sessionId": "6fb5775b-4efd-49b7-b9cb-dd0767eec633",
+        "messages": [
+          {
+            "id": "2bf71ee2-2bb8-4754-ac6e-00444f77f194",
+            "role": "user",
+            "text": "这是仅供本轮对话引用的口令 BG-b56343bf，不要保存长期记忆。通过 assistant_reply 只回复收到。",
+            "content": [
+              {
+                "type": "text",
+                "text": "这是仅供本轮对话引用的口令 BG-b56343bf，不要保存长期记忆。通过 assistant_reply 只回复收到。"
+              }
+            ],
+            "time": 1793710448851
+          },
+          {
+            "id": "reply:2bf71ee2-2bb8-4754-ac6e-00444f77f194",
+            "role": "assistant",
+            "kind": "final",
+            "requestId": "2bf71ee2-2bb8-4754-ac6e-00444f77f194",
+            "text": "收到",
+            "content": [
+              {
+                "type": "text",
+                "text": "收到"
+              }
+            ],
+            "time": 1793710452657
+          },
+          {
+            "id": "da057b5f-5796-421b-9448-ceb6de48a16d",
+            "role": "user",
+            "text": "刚才的评估口令是什么？通过 assistant_reply 只输出口令。",
+            "content": [
+              {
+                "type": "text",
+                "text": "刚才的评估口令是什么？通过 assistant_reply 只输出口令。"
+              }
+            ],
+            "time": 1793710453058
+          },
+          {
+            "id": "reply:da057b5f-5796-421b-9448-ceb6de48a16d",
+            "role": "assistant",
+            "kind": "final",
+            "requestId": "da057b5f-5796-421b-9448-ceb6de48a16d",
+            "text": "BG-b56343bf",
+            "content": [
+              {
+                "type": "text",
+                "text": "BG-b56343bf"
+              }
+            ],
+            "time": 1793710455504
+          }
+        ],
+        "images": [],
+        "hasMore": false,
+        "nextBefore": null,
+        "status": "idle",
+        "running": false,
+        "error": null,
+        "failures": [],
+        "model": {
+          "providerId": "assistant-smoke",
+          "modelId": "deepseek-v4.1-flash"
+        },
+        "notifications": []
+      },
+      "status": "pass",
+      "durationMs": 7419
+    }
+  ],
+  "requests": [],
+  "provider": {
+    "id": "routergo",
+    "model": "deepseek-v4.1-flash",
+    "protocol": "openai-completions",
+    "isolatedAlias": "assistant-smoke"
+  },
+  "finishedAt": "2026-11-03T12:54:16.033Z"
+}

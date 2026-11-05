@@ -1,0 +1,214 @@
+{
+  "goal": {
+    "id": "05073b14-3d8c-402a-90ee-2756bc9e7f11",
+    "budgetGoalId": "9d4e7fd0d1a937a1b09911a6d4b11f93da3fddbcc39675bf719414c7c54d33d6",
+    "requestId": "[\"goal-form\",\"b2012027-4ad0-4cf2-beb5-8b1d4a1478ca\",\"eval-goal\"]",
+    "requestFingerprint": "2771ed286532708289b4f5e19c9f57b05fcf4d448d6bb8b3b21630eec97d5a50",
+    "inputFingerprint": "b2b8bea7e3a4c85c9f4fd3b790eb8918f10c5b9f83b59ecb488aa072c5266f6d",
+    "executionKind": "ticket",
+    "ticketIds": [
+      "d26ab1c7-34d7-4f09-b007-6ade221714de"
+    ],
+    "ticketRevisions": {
+      "d26ab1c7-34d7-4f09-b007-6ade221714de": 1
+    },
+    "ownerSessionId": "b2012027-4ad0-4cf2-beb5-8b1d4a1478ca",
+    "status": "active",
+    "title": "计算并给出结果",
+    "objective": "计算并给出结果",
+    "acceptance": "输出准确计算结果391，有实际执行会话证据。",
+    "scope": null,
+    "budget": {
+      "requests": 8
+    },
+    "projectId": "251fbdc0-4ed4-412d-9af2-74b0c2c8239a",
+    "provider": "assistant-smoke",
+    "model": "deepseek-v4.1-flash",
+    "text": "计算17乘23。无需修改文件，无需工具，只输出计算结果391。",
+    "threadId": "main",
+    "parentGoalId": null,
+    "childGoalIds": [],
+    "nextStep": "verify",
+    "createdAt": "2026-11-03T12:53:06.108Z",
+    "updatedAt": "2026-11-03T12:53:06.114Z",
+    "rowVersion": 2,
+    "waitReason": null
+  },
+  "ticket": {
+    "id": "d26ab1c7-34d7-4f09-b007-6ade221714de",
+    "threadId": "desktop:b2012027-4ad0-4cf2-beb5-8b1d4a1478ca",
+    "target": "计算17乘23。无需修改文件，无需工具，只输出计算结果391。",
+    "acceptance": "输出准确计算结果391，有实际执行会话证据。",
+    "instructionRevision": 1,
+    "status": "completed",
+    "pauseReason": null,
+    "mandate": {
+      "actorId": "desktop-owner",
+      "source": {
+        "channel": "desktop",
+        "sessionId": "b2012027-4ad0-4cf2-beb5-8b1d4a1478ca",
+        "messageId": "goal-form:eval-goal",
+        "threadId": "main"
+      },
+      "instruction": "{\"requestId\":\"eval-goal\",\"objective\":\"计算并给出结果\",\"projectId\":\"251fbdc0-4ed4-412d-9af2-74b0c2c8239a\",\"provider\":\"assistant-smoke\",\"model\":\"deepseek-v4.1-flash\",\"text\":\"计算17乘23。无需修改文件，无需工具，只输出计算结果391。\",\"acceptance\":\"输出准确计算结果391，有实际执行会话证据。\",\"budget\":{\"requests\":8}}",
+      "policyVersion": "6eeaca50235b7fe336181adf7672d18d48da5d637b3ef7e627ff98788a941880",
+      "admission": "desktop-approved-delegation",
+      "controlledActions": "require-current-policy-and-harness-approval",
+      "project": {
+        "id": "251fbdc0-4ed4-412d-9af2-74b0c2c8239a",
+        "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-Tjxnhu\\eval-project"
+      }
+    },
+    "createdByDecision": "514f0e7a-8271-4309-8c68-4b277bbfe4b5",
+    "createdAt": "2026-11-03T12:53:06.100Z",
+    "updatedAt": "2026-11-03T12:53:35.348Z",
+    "resultVersion": 1,
+    "revisions": [],
+    "assignments": [
+      {
+        "id": "desktop:f5a136c6bc8bb7c66257c2e88905ac29a1733f9d3fb537a3c976f3c6055bf0ae",
+        "ticketId": "d26ab1c7-34d7-4f09-b007-6ade221714de",
+        "executor": "harness",
+        "model": {
+          "providerId": "assistant-smoke",
+          "modelId": "deepseek-v4.1-flash"
+        },
+        "text": "计算17乘23。无需修改文件，无需工具，只输出计算结果391。",
+        "acceptance": "输出准确计算结果391，有实际执行会话证据。",
+        "instructionRevision": 1,
+        "executionStopped": {
+          "owner": "assignment-worker-12b08773-b079-4763-943b-aeb43000f44d",
+          "fence": 1,
+          "at": "2026-11-03T12:53:22.443Z"
+        },
+        "state": "completed",
+        "priority": 0,
+        "owner": null,
+        "leaseUntil": null,
+        "fence": 1,
+        "attempts": 1,
+        "createdAt": "2026-11-03T12:53:06.099Z",
+        "updatedAt": "2026-11-03T12:53:35.348Z"
+      }
+    ],
+    "attentions": [],
+    "results": [
+      {
+        "summary": "391",
+        "transcript": {
+          "lastSeq": 23,
+          "hash": "9a434be30cff2da867a46bf0484a4dae36f04ff9ec59086de7c319bfff686b3a"
+        },
+        "toolEvidence": {
+          "entries": [],
+          "total": 0,
+          "omitted": 0,
+          "failedCount": 0,
+          "truncated": false
+        },
+        "evidenceRefs": [
+          {
+            "sessionId": "c50af009-9fc1-4cb9-a9ff-0b25c50f6fc8",
+            "runId": "851cc5b3-62af-4c06-8fd7-a0f1e565f3a1"
+          }
+        ],
+        "sessionId": "c50af009-9fc1-4cb9-a9ff-0b25c50f6fc8",
+        "runId": "851cc5b3-62af-4c06-8fd7-a0f1e565f3a1",
+        "directory": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-Tjxnhu\\eval-project\\.agents\\worktrees\\benchgo-851cc5b3-62af-4c06-8fd7-a0f1e565f3a1",
+        "remainingExecutionMs": 584456,
+        "environment": {
+          "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-Tjxnhu\\eval-project\\.agents\\worktrees\\benchgo-851cc5b3-62af-4c06-8fd7-a0f1e565f3a1",
+          "branch": "benchgo-851cc5b3-62af-4c06-8fd7-a0f1e565f3a1",
+          "baseCommit": "b7df6bea663b0ca29c67473d17c6308860476b80",
+          "repositoryRoot": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-Tjxnhu\\eval-project"
+        },
+        "checkpoint": {
+          "version": 1,
+          "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-Tjxnhu\\eval-project\\.agents\\worktrees\\benchgo-851cc5b3-62af-4c06-8fd7-a0f1e565f3a1",
+          "repositoryRoot": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-Tjxnhu\\eval-project",
+          "commonDir": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-Tjxnhu\\eval-project\\.git",
+          "branch": "benchgo-851cc5b3-62af-4c06-8fd7-a0f1e565f3a1",
+          "baseCommit": "b7df6bea663b0ca29c67473d17c6308860476b80",
+          "head": "b7df6bea663b0ca29c67473d17c6308860476b80",
+          "indexHash": "d348c308c584d31d3e0540fe1592884eee558df405cca1b742faa354b5b32a88",
+          "files": 1,
+          "bytes": 31,
+          "manifestHash": "ef61c070ecd43448d9cf2a3b1d54177b600bfa25639c7d75d3ef47c3eb8f9349"
+        },
+        "review": {
+          "verdict": "passed",
+          "reason": "计算结果准确为391，符合验收标准；提供了实际执行会话与运行证据，且未使用工具、未修改文件，符合任务约束。",
+          "delivery": {
+            "action": "deliver",
+            "text": "计算结果：391。已核对 17×23=391。执行会话证据：sessionId c50af009-9fc1-4cb9-a9ff-0b25c50f6fc8，runId 851cc5b3-62af-4c06-8fd7-a0f1e565f3a1。未使用工具、未修改文件，符合要求。"
+          },
+          "routing": {
+            "configRevision": 1,
+            "capability": "review",
+            "auxiliary": false,
+            "switched": false,
+            "attempts": [
+              {
+                "providerId": "assistant-smoke",
+                "modelId": "deepseek-v4.1-flash",
+                "retry": 0,
+                "status": "completed"
+              }
+            ]
+          },
+          "inputHash": "fa82e5cdf3a0acdef86365381785dada12842b924087fdbc0e06277cf9c40340"
+        },
+        "delivery": {
+          "action": "deliver",
+          "text": "计算结果：391。已核对 17×23=391。执行会话证据：sessionId c50af009-9fc1-4cb9-a9ff-0b25c50f6fc8，runId 851cc5b3-62af-4c06-8fd7-a0f1e565f3a1。未使用工具、未修改文件，符合要求。"
+        },
+        "ticketId": "d26ab1c7-34d7-4f09-b007-6ade221714de",
+        "instructionRevision": 1,
+        "version": 1,
+        "committedAt": "2026-11-03T12:53:35.348Z"
+      }
+    ],
+    "deliveries": [
+      {
+        "receipt": {
+          "status": "accepted",
+          "messageId": "e9b67a50-7880-463e-b106-6bcc5562a442"
+        },
+        "id": "5eed38cb-07ea-4cb1-a59f-a4f11007a9e4",
+        "uniqueKey": "assignment-result:desktop:f5a136c6bc8bb7c66257c2e88905ac29a1733f9d3fb537a3c976f3c6055bf0ae:851cc5b3-62af-4c06-8fd7-a0f1e565f3a1",
+        "ticketId": "d26ab1c7-34d7-4f09-b007-6ade221714de",
+        "payload": {
+          "type": "ticket.result",
+          "source": {
+            "channel": "desktop",
+            "sessionId": "b2012027-4ad0-4cf2-beb5-8b1d4a1478ca",
+            "messageId": "goal-form:eval-goal",
+            "threadId": "main"
+          },
+          "ticketId": "d26ab1c7-34d7-4f09-b007-6ade221714de",
+          "instructionRevision": 1,
+          "resultVersion": 1,
+          "publication": {
+            "action": "deliver",
+            "text": "计算结果：391。已核对 17×23=391。执行会话证据：sessionId c50af009-9fc1-4cb9-a9ff-0b25c50f6fc8，runId 851cc5b3-62af-4c06-8fd7-a0f1e565f3a1。未使用工具、未修改文件，符合要求。"
+          },
+          "text": "计算结果：391。已核对 17×23=391。执行会话证据：sessionId c50af009-9fc1-4cb9-a9ff-0b25c50f6fc8，runId 851cc5b3-62af-4c06-8fd7-a0f1e565f3a1。未使用工具、未修改文件，符合要求。",
+          "evidenceRefs": [
+            {
+              "sessionId": "c50af009-9fc1-4cb9-a9ff-0b25c50f6fc8",
+              "runId": "851cc5b3-62af-4c06-8fd7-a0f1e565f3a1"
+            }
+          ]
+        },
+        "state": "sent",
+        "attempts": 1,
+        "nextAt": 1793710415348,
+        "owner": null,
+        "leaseUntil": null,
+        "sentAt": "2026-11-03T12:53:35.610Z",
+        "lastError": null,
+        "createdAt": "2026-11-03T12:53:35.348Z"
+      }
+    ]
+  }
+}

@@ -12,6 +12,10 @@ function fixture() {
     { event: { seq: 4, type: 'assistant/message', surfaceOp: { op: 'replace' }, data: { message: { content: [{ type: 'text', text: 'hidden replacement' }] } } } },
   ], assistantStream: { activeAttempt: { attemptId: 'attempt', stream: [{ type: 'text-chunks', texts: ['live ', 'output'] }] } } };
   const ctx = {
+    get(name) {
+      if (name !== 'assistant') return undefined;
+      return { dispatch: async (input, peer) => ({ events: input.action === 'notificationSync' ? [{ id: 'event-1', text: '通知' }] : [], deviceId: peer?.principal?.deviceId, action: input.action }) };
+    },
     workspaceRegistry: { list: () => [project] },
     connection: {
       createPeer({ principal, interactions }) {
@@ -63,6 +67,41 @@ test('state lists registered Harness sessions and maps official model catalog', 
   assert.deepEqual(state.sessions.map(session => session.id), ['session']);
   assert.equal(state.models[0].model, 'model');
   assert.deepEqual(f.calls.find(call => call.method === 'list').args, { _request: {} });
+});
+
+test('paired Link syncs durable notifications and marks transport delivery for its device', async t => {
+  const f = fixture(); t.after(() => f.adapter.close());
+  const result = await f.adapter.dispatch({ action: 'notifications', afterSeq: 0 }, f.device);
+  assert.deepEqual(result.events, [{ id: 'event-1', text: '通知' }]);
+  assert.equal(result.deviceId, 'phone');
+});
+
+test('official sessions remain available while SuperAgent is disabled and notification calls recover after enable', async t => {
+  const f = fixture(); t.after(() => f.adapter.close());
+  let current;
+  f.ctx.get = name => name === 'assistant' ? current : undefined;
+  const unavailable = error => error.status === 503 && /SuperAgent.*不可用/.test(error.message);
+  assert.equal((await f.adapter.dispatch({ action: 'state' }, f.device)).sessions[0].id, 'session');
+  await assert.rejects(f.adapter.dispatch({ action: 'notifications' }, f.device), unavailable);
+  const calls = [];
+  const instance = label => ({ dispatch: async input => { calls.push([label, input.action]); return { events: [{ id: label }] }; } });
+  current = instance('first');
+  assert.deepEqual((await f.adapter.dispatch({ action: 'notifications' }, f.device)).events, [{ id: 'first' }]);
+  current = undefined;
+  await assert.rejects(f.adapter.dispatch({ action: 'notificationAck', eventIds: ['first'] }, f.device), unavailable);
+  assert.equal((await f.adapter.dispatch({ action: 'models' }, f.device)).models[0].model, 'model');
+  current = instance('replacement');
+  await f.adapter.dispatch({ action: 'notificationRead', eventIds: ['first'] }, f.device);
+  assert.deepEqual(calls, [['first', 'notificationSync'], ['first', 'notificationDelivered'], ['replacement', 'notificationRead']]);
+});
+
+test('notification delivery does not retain a SuperAgent instance removed during synchronization', async t => {
+  const f = fixture(); t.after(() => f.adapter.close());
+  const calls = [];
+  let current = { dispatch: async input => { calls.push(input.action); current = undefined; return { events: [{ id: 'pending' }] }; } };
+  f.ctx.get = name => name === 'assistant' ? current : undefined;
+  await assert.rejects(f.adapter.dispatch({ action: 'notifications' }, f.device), error => error.status === 503);
+  assert.deepEqual(calls, ['notificationSync']);
 });
 
 test('state does not wait for a slow interaction stream', async t => {

@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { hostname } from 'node:os';
 
 export const secret = () => randomBytes(32).toString('base64url');
 export const hash = value => createHash('sha256').update(value).digest('hex');
@@ -20,10 +21,28 @@ export async function openStore(directory) {
   const file = join(directory, 'devices.json');
   let saved = {};
   try { saved = JSON.parse(await readFile(file, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-  const state = { enabled: false, host: '0.0.0.0', port: 48721, publicUrl: '', ...saved };
+  const state = { host: '0.0.0.0', port: 48721, publicUrl: '', ...saved, enabled: true };
+  state.name = typeof saved.name === 'string' && saved.name.trim() ? text(saved.name, '设备名称', 100) : (hostname().trim().slice(0, 100) || `BenchGo-${randomBytes(3).toString('hex')}`);
   state.devices ??= [];
+  const validSession = value => value && typeof value.digest === 'string' && /^[a-f0-9]{64}$/.test(value.digest)
+    && typeof value.tokenHash === 'string' && /^[a-f0-9]{64}$/.test(value.tokenHash)
+    && Number.isFinite(value.expires) && value.expires > Date.now()
+    && state.devices.some(device => device.id === value.id && device.tokenHash === value.tokenHash);
+  const pruneSessions = sessions => {
+    const counts = new Map();
+    return sessions.filter(validSession).reverse().filter(session => {
+      const count = counts.get(session.id) || 0; counts.set(session.id, count + 1); return count < 8;
+    }).reverse();
+  };
+  state.workbenchSessions = pruneSessions(Array.isArray(saved.workbenchSessions) ? saved.workbenchSessions : []);
   const pairings = new Map(), pending = new Map();
   let writes = Promise.resolve();
+  let sessionChanges = Promise.resolve();
+  const changeSessions = operation => {
+    const task = sessionChanges.then(operation);
+    sessionChanges = task.catch(() => {});
+    return task;
+  };
   function persist() {
     const data = JSON.stringify(state, null, 2);
     const task = writes.then(async () => {
@@ -39,7 +58,24 @@ export async function openStore(directory) {
     for (const [key, value] of pending) if (value.expiresAt <= Date.now()) pending.delete(key);
   }
   return {
-    state, persist, flush: () => writes,
+    state, persist, flush: async () => { await sessionChanges; await writes; },
+    workbenchSession(digest) { return state.workbenchSessions.find(session => session.digest === digest && validSession(session)); },
+    saveWorkbenchSession(digest, session) {
+      return changeSessions(async () => {
+        const value = { digest, id: session.id, tokenHash: session.tokenHash, expires: session.expires };
+        if (!validSession(value)) throw new Error('设备授权已失效，请重新配对');
+        const previous = state.workbenchSessions;
+        state.workbenchSessions = pruneSessions([...previous.filter(row => row.digest !== digest), value]);
+        try { await persist(); } catch (error) { state.workbenchSessions = previous; throw error; }
+      });
+    },
+    removeWorkbenchSessions({ id, digest }) {
+      return changeSessions(async () => {
+        const previous = state.workbenchSessions;
+        state.workbenchSessions = previous.filter(row => id ? row.id !== id : row.digest !== digest);
+        try { await persist(); } catch (error) { state.workbenchSessions = previous; throw error; }
+      });
+    },
     pending() { prune(); return [...pending.values()].filter(p => p.status === 'pending').map(({ id, name, createdAt, expiresAt }) => ({ id, name, createdAt, expiresAt })); },
     begin() {
       prune(); if (pairings.size + pending.size >= 32) throw new Error('配对请求过多，请稍后重试');
@@ -51,13 +87,13 @@ export async function openStore(directory) {
       if (!value) throw new Error('配对码已使用或过期');
       pairings.delete(key);
       const pollToken = secret(), id = randomUUID();
-      pending.set(id, { id, name: text(name, '设备名称', 100), deviceType: ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pollHash: hash(pollToken), status: 'pending' });
+      pending.set(id, { id, name: text(name || `BenchGo-${randomBytes(3).toString('hex')}`, '设备名称', 100), deviceType: ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pollHash: hash(pollToken), status: 'pending' });
       return { requestId: id, pollToken, expiresAt: value.expiresAt };
     },
     poll(id, pollToken) {
       prune(); const p = pending.get(id);
       if (!p || !sameSecret(pollToken, p.pollHash)) throw new Error('配对请求已过期或验证失败');
-      return { status: p.status, ...(p.status === 'approved' ? { token: p.token, deviceId: p.deviceId } : {}) };
+      return { status: p.status, ...(p.status === 'approved' ? { token: p.token, deviceId: p.deviceId, hostName: state.name, name: state.name } : {}) };
     },
     async decide(id, allow) {
       prune(); const p = pending.get(id);
@@ -75,10 +111,20 @@ export async function openStore(directory) {
       const d = state.devices.find(d => sameSecret(token, d.tokenHash));
       if (d) d.lastSeenAt = Date.now(); return d;
     },
+    async renameDevice(id, name) {
+      const device = state.devices.find(device => device.id === id);
+      if (!device) throw new Error('设备不存在');
+      const alias = text(name, '设备备注', 100), previous = device.alias;
+      device.alias = alias;
+      try { await persist(); } catch (error) { if (previous === undefined) delete device.alias; else device.alias = previous; throw error; }
+    },
     async revoke(id) {
-      state.devices = state.devices.filter(d => d.id !== id);
-      for (const [key, value] of pending) if (value.deviceId === id) pending.delete(key);
-      await persist();
+      await changeSessions(async () => {
+        state.devices = state.devices.filter(d => d.id !== id);
+        state.workbenchSessions = state.workbenchSessions.filter(session => session.id !== id);
+        for (const [key, value] of pending) if (value.deviceId === id) pending.delete(key);
+        await persist();
+      });
     },
     clearPairings() { pairings.clear(); pending.clear(); },
   };

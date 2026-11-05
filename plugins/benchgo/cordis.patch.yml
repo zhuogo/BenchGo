@@ -1,0 +1,11 @@
+- insert:
+    - id: commander
+      name: 'benchgo-plugin'
+    - id: commander-harness
+      name: 'benchgo-plugin/harness-plugin'
+    - id: commander-superagent
+      name: 'benchgo-plugin/superagent-plugin'
+    - id: commander-voice
+      name: 'benchgo-plugin/voice-plugin'
+    - id: commander-link
+      name: 'benchgo-plugin/link-plugin'

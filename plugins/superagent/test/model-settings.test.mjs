@@ -1,0 +1,38 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { identityConfigPatch, auxiliaryModelPatch, auxiliaryCapabilityPatch } from '../client/model-settings.mjs';
+import { createAssistantStore } from '../src/store.mjs';
+import { collectAuxiliaryText } from '../src/auxiliary-request.mjs';
+
+test('model editor saves and reloads capability choices and routes opaque model IDs without dropping other settings', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'model-settings-'));
+  let store = await createAssistantStore({ dataDirectory: directory });
+  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
+  const main = { providerId: 'Main/Exact', modelId: 'Main:opaque', options: { maxTokens: 333 } };
+  const aux = { providerId: 'Aux/Exact', modelId: 'Aux:opaque', options: { maxTokens: 222 } };
+  const base = await store.updateConfig({ models: [main], cardHtml: '<b>BenchGo</b>' });
+  let draft = { ...base, ...auxiliaryModelPatch(null, [aux]) };
+  draft = { ...draft, ...auxiliaryCapabilityPatch(draft.auxiliary, 'summary', true) };
+  const patch = identityConfigPatch(draft, base);
+  assert.deepEqual(Object.keys(patch), ['auxiliary']);
+  await store.updateConfig(patch, { revision: base.revision });
+  store.close(); store = await createAssistantStore({ dataDirectory: directory });
+  const config = await store.getConfig();
+  assert.deepEqual(config.models, [main]);
+  assert.equal(config.cardHtml, '<b>BenchGo</b>');
+  assert.deepEqual(config.auxiliary, draft.auxiliary);
+  const seen = [];
+  const llm = { async *stream(request) { seen.push([request.provider, request.model, request.maxTokens]); yield { type: 'text-delta', text: 'ok' }; yield { type: 'finish', reason: { kind: 'stop' } }; } };
+  for (const capability of ['summary', 'review']) await collectAuxiliaryText({ llm, config, capability, model: main, request: {} });
+  assert.deepEqual(seen, [['Aux/Exact', 'Aux:opaque', 222], ['Main/Exact', 'Main:opaque', 333]]);
+  const disabled = { ...config, ...auxiliaryCapabilityPatch(config.auxiliary, 'summary', false) };
+  assert.deepEqual(disabled.auxiliary.models, [aux]);
+  await store.updateConfig(identityConfigPatch(disabled, config));
+  await collectAuxiliaryText({ llm, config: await store.getConfig(), capability: 'summary', model: main, request: {} });
+  assert.deepEqual(seen.at(-1), ['Main/Exact', 'Main:opaque', 333]);
+  await store.updateConfig(auxiliaryModelPatch(disabled.auxiliary, []));
+  assert.equal((await store.getConfig()).auxiliary, null);
+});

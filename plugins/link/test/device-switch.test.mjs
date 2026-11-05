@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { deviceSwitchItems, deviceSwitchState } from '../client/device-switch.mjs';
-import { readJsonResponse } from '../../commander/client/http-response.mjs';
+import { readJsonResponse } from '../../benchgo/client/http-response.mjs';
 import { deviceIcon, deviceKind, deviceStatus, workbenchUrl } from '../client/device-state.mjs';
 
 const require = createRequire(new URL('../package.json', import.meta.url));

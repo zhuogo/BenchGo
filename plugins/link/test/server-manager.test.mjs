@@ -11,6 +11,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { loadIdentity } from '../src/transport/tls.mjs';
 import { verifyServerWorkbench } from '../src/server/manager.mjs';
 import { createServerManager, fingerprintOf, validateSshInput, shellQuote, redactServerLog, openSshTunnel, execute } from '../src/server/manager.mjs';
+import { bash, requiresBash } from './platform.mjs';
 const key = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs1', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } }).privateKey;
 async function fixture(t, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-server-manager-'));
@@ -34,8 +35,13 @@ test('input validation preserves host values and rejects shell and malformed add
   for (const host of ['a; touch /tmp/pwn', '-oProxyCommand=x', 'https://host', 'a\nlocalhost']) assert.throws(() => validateSshInput({ host, username: 'user' }));
   assert.throws(() => validateSshInput({ host: 'host', username: 'user', port: 65536 }));
   assert.throws(() => validateSshInput({ host: 'host', username: 'user' }, { credentials: true }), /指纹/);
+});
+
+test('shell quoting passes opaque values through a real POSIX shell', requiresBash, () => {
   const input = "a'b $(touch /tmp/not-run)";
-  assert.equal(spawnSync('sh', ['-c', 'printf %s ' + shellQuote(input)], { encoding: 'utf8' }).stdout, input);
+  const result = spawnSync(bash, ['-c', 'printf %s ' + shellQuote(input)], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, input);
 });
 test('probe returns SSH SHA256 fingerprint before attempting any authentication', async t => {
   const f = await fixture(t); const result = await f.manager.probe(f.input);
@@ -82,7 +88,9 @@ test('saved servers reopen offline; disconnect removes private record without de
   const manager = createServerManager({ directory });
   t.after(async () => { await manager.close(); await rm(directory, { recursive: true, force: true }); });
   await assert.rejects(manager.manage({ id: 'device', operation: 'stop' }), /重新连接/);
-  await manager.disconnect('device'); assert.deepEqual(JSON.parse(await readFile(join(directory, 'servers.json'))), []); assert.equal((await stat(join(directory, 'servers.json'))).mode & 0o777, 0o600);
+  await manager.disconnect('device'); assert.deepEqual(JSON.parse(await readFile(join(directory, 'servers.json'))), []);
+  // Windows mode bits do not represent POSIX owner-only permissions.
+  if (process.platform !== 'win32') assert.equal((await stat(join(directory, 'servers.json'))).mode & 0o777, 0o600);
 });
 test('server logs redact credentials, bearer, URL and private JSON fields', () => {
   const text = redactServerLog('Bearer abc-123 https://host/?token=hidden&code=paired {"token":"json-secret","password":"pass"} private-key-value', ['private-key-value']);

@@ -1,0 +1,299 @@
+{
+  "at": "2026-11-04T17:08:17.347Z",
+  "snapshots": [
+    {
+      "sessionId": "01aedf14-fbd5-4904-b27d-0b4e46aa9330",
+      "updatedAt": "2026-11-04T17:06:59.269Z",
+      "compressedBytes": 272415,
+      "decodedBytes": 272415,
+      "counts": {
+        "session": 1,
+        "permission/preset": 1,
+        "sandbox/mode": 1,
+        "approval/policy": 1,
+        "agent/inbox/spliced": 4,
+        "turn/start": 2,
+        "step/start": 14,
+        "system/message": 2,
+        "user/message": 6,
+        "request/header": 2,
+        "request/context": 1,
+        "session/title": 2,
+        "session/title-llm-request": 1,
+        "assistant/message": 14,
+        "tool/call": 38,
+        "tool/result": 38,
+        "step/end": 14,
+        "turn/end": 2,
+        "session/end-seed": 1
+      },
+      "tools": [
+        {
+          "name": "web_search",
+          "hosts": []
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.reuters.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "news.google.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "example.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.apnews.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "feeds.bbci.co.uk"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "apnews.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.bbc.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.aljazeera.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.cnbc.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "news.cgtn.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.thepaper.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.thepaper.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.cnbc.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.reuters.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.yicai.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.jiemian.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "36kr.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinadaily.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.jiemian.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.jiemian.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.yicai.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.jiemian.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.yicai.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinadaily.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.jiemian.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.yicai.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.jiemian.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.jiemian.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.yicai.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinadaily.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.jiemian.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.yicai.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinadaily.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.jiemian.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.yicai.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinadaily.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinadaily.com.cn"
+          ]
+        }
+      ],
+      "eventCount": 145,
+      "transcriptHash": "0c710729be47fb6e222f6bb597b03e89e3be6c7694b59169877c0a0f8846ef21",
+      "toolResultStats": {
+        "total": 38,
+        "markedError": 8,
+        "notMarkedError": 30
+      },
+      "lastEvents": [
+        {
+          "type": "system/message",
+          "seq": 138,
+          "time": 1793811961580
+        },
+        {
+          "type": "user/message",
+          "seq": 139,
+          "time": 1793811961581
+        },
+        {
+          "type": "request/header",
+          "seq": 140,
+          "time": 1793811961585
+        },
+        {
+          "type": "assistant/message",
+          "seq": 141,
+          "time": 1793812018004
+        },
+        {
+          "type": "step/end",
+          "seq": 142,
+          "time": 1793812018006
+        },
+        {
+          "type": "turn/end",
+          "seq": 143,
+          "time": 1793812018008
+        }
+      ]
+    }
+  ]
+}

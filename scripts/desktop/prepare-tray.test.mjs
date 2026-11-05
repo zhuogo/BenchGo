@@ -6,16 +6,17 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
-import { prepareTrayInput, trayLabelsPlugin, prepareDesktopTray, verifyTrayBundle } from './prepare-tray.mjs';
+import { prepareTrayInput, prepareApplicationMenuInput, trayLabelsPlugin, prepareDesktopTray, verifyTrayBundle } from './prepare-tray.mjs';
 import config from './electron-builder.config.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const trayPath = join(root, 'deepseek-harness/apps/desktop/lib/types/tray.js');
+const mainInputPath = join(root, 'deepseek-harness/apps/desktop/lib/types/main.js');
 
 test('upstream tray anchor changes or duplicates stop compilation', async () => {
   const source = await readFile(trayPath, 'utf8');
   assert.ok(prepareTrayInput(source.replaceAll('\n', '\r\n')).includes("id === 'zh-CN' ? '主窗口'"));
-  for (const invalid of [source.replace('messages.openApplication', 'messages.openWindow'), source.replace('this.options.quit();', 'this.options.exit();'), source + source]) {
+  for (const invalid of [source.replace('messages.openApplication', 'messages.openWindow'), source.replace('this.options.quit();', 'this.options.exit();'), source.replace('messages.aboutProduct', 'messages.aboutMenu'), source + source]) {
     assert.throws(() => prepareTrayInput(invalid), /Official tray changed/);
   }
 });
@@ -32,6 +33,20 @@ test('compile transform only accepts the exact official tray input and exactly o
   assert.throws(() => plugin.generateBundle(), /got 2/);
 });
 
+test('application menu uses BenchGo branding and the managed restart path', async () => {
+  const source = await readFile(mainInputPath, 'utf8');
+  const code = prepareApplicationMenuInput(source);
+  assert.equal((code.match(/currentDesktopLocale\(\)\.id === 'zh-CN' \? '关于 BenchGo' : 'About BenchGo'/g) ?? []).length, 2);
+  assert.match(code, /title: locale\.id === 'zh-CN' \? '关于 BenchGo' : 'About BenchGo', message: 'BenchGo'/);
+  assert.match(code, /https:\/\/benchgo\.cn/);
+  assert.doesNotMatch(code, /\{ label: currentDesktopLocale\(\)\.messages\.checkUpdatesMenu/);
+  assert.match(code, /currentDesktopLocale\(\)\.messages\.cliCommandMenu/);
+  assert.equal((code.match(/currentDesktopLocale\(\)\.id === 'zh-CN' \? '重启' : 'Restart'/g) ?? []).length, 1);
+  assert.ok(code.indexOf('currentDesktopLocale().messages.cliCommandMenu') < code.indexOf("currentDesktopLocale().id === 'zh-CN' ? '重启' : 'Restart'"));
+  assert.ok(code.indexOf("currentDesktopLocale().id === 'zh-CN' ? '重启' : 'Restart'") < code.indexOf("{ role: 'quit'"));
+  assert.doesNotMatch(code, /currentDesktopLocale\(\)\.messages\.restartAppHostMenu, click/);
+});
+
 test('the actual main bundle preserves show, quit, relabel and disposal through package mapping', async t => {
   const output = await mkdtemp(join(tmpdir(), 'benchgo-tray-'));
   t.after(() => rm(output, { recursive: true, force: true }));
@@ -40,6 +55,11 @@ test('the actual main bundle preserves show, quit, relabel and disposal through 
   const built = await prepareDesktopTray(root, join(output, 'compiled'));
   const code = await readFile(built, 'utf8');
   verifyTrayBundle(code);
+  assert.match(code, /About BenchGo/);
+  assert.match(code, /https:\/\/benchgo\.cn/);
+  assert.doesNotMatch(code, /messages\.checkUpdatesMenu/);
+  assert.match(code, /messages\.cliCommandMenu/);
+  assert.ok(code.includes('重启') && code.includes('Restart'));
   const section = code.match(/[/][/]#region [^\n]*lib[/]types[/]tray\.js\n([\s\S]*?)[/][/]#endregion/)[1];
   let nativeTray;
   class Tray {
@@ -56,7 +76,7 @@ test('the actual main bundle preserves show, quit, relabel and disposal through 
   assert.equal(nativeTray.menu[0].label, '主窗口');
   assert.equal(nativeTray.menu[1].type, 'separator');
   assert.equal(nativeTray.menu[2].label, '退出');
-  assert.equal(nativeTray.tooltip, 'DeepSeek Harness');
+  assert.equal(nativeTray.tooltip, 'BenchGo');
   nativeTray.events.click(); nativeTray.menu[0].click(); nativeTray.menu[2].click();
   assert.equal(opened, 2); assert.equal(quit, 1);
   locale = { ...locale, id: 'en' }; tray.relabel();
@@ -73,6 +93,7 @@ test('the actual main bundle preserves show, quit, relabel and disposal through 
   await createPackage(app, join(output, 'app.asar'));
   verifyTrayBundle(extractFile(join(output, 'app.asar'), 'lib/main.js').toString('utf8'));
   assert.throws(() => verifyTrayBundle(code.replace('label: id === "zh-CN" ? "主窗口" : "Main Window"', 'label: messages.openApplication')), /missing localized/);
+  assert.throws(() => verifyTrayBundle(code.replace('setToolTip("BenchGo")', 'setToolTip(messages.aboutProduct)')), /missing localized/);
 });
 
 test('formal Windows packaging stages the compiled main inside the app dir only while files are collected', async () => {

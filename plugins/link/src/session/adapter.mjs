@@ -13,6 +13,11 @@ const liveText = stream => (stream ?? []).map(record => record.type === 'text-ch
 export function createSessionAdapter(ctx, _options = {}) {
   const peers = new Map();
   const creates = new Map();
+  const notify = (input, principal) => {
+    const assistant = ctx.get?.('assistant');
+    if (!assistant?.dispatch) throw Object.assign(new Error('SuperAgent 模块不可用，请在 BenchGo 插件中启用'), { status: 503 });
+    return assistant.dispatch(input, { principal });
+  };
   const projects = () => ctx.workspaceRegistry.list();
   const projectOf = id => projects().find(project => project.sessionIds.includes(id));
   const requireSession = id => {
@@ -157,7 +162,21 @@ export function createSessionAdapter(ctx, _options = {}) {
   const handle = async (input, device) => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Expected an object');
     const action = string(input.action, 'action');
-    if (!['state', 'models', 'create', 'history', 'send', 'cancel', 'respond'].includes(action)) throw new Error('Unsupported Link action');
+    if (!['state', 'models', 'create', 'history', 'send', 'cancel', 'respond', 'notifications', 'notificationAck', 'notificationRead'].includes(action)) throw new Error('Unsupported Link action');
+    // Notifications are durable assistant events.  They use the paired
+    // device principal as the delivery target, so a reconnect resumes from
+    // the caller's cursor without treating transport acceptance as receipt.
+    if (['notifications', 'notificationAck', 'notificationRead'].includes(action)) {
+      const principal = { kind: 'owner', deviceId: string(device?.id, 'device id') };
+      if (action === 'notifications') {
+        const result = await notify({ action: 'notificationSync', afterSeq: input.afterSeq || 0, limit: input.limit || 100, threadId: input.threadId, unread: input.unread === true }, principal);
+        const ids = (result.events || []).map(event => event.id).filter(Boolean);
+        if (ids.length) await notify({ action: 'notificationDelivered', eventIds: ids }, principal);
+        return result;
+      }
+      if (action === 'notificationAck') return notify({ action: 'notificationAck', eventIds: input.eventIds || [] }, principal);
+      return notify({ action: 'notificationRead', eventIds: input.eventIds || [] }, principal);
+    }
     const record = await getPeer(device);
     if (action === 'models') return { models: await catalog(record) };
     if (action === 'state') {

@@ -1,5 +1,0 @@
-- insert:
-    - id: commander
-      name: 'benchgo-plugin'
-    - id: commander-link
-      name: 'benchgo-plugin/link-plugin'

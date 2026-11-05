@@ -20,3 +20,28 @@ test('direct native sessions share input receipts and approvals but never contro
   await adapter.dispatch({ action: 'respond', id: 'native:direct', interactionId: 'approval', answer: { allow: true } });
   assert.deepEqual(calls.at(-1), ['direct', 'approval', { allow: true }]);
 });
+
+test('native sessions follow Harness module enable, disable and replacement without retaining the runtime', async () => {
+  let commander;
+  const session = { id: 'direct', ownerSessionId: 'commander-web:project', projectId: 'project', cwd: '/project', provider: 'codex', status: 'running' };
+  const calls = [];
+  const runtime = label => ({ list: () => [session], snapshot: () => session, submit: () => { calls.push(label); return { accepted: true }; } });
+  const adapter = createNativeAdapter({ get: name => name === 'commander' ? commander : undefined, workspaceRegistry: { list: () => [{ id: 'project', path: '/project' }] } });
+  const send = () => adapter.dispatch({ action: 'send', id: 'native:direct', text: 'continue', requestId: 'same' });
+  const unavailable = error => error.status === 503 && /Harness.*不可用/.test(error.message);
+  assert.deepEqual(adapter.list(), []);
+  await assert.rejects(send(), unavailable);
+  commander = runtime('first');
+  assert.equal(adapter.list()[0].id, 'native:direct');
+  await send();
+  commander = undefined;
+  assert.deepEqual(adapter.list(), []);
+  await assert.rejects(send(), unavailable);
+  commander = runtime('replacement');
+  await send();
+  assert.deepEqual(calls, ['first', 'replacement']);
+  session.status = 'disconnected';
+  commander.connect = async () => { commander = undefined; };
+  await assert.rejects(send(), unavailable);
+  assert.deepEqual(calls, ['first', 'replacement'], 'unloading during connection never submits through a stale runtime');
+});

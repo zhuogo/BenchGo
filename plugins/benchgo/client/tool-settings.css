@@ -1,0 +1,128 @@
+.cmd-tool-settings { color: var(--dsw-alias-label-primary, inherit); font-size: 13px; min-width: 0; }
+.cmd-tool-heading, .cmd-tool-detail-heading, .cmd-tool-config-heading, .cmd-tool-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.cmd-tool-heading { margin-bottom: 20px; align-items: flex-start; }
+.cmd-tool-heading h2 { font-size: 19px; font-weight: 600; margin: 0; }
+.cmd-tool-heading p { margin-top: 7px; }
+.cmd-tool-heading p, .cmd-tool-hint, .cmd-tool-footer > span { margin: 0; font-size: 12px; line-height: 1.65; color: var(--dsw-alias-label-secondary, #888); }
+.cmd-tool-workbench { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.cmd-tool-tabs { display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0; padding: 0 0 13px; overflow-x: auto; scrollbar-width: none; cursor: grab; user-select: none; touch-action: pan-x pan-y; border-bottom: 1px solid var(--dsw-alias-border-l1, #8882); }
+.cmd-tool-tabs::-webkit-scrollbar { display: none; }
+.cmd-tool-tabs[data-dragging=true], .cmd-tool-tabs[data-dragging=true] > button { cursor: grabbing; }
+.cmd-tool-tabs[data-dragging=true] .cmd-tool-tab-name { transition: none; }
+.cmd-tool-tabs > button { position: relative; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; box-sizing: border-box; min-width: 40px; min-height: 42px; padding: 10px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: inherit; font: inherit; cursor: pointer; transition: background 160ms ease, border-color 160ms ease; }
+.cmd-tool-tabs > button:hover, .cmd-tool-tabs > button:focus-visible { background: var(--dsw-alias-interactive-bg-hover, #8881); }
+.cmd-tool-tabs > button[aria-selected=true] { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4d6bfe) 8%, transparent); border-color: transparent; }
+.cmd-tool-tab-name { display: inline-block; box-sizing: border-box; max-width: 0; overflow: hidden; opacity: 0; white-space: nowrap; font-size: 12px; font-weight: 550; transition: max-width 220ms ease, opacity 170ms ease, padding 220ms ease; }
+.cmd-tool-tabs > button:hover .cmd-tool-tab-name, .cmd-tool-tabs > button:focus-visible .cmd-tool-tab-name { max-width: 170px; padding-left: 9px; opacity: 1; }
+.cmd-tool-brand[data-muted] { filter: grayscale(1); opacity: .55; }
+.cmd-tool-detail { min-width: 0; animation: cmd-tool-enter 150ms ease both; }
+.cmd-tool-detail h3 { display: flex; align-items: center; gap: 9px; margin: 0 0 9px; font-size: 17px; font-weight: 600; }
+.cmd-tool-detail-heading { align-items: flex-start; margin-bottom: 12px; }
+.cmd-tool-badges { display: flex; flex-wrap: wrap; gap: 5px; }
+.cmd-tool-badges span { padding: 3px 6px; font-size: 10px; color: var(--dsw-alias-label-secondary, #888); border-radius: 4px; background: var(--dsw-alias-interactive-bg-hover, #8881); }
+.cmd-tool-badges span[data-ready=true] { color: var(--dsw-alias-status-success, #398361); }
+.cmd-tool-install-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.cmd-tool-button, .cmd-tool-icon { color: inherit; background: transparent; border: 1px solid var(--dsw-alias-border-l1, #8883); border-radius: 6px; min-height: 32px; padding: 6px 10px; font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; transition: background 140ms ease; }
+.cmd-tool-button:hover:not(:disabled), .cmd-tool-icon:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, #8882); }
+.cmd-tool-button:disabled, .cmd-tool-icon:disabled, .cmd-tool-select:disabled { opacity: .45; cursor: default; }
+.cmd-tool-icon { display: grid; place-items: center; padding: 7px; border: 0; }
+.cmd-tool-primary { background: var(--dsw-alias-interactive-bg-active, #8882); font-weight: 550; }
+.cmd-tool-detail { width: 100%; }
+.cmd-tool-editor { margin-top: 27px; padding-top: 21px; border-top: 1px solid var(--dsw-alias-border-l1, #8882); }
+.cmd-tool-config { min-width: 0; }
+.cmd-tool-native-status { display: flex; align-items: flex-start; gap: 8px; padding: 12px 0 4px; color: var(--dsw-alias-label-secondary, #888); }
+.cmd-tool-native-status > .cmd-ui-icon { flex: none; margin-top: 2px; color: var(--dsw-alias-status-success, #398361); }
+.cmd-tool-native-status strong { font-size: 12px; font-weight: 500; color: var(--dsw-alias-label-primary, inherit); }
+.cmd-tool-native-status p { margin: 5px 0 0; font-size: 11px; line-height: 1.7; }
+.cmd-tool-paths { margin-top: 10px; color: var(--dsw-alias-label-secondary, #888); font-size: 11px; }
+.cmd-tool-paths summary { cursor: pointer; padding: 3px 0; }
+.cmd-tool-paths p { display: flex; gap: 12px; margin: 9px 0; line-height: 1.7; }
+.cmd-tool-paths p > span { flex: none; min-width: 82px; }
+.cmd-tool-paths code { min-width: 0; overflow-wrap: anywhere; font: inherit; font-family: var(--dsw-font-family-code, ui-monospace, monospace); }
+.cmd-tool-subscription { margin-top: 20px; padding: 0; border-radius: 0; background: transparent; }
+.cmd-tool-subscription strong { font-size: 12px; font-weight: 550; }
+.cmd-tool-subscription p { margin: 6px 0; color: var(--dsw-alias-label-secondary, #888); font-size: 11px; line-height: 1.7; }
+.cmd-tool-subscription > span { display: inline-block; margin: 4px 8px 0 0; font-size: 11px; }
+.cmd-tool-quick-settings { margin-top: 22px; }
+.cmd-tool-quick-settings fieldset { margin: 0 0 21px; padding: 0; border: 0; min-width: 0; }
+.cmd-tool-quick-settings legend { padding: 0; font-size: 12px; font-weight: 600; }
+.cmd-tool-quick-field { min-width: 0; }
+.cmd-tool-quick-field > .cmd-tool-hint { margin-top: 7px; font-size: 11px; }
+.cmd-tool-config-heading { margin-bottom: 8px; }
+.cmd-tool-config h4 { font-size: 13px; font-weight: 600; margin: 0; }
+.cmd-tool-link { color: var(--dsw-alias-label-secondary, #888); border: 0; padding: 3px 0; background: transparent; font: inherit; font-size: 11px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.cmd-tool-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cmd-tool-field { display: flex; flex-direction: column; gap: 7px; margin-top: 15px; min-width: 0; }
+.cmd-tool-field > span { font-size: 12px; font-weight: 500; }
+.cmd-tool-field small, .cmd-tool-advanced small, .cmd-tool-backups small { color: var(--dsw-alias-label-secondary, #888); font-size: 10px; font-weight: normal; margin-left: 5px; }
+.cmd-tool-field > input, .cmd-tool-select, .cmd-tool-advanced textarea { width: 100%; box-sizing: border-box; min-width: 0; border: 1px solid var(--dsw-alias-border-l1, #8883); border-radius: 6px; background: transparent; color: inherit; padding: 8px 10px; font: inherit; font-size: 12px; }
+.cmd-tool-select-anchor { display: flex; width: 100%; min-width: 0; }
+.cmd-tool-select { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 35px; text-align: left; cursor: pointer; }
+.cmd-tool-select > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cmd-tool-select-menu { min-width: 230px; max-width: min(360px, 90vw); }
+.cmd-tool-select-menu input { border: 0; border-radius: 5px; background: var(--dsw-alias-interactive-bg-hover, #8881); color: inherit; padding: 8px; margin: 4px; font: inherit; font-size: 12px; outline: 0; }
+.cmd-tool-select-menu button { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 9px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.cmd-tool-select-menu button:hover, .cmd-tool-select-menu button[data-selected=true] { background: var(--dsw-alias-interactive-bg-hover, #8881); }
+.cmd-tool-select-menu p { padding: 9px; font-size: 12px; opacity: .6; }
+.cmd-tool-advanced, .cmd-tool-backups { margin-top: 20px; }
+.cmd-tool-advanced summary, .cmd-tool-backups summary, .cmd-tool-job summary { cursor: pointer; padding: 5px 0; font-size: 12px; }
+.cmd-tool-advanced .cmd-tool-hint { margin: 7px 0; }
+.cmd-tool-advanced textarea { min-height: 175px; resize: vertical; font-family: var(--dsw-font-family-code, ui-monospace, monospace); line-height: 1.65; }
+.cmd-tool-footer { margin-top: 17px; }
+.cmd-tool-job { margin-top: 20px; padding: 12px 0; border: 0; border-radius: 0; }
+.cmd-tool-job > div:first-child { display: flex; align-items: center; gap: 9px; font-size: 12px; }
+.cmd-tool-job > div:first-child > span { flex: 1; color: var(--dsw-alias-label-secondary, #888); }
+.cmd-tool-job pre { font-size: 11px; line-height: 1.6; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cmd-tool-progress { height: 2px; margin-top: 12px; overflow: hidden; border-radius: 2px; background: var(--dsw-alias-interactive-bg-hover, #8882); }
+.cmd-tool-progress > span { display: block; height: 100%; width: 35%; background: currentColor; opacity: .5; animation: cmd-tool-progress 1.5s ease-in-out infinite; }
+.cmd-tool-error { color: var(--dsw-alias-status-error, #bd5353); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.cmd-tool-notice { color: var(--dsw-alias-status-success, #398361); font-size: 12px; }
+.cmd-tool-empty { margin: 20px 0; color: var(--dsw-alias-label-secondary, #888); font-size: 12px; line-height: 1.7; }
+.cmd-tool-modal { width: min(590px, 100%); background:var(--dsw-alias-bg-layer-2,#fff); color:var(--dsw-alias-label-primary,#222); }
+.cmd-tool-preview > div, .cmd-tool-backups > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; }
+.cmd-tool-preview code { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.cmd-tool-preview span { white-space: nowrap; font-size: 11px; color: var(--dsw-alias-label-secondary, #888); }
+.cmd-tool-preview p { font-size: 12px; line-height: 1.7; }
+.cmd-tool-settings button:focus-visible, .cmd-tool-settings input:focus-visible, .cmd-tool-settings textarea:focus-visible { outline: 2px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4d6bfe) 60%, transparent); outline-offset: 2px; }
+@keyframes cmd-tool-enter { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes cmd-tool-progress { from { transform: translateX(-100%); } to { transform: translateX(390%); } }
+@media (max-width: 680px) { .cmd-tool-workbench { gap: 20px; } .cmd-tool-tabs { gap: 2px; } .cmd-tool-tabs > button { padding: 9px; min-width: 38px; } .cmd-tool-fields { grid-template-columns: 1fr; gap: 0; } .cmd-tool-detail-heading, .cmd-tool-footer { flex-wrap: wrap; } }
+@media (prefers-reduced-motion: reduce) { .cmd-tool-detail, .cmd-tool-progress > span { animation: none; } .cmd-tool-settings button, .cmd-tool-tab-name { transition: none; } }
+.cmd-tool-current-provider{display:flex;align-items:center;gap:14px;padding:13px 14px;margin:12px 0 3px;border-radius:10px;background:var(--dsw-alias-interactive-bg-hover,#8881)}
+.cmd-tool-route-status{display:inline-flex;align-items:center;gap:4px;flex:none;font-size:11px;color:var(--dsw-alias-state-business-primary,#4d6bfe)}
+.cmd-tool-current-provider>div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.cmd-tool-current-provider strong{font-size:13px;font-weight:550;overflow-wrap:anywhere}
+.cmd-tool-current-provider small{font-size:12px;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary,#888)}
+.cmd-tool-config-heading>span{font-size:11px;color:var(--dsw-alias-label-secondary,#888)}
+.cmd-tool-native-sync{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin-top:18px}
+.cmd-tool-native-sync>small{font-size:11px;color:var(--dsw-alias-label-secondary,#888)}
+.cmd-tool-advanced>.cmd-tool-advanced{margin-top:12px}
+.cmd-tool-config>.cmd-tool-advanced{padding-top:12px;border-top:1px solid var(--dsw-alias-border-l1,#8882)}
+.cmd-tool-select{border-color:transparent;border-radius:9px;background:var(--dsw-alias-interactive-bg-hover,#8881);min-height:39px;transition:background 160ms}
+.cmd-tool-select:hover:not(:disabled),.cmd-tool-select[aria-expanded=true]{background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4d6bfe) 7%,transparent)}
+.cmd-tool-select-menu{border-radius:11px;padding:6px;scrollbar-width:none}
+.cmd-tool-select-menu::-webkit-scrollbar{display:none}
+.cmd-tool-select-menu button{border-radius:7px;margin:2px 0;min-height:36px}
+.cmd-tool-select-menu button[data-selected=true]{color:var(--dsw-alias-state-business-primary,#4d6bfe);background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4d6bfe) 9%,transparent)}
+.cmd-tool-select-menu input{background:transparent}
+/* The shared Menu inserts a viewport between the portal card and options. */
+.cmd-tool-select-menu{min-width:260px;padding:6px!important;background:var(--dsw-alias-bg-layer-2,#fff);color:var(--dsw-alias-label-primary,#222);border-radius:12px!important;border:1px solid var(--dsw-alias-border-l1,#8882);box-shadow:0 12px 40px #00000014,0 2px 8px #00000008;animation:cmd-tool-enter 160ms ease both}
+.cmd-tool-select-menu input{display:block;appearance:none;box-sizing:border-box;width:calc(100% - 8px);padding:10px;margin:4px 4px 7px;border:0!important;outline:0!important;box-shadow:none!important;border-radius:7px;background:transparent;color:inherit;font:inherit;font-size:12px;line-height:20px}
+.cmd-tool-select-menu button{appearance:none;box-sizing:border-box;min-height:38px;padding:10px 12px;gap:16px;font-size:12px;line-height:18px;transition:background 140ms,color 140ms}
+.cmd-tool-select-menu button>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmd-tool-select-menu button:focus-visible{outline:0;background:var(--dsw-alias-interactive-bg-hover,#8881)}
+.cmd-tool-select-menu [role=presentation]{scrollbar-width:none;overscroll-behavior:contain}
+.cmd-tool-select-menu [role=presentation]::-webkit-scrollbar{display:none}
+.cmd-tool-select[aria-expanded=true]>.cmd-ui-icon{transform:rotate(180deg)}
+.cmd-tool-select>.cmd-ui-icon{transition:transform 180ms ease;flex:none}
+@media(prefers-reduced-motion:reduce){.cmd-tool-select-menu{animation:none}.cmd-tool-select-menu button,.cmd-tool-select>.cmd-ui-icon{transition:none}}
+
+.cmd-tool-option-label{display:flex;align-items:center;gap:9px;min-width:0}
+.cmd-tool-option-label>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmd-tool-select-menu button>.cmd-ui-icon{flex:none}
+
+.cmd-tool-settings .bg-ui-disclosure-trigger { font-size: 13px; min-height: 44px; }
+.cmd-tool-settings .bg-ui-disclosure-inner { padding-inline: 0; }
+.cmd-tool-tab-name { max-width: 170px; padding-left: 8px; opacity: 1; }
+.cmd-tool-heading, .cmd-tool-config-heading, .cmd-tool-footer { border: 0; border-radius: 0; background: transparent; }
+@media (max-width: 680px) { .cmd-tool-footer { align-items: flex-start; gap: 12px; } .cmd-tool-footer > .bg-ui-button { margin-left: auto; } }

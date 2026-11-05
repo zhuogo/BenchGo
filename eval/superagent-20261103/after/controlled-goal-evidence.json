@@ -1,0 +1,195 @@
+{
+  "goal": {
+    "id": "c2309d6a-7e3d-442d-b3c3-1628d6315695",
+    "budgetGoalId": "e6b5930cfa96292c3bdb50308b30f5890e09e93a653604e6ec9270e277355dbf",
+    "requestId": "[\"goal-form\",\"96998734-466f-4b12-9dc3-92ca3f8b98f4\",\"eval-goal\"]",
+    "requestFingerprint": "e62b8f01bdda5d31e608d5deed36c804d844fbf2abd00a9e6ef74b6f37470790",
+    "inputFingerprint": "3c10d2df27cb8491a0158b50989dac7b3f2bebf4a912bc623b9e7d21145d70e6",
+    "executionKind": "ticket",
+    "ticketIds": [
+      "50e70385-9849-418d-8ef5-9d6108a4de25"
+    ],
+    "ticketRevisions": {
+      "50e70385-9849-418d-8ef5-9d6108a4de25": 1
+    },
+    "ownerSessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4",
+    "status": "active",
+    "title": "计算并给出结果",
+    "objective": "计算并给出结果",
+    "acceptance": "Worker response contains BENCHGO_OK and has transcript evidence.",
+    "scope": null,
+    "budget": {
+      "requests": 8
+    },
+    "projectId": "8baa4fe9-3b8c-4fcd-99c0-f6052964fa38",
+    "provider": "assistant-smoke",
+    "model": "Eval/Route:2026-11+Opaque",
+    "text": "Reply exactly BENCHGO_OK without tools.",
+    "threadId": "main",
+    "parentGoalId": null,
+    "childGoalIds": [],
+    "nextStep": "verify",
+    "createdAt": "2026-11-03T11:23:59.634Z",
+    "updatedAt": "2026-11-03T11:23:59.738Z",
+    "rowVersion": 2,
+    "waitReason": null
+  },
+  "ticket": {
+    "id": "50e70385-9849-418d-8ef5-9d6108a4de25",
+    "threadId": "desktop:96998734-466f-4b12-9dc3-92ca3f8b98f4",
+    "target": "Reply exactly BENCHGO_OK without tools.",
+    "acceptance": "Worker response contains BENCHGO_OK and has transcript evidence.",
+    "instructionRevision": 1,
+    "status": "completed",
+    "pauseReason": null,
+    "mandate": {
+      "actorId": "desktop-owner",
+      "source": {
+        "channel": "desktop",
+        "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4",
+        "messageId": "goal-form:eval-goal",
+        "threadId": "main"
+      },
+      "instruction": "{\"requestId\":\"eval-goal\",\"objective\":\"计算并给出结果\",\"projectId\":\"8baa4fe9-3b8c-4fcd-99c0-f6052964fa38\",\"provider\":\"assistant-smoke\",\"model\":\"Eval/Route:2026-11+Opaque\",\"text\":\"Reply exactly BENCHGO_OK without tools.\",\"acceptance\":\"Worker response contains BENCHGO_OK and has transcript evidence.\",\"budget\":{\"requests\":8}}",
+      "policyVersion": "33ebb06ed79a635203e3df939a402e7b682b288efb8da76b80887cd493604e77",
+      "admission": "desktop-approved-delegation",
+      "controlledActions": "require-current-policy-and-harness-approval",
+      "project": {
+        "id": "8baa4fe9-3b8c-4fcd-99c0-f6052964fa38",
+        "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project"
+      }
+    },
+    "createdByDecision": "3ae8ed51-b1ee-4f0a-bc77-483b922224d3",
+    "createdAt": "2026-11-03T11:23:59.493Z",
+    "updatedAt": "2026-11-03T11:24:14.931Z",
+    "resultVersion": 1,
+    "revisions": [],
+    "assignments": [
+      {
+        "id": "desktop:a56f9debc345f767df00ec6bfafaef1b8189bf73c3a977f33961d4de2d08508a",
+        "ticketId": "50e70385-9849-418d-8ef5-9d6108a4de25",
+        "executor": "harness",
+        "model": {
+          "providerId": "assistant-smoke",
+          "modelId": "Eval/Route:2026-11+Opaque"
+        },
+        "text": "Reply exactly BENCHGO_OK without tools.",
+        "acceptance": "Worker response contains BENCHGO_OK and has transcript evidence.",
+        "instructionRevision": 1,
+        "executionStopped": {
+          "owner": "assignment-worker-505b821e-8fb1-478c-87a8-c76f78c7195b",
+          "fence": 1,
+          "at": "2026-11-03T11:24:11.136Z"
+        },
+        "state": "completed",
+        "priority": 0,
+        "owner": null,
+        "leaseUntil": null,
+        "fence": 1,
+        "attempts": 1,
+        "createdAt": "2026-11-03T11:23:59.477Z",
+        "updatedAt": "2026-11-03T11:24:14.931Z"
+      }
+    ],
+    "attentions": [],
+    "results": [
+      {
+        "summary": "BENCHGO_OK",
+        "transcript": {
+          "lastSeq": 23,
+          "hash": "92044011a4e21a78a54d5a6a8c948256e8c524712700a330e3b71a02f382745c"
+        },
+        "toolEvidence": {
+          "entries": [],
+          "total": 0,
+          "omitted": 0,
+          "failedCount": 0,
+          "truncated": false
+        },
+        "evidenceRefs": [
+          {
+            "sessionId": "607fb985-b642-4e45-b909-134815a0b69e",
+            "runId": "90be49d5-8e13-4383-8dcb-5dbf5d9c77b4"
+          }
+        ],
+        "sessionId": "607fb985-b642-4e45-b909-134815a0b69e",
+        "runId": "90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+        "directory": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project\\.agents\\worktrees\\benchgo-90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+        "remainingExecutionMs": 590873,
+        "environment": {
+          "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project\\.agents\\worktrees\\benchgo-90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+          "branch": "benchgo-90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+          "baseCommit": "e0764cfb352e295b716a4ee63d9eb109399acc8b",
+          "repositoryRoot": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project"
+        },
+        "checkpoint": {
+          "version": 1,
+          "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project\\.agents\\worktrees\\benchgo-90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+          "repositoryRoot": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project",
+          "commonDir": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project\\.git",
+          "branch": "benchgo-90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+          "baseCommit": "e0764cfb352e295b716a4ee63d9eb109399acc8b",
+          "head": "e0764cfb352e295b716a4ee63d9eb109399acc8b",
+          "indexHash": "d348c308c584d31d3e0540fe1592884eee558df405cca1b742faa354b5b32a88",
+          "files": 1,
+          "bytes": 31,
+          "manifestHash": "ef61c070ecd43448d9cf2a3b1d54177b600bfa25639c7d75d3ef47c3eb8f9349"
+        },
+        "review": {
+          "verdict": "passed",
+          "reason": "Controlled fixture: worker transcript contains BENCHGO_OK.",
+          "routing": {
+            "configRevision": 3,
+            "capability": "review",
+            "auxiliary": false,
+            "switched": false,
+            "attempts": [
+              {
+                "providerId": "assistant-smoke",
+                "modelId": "Eval/Route:2026-11+Opaque",
+                "retry": 0,
+                "status": "completed"
+              }
+            ]
+          },
+          "inputHash": "1dab546527ff37fba8e8e9eef96f713e41235cde4d88bd1d9826efcb36fecac6"
+        },
+        "ticketId": "50e70385-9849-418d-8ef5-9d6108a4de25",
+        "instructionRevision": 1,
+        "version": 1,
+        "committedAt": "2026-11-03T11:24:14.931Z"
+      }
+    ],
+    "deliveries": [
+      {
+        "id": "0624c20c-912c-4456-b290-ff814dbe8295",
+        "uniqueKey": "assignment-result:desktop:a56f9debc345f767df00ec6bfafaef1b8189bf73c3a977f33961d4de2d08508a:90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+        "ticketId": "50e70385-9849-418d-8ef5-9d6108a4de25",
+        "payload": {
+          "type": "ticket.result",
+          "source": {
+            "channel": "desktop",
+            "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4",
+            "messageId": "goal-form:eval-goal",
+            "threadId": "main"
+          },
+          "text": "已完成：Reply exactly BENCHGO_OK without tools.\nBENCHGO_OK\n验收：Controlled fixture: worker transcript contains BENCHGO_OK.",
+          "evidenceRefs": [
+            {
+              "sessionId": "607fb985-b642-4e45-b909-134815a0b69e",
+              "runId": "90be49d5-8e13-4383-8dcb-5dbf5d9c77b4"
+            }
+          ]
+        },
+        "state": "sent",
+        "attempts": 1,
+        "nextAt": 1793705054931,
+        "owner": null,
+        "leaseUntil": null,
+        "sentAt": "2026-11-03T11:24:15.652Z",
+        "lastError": null,
+        "createdAt": "2026-11-03T11:24:14.931Z"
+      }
+    ]
+  }
+}

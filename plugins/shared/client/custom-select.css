@@ -4,10 +4,12 @@
 .dowork-select:focus-visible{outline:2px solid color-mix(in srgb,var(--picker-accent) 65%,transparent);outline-offset:2px}
 .dowork-select:disabled{cursor:default;opacity:.45}
 .dowork-select-value{display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}
+.dowork-select-label{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dowork-select-value> :not(.dowork-select-label){flex:none}
 .dowork-select-value[data-placeholder]{color:var(--picker-muted)}
 .dowork-select-chevron{flex:none;width:6px;height:6px;margin:0 2px 3px 0;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);opacity:.55;transition:transform 140ms}
 .dowork-select[aria-expanded=true] .dowork-select-chevron{transform:translateY(3px) rotate(225deg)}
-.dowork-select-popup{z-index:10000;display:flex;flex-direction:column;padding:5px;border:1px solid var(--picker-border);border-radius:11px;background:var(--picker-paper);box-shadow:0 12px 32px #0002,0 2px 8px #0000000d;outline:none;overscroll-behavior:contain}
+@keyframes dowork-select-open{from{opacity:0;transform:translateY(-4px) scale(.985)}to{opacity:1;transform:none}}
+.dowork-select-popup{animation:dowork-select-open 180ms cubic-bezier(.2,.8,.2,1);z-index:10000;display:flex;flex-direction:column;padding:5px;border:1px solid var(--picker-border);border-radius:11px;background:var(--picker-paper);box-shadow:0 12px 32px #0002,0 2px 8px #0000000d;outline:none;overscroll-behavior:contain}
 .dowork-select-options{min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
 .dowork-select-option{display:flex;align-items:center;gap:8px;min-height:36px;padding:8px 9px;box-sizing:border-box;border-radius:6px;cursor:pointer;line-height:1.4;user-select:none}
 .dowork-select-option>span:not(.dowork-select-check){flex:1;min-width:0;overflow-wrap:anywhere}
@@ -18,4 +20,4 @@
 .dowork-select-popup input.dowork-select-search{flex:none;width:100%;box-sizing:border-box;min-height:35px;margin:0 0 4px;padding:7px 9px;border:0;border-bottom:1px solid var(--picker-border);border-radius:0;background:transparent;color:var(--picker-ink);outline:none;box-shadow:none;font:inherit;font-size:12px}
 .dowork-select-empty{margin:0;padding:12px 9px;color:var(--picker-muted);font-size:12px}
 @media(pointer:coarse){.dowork-select,.dowork-select-option{min-height:44px}}
-@media(prefers-reduced-motion:reduce){.dowork-select,.dowork-select-chevron{transition:none}}
+@media(prefers-reduced-motion:reduce){.dowork-select-popup{animation:none}.dowork-select,.dowork-select-chevron{transition:none}}

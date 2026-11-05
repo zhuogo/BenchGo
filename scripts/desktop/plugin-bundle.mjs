@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-const helperBase = existsSync(fileURLToPath(new URL('./shared/plugin-install.mjs', import.meta.url))) ? './shared/' : '../../plugins/commander/shared/';
+const helperBase = existsSync(fileURLToPath(new URL('./shared/plugin-install.mjs', import.meta.url))) ? './shared/' : '../../plugins/benchgo/shared/';
 const { activateRelease, getInstallState, prepareRelease, releaseBundleName } = await import(new URL(`${helperBase}plugin-install.mjs`, import.meta.url));
 const { compareVersions } = await import(new URL(`${helperBase}update-feed.mjs`, import.meta.url));
 
@@ -28,7 +28,7 @@ function findPackage(name, from) {
 function sharedPackage(name) { return name.startsWith('@deepseek-ai/'); }
 
 /** Copy published plugin files and required JS dependencies without duplicating Cordis or official services. */
-export function stagePluginBundle({ runtime, output, plugin = resolve(import.meta.dirname, '../../plugins/commander'), platform = process.platform, arch = process.arch }) {
+export function stagePluginBundle({ runtime, output, plugin = resolve(import.meta.dirname, '../../plugins/benchgo'), platform = process.platform, arch = process.arch }) {
   runtime = runtime ? resolve(runtime) : null; plugin = resolve(plugin);
   const manifest = readJson(join(plugin, 'package.json'));
   if (!['benchgo', 'benchgo-plugin'].includes(manifest.name) || !manifest.dsh?.bundle?.patch) throw new Error('Plus bundle: expected the BenchGo bundle package');
@@ -45,7 +45,7 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
   const packed = spawnSync(npm, ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: plugin, encoding: 'utf8', shell: process.platform === 'win32' });
   if (packed.status !== 0) throw new Error(`Plus bundle: npm pack failed: ${packed.stderr}`);
   const files = JSON.parse(packed.stdout)[0].files.map(file => file.path);
-  for (const required of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'voice/src/plugin.mjs', 'cordis.patch.yml']) {
+  for (const required of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'cordis.patch.yml']) {
     if (!files.includes(required) || !existsSync(join(plugin, required))) throw new Error(`Plus bundle: missing built file ${required}; run build:plus first`);
   }
   const shared = new Map();
@@ -106,8 +106,9 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
     writeJson(join(composition, 'package.json'), {
       name: bundleName, displayName: 'BenchGo', version: manifest.version, private: true, type: 'module', license: 'MIT',
       dependencies: { [manifest.name]: manifest.version }, dsh: { bundle: { patch: './cordis.patch.yml' } },
-      exports: { './package.json': './package.json', './locale/*.json': './locale/*.json' },
+      exports: { './package.json': './package.json', './locale/*.json': './locale/*.json', './icon': './icon.svg' },
     });
+    copyFileSync(join(plugin, 'assets/icon.svg'), join(composition, 'icon.svg'));
     copyFileSync(join(plugin, 'cordis.patch.yml'), join(composition, 'cordis.patch.yml'));
     if (existsSync(join(plugin, 'locale'))) cpSync(join(plugin, 'locale'), join(composition, 'locale'), { recursive: true });
     else {

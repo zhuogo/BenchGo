@@ -81,7 +81,16 @@ tasks.register('prepareLinkAssets') {
         copy { from seed; into new File(out, 'server'); rename 'server-seed.tar.gz', 'server-seed.bundle' }
     }
 }
+tasks.register('prepareBenchGoBrand', Exec) {
+    def repositoryRoot = file('../../../../..')
+    def generator = new File(repositoryRoot, 'plugins/link/mobile/scripts/prepare-brand.mjs')
+    inputs.files(new File(repositoryRoot, 'assets/brand/benchgo-app.svg'), new File(repositoryRoot, 'assets/brand/benchgo-mark.svg'), generator)
+    outputs.files(fileTree('src/main/res') { include 'mipmap-*/ic_benchgo.png', 'drawable-nodpi/ic_benchgo*_art.png', 'values/colors.xml' })
+    workingDir repositoryRoot
+    commandLine 'node', generator.absolutePath
+}
 preBuild.dependsOn(tasks.named('prepareLinkAssets'))
+preBuild.dependsOn(tasks.named('prepareBenchGoBrand'))
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.15.0'

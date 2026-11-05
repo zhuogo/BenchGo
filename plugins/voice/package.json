@@ -1,0 +1,9 @@
+{
+  "name": "@benchgo/voice",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "BenchGo dictation, speech and realtime voice",
+  "license": "MIT",
+  "main": "src/plugin.mjs"
+}

@@ -1,0 +1,187 @@
+{
+  "goal": {
+    "id": "b23000c3-d9c0-481c-8c17-6c8384b6963b",
+    "budgetGoalId": "ab364d4244465cc6ce13557e67250ecaec6a61f284ba001d560b9bdbcce4b126",
+    "requestId": "[\"goal-form\",\"416d4ce3-1929-4c43-86f7-f3ab6a24c436\",\"eval-goal\"]",
+    "requestFingerprint": "7c0b480f0c8ec09eec5b0d2264a750c960bf4fe44e72ab1fa3da21242a8954e0",
+    "inputFingerprint": "b2f7370621a9338927f9994d6aacfebf9035ffe1ab2376b1f0baf6f8f80cffa5",
+    "executionKind": "ticket",
+    "ticketIds": [
+      "3351b8fb-9e59-4f10-8777-5215485f2f25"
+    ],
+    "ticketRevisions": {
+      "3351b8fb-9e59-4f10-8777-5215485f2f25": 1
+    },
+    "ownerSessionId": "416d4ce3-1929-4c43-86f7-f3ab6a24c436",
+    "status": "active",
+    "title": "计算并给出结果",
+    "objective": "计算并给出结果",
+    "acceptance": "Worker response contains BENCHGO_OK and has transcript evidence.",
+    "scope": null,
+    "budget": {
+      "requests": 8
+    },
+    "projectId": "ac49dce3-0936-411e-bc5f-45ffd703499c",
+    "provider": "assistant-smoke",
+    "model": "Eval/Route:2026-11+Opaque",
+    "text": "Reply exactly BENCHGO_OK without tools.",
+    "threadId": "main",
+    "parentGoalId": null,
+    "childGoalIds": [],
+    "nextStep": "verify",
+    "createdAt": "2026-11-03T10:47:12.263Z",
+    "updatedAt": "2026-11-03T10:47:12.269Z",
+    "rowVersion": 2,
+    "waitReason": null
+  },
+  "ticket": {
+    "id": "3351b8fb-9e59-4f10-8777-5215485f2f25",
+    "threadId": "desktop:416d4ce3-1929-4c43-86f7-f3ab6a24c436",
+    "target": "Reply exactly BENCHGO_OK without tools.",
+    "acceptance": "Worker response contains BENCHGO_OK and has transcript evidence.",
+    "instructionRevision": 1,
+    "status": "completed",
+    "pauseReason": null,
+    "mandate": {
+      "actorId": "desktop-owner",
+      "source": {
+        "channel": "desktop",
+        "sessionId": "416d4ce3-1929-4c43-86f7-f3ab6a24c436",
+        "messageId": "goal-form:eval-goal",
+        "threadId": "main"
+      },
+      "instruction": "{\"requestId\":\"eval-goal\",\"objective\":\"计算并给出结果\",\"projectId\":\"ac49dce3-0936-411e-bc5f-45ffd703499c\",\"provider\":\"assistant-smoke\",\"model\":\"Eval/Route:2026-11+Opaque\",\"text\":\"Reply exactly BENCHGO_OK without tools.\",\"acceptance\":\"Worker response contains BENCHGO_OK and has transcript evidence.\",\"budget\":{\"requests\":8}}",
+      "policyVersion": "8cd436c664886710e2014dcf9abbeed92d02577e71dd7323d0d65ef09c6c5787",
+      "admission": "desktop-approved-delegation",
+      "controlledActions": "require-current-policy-and-harness-approval",
+      "project": {
+        "id": "ac49dce3-0936-411e-bc5f-45ffd703499c",
+        "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-tMUuJ7\\eval-project"
+      }
+    },
+    "createdByDecision": "7697b020-f7d0-4f7e-a912-5b8ba08ca6c5",
+    "createdAt": "2026-11-03T10:47:12.255Z",
+    "updatedAt": "2026-11-03T10:47:25.047Z",
+    "resultVersion": 1,
+    "revisions": [],
+    "assignments": [
+      {
+        "id": "desktop:4dd150e25e184bb3b9be73506f3af27768bd75dce2724cc9ce87d1794fbd9bf9",
+        "ticketId": "3351b8fb-9e59-4f10-8777-5215485f2f25",
+        "executor": "harness",
+        "model": {
+          "providerId": "assistant-smoke",
+          "modelId": "Eval/Route:2026-11+Opaque"
+        },
+        "text": "Reply exactly BENCHGO_OK without tools.",
+        "acceptance": "Worker response contains BENCHGO_OK and has transcript evidence.",
+        "instructionRevision": 1,
+        "executionStopped": {
+          "owner": "assignment-worker-40981975-fed3-4df2-80ee-d8e086f6b437",
+          "fence": 1,
+          "at": "2026-11-03T10:47:21.091Z"
+        },
+        "state": "completed",
+        "priority": 0,
+        "owner": null,
+        "leaseUntil": null,
+        "fence": 1,
+        "attempts": 1,
+        "createdAt": "2026-11-03T10:47:12.254Z",
+        "updatedAt": "2026-11-03T10:47:25.047Z"
+      }
+    ],
+    "attentions": [],
+    "results": [
+      {
+        "summary": "BENCHGO_OK",
+        "transcript": {
+          "lastSeq": 23,
+          "hash": "1651d69fe76ac361e81addecae7110483c5417b3f91f4d29d9a29c89a835a6d0"
+        },
+        "evidenceRefs": [
+          {
+            "sessionId": "46cf8159-6371-43e2-829b-3278523a5254",
+            "runId": "cc719f33-818c-4247-a693-3d2f5bbb852c"
+          }
+        ],
+        "sessionId": "46cf8159-6371-43e2-829b-3278523a5254",
+        "runId": "cc719f33-818c-4247-a693-3d2f5bbb852c",
+        "directory": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-tMUuJ7\\eval-project\\.agents\\worktrees\\benchgo-cc719f33-818c-4247-a693-3d2f5bbb852c",
+        "remainingExecutionMs": 591840,
+        "environment": {
+          "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-tMUuJ7\\eval-project\\.agents\\worktrees\\benchgo-cc719f33-818c-4247-a693-3d2f5bbb852c",
+          "branch": "benchgo-cc719f33-818c-4247-a693-3d2f5bbb852c",
+          "baseCommit": "41c018d0396f984938676f4d4ab1527a25743d92",
+          "repositoryRoot": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-tMUuJ7\\eval-project"
+        },
+        "checkpoint": {
+          "version": 1,
+          "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-tMUuJ7\\eval-project\\.agents\\worktrees\\benchgo-cc719f33-818c-4247-a693-3d2f5bbb852c",
+          "repositoryRoot": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-tMUuJ7\\eval-project",
+          "commonDir": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-tMUuJ7\\eval-project\\.git",
+          "branch": "benchgo-cc719f33-818c-4247-a693-3d2f5bbb852c",
+          "baseCommit": "41c018d0396f984938676f4d4ab1527a25743d92",
+          "head": "41c018d0396f984938676f4d4ab1527a25743d92",
+          "indexHash": "d348c308c584d31d3e0540fe1592884eee558df405cca1b742faa354b5b32a88",
+          "files": 1,
+          "bytes": 31,
+          "manifestHash": "ef61c070ecd43448d9cf2a3b1d54177b600bfa25639c7d75d3ef47c3eb8f9349"
+        },
+        "review": {
+          "verdict": "passed",
+          "reason": "Controlled fixture: worker transcript contains BENCHGO_OK.",
+          "routing": {
+            "configRevision": 3,
+            "capability": "review",
+            "auxiliary": false,
+            "switched": false,
+            "attempts": [
+              {
+                "providerId": "assistant-smoke",
+                "modelId": "Eval/Route:2026-11+Opaque",
+                "retry": 0,
+                "status": "completed"
+              }
+            ]
+          }
+        },
+        "ticketId": "3351b8fb-9e59-4f10-8777-5215485f2f25",
+        "instructionRevision": 1,
+        "version": 1,
+        "committedAt": "2026-11-03T10:47:25.047Z"
+      }
+    ],
+    "deliveries": [
+      {
+        "id": "a29e02ff-f620-4500-a259-bb74a27a25fe",
+        "uniqueKey": "assignment-result:desktop:4dd150e25e184bb3b9be73506f3af27768bd75dce2724cc9ce87d1794fbd9bf9:cc719f33-818c-4247-a693-3d2f5bbb852c",
+        "ticketId": "3351b8fb-9e59-4f10-8777-5215485f2f25",
+        "payload": {
+          "type": "ticket.result",
+          "source": {
+            "channel": "desktop",
+            "sessionId": "416d4ce3-1929-4c43-86f7-f3ab6a24c436",
+            "messageId": "goal-form:eval-goal",
+            "threadId": "main"
+          },
+          "text": "已完成：Reply exactly BENCHGO_OK without tools.\nBENCHGO_OK\n验收：Controlled fixture: worker transcript contains BENCHGO_OK.",
+          "evidenceRefs": [
+            {
+              "sessionId": "46cf8159-6371-43e2-829b-3278523a5254",
+              "runId": "cc719f33-818c-4247-a693-3d2f5bbb852c"
+            }
+          ]
+        },
+        "state": "sent",
+        "attempts": 1,
+        "nextAt": 1793702845047,
+        "owner": null,
+        "leaseUntil": null,
+        "sentAt": "2026-11-03T10:47:25.931Z",
+        "lastError": null,
+        "createdAt": "2026-11-03T10:47:25.047Z"
+      }
+    ]
+  }
+}

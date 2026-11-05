@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { initializePluginProfile, stagePluginBundle } from './plugin-bundle.mjs';
-import { getInstallState, releaseBundleName } from '../../plugins/commander/shared/plugin-install.mjs';
+import { getInstallState, releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'benchgo-bundle-'));
@@ -17,9 +17,10 @@ function fixture(t) {
 
 test('published plugin payload excludes development/private files and contains its required dependency closure', t => {
   const { root, put } = fixture(t);
-  const manifest = { name: 'benchgo-plugin', version: '0.1.0', type: 'module', files: ['src', 'lib', 'voice', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { 'fixture-required': '1.0.0' }, devDependencies: { 'fixture-dev': '1.0.0' }, optionalDependencies: { 'fixture-linux': '1.0.0' } };
+  const manifest = { name: 'benchgo-plugin', version: '0.1.0', type: 'module', files: ['src', 'lib', 'cordis.patch.yml', 'assets/icon.svg'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { 'fixture-required': '1.0.0' }, devDependencies: { 'fixture-dev': '1.0.0' }, optionalDependencies: { 'fixture-linux': '1.0.0' } };
+  put('plugin/assets/icon.svg', '<svg>BenchGo</svg>');
   put('plugin/package.json', manifest);
-  for (const name of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'voice/src/plugin.mjs', 'cordis.patch.yml']) put(`plugin/${name}`, 'fixture');
+  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'cordis.patch.yml']) put(`plugin/${name}`, 'fixture');
   put('plugin/private-credentials.txt', 'do-not-package');
   for (const name of ['fixture-required', 'fixture-dev', 'fixture-linux']) {
     put(`plugin/node_modules/${name}/package.json`, { name, version: '1.0.0', ...(name === 'fixture-linux' ? { os: ['linux'] } : {}) });
@@ -30,20 +31,35 @@ test('published plugin payload excludes development/private files and contains i
   assert.ok(existsSync(join(staged.directory, 'release.json')));
   const wrapper = JSON.parse(readFileSync(join(staged.directory, 'node_modules', staged.bundle, 'package.json')));
   assert.equal(wrapper.exports['./locale/*.json'], './locale/*.json');
+  assert.equal(wrapper.exports['./icon'], './icon.svg');
+  assert.equal(readFileSync(join(staged.directory, 'node_modules', staged.bundle, 'icon.svg'), 'utf8'), '<svg>BenchGo</svg>');
+  assert.equal(readFileSync(join(staged.destination, 'assets/icon.svg'), 'utf8'), '<svg>BenchGo</svg>');
   assert.equal(JSON.parse(readFileSync(join(staged.directory, 'node_modules', staged.bundle, 'locale/en.json'))).meta.title, 'BenchGo');
   assert.deepEqual(staged.dependencies, ['fixture-required']);
   assert.deepEqual(staged.omittedOptionalDependencies, ['fixture-linux']);
   assert.equal(existsSync(join(staged.destination, 'private-credentials.txt')), false);
   assert.equal(existsSync(join(staged.destination, 'node_modules/fixture-dev')), false);
   assert.equal(existsSync(join(staged.destination, 'node_modules/fixture-required/index.js')), true);
+  for (const file of ['lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs']) assert.equal(readFileSync(join(staged.destination, file), 'utf8'), 'fixture');
   assert.throws(() => stagePluginBundle({ runtime: join(root, 'runtime'), plugin: join(root, 'plugin') }), /already exists/u);
+});
+
+for (const omitted of ['harness', 'superagent', 'voice']) test(`packaging rejects an allowlist that omits ${omitted}`, t => {
+  const { root, put } = fixture(t);
+  const files = ['src', 'lib/client.js', 'lib/link.mjs', 'lib/link-web', 'lib/relay', 'cordis.patch.yml', ...['harness', 'superagent', 'voice'].filter(name => name !== omitted).map(name => `lib/modules/${name}`)];
+  put('plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0', files, dsh: { bundle: { patch: './cordis.patch.yml' } } });
+  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'cordis.patch.yml']) put(`plugin/${name}`, 'fixture');
+  const required = `lib/modules/${omitted}/src/plugin.mjs`;
+  assert.throws(() => stagePluginBundle({ plugin: join(root, 'plugin'), output: join(root, 'seed') }), error => error.message.includes(`missing built file ${required}`));
+  assert.equal(existsSync(join(root, 'seed/node_modules/benchgo-plugin')), false);
 });
 
 const officialRoot = resolve(import.meta.dirname, '../../deepseek-harness');
 test('SSH optional build-machine addons never enter desktop plugin releases', t => {
   const { root, put } = fixture(t);
-  put('plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0', files: ['src', 'lib', 'voice', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { ssh2: '1.17.0' } });
-  for (const name of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'voice/src/plugin.mjs', 'cordis.patch.yml']) put('plugin/' + name, 'fixture');
+  put('plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0', files: ['src', 'lib', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { ssh2: '1.17.0' } });
+  put('plugin/assets/icon.svg', '<svg>BenchGo</svg>');
+  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'cordis.patch.yml']) put('plugin/' + name, 'fixture');
   put('plugin/node_modules/ssh2/package.json', { name: 'ssh2', version: '1.17.0', optionalDependencies: { 'cpu-features': '0.0.10' } });
   put('plugin/node_modules/ssh2/lib/index.js', 'module.exports = {};');
   put('plugin/node_modules/ssh2/lib/protocol/crypto.js', 'module.exports = {};');
@@ -97,12 +113,17 @@ test('official profile loader resolves the preinstalled Plus bundle and respects
   assert.equal(existsSync(join(profile, 'lock')), false);
 });
 
-function seedFixture(put, prefix, version = '0.1.0') {
+function seedFixture(put, prefix, version = '0.1.0', splitModules = true) {
   const bundleName = releaseBundleName(version);
   put(`${prefix}/release.json`, { schemaVersion: 1, version, platform: process.platform, arch: process.arch, shared: [] });
   put(`${prefix}/node_modules/benchgo-plugin/package.json`, { name: 'benchgo-plugin', version, type: 'module', main: './src/plugin.mjs', exports: { '.': './src/plugin.mjs', './client': './lib/client.js', './package.json': './package.json' }, dsh: { bundle: { patch: './cordis.patch.yml' } } });
-  for (const file of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'voice/src/plugin.mjs']) put(`${prefix}/node_modules/benchgo-plugin/${file}`, `export const version = ${JSON.stringify(version)}; export default true;`);
-  const patch = "- insert:\n    - id: commander\n      name: 'benchgo-plugin'\n";
+  for (const file of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs']) put(`${prefix}/node_modules/benchgo-plugin/${file}`, `export const version = ${JSON.stringify(version)}; export default true;`);
+  const rows = [
+    { id: 'commander', name: 'benchgo-plugin' },
+    ...(splitModules ? ['harness', 'superagent', 'voice'].map(name => ({ id: `commander-${name}`, name: `benchgo-plugin/${name}-plugin` })) : []),
+    { id: 'commander-link', name: 'benchgo-plugin/link-plugin' },
+  ];
+  const patch = JSON.stringify([{ insert: rows }]);
   put(`${prefix}/node_modules/benchgo-plugin/cordis.patch.yml`, patch);
   put(`${prefix}/node_modules/${bundleName}/package.json`, { name: bundleName, displayName: 'BenchGo', version, type: 'module', dependencies: { 'benchgo-plugin': version }, dsh: { bundle: { patch: './cordis.patch.yml' } } });
   put(`${prefix}/node_modules/${bundleName}/cordis.patch.yml`, patch);
@@ -118,6 +139,36 @@ function enrollmentFixture(t) {
 }
 
 const enrollmentOptions = { skip: !existsSync(officialBoot) };
+
+test('upgrading a two-entry bundle loads all five entries while retaining user module state and config', enrollmentOptions, async t => {
+  const { root, put, options } = enrollmentFixture(t);
+  seedFixture(put, 'old-seed', '0.0.9', false);
+  put('profile/package.json', { private: true, dependencies: {}, dsh: { profile: { bundles: ['@dowork/commander'] } } });
+  const config = { dataDir: 'user-data', providers: { opaque: { model: 'unchanged/id' } }, voice: { enabled: false } };
+  const overrides = JSON.stringify([
+    { id: 'commander', config },
+    { id: 'commander-link', disabled: true, config: { directory: 'user-link' } },
+  ]);
+  put('profile/cordis.patch.yml', overrides);
+  const boot = await import(pathToFileURL(officialBoot).href);
+  const anchor = join(root, 'runtime/package.json');
+  put('runtime/package.json', { name: 'fixture-runtime', version: '0.0.0', dependencies: {} });
+  const entries = () => {
+    const profile = boot.loadProfileDirectory('dsh', options.profile, anchor);
+    assert.deepEqual(profile.skippedBundles, []);
+    return boot.composeEntries([...profile.layers.map(layer => layer.patches), profile.patches]);
+  };
+  await initializePluginProfile({ ...options, seed: join(root, 'old-seed') });
+  assert.deepEqual(entries().map(row => row.id), ['commander', 'commander-link']);
+  await initializePluginProfile(options);
+  const upgraded = entries();
+  assert.deepEqual(upgraded.map(row => row.id), ['commander', 'commander-harness', 'commander-superagent', 'commander-voice', 'commander-link']);
+  assert.equal(upgraded.find(row => row.id === 'commander').name, 'benchgo-plugin');
+  assert.deepEqual(upgraded.find(row => row.id === 'commander').config, config);
+  assert.equal(upgraded.find(row => row.id === 'commander-link').disabled, true);
+  assert.deepEqual(upgraded.find(row => row.id === 'commander-link').config, { directory: 'user-link' });
+  assert.equal(readFileSync(join(options.profile, 'cordis.patch.yml'), 'utf8'), overrides);
+});
 
 /** Exercise the official metadata service and both Node resolvers from the profile's own parent. */
 function resolvedProfilePlugin(root, profile) {

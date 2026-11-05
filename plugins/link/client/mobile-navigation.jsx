@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { UIIcon } from '../../commander/client/iconsax.jsx';
+import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { BrandLogo } from './brand.jsx';
 import { StatusDot } from './app.jsx';
 import { recentSessions, sessionGroups } from './mobile-state.mjs';

@@ -1,0 +1,96 @@
+import { TaskDetail, TaskIconButton } from './task-list.jsx';
+import taskCss from './task-list.css';
+import { Button } from '../../shared/client/ui/button.jsx';
+import React, { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { Tooltip, IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
+import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import css from './activity-panel.css';
+import { activityLabels as labels, terminalActivityStates as terminal, liveActivityStates, activeActivityStates } from './activity-data.mjs';
+import { useAssistantActivity } from './use-activity.jsx';
+
+const dateValue = value => { const date = new Date(value); return value && Number.isFinite(date.getTime()) ? date : null; };
+const stamp = value => dateValue(value)?.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) || '时间未知';
+function day(value) {
+  const date = dateValue(value); if (!date) return '时间未知';
+  const today = new Date(), yesterday = new Date(); yesterday.setDate(today.getDate() - 1);
+  if (date.toDateString() === today.toDateString()) return '今天';
+  if (date.toDateString() === yesterday.toDateString()) return '昨天';
+  return date.toLocaleDateString('zh-CN');
+}
+const ActivityContext = createContext(null);
+export function ActivityProvider({ children }) {
+  const [open, setOpen] = useState(false), [filter, setFilter] = useState('all');
+  const trigger = useRef(null), id = useId();
+  const close = () => { setOpen(false); trigger.current?.focus(); };
+  return <ActivityContext.Provider value={{ open, setOpen, filter, setFilter, trigger, id, close }}><style>{css}</style>{children}</ActivityContext.Provider>;
+}
+export function ActivityTrigger({ api }) {
+  const { open, setOpen, trigger, id } = useContext(ActivityContext);
+  const { rows } = useAssistantActivity(api);
+  const count = rows?.filter(row => liveActivityStates(row.status)).length || 0;
+  const label = open ? '收起' : '展开';
+  return <Tooltip label={label} side="bottom" delayMs={450} portal><Button variant="ghost" ref={trigger} type="button" className="ba-activity-trigger" aria-label={label} aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}><IconPanelLeftOutlineRegular className="ba-activity-panel-icon" size={15} />{count > 0 && <span className="ba-activity-count" aria-hidden="true">{count}</span>}</Button></Tooltip>;
+}
+export function ActivityPanel({ api, onOpenResources }) {
+  const { open, filter, setFilter, id, close } = useContext(ActivityContext);
+  const [stopping, setStopping] = useState(null), [actionError, setActionError] = useState(''), [selectedKey, setSelectedKey] = useState(null);
+  const { rows, error, updated, refresh } = useAssistantActivity(api);
+  const panel = useRef(null);
+  const previous = useRef(null);
+  useLayoutEffect(() => {
+    const body = panel.current?.querySelector('.ba-activity-body');
+    if (!body) return;
+    const before = previous.current;
+    const elements = [...body.querySelectorAll('[data-task-key]')];
+    const top = body.getBoundingClientRect().top;
+    const positions = new Map(elements.map(element => [element.dataset.taskKey, element.getBoundingClientRect().top - top + body.scrollTop]));
+    const keys = rows === null ? null : new Set(rows.map(row => row.key));
+    previous.current = { open, filter, keys, positions };
+    // Opening, initial loading and filter changes establish a baseline, not new tasks.
+    if (!open || !before?.open || !before.keys || before.filter !== filter || document.hidden || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const inserted = elements.filter(element => !before.keys.has(element.dataset.taskKey));
+    if (!inserted.length) return;
+    const animations = [];
+    for (const element of elements) {
+      if (!element.animate) continue;
+      const key = element.dataset.taskKey;
+      const delta = before.positions.has(key) ? before.positions.get(key) - positions.get(key) : 0;
+      const frames = !before.keys.has(key)
+        ? [{ opacity: 0, transform: 'translateY(-8px)' }, { opacity: 1, transform: 'translateY(0)' }]
+        : delta ? [{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }] : null;
+      if (frames) animations.push(element.animate(frames, { duration: 240, easing: 'cubic-bezier(.2,.7,.2,1)' }));
+    }
+    return () => animations.forEach(animation => animation.cancel());
+  }, [rows, open, filter]);
+  useEffect(() => { if (open) panel.current?.focus(); }, [open]);
+  const stop = async row => {
+    setStopping(row.key); setActionError('');
+    try { await api(row.kind === 'goal' ? 'goalCancel' : 'ticketStop', row.kind === 'goal' ? { id: row.id, rowVersion: row.rowVersion } : { ticketId: row.id }); await refresh(); }
+    catch (cause) { setActionError(cause.message); } finally { setStopping(null); }
+  };
+  const selected = rows?.find(row => row.key === selectedKey);
+  const active = rows?.filter(row => activeActivityStates(row.status)) || [];
+  const visible = (filter === 'active' ? active : rows || []).slice().sort((a, b) => (dateValue(b.time)?.getTime() || 0) - (dateValue(a.time)?.getTime() || 0));
+  const groups = new Map(); for (const row of visible) { const key = day(row.time); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }
+  const onKeyDown = event => {
+    if (event.key === 'Escape') { event.stopPropagation(); close(); }
+    if (event.key === 'Tab' && window.matchMedia('(max-width: 1000px)').matches) {
+      const buttons = [...panel.current.querySelectorAll('button:not(:disabled), summary, [tabindex="0"]')];
+      const first = buttons[0], last = buttons.at(-1);
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.current)) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
+  };
+  return <><div className="ba-activity-backdrop" hidden={!open} onClick={close} aria-hidden="true" />
+    <aside id={id} ref={panel} hidden={!open} tabIndex={-1} className="ba-activity-panel" aria-label="全部会话任务" onKeyDown={onKeyDown}>
+      <header><div><strong>全部任务</strong><small>全部会话 · {updated ? `${stamp(updated)} 更新` : '正在同步'}</small></div><Tooltip label="收起任务面板" side="bottom" delayMs={450} portal><Button variant="ghost" type="button" className="ba-icon" aria-label="收起任务面板" onClick={close}><IconPanelLeftOutlineRegular className="ba-activity-panel-icon" size={16} /></Button></Tooltip></header>
+      <div className="ba-activity-filters"><Button variant="ghost" type="button" aria-pressed={filter === 'active'} onClick={() => setFilter('active')}>进行中 {active.length}</Button><Button variant="ghost" type="button" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>全部</Button><Button variant="ghost" type="button" aria-label="刷新任务" onClick={refresh}>刷新</Button></div>
+      <div className="ba-activity-body">{actionError && <p role="alert" className="ba-activity-error">{actionError}</p>}{error && <p role="alert" className="ba-activity-error">{error}，可点击刷新重试。</p>}{rows === null && !error && <p className="ba-note" role="status">正在读取任务…</p>}{rows !== null && !visible.length && <p className="ba-activity-empty">{filter === 'active' ? '当前没有进行中的任务' : '暂无任务记录'}</p>}
+        {[...groups].map(([label, items]) => <section className="ba-activity-day" key={label}><h3>{label}</h3>{items.map(row => <article className={`ba-task-list-row ba-activity-task${row.status === 'completed' ? ' is-complete' : ''}`} data-task-key={row.key} key={row.key}>
+          <span className="ba-activity-status" data-status={row.status} title={labels[row.status] || row.status} aria-label={labels[row.status] || row.status}>{row.status === 'completed' ? <UIIcon name="check" size={16} /> : <span />}</span>
+          <div className="ba-task-list-content"><button type="button" className="ba-task-open" onClick={() => setSelectedKey(row.key)}><strong>{row.taskMeta?.title || row.title}</strong><span>{labels[row.status] || row.status || '状态未知'} · {row.phase}</span></button><div className="ba-activity-meta"><span>{row.kind === 'goal' ? '持续目标' : '工单'}</span><time dateTime={dateValue(row.time)?.toISOString()}>{stamp(row.time)}</time></div></div>
+          <div className="ba-task-row-actions"><TaskIconButton icon="more" label="查看记录" onClick={() => setSelectedKey(row.key)} />{!terminal.has(row.status) && <TaskIconButton icon="stop" label={stopping === row.key ? '正在停止…' : '停止任务'} disabled={stopping !== null} onClick={() => stop(row)} />}</div>
+        </article>)}</section>)}
+      </div><footer><Tooltip label="管理任务" side="top" delayMs={450} portal><Button variant="ghost" type="button" className="ba-icon" aria-label="管理任务" onClick={() => onOpenResources?.('tasks')}><UIIcon name="schedules" size={18} /></Button></Tooltip><Tooltip label="记忆与档案" side="top" delayMs={450} portal><Button variant="ghost" type="button" className="ba-icon" aria-label="记忆与档案" onClick={() => onOpenResources?.('memory')}><UIIcon name="archive" size={18} /></Button></Tooltip></footer>
+    </aside><style>{taskCss}</style><TaskDetail open={!!selected && open} title={selected?.taskMeta?.title || selected?.title || '任务记录'} onClose={() => setSelectedKey(null)}>{selected && <><div className="ba-activity-detail"><p>{labels[selected.status] || selected.status} · {selected.phase}</p>{selected.detail && <p>{selected.detail}</p>}<div>创建：{stamp(selected.createdAt)}</div><div>更新：{stamp(selected.updatedAt)}</div></div><Button variant="ghost" onClick={() => { setSelectedKey(null); onOpenResources?.('tasks'); }}>前往任务管理</Button></>}</TaskDetail></>;
+}

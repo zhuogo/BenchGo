@@ -1,0 +1,151 @@
+{
+  "name": "benchgo-plugin",
+  "displayName": "BenchGo",
+  "version": "0.1.0",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhuogo/BenchGo.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "BenchGo native coding agents, shared projects, voice and enhanced Harness UI",
+  "license": "MIT",
+  "main": "src/plugin.mjs",
+  "exports": {
+    ".": "./src/plugin.mjs",
+    "./harness-plugin": "./lib/modules/harness/src/plugin.mjs",
+    "./superagent-plugin": "./lib/modules/superagent/src/plugin.mjs",
+    "./voice-plugin": "./lib/modules/voice/src/plugin.mjs",
+    "./link-plugin": "./src/link-plugin.mjs",
+    "./runtime": "./lib/modules/harness/src/runtime.mjs",
+    "./client": "./lib/client.js",
+    "./icon": "./assets/icon.svg",
+    "./locale/*.json": "./locale/*.json",
+    "./harness-plugin/locale/*.json": "./locale/modules/harness/*.json",
+    "./superagent-plugin/locale/*.json": "./locale/modules/superagent/*.json",
+    "./link-plugin/locale/*.json": "./locale/modules/link/*.json",
+    "./voice-plugin/locale/*.json": "./lib/modules/voice/locale/*.json",
+    "./harness-plugin/icon": "./assets/icon.svg",
+    "./superagent-plugin/icon": "./assets/icon.svg",
+    "./voice-plugin/icon": "./assets/icon.svg",
+    "./link-plugin/icon": "./assets/icon.svg"
+  },
+  "bin": {
+    "commander": "src/cli.mjs",
+    "benchgo": "src/cli.mjs"
+  },
+  "files": [
+    "src",
+    "shared",
+    "cordis.patch.yml",
+    "config.example.json",
+    "config/routergo-deepseek.example.yml",
+    "README.md",
+    "TOOL-CONFIG.md",
+    "openapi.json",
+    "VERIFICATION.md",
+    "lib",
+    "assets/icon.svg",
+    "assets/channel-brands",
+    "assets/fonts/web",
+    "assets/fonts/manifest.json",
+    "assets/fonts/README.md",
+    "NOTICE",
+    "PASEO-LICENSE",
+    "DEEPSEEK-LICENSE",
+    "client/assets/iconsax/LICENSE",
+    "client/assets/iconsax/SOURCE.md",
+    "locale"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --import ../../scripts/source-loader.mjs --test test/*.test.mjs",
+    "test:native": "node --import ../../scripts/source-loader.mjs --test ../harness/test/native.mjs",
+    "start": "node src/cli.mjs",
+    "pack:check": "npm pack --dry-run --ignore-scripts",
+    "build:client": "node scripts/build-client.mjs",
+    "build:modules": "node scripts/build-modules.mjs"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.300"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5-alpha.2",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-sandbox": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-projection": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.2.2-rc.1",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.2-rc.1",
+    "@radix-ui/react-collapsible": "1.2.1",
+    "@radix-ui/react-dialog": "1.3.1",
+    "@radix-ui/react-slot": "1.5.0",
+    "@tailwindcss/node": "4.3.4",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "docx-preview": "0.4.1",
+    "dompurify": "3.4.17",
+    "esbuild": "^0.27.0",
+    "marked": "18.1.2",
+    "pdfjs-dist": "5.4.624",
+    "tailwind-merge": "3.7.0",
+    "tailwindcss": "4.3.4",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5-alpha.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-theme",
+        "@deepseek-ai/dsh-client-ui-settings-models"
+      ],
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-agent-instructions": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-atomic-write": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-compaction-basic": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-experimental-worktree": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-home-paths": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-ask-user": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-user-questions": "0.2.2-rc.1",
+    "@discordjs/voice": "0.19.2",
+    "@larksuiteoapi/node-sdk": "1.76.0",
+    "discord.js": "14.28.0",
+    "imapflow": "2.10.0",
+    "json5": "2.2.3",
+    "jsonc-parser": "3.3.1",
+    "mailparser": "3.14.1",
+    "nodemailer": "10.3.1",
+    "opusscript": "0.0.8",
+    "qrcode": "1.5.4",
+    "sharp": "0.35.5",
+    "smol-toml": "1.9.0",
+    "ssh2": "1.17.0",
+    "tar": "7.5.22",
+    "ws": "8.19.0",
+    "yaml": "2.9.0"
+  }
+}

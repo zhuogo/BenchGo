@@ -1,0 +1,19 @@
+{
+  "actualHumanMessages": 1,
+  "modelRequests": 1,
+  "oldUIUserRows": 2,
+  "fixedUIUserRows": 1,
+  "usage": [
+    {
+      "inputTokens": 15200,
+      "outputTokens": 68,
+      "totalTokens": 15268
+    }
+  ],
+  "timing": [
+    {
+      "type": "assistant/message",
+      "time": 1793714048585
+    }
+  ]
+}

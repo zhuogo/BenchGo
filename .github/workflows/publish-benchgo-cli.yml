@@ -9,10 +9,10 @@ on:
       package:
         description: Package directory to publish
         required: true
-        default: plugins/commander
+        default: plugins/benchgo
         type: choice
         options:
-          - plugins/commander
+          - plugins/benchgo
           - packages/benchgo-cli
           - packages/benchgo-relay
 permissions:
@@ -22,17 +22,41 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI: 'true'
+      DSH_TELEMETRY_DISABLED: '1'
     strategy:
       matrix:
-        package: ${{ github.event_name == 'workflow_dispatch' && fromJSON(format('["{0}"]', inputs.package)) || fromJSON('["packages/benchgo-cli","packages/benchgo-relay","plugins/commander"]') }}
+        package: ${{ github.event_name == 'workflow_dispatch' && fromJSON(format('["{0}"]', inputs.package)) || fromJSON('["packages/benchgo-cli","packages/benchgo-relay","plugins/benchgo"]') }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '24'
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: ${{ matrix.package }}/package.json
+      - name: Prepare official plugin build toolchain
+        if: matrix.package == 'plugins/benchgo'
+        run: |
+          git submodule update --init --recursive -- deepseek-harness
+          npm install --global --force corepack@0.34.0
+          corepack enable
+          npm run check
+      - name: Install locked plugin dependencies
+        if: matrix.package == 'plugins/benchgo'
+        run: |
+          npm run setup
+          npm ci --prefix plugins/link
+          npm ci --prefix plugins/benchgo
+      - name: Build current plugin and verify published entry closure
+        if: matrix.package == 'plugins/benchgo'
+        run: |
+          npm run build:plus
+          node --import ./scripts/source-loader.mjs --test plugins/benchgo/test/package-layout.test.mjs
       - name: Verify package archive
         working-directory: ${{ matrix.package }}
         run: npm pack --dry-run --ignore-scripts

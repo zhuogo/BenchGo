@@ -1,8 +1,12 @@
 # Link · 多端直连
 
-BenchGo 内置的远程连接模块。统一入口是侧栏 **设备中心**，通过「设备 / 连接 / 中继」分段切换管理设备列表、本机连接设置与中继池；设备列表将本机置于第一项，与其他设备统一展示。设置弹窗不再提供设备与连接入口。默认关闭，开启后独立监听加密端口，模型凭据和执行进程留在主机，不需要第三方账号或公共中继。
+`@benchgo/link` 是独立源码包，随唯一安装包 `benchgo-plugin` 交付，通过 Link 插件入口启停。基础连接只依赖 BenchGo 基础层及官方传输、工作区服务；关闭 Harness 聚合或 SuperAgent 后，设备配对、连接与官方会话仍可使用。原生编码会话与总助手通知按请求读取当前服务，模块停用时返回明确的不可用提示，重新启用后自动恢复。Link 数据保存在基础层数据目录下的 `link/`。
 
-云端通过公网 HTTPS 域名打开工作台时，默认复用该域名配对；在本地电脑或私网地址打开时，默认使用同网络 Android App 直连，不要求公网。手动切换保留在高级设置。域名配对仍要求部署者为 `/link/` 配置反向代理，前端不会凭保存 URL 创建路由。
+BenchGo 内置的远程连接模块。统一入口是侧栏 **设备中心**，上方「连接」区提供生成连接信息，下方通过「设备 / 中继池」切换；设备卡片将本机置于第一项，高级设置与授权设备管理收在设备页。连接持久开启，不提供设备启停开关；按钮采用透明背景与淡边框。扫码请求以独立接受弹窗覆盖二维码窗口。添加中继默认连接已有服务，支持添加前、编辑时和列表内测试连接，保存后自动切到中继池并刷新列表和通道状态。设置弹窗不再提供设备与连接入口。独立监听加密端口，模型凭据和执行进程留在主机，不需要第三方账号或公共中继。
+
+生成连接信息时自动优先使用已配置的公网 HTTPS 入口（云端工作台复用当前公网 HTTPS 域名），其次使用通道已连接的中继，否则使用同网络 Android App 直连，无需选择连接方式。配对后的实际工作台连接仍由已有选路机制按直连优先、中继兜底处理。域名配对仍要求部署者为 `/link/` 配置反向代理，前端不会凭保存 URL 创建路由。
+
+配对弹窗只提供一个「复制连接信息」操作，内容统一为 `benchgo://pair?...`，包含主机地址、安全身份与一次性配对码；桌面、网页与新版 Android 同时兼容旧 `dshlink://pair`。公网/中继二维码保留 HTTPS 配对页，手机相机可直接打开。Android 新协议需重新构建安装 APK。
 
 已完成源码、桌面插件打包、Android debug APK 构建与服务测试；移动真机、Windows/macOS 桌面安装尚需验收。Android 工程与当前构建结果见 [移动端](mobile/README.md)。
 
@@ -19,13 +23,13 @@ scripts/          Web 构建
 test/            配对、TLS、权限边界与会话适配测试
 ```
 
-`dist/web/` 为忽略提交的生成资源。BenchGo 构建把服务打入 `plugins/commander/lib/link.mjs`，网页复制到 `lib/link-web/`，安装插件时不依赖同级 Link 源码目录。`reference/` 不参与构建。
+`dist/web/` 为忽略提交的生成资源。BenchGo 构建把服务打入 `plugins/benchgo/lib/link.mjs`，网页复制到 `lib/link-web/`，安装插件时不依赖同级 Link 源码目录。`reference/` 不参与构建。
 
 ## 局域网
 
-1. 目标主机打开「设备 → 允许其他设备连接」，生成二维码或复制连接信息；未启用时自动开启 Link。
+1. 目标主机打开「设备中心 → 连接」，生成二维码或复制连接信息。
 2. 另一台电脑打开「设备 → 添加设备 → 连接已有设备」，粘贴完整连接信息；目标主机批准后保存设备身份。
-3. 手机和电脑接入同一网络，用 Android Link App 扫码后自动发送连接请求，无需再次点击连接；浏览器打开二维码配对链接同样自动连接。默认设备名称为“我的手机-五位随机字母”，生成后在本机保留，也可在扫码前修改。粘贴配对地址时保留手动连接按钮。
+3. 手机和电脑接入同一网络，用 Android Link App 扫码后自动发送连接请求，无需再次点击连接；浏览器打开二维码配对链接同样自动连接。每台设备有独立的持久名称，可从本机设备设置修改；无名称时生成随机名称。连接列表使用被控端名称，也可保存仅影响本机的备注。粘贴配对地址时保留手动连接按钮。
 4. 在桌面确认设备申请，之后即可操作；配对设备可读取已注册项目、发送指令和审批，随时可撤销。
 5. 手机与电脑必须能相互访问；防火墙只需允许选定的 Link 端口。访客 Wi-Fi 的客户端隔离可能阻断连接。
 
@@ -35,7 +39,7 @@ App 用二维码中的真实 SPKI 指纹信任主机证书，不需要域名或�
 
 ## 公网 HTTPS
 
-公网配置和连接方式选择位于「高级设置」。iPhone 浏览器使用此路径，当前无 iOS 原生 App。
+公网配置位于设备页的「高级设置」。iPhone 浏览器使用此路径，当前无 iOS 原生 App。
 
 填写自己的可达 HTTPS 根地址，例如 `https://desk.example.com`，并把 `/link/` 路径反向代理到 Link 的 HTTPS 端口。仅保存地址不会创建 DNS、证书或公网路由。iPhone、Android、Windows 和 macOS 浏览器均可使用公网网页；Android App 也可粘贴公网 App 配对地址，用系统证书校验连接。
 
@@ -47,7 +51,7 @@ App 用二维码中的真实 SPKI 指纹信任主机证书，不需要域名或�
 
 真实配对后进入共享网页工作台，默认「最近」；侧边栏、消息输入、斜杠命令、模型、权限预设、内置插件、Harness 工具与语音配置均由官方网页组件和同一主机设置接口提供，不在手机维护副本。桌面与手机共用会话、模型、插件状态和配置。Android 原生界面仅负责扫码、设备信任和 HTTPS/WebView；浏览器配对复用同源 HTTPS 工作台。移动侧栏、设置弹窗和软键盘针对窄屏适配。
 
-工作台仅对已由电脑允许的设备签发路径限定 HttpOnly Cookie，网页 API 与 Gateway 流使用该设备独立 Peer；撤销后立即失效。配对设备具备完整个人工作台权限，包含操作项目、发送指令、管理权限交互及使用网页已启用的工具。语音服务沿用主机配置，但 Android 麦克风需系统授权；iOS 浏览器依赖 Safari 麦克风权限。
+工作台仅对已由电脑允许的设备签发路径限定 HttpOnly Cookie，网页 API 与 Gateway 流使用该设备独立 Peer；撤销后立即失效。Cookie 摘要与期限持久保存，主机重载不使有效会话丢失；只保留每设备最近八个会话。临时配对码五分钟过期不影响已批准的设备凭据。Android 遇到失效工作台会话时用持久设备凭据恢复；设备打开期间显示加载动效。配对设备具备完整个人工作台权限，包含操作项目、发送指令、管理权限交互及使用网页已启用的工具。语音服务沿用主机配置，但 Android 麦克风需系统授权；iOS 浏览器依赖 Safari 麦克风权限。
 
 实时语音通过独立 `/link/workbench/api/voice/realtime` WebSocket 持续发送二进制 PCM，识别事件与 ACK 同连接返回；复用工作台 Cookie、Host/Origin 校验和主机一次性连接 ticket。本地设备代理保留二进制帧与 TLS 信任约束，撤销设备或关闭工作台会关闭媒体连接。公网反代需配置 [Nginx 示例](config/nginx.example.conf) 中该路径的 Upgrade 路由；普通 HTTP/SSE 语音识别继续走共享 API。主机须明确配置服务支持的实时 WSS 协议与对应模型；Android WebView、自签名证书及真机外放听感仍待设备验证。
 
@@ -73,7 +77,7 @@ Linux 可执行 `node plugins/link/test/lan-offline.mjs`：以两个隔离网络
 
 ```sh
 npm ci --prefix plugins/link
-npm ci --prefix plugins/commander
+npm ci --prefix plugins/benchgo
 npm run build:plus
 npm run test:link
 npm run test:commander
@@ -82,17 +86,17 @@ npm run check
 
 安装现成 BenchGo 插件包无需单独安装 Link。源码重建需先安装 Link 的依赖，根目录仍无独立依赖树。
 
-服务协议：桌面 owner 管理接口 `POST /api/commander-link`；独立 TLS 远端提供配对页 `/link/`、受设备令牌保护的 `POST /link/api/workbench` 会话签发、cookie 保护的 `/link/workbench/` 网页/API/模块资源/Gateway 流，以及 Link 会话 API。远程设备不能访问 owner 管理 API；设备撤销会清除会话并释放 Peer。测试与实际联调边界见 [实现记录](../../Design/01-设备与远程连接/设计.md)。
+服务协议：桌面 owner 管理接口 `POST /api/commander-link`；独立 TLS 远端提供配对页 `/link/`、受设备令牌保护的 `POST /link/api/workbench` 会话签发、cookie 保护的 `/link/workbench/` 网页/API/模块资源/Gateway 流，以及 Link 会话 API。远程设备不能访问 owner 管理 API；设备撤销会清除会话并释放 Peer。测试与实际联调边界见 [实现记录](../../docs/01-设备与远程连接/设计.md)。
 
 ## 设备与服务器管理
 
-侧栏“设备”统一管理当前主机的设备与连接：允许连接、批准申请、授权设备、其他工作台和高级设置。设置弹窗不再保留“设备与连接”标签，设备相关操作统一从设备中心进入。云端浏览器同样支持，凭据及 SSH 操作属于当前云主机；部署需配置设备网关与独立 HTTPS 工作台源，见 [Nginx 示例](config/nginx-devices.example.conf)。电脑粘贴连接信息，手机可扫码；切换不停止目标主机任务。
+侧栏“设备”统一管理当前主机的设备与连接：允许连接、批准申请、授权设备、其他工作台和高级设置。设置弹窗不再保留“设备与连接”标签，设备相关操作统一从设备中心进入。云端浏览器同样支持，凭据及 SSH 操作属于当前云主机；公网 Link 入口的反向代理配置见 [Nginx 示例](config/nginx.example.conf)，跨主机工作台仍保持独立来源和设备鉴权。电脑粘贴连接信息，手机可扫码；切换不停止目标主机任务。
 
 移动端设备切换位于对话标题栏侧栏按钮右侧，返回设备列表时保留已打开的工作台页面。浏览器设备中心只接受已挂载工作台 frame 的精确来源消息，确认标题栏导航可用后才隐藏重复顶栏；旧工作台或导航失效保留外层返回入口。Android 使用限定来源、限定主 frame 的独立导航通道，仅允许返回设备列表，不开放设备管理原生桥；离线仍可切换。普通配对工作台没有父设备中心时不显示无效切换按钮。
 
 添加设备 → 安装到服务器：SSH 地址/端口/用户名 → 确认 SHA256 指纹 → 密码/私钥认证 → 检查安装并建立环回隧道，验证 TLS、设备令牌和真实工作台后才保存设备。默认国内镜像，可选直连。支持 Ubuntu/Debian、x64/arm64 与 systemd 用户服务；密码私钥仅操作内存使用。服务支持状态、启停、重启、日志、升级；移除连接不卸载服务，常驻需要用户会话 linger，安装结果会提示。
 
-Node 令牌存私有权限文件，与官方本机凭据提供器一样信任当前 OS 用户；Android 使用 Keystore 加密。代理工作台独立浏览器源，远端禁止访问本机管理接口。接口见 openapi.json，设计见 [设备与远程连接](../../Design/01-设备与远程连接/设计.md)。MCP delegation 不变，不向 Agent 开放设备切换或 SSH 凭据工具。
+Node 令牌存私有权限文件，与官方本机凭据提供器一样信任当前 OS 用户；Android 使用 Keystore 加密。代理工作台独立浏览器源，远端禁止访问本机管理接口。接口见 openapi.json，设计见 [设备与远程连接](../../docs/01-设备与远程连接/设计.md)。MCP delegation 不变，不向 Agent 开放设备切换或 SSH 凭据工具。
 
 npm run build:plus 生成服务器 seed 和 SHA256 清单，经 SSH 上传，不依赖尚未发布的 Linux 资产。新增 Android 原生多设备与 SSH 能力需重新构建客户端。
 
@@ -102,7 +106,9 @@ SSH 隧道仅供当前客户端访问，不会自动让手机通过公网连接�
 
 一台用户自有服务器对应一个 Link 主机及独立 HTTPS origin，支持 IP 地址加高位端口，不要求域名。目标主机开机、联网并启用 Link 后主动连接中继；浏览器继续使用现有配对批准和工作台权限。TLS 在中继终止，中继运营者能读取内容，因此只能配置用户控制的可信服务器。中继凭据独立于设备令牌，不向 MCP 暴露。
 
-目标主机通过进程环境配置 `DSH_LINK_RELAY_URL=https://<公网IP>:<高位端口>` 与 `DSH_LINK_RELAY_TOKEN`（至少 6 字符的随机专用密钥）。中继密钥仅存受限权限的服务环境配置，不通过配对 URL 分享。设备中心的连接方式增加“自有中继”，仅主机通道连接后允许生成 HTTPS 配对信息；主机批准后按既有流程进入工作台。关闭 Link 会同时断开中继。当前通道在线不代表访问端网络可达，必须从实际设备验收。
+目标主机通过进程环境配置 `DSH_LINK_RELAY_URL=https://<公网IP>:<高位端口>` 与 `DSH_LINK_RELAY_TOKEN`（至少 6 字符的随机专用密钥）。中继密钥仅存受限权限的服务环境配置，不通过配对 URL 分享。设备中心在无公网直连入口且主机通道连接后自动使用中继生成 HTTPS 配对信息；主机批准后按既有流程进入工作台。关闭 Link 会同时断开中继。当前通道在线不代表访问端网络可达，必须从实际设备验收。
+
+添加、编辑中继可通过 owner `relay-test`（设备中心 `hostRelayTest`）测试连接，输入 `{url,token}`；编辑可带 `id` 并留空 `token`，服务端复用该节点已保存的私密密钥。返回 `{ok,latencyMs,message}`，不保存输入、不回显密钥。测试使用可信 HTTPS 的 `GET /__link/relay/probe` 和 Bearer 密钥验证，成功响应必须为 `{protocol:"benchgo-link-relay",version:1,authenticated:true}`；不会注册控制通道或替换在线主机。测试成功仅说明中继协议与密钥有效，隧道在线仍看实时连接状态。五秒无响应明确报告超时；旧中继缺少此接口时提示更新中继服务，更新前原有连接仍兼容。自行配置反向代理时须一并转发该只读路径与 Authorization。
 
 当前已提供核心中继通道、显式 IP 证书操作、SSH 一键部署、LAN 自动优先/失败回退、设备/中继双 Tab 和中继池优先级故障转移；真实公网 ACME、服务器 systemd 与端到端公网连接仍需在目标环境验收。旧 SSH 云端部署与直连继续可用。
 
@@ -136,7 +142,7 @@ node scripts/ip-certificate.mjs uninstall-timer
 
 安装只创建 `benchgo-relay-cert-renew.service` 与 `benchgo-relay-cert-renew.timer`；同名文件已存在且不归本工具管理时会拒绝覆盖。卸载只禁用该 timer 并删除校验通过的本工具 unit，不停止或删除 relay 服务。timer 更新证书后只尝试重启固定名称 `benchgo-relay.service`，不会重启其他服务；每日无证书变化时不会中断现有连接。
 
-timer 安装前必须先由同一 OS 用户配置并启动 `benchgo-relay.service`。发布插件包后，工具位于 `plugins/commander/lib/relay/`；在源码仓库内开发时，对应文件位于 `plugins/link/scripts/`。
+timer 安装前必须先由同一 OS 用户配置并启动 `benchgo-relay.service`。发布插件包后，工具位于 `plugins/benchgo/lib/relay/`；在源码仓库内开发时，对应文件位于 `plugins/link/scripts/`。
 
 复制 `relay.example.json` 到当前用户的配置目录并填写实际 IP、未占用的高位端口、随机中继密钥，以及证书活动路径。中继 TLS 私钥和配置文件都须保持当前用户所有且权限为 `0600`；随机密钥可用 `openssl rand -hex 32` 生成。
 
@@ -161,7 +167,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/node /absolute/path/plugins/commander/lib/relay/run-relay-server.cjs --config /home/link/.config/dsh-link/relay.json
+ExecStart=/usr/bin/node /absolute/path/plugins/benchgo/lib/relay/run-relay-server.cjs --config /home/link/.config/dsh-link/relay.json
 Restart=on-failure
 RestartSec=5
 UMask=0077
@@ -183,7 +189,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/node /absolute/path/plugins/commander/lib/relay/run-relay-server.cjs --config /home/link/.config/dsh-link/relay.json
+ExecStart=/usr/bin/node /absolute/path/plugins/benchgo/lib/relay/run-relay-server.cjs --config /home/link/.config/dsh-link/relay.json
 Restart=on-failure
 RestartSec=5
 UMask=0077
@@ -194,7 +200,7 @@ UNIT
 systemctl --user daemon-reload
 systemctl --user enable --now benchgo-relay.service
 systemctl --user status benchgo-relay.service
-node /absolute/path/plugins/commander/lib/relay/ip-certificate.mjs install-timer --state-dir "$HOME/.local/state/dsh-link"
+node /absolute/path/plugins/benchgo/lib/relay/ip-certificate.mjs install-timer --state-dir "$HOME/.local/state/dsh-link"
 ```
 
 上例中 service unit 的 `ExecStart` 路径也须按实际安装目录和用户路径修改。退出登录后仍需常驻时，由服务器管理员按部署策略为该用户启用 linger；证书 timer 和 relay 必须使用同一用户级 systemd manager。
@@ -202,7 +208,7 @@ node /absolute/path/plugins/commander/lib/relay/ip-certificate.mjs install-timer
 
 ### SSH 一键部署自有中继
 
-在桌面BenchGo的「设备中心 → 连接 → 部署自有中继」填写 SSH 地址、用户名、公网 IP、证书通知邮箱与专用业务端口，核对 SSH 指纹后提交认证。服务器需 Linux/systemd、系统路径 Node 22+、npm、Python3 venv，以及 root 或免密 sudo。密码、私钥和 passphrase 仅用于此次操作。
+在桌面 BenchGo 的「设备中心 → 中继池 → 添加中继 → 部署」填写 SSH 地址、用户名、公网 IP、证书通知邮箱与专用业务端口，核对 SSH 指纹后提交认证；添加弹窗默认显示“连接”已有中继。服务器需 Linux/systemd、系统路径 Node 22+、npm、Python3 venv，以及 root 或免密 sudo。密码、私钥和 passphrase 仅用于此次操作。
 
 向导使用免费的 Let's Encrypt IP 短期证书，不强制域名。业务端口范围 20000–49151，不自动开放安全组或防火墙；HTTP-01 必须公网 80 可达。80 空闲时部署专用验证服务，已有站点时选择 webroot 并自行映射 `/.well-known/acme-challenge/`；不会停用已有站点或改写其配置。服务安装到 `/opt/benchgo-relay`，中继以独立系统用户运行，root 续期任务每日检查。重跑部署更新工具并保留中继身份；非本工具目录或同名单元拒绝接管。
 

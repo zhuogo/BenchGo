@@ -2,11 +2,17 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { prepareAndroidBrand } from '../plugins/link/mobile/scripts/prepare-brand.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const android = fileURLToPath(new URL('../plugins/link/mobile/android/', import.meta.url));
 const windows = process.platform === 'win32';
 const options = process.argv.slice(2);
+if (options.includes('--icons-only')) {
+  if (options.length !== 1) throw new Error('--icons-only does not accept APK build options');
+  await prepareAndroidBrand(root);
+  process.exit(0);
+}
 if (options.includes('--release') && options.includes('--debug')) throw new Error('Choose either --release or --debug');
 const debug = options.includes('--debug');
 const env = { ...process.env };

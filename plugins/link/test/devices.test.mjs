@@ -19,6 +19,9 @@ test('pairing accepts full cloud HTTPS links and existing pinned Link URIs', () 
   const pin = Buffer.alloc(32, 1).toString('base64');
   const local = parsePairingUri('dshlink://pair?' + new URLSearchParams({ url: 'https://127.0.0.1:17770', pin, code: 'local-code' }));
   assert.equal(local.target.pin, pin); assert.equal(local.code, 'local-code');
+  const branded = parsePairingUri('benchgo://pair?' + new URLSearchParams({ url: 'https://127.0.0.1:17770', pin, code: 'local-code' }));
+  assert.deepEqual(branded, local);
+  for (const uri of ['benchgo://other?code=x', 'benchgo://pair/other?code=x', 'benchgo://user@pair?code=x', 'benchgo://pair:123?code=x', 'benchgo://pair?code=x#extra']) assert.throws(() => parsePairingUri(uri));
   for (const uri of ['http://cloud.example/link/#code=x', 'https://u:p@cloud.example/link/#code=x', 'https://cloud.example/other/#code=x', 'https://cloud.example/link/?token=x#code=x', 'https://cloud.example/link/#code=x&code=y', 'https://cloud.example/link/#code=x&token=y', 'https://cloud.example/link/']) assert.throws(() => parsePairingUri(uri));
 });
 test('connections preserve credentials independently and removing one never removes another', async t => {
@@ -36,6 +39,47 @@ test('target rejects insecure addresses, embedded credentials and malformed pins
   for (const url of ['http://a.test', 'https://u:p@a.test', 'https://a.test/path', 'https://a.test/?token=bad']) assert.throws(() => normalizeTarget({ url }));
   assert.throws(() => normalizeTarget({ url: 'https://a.test', pin: 'invalid' }));
 });
+
+test('remote aliases remain local and survive new pairing while unnamed devices get stable names', async t => {
+  const directory = await temp(t), registry = await openDeviceRegistry(directory);
+  const device = await registry.upsert({ url: 'https://unnamed.example', token: 'first' });
+  assert.match(device.name, /^BenchGo-/);
+  assert.equal((await registry.upsert({ url: 'https://unnamed.example', token: 'second' })).name, device.name);
+  await registry.rename(device.id, '我的工作电脑');
+  assert.equal((await registry.upsert({ url: 'https://unnamed.example', token: 'third', name: '被控端名称' })).name, '我的工作电脑');
+  const restored = await openDeviceRegistry(directory);
+  assert.equal(restored.get(device.id).name, '我的工作电脑');
+});
+
+test('renaming the local device updates host identity through the owner contract', async t => {
+  const calls = [], directory = await temp(t);
+  const center = await createDeviceCenter({ directory, webRoot: new URL('../dist/web/', import.meta.url), managerFactory: () => null, hostAdmin: async input => { calls.push(input); return { hostName: input.name }; } });
+  t.after(() => center.close());
+  const result = await center.api({ action: 'rename', deviceId: 'local', name: '书房电脑' });
+  assert.deepEqual(calls, [{ action: 'configure', name: '书房电脑' }]);
+  assert.equal(result.device.name, '书房电脑');
+  assert.equal((await center.api({ action: 'list' })).devices[0].name, '书房电脑');
+});
+
+test('pairing sends the local identity and saves the approved remote identity', async t => {
+  const directory = await temp(t), identity = await loadIdentity(directory), requests = [];
+  const server = createServer({ key: identity.key, cert: identity.cert }, async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    requests.push(JSON.parse(Buffer.concat(chunks).toString()));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(req.url === '/link/api/pair'
+      ? { requestId: 'remote', pollToken: 'private-poll', expiresAt: Date.now() + 300000 }
+      : { status: 'approved', token: 'private-device', hostName: '远端电脑', name: '远端电脑' }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const center = await createDeviceCenter({ directory, webRoot: new URL('../dist/web/', import.meta.url), managerFactory: () => null, localName: () => '本地电脑' });
+  t.after(async () => { await center.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const uri = 'benchgo://pair?' + new URLSearchParams({ url: 'https://127.0.0.1:' + server.address().port, pin: identity.pin, code: 'one-use', name: '二维码名称' });
+  const pair = await center.api({ action: 'pair', uri, name: '不得覆盖的旧客户端名称' });
+  assert.equal(requests[0].name, '本地电脑');
+  const approved = await center.api({ action: 'pairStatus', requestId: pair.requestId });
+  assert.equal(approved.device.name, '远端电脑');
+});
 test('device center exposes only explicit local host administration fields', async t => {
   const calls = [], directory = await temp(t);
   const center = await createDeviceCenter({ directory, webRoot: new URL('../dist/web/', import.meta.url), managerFactory: () => null, hostAdmin: async input => { calls.push(input); return { enabled: true }; } });
@@ -48,6 +92,10 @@ test('device center exposes only explicit local host administration fields', asy
   assert.deepEqual(calls[0], { action: 'status' });
   assert.deepEqual(calls[1], { action: 'configure', enabled: true });
   assert.deepEqual(calls[2], { action: 'pairing', mode: 'lan' });
+  await center.api({ action: 'hostRelayTest', id: 'primary', url: 'https://relay.example', token: '', operation: 'shell', enabled: true });
+  assert.deepEqual(calls.at(-1), { action: 'relay-test', id: 'primary', url: 'https://relay.example', token: '' });
+  await center.api({ action: 'hostRenameDevice', id: 'phone', name: '随身手机', token: 'forbidden', operation: 'shell' });
+  assert.deepEqual(calls.at(-1), { action: 'rename-device', id: 'phone', name: '随身手机' });
   await assert.rejects(center.api({ action: 'unknown-host-action' }), /不支持 SSH/);
 });
 test('local centre requires one-use entry and same-origin JSON, without third-party cookies', async t => {

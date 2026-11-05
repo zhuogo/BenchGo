@@ -1,0 +1,59 @@
+.ba-pet-editor{display:flex;flex-direction:column;gap:20px;min-width:0}
+.ba-pet-editor header{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px}
+.ba-pet-editor h3{margin:0;font-size:16px;font-weight:600}
+.ba-pet-editor header>span,.ba-pet-editor small,.ba-pet-editor-summary p{font-size:12px;color:var(--ba-muted,var(--text-secondary,#666));line-height:1.6}
+.ba-pet-editor-preview{display:flex;gap:28px;align-items:center;padding:24px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-business-primary,#315be8) 12%,var(--ba-line));background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#315be8) 4%,var(--dsw-alias-bg-base,#fff));border-radius:12px}
+.ba-pet-editor-preview>.benchgo-pet-avatar{flex:none}
+.ba-pet-editor-summary{min-width:0;flex:1}
+.ba-pet-editor-summary strong{font-size:20px;font-weight:600;letter-spacing:-.02em;overflow-wrap:anywhere}
+.ba-pet-editor-summary p{margin:8px 0 16px;max-width:32em}
+.ba-pet-editor-summary small{display:block;margin-top:10px}
+.ba-pet-editor-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ba-pet-editor-expression{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;font-size:13px}
+.ba-root .ba-pet-editor-toggle{display:flex;flex-direction:row;justify-content:space-between;gap:24px;align-items:center;min-height:64px;margin:0;padding-top:18px;border-top:1px solid var(--ba-line);font-size:14px}
+.ba-pet-editor-toggle-copy{display:flex;flex:1;flex-direction:column;gap:5px;min-width:0}
+.ba-pet-editor-toggle-copy>span{font-weight:500}
+.ba-pet-editor-toggle-copy small{margin:0;color:var(--ba-muted)}
+.ba-pet-editor-toggle>button{flex:none}
+.ba-pet-settings{display:grid;gap:20px;min-width:0}
+.ba-pet-settings>.ba-pet-editor,.ba-pet-composition{padding:20px;border:1px solid var(--ba-line);border-radius:14px;background:var(--dsw-alias-bg-base,#fff)}
+.ba-pet-composition{margin:0;display:grid;gap:18px;min-width:0}
+.ba-pet-composition>header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.ba-pet-composition>header>.cmd-ui-icon{flex:none;color:var(--dsw-alias-state-business-primary,#315be8)}
+.ba-pet-options[hidden]{display:none}
+.ba-pet-composition h3{margin:0;font-size:16px;font-weight:600}
+.ba-pet-composition h4{margin:0;font-size:13px;font-weight:600}
+.ba-pet-composition header p{margin:6px 0 0;line-height:1.6}
+.ba-pet-options{display:grid;gap:12px}
+.ba-pet-options h4 small{margin-left:8px;font-weight:400;font-size:12px;color:var(--ba-muted)}
+.ba-pet-thumbnail-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:10px}
+.ba-root button.ba-pet-choice{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-width:0;min-height:96px;height:auto;padding:14px 8px;border:1px solid var(--ba-line);border-radius:10px;background:var(--ba-surface);color:inherit;cursor:pointer;font-size:12px;line-height:1.5;transition:border-color .15s,background-color .15s}
+.ba-root button.ba-pet-choice:hover{background:var(--ba-hover);border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#315be8) 35%,var(--ba-line))}
+.ba-root button.ba-pet-choice[aria-pressed=true]{border-color:var(--dsw-alias-state-business-primary,#315be8);box-shadow:inset 0 0 0 1px var(--dsw-alias-state-business-primary,#315be8);background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#315be8) 6%,var(--dsw-alias-bg-base,#fff))}
+.ba-root button.ba-pet-choice:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#315be8);outline-offset:3px}
+.ba-root button.ba-pet-choice:disabled{opacity:.65;cursor:wait}
+.ba-pet-palette-list{display:flex;flex-wrap:wrap;gap:10px}
+.ba-root button.ba-pet-palette{flex-direction:row;gap:10px;min-height:44px;padding:12px 14px}
+.ba-pet-swatches{display:flex;overflow:hidden;border-radius:6px;border:1px solid var(--ba-line)}
+.ba-pet-swatches i{display:block;width:14px;height:22px}
+.ba-pet-catalog-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:190px;padding:24px 16px;border:1px dashed var(--ba-line);border-radius:10px;background:var(--ba-surface);text-align:center}
+.ba-pet-catalog-state>.cmd-ui-icon{color:var(--dsw-alias-state-business-primary,#315be8)}
+.ba-pet-catalog-state strong{font-size:14px;font-weight:600}
+.ba-pet-catalog-state p{margin:0;color:var(--ba-muted);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.ba-pet-catalog-skeleton{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;width:min(100%,360px);margin-top:8px}
+.ba-pet-catalog-skeleton span{height:56px;border-radius:8px;background:var(--ba-hover)}
+.ba-pet-notice{display:flex;align-items:center;gap:8px;margin:0;padding:12px 14px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#315be8) 6%,var(--dsw-alias-bg-base,#fff));color:var(--dsw-alias-label-primary,#171717);font-size:12px;line-height:1.6}
+.ba-pet-notice>.cmd-ui-icon{flex:none;color:var(--dsw-alias-state-business-primary,#315be8)}
+.ba-pet-editor-toolbar{align-items:center;gap:8px 12px}
+.ba-root .ba-pet-editor-toolbar>.ba-pet-editor-actions>button{min-height:34px;border:1px solid var(--ba-line);border-radius:7px;padding:6px 12px;background:transparent}
+.ba-root .ba-pet-editor-toolbar button:hover:not(:disabled):not([aria-disabled=true]){background:var(--ba-hover)}
+.ba-pet-editor-restore{display:flex;align-items:center;gap:4px;margin-left:auto}
+.ba-root .ba-pet-restore-button{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;flex:none}
+.ba-root .ba-pet-restore-button[aria-disabled=true]{opacity:.45;cursor:default}
+.ba-root .ba-pet-editor-toolbar button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#315be8);outline-offset:2px}
+.ba-pet-chat{flex:none;padding:8px 20px;border-bottom:1px solid var(--border-color,rgba(127,127,127,.12))}
+.ba-pet-chat-draft{display:flex;align-items:center;gap:16px;padding:12px 0;font-size:13px}.ba-pet-chat-draft p{margin:6px 0 10px;color:var(--text-secondary,#666);font-size:12px}
+/* Shared fixed heading for main and side conversations. */
+.ba-chat-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:44px}
+@media(max-width:540px){.ba-pet-editor-preview{flex-direction:column;gap:16px;padding:20px 16px}.ba-pet-editor-summary{width:100%}.ba-pet-editor-summary strong{font-size:18px}.ba-pet-editor-actions button{min-height:40px}.ba-pet-settings>.ba-pet-editor,.ba-pet-composition{padding:16px}.ba-pet-options h4 small{display:block;margin:4px 0 0}.ba-pet-thumbnail-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.ba-pet-editor-restore{margin-left:0}.ba-pet-editor-toolbar>.ba-pet-editor-actions{flex:1}.ba-pet-editor-toolbar>span{width:100%}}
+@media(prefers-reduced-motion:reduce){.ba-root button.ba-pet-choice{transition:none}}

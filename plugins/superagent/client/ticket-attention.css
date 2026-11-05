@@ -1,0 +1,10 @@
+.ba-ticket-attention{display:grid;gap:10px;margin:12px 0;padding:16px;border:1px solid var(--dsw-alias-border-l3,#ddd);border-radius:12px;min-width:0;max-width:100%;box-sizing:border-box;font-size:14px;line-height:1.6;background:var(--dsw-alias-bg-base,#fff)}
+.ba-ticket-attention p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.ba-ticket-attention fieldset{display:grid;gap:12px;min-width:0;padding:0;margin:0;border:0}
+.ba-ticket-attention .ba-checkbox{display:flex;align-items:flex-start;gap:8px;cursor:pointer}
+.ba-ticket-attention .ba-checkbox input{margin:5px 0 0;accent-color:var(--dsw-alias-state-business-primary,#315be8)}
+.ba-ticket-attention small{display:block;color:var(--dsw-alias-label-secondary,#666)}
+.ba-attention-answer{display:grid;gap:6px}
+.ba-ticket-attention textarea{box-sizing:border-box;width:100%;min-width:0;resize:vertical;border:1px solid var(--dsw-alias-border-l3,#ddd);border-radius:8px;padding:10px;background:var(--dsw-alias-bg-base,#fff);color:inherit;font:inherit}
+.ba-ticket-attention textarea:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#315be8);outline-offset:2px}
+.ba-ticket-attention button[type=submit]{justify-self:start}

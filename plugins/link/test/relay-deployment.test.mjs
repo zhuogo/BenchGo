@@ -5,6 +5,8 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateRelayDeployment, relayDeploymentScript, relayManagementCommand, deployRelay } from '../src/server/relay-deployment.mjs';
+import { bash, requiresBash, testCommand } from './platform.mjs';
+const python = testCommand(['python3', 'python']);
 const input = { publicIp: '8.8.8.8', email: 'owner@example.com', relayPort: 48730 };
 test('relay deployment validates dedicated ports and explicit webroot, rejects unsafe inputs', () => {
   assert.equal(validateRelayDeployment(input).url, 'https://8.8.8.8:48730');
@@ -19,22 +21,22 @@ test('domain mode defaults to webroot and never tries to own port 80', () => {
   assert.match(script, /if\(c\.challengeMode==='standalone'\)/);
   assert.match(script, /webroot 未被现有网站映射/);
 });
-test('generated webroot detector remains valid Python', () => {
+test('generated webroot detector remains valid Python', { skip: !python && 'Requires a Python interpreter for generated script syntax validation' }, () => {
   const config = validateRelayDeployment({ ...input, domain: 'relay.example.com' });
   const script = relayDeploymentScript({ ...config, token: 'private-token' }, '/tmp/stage');
   const detector = script.match(/<<'PYWEBROOT'\n([\s\S]*?)\nPYWEBROOT/);
   assert.ok(detector);
   const directory = mkdtempSync(join(tmpdir(), 'relay-detector-'));
-  try { const path = join(directory, 'detector.py'); writeFileSync(path, detector[1]); const result = spawnSync('python3', ['-m', 'py_compile', path], { encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); }
+  try { const path = join(directory, 'detector.py'); writeFileSync(path, detector[1]); const result = spawnSync(python, ['-m', 'py_compile', path], { encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); }
   finally { rmSync(directory, { recursive: true, force: true }); }
 });
-test('generated deployment and management scripts parse without shell interpolation of input', () => {
+test('generated deployment and management scripts parse without shell interpolation of input', async t => {
   const config = validateRelayDeployment({...input,challengeMode:'webroot',webroot:"/var/www/a'b $(id)"});
   const script = relayDeploymentScript({...config,token:'private-token'},'/tmp/stage');
-  assert.equal(spawnSync('bash',['-n'],{input:script,encoding:'utf8'}).status,0);
+  const commands = [script];
   for (const operation of ['status','logs','start','stop','restart','renew','renew-status','diagnose','uninstall']) {
     const command = relayManagementCommand(operation);
-    assert.equal(spawnSync('bash',['-n'],{input:command}).status,0, operation);
+    commands.push(command);
     assert.match(command, /(?:systemctl|journalctl)/);
   }
   assert.throws(()=>relayManagementCommand('rm -rf /'));
@@ -44,6 +46,12 @@ test('generated deployment and management scripts parse without shell interpolat
   assert.match(script,/apt-get install -y -q python3-venv/);
   assert.match(script,/await test\(80\)/);
   assert.doesNotMatch(script,/npm install|package\.json/);
+  await t.test('generated scripts pass Bash syntax validation', requiresBash, () => {
+    for (const command of commands) {
+      const result = spawnSync(bash, ['-n'], { input: command, encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+    }
+  });
 });
 test('deploy verifies public TLS before host configuration and returns no secret', async () => {
   const calls=[];let token;

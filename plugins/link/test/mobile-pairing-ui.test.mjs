@@ -6,15 +6,15 @@ import { runInNewContext } from 'node:vm';
 import { deviceName, rememberDeviceName } from '../client/pairing-state.mjs';
 import { defaultProjectId, recentSessions } from '../client/mobile-state.mjs';
 
-const require = createRequire(new URL('../../commander/package.json', import.meta.url));
+const require = createRequire(new URL('../../benchgo/package.json', import.meta.url));
 const source = await readFile(new URL('../client/mobile.jsx', import.meta.url), 'utf8');
 const code = require('esbuild').transformSync(source, { loader: 'jsx', format: 'cjs' }).code;
 const nodes = value => value && typeof value === 'object' ? [value, ...(value.children || []).flatMap(nodes)] : [];
 const textOf = value => typeof value === 'object' ? (value?.children || []).map(textOf).join('') : String(value ?? '');
 const scanIdentity = (code = 'SCAN.CODE') => ({ url: 'https://desk.example.com', pin: 'test-pin', code });
-const uri = value => value?.code ? `dshlink://pair?${new URLSearchParams(value)}` : '';
+const uri = value => value?.code ? `benchgo://pair?${new URLSearchParams(value)}` : '';
 
-function fixture({ initial = null, pairError = '', deferPair = false, native = true, hash = '' } = {}) {
+function fixture({ initial = null, pairError = '', deferPair = false, native = true, hash = '', hostName = '' } = {}) {
   let identity = initial, dirty = false, cursor = 0, tree, status = 'pending', local = 0, pairFailure = pairError, deferred;
   const slots = [], effects = [], calls = [], listeners = new Map(), timers = new Map();
   const emit = () => { for (const fn of listeners.get('link:bootstrap') || []) fn(); };
@@ -35,7 +35,7 @@ function fixture({ initial = null, pairError = '', deferPair = false, native = t
         if (pairFailure) throw new Error(pairFailure);
         return { requestId: 'pair-request', pollToken: 'private-poll', expiresAt: Date.now() + 60_000 };
       }
-      if (action === 'pair/status') return { status, ...(status === 'approved' ? { token: 'approved-token', deviceId: 'device' } : {}) };
+      if (action === 'pair/status') return { status, ...(status === 'approved' ? { token: 'approved-token', deviceId: 'device', ...(hostName ? { hostName } : {}) } : {}) };
       if (action === 'state') return { projects: [], sessions: [], models: [] };
     },
   };
@@ -64,6 +64,7 @@ test('device names use five random letters and preserve generated or custom name
   try {
     const generated = deviceName();
     assert.match(generated, /^我的手机-[A-Z]{5}$/);
+    assert.equal(deviceName(), generated);
     rememberDeviceName(generated); assert.equal(deviceName(), generated);
     assert.equal(deviceName('原有手机'), '原有手机');
     rememberDeviceName('  工作手机  '); assert.equal(deviceName(), '工作手机');
@@ -100,7 +101,20 @@ test('scan events connect using the chosen name; a new scan ignores stale pendin
   assert.deepEqual(view.calls.filter(call => call.action === 'pair').map(call => call.args.code), ['FIRST', 'SECOND']);
   view.status('approved'); await view.tick();
   assert.equal(view.identity.code, 'SECOND');
-  assert.equal(view.identity.name, '工作手机');
+  assert.equal(view.identity.localName, '工作手机');
+  assert.equal(view.identity.name, 'desk.example.com');
+});
+
+test('pair approval stores the host name separately from this phone name and stops polling', async () => {
+  const view = fixture({ initial: { ...scanIdentity(), name: '开发电脑', localName: '工作手机' }, hostName: '办公室电脑' });
+  await view.settle();
+  assert.equal(view.calls.find(call => call.action === 'pair').args.name, '工作手机');
+  view.status('approved'); await view.tick();
+  assert.equal(view.identity.name, '办公室电脑');
+  assert.equal(view.identity.localName, '工作手机');
+  const polls = view.calls.filter(call => call.action === 'pair/status').length;
+  await view.tick(); await view.tick();
+  assert.equal(view.calls.filter(call => call.action === 'pair/status').length, polls);
 });
 
 test('network failure shows a manual retry and never starts an automatic retry loop', async () => {

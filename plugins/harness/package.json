@@ -1,0 +1,13 @@
+{
+  "name": "@benchgo/harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "BenchGo Harness aggregation and native coding-agent runtime",
+  "license": "MIT",
+  "main": "src/plugin.mjs",
+  "scripts": {
+    "test": "node --import ../../scripts/source-loader.mjs --test test/*.test.mjs",
+    "test:native": "node --import ../../scripts/source-loader.mjs --test test/native.mjs"
+  }
+}

@@ -6,6 +6,8 @@ export const deviceRuntime = {
   hostCall(action, input = {}) {
     const actions = {
       relayConfigure: 'hostRelayConfigure',
+      relayTest: 'hostRelayTest',
+      hostRelayTest: 'hostRelayTest',
       relayPoolConfigure: 'hostRelayPoolConfigure',
       hostRelayPoolConfigure: 'hostRelayPoolConfigure',
       status: 'hostStatus',
@@ -15,11 +17,12 @@ export const deviceRuntime = {
       confirm: 'hostConfirm',
       reject: 'hostReject',
       revoke: 'hostRevoke',
+      'rename-device': 'hostRenameDevice',
     };
     if (!actions[action]) return Promise.reject(new Error('当前设备中心不支持此高级设置，请在主机设置中操作'));
     return deviceRuntime.call(actions[action], input);
   },
-  clientName: () => isNative() ? deviceName() : '这台电脑',
+  clientName: () => isNative() ? deviceName(bootstrap()?.localName) : '这台电脑',
   async call(action, args = {}) {
     if (isNative()) return nativeDeviceCall(action, args);
     const response = await fetch(new URL('api/devices', document.baseURI), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...args, action }) });

@@ -1,12 +1,12 @@
 import React from 'react';
-import logo from '../../../assets/brand/benchgo-logo.svg';
-import favicon from '../../../assets/brand/favicon.svg';
+import appIcon from '../../../assets/brand/benchgo-app.svg';
+import mark from '../../../assets/brand/benchgo-mark.svg';
 
-export const brandIcon = `data:image/svg+xml,${encodeURIComponent(logo)}`;
-const faviconIcon = `data:image/svg+xml,${encodeURIComponent(favicon)}`;
+export const brandIcon = `data:image/svg+xml,${encodeURIComponent(appIcon)}`;
+const markIcon = `data:image/svg+xml,${encodeURIComponent(mark)}`;
 
 export function BrandLogo({ size = 32, className = '', decorative = false }) {
-  return <img src={brandIcon} width={size} height={size} className={className} alt={decorative ? '' : 'BenchGo'} style={{ display: 'block', flex: 'none' }} />;
+  return <img src={markIcon} width={size} height={size} className={className} alt={decorative ? '' : 'BenchGo'} style={{ display: 'block', flex: 'none', objectFit: 'contain' }} />;
 }
 
 /** Keep both official light/dark favicon nodes branded; restore them when the plugin unloads. */
@@ -16,7 +16,7 @@ export function mountBrand(ctx) {
     const previous = links.map(link => [link, link.getAttribute('href'), link.getAttribute('type')]);
     const created = !links.length;
     if (created) { const link = document.createElement('link'); link.rel = 'icon'; document.head.append(link); links.push(link); }
-    for (const link of links) { link.href = faviconIcon; link.type = 'image/svg+xml'; }
+    for (const link of links) { link.href = markIcon; link.type = 'image/svg+xml'; }
     return () => {
       if (created) links[0].remove();
       for (const [link, href, type] of previous) {

@@ -21,9 +21,9 @@ try {
   await symlink(join(root, 'deepseek-harness/apps/cli'), join(runtime, 'node_modules/@deepseek-ai/dsh'), 'dir');
   for (const name of ['dsh-app-boot', 'dsh-atomic-write']) await symlink(join(root, 'deepseek-harness/apps/cli/node_modules/@deepseek-ai', name), join(runtime, 'node_modules/@deepseek-ai', name), 'dir');
   await mkdir(profile, { recursive: true });
-  await writeFile(join(profile, 'package.json'), JSON.stringify({ private: true, dependencies: { 'benchgo-plugin': 'link:' + join(root, 'plugins/commander') }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'benchgo-plugin'] } } }));
+  await writeFile(join(profile, 'package.json'), JSON.stringify({ private: true, dependencies: { 'benchgo-plugin': 'link:' + join(root, 'plugins/benchgo') }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'benchgo-plugin'] } } }));
   await mkdir(join(profile, 'node_modules'), { recursive: true });
-  await symlink(join(root, 'plugins/commander'), join(profile, 'node_modules/benchgo-plugin'), 'dir');
+  await symlink(join(root, 'plugins/benchgo'), join(profile, 'node_modules/benchgo-plugin'), 'dir');
   await writeFile(join(profile, 'cordis.yml'), '[]\n');
   await writeFile(join(profile, 'cordis.patch.yml'), ['- id: commander', '  config:', '    dataDir: ' + JSON.stringify(dataDir), '- id: session-log-deepseek', '  config:', '    enabled: false', '- id: session-telemetry-otel', '  disabled: true', ''].join('\n'));
   const webPort = await port(), linkPort = await port();
@@ -47,7 +47,7 @@ try {
   const devices = JSON.parse(await readFile(join(dataDir, 'link/devices.json'))).devices; assert.equal(devices.length, 1); assert(!JSON.stringify(devices).includes(result.token));
   // The fake service manager leaves the real Host running while exercising release activation.
   const bootNodeModules = join(root, 'deepseek-harness/apps/cli/node_modules/@deepseek-ai');
-  const tar = createRequire(join(root, 'plugins/commander/package.json'))('tar');
+  const tar = createRequire(join(root, 'plugins/benchgo/package.json'))('tar');
   const seed = join(directory, 'seed'); await mkdir(seed); await tar.x({ file: join(assets, 'server-seed.tar.gz'), cwd: seed });
   const release = JSON.parse(await readFile(join(seed, 'release.json')));
   for (const item of release.shared) { const destination = join(runtime, 'node_modules', item.name); if (!['@deepseek-ai/dsh-app-boot', '@deepseek-ai/dsh-atomic-write'].includes(item.name)) await symlink(join(bootNodeModules, item.name.slice('@deepseek-ai/'.length)), destination, 'dir'); }

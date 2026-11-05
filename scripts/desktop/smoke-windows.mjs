@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { smokePreparedRuntime } from '../../deepseek-harness/apps/desktop/scripts/smoke-prepared-runtime.ts';
 import { DesktopHostProcess } from '../../deepseek-harness/apps/desktop/src/host-process.ts';
-import { getInstallState } from '../../plugins/commander/shared/plugin-install.mjs';
+import { getInstallState } from '../../plugins/benchgo/shared/plugin-install.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const app = join(root, 'artifacts/windows/win-unpacked');
@@ -56,7 +56,7 @@ try {
   const font = await fetch(new URL('/api/commander-fonts/' + fontManifest[0].file, ready.url), { headers: { cookie } });
   if (!font.ok || Buffer.from(await font.arrayBuffer()).subarray(0, 4).toString() !== 'wOF2') throw new Error('Packaged sidebar font could not be loaded');
   console.log('Packaged authenticated sidebar state, recent workspace recovery and font asset passed.');
-  const dataDir = join(temporary, '.dowork', 'commander');
+  const dataDir = join(temporary, '.benchgo');
   const lockPath = join(dataDir, 'owner.lock');
   const owner = JSON.parse(await readFile(lockPath, 'utf8'));
   if (owner.host !== hostname() || !Number.isSafeInteger(owner.pid) || owner.pid < 1 || owner.pid === process.pid) throw new Error('Unexpected packaged Host owner record');

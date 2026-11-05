@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { UIIcon } from '../../commander/client/iconsax.jsx';
-import { readJsonResponse } from '../../commander/client/http-response.mjs';
+import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { readJsonResponse } from '../../benchgo/client/http-response.mjs';
 import { deviceIcon, deviceKind, deviceStatus, workbenchUrl } from './device-state.mjs';
 import { deviceSwitchState } from './device-switch.mjs';
 

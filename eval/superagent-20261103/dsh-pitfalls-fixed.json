@@ -1,0 +1,51 @@
+{
+  "at": "2026-11-03T12:17:54.960Z",
+  "scope": "Real host runner + in-memory store; injected assessment probe, no provider requests or production changes.",
+  "findings": [
+    {
+      "id": "ALIGN-01",
+      "fixed": true,
+      "description": "The second thread starts while the first assessment is blocked.",
+      "callsWhileFirstBlocked": 2
+    },
+    {
+      "id": "ALIGN-02",
+      "fixed": true,
+      "description": "Admission requests use the configured auxiliary model and retain the bounded source reader."
+    }
+  ],
+  "calls": [
+    {
+      "threadId": "slow-thread",
+      "model": {
+        "providerId": "main-provider",
+        "modelId": "main-opaque"
+      },
+      "auxiliaryForwarded": true
+    },
+    {
+      "threadId": "other-thread",
+      "model": {
+        "providerId": "main-provider",
+        "modelId": "main-opaque"
+      },
+      "auxiliaryForwarded": true
+    }
+  ],
+  "requests": [
+    {
+      "provider": "aux-provider",
+      "model": "aux-opaque",
+      "tools": [
+        "read_assessment_source"
+      ]
+    },
+    {
+      "provider": "aux-provider",
+      "model": "aux-opaque",
+      "tools": [
+        "read_assessment_source"
+      ]
+    }
+  ]
+}

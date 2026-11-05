@@ -1,0 +1,24 @@
+{
+  "generatedAt": "2026-11-03T11:18:51.914Z",
+  "scope": "Deterministic local ingress only. Candidate counts are not measured LLM calls. No cache token or end-to-end performance claims.",
+  "subscribed": {
+    "messages": 300,
+    "initialRequests": 20,
+    "followups": 280,
+    "candidates": 20,
+    "direct": 280,
+    "duplicateReplaysRejected": 300,
+    "hostIngressP50Ms": 0.8396999999999935,
+    "hostIngressP95Ms": 0.9806999999999846
+  },
+  "withoutSubscriptions": {
+    "messages": 300,
+    "initialRequests": 20,
+    "followups": 280,
+    "candidates": 300,
+    "direct": 0,
+    "duplicateReplaysRejected": 300,
+    "hostIngressP50Ms": 0.5842999999999847,
+    "hostIngressP95Ms": 0.6737000000000535
+  }
+}

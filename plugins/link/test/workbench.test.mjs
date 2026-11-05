@@ -166,10 +166,16 @@ test('workbench requires approved device cookie, serves shared index and blocks 
   assert.equal((await f.call('/link/workbench/api/voice', { cookie, headers: { origin: 'https://evil.example' } })).status, 403);
   for (const path of ['voice', 'commander/tooling', 'settings/get']) assert.equal((await f.call('/link/workbench/api/' + path, { cookie, body: { action: 'config' } })).status, 200);
   assert.deepEqual(f.calls.map(call => call.path), ['/api/voice', '/api/commander/tooling', '/api/settings/get']);
-  assert(f.calls.every(call => call.peer === f.calls[0].peer && call.peer.principal.kind === 'owner' && !call.cookie && !call.auth));
+  assert.equal((await f.call('/link/workbench/api/benchgo/modules', { method: 'GET', cookie })).status, 200);
+  assert.equal(f.calls.at(-1).path, '/api/benchgo/modules');
+  assert.equal(f.calls.at(-1).body, null);
+  assert.equal((await f.call('/link/workbench/api/benchgo/preview-assets/sheet-worker.js', { method: 'GET', cookie })).status, 200);
+  assert.equal(f.calls.at(-1).path, '/api/benchgo/preview-assets/sheet-worker.js');
+  assert(f.calls.every(call => call.peer === f.calls[0].peer && call.peer.principal.kind === 'owner' && call.peer.principal.deviceId === f.deviceId && !call.cookie && !call.auth));
   await f.store.revoke(f.deviceId); await f.workbench.revoke(f.deviceId);
   assert.equal((await f.call('/link/workbench/api/voice', { cookie })).status, 401);
   assert.equal((await f.call('/link/workbench/asset.js', { method: 'GET', cookie })).status, 401);
+  assert.equal((await f.call('/link/workbench/api/benchgo/preview-assets/sheet-worker.js', { method: 'GET', cookie })).status, 401);
   assert.equal(f.disposed.length, 1);
 });
 

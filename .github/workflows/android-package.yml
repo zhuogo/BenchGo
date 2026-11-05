@@ -32,7 +32,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             plugins/link/package-lock.json
-            plugins/commander/package-lock.json
+            plugins/benchgo/package-lock.json
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -45,7 +45,7 @@ jobs:
         run: |
           npm run setup
           npm ci --prefix plugins/link
-          npm ci --prefix plugins/commander
+          npm ci --prefix plugins/benchgo
       - name: Build and verify signed Android release
         env:
           BENCHGO_ANDROID_KEYSTORE_BASE64: ${{ secrets.BENCHGO_ANDROID_KEYSTORE_BASE64 }}

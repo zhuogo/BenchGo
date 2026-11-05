@@ -1,0 +1,139 @@
+{
+  "startedAt": "2026-11-03T15:19:07.633Z",
+  "finishedAt": "2026-11-03T15:19:38.542Z",
+  "scope": "Read-only original Feishu evidence re-review with configured real model; no DB mutation, no external send, not a new Worker run.",
+  "ticketId": "6e95cee9-42bf-48b4-96ab-5f5cdbf13db8",
+  "originalStatus": "failed",
+  "originalReview": "failed",
+  "index": {
+    "total": 15,
+    "omitted": 0
+  },
+  "pages": [
+    {
+      "seq": 46,
+      "name": "web_fetch",
+      "offset": 5000,
+      "length": 4000
+    },
+    {
+      "seq": 46,
+      "name": "web_fetch",
+      "offset": 9000,
+      "length": 4000
+    },
+    {
+      "seq": 37,
+      "name": "web_fetch",
+      "offset": 5000,
+      "length": 4000
+    },
+    {
+      "seq": 38,
+      "name": "web_fetch",
+      "offset": 8000,
+      "length": 4000
+    },
+    {
+      "seq": 39,
+      "name": "web_fetch",
+      "offset": 5000,
+      "length": 4000
+    },
+    {
+      "seq": 40,
+      "name": "web_fetch",
+      "offset": 3000,
+      "length": 4000
+    },
+    {
+      "seq": 28,
+      "name": "web_fetch",
+      "offset": 6000,
+      "length": 4000
+    },
+    {
+      "seq": 29,
+      "name": "web_fetch",
+      "offset": 3000,
+      "length": 4000
+    }
+  ],
+  "decisions": [
+    {
+      "readEvidence": [
+        {
+          "seq": 46,
+          "offset": 5000,
+          "limit": 4000
+        },
+        {
+          "seq": 46,
+          "offset": 9000,
+          "limit": 4000
+        },
+        {
+          "seq": 37,
+          "offset": 5000,
+          "limit": 4000
+        },
+        {
+          "seq": 38,
+          "offset": 8000,
+          "limit": 4000
+        },
+        {
+          "seq": 39,
+          "offset": 5000,
+          "limit": 4000
+        },
+        {
+          "seq": 40,
+          "offset": 3000,
+          "limit": 4000
+        },
+        {
+          "seq": 28,
+          "offset": 6000,
+          "limit": 4000
+        },
+        {
+          "seq": 29,
+          "offset": 3000,
+          "limit": 4000
+        }
+      ]
+    },
+    {
+      "verdict": "passed",
+      "reason": "摘要日期为 2026-11-03，覆盖多个领域且逐条附中新网/新浪原文链接；关键条目（乌镇峰会、外汇存准率、力箭二号、攻击-21、美中期选举、武汉爆燃、厄尔尼诺、国考、2036奥运）均有对应抓取正文支撑，未核实的热榜词条已单独标注，同时说明检索工具不可用的限制，符合验收要求。",
+      "delivery": {
+        "action": "deliver",
+        "text": "## 2026年11月3日（周二）热点摘要\n\n说明：今日 `web_search` 不可用，以下内容来自对中国新闻网、新浪新闻当日文章的直接抓取，覆盖以这两家门户的当日要闻为准；每条附原文链接，未取得正文的仅作标注。\n\n### 时政\n- **2026年世界互联网大会乌镇峰会开幕，李强发表主旨演讲**：谈互联网智能化变革与“以人为本”，点名人与机器、算法伦理、数实融合安全、数智鸿沟四问题，反对“数字铁幕”，约1800人参会。→ https://www.chinanews.com.cn/gn/2026/11-03/10725324.shtml\n- **刘延东同志遗体在京火化**，习近平等到八宝山送别；同日党的二十届五中全会文件及辅导材料在京首发。→ https://www.chinanews.com.cn/gn/2026/11-03/10725355.shtml ｜ https://www.chinanews.com.cn/gn/2026/11-03/10725350.shtml\n\n### 财经\n- **央行上调外汇存款准备金率至6%**（4%→6%，11月15日起执行），释放稳汇率、抑单边升值信号；当日人民币对美元中间价6.7150。→ https://www.chinanews.com.cn/cj/2026/11-03/10725306.shtml\n- 发改委谈“新动能”：监测预警AI就业替代风险，“十五五”末新兴支柱产业产值有望超10万亿元；证监会同日发布稳市场政策。→ https://www.chinanews.com.cn/cj/2026/11-03/10725288.shtml ｜ https://www.chinanews.com.cn/cj/2026/11-03/10725289.shtml\n\n### 科技与国防\n- **力箭二号遥二运载火箭发射成功**（8时15分，东风商业航天创新试验区），成功将千帆极轨21组卫星送入预定轨道。→ https://www.chinanews.com.cn/gn/2026/11-03/10725111.shtml\n- **攻击-21首次在四川舰成功起降**，舰载察打一体隐身无人机登上076型两栖攻击舰。→ https://www.chinanews.com.cn/gn/2026/11-03/10725319.shtml\n\n### 国际\n- **美国中期选举正式投票**：众议院435席、参议院35席改选，经济、战事、移民为关键议题，民调预计民主党有望夺回众议院。→ https://www.chinanews.com.cn/gj/2026/11-03/10725081.shtml\n- 其他：特朗普称美伊在对话、不急于重启战事；朝鲜导弹总局进行武器系统试验；俄军轰炸扎波罗热人道援助点致26人遇难；韩国总统李在明等168人信息泄露。→ https://www.chinanews.com.cn/gj/2026/11-03/10725087.shtml ｜ https://www.chinanews.com.cn/gj/2026/11-03/10725209.shtml ｜ https://www.chinanews.com.cn/gj/2026/11-03/10725335.shtml\n\n### 社会民生\n- **武汉武昌一小区爆燃，2死1伤**（11月2日23时50分许发生，3日警方通报）。→ https://news.sina.com.cn/o/2026-11-03/doc-inixmhhh2341190.shtml\n- **中国气象局：超强厄尔尼诺明显影响我国，今冬冷暖起伏大**，11月有4次冷空气过程。→ https://www.chinanews.com.cn/sh/2026/11-03/10725299.shtml\n- **“微信转账加个动作”登热搜第一**，律师澄清“带公章电子凭证是法院唯一依据”说法不准确。→ https://k.sina.com.cn/article_2810373291_a782e4ab0190308n2.html\n- **国考过审人数七年来首次下降**（393.5万报名、345万过审，招录3.57万，平均竞争比97:1）。→ https://news.sina.com.cn/c/2026-11-02/doc-inixiynx9295183.shtml\n\n### 体育\n- **中国确定不申办2036年夏季奥运会**，德、匈、印、卡塔尔、韩、南非、土耳其七国入围，2029年全会投票。→ https://news.sina.com.cn/c/2026-11-03/doc-inixmxcy2301434.shtml\n\n### 热榜快照（仅榜单文字，未逐条核实）\n王楚钦赛后关心林德状况、TES对战iG首发名单、华为星芒价格、张本美和累哭了、女子买一等座却只能站着等，见 https://news.sina.com.cn/ 热榜区。\n\n**限制**：站内搜索端点返回402（余额不足），微博热搜接口与TopHub均返回403，因此无法给出全网热度排序与完整Top50，热点以中新网、新浪当日要闻为准。"
+      }
+    }
+  ],
+  "verdict": {
+    "verdict": "passed",
+    "reason": "摘要日期为 2026-11-03，覆盖多个领域且逐条附中新网/新浪原文链接；关键条目（乌镇峰会、外汇存准率、力箭二号、攻击-21、美中期选举、武汉爆燃、厄尔尼诺、国考、2036奥运）均有对应抓取正文支撑，未核实的热榜词条已单独标注，同时说明检索工具不可用的限制，符合验收要求。",
+    "delivery": {
+      "action": "deliver",
+      "text": "## 2026年11月3日（周二）热点摘要\n\n说明：今日 `web_search` 不可用，以下内容来自对中国新闻网、新浪新闻当日文章的直接抓取，覆盖以这两家门户的当日要闻为准；每条附原文链接，未取得正文的仅作标注。\n\n### 时政\n- **2026年世界互联网大会乌镇峰会开幕，李强发表主旨演讲**：谈互联网智能化变革与“以人为本”，点名人与机器、算法伦理、数实融合安全、数智鸿沟四问题，反对“数字铁幕”，约1800人参会。→ https://www.chinanews.com.cn/gn/2026/11-03/10725324.shtml\n- **刘延东同志遗体在京火化**，习近平等到八宝山送别；同日党的二十届五中全会文件及辅导材料在京首发。→ https://www.chinanews.com.cn/gn/2026/11-03/10725355.shtml ｜ https://www.chinanews.com.cn/gn/2026/11-03/10725350.shtml\n\n### 财经\n- **央行上调外汇存款准备金率至6%**（4%→6%，11月15日起执行），释放稳汇率、抑单边升值信号；当日人民币对美元中间价6.7150。→ https://www.chinanews.com.cn/cj/2026/11-03/10725306.shtml\n- 发改委谈“新动能”：监测预警AI就业替代风险，“十五五”末新兴支柱产业产值有望超10万亿元；证监会同日发布稳市场政策。→ https://www.chinanews.com.cn/cj/2026/11-03/10725288.shtml ｜ https://www.chinanews.com.cn/cj/2026/11-03/10725289.shtml\n\n### 科技与国防\n- **力箭二号遥二运载火箭发射成功**（8时15分，东风商业航天创新试验区），成功将千帆极轨21组卫星送入预定轨道。→ https://www.chinanews.com.cn/gn/2026/11-03/10725111.shtml\n- **攻击-21首次在四川舰成功起降**，舰载察打一体隐身无人机登上076型两栖攻击舰。→ https://www.chinanews.com.cn/gn/2026/11-03/10725319.shtml\n\n### 国际\n- **美国中期选举正式投票**：众议院435席、参议院35席改选，经济、战事、移民为关键议题，民调预计民主党有望夺回众议院。→ https://www.chinanews.com.cn/gj/2026/11-03/10725081.shtml\n- 其他：特朗普称美伊在对话、不急于重启战事；朝鲜导弹总局进行武器系统试验；俄军轰炸扎波罗热人道援助点致26人遇难；韩国总统李在明等168人信息泄露。→ https://www.chinanews.com.cn/gj/2026/11-03/10725087.shtml ｜ https://www.chinanews.com.cn/gj/2026/11-03/10725209.shtml ｜ https://www.chinanews.com.cn/gj/2026/11-03/10725335.shtml\n\n### 社会民生\n- **武汉武昌一小区爆燃，2死1伤**（11月2日23时50分许发生，3日警方通报）。→ https://news.sina.com.cn/o/2026-11-03/doc-inixmhhh2341190.shtml\n- **中国气象局：超强厄尔尼诺明显影响我国，今冬冷暖起伏大**，11月有4次冷空气过程。→ https://www.chinanews.com.cn/sh/2026/11-03/10725299.shtml\n- **“微信转账加个动作”登热搜第一**，律师澄清“带公章电子凭证是法院唯一依据”说法不准确。→ https://k.sina.com.cn/article_2810373291_a782e4ab0190308n2.html\n- **国考过审人数七年来首次下降**（393.5万报名、345万过审，招录3.57万，平均竞争比97:1）。→ https://news.sina.com.cn/c/2026-11-02/doc-inixiynx9295183.shtml\n\n### 体育\n- **中国确定不申办2036年夏季奥运会**，德、匈、印、卡塔尔、韩、南非、土耳其七国入围，2029年全会投票。→ https://news.sina.com.cn/c/2026-11-03/doc-inixmxcy2301434.shtml\n\n### 热榜快照（仅榜单文字，未逐条核实）\n王楚钦赛后关心林德状况、TES对战iG首发名单、华为星芒价格、张本美和累哭了、女子买一等座却只能站着等，见 https://news.sina.com.cn/ 热榜区。\n\n**限制**：站内搜索端点返回402（余额不足），微博热搜接口与TopHub均返回403，因此无法给出全网热度排序与完整Top50，热点以中新网、新浪当日要闻为准。"
+    },
+    "routing": {
+      "configRevision": null,
+      "capability": "review",
+      "auxiliary": false,
+      "switched": false,
+      "attempts": [
+        {
+          "providerId": "routergo",
+          "modelId": "deepseek-v4.1-flash",
+          "retry": 0,
+          "status": "completed"
+        }
+      ]
+    },
+    "inputHash": "8b7834e2a2406d8d75f0fc29af9faf80a36cc952f1285cd88f335dafa12ec1c8"
+  }
+}

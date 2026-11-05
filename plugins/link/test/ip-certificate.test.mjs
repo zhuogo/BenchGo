@@ -10,6 +10,7 @@ import { validateConfig } from '../scripts/ip-certificate.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const script = join(root, 'scripts/ip-certificate.mjs');
+const requiresLinux = { skip: process.platform !== 'linux' && 'Requires Linux Certbot/systemd, executable shebang fixtures and POSIX certificate symlinks' };
 const require = createRequire(join(root, 'package.json'));
 const selfsigned = require('selfsigned');
 const signed = selfsigned.generate([{ name: 'commonName', value: '8.8.8.8' }], { keySize: 2048, days: 30, algorithm: 'sha256', extensions: [{ name: 'basicConstraints', cA: false }, { name: 'keyUsage', digitalSignature: true, keyEncipherment: true }, { name: 'extKeyUsage', serverAuth: true }, { name: 'subjectAltName', altNames: [{ type: 7, ip: '8.8.8.8' }] }] });
@@ -88,7 +89,7 @@ test('domain configuration does not require an IP certificate subject', () => {
   assert.equal(config.ip, undefined);
 });
 
-test('issue uses Certbot argv, publishes a matching cert atomically, and never prints the private key', async t => {
+test('issue uses Certbot argv, publishes a matching cert atomically, and never prints the private key', requiresLinux, async t => {
   const f = await fixture(t), suspiciousWebroot = join(f.directory, 'webroot; touch shell-pwn');
   await mkdir(suspiciousWebroot);
   const result = f.invoke('issue', { '--webroot': suspiciousWebroot });
@@ -109,7 +110,7 @@ test('issue uses Certbot argv, publishes a matching cert atomically, and never p
   assert.equal(JSON.parse(status.stdout).state, 'ready'); assert(!status.stdout.includes(fixtureKey));
 });
 
-test('first dry-run uses certonly and does not publish a certificate', async t => {
+test('first dry-run uses certonly and does not publish a certificate', requiresLinux, async t => {
   const f = await fixture(t);
   const result = f.invoke('dry-run'); assert.equal(result.status, 0, result.stderr);
   const args = JSON.parse(await readFile(f.argsFile, 'utf8'));
@@ -117,7 +118,7 @@ test('first dry-run uses certonly and does not publish a certificate', async t =
   const status = f.invoke('status'); assert.equal(JSON.parse(status.stdout).state, 'certificate-missing');
 });
 
-test('email is optional for issue and timer renewal', async t => {
+test('email is optional for issue and timer renewal', requiresLinux, async t => {
   const f = await fixture(t);
   const issued = f.invoke('issue', { '--email': undefined });
   assert.equal(issued.status, 0, issued.stderr);
@@ -144,7 +145,7 @@ test('status on an absent explicit state directory is read-only', async t => {
   await assert.rejects(readFile(join(f.stateDir, 'dsh-link-ip-certificate', 'managed.json')), { code: 'ENOENT' });
 });
 
-test('failed renewal leaves the active certificate version and bytes untouched', async t => {
+test('failed renewal leaves the active certificate version and bytes untouched', requiresLinux, async t => {
   const f = await fixture(t);
   const issued = f.invoke('issue'); assert.equal(issued.status, 0, issued.stderr);
   const active = join(f.stateDir, 'dsh-link-ip-certificate', 'active');
@@ -156,7 +157,7 @@ test('failed renewal leaves the active certificate version and bytes untouched',
   const status = f.invoke('status'); assert.equal(JSON.parse(status.stdout).state, 'ready');
 });
 
-test('successful Certbot exit with mismatched output also leaves the active certificate untouched', async t => {
+test('successful Certbot exit with mismatched output also leaves the active certificate untouched', requiresLinux, async t => {
   const f = await fixture(t);
   const issued = f.invoke('issue'); assert.equal(issued.status, 0, issued.stderr);
   const active = join(f.stateDir, 'dsh-link-ip-certificate', 'active');
@@ -166,14 +167,14 @@ test('successful Certbot exit with mismatched output also leaves the active cert
   assert.equal(await readlink(active), beforeLink); assert.equal(await readFile(join(active, 'privkey.pem'), 'utf8'), beforeKey);
 });
 
-test('Certbot older than 5.4 is rejected before certificate state is created', async t => {
+test('Certbot older than 5.4 is rejected before certificate state is created', requiresLinux, async t => {
   const f = await fixture(t);
   const result = f.invoke('dry-run', {}, { CERTBOT_TEST_VERSION: '5.3.0' });
   assert.notEqual(result.status, 0); assert.match(result.stderr, /5\.4\.0 或更高/);
   await assert.rejects(readFile(join(f.stateDir, 'dsh-link-ip-certificate', 'managed.json')), { code: 'ENOENT' });
 });
 
-test('unchanged renewal does not publish a release or restart the relay', async t => {
+test('unchanged renewal does not publish a release or restart the relay', requiresLinux, async t => {
   const f = await fixture(t), issued = f.invoke('issue'); assert.equal(issued.status, 0, issued.stderr);
   const active = join(f.stateDir, 'dsh-link-ip-certificate', 'active'), before = await readlink(active);
   const result = f.invoke('renew', { '--restart-relay-unit': 'benchgo-relay.service' });
@@ -182,7 +183,7 @@ test('unchanged renewal does not publish a release or restart the relay', async 
   await assert.rejects(readFile(f.systemctlLog, 'utf8'), { code: 'ENOENT' });
 });
 
-test('changed renewal restarts only the fixed relay service and retries a failed restart', async t => {
+test('changed renewal restarts only the fixed relay service and retries a failed restart', requiresLinux, async t => {
   const f = await fixture(t), issued = f.invoke('issue'); assert.equal(issued.status, 0, issued.stderr);
   const active = join(f.stateDir, 'dsh-link-ip-certificate', 'active'), old = await readlink(active);
   const failedRestart = f.invoke('renew', { '--restart-relay-unit': 'benchgo-relay.service' }, { CERTBOT_TEST_CERT: renewed.cert, CERTBOT_TEST_KEY: renewed.private, SYSTEMCTL_TEST_FAIL: '1' });
@@ -195,7 +196,7 @@ test('changed renewal restarts only the fixed relay service and retries a failed
   assert.deepEqual(calls, [['--user', 'try-restart', 'benchgo-relay.service'], ['--user', 'try-restart', 'benchgo-relay.service']]);
 });
 
-test('timer installation and removal manage only owned units and never remove the relay service', async t => {
+test('timer installation and removal manage only owned units and never remove the relay service', requiresLinux, async t => {
   const f = await fixture(t), issued = f.invoke('issue'); assert.equal(issued.status, 0, issued.stderr);
   await mkdir(f.unitDir, { recursive: true });
   const relayUnit = join(f.unitDir, 'benchgo-relay.service'), relayContents = '[Service]\nExecStart=/usr/bin/node relay.js\n';
@@ -217,7 +218,7 @@ test('timer installation and removal manage only owned units and never remove th
   assert(!allCalls.some(args => ['enable', 'disable', 'try-restart', 'stop', 'restart'].includes(args[1]) && args.includes('benchgo-relay.service')));
 });
 
-test('timer installation refuses to overwrite an unrelated same-name unit', async t => {
+test('timer installation refuses to overwrite an unrelated same-name unit', requiresLinux, async t => {
   const f = await fixture(t), issued = f.invoke('issue'); assert.equal(issued.status, 0, issued.stderr);
   await mkdir(f.unitDir, { recursive: true });
   await writeFile(join(f.unitDir, 'benchgo-relay.service'), '[Service]\nExecStart=/usr/bin/node relay.js\n');

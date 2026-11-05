@@ -2,7 +2,7 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { mkdir, writeFile, access } from 'node:fs/promises';
 const privatePath = new URL('../../.local/release-keys/benchgo-update-private.pem', import.meta.url);
-const publicPath = new URL('../../plugins/commander/shared/update-public-key.pem', import.meta.url);
+const publicPath = new URL('../../plugins/benchgo/shared/update-public-key.pem', import.meta.url);
 for (const path of [privatePath, publicPath]) {
   try { await access(path); throw new Error('更新签名密钥已存在，拒绝覆盖'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }

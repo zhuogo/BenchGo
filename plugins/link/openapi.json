@@ -3,7 +3,7 @@
   "info": {
     "title": "BenchGo 设备中心",
     "version": "1.0.0",
-    "description": "本机 owner 使用 launch 一次性入口获取私有会话路径。设备 token、SSH 密码和私钥不在公开响应暴露。MCP delegation 不变，不开放 Agent 设备切换或 SSH 工具。 自有中继首版为单主机独占 HTTPS 源，TLS 在用户中继终止，中继运营者可读取内容；不增加 MCP 管理工具。"
+    "description": "本机 owner 使用 launch 一次性入口获取私有会话路径。设备 token、SSH 密码和私钥不在公开响应暴露。MCP delegation 不变，不开放 Agent 设备切换或 SSH 工具。已配对工作台的 Link 会话接口除 Harness 操作外支持 notifications、notificationAck、notificationRead：通知以设备 ID 为投递目标，支持游标同步、独立回执与断线恢复；传输接收不等于设备回执。自有中继首版为单主机独占 HTTPS 源，TLS 在用户中继终止，中继运营者可读取内容；不增加 MCP 管理工具。"
   },
   "servers": [
     {
@@ -21,9 +21,18 @@
     }
   ],
   "paths": {
+    "/link/workbench/api/commander/assistant": {
+      "post": {
+        "summary": "已配对设备的总助手通知与会话接口",
+        "description": "仅接受工作台 HttpOnly 会话。除官方助手操作外，Link 允许 notifications（全局 seq 游标增量同步）、notificationAck（设备收件回执）和 notificationRead（助手已读状态）。notifications 返回后服务端记录 transport-delivered；客户端确认用户已看到后再提交 notificationAck。afterSeq 是全局通知序号，不是 thread 局部游标；断线重连应使用上次返回的 cursor。",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkbenchAssistantRequest" } } } },
+        "responses": { "200": { "description": "助手操作结果或通知增量。", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } }, "400": { "description": "请求无效。" }, "401": { "description": "工作台会话失效。" } }
+      }
+    },
     "/api/devices": {
       "post": {
         "summary": "设备保存、配对、切换与服务器管理",
+        "x-device-naming": "rename 的 deviceId=local 修改本机持久名称并用于配对身份；其他设备 rename 仅保存本机管理备注，不修改被控端。hostRenameDevice 的 id/name 对已授权访问本机的设备保存本地备注，对应 owner rename-device；hostStatus.devices 的 name 显示备注，originalName 保留设备原始身份名。list 本机行返回真实名称。已批准配对返回 hostName 和 name（均为被控主机名称）；缺少名称生成稳定随机名。设备连接持久开启，hostConfigure.enabled 仅为旧客户端兼容字段，不再关闭连接。",
         "requestBody": {
           "required": true,
           "content": {
@@ -36,7 +45,7 @@
         },
         "responses": {
           "200": {
-            "description": "list:{devices,activeId,capabilities}; pair:{requestId,expiresAt}; pairStatus:{status,device?}; select:{device,url}; sshProbe:{fingerprint}; sshConnect/reconnect/update:{jobId}; job:{id,state,steps,device?,error?}; serverAction:{operation,status?,logs?}"
+            "description": "list:{devices,activeId,capabilities}; pair:{requestId,expiresAt}; pairStatus:{status,device?}; select:{device,url}; sshProbe:{fingerprint}; sshConnect/reconnect/update:{jobId}; job:{id,state,steps,device?,error?}; serverAction:{operation,status?,logs?}; hostRelayTest:{ok,latencyMs,message}（只读测试，不保存输入、不抢占在线控制通道；id 节点 token 留空时复用私密配置）"
           },
           "400": {
             "description": "输入错误或操作失败"
@@ -127,7 +136,9 @@
                           "confirm",
                           "reject",
                           "revoke",
+                          "rename-device",
                           "relay-configure",
+                          "relay-test",
                           "relay-pool-configure"
                         ]
                       },
@@ -140,6 +151,12 @@
                       },
                       "enabled": {
                         "type": "boolean"
+                      },
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100,
+                        "description": "configure 更新本机持久名称，status.hostName 及批准配对的 hostName/name 返回此名称。"
                       },
                       "host": {
                         "type": "string"
@@ -175,7 +192,7 @@
         },
         "responses": {
           "200": {
-            "description": "当前 Link 与中继状态"
+            "description": "当前 Link 与中继状态；relay-test 返回 {ok,latencyMs,message}，失败仍返回 200，五秒无响应报告超时；验证可信 HTTPS、中继协议和密钥，不代表隧道或访问端已在线。输入 url/token，编辑可带 id 并留空 token 复用私密配置；不保存输入、不回显密钥。GET /__link/relay/probe 为只读 Bearer 鉴权探测，要求 {protocol:benchgo-link-relay,version:1,authenticated:true}；旧中继无此能力时需升级，普通 HTTP 可达不算成功。"
           },
           "400": {
             "description": "输入无效、配置错误或服务关闭"
@@ -186,6 +203,30 @@
           "403": {
             "description": "owner 权限或来源无效"
           }
+        }
+      }
+    },
+    "/link/api/rpc": {
+      "post": {
+        "summary": "配对工作台会话与通知 RPC",
+        "description": "仅配对设备工作台会话可调用；afterSeq 是总助手通知的全局 seq 游标，按 threadId/unread 过滤后仍推进全局游标，客户端必须保存返回 cursor。notifications 返回后仅表示传输已接收；notificationAck 是设备级收件回执，notificationRead 是共享用户已读状态。断线后使用上次 cursor 增量同步。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LinkSessionRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "会话、模型或通知操作结果",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LinkSessionResponse" } } }
+          },
+          "400": { "description": "请求无效或操作失败" },
+          "401": { "description": "设备会话无效或已过期" },
+          "403": { "description": "设备未获准访问" },
+          "409": { "description": "请求标识冲突" }
         }
       }
     }
@@ -217,10 +258,12 @@
               "hostConfirm",
               "hostReject",
               "hostRevoke",
+              "hostRenameDevice",
               "relayProbe",
               "relayDeploy",
               "relayAction",
               "hostRelayConfigure",
+              "hostRelayTest",
               "hostRelayPoolConfigure"
             ]
           },
@@ -405,6 +448,19 @@
           }
         ]
       },
+      "WorkbenchAssistantRequest": {
+        "type": "object",
+        "required": ["action"],
+        "properties": {
+          "action": { "type": "string", "enum": ["notifications", "notificationAck", "notificationRead"] },
+          "afterSeq": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "threadId": { "type": "string", "maxLength": 200 },
+          "unread": { "type": "boolean" },
+          "eventIds": { "type": "array", "maxItems": 500, "items": { "type": "string", "maxLength": 200 } }
+        },
+        "additionalProperties": true
+      },
       "Device": {
         "type": "object",
         "required": [
@@ -486,6 +542,33 @@
             "type": "string"
           }
         }
+      },
+      "LinkSessionRequest": {
+        "type": "object",
+        "required": ["action"],
+        "properties": {
+          "action": { "enum": ["state", "models", "create", "history", "send", "cancel", "respond", "notifications", "notificationAck", "notificationRead"] },
+          "id": { "type": "string" },
+          "projectId": { "type": "string" },
+          "provider": { "type": "string" },
+          "model": { "type": "string" },
+          "requestId": { "type": "string", "maxLength": 200 },
+          "text": { "type": "string", "maxLength": 20000 },
+          "before": { "type": "integer", "minimum": 0 },
+          "afterSeq": { "type": "integer", "minimum": 0, "description": "全局通知 seq 游标" },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "threadId": { "type": "string" },
+          "unread": { "type": "boolean" },
+          "eventIds": { "type": "array", "items": { "type": "string" }, "maxItems": 500 },
+          "interactionId": { "type": "string" },
+          "answer": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": false
+      },
+      "LinkSessionResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "按 action 返回；notifications 包含 events、cursor、hasMore、resyncRequired。"
       }
     }
   }

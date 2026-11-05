@@ -9,7 +9,9 @@ export function deviceName(preferred = '', { persist = true } = {}) {
   const bytes = new Uint8Array(5);
   if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(bytes);
   else for (let index = 0; index < bytes.length; index++) bytes[index] = Math.floor(Math.random() * 256);
-  return '我的手机-' + Array.from(bytes, value => String.fromCharCode(65 + value % 26)).join('');
+  const generated = '我的手机-' + Array.from(bytes, value => String.fromCharCode(65 + value % 26)).join('');
+  if (persist) rememberDeviceName(generated);
+  return generated;
 }
 
 export function rememberDeviceName(name) {

@@ -1,0 +1,2485 @@
+{
+  "mode": "controlled",
+  "extra": false,
+  "diagnostic": false,
+  "startedAt": "2026-11-03T11:23:24.948Z",
+  "scenarios": [
+    {
+      "id": "S01",
+      "title": "插件装配与状态入口",
+      "expected": "真实 loader 启动后 state 返回线程、配置和能力",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:37.536Z",
+      "evidence": {
+        "configRevision": 0,
+        "keys": [
+          "config",
+          "petExpression",
+          "media",
+          "profile",
+          "memories",
+          "state"
+        ]
+      },
+      "status": "pass",
+      "durationMs": 48
+    },
+    {
+      "id": "S02",
+      "title": "未认证访问隔离",
+      "expected": "不带 cookie 返回 401，不返回状态内容",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:37.594Z",
+      "evidence": {
+        "status": 401,
+        "body": "unauthorized"
+      },
+      "status": "pass",
+      "durationMs": 15
+    },
+    {
+      "id": "S03",
+      "title": "跨站操作拦截",
+      "expected": "恶意 Origin 返回 403",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:37.620Z",
+      "evidence": {
+        "status": 403,
+        "body": "forbidden"
+      },
+      "status": "pass",
+      "durationMs": 8
+    },
+    {
+      "id": "S04",
+      "title": "能力和模型目录",
+      "expected": "目录包含已配置模型服务；能力接口返回真实布尔值",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:37.637Z",
+      "evidence": {
+        "catalog": {
+          "projects": [],
+          "providers": [
+            {
+              "id": "deepseek-official",
+              "name": "DeepSeek",
+              "available": true
+            },
+            {
+              "id": "deepseek-account",
+              "name": "DeepSeek Account",
+              "available": true
+            },
+            {
+              "id": "assistant-smoke",
+              "name": "assistant-smoke",
+              "available": true
+            },
+            {
+              "id": "commander-codex",
+              "name": "Codex",
+              "available": true
+            },
+            {
+              "id": "commander-claude",
+              "name": "Claude Code",
+              "available": true
+            },
+            {
+              "id": "commander-pi",
+              "name": "Pi",
+              "available": true
+            },
+            {
+              "id": "commander-opencode",
+              "name": "OpenCode",
+              "available": true
+            },
+            {
+              "id": "commander-gemini",
+              "name": "Gemini CLI",
+              "available": true
+            },
+            {
+              "id": "commander-hermes",
+              "name": "Hermes",
+              "available": true
+            },
+            {
+              "id": "commander-grok",
+              "name": "Grok Build",
+              "available": true
+            },
+            {
+              "id": "commander-mcode",
+              "name": "MiniMax Code",
+              "available": true
+            }
+          ],
+          "models": [
+            {
+              "provider": "assistant-smoke",
+              "id": "Eval/Route:2026-11+Opaque",
+              "name": "Eval/Route:2026-11+Opaque",
+              "inputModalities": [
+                "text"
+              ]
+            },
+            {
+              "provider": "assistant-smoke",
+              "id": "Eval/Thread:V2+Exact",
+              "name": "Eval/Thread:V2+Exact",
+              "inputModalities": [
+                "text"
+              ]
+            },
+            {
+              "provider": "commander-codex",
+              "id": "dsh-route-v1:WyJhc3Npc3RhbnQtc21va2UiLCJFdmFsL1JvdXRlOjIwMjYtMTErT3BhcXVlIl0",
+              "name": "Eval/Route:2026-11+Opaque",
+              "inputModalities": [
+                "text"
+              ]
+            },
+            {
+              "provider": "commander-codex",
+              "id": "dsh-route-v1:WyJhc3Npc3RhbnQtc21va2UiLCJFdmFsL1RocmVhZDpWMitFeGFjdCJd",
+              "name": "Eval/Thread:V2+Exact",
+              "inputModalities": [
+                "text"
+              ]
+            },
+            {
+              "provider": "commander-claude",
+              "id": "dsh-route-v1:WyJhc3Npc3RhbnQtc21va2UiLCJFdmFsL1JvdXRlOjIwMjYtMTErT3BhcXVlIl0",
+              "name": "Eval/Route:2026-11+Opaque",
+              "inputModalities": [
+                "text"
+              ]
+            },
+            {
+              "provider": "commander-claude",
+              "id": "dsh-route-v1:WyJhc3Npc3RhbnQtc21va2UiLCJFdmFsL1RocmVhZDpWMitFeGFjdCJd",
+              "name": "Eval/Thread:V2+Exact",
+              "inputModalities": [
+                "text"
+              ]
+            }
+          ]
+        },
+        "capabilities": {
+          "schemaVersion": 1,
+          "available": {
+            "chat": true,
+            "sideChats": true,
+            "memory": true,
+            "documents": true,
+            "tickets": true,
+            "goals": true,
+            "triggers": true,
+            "skills": true,
+            "media": true,
+            "summary": true,
+            "vision": true,
+            "ticketRevisions": true,
+            "evaluationDisposition": true,
+            "identityMigration": true,
+            "linkNotifications": true,
+            "backgroundReview": true,
+            "multiProfile": false,
+            "vectorMemory": false,
+            "voiceInput": false,
+            "readAloud": false,
+            "realtimeVoice": false
+          },
+          "reasons": {
+            "multiProfile": "BenchGo 当前固定为一个总助手和一个活动身份",
+            "vectorMemory": "不新增向量数据库依赖",
+            "voiceInput": "请在设置 → 语音中启用语音输入",
+            "readAloud": "请在设置 → 语音中启用自动朗读",
+            "realtimeVoice": "请在设置 → 语音中启用实时通话"
+          }
+        }
+      },
+      "status": "pass",
+      "durationMs": 391
+    },
+    {
+      "id": "S05",
+      "title": "配置局部保存不丢失其他字段",
+      "expected": "改名保留模型列表；读回一致",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:38.036Z",
+      "evidence": {
+        "schemaVersion": 1,
+        "revision": 2,
+        "name": "BenchGo Eval",
+        "cardHtml": null,
+        "models": [
+          {
+            "providerId": "assistant-smoke",
+            "modelId": "Eval/Route:2026-11+Opaque"
+          }
+        ],
+        "image": null,
+        "video": null,
+        "tts": null,
+        "asr": null,
+        "capabilities": {
+          "proactive": false
+        },
+        "cardMotion": true,
+        "pet": null,
+        "petPrevious": null,
+        "petHasPrevious": false,
+        "auxiliary": null,
+        "workerConcurrency": 2
+      },
+      "status": "pass",
+      "durationMs": 134
+    },
+    {
+      "id": "S06",
+      "title": "过期配置写入冲突",
+      "expected": "过期 revision 被拒，已保存值保持",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:38.178Z",
+      "evidence": {
+        "status": 409,
+        "body": {
+          "error": "Assistant data changed; reload before saving",
+          "code": "REVISION_CONFLICT",
+          "revision": 3
+        }
+      },
+      "status": "pass",
+      "durationMs": 148
+    },
+    {
+      "id": "S07",
+      "title": "会话并发初始化幂等",
+      "expected": "5次并发 ensure 返回同一个 sessionId",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:38.334Z",
+      "evidence": [
+        {
+          "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4"
+        },
+        {
+          "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4"
+        },
+        {
+          "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4"
+        },
+        {
+          "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4"
+        },
+        {
+          "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4"
+        }
+      ],
+      "status": "pass",
+      "durationMs": 110
+    },
+    {
+      "id": "S08",
+      "title": "发送、流式返回和历史落盘",
+      "expected": "应答 BENCHGO_OK；用户与助手消息可读",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:38.529Z",
+      "evidence": {
+        "threadId": "main",
+        "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4",
+        "messages": [
+          {
+            "id": "1609f569-2d7b-4bd0-810a-2329c49e3907",
+            "role": "user",
+            "text": "EVAL_BASIC Reply BENCHGO_OK",
+            "content": [
+              {
+                "type": "text",
+                "text": "EVAL_BASIC Reply BENCHGO_OK"
+              }
+            ],
+            "source": {
+              "kind": "user"
+            },
+            "interrupted": false,
+            "time": 1793705018737
+          },
+          {
+            "id": "28a16aed-8389-4985-b1db-538bab2c016a",
+            "role": "assistant",
+            "text": "BENCHGO_OK",
+            "content": [
+              {
+                "type": "text",
+                "text": "BENCHGO_OK"
+              }
+            ],
+            "source": {
+              "kind": "model",
+              "provider": "assistant-smoke",
+              "model": "Eval/Route:2026-11+Opaque",
+              "replayState": {
+                "response": {
+                  "kind": "pi-ai",
+                  "version": 2,
+                  "api": "openai-completions",
+                  "provider": "assistant-smoke",
+                  "model": "Eval/Route:2026-11+Opaque",
+                  "responseId": "eval",
+                  "stopReason": "stop"
+                },
+                "blocks": [
+                  {
+                    "type": "text"
+                  }
+                ]
+              }
+            },
+            "interrupted": false,
+            "time": 1793705019252
+          }
+        ],
+        "images": [],
+        "hasMore": false,
+        "nextBefore": null,
+        "status": "idle",
+        "running": false,
+        "error": null,
+        "failures": [],
+        "model": {
+          "providerId": "assistant-smoke",
+          "modelId": "Eval/Route:2026-11+Opaque"
+        },
+        "notifications": []
+      },
+      "status": "pass",
+      "durationMs": 977
+    },
+    {
+      "id": "S09",
+      "title": "供应商模型 ID 全链路一致",
+      "expected": "配置、history、实际 HTTP body 的 model 完全相同",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:39.514Z",
+      "evidence": {
+        "configured": {
+          "providerId": "assistant-smoke",
+          "modelId": "Eval/Route:2026-11+Opaque"
+        },
+        "selected": {
+          "providerId": "assistant-smoke",
+          "modelId": "Eval/Route:2026-11+Opaque"
+        },
+        "actualRequestModels": [
+          "Eval/Route:2026-11+Opaque"
+        ]
+      },
+      "status": "pass",
+      "durationMs": 12
+    },
+    {
+      "id": "S10",
+      "title": "重复提交去重",
+      "expected": "相同 requestId/正文返回 duplicate，用户消息不重复",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:39.576Z",
+      "evidence": {
+        "threadId": "main",
+        "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4",
+        "messageId": "1609f569-2d7b-4bd0-810a-2329c49e3907",
+        "duplicate": true
+      },
+      "status": "pass",
+      "durationMs": 42
+    },
+    {
+      "id": "S11",
+      "title": "请求 ID 冲突保护",
+      "expected": "同 requestId 不同内容被拒绝",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:39.625Z",
+      "evidence": {
+        "status": 400,
+        "body": {
+          "error": "请求标识已用于不同内容"
+        }
+      },
+      "status": "pass",
+      "durationMs": 17
+    },
+    {
+      "id": "S12",
+      "title": "旁聊与主聊隔离",
+      "expected": "旁聊消息不进入主聊；sessionId不同",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:39.649Z",
+      "evidence": {
+        "threadId": "635bf7b6-f459-43d7-a677-e6030da4c013",
+        "sessionId": "9dd498a2-64cd-4e0c-92d4-37df0818341c",
+        "messages": [
+          {
+            "id": "c3d2adce-ebf5-402f-8bef-5a5247d061b0",
+            "role": "user",
+            "text": "EVAL_SIDE",
+            "content": [
+              {
+                "type": "text",
+                "text": "EVAL_SIDE"
+              }
+            ],
+            "source": {
+              "kind": "user"
+            },
+            "interrupted": false,
+            "time": 1793705019894
+          },
+          {
+            "id": "2b38371f-9380-45c0-bced-2f07fdc76fea",
+            "role": "assistant",
+            "text": "BENCHGO_OK",
+            "content": [
+              {
+                "type": "text",
+                "text": "BENCHGO_OK"
+              }
+            ],
+            "source": {
+              "kind": "model",
+              "provider": "assistant-smoke",
+              "model": "Eval/Route:2026-11+Opaque",
+              "replayState": {
+                "response": {
+                  "kind": "pi-ai",
+                  "version": 2,
+                  "api": "openai-completions",
+                  "provider": "assistant-smoke",
+                  "model": "Eval/Route:2026-11+Opaque",
+                  "responseId": "eval",
+                  "stopReason": "stop"
+                },
+                "blocks": [
+                  {
+                    "type": "text"
+                  }
+                ]
+              }
+            },
+            "interrupted": false,
+            "time": 1793705020016
+          }
+        ],
+        "images": [],
+        "hasMore": false,
+        "nextBefore": null,
+        "status": "idle",
+        "running": false,
+        "error": null,
+        "failures": [],
+        "model": {
+          "providerId": "assistant-smoke",
+          "modelId": "Eval/Route:2026-11+Opaque"
+        },
+        "notifications": []
+      },
+      "status": "pass",
+      "durationMs": 695
+    },
+    {
+      "id": "S13",
+      "title": "线程显式模型覆盖默认",
+      "expected": "旁聊显式模型和实际请求一致；主聊配置不变",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:40.394Z",
+      "evidence": {
+        "providerId": "assistant-smoke",
+        "modelId": "Eval/Thread:V2+Exact"
+      },
+      "status": "pass",
+      "durationMs": 657
+    },
+    {
+      "id": "S14",
+      "title": "归档阻止执行并可恢复",
+      "expected": "归档后 send 被拒；恢复后可继续",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:41.058Z",
+      "evidence": {
+        "status": 400,
+        "body": {
+          "error": "请先恢复已归档的旁聊"
+        }
+      },
+      "status": "pass",
+      "durationMs": 576
+    },
+    {
+      "id": "S15",
+      "title": "原生只读工具真实执行",
+      "expected": "模型发出 read，官方工具返回随机文件内容",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:41.688Z",
+      "evidence": {
+        "threadId": "fcdcb3f6-896a-4612-848e-a6f85ca65337",
+        "sessionId": "28d66bd4-402d-44f1-8600-ef3e61ca9b34",
+        "messages": [
+          {
+            "id": "15fef63d-a350-42e1-9211-3cacfa7c71dc",
+            "role": "user",
+            "text": "EVAL_READ\nPATH=C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\read-fixture.txt",
+            "content": [
+              {
+                "type": "text",
+                "text": "EVAL_READ\nPATH=C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\read-fixture.txt"
+              }
+            ],
+            "source": {
+              "kind": "user"
+            },
+            "interrupted": false,
+            "time": 1793705021911
+          },
+          {
+            "id": "1fbc5862-688c-44e7-8b65-78d0329048c3",
+            "role": "assistant",
+            "text": "",
+            "content": [
+              {
+                "type": "tool-call",
+                "id": "eval-tool",
+                "name": "read",
+                "arguments": "{\"file_path\":\"C:\\\\Users\\\\DraftGo\\\\AppData\\\\Local\\\\Temp\\\\benchgo-assistant-live-nqrTLC\\\\read-fixture.txt\",\"path\":\"C:\\\\Users\\\\DraftGo\\\\AppData\\\\Local\\\\Temp\\\\benchgo-assistant-live-nqrTLC\\\\read-fixture.txt\"}"
+              }
+            ],
+            "source": {
+              "kind": "model",
+              "provider": "assistant-smoke",
+              "model": "Eval/Route:2026-11+Opaque",
+              "replayState": {
+                "response": {
+                  "kind": "pi-ai",
+                  "version": 2,
+                  "api": "openai-completions",
+                  "provider": "assistant-smoke",
+                  "model": "Eval/Route:2026-11+Opaque",
+                  "responseId": "eval",
+                  "stopReason": "toolUse"
+                },
+                "blocks": [
+                  {
+                    "type": "tool-call"
+                  }
+                ]
+              }
+            },
+            "interrupted": false,
+            "time": 1793705022055
+          },
+          {
+            "id": "567bcc4c-f329-404f-b998-88ec35ba4075",
+            "role": "assistant",
+            "text": "EVAL_TOOL_RESULT <path>C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\read-fixture.txt</path>\n<type>file</type>\n<content>\n1: CONTENT-43a8d15a-142b-4d9c-939a-b1896403a8ff\n\n(End of file - total 1 lines)\n</content>",
+            "content": [
+              {
+                "type": "text",
+                "text": "EVAL_TOOL_RESULT <path>C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\read-fixture.txt</path>\n<type>file</type>\n<content>\n1: CONTENT-43a8d15a-142b-4d9c-939a-b1896403a8ff\n\n(End of file - total 1 lines)\n</content>"
+              }
+            ],
+            "source": {
+              "kind": "model",
+              "provider": "assistant-smoke",
+              "model": "Eval/Route:2026-11+Opaque",
+              "replayState": {
+                "response": {
+                  "kind": "pi-ai",
+                  "version": 2,
+                  "api": "openai-completions",
+                  "provider": "assistant-smoke",
+                  "model": "Eval/Route:2026-11+Opaque",
+                  "responseId": "eval",
+                  "stopReason": "stop"
+                },
+                "blocks": [
+                  {
+                    "type": "text"
+                  }
+                ]
+              }
+            },
+            "interrupted": false,
+            "time": 1793705022282
+          }
+        ],
+        "images": [],
+        "hasMore": false,
+        "nextBefore": null,
+        "status": "idle",
+        "running": false,
+        "error": null,
+        "failures": [],
+        "model": {
+          "providerId": "assistant-smoke",
+          "modelId": "Eval/Route:2026-11+Opaque"
+        },
+        "notifications": []
+      },
+      "status": "pass",
+      "durationMs": 616
+    },
+    {
+      "id": "S16",
+      "title": "Router 持久写入权限边界",
+      "expected": "直接 write 被拒，磁盘不产生副作用",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:42.357Z",
+      "evidence": {
+        "threadId": "141cf87b-c74d-48f6-b0f2-35dccd1784ae",
+        "sessionId": "576bf7bb-e455-465f-b54c-03977dc89a12",
+        "messages": [
+          {
+            "id": "ee1a2583-eaee-4ee3-b98b-9453542b2cf3",
+            "role": "user",
+            "text": "EVAL_DENY_WRITE\nPATH=C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\forbidden.txt",
+            "content": [
+              {
+                "type": "text",
+                "text": "EVAL_DENY_WRITE\nPATH=C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\forbidden.txt"
+              }
+            ],
+            "source": {
+              "kind": "user"
+            },
+            "interrupted": false,
+            "time": 1793705022620
+          },
+          {
+            "id": "97b4ea7f-5e09-4dc5-8273-7ec3d5795786",
+            "role": "assistant",
+            "text": "",
+            "content": [
+              {
+                "type": "tool-call",
+                "id": "eval-tool",
+                "name": "write",
+                "arguments": "{\"file_path\":\"C:\\\\Users\\\\DraftGo\\\\AppData\\\\Local\\\\Temp\\\\benchgo-assistant-live-nqrTLC\\\\forbidden.txt\",\"path\":\"C:\\\\Users\\\\DraftGo\\\\AppData\\\\Local\\\\Temp\\\\benchgo-assistant-live-nqrTLC\\\\forbidden.txt\",\"content\":\"UNAUTHORIZED\"}"
+              }
+            ],
+            "source": {
+              "kind": "model",
+              "provider": "assistant-smoke",
+              "model": "Eval/Route:2026-11+Opaque",
+              "replayState": {
+                "response": {
+                  "kind": "pi-ai",
+                  "version": 2,
+                  "api": "openai-completions",
+                  "provider": "assistant-smoke",
+                  "model": "Eval/Route:2026-11+Opaque",
+                  "responseId": "eval",
+                  "stopReason": "toolUse"
+                },
+                "blocks": [
+                  {
+                    "type": "tool-call"
+                  }
+                ]
+              }
+            },
+            "interrupted": false,
+            "time": 1793705022740
+          },
+          {
+            "id": "a78634ca-ed1a-4189-8d8b-315ce656bda5",
+            "role": "assistant",
+            "text": "EVAL_TOOL_RESULT Error: Router 不能直接执行持久副作用或未知工具；请使用 assistant_delegate 创建带授权的工单，由 Worker 执行。",
+            "content": [
+              {
+                "type": "text",
+                "text": "EVAL_TOOL_RESULT Error: Router 不能直接执行持久副作用或未知工具；请使用 assistant_delegate 创建带授权的工单，由 Worker 执行。"
+              }
+            ],
+            "source": {
+              "kind": "model",
+              "provider": "assistant-smoke",
+              "model": "Eval/Route:2026-11+Opaque",
+              "replayState": {
+                "response": {
+                  "kind": "pi-ai",
+                  "version": 2,
+                  "api": "openai-completions",
+                  "provider": "assistant-smoke",
+                  "model": "Eval/Route:2026-11+Opaque",
+                  "responseId": "eval",
+                  "stopReason": "stop"
+                },
+                "blocks": [
+                  {
+                    "type": "text"
+                  }
+                ]
+              }
+            },
+            "interrupted": false,
+            "time": 1793705022931
+          }
+        ],
+        "images": [],
+        "hasMore": false,
+        "nextBefore": null,
+        "status": "idle",
+        "running": false,
+        "error": null,
+        "failures": [],
+        "model": {
+          "providerId": "assistant-smoke",
+          "modelId": "Eval/Route:2026-11+Opaque"
+        },
+        "notifications": []
+      },
+      "status": "pass",
+      "durationMs": 634
+    },
+    {
+      "id": "S17",
+      "title": "供应商认证错误可见",
+      "expected": "401 转化为 history.error，不能显示完成",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:43.108Z",
+      "evidence": {
+        "threadId": "355598be-6d60-4a78-8b10-c004ba54d46c",
+        "sessionId": "a906ae86-898b-4968-9319-b59dcccb39dc",
+        "messages": [
+          {
+            "id": "151251b6-f3df-43a7-acf5-34447d139acd",
+            "role": "user",
+            "text": "EVAL_ERROR",
+            "content": [
+              {
+                "type": "text",
+                "text": "EVAL_ERROR"
+              }
+            ],
+            "source": {
+              "kind": "user"
+            },
+            "interrupted": false,
+            "time": 1793705027375
+          }
+        ],
+        "images": [],
+        "hasMore": false,
+        "nextBefore": null,
+        "status": "idle",
+        "running": false,
+        "error": "401: {\"message\":\"EVAL_INVALID_CREDENTIAL\",\"type\":\"authentication_error\"}",
+        "failures": [],
+        "model": {
+          "providerId": "assistant-smoke",
+          "modelId": "Eval/Route:2026-11+Opaque"
+        },
+        "notifications": []
+      },
+      "status": "pass",
+      "durationMs": 5037
+    },
+    {
+      "id": "S18",
+      "title": "失败后新请求恢复",
+      "expected": "供应商恢复后新线程成功返回",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:48.156Z",
+      "evidence": {
+        "threadId": "844fbdcc-6c32-47d3-8681-2ef7e031d9ce",
+        "sessionId": "b808a91a-2afb-4c19-8002-b35e55ea6504",
+        "messages": [
+          {
+            "id": "ad1886c1-cf72-40a1-8543-f188cf0cbcd3",
+            "role": "user",
+            "text": "EVAL_RECOVERY",
+            "content": [
+              {
+                "type": "text",
+                "text": "EVAL_RECOVERY"
+              }
+            ],
+            "source": {
+              "kind": "user"
+            },
+            "interrupted": false,
+            "time": 1793705030172
+          },
+          {
+            "id": "bc25e354-080d-488c-aca4-fc85d3ae2cc5",
+            "role": "assistant",
+            "text": "BENCHGO_OK",
+            "content": [
+              {
+                "type": "text",
+                "text": "BENCHGO_OK"
+              }
+            ],
+            "source": {
+              "kind": "model",
+              "provider": "assistant-smoke",
+              "model": "Eval/Route:2026-11+Opaque",
+              "replayState": {
+                "response": {
+                  "kind": "pi-ai",
+                  "version": 2,
+                  "api": "openai-completions",
+                  "provider": "assistant-smoke",
+                  "model": "Eval/Route:2026-11+Opaque",
+                  "responseId": "eval",
+                  "stopReason": "stop"
+                },
+                "blocks": [
+                  {
+                    "type": "text"
+                  }
+                ]
+              }
+            },
+            "interrupted": false,
+            "time": 1793705030329
+          }
+        ],
+        "images": [],
+        "hasMore": false,
+        "nextBefore": null,
+        "status": "idle",
+        "running": false,
+        "error": null,
+        "failures": [],
+        "model": {
+          "providerId": "assistant-smoke",
+          "modelId": "Eval/Route:2026-11+Opaque"
+        },
+        "notifications": []
+      },
+      "status": "pass",
+      "durationMs": 2242
+    },
+    {
+      "id": "S19",
+      "title": "运行中取消",
+      "expected": "等待模型时取消，3秒内不再 running",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:50.449Z",
+      "evidence": {
+        "threadId": "c15da3ad-a7fd-4c0d-b5aa-4d05d2e3e8de",
+        "sessionId": "926d622f-6ff6-49ed-b8ff-d2d986c045b1",
+        "messages": [],
+        "images": [],
+        "hasMore": false,
+        "nextBefore": null,
+        "status": "idle",
+        "running": false,
+        "error": null,
+        "failures": [],
+        "model": null,
+        "notifications": []
+      },
+      "status": "pass",
+      "durationMs": 2474
+    },
+    {
+      "id": "S20",
+      "title": "长期记忆保存与检索",
+      "expected": "保存的唯一记忆可检索，内容和来源保留",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:52.970Z",
+      "evidence": {
+        "memory": {
+          "id": "1e2b8f21-d6a4-47f4-9907-08239d89e7f2",
+          "content": "EVAL_MEMORY 用户偏好简体中文",
+          "source": {
+            "kind": "user",
+            "threadId": "main"
+          },
+          "scope": "global",
+          "createdAt": "2026-11-03T11:23:53.189Z",
+          "updatedAt": "2026-11-03T11:23:53.189Z",
+          "revision": 1,
+          "document": "MEMORY.md"
+        },
+        "search": {
+          "memories": [
+            {
+              "id": "1e2b8f21-d6a4-47f4-9907-08239d89e7f2",
+              "source": {
+                "kind": "user",
+                "threadId": "main"
+              },
+              "scope": "global",
+              "createdAt": "2026-11-03T11:23:53.189Z",
+              "updatedAt": "2026-11-03T11:23:53.189Z",
+              "revision": 1,
+              "content": "EVAL_MEMORY 用户偏好简体中文",
+              "document": "MEMORY.md",
+              "score": 1
+            }
+          ]
+        }
+      },
+      "status": "pass",
+      "durationMs": 1416
+    },
+    {
+      "id": "S21",
+      "title": "人格文档版本保护",
+      "expected": "旧 hash 写入被拒，用户当前文本保留",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:54.434Z",
+      "evidence": {
+        "saved": {
+          "document": {
+            "name": "USER.md",
+            "content": "# Eval user\n中文",
+            "hash": "e16d52aa7d95819e9afec32b66bbefc9ed245ec632030c7d421a17b62152d88c",
+            "revision": 2,
+            "updatedAt": "2026-11-03T11:23:54.885Z",
+            "source": {
+              "kind": "user",
+              "threadId": "main"
+            }
+          }
+        },
+        "rejected": {
+          "status": 409,
+          "body": {
+            "error": "Assistant document changed; reload before saving",
+            "code": "HASH_CONFLICT",
+            "hash": "e16d52aa7d95819e9afec32b66bbefc9ed245ec632030c7d421a17b62152d88c"
+          }
+        }
+      },
+      "status": "pass",
+      "durationMs": 1987
+    },
+    {
+      "id": "S22",
+      "title": "产物路径穿越防护",
+      "expected": "认证用户也不能通过 ../ 读取任意文件",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:56.432Z",
+      "evidence": {
+        "status": 400,
+        "body": "Invalid artifact"
+      },
+      "status": "pass",
+      "durationMs": 15
+    },
+    {
+      "id": "S23",
+      "title": "无效目标原子拒绝",
+      "expected": "项目不存在时不遗留工单和目标",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:56.496Z",
+      "evidence": {
+        "status": 400,
+        "body": {
+          "error": "目标项目不存在"
+        }
+      },
+      "status": "pass",
+      "durationMs": 47
+    },
+    {
+      "id": "S24",
+      "title": "目标到执行、验收、交付闭环",
+      "expected": "真实工单、Worker会话、独立验收及delivery sent",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:23:56.591Z",
+      "evidence": {
+        "goal": {
+          "id": "c2309d6a-7e3d-442d-b3c3-1628d6315695",
+          "budgetGoalId": "e6b5930cfa96292c3bdb50308b30f5890e09e93a653604e6ec9270e277355dbf",
+          "requestId": "[\"goal-form\",\"96998734-466f-4b12-9dc3-92ca3f8b98f4\",\"eval-goal\"]",
+          "requestFingerprint": "e62b8f01bdda5d31e608d5deed36c804d844fbf2abd00a9e6ef74b6f37470790",
+          "inputFingerprint": "3c10d2df27cb8491a0158b50989dac7b3f2bebf4a912bc623b9e7d21145d70e6",
+          "executionKind": "ticket",
+          "ticketIds": [
+            "50e70385-9849-418d-8ef5-9d6108a4de25"
+          ],
+          "ticketRevisions": {
+            "50e70385-9849-418d-8ef5-9d6108a4de25": 1
+          },
+          "ownerSessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4",
+          "status": "active",
+          "title": "计算并给出结果",
+          "objective": "计算并给出结果",
+          "acceptance": "Worker response contains BENCHGO_OK and has transcript evidence.",
+          "scope": null,
+          "budget": {
+            "requests": 8
+          },
+          "projectId": "8baa4fe9-3b8c-4fcd-99c0-f6052964fa38",
+          "provider": "assistant-smoke",
+          "model": "Eval/Route:2026-11+Opaque",
+          "text": "Reply exactly BENCHGO_OK without tools.",
+          "threadId": "main",
+          "parentGoalId": null,
+          "childGoalIds": [],
+          "nextStep": "verify",
+          "createdAt": "2026-11-03T11:23:59.634Z",
+          "updatedAt": "2026-11-03T11:23:59.738Z",
+          "rowVersion": 2,
+          "waitReason": null
+        },
+        "ticket": {
+          "id": "50e70385-9849-418d-8ef5-9d6108a4de25",
+          "threadId": "desktop:96998734-466f-4b12-9dc3-92ca3f8b98f4",
+          "target": "Reply exactly BENCHGO_OK without tools.",
+          "acceptance": "Worker response contains BENCHGO_OK and has transcript evidence.",
+          "instructionRevision": 1,
+          "status": "completed",
+          "pauseReason": null,
+          "mandate": {
+            "actorId": "desktop-owner",
+            "source": {
+              "channel": "desktop",
+              "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4",
+              "messageId": "goal-form:eval-goal",
+              "threadId": "main"
+            },
+            "instruction": "{\"requestId\":\"eval-goal\",\"objective\":\"计算并给出结果\",\"projectId\":\"8baa4fe9-3b8c-4fcd-99c0-f6052964fa38\",\"provider\":\"assistant-smoke\",\"model\":\"Eval/Route:2026-11+Opaque\",\"text\":\"Reply exactly BENCHGO_OK without tools.\",\"acceptance\":\"Worker response contains BENCHGO_OK and has transcript evidence.\",\"budget\":{\"requests\":8}}",
+            "policyVersion": "33ebb06ed79a635203e3df939a402e7b682b288efb8da76b80887cd493604e77",
+            "admission": "desktop-approved-delegation",
+            "controlledActions": "require-current-policy-and-harness-approval",
+            "project": {
+              "id": "8baa4fe9-3b8c-4fcd-99c0-f6052964fa38",
+              "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project"
+            }
+          },
+          "createdByDecision": "3ae8ed51-b1ee-4f0a-bc77-483b922224d3",
+          "createdAt": "2026-11-03T11:23:59.493Z",
+          "updatedAt": "2026-11-03T11:24:14.931Z",
+          "resultVersion": 1,
+          "revisions": [],
+          "assignments": [
+            {
+              "id": "desktop:a56f9debc345f767df00ec6bfafaef1b8189bf73c3a977f33961d4de2d08508a",
+              "ticketId": "50e70385-9849-418d-8ef5-9d6108a4de25",
+              "executor": "harness",
+              "model": {
+                "providerId": "assistant-smoke",
+                "modelId": "Eval/Route:2026-11+Opaque"
+              },
+              "text": "Reply exactly BENCHGO_OK without tools.",
+              "acceptance": "Worker response contains BENCHGO_OK and has transcript evidence.",
+              "instructionRevision": 1,
+              "executionStopped": {
+                "owner": "assignment-worker-505b821e-8fb1-478c-87a8-c76f78c7195b",
+                "fence": 1,
+                "at": "2026-11-03T11:24:11.136Z"
+              },
+              "state": "completed",
+              "priority": 0,
+              "owner": null,
+              "leaseUntil": null,
+              "fence": 1,
+              "attempts": 1,
+              "createdAt": "2026-11-03T11:23:59.477Z",
+              "updatedAt": "2026-11-03T11:24:14.931Z"
+            }
+          ],
+          "attentions": [],
+          "results": [
+            {
+              "summary": "BENCHGO_OK",
+              "transcript": {
+                "lastSeq": 23,
+                "hash": "92044011a4e21a78a54d5a6a8c948256e8c524712700a330e3b71a02f382745c"
+              },
+              "toolEvidence": {
+                "entries": [],
+                "total": 0,
+                "omitted": 0,
+                "failedCount": 0,
+                "truncated": false
+              },
+              "evidenceRefs": [
+                {
+                  "sessionId": "607fb985-b642-4e45-b909-134815a0b69e",
+                  "runId": "90be49d5-8e13-4383-8dcb-5dbf5d9c77b4"
+                }
+              ],
+              "sessionId": "607fb985-b642-4e45-b909-134815a0b69e",
+              "runId": "90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+              "directory": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project\\.agents\\worktrees\\benchgo-90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+              "remainingExecutionMs": 590873,
+              "environment": {
+                "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project\\.agents\\worktrees\\benchgo-90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+                "branch": "benchgo-90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+                "baseCommit": "e0764cfb352e295b716a4ee63d9eb109399acc8b",
+                "repositoryRoot": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project"
+              },
+              "checkpoint": {
+                "version": 1,
+                "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project\\.agents\\worktrees\\benchgo-90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+                "repositoryRoot": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project",
+                "commonDir": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project\\.git",
+                "branch": "benchgo-90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+                "baseCommit": "e0764cfb352e295b716a4ee63d9eb109399acc8b",
+                "head": "e0764cfb352e295b716a4ee63d9eb109399acc8b",
+                "indexHash": "d348c308c584d31d3e0540fe1592884eee558df405cca1b742faa354b5b32a88",
+                "files": 1,
+                "bytes": 31,
+                "manifestHash": "ef61c070ecd43448d9cf2a3b1d54177b600bfa25639c7d75d3ef47c3eb8f9349"
+              },
+              "review": {
+                "verdict": "passed",
+                "reason": "Controlled fixture: worker transcript contains BENCHGO_OK.",
+                "routing": {
+                  "configRevision": 3,
+                  "capability": "review",
+                  "auxiliary": false,
+                  "switched": false,
+                  "attempts": [
+                    {
+                      "providerId": "assistant-smoke",
+                      "modelId": "Eval/Route:2026-11+Opaque",
+                      "retry": 0,
+                      "status": "completed"
+                    }
+                  ]
+                },
+                "inputHash": "1dab546527ff37fba8e8e9eef96f713e41235cde4d88bd1d9826efcb36fecac6"
+              },
+              "ticketId": "50e70385-9849-418d-8ef5-9d6108a4de25",
+              "instructionRevision": 1,
+              "version": 1,
+              "committedAt": "2026-11-03T11:24:14.931Z"
+            }
+          ],
+          "deliveries": [
+            {
+              "id": "0624c20c-912c-4456-b290-ff814dbe8295",
+              "uniqueKey": "assignment-result:desktop:a56f9debc345f767df00ec6bfafaef1b8189bf73c3a977f33961d4de2d08508a:90be49d5-8e13-4383-8dcb-5dbf5d9c77b4",
+              "ticketId": "50e70385-9849-418d-8ef5-9d6108a4de25",
+              "payload": {
+                "type": "ticket.result",
+                "source": {
+                  "channel": "desktop",
+                  "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4",
+                  "messageId": "goal-form:eval-goal",
+                  "threadId": "main"
+                },
+                "text": "已完成：Reply exactly BENCHGO_OK without tools.\nBENCHGO_OK\n验收：Controlled fixture: worker transcript contains BENCHGO_OK.",
+                "evidenceRefs": [
+                  {
+                    "sessionId": "607fb985-b642-4e45-b909-134815a0b69e",
+                    "runId": "90be49d5-8e13-4383-8dcb-5dbf5d9c77b4"
+                  }
+                ]
+              },
+              "state": "sent",
+              "attempts": 1,
+              "nextAt": 1793705054931,
+              "owner": null,
+              "leaseUntil": null,
+              "sentAt": "2026-11-03T11:24:15.652Z",
+              "lastError": null,
+              "createdAt": "2026-11-03T11:24:14.931Z"
+            }
+          ]
+        }
+      },
+      "status": "pass",
+      "durationMs": 19563
+    },
+    {
+      "id": "S25",
+      "title": "零预算阻止模型执行",
+      "expected": "budget.requests=0 时工单等待预算，不发出 Worker 请求",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:24:16.203Z",
+      "evidence": {
+        "goal": {
+          "id": "5ed5ef9a-033b-4887-bfe2-e60fbf7bdabb",
+          "budgetGoalId": "ada59c1eb67ff46a11c6045a0b853c8c0c055477ce5869e54a26407b2131a605",
+          "requestId": "[\"goal-form\",\"96998734-466f-4b12-9dc3-92ca3f8b98f4\",\"zero-budget\"]",
+          "requestFingerprint": "82adba0f3cf973d8d65f162176fe68803bade8a108c652f5d00ef14c2bb4646d",
+          "inputFingerprint": "e46fbcdf9a5e331eef3169e821bdb125d7eb012d6ae331931a52355a009b96b2",
+          "executionKind": "ticket",
+          "ticketIds": [
+            "2ebbdfa1-2be2-4f92-877c-e6b8520f5e7e"
+          ],
+          "ticketRevisions": {
+            "2ebbdfa1-2be2-4f92-877c-e6b8520f5e7e": 1
+          },
+          "ownerSessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4",
+          "status": "active",
+          "title": "Zero budget",
+          "objective": "Zero budget",
+          "acceptance": null,
+          "scope": null,
+          "budget": {
+            "requests": 0
+          },
+          "projectId": "8baa4fe9-3b8c-4fcd-99c0-f6052964fa38",
+          "provider": "assistant-smoke",
+          "model": "Eval/Route:2026-11+Opaque",
+          "text": "Reply BENCHGO_OK",
+          "threadId": "main",
+          "parentGoalId": null,
+          "childGoalIds": [],
+          "nextStep": "verify",
+          "createdAt": "2026-11-03T11:24:17.639Z",
+          "updatedAt": "2026-11-03T11:24:17.701Z",
+          "rowVersion": 2,
+          "waitReason": null
+        },
+        "tickets": [
+          {
+            "id": "2ebbdfa1-2be2-4f92-877c-e6b8520f5e7e",
+            "threadId": "desktop:96998734-466f-4b12-9dc3-92ca3f8b98f4",
+            "target": "Reply BENCHGO_OK",
+            "acceptance": "",
+            "instructionRevision": 1,
+            "status": "open",
+            "pauseReason": null,
+            "mandate": {
+              "actorId": "desktop-owner",
+              "source": {
+                "channel": "desktop",
+                "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4",
+                "messageId": "goal-form:zero-budget",
+                "threadId": "main"
+              },
+              "instruction": "{\"requestId\":\"zero-budget\",\"objective\":\"Zero budget\",\"projectId\":\"8baa4fe9-3b8c-4fcd-99c0-f6052964fa38\",\"provider\":\"assistant-smoke\",\"model\":\"Eval/Route:2026-11+Opaque\",\"text\":\"Reply BENCHGO_OK\",\"budget\":{\"requests\":0}}",
+              "policyVersion": "33ebb06ed79a635203e3df939a402e7b682b288efb8da76b80887cd493604e77",
+              "admission": "desktop-approved-delegation",
+              "controlledActions": "require-current-policy-and-harness-approval",
+              "project": {
+                "id": "8baa4fe9-3b8c-4fcd-99c0-f6052964fa38",
+                "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\eval-project"
+              }
+            },
+            "createdByDecision": "42cf7241-e93b-4efa-9577-7b2b6e4c518a",
+            "createdAt": "2026-11-03T11:24:17.465Z",
+            "updatedAt": "2026-11-03T11:24:17.465Z",
+            "resultVersion": 0,
+            "revisions": [],
+            "assignments": [
+              {
+                "id": "desktop:5185b1edfa861d728d6b6028d43aac90761165931b27dafda7e94aede85b7b18",
+                "ticketId": "2ebbdfa1-2be2-4f92-877c-e6b8520f5e7e",
+                "executor": "harness",
+                "model": {
+                  "providerId": "assistant-smoke",
+                  "modelId": "Eval/Route:2026-11+Opaque"
+                },
+                "text": "Reply BENCHGO_OK",
+                "acceptance": "",
+                "instructionRevision": 1,
+                "state": "claimed",
+                "priority": 0,
+                "owner": "assignment-worker-505b821e-8fb1-478c-87a8-c76f78c7195b",
+                "leaseUntil": 1793705119972,
+                "fence": 1,
+                "attempts": 1,
+                "createdAt": "2026-11-03T11:24:17.464Z",
+                "updatedAt": "2026-11-03T11:24:19.972Z"
+              }
+            ],
+            "attentions": [],
+            "results": [],
+            "deliveries": []
+          }
+        ]
+      },
+      "status": "pass",
+      "durationMs": 7286
+    },
+    {
+      "id": "S26",
+      "title": "旧结果版本不能触发重新验收",
+      "expected": "对实际工单以过期版本重审被拒",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:24:23.541Z",
+      "evidence": {
+        "status": 400,
+        "body": {
+          "error": "工单待验收状态已变化，请刷新"
+        }
+      },
+      "status": "pass",
+      "durationMs": 4260
+    },
+    {
+      "id": "S27",
+      "title": "桌面通知同步与确认",
+      "expected": "交付通知可同步；确认后 unread 不再包含该事件",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:24:27.855Z",
+      "evidence": {
+        "notifications": {
+          "events": [
+            {
+              "type": "ticket.result",
+              "source": {
+                "channel": "desktop",
+                "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4",
+                "messageId": "goal-form:eval-goal",
+                "threadId": "main"
+              },
+              "text": "已完成：Reply exactly BENCHGO_OK without tools.\nBENCHGO_OK\n验收：Controlled fixture: worker transcript contains BENCHGO_OK.",
+              "evidenceRefs": [
+                {
+                  "sessionId": "607fb985-b642-4e45-b909-134815a0b69e",
+                  "runId": "90be49d5-8e13-4383-8dcb-5dbf5d9c77b4"
+                }
+              ],
+              "title": "Reply exactly BENCHGO_OK without tools.",
+              "status": "completed",
+              "id": "d9b86b02-3fc4-4dba-a8dc-f0a0b2403966",
+              "eventId": "d9b86b02-3fc4-4dba-a8dc-f0a0b2403966",
+              "taskId": "50e70385-9849-418d-8ef5-9d6108a4de25",
+              "threadId": "main",
+              "threadRefs": [
+                "main"
+              ],
+              "createdAt": "2026-11-03T11:24:15.648Z",
+              "seq": 1,
+              "readAt": null
+            }
+          ],
+          "cursor": 1,
+          "hasMore": false,
+          "resyncRequired": false
+        },
+        "unread": {
+          "events": [],
+          "cursor": 1,
+          "hasMore": false,
+          "resyncRequired": false
+        }
+      },
+      "status": "pass",
+      "durationMs": 142
+    },
+    {
+      "id": "S28",
+      "title": "摘要路由与未配置能力提示",
+      "expected": "摘要复用主模型并返回来源；无模型时明确拒绝",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:24:28.055Z",
+      "evidence": {
+        "summary": {
+          "text": "BENCHGO_OK",
+          "routing": {
+            "configRevision": 3,
+            "capability": "summary",
+            "auxiliary": false,
+            "switched": false,
+            "attempts": [
+              {
+                "providerId": "assistant-smoke",
+                "modelId": "Eval/Route:2026-11+Opaque",
+                "retry": 0,
+                "status": "completed"
+              }
+            ]
+          },
+          "source": {
+            "kind": "supplied-text",
+            "hash": "15bc14e22fcb7d3d39d69e5a232e1b4b4e99854eada94e70e264e797dcffca72",
+            "characters": 4,
+            "complete": true
+          },
+          "referenceId": "auxiliary:e9209169-ab61-4a6e-835b-d3cdd07d8d66"
+        },
+        "missing": {
+          "status": 409,
+          "body": {
+            "error": "请先配置当前聊天模型"
+          }
+        }
+      },
+      "status": "pass",
+      "durationMs": 3385
+    },
+    {
+      "id": "S29",
+      "title": "主会话重建隔离旧请求",
+      "expected": "resetMain 创建新 sessionId，历史为空，配置保留",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:24:31.496Z",
+      "evidence": {
+        "newSession": {
+          "sessionId": "f0806289-83cb-4731-ba30-b1a5261719f0"
+        },
+        "history": {
+          "threadId": "main",
+          "sessionId": "f0806289-83cb-4731-ba30-b1a5261719f0",
+          "messages": [],
+          "images": [],
+          "hasMore": false,
+          "nextBefore": null,
+          "status": "idle",
+          "running": false,
+          "error": null,
+          "failures": [],
+          "model": null,
+          "notifications": [
+            {
+              "type": "ticket.result",
+              "source": {
+                "channel": "desktop",
+                "sessionId": "96998734-466f-4b12-9dc3-92ca3f8b98f4",
+                "messageId": "goal-form:eval-goal",
+                "threadId": "main"
+              },
+              "text": "已完成：Reply exactly BENCHGO_OK without tools.\nBENCHGO_OK\n验收：Controlled fixture: worker transcript contains BENCHGO_OK.",
+              "evidenceRefs": [
+                {
+                  "sessionId": "607fb985-b642-4e45-b909-134815a0b69e",
+                  "runId": "90be49d5-8e13-4383-8dcb-5dbf5d9c77b4"
+                }
+              ],
+              "title": "Reply exactly BENCHGO_OK without tools.",
+              "status": "completed",
+              "id": "d9b86b02-3fc4-4dba-a8dc-f0a0b2403966",
+              "eventId": "d9b86b02-3fc4-4dba-a8dc-f0a0b2403966",
+              "taskId": "50e70385-9849-418d-8ef5-9d6108a4de25",
+              "threadId": "main",
+              "threadRefs": [
+                "main"
+              ],
+              "createdAt": "2026-11-03T11:24:15.648Z",
+              "seq": 1,
+              "readAt": "2026-11-03T11:24:27.884Z"
+            }
+          ]
+        }
+      },
+      "status": "pass",
+      "durationMs": 16199
+    },
+    {
+      "id": "S30",
+      "title": "删除旁聊与主聊保护",
+      "expected": "未归档时拒删；归档后删除；主聊不能删除",
+      "layer": "可控模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T11:24:47.723Z",
+      "evidence": {
+        "status": 400,
+        "body": {
+          "error": "主聊天不能删除"
+        }
+      },
+      "status": "pass",
+      "durationMs": 2953
+    }
+  ],
+  "requests": [
+    {
+      "at": "2026-11-03T11:23:39.215Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [
+        "ask_user_question",
+        "assistant_analyze_image",
+        "assistant_capabilities",
+        "assistant_config",
+        "assistant_delegate",
+        "assistant_generate_image",
+        "assistant_goals",
+        "assistant_history",
+        "assistant_learn",
+        "assistant_ledger_read",
+        "assistant_memory",
+        "assistant_memory_search",
+        "assistant_models",
+        "assistant_pet",
+        "assistant_profile",
+        "assistant_projects",
+        "assistant_review",
+        "assistant_session_search",
+        "assistant_sessions",
+        "assistant_summarize",
+        "assistant_ticket_change",
+        "assistant_tickets",
+        "commander_archive",
+        "commander_close",
+        "commander_connect",
+        "commander_create",
+        "commander_discover",
+        "commander_doctor",
+        "commander_events",
+        "commander_history",
+        "commander_interrupt",
+        "commander_providers",
+        "commander_send",
+        "commander_sessions",
+        "commander_steer",
+        "commander_wait",
+        "create_goal",
+        "edit",
+        "exit_plan_mode",
+        "get_goal",
+        "glob",
+        "grep",
+        "interrupt_agent",
+        "job_kill",
+        "job_list",
+        "job_output",
+        "list_agents",
+        "present",
+        "pwsh",
+        "read",
+        "read_image",
+        "schedule_create",
+        "schedule_delete",
+        "schedule_list",
+        "schedule_update",
+        "send_message",
+        "skill",
+        "subagent",
+        "subagent_fork",
+        "todo_write",
+        "update_goal",
+        "web_fetch",
+        "web_search",
+        "workflow",
+        "working_directory",
+        "write"
+      ],
+      "lastRole": "user",
+      "marker": "EVAL_BASIC",
+      "userPreview": "EVAL_BASIC Reply BENCHGO_OK",
+      "messageRoles": [
+        "system",
+        "user",
+        "user",
+        "user",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:39.218Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [],
+      "lastRole": "user",
+      "marker": "EVAL_BASIC",
+      "userPreview": "Generate the session title from this JSON array of human messages:\n[{\"seq\":8,\"text\":\"EVAL_BASIC Reply BENCHGO_OK\"}]",
+      "messageRoles": [
+        "system",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:40.013Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [
+        "ask_user_question",
+        "assistant_analyze_image",
+        "assistant_capabilities",
+        "assistant_config",
+        "assistant_delegate",
+        "assistant_generate_image",
+        "assistant_goals",
+        "assistant_history",
+        "assistant_learn",
+        "assistant_ledger_read",
+        "assistant_memory",
+        "assistant_memory_search",
+        "assistant_models",
+        "assistant_pet",
+        "assistant_profile",
+        "assistant_projects",
+        "assistant_review",
+        "assistant_session_search",
+        "assistant_sessions",
+        "assistant_summarize",
+        "assistant_ticket_change",
+        "assistant_tickets",
+        "commander_archive",
+        "commander_close",
+        "commander_connect",
+        "commander_create",
+        "commander_discover",
+        "commander_doctor",
+        "commander_events",
+        "commander_history",
+        "commander_interrupt",
+        "commander_providers",
+        "commander_send",
+        "commander_sessions",
+        "commander_steer",
+        "commander_wait",
+        "create_goal",
+        "edit",
+        "exit_plan_mode",
+        "get_goal",
+        "glob",
+        "grep",
+        "interrupt_agent",
+        "job_kill",
+        "job_list",
+        "job_output",
+        "list_agents",
+        "present",
+        "pwsh",
+        "read",
+        "read_image",
+        "schedule_create",
+        "schedule_delete",
+        "schedule_list",
+        "schedule_update",
+        "send_message",
+        "skill",
+        "subagent",
+        "subagent_fork",
+        "todo_write",
+        "update_goal",
+        "web_fetch",
+        "web_search",
+        "workflow",
+        "working_directory",
+        "write"
+      ],
+      "lastRole": "user",
+      "marker": "EVAL_SIDE",
+      "userPreview": "EVAL_SIDE",
+      "messageRoles": [
+        "system",
+        "user",
+        "user",
+        "user",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:40.014Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [],
+      "lastRole": "user",
+      "marker": "EVAL_SIDE",
+      "userPreview": "Generate the session title from this JSON array of human messages:\n[{\"seq\":8,\"text\":\"EVAL_SIDE\"}]",
+      "messageRoles": [
+        "system",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:40.650Z",
+      "model": "Eval/Thread:V2+Exact",
+      "tools": [
+        "ask_user_question",
+        "assistant_analyze_image",
+        "assistant_capabilities",
+        "assistant_config",
+        "assistant_delegate",
+        "assistant_generate_image",
+        "assistant_goals",
+        "assistant_history",
+        "assistant_learn",
+        "assistant_ledger_read",
+        "assistant_memory",
+        "assistant_memory_search",
+        "assistant_models",
+        "assistant_pet",
+        "assistant_profile",
+        "assistant_projects",
+        "assistant_review",
+        "assistant_session_search",
+        "assistant_sessions",
+        "assistant_summarize",
+        "assistant_ticket_change",
+        "assistant_tickets",
+        "commander_archive",
+        "commander_close",
+        "commander_connect",
+        "commander_create",
+        "commander_discover",
+        "commander_doctor",
+        "commander_events",
+        "commander_history",
+        "commander_interrupt",
+        "commander_providers",
+        "commander_send",
+        "commander_sessions",
+        "commander_steer",
+        "commander_wait",
+        "create_goal",
+        "edit",
+        "exit_plan_mode",
+        "get_goal",
+        "glob",
+        "grep",
+        "interrupt_agent",
+        "job_kill",
+        "job_list",
+        "job_output",
+        "list_agents",
+        "present",
+        "pwsh",
+        "read",
+        "read_image",
+        "schedule_create",
+        "schedule_delete",
+        "schedule_list",
+        "schedule_update",
+        "send_message",
+        "skill",
+        "subagent",
+        "subagent_fork",
+        "todo_write",
+        "update_goal",
+        "web_fetch",
+        "web_search",
+        "workflow",
+        "working_directory",
+        "write"
+      ],
+      "lastRole": "user",
+      "marker": "EVAL_OVERRIDE",
+      "userPreview": "EVAL_OVERRIDE",
+      "messageRoles": [
+        "system",
+        "user",
+        "user",
+        "user",
+        "user",
+        "assistant",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:41.301Z",
+      "model": "Eval/Thread:V2+Exact",
+      "tools": [
+        "ask_user_question",
+        "assistant_analyze_image",
+        "assistant_capabilities",
+        "assistant_config",
+        "assistant_delegate",
+        "assistant_generate_image",
+        "assistant_goals",
+        "assistant_history",
+        "assistant_learn",
+        "assistant_ledger_read",
+        "assistant_memory",
+        "assistant_memory_search",
+        "assistant_models",
+        "assistant_pet",
+        "assistant_profile",
+        "assistant_projects",
+        "assistant_review",
+        "assistant_session_search",
+        "assistant_sessions",
+        "assistant_summarize",
+        "assistant_ticket_change",
+        "assistant_tickets",
+        "commander_archive",
+        "commander_close",
+        "commander_connect",
+        "commander_create",
+        "commander_discover",
+        "commander_doctor",
+        "commander_events",
+        "commander_history",
+        "commander_interrupt",
+        "commander_providers",
+        "commander_send",
+        "commander_sessions",
+        "commander_steer",
+        "commander_wait",
+        "create_goal",
+        "edit",
+        "exit_plan_mode",
+        "get_goal",
+        "glob",
+        "grep",
+        "interrupt_agent",
+        "job_kill",
+        "job_list",
+        "job_output",
+        "list_agents",
+        "present",
+        "pwsh",
+        "read",
+        "read_image",
+        "schedule_create",
+        "schedule_delete",
+        "schedule_list",
+        "schedule_update",
+        "send_message",
+        "skill",
+        "subagent",
+        "subagent_fork",
+        "todo_write",
+        "update_goal",
+        "web_fetch",
+        "web_search",
+        "workflow",
+        "working_directory",
+        "write"
+      ],
+      "lastRole": "user",
+      "marker": "EVAL_RESUME",
+      "userPreview": "EVAL_RESUME",
+      "messageRoles": [
+        "system",
+        "user",
+        "user",
+        "user",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:42.044Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [
+        "ask_user_question",
+        "assistant_analyze_image",
+        "assistant_capabilities",
+        "assistant_config",
+        "assistant_delegate",
+        "assistant_generate_image",
+        "assistant_goals",
+        "assistant_history",
+        "assistant_learn",
+        "assistant_ledger_read",
+        "assistant_memory",
+        "assistant_memory_search",
+        "assistant_models",
+        "assistant_pet",
+        "assistant_profile",
+        "assistant_projects",
+        "assistant_review",
+        "assistant_session_search",
+        "assistant_sessions",
+        "assistant_summarize",
+        "assistant_ticket_change",
+        "assistant_tickets",
+        "commander_archive",
+        "commander_close",
+        "commander_connect",
+        "commander_create",
+        "commander_discover",
+        "commander_doctor",
+        "commander_events",
+        "commander_history",
+        "commander_interrupt",
+        "commander_providers",
+        "commander_send",
+        "commander_sessions",
+        "commander_steer",
+        "commander_wait",
+        "create_goal",
+        "edit",
+        "exit_plan_mode",
+        "get_goal",
+        "glob",
+        "grep",
+        "interrupt_agent",
+        "job_kill",
+        "job_list",
+        "job_output",
+        "list_agents",
+        "present",
+        "pwsh",
+        "read",
+        "read_image",
+        "schedule_create",
+        "schedule_delete",
+        "schedule_list",
+        "schedule_update",
+        "send_message",
+        "skill",
+        "subagent",
+        "subagent_fork",
+        "todo_write",
+        "update_goal",
+        "web_fetch",
+        "web_search",
+        "workflow",
+        "working_directory",
+        "write"
+      ],
+      "lastRole": "user",
+      "marker": "EVAL_READ",
+      "userPreview": "EVAL_READ\nPATH=C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\read-fixture.txt",
+      "messageRoles": [
+        "system",
+        "user",
+        "user",
+        "user",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:42.045Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [],
+      "lastRole": "user",
+      "marker": "EVAL_READ",
+      "userPreview": "Generate the session title from this JSON array of human messages:\n[{\"seq\":8,\"text\":\"EVAL_READ\\nPATH=C:\\\\Users\\\\DraftGo\\\\AppData\\\\Local\\\\Temp\\\\benchgo-assistant-live-nqrTLC\\\\read-fixture.txt\"}]",
+      "messageRoles": [
+        "system",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:42.280Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [
+        "ask_user_question",
+        "assistant_analyze_image",
+        "assistant_capabilities",
+        "assistant_config",
+        "assistant_delegate",
+        "assistant_generate_image",
+        "assistant_goals",
+        "assistant_history",
+        "assistant_learn",
+        "assistant_ledger_read",
+        "assistant_memory",
+        "assistant_memory_search",
+        "assistant_models",
+        "assistant_pet",
+        "assistant_profile",
+        "assistant_projects",
+        "assistant_review",
+        "assistant_session_search",
+        "assistant_sessions",
+        "assistant_summarize",
+        "assistant_ticket_change",
+        "assistant_tickets",
+        "commander_archive",
+        "commander_close",
+        "commander_connect",
+        "commander_create",
+        "commander_discover",
+        "commander_doctor",
+        "commander_events",
+        "commander_history",
+        "commander_interrupt",
+        "commander_providers",
+        "commander_send",
+        "commander_sessions",
+        "commander_steer",
+        "commander_wait",
+        "create_goal",
+        "edit",
+        "exit_plan_mode",
+        "get_goal",
+        "glob",
+        "grep",
+        "interrupt_agent",
+        "job_kill",
+        "job_list",
+        "job_output",
+        "list_agents",
+        "present",
+        "pwsh",
+        "read",
+        "read_image",
+        "schedule_create",
+        "schedule_delete",
+        "schedule_list",
+        "schedule_update",
+        "send_message",
+        "skill",
+        "subagent",
+        "subagent_fork",
+        "todo_write",
+        "update_goal",
+        "web_fetch",
+        "web_search",
+        "workflow",
+        "working_directory",
+        "write"
+      ],
+      "lastRole": "tool",
+      "marker": "EVAL_READ",
+      "userPreview": "EVAL_READ\nPATH=C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\read-fixture.txt",
+      "messageRoles": [
+        "system",
+        "user",
+        "user",
+        "user",
+        "user",
+        "assistant",
+        "tool"
+      ],
+      "toolResult": "<path>C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\read-fixture.txt</path>\n<type>file</type>\n<content>\n1: CONTENT-43a8d15a-142b-4d9c-939a-b1896403a8ff\n\n(End of file - total 1 lines)\n</content>"
+    },
+    {
+      "at": "2026-11-03T11:23:42.737Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [
+        "ask_user_question",
+        "assistant_analyze_image",
+        "assistant_capabilities",
+        "assistant_config",
+        "assistant_delegate",
+        "assistant_generate_image",
+        "assistant_goals",
+        "assistant_history",
+        "assistant_learn",
+        "assistant_ledger_read",
+        "assistant_memory",
+        "assistant_memory_search",
+        "assistant_models",
+        "assistant_pet",
+        "assistant_profile",
+        "assistant_projects",
+        "assistant_review",
+        "assistant_session_search",
+        "assistant_sessions",
+        "assistant_summarize",
+        "assistant_ticket_change",
+        "assistant_tickets",
+        "commander_archive",
+        "commander_close",
+        "commander_connect",
+        "commander_create",
+        "commander_discover",
+        "commander_doctor",
+        "commander_events",
+        "commander_history",
+        "commander_interrupt",
+        "commander_providers",
+        "commander_send",
+        "commander_sessions",
+        "commander_steer",
+        "commander_wait",
+        "create_goal",
+        "edit",
+        "exit_plan_mode",
+        "get_goal",
+        "glob",
+        "grep",
+        "interrupt_agent",
+        "job_kill",
+        "job_list",
+        "job_output",
+        "list_agents",
+        "present",
+        "pwsh",
+        "read",
+        "read_image",
+        "schedule_create",
+        "schedule_delete",
+        "schedule_list",
+        "schedule_update",
+        "send_message",
+        "skill",
+        "subagent",
+        "subagent_fork",
+        "todo_write",
+        "update_goal",
+        "web_fetch",
+        "web_search",
+        "workflow",
+        "working_directory",
+        "write"
+      ],
+      "lastRole": "user",
+      "marker": "EVAL_DENY_WRITE",
+      "userPreview": "EVAL_DENY_WRITE\nPATH=C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\forbidden.txt",
+      "messageRoles": [
+        "system",
+        "user",
+        "user",
+        "user",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:42.743Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [],
+      "lastRole": "user",
+      "marker": "EVAL_DENY_WRITE",
+      "userPreview": "Generate the session title from this JSON array of human messages:\n[{\"seq\":8,\"text\":\"EVAL_DENY_WRITE\\nPATH=C:\\\\Users\\\\DraftGo\\\\AppData\\\\Local\\\\Temp\\\\benchgo-assistant-live-nqrTLC\\\\forbidden.txt\"}]",
+      "messageRoles": [
+        "system",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:42.929Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [
+        "ask_user_question",
+        "assistant_analyze_image",
+        "assistant_capabilities",
+        "assistant_config",
+        "assistant_delegate",
+        "assistant_generate_image",
+        "assistant_goals",
+        "assistant_history",
+        "assistant_learn",
+        "assistant_ledger_read",
+        "assistant_memory",
+        "assistant_memory_search",
+        "assistant_models",
+        "assistant_pet",
+        "assistant_profile",
+        "assistant_projects",
+        "assistant_review",
+        "assistant_session_search",
+        "assistant_sessions",
+        "assistant_summarize",
+        "assistant_ticket_change",
+        "assistant_tickets",
+        "commander_archive",
+        "commander_close",
+        "commander_connect",
+        "commander_create",
+        "commander_discover",
+        "commander_doctor",
+        "commander_events",
+        "commander_history",
+        "commander_interrupt",
+        "commander_providers",
+        "commander_send",
+        "commander_sessions",
+        "commander_steer",
+        "commander_wait",
+        "create_goal",
+        "edit",
+        "exit_plan_mode",
+        "get_goal",
+        "glob",
+        "grep",
+        "interrupt_agent",
+        "job_kill",
+        "job_list",
+        "job_output",
+        "list_agents",
+        "present",
+        "pwsh",
+        "read",
+        "read_image",
+        "schedule_create",
+        "schedule_delete",
+        "schedule_list",
+        "schedule_update",
+        "send_message",
+        "skill",
+        "subagent",
+        "subagent_fork",
+        "todo_write",
+        "update_goal",
+        "web_fetch",
+        "web_search",
+        "workflow",
+        "working_directory",
+        "write"
+      ],
+      "lastRole": "tool",
+      "marker": "EVAL_DENY_WRITE",
+      "userPreview": "EVAL_DENY_WRITE\nPATH=C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-nqrTLC\\forbidden.txt",
+      "messageRoles": [
+        "system",
+        "user",
+        "user",
+        "user",
+        "user",
+        "assistant",
+        "tool"
+      ],
+      "toolResult": "Error: Router 不能直接执行持久副作用或未知工具；请使用 assistant_delegate 创建带授权的工单，由 Worker 执行。"
+    },
+    {
+      "at": "2026-11-03T11:23:47.853Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [
+        "ask_user_question",
+        "assistant_analyze_image",
+        "assistant_capabilities",
+        "assistant_config",
+        "assistant_delegate",
+        "assistant_generate_image",
+        "assistant_goals",
+        "assistant_history",
+        "assistant_learn",
+        "assistant_ledger_read",
+        "assistant_memory",
+        "assistant_memory_search",
+        "assistant_models",
+        "assistant_pet",
+        "assistant_profile",
+        "assistant_projects",
+        "assistant_review",
+        "assistant_session_search",
+        "assistant_sessions",
+        "assistant_summarize",
+        "assistant_ticket_change",
+        "assistant_tickets",
+        "commander_archive",
+        "commander_close",
+        "commander_connect",
+        "commander_create",
+        "commander_discover",
+        "commander_doctor",
+        "commander_events",
+        "commander_history",
+        "commander_interrupt",
+        "commander_providers",
+        "commander_send",
+        "commander_sessions",
+        "commander_steer",
+        "commander_wait",
+        "create_goal",
+        "edit",
+        "exit_plan_mode",
+        "get_goal",
+        "glob",
+        "grep",
+        "interrupt_agent",
+        "job_kill",
+        "job_list",
+        "job_output",
+        "list_agents",
+        "present",
+        "pwsh",
+        "read",
+        "read_image",
+        "schedule_create",
+        "schedule_delete",
+        "schedule_list",
+        "schedule_update",
+        "send_message",
+        "skill",
+        "subagent",
+        "subagent_fork",
+        "todo_write",
+        "update_goal",
+        "web_fetch",
+        "web_search",
+        "workflow",
+        "working_directory",
+        "write"
+      ],
+      "lastRole": "user",
+      "marker": "EVAL_ERROR",
+      "userPreview": "EVAL_ERROR",
+      "messageRoles": [
+        "system",
+        "user",
+        "user",
+        "user",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:47.854Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [],
+      "lastRole": "user",
+      "marker": "EVAL_ERROR",
+      "userPreview": "Generate the session title from this JSON array of human messages:\n[{\"seq\":8,\"text\":\"EVAL_ERROR\"}]",
+      "messageRoles": [
+        "system",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:50.327Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [
+        "ask_user_question",
+        "assistant_analyze_image",
+        "assistant_capabilities",
+        "assistant_config",
+        "assistant_delegate",
+        "assistant_generate_image",
+        "assistant_goals",
+        "assistant_history",
+        "assistant_learn",
+        "assistant_ledger_read",
+        "assistant_memory",
+        "assistant_memory_search",
+        "assistant_models",
+        "assistant_pet",
+        "assistant_profile",
+        "assistant_projects",
+        "assistant_review",
+        "assistant_session_search",
+        "assistant_sessions",
+        "assistant_summarize",
+        "assistant_ticket_change",
+        "assistant_tickets",
+        "commander_archive",
+        "commander_close",
+        "commander_connect",
+        "commander_create",
+        "commander_discover",
+        "commander_doctor",
+        "commander_events",
+        "commander_history",
+        "commander_interrupt",
+        "commander_providers",
+        "commander_send",
+        "commander_sessions",
+        "commander_steer",
+        "commander_wait",
+        "create_goal",
+        "edit",
+        "exit_plan_mode",
+        "get_goal",
+        "glob",
+        "grep",
+        "interrupt_agent",
+        "job_kill",
+        "job_list",
+        "job_output",
+        "list_agents",
+        "present",
+        "pwsh",
+        "read",
+        "read_image",
+        "schedule_create",
+        "schedule_delete",
+        "schedule_list",
+        "schedule_update",
+        "send_message",
+        "skill",
+        "subagent",
+        "subagent_fork",
+        "todo_write",
+        "update_goal",
+        "web_fetch",
+        "web_search",
+        "workflow",
+        "working_directory",
+        "write"
+      ],
+      "lastRole": "user",
+      "marker": "EVAL_RECOVERY",
+      "userPreview": "EVAL_RECOVERY",
+      "messageRoles": [
+        "system",
+        "user",
+        "user",
+        "user",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:23:50.327Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [],
+      "lastRole": "user",
+      "marker": "EVAL_RECOVERY",
+      "userPreview": "Generate the session title from this JSON array of human messages:\n[{\"seq\":8,\"text\":\"EVAL_RECOVERY\"}]",
+      "messageRoles": [
+        "system",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:24:08.428Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [
+        "ask_user_question",
+        "assistant_vault_execute",
+        "assistant_vault_list",
+        "commander_archive",
+        "commander_close",
+        "commander_connect",
+        "commander_create",
+        "commander_discover",
+        "commander_doctor",
+        "commander_events",
+        "commander_history",
+        "commander_interrupt",
+        "commander_providers",
+        "commander_send",
+        "commander_sessions",
+        "commander_steer",
+        "commander_wait",
+        "create_goal",
+        "edit",
+        "exit_plan_mode",
+        "get_goal",
+        "glob",
+        "grep",
+        "interrupt_agent",
+        "job_kill",
+        "job_list",
+        "job_output",
+        "list_agents",
+        "present",
+        "pwsh",
+        "read",
+        "read_image",
+        "schedule_create",
+        "schedule_delete",
+        "schedule_list",
+        "schedule_update",
+        "send_message",
+        "skill",
+        "subagent",
+        "subagent_fork",
+        "todo_write",
+        "update_goal",
+        "web_fetch",
+        "web_search",
+        "workflow",
+        "working_directory",
+        "write"
+      ],
+      "lastRole": "user",
+      "marker": "EVAL_MEMORY",
+      "userPreview": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent working directory: \"C:\\\\Users\\\\DraftGo\\\\AppData\\\\Local\\\\Temp\\\\benchgo-assistant-live-nqrTLC\\\\eval-project\\\\.agents\\\\worktrees\\\\benchgo-90be49d5-8e13-4383-8dcb-5dbf5d9c77b4\".\n\n{\"documents\":[{\"name\":\"SOUL.md\",\"content\":\"# 沟通风格\\n\\n清晰、简洁、诚实。先给结论，按需要补充依据。\\n普通细节自行判断，关键歧义及时澄清；不编造事实、进度或完成状态。\\n\",\"hash\":\"6cd8d294e55cf13ad9df7949a71a000cbc8a8c24417d874f7ba7cb3e22166ff7\",\"revision\":1,\"updatedAt\":\"2026-11-03T11:23:36.040Z\",\"source\":{\"type\":\"initialization\"}},{\"name\":\"IDENTITY.md\",\"content\":\"---\\nname: \\\"Eval current\\\"\\n---\\n\\n# 助手身份\\n\\n我是 BenchGo 中的长期个人助手，以宠物形象陪伴用户，负责理解需求、工作协调与结果交付。\\n默认没有名字；用户命名后由本文件顶部的 name 字段管理，空字符串表示未命名。\\n默认使用品牌形象，也支持用户自己的形象。更换外观不改变我的身份、权限或记忆。\\n自身人设沿用 SOUL.md，用户资料沿用 USER.md，共同经历与长期经验沿用同一套记忆。\\n\",\"hash\":\"9b50b661a3d3eaf8fa867bec34bebda65bfef606add8544c8a09e8daa575a828\",\"revision\":3,\"updatedAt\":\"2026-11-03T11:23:38.233Z\",\"source\":{\"type\":\"user-edit\",\"field\":\"identity-name\"}},{\"name\":\"USER.",
+      "messageRoles": [
+        "system",
+        "user",
+        "user",
+        "user",
+        "user",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:24:08.429Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [],
+      "lastRole": "user",
+      "marker": null,
+      "userPreview": "Generate the session title from this JSON array of human messages:\n[{\"seq\":12,\"text\":\"Reply exactly BENCHGO_OK without tools.\"}]",
+      "messageRoles": [
+        "system",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:24:13.069Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [],
+      "lastRole": "user",
+      "marker": null,
+      "userPreview": "{\"objective\":\"Reply exactly BENCHGO_OK without tools.\",\"acceptance\":\"Worker response contains BENCHGO_OK and has transcript evidence.\",\"instructionRevision\":1,\"mandate\":{\"actorId\":\"desktop-owner\",\"source\":{\"channel\":\"desktop\",\"sessionId\":\"96998734-466f-4b12-9dc3-92ca3f8b98f4\",\"messageId\":\"goal-form:eval-goal\",\"threadId\":\"main\"},\"instruction\":\"{\\\"requestId\\\":\\\"eval-goal\\\",\\\"objective\\\":\\\"计算并给出结果\\\",\\\"projectId\\\":\\\"8baa4fe9-3b8c-4fcd-99c0-f6052964fa38\\\",\\\"provider\\\":\\\"assistant-smoke\\\",\\\"model\\\":\\\"Eval/Route:2026-11+Opaque\\\",\\\"text\\\":\\\"Reply exactly BENCHGO_OK without tools.\\\",\\\"acceptance\\\":\\\"Worker response contains BENCHGO_OK and has transcript evidence.\\\",\\\"budget\\\":{\\\"requests\\\":8}}\",\"policyVersion\":\"33ebb06ed79a635203e3df939a402e7b682b288efb8da76b80887cd493604e77\",\"admission\":\"desktop-approved-delegation\",\"controlledActions\":\"require-current-policy-and-harness-approval\",\"project\":{\"id\":\"8baa4fe9-3b8c-4fcd-99c0-f6052964fa38\",\"path\":\"C:\\\\Users\\\\DraftGo\\\\AppData\\\\Local\\\\Temp\\\\benchgo-a",
+      "messageRoles": [
+        "system",
+        "user"
+      ]
+    },
+    {
+      "at": "2026-11-03T11:24:30.071Z",
+      "model": "Eval/Route:2026-11+Opaque",
+      "tools": [],
+      "lastRole": "user",
+      "marker": null,
+      "userPreview": "测试摘要",
+      "messageRoles": [
+        "system",
+        "user"
+      ]
+    }
+  ],
+  "finishedAt": "2026-11-03T11:24:51.207Z"
+}

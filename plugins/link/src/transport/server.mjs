@@ -39,6 +39,7 @@ export function validateConfig(input, prior) {
   const value = { ...prior };
   for (const key of ['enabled', 'host', 'port', 'publicUrl']) if (input[key] !== undefined) value[key] = input[key];
   if (typeof value.enabled !== 'boolean') throw new Error('启用状态必须是布尔值');
+  value.enabled = true;
   if (!isIP(value.host) && value.host !== 'localhost') throw new Error('监听地址必须是 IP 或 localhost');
   if (!Number.isInteger(value.port) || value.port < 0 || value.port > 65535) throw new Error('端口必须在 0 至 65535 之间');
   if (typeof value.publicUrl !== 'string') throw new Error('公网地址无效');
@@ -109,7 +110,7 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
         return await workbench.handle(req, res, url, headers);
       }
       if (req.method === 'GET') {
-        if (url.pathname === '/link/api/info') return send(res, 200, { name: 'DSH Link', version: '0.1.0' });
+        if (url.pathname === '/link/api/info') return send(res, 200, { name: 'DSH Link', hostName: store.state.name, version: '0.1.0' });
         const file = { '/link': 'index.html', '/link/': 'index.html', '/link/index.html': 'index.html', '/link/app.js': 'app.js', '/link/app.css': 'app.css' }[url.pathname];
         if (!file) throw fail('未找到', 404);
         if (url.pathname === '/link') { res.writeHead(308, { location: '/link/', ...headers }); return res.end(); }
@@ -136,7 +137,7 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
       if (url.pathname === '/link/api/workbench') {
         if (!workbench) throw fail('网页工作台尚未就绪', 503);
         await body(req);
-        return send(res, 200, workbench.begin(device, res));
+        return send(res, 200, await workbench.begin(device, res));
       }
       const input = await body(req);
       if (!active || !store.state.devices.some(d => d.id === device.id)) throw fail('设备授权已失效', 401);

@@ -1,0 +1,26 @@
+{
+  "mode": "real",
+  "extra": true,
+  "diagnostic": true,
+  "startedAt": "2026-11-03T10:52:46.457Z",
+  "scenarios": [
+    {
+      "id": "R06",
+      "title": "真实文件产物交付",
+      "expected": "Worker写入隔离工作树；磁盘内容正确；验收和交付完成",
+      "layer": "真实模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T10:53:05.927Z",
+      "status": "fail",
+      "error": "Expected values to be strictly equal:\n\n'wait' !== 'passed'\n",
+      "durationMs": 80152
+    }
+  ],
+  "requests": [],
+  "provider": {
+    "id": "routergo",
+    "model": "deepseek-v4.1-flash",
+    "protocol": "openai-completions",
+    "isolatedAlias": "assistant-smoke"
+  },
+  "finishedAt": "2026-11-03T10:54:26.290Z"
+}

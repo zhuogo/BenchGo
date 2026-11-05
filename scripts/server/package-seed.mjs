@@ -10,7 +10,7 @@ import { parseArgs } from 'node:util';
 import { stagePluginBundle } from '../desktop/plugin-bundle.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 export async function packageServerSeed({ output = join(root, 'plugins/link/dist/server') } = {}) {
-  const plugin = join(root, 'plugins/commander');
+  const plugin = join(root, 'plugins/benchgo');
   const metadata = JSON.parse(await readFile(join(plugin, 'package.json')));
   const upstream = JSON.parse(await readFile(join(root, 'upstream.json')));
   const tar = createRequire(join(plugin, 'package.json'))('tar');

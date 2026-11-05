@@ -1,0 +1,6 @@
+.ba-card.ba-card{display:flex;align-items:center;gap:8px;flex:0 0 auto;min-width:0;width:160px;max-width:100%;height:40px;padding:0;border:0;background:transparent;color:inherit;text-align:left;overflow:hidden;pointer-events:auto;border-radius:6px;font:inherit}
+button.ba-card.ba-card{cursor:pointer;box-shadow:none}
+button.ba-card.ba-card:hover{background:var(--bg-hover,rgba(127,127,127,.08))}
+.ba-card.ba-card:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+.ba-card iframe{display:block;flex:none;width:160px;height:40px;border:0;pointer-events:none}
+.ba-card-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}

@@ -1,0 +1,2951 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "BenchGo Harness 工具管理",
+    "version": "1.2.0",
+    "description": "官方 owner 通道的侧栏状态与工具设置接口；已配对工作台仅通过 Link 既有转发白名单访问。工具安装与本机配置写入仍受对应权限限制，不通过 MCP 向 Agent 暴露安装或配置写入权限。"
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "paths": {
+    "/api/commander/tooling": {
+      "post": {
+        "summary": "管理工具、隔离会话方案与安装任务",
+        "description": "请求必须通过官方 owner 通道且 Origin 同源。安装、更新、重装均绑定系统真实安装来源；未知来源禁止自动更新或卸载。旧客户端携带的 source 字段仅为兼容，不改变来源选择；卸载需携带探测快照 snapshot 二次确认。本机配置写入需 confirmNativeWrite=true。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "操作结果；安装操作立即返回异步 job，后续使用 job/cancel 查询或取消。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolingResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "输入无效或操作失败；未知 source 拒绝，不静默回退。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "非同源请求或未获 owner 授权。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "方案冲突、缺少显式本机写入确认或工具仍在运行。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "请求超过 300 KiB。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type 不是 application/json。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/commander": {
+      "post": {
+        "summary": "原生会话与项目侧栏操作",
+        "description": "通过现有 owner 认证 Connection 通道调用。state 返回项目、会话、隐藏记录及可选能力状态；ensureRecent 恢复最近工作区。委派 loopback 监听或字体初始化失败不撤销本接口，capabilities 对应 available=false，并保留 error/code。损坏的用户持久化数据仍报错，不重置。其他会话操作保持既有语义。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "state",
+                      "ensureRecent",
+                      "binding",
+                      "browse",
+                      "clone",
+                      "dismiss",
+                      "doctor",
+                      "project",
+                      "models",
+                      "create",
+                      "start",
+                      "events",
+                      "adopt",
+                      "archive",
+                      "delete",
+                      "send",
+                      "connect",
+                      "interrupt",
+                      "steer",
+                      "close",
+                      "history",
+                      "approve"
+                    ]
+                  }
+                },
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "state 返回 SidebarState；ensureRecent 返回 RecentWorkspace；其他操作返回对应结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SidebarState"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RecentWorkspace"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "输入或操作失败；已有会话身份可随 session 字段返回。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "BenchGo 存储或侧栏初始化失败（含数据目录占用、无法确认旧锁持有者或损坏持久状态）；明确报告原因，保留已有数据，不返回空会话或缺失路由 404。修复原因后需重启主机。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "const": "COMMANDER_UNAVAILABLE"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/benchgo/vault": {
+      "post": {
+        "summary": "保险库状态与凭据管理",
+        "description": "同源 owner 通道；凭据由宿主服务加密保存，HTTP 与 Worker 均不返回 secret。请求体上限 64 KiB，响应使用 no-store。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VaultRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "操作结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            },
+            "x-action-schemas": {
+              "status": {
+                "$ref": "#/components/schemas/VaultStatus"
+              },
+              "list": {
+                "$ref": "#/components/schemas/VaultList"
+              },
+              "save": {
+                "$ref": "#/components/schemas/VaultSaveResult"
+              },
+              "remove": {
+                "type": "object",
+                "required": [
+                  "removed"
+                ],
+                "properties": {
+                  "removed": {
+                    "const": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效"
+          },
+          "403": {
+            "description": "同源或 HTTPS 要求不满足"
+          },
+          "409": {
+            "description": "凭据冲突或数据版本过旧"
+          },
+          "413": {
+            "description": "请求过大"
+          },
+          "503": {
+            "description": "保险库不可用"
+          }
+        }
+      }
+    },
+    "/api/commander/assistant": {
+      "post": {
+        "summary": "SuperAgent 主聊天、旁聊、配置、记忆与任务操作",
+        "description": "BenchGo SuperAgent owner 通道。Router 兼任对话助手与总调度，负责自然聊天、回答、协调和自动委派，无网页、文件、shell 探索权限。当前明确人类请求授权普通派工，无额外 Ticket 审批；实际副作用保留原授权门禁。send 持久接收并按会话分诊，history.requests 可查询处理状态。桌面派工成功后由当前 Router 自然回复；显式人类渠道请求的接单正文复用同次研判 replyText，通过 ticket.accepted 持久投递，无固定文案兜底。任务结果验收后回原来源。辅助 review 控制研判与成果验收，不额外限制 Worker 并发。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "操作结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            },
+            "x-action-schemas": {
+              "analyzeImage": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "archiveThread": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "artifacts": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "bringToMain": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "cancel": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "capabilities": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "catalog": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "checkpointList": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "checkpointPreview": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "checkpointRestore": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "compact": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "config": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "connectionConfigure": {
+                "$ref": "#/components/schemas/ChannelConnection"
+              },
+              "connections": {
+                "$ref": "#/components/schemas/ChannelConnection"
+              },
+              "connectionStatus": {
+                "$ref": "#/components/schemas/ChannelStatus"
+              },
+              "connectionVerify": {
+                "type": "object",
+                "description": "Returns saved configuration and authentication status. Feishu status also includes the current long-connection state and actual receive/send verification; authenticating does not restart a healthy connection.",
+                "additionalProperties": true
+              },
+              "createThread": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "deleteArchivedThreads": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "deleteThread": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ensure": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "evaluationDispose": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "evaluationHistory": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "evaluations": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalAdvance": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalBudgetGet": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalBudgetResume": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalBudgetUpdate": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalCancel": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalCreate": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalGet": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalList": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalPause": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalResume": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalUpdate": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "history": {
+                "type": "object",
+                "description": "主聊与旁聊的受控聊天历史：真实用户消息、assistant_reply 显式发布、官方 completed 回合确认的无工具调用终答，以及本来源已审核通知；不返回工具、过程说明或思维链。支持 before/limit 分页。",
+                "properties": {
+                  "activeReply": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "description": "当前运行中、含真实用户消息的回合身份；用于校验官方会话中 assistant_reply 的流式正文，不包含执行过程。",
+                    "properties": {
+                      "requestId": {
+                        "type": "string"
+                      },
+                      "turn": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "requestId",
+                      "turn"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "reactions": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "当前会话消息键到用户表情的映射。"
+                  },
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "seq": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "原会话事件序号，用于与官方即时用户消息关联及分页。"
+                        },
+                        "rpcId": {
+                          "type": "string",
+                          "description": "真实用户消息的发送请求标识，用于去除已持久化的本地回声。"
+                        },
+                        "usage": {
+                          "type": "object",
+                          "description": "最终回复那次模型请求的官方用量，不是工单总量；缺失不补零。",
+                          "additionalProperties": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "additionalProperties": true
+              },
+              "ledgerRead": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "memoryCandidateAccept": {
+                "type": "object",
+                "additionalProperties": true,
+                "deprecated": true,
+                "description": "已弃用，仅兼容旧版记忆候选管理；合格记忆现在自动保存，新客户端无需逐条确认。"
+              },
+              "memoryCandidateReject": {
+                "type": "object",
+                "additionalProperties": true,
+                "deprecated": true,
+                "description": "已弃用，仅兼容旧版记忆候选管理；合格记忆现在自动保存，新客户端无需逐条确认。"
+              },
+              "memoryCandidates": {
+                "type": "object",
+                "additionalProperties": true,
+                "deprecated": true,
+                "description": "已弃用，仅兼容旧版记忆候选管理；合格记忆现在自动保存，新客户端无需逐条确认。"
+              },
+              "memoryDelete": {
+                "type": "object",
+                "required": [
+                  "removed"
+                ],
+                "properties": {
+                  "removed": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false,
+                "description": "直接遗忘单条记忆，同时清理允许遗忘的历史和会话快照；revision 不一致时拒绝。"
+              },
+              "memoryForget": {
+                "type": "object",
+                "required": [
+                  "removed"
+                ],
+                "properties": {
+                  "removed": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false,
+                "description": "直接遗忘单条记忆，同时清理允许遗忘的历史和会话快照；revision 不一致时拒绝。"
+              },
+              "memoryLearning": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "memorySave": {
+                "$ref": "#/components/schemas/AssistantMemoryEntry",
+                "description": "立即保存或纠正记忆，返回实际正文与版本；无需候选确认。更新时传 revision 以检测冲突。"
+              },
+              "memorySearch": {
+                "type": "object",
+                "required": [
+                  "memories"
+                ],
+                "properties": {
+                  "memories": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantMemoryEntry"
+                    }
+                  }
+                },
+                "additionalProperties": true,
+                "description": "返回符合当前学习排除规则的已保存记忆。"
+              },
+              "notificationAck": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "notificationDelivered": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "notificationRead": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "notifications": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "notificationSync": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ownedSkillApprove": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ownedSkillAudit": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ownedSkillPin": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ownedSkillReject": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ownedSkillRestore": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ownedSkills": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "pinThread": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "profile": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "profileDocuments": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "profileExport": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "profileImport": {
+                "type": "object",
+                "description": "includeMemories=false 时保留目标 Profile 的 MEMORY.md、USER.md、TOOLS.md，不导入这些文档或独立记忆条目。documents 仅列出本次参与导入的文档。",
+                "additionalProperties": true
+              },
+              "profileInfo": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "renameThread": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "resetMain": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "review": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "reviewClaim": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "reviewComplete": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "reviewFail": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "send": {
+                "type": "object",
+                "description": "持久接收消息，Router 运行中仍可排队。返回 threadId/sessionId/requestId/messageId/status 和可选 duplicate；相同 requestId 不重发，内容或 replyContext 不同拒绝。queued/processing 不是任务完成。Router 用户可见 text 通过官方实时流显示，reasoning/工具参数不公开；正式回复成功后持久保存。cancel 取消该会话当前回合及排队请求，不隐含取消已委派工单。",
+                "additionalProperties": true
+              },
+              "requestState": {
+                "type": "array",
+                "description": "指定逻辑聊天的持久 inbox 回执，只读对账，不重放未知请求。",
+                "items": { "type": "object", "additionalProperties": true }
+              },
+              "sessionSearch": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "state": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "summarize": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "systemFiles": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ticketAnswer": {
+                "type": "object",
+                "description": "回答明确 attentionId 对应的原问题，需 ticketId/instructionRevision/requestId/answer；Review Attention 同时校验当前结果版本。仅信息、权限、范围问题建立 Attention，内部核验不要求用户回答。答复持久关联原单并在原 Assignment/Run/session 续做，不扩大授权。",
+                "additionalProperties": true
+              },
+              "ticketPause": {
+                "type": "object",
+                "description": "暂停原工单，执行确认停止及保存检查点前为 pausing。",
+                "additionalProperties": true
+              },
+              "ticketResume": {
+                "type": "object",
+                "description": "恢复暂停工单或原单续做等待。续做必须提供当前 expectedResultVersion（执行未提交时可为0）；执行额度耗尽时由用户显式提交 additionalExecutionMs，正整数且最多600000。不增加 Goal 额度。版本、停止、撤权、检查点或外部效果未核实时拒绝，返回 queued:false/code 或错误。",
+                "additionalProperties": true
+              },
+              "ticketChange": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ticketRetryReview": {
+                "type": "object",
+                "description": "只锁定并复核原执行证据，不是补做入口。内部 review_wait 由系统按持久退避重核；blocked 必须回答原 Attention。failed/rework 自然说明原因并恢复原 Assignment/Run/session/工作区，不以固定次数终单；无进展或额度不足保留可恢复等待。旧 open/uncertain 且 resultVersion=0 可用 expectedResultVersion=0 核实原执行，不重放未知动作。toolEvidence 截断不代表缺证据，按需分页读取。unchanged=true 仅为去重，不代表任务继续或完成。",
+                "additionalProperties": true
+              },
+              "tickets": {
+                "type": "object",
+                "description": "工单及结果记录。独立 title 最多10个Unicode字符，target/acceptance保留完整任务要求。review.verdict 为 passed/failed/wait/rework，failed/rework 仅表示本轮结果未通过；内部待核验为 review_wait，真实缺用户决定为 blocked+Attention，资源/无进展保留 continuationWait。系统故障 publication.origin=system 与 AI 正文分开。普通选项和信息答复不能替代动作审批。",
+                "additionalProperties": true
+              },
+              "ticketStop": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "connectionCredential": {
+                "type": "object",
+                "required": [
+                  "ref"
+                ],
+                "properties": {
+                  "ref": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "connectionCatalog": {
+                "type": "object",
+                "required": [
+                  "channels"
+                ],
+                "properties": {
+                  "channels": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "label",
+                        "fields",
+                        "status"
+                      ],
+                      "properties": {
+                        "id": {
+                          "$ref": "#/components/schemas/ChannelId"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "fields": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "status": {
+                          "$ref": "#/components/schemas/ChannelStatus"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "additionalProperties": false
+              },
+              "connectionAction": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "渠道操作响应。飞书 operation=listChats 返回 FeishuChatList；只读取机器人已加入的群，不发送测试消息。",
+                "x-operation-schemas": {
+                  "feishu.listChats": {
+                    "$ref": "#/components/schemas/FeishuChatList"
+                  }
+                }
+              },
+              "petCatalog": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "petUpload": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "petPreview": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "petApply": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "petRestore": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "petExpress": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "petDiscard": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "notificationOption": {
+                "type": "object",
+                "description": "选项原文作为普通用户意愿发送，不构成审批。校验来源会话和工单结果版本，同一 eventId 的选择使用持久发送幂等键。",
+                "required": [
+                  "threadId",
+                  "sessionId",
+                  "messageId"
+                ],
+                "properties": {
+                  "threadId": {
+                    "type": "string"
+                  },
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "messageId": {
+                    "type": "string"
+                  },
+                  "duplicate": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "messageReaction": {
+                "type": "object",
+                "required": [
+                  "messageKey",
+                  "emoji"
+                ],
+                "properties": {
+                  "messageKey": {
+                    "type": "string"
+                  },
+                  "emoji": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "connectionReplies": {
+                "type": "object",
+                "required": [
+                  "replies"
+                ],
+                "properties": {
+                  "replies": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "triggerId",
+                        "threadId",
+                        "kind",
+                        "text",
+                        "state"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "triggerId": {
+                          "type": "string"
+                        },
+                        "threadId": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "answer",
+                            "ask"
+                          ]
+                        },
+                        "text": {
+                          "type": "string",
+                          "maxLength": 6000
+                        },
+                        "state": {
+                          "enum": [
+                            "queued",
+                            "claimed",
+                            "sent",
+                            "suppressed",
+                            "uncertain"
+                          ]
+                        },
+                        "attempts": {
+                          "type": "integer"
+                        },
+                        "lastError": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "receipt": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "description": "Owner-authenticated direct channel reply mailbox. Optional channel and threadId filters; newest 100 entries. No Ticket is created for answer/ask."
+              }
+            }
+          },
+          "400": {
+            "description": "请求无效"
+          },
+          "403": {
+            "description": "未获 owner 授权"
+          },
+          "409": {
+            "description": "版本冲突"
+          }
+        }
+      }
+    },
+    "/api/commander/assistant/channels/webhook": {
+      "post": {
+        "summary": "签名事件交给统一 Router",
+        "description": "HMAC-SHA256 密钥来自 signingSecretRef；签名十六进制值覆盖 timestamp + \".\" + 原始请求字节。时间窗为五分钟。requestId 持久去重，身份取配置唯一 ownerIds，输入不可声明身份。结果通过已认证 tickets 查询。",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-BenchGo-Timestamp",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{10}$"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-BenchGo-Signature",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "事件已持久受理；不代表任务完成"
+          },
+          "401": {
+            "description": "签名或时间戳无效"
+          },
+          "413": {
+            "description": "正文超过64KB"
+          },
+          "503": {
+            "description": "尚未持久受理，请用相同requestId重试"
+          }
+        }
+      }
+    },
+    "/api/commander/assistant/channels/feishu": {
+      "post": {
+        "summary": "feishu 官方签名回调",
+        "description": "独立验证平台认证与来源后进入统一准入；不使用浏览器主人身份。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "平台事件已处理"
+          },
+          "401": {
+            "description": "平台验证失败"
+          },
+          "503": {
+            "description": "接收失败，请由平台重试"
+          }
+        }
+      }
+    },
+    "/api/commander/assistant/channels/whatsapp": {
+      "post": {
+        "summary": "whatsapp 官方签名回调",
+        "description": "独立验证平台认证与来源后进入统一准入；不使用浏览器主人身份。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "平台事件已处理"
+          },
+          "401": {
+            "description": "平台验证失败"
+          },
+          "503": {
+            "description": "接收失败，请由平台重试"
+          }
+        }
+      },
+      "get": {
+        "summary": "WhatsApp 回调订阅验证",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "hub.mode",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hub.verify_token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hub.challenge",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "验证挑战"
+          },
+          "401": {
+            "description": "验证失败"
+          }
+        }
+      }
+    },
+    "/api/commander/assistant/pet-asset": {
+      "get": {
+        "summary": "Read a normalized private SuperAgent appearance asset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raster image; immutable private cache, owner access follows the existing assistant connection."
+          },
+          "404": {
+            "description": "Missing or invalid asset"
+          }
+        }
+      }
+    },
+    "/api/benchgo/skills": {
+      "post": {
+        "summary": "Read the unified skill catalog and instruction bodies",
+        "description": "Owner-only same-origin JSON endpoint. Reads the default Agent preset through a standing scope lease without creating an Agent. Omitted projectId selects global skills; projectId must identify a registered workspace. Uses official registry winners, without enumerating shadowed copies or scanning arbitrary paths. Owned skill management remains on the assistant API; no new MCP tools.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "action"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "list"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "name",
+                      "provider"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "get"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "provider": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "list returns available, skills, projects and scope; get returns skill including content. Missing registry returns available:false for list. Responses use no-store.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "skills": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SkillSummary"
+                      }
+                    },
+                    "skill": {
+                      "$ref": "#/components/schemas/SkillSummary"
+                    },
+                    "projects": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "scope": {
+                      "type": "object",
+                      "properties": {
+                        "projectId": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "cwd": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "403": {
+            "description": "Cross-origin request rejected"
+          },
+          "404": {
+            "description": "Project or skill not found"
+          },
+          "409": {
+            "description": "Winning provider changed; refresh the catalog"
+          },
+          "415": {
+            "description": "application/json required"
+          },
+          "503": {
+            "description": "Skill service unavailable or lookup failed"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ToolingRequest": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "pickerCatalog",
+              "catalog",
+              "profiles",
+              "providers",
+              "models",
+              "job",
+              "install",
+              "update",
+              "reinstall",
+              "uninstallPreview",
+              "uninstall",
+              "cancel",
+              "setDefault",
+              "saveProfile",
+              "setBindings",
+              "preview",
+              "apply",
+              "restore"
+            ]
+          },
+          "tool": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "description": "安装任务 ID（job/cancel）"
+          },
+          "providerId": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "quickSettings": {
+            "type": "object"
+          },
+          "overrides": {
+            "type": "object"
+          },
+          "contextWindow": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expectedRevision": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confirmNativeWrite": {
+            "type": "boolean"
+          },
+          "checksums": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "backupId": {
+            "type": "string"
+          },
+          "snapshot": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "卸载预览返回的实际安装来源；仅用于展示和任务结果。"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "install",
+                    "update",
+                    "reinstall"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "tool"
+              ],
+              "properties": {}
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "uninstall",
+                    "setDefault",
+                    "saveProfile",
+                    "preview",
+                    "apply"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "tool"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "job",
+                    "cancel"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "id"
+              ]
+            }
+          }
+        ]
+      },
+      "ToolSummary": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "installer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "canInstall": {
+            "type": "boolean"
+          },
+          "canUpdate": {
+            "type": "boolean"
+          },
+          "canReinstall": {
+            "type": "boolean"
+          },
+          "canUninstall": {
+            "type": "boolean"
+          },
+          "job": {
+            "$ref": "#/components/schemas/InstallJob"
+          }
+        }
+      },
+      "InstallJob": {
+        "type": "object",
+        "required": [
+          "id",
+          "toolId",
+          "action",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "toolId": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "install",
+              "update",
+              "reinstall",
+              "uninstall"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "description": "实际探测到的安装来源。"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "当前阶段，如环境准备、工具安装或版本验证。"
+          },
+          "logs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "NativeConfigFileStatus": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "unavailable": {
+            "type": "boolean"
+          },
+          "externalChanged": {
+            "type": "boolean",
+            "description": "与最近一次显式同步后的 SHA-256 不同；仅报告，不自动覆盖。"
+          }
+        },
+        "additionalProperties": true
+      },
+      "NativeToolStatus": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "lastSyncAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NativeConfigFileStatus"
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "ToolingResponse": {
+        "type": "object",
+        "properties": {
+          "native": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NativeToolStatus"
+            },
+            "description": "只读原生配置状态。externalChanged 表示同步后发生改动，不触发自动合并或写入。"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolSummary"
+            }
+          },
+          "job": {
+            "$ref": "#/components/schemas/InstallJob"
+          }
+        },
+        "description": "按 action 返回：catalog 含 tools/profiles/defaults/capabilities/backups/bindings/providerAccess；pickerCatalog 返回模型选择目录；profiles 返回方案目录；providers/models 返回对应列表；install/update/reinstall/uninstall/job/cancel 返回 job；saveProfile 返回 profile；preview 返回 preview；apply/restore 返回 result；setDefault/setBindings 返回方案管理结果。保留既有响应字段。"
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "OptionalWebCapability": {
+        "type": "object",
+        "required": [
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string",
+            "description": "初始化失败的实际错误消息，仅不可用时存在。"
+          },
+          "code": {
+            "type": "string",
+            "description": "原始错误码，如 EACCES；原异常未提供时省略。"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SidebarState": {
+        "type": "object",
+        "required": [
+          "projects",
+          "sessions",
+          "deletedHarnessIds",
+          "capabilities"
+        ],
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "deletedHarnessIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "capabilities": {
+            "type": "object",
+            "required": [
+              "delegation",
+              "fonts"
+            ],
+            "properties": {
+              "delegation": {
+                "$ref": "#/components/schemas/OptionalWebCapability"
+              },
+              "fonts": {
+                "$ref": "#/components/schemas/OptionalWebCapability"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "RecentWorkspace": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "path"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UninstallPreview": {
+        "type": "object",
+        "required": [
+          "available",
+          "snapshot"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "realpath": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "snapshot": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AssistantRequest": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "analyzeImage",
+              "archiveThread",
+              "artifacts",
+              "bringToMain",
+              "cancel",
+              "capabilities",
+              "catalog",
+              "checkpointList",
+              "checkpointPreview",
+              "checkpointRestore",
+              "compact",
+              "config",
+              "connectionAction",
+              "connectionCatalog",
+              "connectionConfigure",
+              "connectionCredential",
+              "connectionStatus",
+              "connectionVerify",
+              "connections",
+              "createThread",
+              "deleteArchivedThreads",
+              "deleteThread",
+              "ensure",
+              "evaluationDispose",
+              "evaluationHistory",
+              "evaluations",
+              "goalAdvance",
+              "goalBudgetGet",
+              "goalBudgetResume",
+              "goalBudgetUpdate",
+              "goalCancel",
+              "goalCreate",
+              "goalGet",
+              "goalList",
+              "goalPause",
+              "goalResume",
+              "goalUpdate",
+              "history",
+              "ledgerRead",
+              "memoryCandidateAccept",
+              "memoryCandidateReject",
+              "memoryCandidates",
+              "memoryDelete",
+              "memoryForget",
+              "memoryLearning",
+              "memorySave",
+              "memorySearch",
+              "notificationAck",
+              "notificationDelivered",
+              "notificationRead",
+              "notificationSync",
+              "notifications",
+              "ownedSkillApprove",
+              "ownedSkillAudit",
+              "ownedSkillPin",
+              "ownedSkillReject",
+              "ownedSkillRestore",
+              "ownedSkills",
+              "petApply",
+              "petCatalog",
+              "petDiscard",
+              "petExpress",
+              "petPreview",
+              "petRestore",
+              "petUpload",
+              "pinThread",
+              "profile",
+              "profileDocuments",
+              "profileExport",
+              "profileImport",
+              "profileInfo",
+              "renameThread",
+              "resetMain",
+              "requestState",
+              "review",
+              "reviewClaim",
+              "reviewComplete",
+              "reviewFail",
+              "send",
+              "sessionSearch",
+              "state",
+              "summarize",
+              "systemFiles",
+              "ticketAnswer",
+              "ticketChange",
+              "ticketPause",
+              "ticketResume",
+              "ticketRetryReview",
+              "ticketStop",
+              "tickets",
+              "notificationOption",
+              "messageReaction",
+              "connectionReplies"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedInstructionRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedResultVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "additionalExecutionMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 600000
+          },
+          "expectedUpdatedAt": {
+            "type": "string",
+            "minLength": 8
+          },
+          "candidateId": {
+            "type": "string"
+          },
+          "choice": {
+            "type": "string"
+          },
+          "versionId": {
+            "type": "string"
+          },
+          "expectedHash": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "ticketId": {
+            "type": "string"
+          },
+          "previewHash": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "disposition": {
+            "type": "string"
+          },
+          "request": {
+            "type": "object"
+          },
+          "patch": {
+            "type": "object",
+            "description": "局部更新，保留未编辑字段。models 为主模型及备用；auxiliary 为 null 或 {models: 模型列表, capabilities: 用途列表}。用途为 vision/compression/summary/review；未配置或未勾选时跟随当前主模型。review 包括接单研判、成果验收和学习复盘。providerId/modelId 原样保存。",
+            "additionalProperties": true,
+            "properties": {
+              "keyPools": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "providerId",
+                    "candidates"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "providerId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "candidates": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 7,
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "keyPools": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "required": [
+                "providerId",
+                "candidates"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "providerId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "candidates": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 7,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          "goalIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "after": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "channel": {
+            "$ref": "#/components/schemas/ChannelId"
+          },
+          "field": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "guildId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "channelId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "actorId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "loginId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "secret": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536,
+            "writeOnly": true,
+            "description": "仅用于 connectionCredential；响应、配置和模型上下文不含明文。"
+          },
+          "draftId": {
+            "type": "string",
+            "description": "Pet preview ID returned by petUpload/petPreview; required to apply or discard that preview."
+          },
+          "dataUrl": {
+            "type": "string",
+            "description": "petUpload only: PNG/JPEG/WebP base64 data URL; input limited to 8 MiB, decoded and normalized by the server."
+          },
+          "artifactPath": {
+            "type": "string",
+            "description": "petPreview only: relative artifacts/<image> path; arbitrary host paths and remote URLs are rejected."
+          },
+          "expression": {
+            "type": "string",
+            "description": "An actual catalog expression ID, or a custom expression ID bound to the current appearance."
+          },
+          "pet": {
+            "$ref": "#/components/schemas/AssistantPetAppearance"
+          },
+          "pageToken": {
+            "type": "string",
+            "description": "飞书 listChats 分页游标，原样传回，不解释或改写。"
+          },
+          "eventId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 150
+          },
+          "memory": {
+            "type": "object",
+            "required": [
+              "content"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "content": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              },
+              "source": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "scope": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "document": {
+                "type": "string",
+                "enum": [
+                  "MEMORY.md",
+                  "USER.md",
+                  "TOOLS.md"
+                ]
+              }
+            },
+            "additionalProperties": true,
+            "description": "memorySave 的记忆正文。缺少 source 时由管理入口补充用户来源；更新已有 id 时可配合顶层 revision 保护并发。"
+          }
+        },
+        "additionalProperties": true,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "ticketChange"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "id",
+                "operation",
+                "expectedInstructionRevision",
+                "requestId",
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "evaluationDispose"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "candidateId",
+                "disposition",
+                "expectedRevision",
+                "expectedUpdatedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "checkpointRestore"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "ticketId",
+                "runId",
+                "token"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "summarize"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "text"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "analyzeImage"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "file",
+                "question"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "summarize"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "analyzeImage"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "question": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "connectionConfigure"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "revision",
+                "patch"
+              ],
+              "properties": {
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "patch": {
+                  "$ref": "#/components/schemas/ChannelConfig"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "connectionCredential"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "channel",
+                "field",
+                "secret"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "connectionAction"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "channel",
+                "operation"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "connectionAction"
+                },
+                "channel": {
+                  "const": "api"
+                },
+                "operation": {
+                  "const": "submit"
+                }
+              },
+              "required": [
+                "action",
+                "channel",
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "requestId",
+                "conversationId",
+                "text"
+              ],
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32000
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "connectionConfigure"
+                },
+                "channel": {
+                  "const": "feishu"
+                }
+              },
+              "required": [
+                "action",
+                "channel"
+              ]
+            },
+            "then": {
+              "properties": {
+                "patch": {
+                  "$ref": "#/components/schemas/FeishuChannelConfig"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "notificationOption"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "eventId",
+                "threadId",
+                "text"
+              ],
+              "properties": {
+                "threadId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "messageReaction"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "threadId",
+                "messageKey",
+                "emoji"
+              ],
+              "properties": {
+                "threadId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "messageKey": {
+                  "type": "string",
+                  "pattern": "^(message|notification):.+",
+                  "maxLength": 500
+                },
+                "emoji": {
+                  "enum": [
+                    null,
+                    "👍",
+                    "❤️",
+                    "😂",
+                    "🎉",
+                    "🤔",
+                    "👎"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "memorySave"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "memory"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "memoryDelete",
+                    "memoryForget",
+                    "memoryCandidateAccept",
+                    "memoryCandidateReject"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        ],
+        "x-deprecated-actions": [
+          "memoryCandidates",
+          "memoryCandidateAccept",
+          "memoryCandidateReject"
+        ]
+      },
+      "VaultEntry": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "label": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string",
+            "format": "uri"
+          },
+          "method": {
+            "type": "string"
+          },
+          "placement": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": "integer"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "available": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "handle",
+          "revision",
+          "label",
+          "target",
+          "method",
+          "placement",
+          "field",
+          "prefix",
+          "kind",
+          "expiresAt",
+          "updatedAt",
+          "configured",
+          "available"
+        ],
+        "additionalProperties": false
+      },
+      "VaultStatus": {
+        "type": "object",
+        "required": [
+          "initialized"
+        ],
+        "properties": {
+          "initialized": {
+            "type": "boolean"
+          },
+          "locked": {
+            "const": false
+          }
+        },
+        "additionalProperties": true
+      },
+      "VaultList": {
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VaultEntry"
+            }
+          },
+          "locked": {
+            "const": false
+          }
+        },
+        "additionalProperties": true
+      },
+      "VaultSaveResult": {
+        "type": "object",
+        "required": [
+          "entry"
+        ],
+        "properties": {
+          "entry": {
+            "$ref": "#/components/schemas/VaultEntry"
+          }
+        },
+        "additionalProperties": false
+      },
+      "VaultRequest": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "status",
+              "list",
+              "save",
+              "remove"
+            ]
+          },
+          "handle": {
+            "type": "string",
+            "minLength": 1
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "secret": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": true
+          },
+          "target": {
+            "type": "string",
+            "format": "uri"
+          },
+          "method": {
+            "type": "string"
+          },
+          "placement": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "save"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "label",
+                "secret",
+                "target",
+                "method",
+                "placement",
+                "field"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "save"
+                },
+                "handle": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "handle"
+              ]
+            },
+            "then": {
+              "required": [
+                "revision"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "remove"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "handle",
+                "revision"
+              ]
+            }
+          }
+        ]
+      },
+      "ChannelId": {
+        "type": "string",
+        "enum": [
+          "feishu",
+          "wecom",
+          "qq",
+          "weixin",
+          "telegram",
+          "discord",
+          "whatsapp",
+          "email",
+          "webhook",
+          "api"
+        ]
+      },
+      "ChannelConfig": {
+        "type": "object",
+        "description": "按渠道的配置；仅包含凭据引用，密钥通过 connectionCredential 单独录入。字段由 connectionCatalog 提供。",
+        "additionalProperties": true
+      },
+      "ChannelConnection": {
+        "type": "object",
+        "required": [
+          "revision",
+          "config"
+        ],
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/ChannelId"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "config": {
+            "$ref": "#/components/schemas/ChannelConfig"
+          }
+        },
+        "additionalProperties": true
+      },
+      "ChannelStatus": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "authentication": {
+            "type": "string"
+          },
+          "events": {
+            "type": "string"
+          },
+          "sending": {
+            "type": "string"
+          },
+          "connection": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          },
+          "voice": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "WebhookEvent": {
+        "type": "object",
+        "required": [
+          "requestId",
+          "conversationId",
+          "text"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "conversationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          }
+        },
+        "additionalProperties": false
+      },
+      "AssistantPetAppearance": {
+        "type": "object",
+        "description": "The same SuperAgent identity appearance. Saved only through preview/apply; null restores the formal default.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "builtin",
+              "custom"
+            ]
+          },
+          "assetId": {
+            "type": "string"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "decorations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "palette": {
+            "type": "string"
+          },
+          "expressions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "FeishuGroupRule": {
+        "type": "object",
+        "required": [
+          "chatId",
+          "mode"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "mentions",
+              "all",
+              "disabled"
+            ],
+            "description": "mentions：仅 @机器人触发；all：另接收讨论作为上下文，不自动创建任务；disabled：停用。"
+          }
+        },
+        "additionalProperties": false
+      },
+      "FeishuChannelConfig": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ChannelConfig"
+          }
+        ],
+        "type": "object",
+        "properties": {
+          "accessMode": {
+            "type": "string",
+            "enum": [
+              "owners",
+              "platform"
+            ],
+            "default": "owners",
+            "description": "owners 保留 ownerOpenIds 范围；platform 允许飞书平台可访问人员请求任务，不授予桌面主人权限。"
+          },
+          "directMessages": {
+            "type": "boolean",
+            "default": true
+          },
+          "groups": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/FeishuGroupRule"
+            },
+            "default": null,
+            "description": "null 兼容旧 chatIds；数组按群配置，与私聊独立。"
+          },
+          "otherGroups": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "mentions"
+            ],
+            "default": "disabled"
+          }
+        },
+        "additionalProperties": true
+      },
+      "FeishuChatList": {
+        "type": "object",
+        "required": [
+          "chats"
+        ],
+        "properties": {
+          "chats": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "chatId",
+                "name"
+              ],
+              "properties": {
+                "chatId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "nextPageToken": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SkillSummary": {
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "source",
+          "provider",
+          "invocation"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "whenToUse": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "invocation": {
+            "type": "object",
+            "properties": {
+              "modelInvocable": {
+                "type": "boolean"
+              },
+              "userInvocable": {
+                "type": "boolean"
+              }
+            }
+          },
+          "resourceBase": {
+            "type": "object"
+          }
+        }
+      },
+      "AssistantMemoryEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "content",
+          "source",
+          "revision",
+          "document"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "content": {
+            "type": "string"
+          },
+          "source": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "document": {
+            "type": "string",
+            "enum": [
+              "MEMORY.md",
+              "USER.md",
+              "TOOLS.md"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "score": {
+            "type": "number"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

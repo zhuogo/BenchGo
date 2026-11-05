@@ -1,0 +1,86 @@
+{
+  "generatedAt": "2026-11-03T11:25:47.426Z",
+  "description": "真实工具证据进入结果包；历史结果可锁定补证；相同输入不重复验收；主辅模型同页配置及用途勾选；过期测试修正；既有权限、准入与订阅机制保持。",
+  "testsPassed": 132,
+  "tests": [
+    {
+      "file": "optimization-routing.tap",
+      "total": 28,
+      "pass": 28,
+      "fail": 0,
+      "cancelled": 0
+    },
+    {
+      "file": "optimization-core.tap",
+      "total": 76,
+      "pass": 76,
+      "fail": 0,
+      "cancelled": 0
+    },
+    {
+      "file": "optimization-ticket-ui.tap",
+      "total": 4,
+      "pass": 4,
+      "fail": 0,
+      "cancelled": 0
+    },
+    {
+      "file": "optimization-gates.tap",
+      "total": 24,
+      "pass": 24,
+      "fail": 0,
+      "cancelled": 0
+    }
+  ],
+  "limitations": "未做视觉验收、外部聊天渠道端到端或生产压力测试。证据投影有界，超长证据未实现模型主动分页读取；缺证据仍保持待确认。没有新增 Worker 显式报告工具或通用成果证明器，不承诺任意任务自动成功。",
+  "sources": [
+    {
+      "file": "plugins/superagent/src/execution-evidence.mjs",
+      "sha256": "7101de9c363f765eda4f7800628d4ec90125eb97f699e8e6db571b8c39583a86"
+    },
+    {
+      "file": "plugins/superagent/src/assignment-executor.mjs",
+      "sha256": "6d767c79a031c6d9f1da1df8c649ef6d6870195f4c223ef03cb68a3b564cb29b"
+    },
+    {
+      "file": "plugins/superagent/src/review-input.mjs",
+      "sha256": "2fbf8b33b0b1593268b1276999cc69d130923b1b2b259f863578b11911f89670"
+    },
+    {
+      "file": "plugins/superagent/src/review-continuation.mjs",
+      "sha256": "583e5aaa3b2b2c6fa918f800a4ecc092e7272844aa86e13aa531077348f77b85"
+    },
+    {
+      "file": "plugins/superagent/src/ticket-review.mjs",
+      "sha256": "5a785232eb25bf0e97af820ee967702c76a20066babc273cee6ac6953a6347f4"
+    },
+    {
+      "file": "plugins/superagent/src/service.mjs",
+      "sha256": "ee61abe9e3af9f0ceb20b58eec595accec396f837f3d8b1045c66a9946986026"
+    },
+    {
+      "file": "plugins/superagent/client/model-settings.jsx",
+      "sha256": "83b43910647088b5afa8615f1cb4855fd6439a4bab96c1ecd6cfd1cede28deb3"
+    },
+    {
+      "file": "plugins/superagent/client/model-settings.mjs",
+      "sha256": "0df7371e1a382d56f77557a3d85ba086b6b59984a6c1fba63948eeaf413a2236"
+    },
+    {
+      "file": "plugins/superagent/client/model-settings.css",
+      "sha256": "d47ca441f6104a12b4a44e79b1efd2f25f3d87b076ff172556777c39219f668c"
+    },
+    {
+      "file": "plugins/superagent/client/index.jsx",
+      "sha256": "e6ca8c7ae1fa0b6eb1756cf66a65d36ec1c7e91a9f3b5b08df4544f2ae24a5b3"
+    },
+    {
+      "file": "plugins/superagent/client/tickets.jsx",
+      "sha256": "8b44786a9ce590716e29d7a262e969d5b9c026406fcc23d9afc585c8ae933f28"
+    },
+    {
+      "file": "plugins/benchgo/openapi.json",
+      "sha256": "145a6ba8277da3540d26694542ea9fdcff007c6cf1f72d403122b6be55637b04"
+    }
+  ]
+}

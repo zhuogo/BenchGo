@@ -1,0 +1,35 @@
+{
+  "at": "2026-11-03T12:08:24.750Z",
+  "scope": "Real host runner + in-memory store; injected assessment probe, no provider requests or production changes.",
+  "findings": [
+    {
+      "id": "ALIGN-01",
+      "confirmed": true,
+      "description": "Independent threads are assessed serially; a blocked first assessment prevents the second from starting.",
+      "callsWhileFirstBlocked": 1
+    },
+    {
+      "id": "ALIGN-02",
+      "confirmed": true,
+      "description": "Enabled auxiliary review route is not forwarded to admission assessment; main model is selected."
+    }
+  ],
+  "calls": [
+    {
+      "threadId": "slow-thread",
+      "model": {
+        "providerId": "main-provider",
+        "modelId": "main-opaque"
+      },
+      "auxiliaryForwarded": false
+    },
+    {
+      "threadId": "other-thread",
+      "model": {
+        "providerId": "main-provider",
+        "modelId": "main-opaque"
+      },
+      "auxiliaryForwarded": false
+    }
+  ]
+}

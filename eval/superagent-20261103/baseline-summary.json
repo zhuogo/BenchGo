@@ -1,0 +1,2985 @@
+{
+  "command": "node --import ./scripts/source-loader.mjs --test --test-reporter=tap --test-reporter-destination=artifacts/superagent-eval/baseline.tap plugins/superagent/test/*.test.mjs",
+  "tests": 490,
+  "pass": 488,
+  "fail": 1,
+  "cancelled": 1,
+  "skipped": 0,
+  "durationMs": 133977.0541,
+  "passRate": 0.9959183673469387,
+  "limitations": [
+    "Scripted model adapters: not real provider quality evaluation",
+    "Some UI tests inspect source rather than render or click UI",
+    "service.test.mjs invokes Request handlers directly, not network"
+  ],
+  "findings": [
+    {
+      "id": "BASE-01",
+      "severity": "P2",
+      "category": "test drift",
+      "file": "plugins/superagent/test/activity-panel.test.mjs",
+      "line": 9,
+      "reason": "Exports nonexistent task from JSX after extraction into activity-data.mjs activityTask",
+      "counterfactual": "Directly importing activityTask in memory makes both original tests pass",
+      "remedy": "Replace source-transform extraction with import { activityTask as task } from ../client/activity-data.mjs; remove unused esbuild/vm/fs imports"
+    },
+    {
+      "id": "BASE-02",
+      "severity": "P2",
+      "category": "test timeout",
+      "file": "plugins/superagent/test/schedule-host.test.mjs",
+      "line": 20,
+      "reason": "Full parallel baseline exceeded 20000ms timeout (23864.3458ms)",
+      "rerun": {
+        "pass": 1,
+        "durationMs": 1907.1078,
+        "totalDurationMs": 2376.0785,
+        "evidence": "schedule-host-rerun.tap"
+      },
+      "diagnosis": "Standalone pass supports concurrency/load sensitivity; product scheduling failure not demonstrated",
+      "remedy": "Bound suite test concurrency or isolate heavyweight real-engine tests; retain real schedule assertions"
+    }
+  ],
+  "results": [
+    {
+      "status": "ok",
+      "number": 1,
+      "name": "home uses current instruction results and separates blocked work from completed work",
+      "durationMs": 3.9732
+    },
+    {
+      "status": "ok",
+      "number": 2,
+      "name": "home and drawer share requests; background pages pause and last unsubscribe cleans up",
+      "durationMs": 9.1829
+    },
+    {
+      "status": "ok",
+      "number": 3,
+      "name": "a failed refresh keeps real prior data and exposes error, never a fake empty state",
+      "durationMs": 1.6748
+    },
+    {
+      "status": "ok",
+      "number": 4,
+      "name": "late responses after unmount cannot overwrite a new subscription",
+      "durationMs": 2.0612
+    },
+    {
+      "status": "not ok",
+      "number": 2,
+      "name": "plugins\\\\superagent\\\\test\\\\activity-panel.test.mjs",
+      "durationMs": 295.357
+    },
+    {
+      "status": "ok",
+      "number": 6,
+      "name": "assistant approval uses the Harness approval service with the real agent and call context",
+      "durationMs": 4.0701
+    },
+    {
+      "status": "ok",
+      "number": 7,
+      "name": "artifacts list real nested files by category with stable pagination",
+      "durationMs": 996.9907
+    },
+    {
+      "status": "ok",
+      "number": 8,
+      "name": "office and Markdown extensions belong to the document category",
+      "durationMs": 157.1219
+    },
+    {
+      "status": "ok",
+      "number": 9,
+      "name": "artifact download preserves MIME and Unicode names, and isolates active web content",
+      "durationMs": 50.5669
+    },
+    {
+      "status": "ok",
+      "number": 10,
+      "name": "artifact directory links never expose files outside the workspace and retain the size limit",
+      "durationMs": 465.1584
+    },
+    {
+      "status": "ok",
+      "number": 11,
+      "name": "artifact PDF preview passes only verified bytes and preserves download route",
+      "durationMs": 9.9714
+    },
+    {
+      "status": "ok",
+      "number": 12,
+      "name": "window retains head and trigger neighbours, stubs other originals without mutation",
+      "durationMs": 9.6544
+    },
+    {
+      "status": "ok",
+      "number": 13,
+      "name": "excerpts retain original length and pointer without broken surrogate pairs",
+      "durationMs": 1.061
+    },
+    {
+      "status": "ok",
+      "number": 14,
+      "name": "cross-thread context is excluded and late input leaves prior snapshot unchanged",
+      "durationMs": 1.56
+    },
+    {
+      "status": "ok",
+      "number": 15,
+      "name": "invalid or ambiguous source order is rejected",
+      "durationMs": 2.2997
+    },
+    {
+      "status": "ok",
+      "number": 16,
+      "name": "policy binds disk rules and channel revision; revoked ownership cannot open tickets",
+      "durationMs": 7.6324
+    },
+    {
+      "status": "ok",
+      "number": 17,
+      "name": "machine admission requires auto mode and every enabled written rule; revocation fences its mandate",
+      "durationMs": 3.4971
+    },
+    {
+      "status": "ok",
+      "number": 18,
+      "name": "all channel mandates bind trusted owners, source revision and current allowlist",
+      "durationMs": 1.0601
+    },
+    {
+      "status": "ok",
+      "number": 19,
+      "name": "assessment includes bounded head and nearby context beyond the first page and preserves original ledger text",
+      "durationMs": 337.9476
+    },
+    {
+      "status": "ok",
+      "number": 20,
+      "name": "large candidate batches share an excerpt budget and leave excess candidates queued",
+      "durationMs": 51.4729
+    },
+    {
+      "status": "ok",
+      "number": 21,
+      "name": "persisted intake becomes a ticket only with host authorization, duplicate ticks coalesce",
+      "durationMs": 16.99
+    },
+    {
+      "status": "ok",
+      "number": 22,
+      "name": "policy changes during authorization prevent ticket creation",
+      "durationMs": 12.4182
+    },
+    {
+      "status": "ok",
+      "number": 23,
+      "name": "a failed thread does not starve other threads and shutdown fences ignored cancellation",
+      "durationMs": 18.9987
+    },
+    {
+      "status": "ok",
+      "number": 24,
+      "name": "source reads page original text and refuse hidden IDs, invalid ranges and excess requests",
+      "durationMs": 3.5967
+    },
+    {
+      "status": "ok",
+      "number": 25,
+      "name": "Router performs only bounded original-source reads before final decisions",
+      "durationMs": 17.9379
+    },
+    {
+      "status": "ok",
+      "number": 26,
+      "name": "Router rejects executable or endless source tools without finalizing decisions",
+      "durationMs": 5.9959
+    },
+    {
+      "status": "ok",
+      "number": 27,
+      "name": "Router assessment is tool-free and rejects duplicate candidate decisions",
+      "durationMs": 5.4417
+    },
+    {
+      "status": "ok",
+      "number": 28,
+      "name": "assessment uses the full configured queue and stops on permission denial",
+      "durationMs": 2.1499
+    },
+    {
+      "status": "ok",
+      "number": 29,
+      "name": "host execution is persisted, isolated and permission-gated (project=false)",
+      "durationMs": 21828.5578
+    },
+    {
+      "status": "ok",
+      "number": 30,
+      "name": "host execution is persisted, isolated and permission-gated (project=true)",
+      "durationMs": 2584.9131
+    },
+    {
+      "status": "ok",
+      "number": 31,
+      "name": "deadline interrupts stalled execution and keeps its submitted run uncertain",
+      "durationMs": 8210.4458
+    },
+    {
+      "status": "ok",
+      "number": 32,
+      "name": "cancel waits for confirmed host disposal (cleanupFails=false)",
+      "durationMs": 10140.0252
+    },
+    {
+      "status": "ok",
+      "number": 33,
+      "name": "cancel waits for confirmed host disposal (cleanupFails=true)",
+      "durationMs": 14260.4427
+    },
+    {
+      "status": "ok",
+      "number": 34,
+      "name": "claims an assignment once and commits execution before completing its lease",
+      "durationMs": 33.8615
+    },
+    {
+      "status": "ok",
+      "number": 35,
+      "name": "execution failure is uncertain and never blindly retried",
+      "durationMs": 17.8926
+    },
+    {
+      "status": "ok",
+      "number": 36,
+      "name": "a parked Attention releases its single slot without being marked completed",
+      "durationMs": 29.2314
+    },
+    {
+      "status": "ok",
+      "number": 37,
+      "name": "policy narrowing after execution prevents result delivery",
+      "durationMs": 13.3771
+    },
+    {
+      "status": "ok",
+      "number": 38,
+      "name": "shutdown aborts active execution and preserves uncertainty",
+      "durationMs": 12.5692
+    },
+    {
+      "status": "ok",
+      "number": 39,
+      "name": "a free slot starts new work while another execution remains busy",
+      "durationMs": 15.7148
+    },
+    {
+      "status": "ok",
+      "number": 40,
+      "name": "Desktop Attention validates exact choices, revisions and idempotency and preserves answers across reopen",
+      "durationMs": 22358.3424
+    },
+    {
+      "status": "ok",
+      "number": 41,
+      "name": "Attention replies require authenticated owner and exact source after reopening (machine=false)",
+      "durationMs": 2702.3839
+    },
+    {
+      "status": "ok",
+      "number": 42,
+      "name": "Attention replies require authenticated owner and exact source after reopening (machine=true)",
+      "durationMs": 12320.9175
+    },
+    {
+      "status": "ok",
+      "number": 43,
+      "name": "compaction buffers failed output and records exact successful fallback route",
+      "durationMs": 7.7304
+    },
+    {
+      "status": "ok",
+      "number": 44,
+      "name": "ordinary calls and unassigned compaction pass through unchanged",
+      "durationMs": 0.7461
+    },
+    {
+      "status": "ok",
+      "number": 45,
+      "name": "all configured fallbacks are tried, while refusal and aborted finish never retry",
+      "durationMs": 3.4583
+    },
+    {
+      "status": "ok",
+      "number": 46,
+      "name": "abort discards all buffered chunks and never dispatches fallback",
+      "durationMs": 2.4559
+    },
+    {
+      "status": "ok",
+      "number": 47,
+      "name": "incomplete and oversized streams fail closed without fallback",
+      "durationMs": 1.328
+    },
+    {
+      "status": "ok",
+      "number": 48,
+      "name": "identical fallback preserves terminal failure instead of ending silently",
+      "durationMs": 1.3886
+    },
+    {
+      "status": "ok",
+      "number": 49,
+      "name": "thrown transient failures retry once before switching without leaking partial output",
+      "durationMs": 1.6721
+    },
+    {
+      "status": "ok",
+      "number": 50,
+      "name": "compaction reaches the third configured model before main and reports its route",
+      "durationMs": 1.3113
+    },
+    {
+      "status": "ok",
+      "number": 51,
+      "name": "auxiliary settings preserve opaque primary and fallback identities across edits and reload",
+      "durationMs": 25112.9665
+    },
+    {
+      "status": "ok",
+      "number": 52,
+      "name": "legacy configuration defaults to no auxiliary without changing its revision or primary",
+      "durationMs": 18931.3949
+    },
+    {
+      "status": "ok",
+      "number": 53,
+      "name": "legacy key pools are stripped on load and cannot be configured again",
+      "durationMs": 15798.7181
+    },
+    {
+      "status": "ok",
+      "number": 54,
+      "name": "invalid auxiliary configuration is atomic and cannot silently accept unsupported capabilities or credentials",
+      "durationMs": 9314.7671
+    },
+    {
+      "status": "ok",
+      "number": 55,
+      "name": "official Harness prepared vision dispatch reads durable image and rejects text-only main",
+      "durationMs": 1721.4868
+    },
+    {
+      "status": "ok",
+      "number": 56,
+      "name": "summary follows capability changes and explicit side-chat main selection without mutating source",
+      "durationMs": 10.0736
+    },
+    {
+      "status": "ok",
+      "number": 57,
+      "name": "summary rejects empty/oversized evidence instead of silently truncating",
+      "durationMs": 2.5784
+    },
+    {
+      "status": "ok",
+      "number": 58,
+      "name": "vision uses official durable attachments and exact route, preserving source identity",
+      "durationMs": 60.2341
+    },
+    {
+      "status": "ok",
+      "number": 59,
+      "name": "vision never reports placeholder-only text model output as image evidence",
+      "durationMs": 1.9271
+    },
+    {
+      "status": "ok",
+      "number": 60,
+      "name": "vision reports unavailable attachments, missing files and unsupported formats",
+      "durationMs": 2.7407
+    },
+    {
+      "status": "ok",
+      "number": 61,
+      "name": "read-only summary fallback discards partial text and retains frozen source/config",
+      "durationMs": 2.9077
+    },
+    {
+      "status": "ok",
+      "number": 62,
+      "name": "cancelled requests never publish or record an answer",
+      "durationMs": 1.0858
+    },
+    {
+      "status": "ok",
+      "number": 63,
+      "name": "auxiliary request freezes configuration and discards failed text before one backup switch",
+      "durationMs": 7.103
+    },
+    {
+      "status": "ok",
+      "number": 64,
+      "name": "invalid structured output returns directly to main model with its exact options",
+      "durationMs": 0.9325
+    },
+    {
+      "status": "ok",
+      "number": 65,
+      "name": "transient failures exhaust all configured models in order before main",
+      "durationMs": 1.6408
+    },
+    {
+      "status": "ok",
+      "number": 66,
+      "name": "policy denial and aborted completion do not retry or switch models",
+      "durationMs": 1.099
+    },
+    {
+      "status": "ok",
+      "number": 67,
+      "name": "signal cancellation discards partial response without dispatching a fallback",
+      "durationMs": 0.832
+    },
+    {
+      "status": "ok",
+      "number": 68,
+      "name": "unassigned capabilities keep main model and never invoke auxiliary fallback",
+      "durationMs": 0.5341
+    },
+    {
+      "status": "ok",
+      "number": 69,
+      "name": "tool calls and incomplete output cannot publish as successful auxiliary results",
+      "durationMs": 1.3772
+    },
+    {
+      "status": "ok",
+      "number": 70,
+      "name": "third configured auxiliary model succeeds with its opaque ID intact",
+      "durationMs": 0.9069
+    },
+    {
+      "status": "ok",
+      "number": 71,
+      "name": "review without an auxiliary assignment follows explicit then configured model order",
+      "durationMs": 2.7681
+    },
+    {
+      "status": "ok",
+      "number": 72,
+      "name": "mode switching preserves HTML draft and only patches card fields",
+      "durationMs": 6.6247
+    },
+    {
+      "status": "ok",
+      "number": 73,
+      "name": "reset restores default motion and preview controls never write configuration",
+      "durationMs": 3.8987
+    },
+    {
+      "status": "ok",
+      "number": 74,
+      "name": "HTML name cards retain presentation but remove executable and navigable markup",
+      "durationMs": 317.8967
+    },
+    {
+      "status": "ok",
+      "number": 75,
+      "name": "custom cards use a fixed isolated frame and empty cards fall back to the current name",
+      "durationMs": 28.5329
+    },
+    {
+      "status": "ok",
+      "number": 76,
+      "name": "theme colors cannot inject markup and the frame keeps its constrained layout",
+      "durationMs": 18.4186
+    },
+    {
+      "status": "ok",
+      "number": 77,
+      "name": "unsupported containers preserve safe children and report filtered content",
+      "durationMs": 17.8381
+    },
+    {
+      "status": "ok",
+      "number": 78,
+      "name": "empty styling is not content but a painted CSS mark is supported",
+      "durationMs": 33.5526
+    },
+    {
+      "status": "ok",
+      "number": 79,
+      "name": "channel CAS configuration isolates providers, retains opaque identifiers and rejects plaintext secrets",
+      "durationMs": 2983.0103
+    },
+    {
+      "status": "ok",
+      "number": 80,
+      "name": "authenticated API direct messages enter durable Router queue and revoked sources cannot send",
+      "durationMs": 18429.6001
+    },
+    {
+      "status": "ok",
+      "number": 81,
+      "name": "disabled channel lifecycle needs no network and callbacks report missing carrier",
+      "durationMs": 542.9161
+    },
+    {
+      "status": "ok",
+      "number": 82,
+      "name": "late HTTP carrier mounts signed callbacks and revokes routes on disposal",
+      "durationMs": 2452.4351
+    },
+    {
+      "status": "ok",
+      "number": 83,
+      "name": "channel secrets are encrypted, independently referenced and survive service reload",
+      "durationMs": 11.0593
+    },
+    {
+      "status": "ok",
+      "number": 84,
+      "name": "channel credential validation never echoes secrets",
+      "durationMs": 0.7453
+    },
+    {
+      "status": "ok",
+      "number": 85,
+      "name": "production runtime protects dispatched Worker files and exposes authorized rollback",
+      "durationMs": 58559.6725
+    },
+    {
+      "status": "ok",
+      "number": 86,
+      "name": "authorized stopped execution restores through the real service and cannot resume",
+      "durationMs": 1807.0187
+    },
+    {
+      "status": "ok",
+      "number": 87,
+      "name": "checkpoint reads cannot cross session or ticket boundaries",
+      "durationMs": 30.9951
+    },
+    {
+      "status": "ok",
+      "number": 88,
+      "name": "cancelled execution can restore only after its exact executor confirms release",
+      "durationMs": 55.9321
+    },
+    {
+      "status": "ok",
+      "number": 89,
+      "name": "restore requires stopped execution and current policy {\"complete\":false}",
+      "durationMs": 30.9757
+    },
+    {
+      "status": "ok",
+      "number": 90,
+      "name": "restore requires stopped execution and current policy {\"stopped\":false}",
+      "durationMs": 30.4169
+    },
+    {
+      "status": "ok",
+      "number": 91,
+      "name": "restore requires stopped execution and current policy {\"active\":true}",
+      "durationMs": 330.3477
+    },
+    {
+      "status": "ok",
+      "number": 92,
+      "name": "restore requires stopped execution and current policy {\"revoked\":true}",
+      "durationMs": 662.1166
+    },
+    {
+      "status": "ok",
+      "number": 93,
+      "name": "authority revoked while backup is being prepared prevents writes and blocks old-run continuation",
+      "durationMs": 46.5045
+    },
+    {
+      "status": "ok",
+      "number": 94,
+      "name": "中国渠道配置严格校验且来源身份由可信配置决定",
+      "durationMs": 7.1793
+    },
+    {
+      "status": "ok",
+      "number": 95,
+      "name": "企业微信订阅认证、真实回执与停用释放",
+      "durationMs": 60.7721
+    },
+    {
+      "status": "ok",
+      "number": 96,
+      "name": "QQ 按事件目标类型归一化，发送前复验凭据等待期间的撤销",
+      "durationMs": 2.3345
+    },
+    {
+      "status": "ok",
+      "number": 97,
+      "name": "QQ 网关认证、消息受理及发送使用官方 API",
+      "durationMs": 12.2238
+    },
+    {
+      "status": "ok",
+      "number": 98,
+      "name": "微信私聊长轮询保留回复上下文且不泄露进事件，取消轮询",
+      "durationMs": 7.1889
+    },
+    {
+      "status": "ok",
+      "number": 99,
+      "name": "微信扫码仅主人可用，确认凭据安全保存并只返回引用",
+      "durationMs": 3.1809
+    },
+    {
+      "status": "ok",
+      "number": 100,
+      "name": "微信扫码过期清理，拒绝外部服务地址与恶意跳转",
+      "durationMs": 3.4731
+    },
+    {
+      "status": "ok",
+      "number": 101,
+      "name": "late polls cannot overwrite a saved card, including same-revision identity reads",
+      "durationMs": 2.4102
+    },
+    {
+      "status": "ok",
+      "number": 102,
+      "name": "subscriptions update on actual changes and higher revision wins over request start order",
+      "durationMs": 0.5698
+    },
+    {
+      "status": "ok",
+      "number": 103,
+      "name": "channel saves only changed fields with opaque IDs and channel revision",
+      "durationMs": 10.9643
+    },
+    {
+      "status": "ok",
+      "number": 104,
+      "name": "channel switch protects unsaved input and verification is disabled while dirty",
+      "durationMs": 2.9274
+    },
+    {
+      "status": "ok",
+      "number": 105,
+      "name": "revision conflict retains unsaved edits and does not replace base revision",
+      "durationMs": 2.9015
+    },
+    {
+      "status": "ok",
+      "number": 106,
+      "name": "selected brand lights up independently of connection availability",
+      "durationMs": 2.4423
+    },
+    {
+      "status": "ok",
+      "number": 107,
+      "name": "credential entry clears plaintext and stores only returned reference in configuration",
+      "durationMs": 3.2975
+    },
+    {
+      "status": "ok",
+      "number": 108,
+      "name": "cancel and channel switch clear credential plaintext",
+      "durationMs": 3.7127
+    },
+    {
+      "status": "ok",
+      "number": 109,
+      "name": "QR login renders locally and merges only returned credential references into draft",
+      "durationMs": 3.7182
+    },
+    {
+      "status": "ok",
+      "number": 110,
+      "name": "cancel QR login invokes cancellation and clears displayed QR",
+      "durationMs": 4.1574
+    },
+    {
+      "status": "ok",
+      "number": 111,
+      "name": "connection edits preserve unrelated fields and reject stale or secret writes across reopen",
+      "durationMs": 3229.035
+    },
+    {
+      "status": "ok",
+      "number": 112,
+      "name": "automatic admission settings persist exactly and can be revoked without losing identities or rules",
+      "durationMs": 1868.78
+    },
+    {
+      "status": "ok",
+      "number": 113,
+      "name": "delivery worker is idempotent and persists failed attempts",
+      "durationMs": 6758.074
+    },
+    {
+      "status": "ok",
+      "number": 114,
+      "name": "offline target providers retain outbox rows until a device is available",
+      "durationMs": 2785.9094
+    },
+    {
+      "status": "ok",
+      "number": 115,
+      "name": "desktop approval atomically admits one Ticket and preserves original instruction and opaque model",
+      "durationMs": 18661.3865
+    },
+    {
+      "status": "ok",
+      "number": 116,
+      "name": "desktop delegation rejects inherited tool callers, missing model and rewritten identities before approval",
+      "durationMs": 5197.3294
+    },
+    {
+      "status": "ok",
+      "number": 117,
+      "name": "policy change during approval cannot admit a stale project mandate",
+      "durationMs": 1369.7917
+    },
+    {
+      "status": "ok",
+      "number": 118,
+      "name": "a notification-only turn cannot reuse a previous human instruction",
+      "durationMs": 11039.6587
+    },
+    {
+      "status": "ok",
+      "number": 119,
+      "name": "completed turns and changed human instructions cannot create a desktop mandate",
+      "durationMs": 7940.7016
+    },
+    {
+      "status": "ok",
+      "number": 120,
+      "name": "new delegation requires the exact live root driver even with approval bypass",
+      "durationMs": 12779.3532
+    },
+    {
+      "status": "ok",
+      "number": 121,
+      "name": "resource form authority is separate from live model authority and records literal input",
+      "durationMs": 1670.129
+    },
+    {
+      "status": "ok",
+      "number": 122,
+      "name": "ticket queries respect session ownership, filter projects before limiting, and remain read only",
+      "durationMs": 29.7506
+    },
+    {
+      "status": "ok",
+      "number": 123,
+      "name": "PCM converts stereo 48k into valid mono 24k WAV",
+      "durationMs": 2.4458
+    },
+    {
+      "status": "ok",
+      "number": 124,
+      "name": "voice rejects untrusted actions and missing services",
+      "durationMs": 3.9835
+    },
+    {
+      "status": "ok",
+      "number": 125,
+      "name": "missing platform DAVE runtime reports unavailable before loading Discord SDK",
+      "durationMs": 2.1519
+    },
+    {
+      "status": "ok",
+      "number": 126,
+      "name": "authorized voice utterance reaches Router with immutable source; bystanders ignored",
+      "durationMs": 67.0961
+    },
+    {
+      "status": "ok",
+      "number": 127,
+      "name": "delivery plays only matching voice source and converts PCM for Discord",
+      "durationMs": 4.4256
+    },
+    {
+      "status": "ok",
+      "number": 128,
+      "name": "revoked owner during recognition cannot submit late text",
+      "durationMs": 4.502
+    },
+    {
+      "status": "ok",
+      "number": 129,
+      "name": "profile editing reads and saves without version requests and carries the original hash",
+      "durationMs": 13.2244
+    },
+    {
+      "status": "ok",
+      "number": 130,
+      "name": "conflicting saves retain the draft and reload discards it only after confirmation",
+      "durationMs": 5.3706
+    },
+    {
+      "status": "ok",
+      "number": 131,
+      "name": "history loads on demand and refreshes after saving",
+      "durationMs": 50.7316
+    },
+    {
+      "status": "ok",
+      "number": 132,
+      "name": "email rejects automated/unlisted mail and never promotes forged From to owner",
+      "durationMs": 6.3638
+    },
+    {
+      "status": "ok",
+      "number": 133,
+      "name": "email uses References thread and excludes attachment payload",
+      "durationMs": 2.8499
+    },
+    {
+      "status": "ok",
+      "number": 134,
+      "name": "email rejects missing/wrong/rotated tokens and strips token before Router",
+      "durationMs": 0.867
+    },
+    {
+      "status": "ok",
+      "number": 135,
+      "name": "email polls through IMAP, sends threaded SMTP and honors revocation",
+      "durationMs": 6.1257
+    },
+    {
+      "status": "ok",
+      "number": 136,
+      "name": "email does not consume mail when Router ingestion fails",
+      "durationMs": 2.1296
+    },
+    {
+      "status": "ok",
+      "number": 137,
+      "name": "email matches configured address casing through Router authorization",
+      "durationMs": 1.0875
+    },
+    {
+      "status": "ok",
+      "number": 138,
+      "name": "email server size filter leaves 50 oversized mails unread and handles later normal mail",
+      "durationMs": 3.1093
+    },
+    {
+      "status": "ok",
+      "number": 139,
+      "name": "legacy Key pools never rotate credentials for assistant or other Harness requests",
+      "durationMs": 105.7303
+    },
+    {
+      "status": "ok",
+      "number": 140,
+      "name": "production auxiliary compaction uses explicit model routes and ignores legacy Key pools",
+      "durationMs": 51.8477
+    },
+    {
+      "status": "ok",
+      "number": 141,
+      "name": "official skill invocation and tool loading persist owned usage without counting previews",
+      "durationMs": 5700.2047
+    },
+    {
+      "status": "ok",
+      "number": 142,
+      "name": "official user question resumes the same live Worker from its exact source answer",
+      "durationMs": 18926.064
+    },
+    {
+      "status": "ok",
+      "number": 143,
+      "name": "timed official Attention resumes after host restart without replay, rejects altered artifacts (tamper=false)",
+      "durationMs": 17023.3318
+    },
+    {
+      "status": "ok",
+      "number": 144,
+      "name": "timed official Attention resumes after host restart without replay, rejects altered artifacts (tamper=true)",
+      "durationMs": 16039.9342
+    },
+    {
+      "status": "ok",
+      "number": 145,
+      "name": "assignment executor uses the real Harness writer and current permission hook",
+      "durationMs": 3353.2516
+    },
+    {
+      "status": "ok",
+      "number": 146,
+      "name": "late context after the final Worker request continues the same official session without replay",
+      "durationMs": 2688.3929
+    },
+    {
+      "status": "ok",
+      "number": 147,
+      "name": "review-time context resumes verified original session and retains budget (tamper=false)",
+      "durationMs": 10805.6261
+    },
+    {
+      "status": "ok",
+      "number": 148,
+      "name": "review-time context resumes verified original session and retains budget (tamper=true)",
+      "durationMs": 8900.6517
+    },
+    {
+      "status": "ok",
+      "number": 149,
+      "name": "project worker mounts official worktrees and preserves dirty source while tools run in its checkout",
+      "durationMs": 19668.8726
+    },
+    {
+      "status": "ok",
+      "number": 150,
+      "name": "reopened orchestration recovers only verification under the real persisted session writer lock",
+      "durationMs": 1290.5281
+    },
+    {
+      "status": "ok",
+      "number": 151,
+      "name": "official preset is bound to the assistant while inherited tools remain available",
+      "durationMs": 190.0226
+    },
+    {
+      "status": "ok",
+      "number": 152,
+      "name": "inherited tools remain subject to Harness permission decisions",
+      "durationMs": 38.8015
+    },
+    {
+      "status": "ok",
+      "number": 153,
+      "name": "one persistent main identity, scoped prompt, real Harness streaming and busy cancellation",
+      "durationMs": 67.179
+    },
+    {
+      "status": "ok",
+      "number": 154,
+      "name": "clearing main while history refreshes releases the old writer before reopening",
+      "durationMs": 93.7038
+    },
+    {
+      "status": "ok",
+      "number": 155,
+      "name": "clearing waits for pending main setup and concurrent clears share one reset",
+      "durationMs": 40.9119
+    },
+    {
+      "status": "ok",
+      "number": 156,
+      "name": "official composer admission keeps assistant model routing and refreshes memory query",
+      "durationMs": 31.4276
+    },
+    {
+      "status": "ok",
+      "number": 157,
+      "name": "send and official composer both persist immutable direct Triggers without creating Tickets",
+      "durationMs": 47.5551
+    },
+    {
+      "status": "ok",
+      "number": 158,
+      "name": "Router blocks inherited mutation while retaining read-only tools and controlled delegation",
+      "durationMs": 31.3256
+    },
+    {
+      "status": "ok",
+      "number": 159,
+      "name": "Schedule messages enter the bridge without dispatching their raw instruction to Router",
+      "durationMs": 30.9043
+    },
+    {
+      "status": "ok",
+      "number": 160,
+      "name": "profile understanding stays frozen until a new main session",
+      "durationMs": 51.2026
+    },
+    {
+      "status": "ok",
+      "number": 161,
+      "name": "runtime context exposes the full current name card as data and refreshes after edits",
+      "durationMs": 42.3871
+    },
+    {
+      "status": "ok",
+      "number": 162,
+      "name": "live session rereads a privacy-redacted snapshot after forgetting MEMORY.md",
+      "durationMs": 705.528
+    },
+    {
+      "status": "ok",
+      "number": 163,
+      "name": "live session rereads a privacy-redacted snapshot after forgetting USER.md",
+      "durationMs": 724.2714
+    },
+    {
+      "status": "ok",
+      "number": 164,
+      "name": "official JSONL disk persistence resumes the same main identity after engine shutdown",
+      "durationMs": 708.0878
+    },
+    {
+      "status": "ok",
+      "number": 165,
+      "name": "Router watchdog restores its official session after host restart without replaying a completed request",
+      "durationMs": 580.6262
+    },
+    {
+      "status": "ok",
+      "number": 166,
+      "name": "first-match replaces the official all-candidate projection in real model requests only",
+      "durationMs": 133.3898
+    },
+    {
+      "status": "ok",
+      "number": 167,
+      "name": "Router recovery resumes disposed work from the durable transcript with one recovery notice",
+      "durationMs": 678.0082
+    },
+    {
+      "status": "ok",
+      "number": 168,
+      "name": "thread model overrides validate models and null restores the default queue",
+      "durationMs": 38.3824
+    },
+    {
+      "status": "ok",
+      "number": 169,
+      "name": "shutdown drains accepted state writes and never delivers queued or prepared prompts afterward",
+      "durationMs": 29.8611
+    },
+    {
+      "status": "ok",
+      "number": 170,
+      "name": "isolated official compaction automatically summarizes older context before the next turn",
+      "durationMs": 49.4739
+    },
+    {
+      "status": "ok",
+      "number": 171,
+      "name": "official compaction routes auxiliary fallback with frozen config and accurate summary provenance",
+      "durationMs": 40.1074
+    },
+    {
+      "status": "ok",
+      "number": 172,
+      "name": "official one-shot compaction accounts for and limits auxiliary retries (10)",
+      "durationMs": 53.1219
+    },
+    {
+      "status": "ok",
+      "number": 173,
+      "name": "official one-shot compaction accounts for and limits auxiliary retries (2)",
+      "durationMs": 53.4313
+    },
+    {
+      "status": "ok",
+      "number": 174,
+      "name": "generated image results expose only a safe local artifact URL",
+      "durationMs": 37.4425
+    },
+    {
+      "status": "ok",
+      "number": 175,
+      "name": "request failure switches once without replaying input and every new message restores primary",
+      "durationMs": 43.2901
+    },
+    {
+      "status": "ok",
+      "number": 176,
+      "name": "main and explicit side chat queues reach the third model in exact configured order",
+      "durationMs": 64.2879
+    },
+    {
+      "status": "ok",
+      "number": 177,
+      "name": "permission denial remains terminal and configuration changes apply to next turn",
+      "durationMs": 40.0224
+    },
+    {
+      "status": "ok",
+      "number": 178,
+      "name": "one message uses the frozen complete queue after a tool step without replaying tools",
+      "durationMs": 42.1306
+    },
+    {
+      "status": "ok",
+      "number": 179,
+      "name": "model preparation failures exhaust the complete ordered queue",
+      "durationMs": 31.6181
+    },
+    {
+      "status": "ok",
+      "number": 180,
+      "name": "parallel tools in one Harness step count as one learning iteration",
+      "durationMs": 550.5166
+    },
+    {
+      "status": "ok",
+      "number": 181,
+      "name": "stable client request IDs prevent duplicate sends",
+      "durationMs": 38.7134
+    },
+    {
+      "status": "ok",
+      "number": 182,
+      "name": "history pages bound transcript payload and traverse older messages without raw events",
+      "durationMs": 57.9624
+    },
+    {
+      "status": "ok",
+      "number": 183,
+      "name": "completed scoped tool survives later model failover without repeating the effect",
+      "durationMs": 51.2255
+    },
+    {
+      "status": "ok",
+      "number": 184,
+      "name": "live partial text is visible before completion and cancellation stops current turn",
+      "durationMs": 43.86
+    },
+    {
+      "status": "ok",
+      "number": 185,
+      "name": "budget exhaustion parks the real Worker and resumes the same session (limit=0)",
+      "durationMs": 407.851
+    },
+    {
+      "status": "ok",
+      "number": 186,
+      "name": "budget exhaustion parks the real Worker and resumes the same session (limit=1)",
+      "durationMs": 380.5354
+    },
+    {
+      "status": "ok",
+      "number": 187,
+      "name": "explicit pause resumes only verified official state (recover=false, tamper=false)",
+      "durationMs": 336.1716
+    },
+    {
+      "status": "ok",
+      "number": 188,
+      "name": "explicit pause resumes only verified official state (recover=false, tamper=true)",
+      "durationMs": 3677.1519
+    },
+    {
+      "status": "ok",
+      "number": 189,
+      "name": "explicit pause resumes only verified official state (recover=true, tamper=false)",
+      "durationMs": 5371.1769
+    },
+    {
+      "status": "ok",
+      "number": 190,
+      "name": "explicit pause resumes only verified official state (recover=true, tamper=true)",
+      "durationMs": 5366.0789
+    },
+    {
+      "status": "ok",
+      "number": 191,
+      "name": "Worker preserves explicit model and tries all configured fallbacks in one run",
+      "durationMs": 4845.8748
+    },
+    {
+      "status": "ok",
+      "number": 192,
+      "name": "Worker preserves explicit model and does not bypass permission denial",
+      "durationMs": 1125.5315
+    },
+    {
+      "status": "ok",
+      "number": 193,
+      "name": "human retry preserves original trigger, audits current policy and fences stale model responses",
+      "durationMs": 22241.1755
+    },
+    {
+      "status": "ok",
+      "number": 194,
+      "name": "human ignore is durable and cannot be retried into a second decision",
+      "durationMs": 2015.2549
+    },
+    {
+      "status": "ok",
+      "number": 195,
+      "name": "stale retry cannot act again after the next timeout cycle",
+      "durationMs": 9755.4752
+    },
+    {
+      "status": "ok",
+      "number": 196,
+      "name": "recovery holds the official exclusive handle through verification and always releases it",
+      "durationMs": 6.3085
+    },
+    {
+      "status": "ok",
+      "number": 197,
+      "name": "a retained project directory alone is insufficient recovery evidence",
+      "durationMs": 1.2987
+    },
+    {
+      "status": "ok",
+      "number": 198,
+      "name": "live writers, changed transcripts and incomplete endings never authorize recovery",
+      "durationMs": 1.0752
+    },
+    {
+      "status": "ok",
+      "number": 199,
+      "name": "long connection persists authenticated events and stops old callbacks after disable",
+      "durationMs": 6.4798
+    },
+    {
+      "status": "ok",
+      "number": 200,
+      "name": "official dispatcher payload is normalized and disposal drains accepted ingestion",
+      "durationMs": 375.4593
+    },
+    {
+      "status": "ok",
+      "number": 201,
+      "name": "stop during credential resolution cannot resurrect connection",
+      "durationMs": 1.6483
+    },
+    {
+      "status": "ok",
+      "number": 202,
+      "name": "configuration contains references only and rejects inline secrets",
+      "durationMs": 4.0382
+    },
+    {
+      "status": "ok",
+      "number": 203,
+      "name": "rich text is readable and unsupported attachments are not presented as parsed content",
+      "durationMs": 4.3922
+    },
+    {
+      "status": "ok",
+      "number": 204,
+      "name": "verified metadata determines mention and ownership, raw event excludes auth token",
+      "durationMs": 0.7426
+    },
+    {
+      "status": "ok",
+      "number": 205,
+      "name": "reply metadata preserves opaque parent and root IDs in group and direct messages",
+      "durationMs": 1.1345
+    },
+    {
+      "status": "ok",
+      "number": 206,
+      "name": "callback verifies token/app and acknowledges only after durable ingestion",
+      "durationMs": 53.8335
+    },
+    {
+      "status": "ok",
+      "number": 207,
+      "name": "challenge authenticates without declaring event subscription verified",
+      "durationMs": 2.7574
+    },
+    {
+      "status": "ok",
+      "number": 208,
+      "name": "encrypted callback verifies raw body signature and timestamp before decrypting",
+      "durationMs": 4.5468
+    },
+    {
+      "status": "ok",
+      "number": 209,
+      "name": "reply retains stable UUID, exact source, and accepted differs from delivered",
+      "durationMs": 5.3341
+    },
+    {
+      "status": "ok",
+      "number": 210,
+      "name": "transport failure is explicit and never exposes provider response secrets",
+      "durationMs": 1.4679
+    },
+    {
+      "status": "ok",
+      "number": 211,
+      "name": "disabling while token request is pending prevents the subsequent message send",
+      "durationMs": 1.1354
+    },
+    {
+      "status": "ok",
+      "number": 212,
+      "name": "long channel replies retain every Unicode character within platform limits",
+      "durationMs": 7.7934
+    },
+    {
+      "status": "ok",
+      "number": 213,
+      "name": "API submit trusts host principal and configured actor, preserves idempotent source",
+      "durationMs": 5.5808
+    },
+    {
+      "status": "ok",
+      "number": 214,
+      "name": "Webhook verifies exact body and timestamp before durable admission, binds actor",
+      "durationMs": 49.741
+    },
+    {
+      "status": "ok",
+      "number": 215,
+      "name": "Webhook rejects oversized signed bodies and does not acknowledge failed persistence",
+      "durationMs": 3.8372
+    },
+    {
+      "status": "ok",
+      "number": 216,
+      "name": "retries and compaction consume shared reservations before dispatch; denial throws synchronously",
+      "durationMs": 4.4924
+    },
+    {
+      "status": "ok",
+      "number": 217,
+      "name": "ordinary errors cannot become resumable pauses without a matching host-saved ending",
+      "durationMs": 0.4463
+    },
+    {
+      "status": "ok",
+      "number": 218,
+      "name": "siblings reserve shared parent requests atomically and replay never double charges",
+      "durationMs": 9.6677
+    },
+    {
+      "status": "ok",
+      "number": 219,
+      "name": "usage deduplication, missing usage, binding and reservation survive reopening",
+      "durationMs": 6697.3648
+    },
+    {
+      "status": "ok",
+      "number": 220,
+      "name": "deadline and zero limits deny at boundary and revision updates cannot lose usage",
+      "durationMs": 3.4665
+    },
+    {
+      "status": "ok",
+      "number": 221,
+      "name": "one-shot usage settles the reserved request once across reopen and charges its ancestry",
+      "durationMs": 4504.1855
+    },
+    {
+      "status": "ok",
+      "number": 222,
+      "name": "strict budgets and immutable parent chains reject unsafe input",
+      "durationMs": 3.4872
+    },
+    {
+      "status": "ok",
+      "number": 223,
+      "name": "Ticket admission atomically binds budgets and rolls back an invalid binding",
+      "durationMs": 15.9792
+    },
+    {
+      "status": "ok",
+      "number": 224,
+      "name": "budget parser preserves zero, omission and exact limits and rejects invalid values",
+      "durationMs": 6.9519
+    },
+    {
+      "status": "ok",
+      "number": 225,
+      "name": "budget edit preserves other limits, sends opened version and never auto resumes",
+      "durationMs": 3.6805
+    },
+    {
+      "status": "ok",
+      "number": 226,
+      "name": "conflict keeps draft visible; unknown usage is disclosed and missing budget is unavailable",
+      "durationMs": 4.4534
+    },
+    {
+      "status": "ok",
+      "number": 227,
+      "name": "Goals create submits budget with opaque model IDs; budget wait resumes through dedicated API",
+      "durationMs": 14.6883
+    },
+    {
+      "status": "ok",
+      "number": 228,
+      "name": "durable failed attempts use the last official usage sample, not their sum",
+      "durationMs": 3.4838
+    },
+    {
+      "status": "ok",
+      "number": 229,
+      "name": "completed message uses authoritative usage and missing usage stays unknown",
+      "durationMs": 0.4974
+    },
+    {
+      "status": "ok",
+      "number": 230,
+      "name": "replay sends only owned assistant settlements with stable durable identity",
+      "durationMs": 0.4956
+    },
+    {
+      "status": "ok",
+      "number": 231,
+      "name": "worker usage replays owned history and observes only its own session",
+      "durationMs": 0.7365
+    },
+    {
+      "status": "ok",
+      "number": 232,
+      "name": "Goal observes only the latest current committed Ticket review",
+      "durationMs": 3.4701
+    },
+    {
+      "status": "ok",
+      "number": 233,
+      "name": "Goal binding rejects foreign owner, different work, aliases and stale assignments",
+      "durationMs": 1.0666
+    },
+    {
+      "status": "ok",
+      "number": 234,
+      "name": "Ticket goal survives partial creation and restart without duplicate dispatch or changed retry (budget=false)",
+      "durationMs": 23328.3172
+    },
+    {
+      "status": "ok",
+      "number": 235,
+      "name": "Ticket goal survives partial creation and restart without duplicate dispatch or changed retry (budget=true)",
+      "durationMs": 16509.5148
+    },
+    {
+      "status": "ok",
+      "number": 236,
+      "name": "a changed Ticket cannot complete the original Goal even after passing its new review",
+      "durationMs": 16279.6119
+    },
+    {
+      "status": "ok",
+      "number": 237,
+      "name": "creation captures the full input before model validation and rejects invalid later leaves before dispatch",
+      "durationMs": 1.6383
+    },
+    {
+      "status": "ok",
+      "number": 238,
+      "name": "cancellation persists before effects and resumes after restart without dispatch",
+      "durationMs": 2928.2805
+    },
+    {
+      "status": "ok",
+      "number": 239,
+      "name": "budget API reads authoritative totals, requires version and does not reset use or auto resume",
+      "durationMs": 21794.7882
+    },
+    {
+      "status": "ok",
+      "number": 240,
+      "name": "budget resume preflights all shared limits and returns review-only retries without resuming human pauses",
+      "durationMs": 2209.6802
+    },
+    {
+      "status": "ok",
+      "number": 241,
+      "name": "invalid goal trees do not leave a partially created parent",
+      "durationMs": 257.6462
+    },
+    {
+      "status": "ok",
+      "number": 242,
+      "name": "starter inserts and persists an editable draft without submitting, and preserves existing drafts",
+      "durationMs": 5.5485
+    },
+    {
+      "status": "ok",
+      "number": 243,
+      "name": "a rejected revision-guarded insertion does not persist or submit",
+      "durationMs": 1.9819
+    },
+    {
+      "status": "ok",
+      "number": 244,
+      "name": "home yields to existing, running and loading conversations while keeping official persistence view mounted",
+      "durationMs": 2.7237
+    },
+    {
+      "status": "ok",
+      "number": 245,
+      "name": "identity parser reads only frontmatter and preserves unrelated fields",
+      "durationMs": 2.8426
+    },
+    {
+      "status": "ok",
+      "number": 246,
+      "name": "name edits write IDENTITY.md and new sessions read the new identity",
+      "durationMs": 24399.7255
+    },
+    {
+      "status": "ok",
+      "number": 247,
+      "name": "profile import adapts a legacy display name without a dedicated identity migration",
+      "durationMs": 31551.2579
+    },
+    {
+      "status": "ok",
+      "number": 248,
+      "name": "trusted policy controls direct intake and group mention; replay cannot create another candidate",
+      "durationMs": 21212.8494
+    },
+    {
+      "status": "ok",
+      "number": 249,
+      "name": "machine allowlist is separate and mentions never promote machine authority",
+      "durationMs": 9.3194
+    },
+    {
+      "status": "ok",
+      "number": 250,
+      "name": "subscription catches context arriving during assessment without taking another candidate or denied thread input",
+      "durationMs": 16.3685
+    },
+    {
+      "status": "ok",
+      "number": 251,
+      "name": "late subscription preserves ambiguous messages without guessing ownership",
+      "durationMs": 12.943
+    },
+    {
+      "status": "ok",
+      "number": 252,
+      "name": "a batch opening two tickets does not assign late context to whichever decision finishes first",
+      "durationMs": 12.9064
+    },
+    {
+      "status": "ok",
+      "number": 253,
+      "name": "finishing a batch reconciles earlier context even after live delivery advanced the cursor",
+      "durationMs": 12.3552
+    },
+    {
+      "status": "ok",
+      "number": 254,
+      "name": "prompt counters survive restart, deduplicate source events and ignore background output",
+      "durationMs": 7996.5095
+    },
+    {
+      "status": "ok",
+      "number": 255,
+      "name": "tool counter is per turn and all explicit entries share one pipeline",
+      "durationMs": 9294.5601
+    },
+    {
+      "status": "ok",
+      "number": 256,
+      "name": "outbox recovery after completed enqueue acknowledgement loss cannot duplicate a review",
+      "durationMs": 3508.2916
+    },
+    {
+      "status": "ok",
+      "number": 257,
+      "name": "failed learning reviews are bounded and do not advance successful ranges",
+      "durationMs": 829.6619
+    },
+    {
+      "status": "ok",
+      "number": 258,
+      "name": "learning filters excluded sources before inference and preserves verified evidence",
+      "durationMs": 3.9571
+    },
+    {
+      "status": "ok",
+      "number": 259,
+      "name": "fabricated source or policy revocation cannot write learning candidates",
+      "durationMs": 1.5671
+    },
+    {
+      "status": "ok",
+      "number": 260,
+      "name": "learning creates review candidates without publishing and preserves approved retry results",
+      "durationMs": 4671.4528
+    },
+    {
+      "status": "ok",
+      "number": 261,
+      "name": "rejected learning candidates remain rejected across retries",
+      "durationMs": 2434.0375
+    },
+    {
+      "status": "ok",
+      "number": 262,
+      "name": "all skill evidence and fields are validated before any memory or skill is written",
+      "durationMs": 2184.5032
+    },
+    {
+      "status": "ok",
+      "number": 263,
+      "name": "revoked policy cannot produce owned skills",
+      "durationMs": 2087.5371
+    },
+    {
+      "status": "ok",
+      "number": 264,
+      "name": "FTS5 retrieves Chinese original text and index rebuild preserves it",
+      "durationMs": 3038.286
+    },
+    {
+      "status": "ok",
+      "number": 265,
+      "name": "records are immutable and links cannot dangle; append is atomic",
+      "durationMs": 1224.9565
+    },
+    {
+      "status": "ok",
+      "number": 266,
+      "name": "long original is losslessly paged including emoji",
+      "durationMs": 1359.5922
+    },
+    {
+      "status": "ok",
+      "number": 267,
+      "name": "session filter applies before result limit",
+      "durationMs": 1376.4934
+    },
+    {
+      "status": "ok",
+      "number": 268,
+      "name": "Harness projection and watermark survive restart; failed batch rolls back",
+      "durationMs": 1883.676
+    },
+    {
+      "status": "ok",
+      "number": 269,
+      "name": "media availability checks local configuration, routes and credentials without network requests",
+      "durationMs": 81.43
+    },
+    {
+      "status": "ok",
+      "number": 270,
+      "name": "image uses exact configured model and persists idempotency across instances",
+      "durationMs": 565.5882
+    },
+    {
+      "status": "ok",
+      "number": 271,
+      "name": "uncertain submitted image never automatically resends and URL results are not fetched",
+      "durationMs": 6.4316
+    },
+    {
+      "status": "ok",
+      "number": 272,
+      "name": "unknown image protocol and invalid request ids fail before upstream access",
+      "durationMs": 3.2228
+    },
+    {
+      "status": "ok",
+      "number": 273,
+      "name": "TTS resolves independent provider and exact model then streams PCM",
+      "durationMs": 12.3582
+    },
+    {
+      "status": "ok",
+      "number": 274,
+      "name": "missing independent ASR config is explicit",
+      "durationMs": 3.459
+    },
+    {
+      "status": "ok",
+      "number": 275,
+      "name": "saved and reloaded independent ASR/TTS selection reaches exact provider requests",
+      "durationMs": 20959.4767
+    },
+    {
+      "status": "ok",
+      "number": 276,
+      "name": "dedicated media credentials override shared keys, unavailable references never fall back",
+      "durationMs": 13.6601
+    },
+    {
+      "status": "ok",
+      "number": 277,
+      "name": "dedicated image, ASR and TTS credentials work without shared provider credentials",
+      "durationMs": 10.4532
+    },
+    {
+      "status": "ok",
+      "number": 278,
+      "name": "context uses the ordered five-document chain while preserving legacy tool notes",
+      "durationMs": 21346.31
+    },
+    {
+      "status": "ok",
+      "number": 279,
+      "name": "six Chinese documents keep existing configuration and legacy sources through an idempotent migration",
+      "durationMs": 30056.3559
+    },
+    {
+      "status": "ok",
+      "number": 280,
+      "name": "document edits use hashes across stores, import external edits and restore exact versions",
+      "durationMs": 5882.4525
+    },
+    {
+      "status": "ok",
+      "number": 281,
+      "name": "prepared journals recover from a file replacement without replaying abandoned or conflicting writes",
+      "durationMs": 13374.3703
+    },
+    {
+      "status": "ok",
+      "number": 282,
+      "name": "Chinese search rereads Markdown, verifies phrases and correction excludes old evidence",
+      "durationMs": 18685.626
+    },
+    {
+      "status": "ok",
+      "number": 283,
+      "name": "learning requires trusted evidence, obeys exclusions and supports candidate acceptance/rejection",
+      "durationMs": 2309.6531
+    },
+    {
+      "status": "ok",
+      "number": 284,
+      "name": "invalid UTF-8 and damaged memory metadata are reported without recreating or overwriting files",
+      "durationMs": 735.1284
+    },
+    {
+      "status": "ok",
+      "number": 285,
+      "name": "concurrent candidate acceptance across stores creates one durable memory",
+      "durationMs": 776.1532
+    },
+    {
+      "status": "ok",
+      "number": 286,
+      "name": "profile import without memories preserves all target memory documents",
+      "durationMs": 1600.2487
+    },
+    {
+      "status": "ok",
+      "number": 287,
+      "name": "only exact broken templates are repaired and custom content survives reopen",
+      "durationMs": 765.892
+    },
+    {
+      "status": "ok",
+      "number": 288,
+      "name": "forget removes managed history and blocks old sources without claiming deletion of original conversations",
+      "durationMs": 803.7664
+    },
+    {
+      "status": "ok",
+      "number": 289,
+      "name": "model persistent action is fenced, committed once and idempotent by callId",
+      "durationMs": 13558.6022
+    },
+    {
+      "status": "ok",
+      "number": 290,
+      "name": "same callId with different arguments is rejected without a second action",
+      "durationMs": 1604.2198
+    },
+    {
+      "status": "ok",
+      "number": 291,
+      "name": "approval denial and changed root instruction reserve no Ticket or execute no action",
+      "durationMs": 8.3869
+    },
+    {
+      "status": "ok",
+      "number": 292,
+      "name": "arguments are frozen before dispatch and failed readback becomes non-replayable uncertain",
+      "durationMs": 11.5328
+    },
+    {
+      "status": "ok",
+      "number": 293,
+      "name": "concurrent retry joins one identical operation and rejects changed inputs",
+      "durationMs": 14.4418
+    },
+    {
+      "status": "ok",
+      "number": 294,
+      "name": "ordinary workers cannot claim a reserved model-action assignment",
+      "durationMs": 9.3983
+    },
+    {
+      "status": "ok",
+      "number": 295,
+      "name": "ticket revision submits the opened version and preserves failed draft and request ID",
+      "durationMs": 107.5446
+    },
+    {
+      "status": "ok",
+      "number": 296,
+      "name": "active or uncertain execution prevents revision while terminal tickets offer reopen",
+      "durationMs": 17.9462
+    },
+    {
+      "status": "ok",
+      "number": 297,
+      "name": "manual Eval retry is bound to both versions and keeps failed reason visible",
+      "durationMs": 6.393
+    },
+    {
+      "status": "ok",
+      "number": 298,
+      "name": "checkpoint restore shows exclusions and refuses active, conflicting or incomplete previews",
+      "durationMs": 22.5231
+    },
+    {
+      "status": "ok",
+      "number": 299,
+      "name": "checkpoint restore uses the reviewed token and never claims to revert external effects",
+      "durationMs": 3.8704
+    },
+    {
+      "status": "ok",
+      "number": 300,
+      "name": "desktop explicit model runs without default or channel admission; local delivery failure is retryable (false)",
+      "durationMs": 30152.615
+    },
+    {
+      "status": "ok",
+      "number": 301,
+      "name": "desktop explicit model runs without default or channel admission; local delivery failure is retryable (true)",
+      "durationMs": 20855.5352
+    },
+    {
+      "status": "ok",
+      "number": 302,
+      "name": "persisted Router acceptance executes once, verifies and delivers to the exact source",
+      "durationMs": 25093.7026
+    },
+    {
+      "status": "ok",
+      "number": 303,
+      "name": "unknown source send retains the accepted result without blind resend or re-execution",
+      "durationMs": 8599.1998
+    },
+    {
+      "status": "ok",
+      "number": 304,
+      "name": "runtime sends pending Attention then schedules only its answered continuation and final review",
+      "durationMs": 1868.486
+    },
+    {
+      "status": "ok",
+      "number": 305,
+      "name": "revoking channel admission before scheduling prevents execution",
+      "durationMs": 780.329
+    },
+    {
+      "status": "ok",
+      "number": 306,
+      "name": "project results require the same artifacts before and after Router review (changed=false)",
+      "durationMs": 8622.5769
+    },
+    {
+      "status": "ok",
+      "number": 307,
+      "name": "project results require the same artifacts before and after Router review (changed=true)",
+      "durationMs": 25039.3728
+    },
+    {
+      "status": "ok",
+      "number": 308,
+      "name": "runtime recovers a saved pause without executing or reviewing it",
+      "durationMs": 569.1614
+    },
+    {
+      "status": "ok",
+      "number": 309,
+      "name": "pause blocks queued work and resumes the exact checkpoint without replay",
+      "durationMs": 11842.8575
+    },
+    {
+      "status": "ok",
+      "number": 310,
+      "name": "pause survives reopening and never replays an expired execution",
+      "durationMs": 3221.7202
+    },
+    {
+      "status": "ok",
+      "number": 311,
+      "name": "requirement edits fence stale results and leases without status updates changing requirements",
+      "durationMs": 14218.3567
+    },
+    {
+      "status": "ok",
+      "number": 312,
+      "name": "existing database migrates Ticket requirements without rewriting legacy Assignments",
+      "durationMs": 15543.6024
+    },
+    {
+      "status": "ok",
+      "number": 313,
+      "name": "verification-only recovery transfers a fenced lease without creating a second execution",
+      "durationMs": 2144.6117
+    },
+    {
+      "status": "ok",
+      "number": 314,
+      "name": "automatic verification retries are delayed and bounded across ownership changes",
+      "durationMs": 3299.5519
+    },
+    {
+      "status": "ok",
+      "number": 315,
+      "name": "execution identity persists before submission and expired runs cannot be replayed",
+      "durationMs": 2416.661
+    },
+    {
+      "status": "ok",
+      "number": 316,
+      "name": "subscribed context needs a matching execution receipt before result commit",
+      "durationMs": 9221.8472
+    },
+    {
+      "status": "ok",
+      "number": 317,
+      "name": "immutable trigger, single eval, atomic decision ticket and subscribed handback",
+      "durationMs": 7190.394
+    },
+    {
+      "status": "ok",
+      "number": 318,
+      "name": "evaluation timeout retries twice then unavailable and policy invalidates in-flight",
+      "durationMs": 6404.8499
+    },
+    {
+      "status": "ok",
+      "number": 319,
+      "name": "mechanical assignment verifies mandate and fences reclaimed work; result creates outbox",
+      "durationMs": 6390.7427
+    },
+    {
+      "status": "ok",
+      "number": 320,
+      "name": "late assessment cannot commit after timeout and re-claim under the same policy",
+      "durationMs": 1159.7468
+    },
+    {
+      "status": "ok",
+      "number": 321,
+      "name": "action boundary renewal rechecks permission and never revives an expired worker",
+      "durationMs": 969.5525
+    },
+    {
+      "status": "ok",
+      "number": 322,
+      "name": "cancellation fences execution and waits for the matching disposal receipt",
+      "durationMs": 374.032
+    },
+    {
+      "status": "ok",
+      "number": 323,
+      "name": "saved pause recovery waits for expired ownership and persists inspection backoff",
+      "durationMs": 412.5069
+    },
+    {
+      "status": "ok",
+      "number": 324,
+      "name": "inferred rules cannot attach to or stop an existing Ticket",
+      "durationMs": 16.59
+    },
+    {
+      "status": "ok",
+      "number": 325,
+      "name": "subscribed handback preserves its original machine gate across reopen and replay",
+      "durationMs": 345.0929
+    },
+    {
+      "status": "ok",
+      "number": 326,
+      "name": "budget pause persists and shared ancestor limits prevent resume until adjusted",
+      "durationMs": 395.0492
+    },
+    {
+      "status": "ok",
+      "number": 327,
+      "name": "manual pause cannot bypass exhausted budget and rejects malformed reasons",
+      "durationMs": 320.3237
+    },
+    {
+      "status": "ok",
+      "number": 328,
+      "name": "official provider projects only available owned skills; catalog and preview do not count use",
+      "durationMs": 3.7799
+    },
+    {
+      "status": "ok",
+      "number": 329,
+      "name": "official final tool outcomes count successful owned loads with stable session/call identities",
+      "durationMs": 1.4955
+    },
+    {
+      "status": "ok",
+      "number": 330,
+      "name": "errors, unrelated tools/providers, mismatched bodies and missing execution identity never count",
+      "durationMs": 0.5284
+    },
+    {
+      "status": "ok",
+      "number": 331,
+      "name": "stale catalog cannot load changed or archived body",
+      "durationMs": 1.6625
+    },
+    {
+      "status": "ok",
+      "number": 332,
+      "name": "explicit invocation counts only a step-local owned provider load followed by durable injection",
+      "durationMs": 1.0343
+    },
+    {
+      "status": "ok",
+      "number": 333,
+      "name": "usage requires exact provider and available identity; event identity passes unchanged",
+      "durationMs": 0.3935
+    },
+    {
+      "status": "ok",
+      "number": 334,
+      "name": "cancellation and idempotent teardown prohibit further provider work",
+      "durationMs": 0.9132
+    },
+    {
+      "status": "ok",
+      "number": 335,
+      "name": "Curator thresholds and use watermark survive reopening without duplicate archival",
+      "durationMs": 5582.1916
+    },
+    {
+      "status": "ok",
+      "number": 336,
+      "name": "fixed skills cannot be changed or automatically archived; unknown third party skills are never adopted",
+      "durationMs": 2.4671
+    },
+    {
+      "status": "ok",
+      "number": 337,
+      "name": "immutable snapshots support rollback with CAS and preserve both revisions",
+      "durationMs": 1.9978
+    },
+    {
+      "status": "ok",
+      "number": 338,
+      "name": "approved skills use the official registry, preserve user precedence and invalidate archived entries",
+      "durationMs": 3348.1446
+    },
+    {
+      "status": "ok",
+      "number": 339,
+      "name": "candidate approval and rejection carry displayed version and reload server state",
+      "durationMs": 8.9641
+    },
+    {
+      "status": "ok",
+      "number": 340,
+      "name": "pin and archived restore preserve revision; failures remain visible",
+      "durationMs": 4.1457
+    },
+    {
+      "status": "ok",
+      "number": 341,
+      "name": "snapshot restore binds exact audit sequence and fixed skills cannot restore history",
+      "durationMs": 45.4756
+    },
+    {
+      "status": "ok",
+      "number": 342,
+      "name": "unavailable official provider disables publishing and restore while rejection remains possible",
+      "durationMs": 3.3605
+    },
+    {
+      "status": "ok",
+      "number": 343,
+      "name": "artifact names open the shared preview and returning restores the trigger",
+      "durationMs": 105.8491
+    },
+    {
+      "status": "ok",
+      "number": 344,
+      "name": "system file selection reuses preview without a second text-read request",
+      "durationMs": 8.1764
+    },
+    {
+      "status": "ok",
+      "number": 345,
+      "name": "first-match selects one source across the root-to-cwd chain and merges only the same name",
+      "durationMs": 49.1226
+    },
+    {
+      "status": "ok",
+      "number": 346,
+      "name": "empty first candidate remains authoritative; SOUL is never a project competitor",
+      "durationMs": 14.5165
+    },
+    {
+      "status": "ok",
+      "number": 347,
+      "name": "first-match preserves both host global instruction roots and refuses oversized selected rules",
+      "durationMs": 15.7859
+    },
+    {
+      "status": "ok",
+      "number": 348,
+      "name": "searchable selector preserves opaque custom IDs and keyboard selection",
+      "durationMs": 107.4503
+    },
+    {
+      "status": "ok",
+      "number": 349,
+      "name": "capsule tabs support arrows and keep panel relationships",
+      "durationMs": 6.5671
+    },
+    {
+      "status": "ok",
+      "number": 350,
+      "name": "resource frontend removes profile transfer and artifact refresh while sharing capsule controls",
+      "durationMs": 1.8702
+    },
+    {
+      "status": "ok",
+      "number": 351,
+      "name": "waiting review continues from locked evidence without starting another execution",
+      "durationMs": 15760.3228
+    },
+    {
+      "status": "ok",
+      "number": 352,
+      "name": "review budget exhaustion preserves evidence and retries only review after adjustment (0)",
+      "durationMs": 20222.9405
+    },
+    {
+      "status": "ok",
+      "number": 353,
+      "name": "review budget exhaustion preserves evidence and retries only review after adjustment (1)",
+      "durationMs": 9775.4857
+    },
+    {
+      "status": "ok",
+      "number": 354,
+      "name": "changed transcript rejects continuation before review and preserves waiting",
+      "durationMs": 16425.5443
+    },
+    {
+      "status": "ok",
+      "number": 355,
+      "name": "cancellation while reviewing cannot be overwritten by late verdict",
+      "durationMs": 9388.2946
+    },
+    {
+      "status": "ok",
+      "number": 356,
+      "name": "runtime shutdown drains retry review and its evidence writer before returning",
+      "durationMs": 1495.1918
+    },
+    {
+      "status": "ok",
+      "number": 357,
+      "name": "review worker processes candidates and persists a rejected result",
+      "durationMs": 366.0452
+    },
+    {
+      "status": "ok",
+      "number": 358,
+      "name": "review worker retries bounded failures and then marks failed",
+      "durationMs": 344.0851
+    },
+    {
+      "status": "ok",
+      "number": 359,
+      "name": "review queue is durable, deduplicated, budgeted and lease protected",
+      "durationMs": 344.7147
+    },
+    {
+      "status": "ok",
+      "number": 360,
+      "name": "expired review lease is recovered on restart",
+      "durationMs": 1469.1858
+    },
+    {
+      "status": "ok",
+      "number": 361,
+      "name": "reserve atomically creates one claimed router-only Assignment and prepared Run",
+      "durationMs": 2555.5054
+    },
+    {
+      "status": "ok",
+      "number": 362,
+      "name": "verified receipt and authoritative readback settle Run, Result and Outbox atomically and idempotently",
+      "durationMs": 11950.7576
+    },
+    {
+      "status": "ok",
+      "number": 363,
+      "name": "expired or unknown Router action is uncertain and can never be claimed or replayed",
+      "durationMs": 12824.3881
+    },
+    {
+      "status": "ok",
+      "number": 364,
+      "name": "policy revocation at settle preserves observed receipt but refuses false completion",
+      "durationMs": 6324.9079
+    },
+    {
+      "status": "ok",
+      "number": 365,
+      "name": "desktop ingress retains full immutable original, skips Eval and deduplicates composer/send",
+      "durationMs": 24.558
+    },
+    {
+      "status": "ok",
+      "number": 366,
+      "name": "Router gates exact definitions, operations, nested calls and unknown tools before dispatch",
+      "durationMs": 2.1666
+    },
+    {
+      "status": "ok",
+      "number": 367,
+      "name": "Router only continues interrupted work, never completed or explicitly cancelled turns",
+      "durationMs": 2.6844
+    },
+    {
+      "status": "ok",
+      "number": 368,
+      "name": "unknown tool effects survive synthetic repair receipts",
+      "durationMs": 0.4007
+    },
+    {
+      "status": "ok",
+      "number": 369,
+      "name": "live Router including async waits is untouched; absent Router requires exclusive writer proof",
+      "durationMs": 1.3793
+    },
+    {
+      "status": "ok",
+      "number": 370,
+      "name": "watchdog serializes polls and drains an in-flight recovery on stop",
+      "durationMs": 0.6444
+    },
+    {
+      "status": "ok",
+      "number": 371,
+      "name": "Harness transient and credential failures permit bounded model failover",
+      "durationMs": 1.954
+    },
+    {
+      "status": "ok",
+      "number": 372,
+      "name": "403 fails over only for structured credential errors and policy always wins",
+      "durationMs": 0.3785
+    },
+    {
+      "status": "ok",
+      "number": 373,
+      "name": "transient classification includes wrapped transport failures but not authentication or policy",
+      "durationMs": 0.3656
+    },
+    {
+      "status": "ok",
+      "number": 374,
+      "name": "permission, refusal, context repair and cancellation do not permit failover",
+      "durationMs": 0.3408
+    },
+    {
+      "status": "ok",
+      "number": 375,
+      "name": "written rules require a nonempty exact heading and ignore fenced examples",
+      "durationMs": 4.7504
+    },
+    {
+      "status": "ok",
+      "number": 376,
+      "name": "machine intake through Router and runtime (auto)",
+      "durationMs": 34485.8725
+    },
+    {
+      "status": "ok",
+      "number": 377,
+      "name": "machine intake through Router and runtime (manual)",
+      "durationMs": 9046.3794
+    },
+    {
+      "status": "ok",
+      "number": 378,
+      "name": "machine intake through Router and runtime (unknown-rule)",
+      "durationMs": 17924.1888
+    },
+    {
+      "status": "ok",
+      "number": 379,
+      "name": "machine intake through Router and runtime (ignore)",
+      "durationMs": 8834.6363
+    },
+    {
+      "status": "ok",
+      "number": 380,
+      "name": "machine intake through Router and runtime (revoked)",
+      "durationMs": 1479.8827
+    },
+    {
+      "status": "ok",
+      "number": 381,
+      "name": "machine intake through Router and runtime (revoked-during-run)",
+      "durationMs": 3030.4781
+    },
+    {
+      "status": "ok",
+      "number": 382,
+      "name": "notification store persists events, cursors and read state",
+      "durationMs": 473.4655
+    },
+    {
+      "status": "ok",
+      "number": 383,
+      "name": "durable outbox tracks per-device targets, retries independently and closes only after every target",
+      "durationMs": 2204.1936
+    },
+    {
+      "status": "ok",
+      "number": 384,
+      "name": "typed official messages create durable machine Triggers and deduplicate crash-window message IDs",
+      "durationMs": 19.6477
+    },
+    {
+      "status": "ok",
+      "number": 385,
+      "name": "latest official history recovers startup delivery and preserves delivered prompt after edits",
+      "durationMs": 10.3
+    },
+    {
+      "status": "ok",
+      "number": 386,
+      "name": "foreign and archived sessions, missing schedules and unverifiable changed prompts fail closed",
+      "durationMs": 8.4771
+    },
+    {
+      "status": "ok",
+      "number": 387,
+      "name": "recurring batches retain separate opaque IDs and occurrences",
+      "durationMs": 2.8545
+    },
+    {
+      "status": "ok",
+      "number": 388,
+      "name": "Schedule admission flows through Eval into a validated Ticket and independent next occurrence",
+      "durationMs": 22.6601
+    },
+    {
+      "status": "ok",
+      "number": 389,
+      "name": "legacy receipts without immutable prompts do not reconstruct or replay changed instructions",
+      "durationMs": 7.3391
+    },
+    {
+      "status": "ok",
+      "number": 390,
+      "name": "first bridge installation never replays receipts already delivered by the old conversation path",
+      "durationMs": 6.6076
+    },
+    {
+      "status": "not ok",
+      "number": 391,
+      "name": "official Host Schedule persists a due reminder and enters SuperAgent Eval without a Router model request",
+      "durationMs": 23864.3458
+    },
+    {
+      "status": "ok",
+      "number": 392,
+      "name": "mounted assistant HTTP routes execute real Harness and register scoped tools",
+      "durationMs": 68404.8458
+    },
+    {
+      "status": "ok",
+      "number": 393,
+      "name": "Telegram scopes group mentions, owners, topics and ignores bots",
+      "durationMs": 3.31
+    },
+    {
+      "status": "ok",
+      "number": 394,
+      "name": "Telegram sends topic and refuses revoked destinations",
+      "durationMs": 50.2235
+    },
+    {
+      "status": "ok",
+      "number": 395,
+      "name": "Discord filters group mentions and bots",
+      "durationMs": 0.439
+    },
+    {
+      "status": "ok",
+      "number": 396,
+      "name": "Discord SDK lifecycle ingests and prevents output mention escalation",
+      "durationMs": 10.0572
+    },
+    {
+      "status": "ok",
+      "number": 397,
+      "name": "Discord voice commands bypass mention requirement and TTS failure never retries sent text",
+      "durationMs": 2.2008
+    },
+    {
+      "status": "ok",
+      "number": 398,
+      "name": "independent configuration survives restart and preserves opaque models and unrelated fields",
+      "durationMs": 29789.288
+    },
+    {
+      "status": "ok",
+      "number": 399,
+      "name": "session context survives store restart and new sessions receive current documents",
+      "durationMs": 8112.1425
+    },
+    {
+      "status": "ok",
+      "number": 400,
+      "name": "concurrent stores serialize edits and reject stale revisions without partial files",
+      "durationMs": 15852.7092
+    },
+    {
+      "status": "ok",
+      "number": 401,
+      "name": "HTML name cards survive reload independently of names and opaque model settings",
+      "durationMs": 15238.7703
+    },
+    {
+      "status": "ok",
+      "number": 402,
+      "name": "card motion migrates, persists independently and rejects invalid or stale edits",
+      "durationMs": 1742.6164
+    },
+    {
+      "status": "ok",
+      "number": 403,
+      "name": "media requires full references, duplicate models and dangerous nested keys are rejected without saving",
+      "durationMs": 902.6653
+    },
+    {
+      "status": "ok",
+      "number": 404,
+      "name": "video selection migrates legacy configs and preserves image/model settings without exporting credentials",
+      "durationMs": 806.2287
+    },
+    {
+      "status": "ok",
+      "number": 405,
+      "name": "profiles, thread metadata and explicit memories persist and corrected/deleted memories disappear",
+      "durationMs": 990.9913
+    },
+    {
+      "status": "ok",
+      "number": 406,
+      "name": "runtime freezes five ordered documents while management preserves six",
+      "durationMs": 579.3278
+    },
+    {
+      "status": "ok",
+      "number": 407,
+      "name": "assistant runtime context excludes memories blocked by learning policy",
+      "durationMs": 782.1307
+    },
+    {
+      "status": "ok",
+      "number": 408,
+      "name": "profile import rejects duplicate or missing authoritative documents",
+      "durationMs": 587.0012
+    },
+    {
+      "status": "ok",
+      "number": 409,
+      "name": "system files browse the configuration root and nested workspace with read-only downloads",
+      "durationMs": 423.1437
+    },
+    {
+      "status": "ok",
+      "number": 410,
+      "name": "system files reject traversal, directory reads and oversized content",
+      "durationMs": 13.7574
+    },
+    {
+      "status": "ok",
+      "number": 411,
+      "name": "system files exclude directory links outside the configuration root",
+      "durationMs": 8.1333
+    },
+    {
+      "status": "ok",
+      "number": 412,
+      "name": "system files expose UI entries and bounded text previews",
+      "durationMs": 14.1438
+    },
+    {
+      "status": "ok",
+      "number": 413,
+      "name": "system-file PDF preview reuses bounded file access",
+      "durationMs": 4.7
+    },
+    {
+      "status": "ok",
+      "number": 414,
+      "name": "ticket header action is connected and concurrency changes submit only their field",
+      "durationMs": 10.6838
+    },
+    {
+      "status": "ok",
+      "number": 415,
+      "name": "concurrency conflicts retain the draft and cancelling restores the saved value",
+      "durationMs": 3.9666
+    },
+    {
+      "status": "ok",
+      "number": 416,
+      "name": "waiting evidence exposes version-bound review retry and reports failure",
+      "durationMs": 6.1123
+    },
+    {
+      "status": "ok",
+      "number": 417,
+      "name": "terminal, stale and non-review waiting tickets cannot offer review retry",
+      "durationMs": 5.7871
+    },
+    {
+      "status": "ok",
+      "number": 418,
+      "name": "ticket header opens goals; concurrency modal saves only its field and cancel restores saved value",
+      "durationMs": 9.1099
+    },
+    {
+      "status": "ok",
+      "number": 419,
+      "name": "requirements change keeps immutable history, a fresh execution and CAS across database reopen",
+      "durationMs": 11955.0152
+    },
+    {
+      "status": "ok",
+      "number": 420,
+      "name": "closed work reopens with new authorization without replacing the previous result",
+      "durationMs": 15526.5488
+    },
+    {
+      "status": "ok",
+      "number": 421,
+      "name": "live or uncertain executions and forged authorization cannot be revised",
+      "durationMs": 1909.2026
+    },
+    {
+      "status": "ok",
+      "number": 422,
+      "name": "host revision uses exact model, current root instruction and revalidates authority after approval",
+      "durationMs": 2550.0756
+    },
+    {
+      "status": "ok",
+      "number": 423,
+      "name": "a reopened Ticket executes, reviews and delivers the fresh revision while its revoked original stays historical",
+      "durationMs": 3217.1673
+    },
+    {
+      "status": "ok",
+      "number": 424,
+      "name": "Feishu owner reopens a completed subscribed Ticket through fresh Eval and preserves its original channel",
+      "durationMs": 8216.0752
+    },
+    {
+      "status": "ok",
+      "number": 425,
+      "name": "model edits preserve opaque IDs and unrelated hidden configuration across save and reload",
+      "durationMs": 12.8581
+    },
+    {
+      "status": "ok",
+      "number": 426,
+      "name": "archived side chats expose only unarchive and delete with the distinct restore icon",
+      "durationMs": 3.4543
+    },
+    {
+      "status": "ok",
+      "number": 427,
+      "name": "assistant conversations use the shared sidebar section with pinned icon-free main chat",
+      "durationMs": 2.1663
+    },
+    {
+      "status": "ok",
+      "number": 428,
+      "name": "main chat activity follows its official session even when another panel is selected",
+      "durationMs": 2.7249
+    },
+    {
+      "status": "ok",
+      "number": 429,
+      "name": "sidebar collapse state and chevron structure follow shared rotation styles",
+      "durationMs": 3.3173
+    },
+    {
+      "status": "ok",
+      "number": 430,
+      "name": "resetting a custom name card preserves the rest of the settings draft",
+      "durationMs": 2.0974
+    },
+    {
+      "status": "ok",
+      "number": 431,
+      "name": "history keeps earlier and middle pages across polling and send refreshes",
+      "durationMs": 3.2246
+    },
+    {
+      "status": "ok",
+      "number": 432,
+      "name": "earlier response preserves concurrent live reply and current status",
+      "durationMs": 2.0846
+    },
+    {
+      "status": "ok",
+      "number": 433,
+      "name": "side chats no longer expose bring-to-main controls",
+      "durationMs": 2.7103
+    },
+    {
+      "status": "ok",
+      "number": 434,
+      "name": "side chat follows the main model queue and exposes handoff controls",
+      "durationMs": 1.8229
+    },
+    {
+      "status": "ok",
+      "number": 435,
+      "name": "catalog fetch is shared across model fields",
+      "durationMs": 2.0135
+    },
+    {
+      "status": "ok",
+      "number": 436,
+      "name": "image previews reject executable URL schemes and expose download",
+      "durationMs": 2.0275
+    },
+    {
+      "status": "ok",
+      "number": 437,
+      "name": "identity saves only changed card fields and never overwrites media or USER.md",
+      "durationMs": 2.9931
+    },
+    {
+      "status": "ok",
+      "number": 438,
+      "name": "resource navigation includes vault and system files last without settings or automation switch",
+      "durationMs": 3.3256
+    },
+    {
+      "status": "ok",
+      "number": 439,
+      "name": "ticket header opens the goal form and returns to the ticket list",
+      "durationMs": 2.9485
+    },
+    {
+      "status": "ok",
+      "number": 440,
+      "name": "identity body is edited only through documents; model priority remains exact",
+      "durationMs": 2.6202
+    },
+    {
+      "status": "ok",
+      "number": 441,
+      "name": "message rendering never passes content block objects to React",
+      "durationMs": 2.8156
+    },
+    {
+      "status": "ok",
+      "number": 442,
+      "name": "backend errors and fallback reasons are visible",
+      "durationMs": 1.9533
+    },
+    {
+      "status": "ok",
+      "number": 443,
+      "name": "approval is answered only by explicit user action using official outcome",
+      "durationMs": 2.2051
+    },
+    {
+      "status": "ok",
+      "number": 444,
+      "name": "question replies follow official selected-label answer contract",
+      "durationMs": 2.4934
+    },
+    {
+      "status": "ok",
+      "number": 445,
+      "name": "session scope waits for the assistant writer and remains alive until explicit release",
+      "durationMs": 2.006
+    },
+    {
+      "status": "ok",
+      "number": 446,
+      "name": "released or replaced assistant sessions never open a stale official writer",
+      "durationMs": 3.2447
+    },
+    {
+      "status": "ok",
+      "number": 447,
+      "name": "failed assistant initialization does not activate an official session and can be retried",
+      "durationMs": 2.7224
+    },
+    {
+      "status": "ok",
+      "number": 448,
+      "name": "background assistant thread approval remains visible",
+      "durationMs": 2.2772
+    },
+    {
+      "status": "ok",
+      "number": 449,
+      "name": "notifications render in main and originating side chat only",
+      "durationMs": 1.9094
+    },
+    {
+      "status": "ok",
+      "number": 450,
+      "name": "clear is a main-chat slash action that resets once and opens the new session",
+      "durationMs": 25.2053
+    },
+    {
+      "status": "ok",
+      "number": 451,
+      "name": "clear failure preserves the main session and remains retryable",
+      "durationMs": 2.8056
+    },
+    {
+      "status": "ok",
+      "number": 452,
+      "name": "a cleared main session observed by polling drops the old transcript and artifacts",
+      "durationMs": 1.7015
+    },
+    {
+      "status": "ok",
+      "number": 453,
+      "name": "clear success remains committed when opening the new chat needs a retry",
+      "durationMs": 2.2329
+    },
+    {
+      "status": "ok",
+      "number": 454,
+      "name": "configuration rejects inline secrets and deduplicates permitted identities",
+      "durationMs": 3.6643
+    },
+    {
+      "status": "ok",
+      "number": 455,
+      "name": "normalization scopes phone identity, preserves thread, and derives ownership from configuration",
+      "durationMs": 1.9946
+    },
+    {
+      "status": "ok",
+      "number": 456,
+      "name": "webhook authenticates exact bytes before durable intake and retries intake failures",
+      "durationMs": 45.195
+    },
+    {
+      "status": "ok",
+      "number": 457,
+      "name": "verification challenge and Graph verification check credentials and account identity",
+      "durationMs": 3.488
+    },
+    {
+      "status": "ok",
+      "number": 458,
+      "name": "reply uses original message and chat; disallowed and revoked sources cannot send",
+      "durationMs": 1.6466
+    },
+    {
+      "status": "ok",
+      "number": 459,
+      "name": "media explicitly reports unavailable body instead of pretending a transcription",
+      "durationMs": 0.3945
+    },
+    {
+      "status": "ok",
+      "number": 460,
+      "name": "ordinary Worker directory checkpoints include hidden files and reject changed contents",
+      "durationMs": 33.2079
+    },
+    {
+      "status": "ok",
+      "number": 461,
+      "name": "checkpoint preserves source changes and detects tracked, untracked, ignored and deleted artifacts",
+      "durationMs": 14400.2194
+    },
+    {
+      "status": "ok",
+      "number": 462,
+      "name": "index changes and branch substitution invalidate checkpoint without file changes",
+      "durationMs": 8067.9197
+    },
+    {
+      "status": "ok",
+      "number": 463,
+      "name": "missing evidence, wrong repository, links and cancellation fail closed",
+      "durationMs": 2362.8782
+    },
+    {
+      "status": "ok",
+      "number": 464,
+      "name": "internal pnpm junctions are captured without traversal and target tampering is detected",
+      "durationMs": 6171.8383
+    },
+    {
+      "status": "ok",
+      "number": 465,
+      "name": "round restore reverses creations, deletions and edits, preserving later unrelated user work",
+      "durationMs": 1005.0283
+    },
+    {
+      "status": "ok",
+      "number": 466,
+      "name": "same-file later edits and edits between actions prevent whole-round overwrite",
+      "durationMs": 38.9236
+    },
+    {
+      "status": "ok",
+      "number": 467,
+      "name": "preview tokens bind the current workspace and survive service reload",
+      "durationMs": 84.1388
+    },
+    {
+      "status": "ok",
+      "number": 468,
+      "name": "failed actions retain their changed files and same-run calls serialize",
+      "durationMs": 535.7269
+    },
+    {
+      "status": "ok",
+      "number": 469,
+      "name": "credentials and project Git metadata are excluded and limits fail before dispatch",
+      "durationMs": 407.0586
+    },
+    {
+      "status": "ok",
+      "number": 470,
+      "name": "symlink workspace content fails closed",
+      "durationMs": 11.7073
+    },
+    {
+      "status": "ok",
+      "number": 471,
+      "name": "file/directory transitions can be restored without recursive deletion",
+      "durationMs": 411.9125
+    },
+    {
+      "status": "ok",
+      "number": 472,
+      "name": "new user files beneath a former file conflict before any rollback writes",
+      "durationMs": 30.1272
+    },
+    {
+      "status": "ok",
+      "number": 473,
+      "name": "crash-pending records block further actions and rollback",
+      "durationMs": 24.9662
+    },
+    {
+      "status": "ok",
+      "number": 474,
+      "name": "late additions drain through actual turns, including additions arriving during continuation",
+      "durationMs": 3.3854
+    },
+    {
+      "status": "ok",
+      "number": 475,
+      "name": "empty inbox does not start another turn",
+      "durationMs": 0.3746
+    },
+    {
+      "status": "ok",
+      "number": 476,
+      "name": "unconsumed context fails instead of inventing a receipt or spinning",
+      "durationMs": 1.0774
+    },
+    {
+      "status": "ok",
+      "number": 477,
+      "name": "pause or attention keeps pending context for the resumed worker",
+      "durationMs": 0.4554
+    },
+    {
+      "status": "ok",
+      "number": 478,
+      "name": "continuous arrivals stop at a bounded number of turns",
+      "durationMs": 0.4385
+    },
+    {
+      "status": "ok",
+      "number": 479,
+      "name": "abort and turn failures propagate without retry",
+      "durationMs": 0.6085
+    },
+    {
+      "status": "ok",
+      "number": 480,
+      "name": "desktop tools ignore channel revisions but stop on desktop authority changes",
+      "durationMs": 2.8753
+    },
+    {
+      "status": "ok",
+      "number": 481,
+      "name": "each worker action checks live authorization; narrowing during approval prevents dispatch",
+      "durationMs": 18.236
+    },
+    {
+      "status": "ok",
+      "number": 482,
+      "name": "cancellation while rereading policy cannot enter tool dispatch",
+      "durationMs": 0.5703
+    },
+    {
+      "status": "ok",
+      "number": 483,
+      "name": "checkpoint IO precedes final authorization and revoked tools never dispatch",
+      "durationMs": 0.7431
+    },
+    {
+      "status": "ok",
+      "number": 484,
+      "name": "Worker vault binds actual run, officially approves and writes only redacted host records",
+      "durationMs": 71.6348
+    },
+    {
+      "status": "ok",
+      "number": 485,
+      "name": "Worker rejects foreign agents, paused tickets and forged identities before approval",
+      "durationMs": 10.6416
+    },
+    {
+      "status": "ok",
+      "number": 486,
+      "name": "rule tightening or cancellation during official approval stops the HTTP boundary",
+      "durationMs": 23.4105
+    },
+    {
+      "status": "ok",
+      "number": 487,
+      "name": "approval rejection is audited and authorized=true cannot bypass the official approval service",
+      "durationMs": 10.2531
+    },
+    {
+      "status": "ok",
+      "number": 488,
+      "name": "final policy/fence gate runs after vault IO immediately before network submission",
+      "durationMs": 10.705
+    },
+    {
+      "status": "ok",
+      "number": 489,
+      "name": "uncertain external effect cannot be replayed under a new call id or reordered body",
+      "durationMs": 39.3636
+    },
+    {
+      "status": "ok",
+      "number": 490,
+      "name": "approval binds immutable request body and credential rotation invalidates prior approval",
+      "durationMs": 22.9145
+    }
+  ]
+}

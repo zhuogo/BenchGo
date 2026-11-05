@@ -18,7 +18,7 @@ for (const [path, mode, hint] of [
   [nodeBinary, constants.X_OK, 'Set LINK_TEST_NODE to a Node.js 24 executable'],
   [join(profileDependencies, 'benchgo/package.json'), constants.R_OK, 'Set LINK_HARNESS_NODE_MODULES to prepared profile node_modules containing benchgo'],
   [tsxImport, constants.R_OK, 'Install the official Harness workspace dependencies (tsx is required)'],
-  [join(root, 'plugins/commander/lib/link.mjs'), constants.R_OK, 'Build the BenchGo and Link bundle first'],
+  [join(root, 'plugins/benchgo/lib/link.mjs'), constants.R_OK, 'Build the BenchGo and Link bundle first'],
 ]) {
   try { await access(path, mode); }
   catch { console.error(`Link live smoke prerequisite missing: ${path}. ${hint}.`); process.exit(1); }
@@ -52,7 +52,7 @@ try {
   await new Promise(resolve => modelServer.listen(0, '127.0.0.1', resolve));
   const modelUrl = `http://127.0.0.1:${modelServer.address().port}/v1`;
   await mkdir(profile, { recursive: true }); await mkdir(workspace);
-  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-link-live-profile', private: true, dependencies: { 'benchgo-plugin': `link:${root}/plugins/commander` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'benchgo-plugin'] } } }));
+  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-link-live-profile', private: true, dependencies: { 'benchgo-plugin': `link:${root}/plugins/benchgo` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'benchgo-plugin'] } } }));
   await writeFile(join(profile, 'cordis.yml'), '[]\n');
   await writeFile(join(profile, 'cordis.patch.yml'), [
     '- id: commander', `  config:`, `    dataDir: ${JSON.stringify(join(directory, 'commander'))}`,
@@ -111,7 +111,7 @@ try {
   assert.ok(workbenchCookie, 'paired device receives its own workbench cookie');
   const updates = input => remote('/link/workbench/api/commander/updates', input, undefined, { cookie: workbenchCookie });
   const updateStatus = await updates({ action: 'status' });
-  assert.equal(updateStatus.current.plugin, JSON.parse(await readFile(join(root, 'plugins/commander/package.json'))).version);
+  assert.equal(updateStatus.current.plugin, JSON.parse(await readFile(join(root, 'plugins/benchgo/package.json'))).version);
   assert.equal(updateStatus.installation, 'server');
   assert.equal(updateStatus.managed, false, 'source profiles never falsely offer Windows self-updating');
   const configuredUpdates = await updates({ action: 'configure', source: 'github' });

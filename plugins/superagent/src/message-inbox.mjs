@@ -1,0 +1,136 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
+
+const active = new Set(['queued', 'processing', 'prepared']);
+const fingerprint = (threadId, text, context) => createHash('sha256').update(JSON.stringify(context === undefined ? [threadId, text] : [threadId, text, context])).digest('hex');
+
+function replySnapshot(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).some(key => !['eventId', 'ticketId', 'instructionRevision', 'resultVersion', 'question'].includes(key))
+    || typeof value.eventId !== 'string' || !value.eventId || value.eventId.length > 200
+    || typeof value.ticketId !== 'string' || !value.ticketId || value.ticketId.length > 200
+    || !Number.isSafeInteger(value.instructionRevision) || value.instructionRevision < 1
+    || (value.resultVersion !== null && value.resultVersion !== undefined && (!Number.isSafeInteger(value.resultVersion) || value.resultVersion < 1))
+    || typeof value.question !== 'string' || value.question.length > 200_000) throw new Error('无效回复关联');
+  return { eventId: value.eventId, ticketId: value.ticketId, instructionRevision: value.instructionRevision,
+    resultVersion: value.resultVersion ?? null, question: value.question };
+}
+
+/** Receipt state is reconciled against the host transcript, never an LLM guess. */
+export function messageReceiptFromEvents(request, events) {
+  const index = events.findIndex(event => event.type === 'user/message' && event.data?.id === request.messageId);
+  if (index < 0) return { status: 'uncertain', error: '消息提交状态待核实；未自动重放，请检查会话记录。' };
+  const end = events.slice(index + 1).find(event => event.type === 'turn/end');
+  if (!end) return { status: 'uncertain', error: '原消息已记录，但 Router 回合尚未完成；等待会话恢复。' };
+  const reason = end.data?.reason;
+  if (reason?.kind === 'error') return { status: 'failed', error: String(reason.error?.message || 'Router 处理失败') };
+  if (reason?.kind === 'aborted' && reason.reason?.kind === 'user') return { status: 'cancelled' };
+  if (reason?.kind === 'interrupted' || reason?.kind === 'aborted') return { status: 'uncertain', error: 'Router 回合中断，未重放原请求。' };
+  return { status: 'processed' };
+}
+
+/** Reuses state.requests: one durable inbox, one host writer per conversation. */
+export function createMessageInbox({ getState, updateState, ensureSession, getAgent, readSession, beforeDispatch, onDispatch, onChange = () => {}, now = Date.now, isStopped = () => false }) {
+  const drains = new Map();
+  const receipt = row => ({ threadId: row.threadId, sessionId: row.sessionId ?? null, requestId: row.requestId, messageId: row.messageId, status: row.status === 'sent' ? 'processed' : row.status, ...(row.error ? { error: row.error } : {}) });
+  const patch = async (requestId, change) => updateState(state => ({ requests: (state.requests || []).map(row => row.requestId === requestId ? { ...row, ...change,
+    ...(change.status === 'processed' ? { message: undefined } : {}), updatedAt: new Date(now()).toISOString() } : row) }));
+  async function reconcile(threadId, agent) {
+    const rows = (await getState()).requests || [];
+    for (const row of rows.filter(item => item.threadId === threadId && ['prepared', 'processing', 'uncertain', 'sent'].includes(item.status))) {
+      if (agent?.status === 'running') return;
+      try {
+        if (!row.sessionId) throw new Error('缺少原始会话标识');
+        const { events } = await readSession(row.sessionId);
+        await patch(row.requestId, messageReceiptFromEvents(row, events));
+      } catch (error) { await patch(row.requestId, { status: 'uncertain', error: `无法核实原消息交付：${error.message}` }); }
+    }
+  }
+  function drain(threadId) {
+    if (isStopped()) return Promise.resolve();
+    if (drains.has(threadId)) return drains.get(threadId);
+    const operation = (async () => {
+      let agent;
+      try {
+        const rows = (await getState()).requests || [];
+        if (!rows.some(row => row.threadId === threadId && (active.has(row.status) || ['uncertain', 'sent'].includes(row.status)))) return;
+        agent = getAgent?.(threadId);
+        if (isStopped() || agent?.status === 'running') return;
+        await reconcile(threadId, agent);
+        const row = ((await getState()).requests || []).find(item => item.threadId === threadId && item.status === 'queued');
+        if (!row || isStopped()) return;
+        agent ||= await ensureSession({ threadId });
+        if (isStopped() || agent.status === 'running') return;
+        await patch(row.requestId, { status: 'processing', sessionId: agent.id });
+        if (isStopped()) {
+          await patch(row.requestId, { status: 'queued' });
+          return;
+        }
+        // Cancellation/clear may have committed while the writer was prepared.
+        if (!((await getState()).requests || []).some(item => item.requestId === row.requestId && item.status === 'processing')) return;
+        try {
+          await beforeDispatch?.({ ...row, sessionId: agent.id }, agent);
+          if (isStopped()) { await patch(row.requestId, { status: 'queued' }); return; }
+          if (!((await getState()).requests || []).some(item => item.requestId === row.requestId && item.status === 'processing')) return;
+          onDispatch?.(row, agent);
+          agent.followup(row.message);
+        } catch (error) {
+          await patch(row.requestId, { status: 'uncertain', error: `消息分诊提交失败，未自动重放：${error.message}` });
+          onChange({ type: 'inbox', threadId, status: 'uncertain' });
+        }
+      } catch (error) {
+        // An unavailable model/session must not strand accepted messages forever.
+        await updateState(state => ({ requests: (state.requests || []).map(row => row.threadId === threadId && row.status === 'queued'
+          ? { ...row, status: 'failed', error: `无法启动消息分诊：${error.message}`, updatedAt: new Date(now()).toISOString() } : row) }));
+        onChange({ type: 'inbox', threadId, status: 'failed' });
+      }
+    })();
+    drains.set(threadId, operation);
+    operation.finally(async () => {
+      if (drains.get(threadId) === operation) drains.delete(threadId);
+      if (!isStopped() && getAgent?.(threadId)?.status === 'idle'
+        && ((await getState()).requests || []).some(row => row.threadId === threadId && row.status === 'queued')) void drain(threadId);
+    }).catch(() => {});
+    return operation;
+  }
+  return {
+    async enqueue({ threadId = 'main', text, requestId = randomUUID(), replyContext }) {
+      const context = replySnapshot(replyContext);
+      const digest = fingerprint(threadId, text, context);
+      let duplicate = false;
+      await updateState(state => {
+        const previous = (state.requests || []).find(row => row.requestId === requestId);
+        if (previous) {
+          if (previous.threadId !== threadId || (previous.fingerprint && previous.fingerprint !== digest)) throw new Error('请求标识已用于不同话题或内容');
+          duplicate = true;
+          return {};
+        }
+        const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user', requestId, rpcId: requestId,
+          ...(context ? { replyContext: context } : {}) } });
+        const row = { requestId, threadId, sessionId: getAgent?.(threadId)?.id ?? null, messageId: message.id, message, fingerprint: digest, status: 'queued', createdAt: new Date(now()).toISOString() };
+        return { requests: [...(state.requests || []), row] };
+      });
+      await drain(threadId);
+      const row = (await getState()).requests.find(item => item.requestId === requestId);
+      onChange({ type: 'inbox', threadId, requestId, status: row.status });
+      return { ...receipt(row), ...(duplicate ? { duplicate: true } : {}) };
+    },
+    drain,
+    async settle(threadId) { await drains.get(threadId); await drain(threadId); },
+    async recover() {
+      const threads = [...new Set(((await getState()).requests || []).filter(row => active.has(row.status) || ['uncertain', 'sent'].includes(row.status)).map(row => row.threadId))];
+      await Promise.all(threads.map(drain));
+    },
+    async cancel(threadId) {
+      await updateState(state => ({ requests: (state.requests || []).map(row => row.threadId === threadId && active.has(row.status)
+        ? { ...row, status: 'cancelled', updatedAt: new Date(now()).toISOString() } : row) }));
+    },
+    async hasPending(threadId) { return ((await getState()).requests || []).some(row => row.threadId === threadId && active.has(row.status)); },
+    async state(threadId) {
+      return ((await getState()).requests || []).filter(row => row.threadId === threadId).map(row => ({ ...receipt(row), createdAt: row.createdAt, updatedAt: row.updatedAt,
+        ...(row.message ? { text: row.message.content?.filter(block => block.type === 'text').map(block => block.text).join('') ?? '' } : {}) }));
+    },
+    async dispose() { await Promise.allSettled([...drains.values()]); },
+  };
+}

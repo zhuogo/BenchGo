@@ -1,0 +1,232 @@
+{
+  "at": "2026-11-04T17:08:17.342Z",
+  "snapshots": [
+    {
+      "sessionId": "4db6df2e-de59-4500-8896-b33b13626964",
+      "updatedAt": "2026-11-04T17:03:06.384Z",
+      "compressedBytes": 192679,
+      "decodedBytes": 192679,
+      "counts": {
+        "session": 1,
+        "permission/preset": 1,
+        "sandbox/mode": 1,
+        "approval/policy": 1,
+        "agent/inbox/spliced": 2,
+        "turn/start": 1,
+        "step/start": 11,
+        "system/message": 1,
+        "user/message": 5,
+        "request/header": 1,
+        "request/context": 1,
+        "session/title": 2,
+        "session/title-llm-request": 1,
+        "assistant/message": 11,
+        "tool/call": 27,
+        "tool/result": 27,
+        "step/end": 11,
+        "turn/end": 1
+      },
+      "tools": [
+        {
+          "name": "web_search",
+          "hosts": []
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "news.sina.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.reuters.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "news.sina.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "news.sina.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "tech.sina.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "finance.sina.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "news.sina.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "k.sina.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.thepaper.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "apnews.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "finance.sina.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.thepaper.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "finance.sina.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.thepaper.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.thepaper.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "news.sina.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.thepaper.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.zaobao.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.bbc.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.stcn.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.stcn.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.stcn.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.zaobao.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.zaobao.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.stcn.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.zaobao.com"
+          ]
+        }
+      ],
+      "eventCount": 106,
+      "transcriptHash": "941b616558a97108a635dbc284f1d036314fd700a560613c61b23ca0d1755868",
+      "toolResultStats": {
+        "total": 27,
+        "markedError": 3,
+        "notMarkedError": 24
+      },
+      "lastEvents": [
+        {
+          "type": "tool/result",
+          "seq": 99,
+          "time": 1793811704327
+        },
+        {
+          "type": "step/end",
+          "seq": 100,
+          "time": 1793811704328
+        },
+        {
+          "type": "step/start",
+          "seq": 101,
+          "time": 1793811704390
+        },
+        {
+          "type": "assistant/message",
+          "seq": 102,
+          "time": 1793811785547
+        },
+        {
+          "type": "step/end",
+          "seq": 103,
+          "time": 1793811785551
+        },
+        {
+          "type": "turn/end",
+          "seq": 104,
+          "time": 1793811785553
+        }
+      ]
+    }
+  ]
+}

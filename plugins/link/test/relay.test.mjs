@@ -13,6 +13,7 @@ import { loadIdentity } from '../src/transport/tls.mjs';
 import { listen, validateConfig } from '../src/transport/server.mjs';
 import { createRelayServer } from '../src/transport/relay-server.mjs';
 import { createRelayHost } from '../src/transport/relay-host.mjs';
+import { testRelayConnection } from '../src/transport/relay-probe.mjs';
 import { relayPathAllowed } from '../src/transport/relay-protocol.mjs';
 import { createWorkbench } from '../src/transport/workbench.mjs';
 
@@ -74,6 +75,13 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
   });
   for (let index = 0; index < 50 && !host.status().connected; index++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(host.status().connected, true);
+
+  const probeOptions = { ca: relayIdentity.cert };
+  const tested = await testRelayConnection({ url: relayOrigin, token }, probeOptions);
+  assert.equal(tested.ok, true); assert(tested.latencyMs >= 0);
+  assert.match((await testRelayConnection({ url: relayOrigin, token })).message, /TLS/);
+  assert.equal((await testRelayConnection({ url: relayOrigin, token: 'wrong-secret' }, probeOptions)).ok, false);
+  assert.equal(host.status().connected, true, 'testing credentials must not replace the active host');
 
   const pairing = store.begin();
   const requested = await request(relayPort, '/link/api/pair', { method: 'POST', body: JSON.stringify({ code: pairing.code, name: 'Relay phone' }), headers: { 'content-type': 'application/json' } });
@@ -172,6 +180,48 @@ test('relay rejects excess voice upgrades without crashing and host close interr
   const started = Date.now(); await host.close();
   assert.ok(Date.now() - started < 2_000, 'close should not wait for the TLS handshake timeout');
   await new Promise(resolve => stalled.close(resolve));
+});
+
+test('connecting relay timeout reports once, retries and closes without uncaught socket errors', { timeout: 5_000 }, async t => {
+  const accepted = new Set();
+  const stalled = createNetServer(socket => {
+    accepted.add(socket); socket.resume(); socket.once('close', () => accepted.delete(socket));
+  });
+  stalled.listen(0, '127.0.0.1'); await once(stalled, 'listening');
+  const errors = [];
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const host = createRelayHost({ relayUrl: `https://127.0.0.1:${stalled.address().port}`, token: 'relay-host-secret-with-at-least-32-bytes', target: { url: 'https://127.0.0.1:48721', pin: 'A'.repeat(43) + '=' }, onError: error => errors.push(error.message) });
+  t.after(async () => {
+    await host.close(); t.mock.timers.reset();
+    for (const socket of accepted) socket.destroy();
+    await new Promise(resolve => stalled.close(resolve));
+  });
+  await once(stalled, 'connection');
+  t.mock.timers.tick(10_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(errors, ['中继连接超时']);
+  assert.deepEqual(host.status(), { connected: false, lastError: '中继连接超时' });
+
+  const reconnect = once(stalled, 'connection');
+  t.mock.timers.tick(1_000);
+  await reconnect;
+  await host.close();
+  t.mock.timers.tick(60_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(errors, ['中继连接超时'], 'closing a connecting retry must not publish another failure');
+  assert.equal(host.status().connected, false);
+});
+
+test('read-only relay probe times out on a stalled TLS peer and sanitizes failures', async t => {
+  const sockets = new Set();
+  const stalled = createNetServer(socket => { sockets.add(socket); socket.resume(); socket.once('close', () => sockets.delete(socket)); });
+  stalled.listen(0, '127.0.0.1'); await once(stalled, 'listening');
+  t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise(resolve => stalled.close(resolve)); });
+  const token = 'private-secret-do-not-return';
+  const value = await testRelayConnection({ url: `https://127.0.0.1:${stalled.address().port}`, token }, { timeout: 25 });
+  assert.equal(value.ok, false); assert.match(value.message, /超时/);
+  assert.equal(JSON.stringify(value).includes(token), false);
+  assert.equal((await testRelayConnection({ url: 'http://relay.example', token })).ok, false);
 });
 
 test('relay and host reject weak credentials and non-loopback upstreams', async () => {

@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import config from './electron-builder.config.mjs';
+import config, { verifyPackagedPluginSeed } from './electron-builder.config.mjs';
 
 test('external seed explicitly includes root node_modules with the official packaging convention', () => {
   const seed = config.extraResources.find(item => item.to === 'benchgo/seed');
@@ -17,6 +19,32 @@ test('application version stays independent of plugin-only releases', async () =
   const app = JSON.parse(await readFile(new URL('../../package.json', import.meta.url)));
   assert.equal(config.extraMetadata.version, app.version);
   assert.equal(config.artifactName, `benchgo-${app.version}-win-x64-setup.exe`);
+});
+
+test('packaged seed checks all current exported entries without requiring removed source paths', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-seed-contract-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const plugin = join(directory, 'node_modules', 'benchgo-plugin');
+  const manifest = JSON.parse(await readFile(new URL('../../plugins/benchgo/package.json', import.meta.url), 'utf8'));
+  const entries = ['.', './harness-plugin', './superagent-plugin', './voice-plugin', './link-plugin', './runtime'];
+  const files = new Set(['lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'cordis.patch.yml', ...entries.map(key => manifest.exports[key])]);
+  for (const file of files) {
+    const target = join(plugin, file);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, 'fixture');
+  }
+  await writeFile(join(directory, 'release.json'), '{}');
+  await writeFile(join(plugin, 'package.json'), JSON.stringify(manifest));
+  await verifyPackagedPluginSeed(directory);
+  for (const key of entries) {
+    const target = join(plugin, manifest.exports[key]);
+    await rm(target);
+    await assert.rejects(verifyPackagedPluginSeed(directory), { code: 'ENOENT' });
+    await writeFile(target, 'fixture');
+  }
+  delete manifest.exports['./superagent-plugin'];
+  await writeFile(join(plugin, 'package.json'), JSON.stringify(manifest));
+  await assert.rejects(verifyPackagedPluginSeed(directory), /export is missing: \.\/superagent-plugin/);
 });
 
 

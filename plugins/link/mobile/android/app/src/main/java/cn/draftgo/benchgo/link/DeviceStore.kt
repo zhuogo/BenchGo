@@ -8,15 +8,16 @@ import java.security.MessageDigest
 import java.util.Base64
 
 data class Identity(val url: String, val pin: String, val code: String, val name: String, val token: String,
-    val id: String = stableId(url, pin), val kind: String = "computer", val ssh: JSONObject? = null, val warning: String = "", val routes: JSONArray? = null) {
+    val id: String = stableId(url, pin), val kind: String = "computer", val ssh: JSONObject? = null, val warning: String = "", val routes: JSONArray? = null, val alias: String = "") {
     val hostKey: String get() = "$url|$pin"
     fun toJson() = JSONObject().apply {
         put("url", url); put("pin", pin); put("code", code); put("name", name); put("token", token)
         if (routes != null) put("routes", routes)
+        if (alias.isNotBlank()) put("alias", alias)
         put("id", id); put("kind", kind); if (ssh != null) put("ssh", ssh); if (warning.isNotBlank()) put("warning", warning)
     }
     fun publicJson(status: String = "unknown") = JSONObject().apply {
-        put("id", id); put("name", name.ifBlank { if (kind == "ssh") ssh?.optString("host") ?: "服务器" else URI(url).host })
+        put("id", id); put("name", alias.ifBlank { name.ifBlank { if (kind == "ssh") ssh?.optString("host") ?: "服务器" else URI(url).host } })
         if (warning.isNotBlank()) put("warning", warning)
         put("kind", kind); put("url", if (kind == "ssh") "ssh://" + ssh?.optString("host") else url); put("status", status)
     }
@@ -31,7 +32,7 @@ data class Identity(val url: String, val pin: String, val code: String, val name
             val token = json.optString("token").trim()
             require(code.length <= 256 && token.length <= 4096) { "设备凭据无效" }
             require(code.isNotEmpty() || token.isNotEmpty()) { "缺少配对码或设备令牌" }
-            return Identity(url, pin, code, json.optString("name").take(128), token, json.optString("id").ifBlank { stableId(url, pin) }, json.optString("kind", "computer"), json.optJSONObject("ssh"), json.optString("warning"), json.optJSONArray("routes"))
+            return Identity(url, pin, code, json.optString("name").take(128), token, json.optString("id").ifBlank { stableId(url, pin) }, json.optString("kind", "computer"), json.optJSONObject("ssh"), json.optString("warning"), json.optJSONArray("routes"), json.optString("alias").take(128))
         }
     }
 }
@@ -45,6 +46,18 @@ internal class IdentityStore(context: Context) {
     private val devices = linkedMapOf<String, Identity>()
     private var activeId = ""
     private var unreadable = false
+    @Synchronized fun localName(): String {
+        val saved = prefs.getString("localName", "").orEmpty().trim()
+        if (saved.isNotBlank()) return saved
+        val generated = "手机-" + java.security.SecureRandom().let { random -> (1..5).map { ('A'.code + random.nextInt(26)).toChar() }.joinToString("") }
+        renameLocal(generated)
+        return generated
+    }
+    @Synchronized fun renameLocal(name: String) {
+        val value = name.trim()
+        require(value.isNotBlank() && value.length <= 100 && value.none { it.isISOControl() }) { "设备名称须为 1–100 字" }
+        check(prefs.edit().putString("localName", value).commit()) { "无法保存本机名称" }
+    }
     init {
         val raw = prefs.getString("value", null)
         if (raw != null) {

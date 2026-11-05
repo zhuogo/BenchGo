@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-03",
+  "checks": {
+    "savedEnabled": true,
+    "groupName": "无敌大队",
+    "groupMode": "mentions",
+    "latestMessageId": "om_x100b61ab5f3b6cb4b4c896873612ac5",
+    "latestMessageCreateTime": "1793716511523",
+    "latestMessageMentionsConfiguredBot": true,
+    "messageReadApiCode": 0,
+    "websocketEndpointHttp": 200,
+    "websocketEndpointCode": 0,
+    "websocketEndpointIssued": true,
+    "persistedFeishuTriggersAtCheck": 0
+  },
+  "limits": [
+    "Endpoint issuance does not prove the running application's websocket is connected.",
+    "The running application's live connection state requires the authenticated UI.",
+    "No messages were sent or replayed during this check."
+  ]
+}

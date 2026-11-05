@@ -1,0 +1,1350 @@
+{
+  "at": "2026-11-03T10:56:30.890Z",
+  "files": [
+    {
+      "path": "plugins/superagent/src/admission-rules.mjs",
+      "bytes": 1352,
+      "sha256": "0f173dadb586cf758f87b57d6471c7f54d65fa1d6f7da04100fa0b6ba71916e4"
+    },
+    {
+      "path": "plugins/superagent/src/approval.mjs",
+      "bytes": 493,
+      "sha256": "ad73cff9db5ed11544e97e1e7a85969497769b57b73c6486ceddc0ae17eb6fb0"
+    },
+    {
+      "path": "plugins/superagent/src/assessment-context.mjs",
+      "bytes": 2233,
+      "sha256": "a8e2dda517567f1973b43af754b87fece4cefdda2789e840cb5447ab3959296b"
+    },
+    {
+      "path": "plugins/superagent/src/assessment-policy.mjs",
+      "bytes": 8302,
+      "sha256": "92b7a8b4108563ee1d319127c44073dad85324d4841413c12c205cec2434f93c"
+    },
+    {
+      "path": "plugins/superagent/src/assessment-runner.mjs",
+      "bytes": 5207,
+      "sha256": "6552e16119d3674097b349d8215b4ff0db8c1bbbf23c5219f0e65def890ffa7f"
+    },
+    {
+      "path": "plugins/superagent/src/assessment-source.mjs",
+      "bytes": 2090,
+      "sha256": "04343ebf8795a024d68d9bba61cb46d89d16c6b8fc2508c830c988f9385a4dfd"
+    },
+    {
+      "path": "plugins/superagent/src/assessment.mjs",
+      "bytes": 7152,
+      "sha256": "8874f459bedd908deecb7f13bab40424389c2c97a466f5a37823ea3aeb245270"
+    },
+    {
+      "path": "plugins/superagent/src/assignment-executor.mjs",
+      "bytes": 16585,
+      "sha256": "a75321b29c8d359f3ba024c37be9780093746b47a8a7b32cffcb1252b0f08216"
+    },
+    {
+      "path": "plugins/superagent/src/assignment-worker.mjs",
+      "bytes": 5671,
+      "sha256": "fde03c0d36f44fd76357ef8e79810aa815313eb17a6c077f4a6e4aac57e6902d"
+    },
+    {
+      "path": "plugins/superagent/src/attention-store.mjs",
+      "bytes": 13002,
+      "sha256": "f65634424fb9c5cfd20a6d6a6e2bacde760fbffa8515940fe0e84177477f6002"
+    },
+    {
+      "path": "plugins/superagent/src/auxiliary-compaction.mjs",
+      "bytes": 4527,
+      "sha256": "b8e93fdb1d59179fdb7475d00b8bd3d4bbe1c5536a8ea915af849a25e95ecdb6"
+    },
+    {
+      "path": "plugins/superagent/src/auxiliary-operations.mjs",
+      "bytes": 5280,
+      "sha256": "d07301fbfd56d110ac0caad59f53036e9c919b4bd4af791f04ce0d268203c6df"
+    },
+    {
+      "path": "plugins/superagent/src/auxiliary-request.mjs",
+      "bytes": 3437,
+      "sha256": "cca1dff3914ebf1a58fff69e9427ed0b77817aa66cd21d6c7bc9891d7ea6b612"
+    },
+    {
+      "path": "plugins/superagent/src/channel-catalog.mjs",
+      "bytes": 5634,
+      "sha256": "d4ed161c1bc9a5e8fedc18070857c005a21dfcf3db4ae57c4b21181cf64cbabc"
+    },
+    {
+      "path": "plugins/superagent/src/channel-credentials.mjs",
+      "bytes": 2901,
+      "sha256": "2ab81b2fb5b6e3c9b0aec94747511ecb56f523a3dd47515e5037108a19d63482"
+    },
+    {
+      "path": "plugins/superagent/src/channel-runtime.mjs",
+      "bytes": 8226,
+      "sha256": "82134d23067c9313c296fc926303a80c11d44a5d794788b34f16c8ea1efd4d46"
+    },
+    {
+      "path": "plugins/superagent/src/channels/api.mjs",
+      "bytes": 3804,
+      "sha256": "141eb097a0fd7a91535bd57c34e931f6fd3f1dd73ff2fa444d2867ad3c1f5734"
+    },
+    {
+      "path": "plugins/superagent/src/channels/china-common.mjs",
+      "bytes": 7904,
+      "sha256": "ec88967c5d8f079063b148bb869d0fd1579de6a0485349cb21f47b0c9eaf10f7"
+    },
+    {
+      "path": "plugins/superagent/src/channels/discord-voice.mjs",
+      "bytes": 9804,
+      "sha256": "7ea88f64a3d687f397d1f23e2b8094abfdb56aa0f7f15f3abfc5619fddb14b26"
+    },
+    {
+      "path": "plugins/superagent/src/channels/discord.mjs",
+      "bytes": 5260,
+      "sha256": "32ef120162562a5a62b6b954fe927a2e4e13505b0d34c261e839eeafe27d7dcd"
+    },
+    {
+      "path": "plugins/superagent/src/channels/email.mjs",
+      "bytes": 12453,
+      "sha256": "2dbca9de1036636ecec1adf7c8f2a5656baa865c3acf8dde53e5033fdbcf963b"
+    },
+    {
+      "path": "plugins/superagent/src/channels/message-chunks.mjs",
+      "bytes": 603,
+      "sha256": "f32b7e711f7ecbbb7b8fac0ff0e64fdc633dac4c2e9ab5d128e1b0ed5008b634"
+    },
+    {
+      "path": "plugins/superagent/src/channels/qq.mjs",
+      "bytes": 5670,
+      "sha256": "5c7d02e876a01b2b4c54dc43f16a41046c783412382a5c9b018df288fce32e04"
+    },
+    {
+      "path": "plugins/superagent/src/channels/social-common.mjs",
+      "bytes": 1552,
+      "sha256": "21805d26eadbcc35735f9cc4b6d6515f9480dc23bb9ec6d886fbc044800f6425"
+    },
+    {
+      "path": "plugins/superagent/src/channels/telegram.mjs",
+      "bytes": 4492,
+      "sha256": "fb9dc8d9dd202a1b4bef612e798e12c240c1f57ac4637abdcc71cdef1860ab22"
+    },
+    {
+      "path": "plugins/superagent/src/channels/webhook.mjs",
+      "bytes": 4596,
+      "sha256": "f09d65916335fe0a4fe00ccda661737ce3ece5b3fd4b25547dad8053a132a0a8"
+    },
+    {
+      "path": "plugins/superagent/src/channels/wecom.mjs",
+      "bytes": 5104,
+      "sha256": "1c85e0e83b87875a48d7330afa4c4eec0a78b6290122bf32dca1ecbbf175643c"
+    },
+    {
+      "path": "plugins/superagent/src/channels/weixin.mjs",
+      "bytes": 10388,
+      "sha256": "235526b6b458a5db6b3d8389d222c7d7f34d8d0e557e0b4ec9708ebea59e6b19"
+    },
+    {
+      "path": "plugins/superagent/src/channels/whatsapp.mjs",
+      "bytes": 746,
+      "sha256": "06183435405fa699fbc77c4d44e35832faa4ba72327a3196532cb62b087c4f33"
+    },
+    {
+      "path": "plugins/superagent/src/checkpoint-service.mjs",
+      "bytes": 4032,
+      "sha256": "4ffe6dfefda9ab807801a995dd76877e444fdf4af16b02352732fc449ce6efbe"
+    },
+    {
+      "path": "plugins/superagent/src/connections.mjs",
+      "bytes": 2016,
+      "sha256": "5b1793daac54ffa6365902d9c0f37ab84a01e176cd6fc5c8684f98079b87556e"
+    },
+    {
+      "path": "plugins/superagent/src/context-privacy.mjs",
+      "bytes": 1719,
+      "sha256": "0780cc31aad235979246328ae9e5d493597390b18d60cab820c84edcdf9a08b0"
+    },
+    {
+      "path": "plugins/superagent/src/delivery-worker.mjs",
+      "bytes": 3525,
+      "sha256": "a5129df0119813fc0a9c3e9833f6870f4b37456e7d1a009e476577e35ed12bd1"
+    },
+    {
+      "path": "plugins/superagent/src/desktop-delegation-service.mjs",
+      "bytes": 6022,
+      "sha256": "188629b3219d4593ad45138053bdad6dd2c0a2ca5c8379386fbbcbeec5861f51"
+    },
+    {
+      "path": "plugins/superagent/src/desktop-ticket-access.mjs",
+      "bytes": 1869,
+      "sha256": "69bccf7c6d456da98e2a5caf22b4a8e4bca6d9f26018adf3281958be1f63d87a"
+    },
+    {
+      "path": "plugins/superagent/src/desktop-ticket-store.mjs",
+      "bytes": 3303,
+      "sha256": "865fc56b19528d1ad41dde0941a7112d1d858a459abeaee888efe9529cce02f8"
+    },
+    {
+      "path": "plugins/superagent/src/desktop-trigger.mjs",
+      "bytes": 989,
+      "sha256": "8f0ce19748cdffdedcbfe4bb3709b0ee7e9823490d37e732df70509c44f66c45"
+    },
+    {
+      "path": "plugins/superagent/src/documents.mjs",
+      "bytes": 17702,
+      "sha256": "8dbe0e16dbf0518491c757cfcf5df316aa26349e9b3b96834bd03bf9a379f9e8"
+    },
+    {
+      "path": "plugins/superagent/src/engine.mjs",
+      "bytes": 35554,
+      "sha256": "d3a95a30406ed6ddc28f0fdf954c522aa3d44d68e637ba037b26ca0008a86d01"
+    },
+    {
+      "path": "plugins/superagent/src/eval-disposition-store.mjs",
+      "bytes": 4110,
+      "sha256": "4d45ec2b6ccc8ffbd2e18e03f3449024fc53de42369f3430fdc290027348a5b8"
+    },
+    {
+      "path": "plugins/superagent/src/eval-disposition.mjs",
+      "bytes": 1031,
+      "sha256": "21a60906e03293994997ad5e802ea18490853e3f185539e0766a6f94e56066dc"
+    },
+    {
+      "path": "plugins/superagent/src/execution-evidence.mjs",
+      "bytes": 3963,
+      "sha256": "3f62a49b09c4b5e8464722de36416763d1c46470707de1fd29d43a147f9ec321"
+    },
+    {
+      "path": "plugins/superagent/src/feishu-stream.mjs",
+      "bytes": 3470,
+      "sha256": "17cc2b110110d82afafa8c87ec7cc4797e77eb6b5ed6e605791b3ee1b7aecc05"
+    },
+    {
+      "path": "plugins/superagent/src/feishu.mjs",
+      "bytes": 14913,
+      "sha256": "a65b266d07aca019ac1d87fb51d77d14768a8c0920f8d705849e3349075c708c"
+    },
+    {
+      "path": "plugins/superagent/src/goal-budget-gate.mjs",
+      "bytes": 2795,
+      "sha256": "beb94c88e81437fffd445ebd5f45abdaefbb6080a85b9f25f1e6640151ebc1ff"
+    },
+    {
+      "path": "plugins/superagent/src/goal-budget-store.mjs",
+      "bytes": 8964,
+      "sha256": "09338a6e03689a94a1c0be91b6e54ed7f6f4ecde623159620d7d81eb572ab2c3"
+    },
+    {
+      "path": "plugins/superagent/src/goal-budget-usage.mjs",
+      "bytes": 1935,
+      "sha256": "f044e4ac5e2b02dcec22fd6c678666f50718ae817967d3d76b27f835d9368956"
+    },
+    {
+      "path": "plugins/superagent/src/goal-ticket-creation.mjs",
+      "bytes": 4554,
+      "sha256": "2b8f426ed130e359001c16ec619c2083045f1d574dd0167fa22d118543d5528a"
+    },
+    {
+      "path": "plugins/superagent/src/goal-ticket-record.mjs",
+      "bytes": 2574,
+      "sha256": "1990fc8cc443facf629ba384b3f90544f97c8a271048d262394fd632af2b1fde"
+    },
+    {
+      "path": "plugins/superagent/src/identity.mjs",
+      "bytes": 1901,
+      "sha256": "b20d9ebd3375bb3b3a93d074eee814cf4b85eb8cd162a89d258256e5b226101f"
+    },
+    {
+      "path": "plugins/superagent/src/intake.mjs",
+      "bytes": 2873,
+      "sha256": "fb5d48f97a59c01de7788e21c25e3d63b3338324f1f7ce61293d82691100b199"
+    },
+    {
+      "path": "plugins/superagent/src/learning-counters.mjs",
+      "bytes": 6828,
+      "sha256": "412dacc4e83d3e962391767d6b032e04cab96c11f9a0447d2894bd8f86cd6cf8"
+    },
+    {
+      "path": "plugins/superagent/src/learning-processor.mjs",
+      "bytes": 7160,
+      "sha256": "19f681b7acaeccab449116a0c603f269e64e51f12221ee8daeb9d8cdb4aa9118"
+    },
+    {
+      "path": "plugins/superagent/src/ledger.mjs",
+      "bytes": 7491,
+      "sha256": "49c27d2fb1bdf2c94afdced6b87806bbc5827f9625a96bda3d8490594c6b5f83"
+    },
+    {
+      "path": "plugins/superagent/src/media.mjs",
+      "bytes": 10551,
+      "sha256": "a08de6c9b52627caa6aa740350cfd2818854754db43780b1abac73d5a6238c8a"
+    },
+    {
+      "path": "plugins/superagent/src/memory.mjs",
+      "bytes": 25954,
+      "sha256": "3d60f8794c0646fc1d7f5bed3950f18ef8888d8c4ff94746b60b92c24fb4ca44"
+    },
+    {
+      "path": "plugins/superagent/src/model-action-ticket.mjs",
+      "bytes": 10620,
+      "sha256": "05cd5534963980f907cc7862e10e39dce61009cb8e574d8524683916cd56bdd8"
+    },
+    {
+      "path": "plugins/superagent/src/orchestration-runtime.mjs",
+      "bytes": 11947,
+      "sha256": "6b3845f35313fd091d71fc22b1907df2eb8c8f2d2df809176512c80b17ebb43f"
+    },
+    {
+      "path": "plugins/superagent/src/orchestration-store.mjs",
+      "bytes": 83006,
+      "sha256": "e347c8f5db871072181668b509b147360b4ac8b693f82ddb47b5ab74eadb4698"
+    },
+    {
+      "path": "plugins/superagent/src/owned-skill-provider.mjs",
+      "bytes": 5471,
+      "sha256": "287e1c80fa8415418801b6352fd2d0bfa179807ee521f250294c167c70d7ce50"
+    },
+    {
+      "path": "plugins/superagent/src/owned-skill-store.mjs",
+      "bytes": 7279,
+      "sha256": "fd1965a15c3444f774007f733c42ac4fce93a7a983c102d76757fa7c64583c32"
+    },
+    {
+      "path": "plugins/superagent/src/owned-skills.mjs",
+      "bytes": 5764,
+      "sha256": "f8cc001f5d396a0b702b18ee1463091335df22cd19e9445ecdafd0299e1bfa91"
+    },
+    {
+      "path": "plugins/superagent/src/plugin.mjs",
+      "bytes": 667,
+      "sha256": "460104583e76386cd023dca862335aef2653bcff5a6a1879c6d9e8226cecd7cc"
+    },
+    {
+      "path": "plugins/superagent/src/project-rules.mjs",
+      "bytes": 7125,
+      "sha256": "da7efb61eec9c55f4d465526159c3ebb4a62c31706bbf3ad30477fa8cf924f75"
+    },
+    {
+      "path": "plugins/superagent/src/review-continuation.mjs",
+      "bytes": 3150,
+      "sha256": "e08df581750af852d4a8efaf69b1db1a3eaa4bbfb9f0e70f519c2c09c077538b"
+    },
+    {
+      "path": "plugins/superagent/src/review-worker.mjs",
+      "bytes": 4209,
+      "sha256": "69851f7ff7d6cc395629db09cbdc77a45b44c0c520e308029ba631c0c15a9c1b"
+    },
+    {
+      "path": "plugins/superagent/src/review.mjs",
+      "bytes": 9411,
+      "sha256": "98251b23ba2324f2d0ee6be9a2a8b1e4df26ffb73699dc5726f8207c667249d0"
+    },
+    {
+      "path": "plugins/superagent/src/router-action-store.mjs",
+      "bytes": 12340,
+      "sha256": "aeb24f0af85cf4df735d80fd1663fab1d1c246aa04573b5e22276a5ccfed82bb"
+    },
+    {
+      "path": "plugins/superagent/src/router-permissions.mjs",
+      "bytes": 1557,
+      "sha256": "b9be8b29b3a442fea2d58cc0dedeb75947c61a4c3e7715c8f8afc060aee37907"
+    },
+    {
+      "path": "plugins/superagent/src/router-recovery.mjs",
+      "bytes": 3131,
+      "sha256": "1d5de050c2026661770fccdca7eade2a7d8238d85c67fb432d31089534c95517"
+    },
+    {
+      "path": "plugins/superagent/src/routing.mjs",
+      "bytes": 1938,
+      "sha256": "ea0497317e7322afb1e1aaa77001820994954b53c301feac002125506ed3fb31"
+    },
+    {
+      "path": "plugins/superagent/src/runtime-store.mjs",
+      "bytes": 13101,
+      "sha256": "40f3dfd5d43d94e3c40eaa424713f576f57d985a2d23847c64d5fe0e1d3542ce"
+    },
+    {
+      "path": "plugins/superagent/src/schedule-bridge.mjs",
+      "bytes": 7891,
+      "sha256": "52bb21de5ddc730f1bafb010647ecfb1098b5eca244100b3a968d79d00759fff"
+    },
+    {
+      "path": "plugins/superagent/src/scheduler.mjs",
+      "bytes": 22774,
+      "sha256": "05a9b865c0a1f8f89294afc10d4582def734ecbd7b2effe741cee01ae503fa13"
+    },
+    {
+      "path": "plugins/superagent/src/service.mjs",
+      "bytes": 62059,
+      "sha256": "ace3e71196e2486b075873bd6364deb534eda373e64c3229702419bb0c425305"
+    },
+    {
+      "path": "plugins/superagent/src/store.mjs",
+      "bytes": 21432,
+      "sha256": "91449878a923abf6bb1583800f319862295d154aff49bc1bc91c16e6b5543988"
+    },
+    {
+      "path": "plugins/superagent/src/subscription-inbox.mjs",
+      "bytes": 1855,
+      "sha256": "18de8e60381c01acd70a8d70fe72c95aaeb990d823b5f799a5f66731b1e5b8ca"
+    },
+    {
+      "path": "plugins/superagent/src/system-files.mjs",
+      "bytes": 8782,
+      "sha256": "adaaae2421fd7d8114eb5932b9383f47ce3e83ec9483030b0ec2688c65ddfd2c"
+    },
+    {
+      "path": "plugins/superagent/src/ticket-review.mjs",
+      "bytes": 2484,
+      "sha256": "b75bcfa46201a739a891e46159334071cde814f4eabf403fccd6531878ed04aa"
+    },
+    {
+      "path": "plugins/superagent/src/ticket-revision-service.mjs",
+      "bytes": 5108,
+      "sha256": "718d6cf93ee19f5e9ca55804d5d4dff0704955288c3876efabafb47ae519646c"
+    },
+    {
+      "path": "plugins/superagent/src/ticket-revisions.mjs",
+      "bytes": 6026,
+      "sha256": "c81be46467ceb63790e9bed08486ce856e3265068ac88c17be6cd6afcc6f2ef0"
+    },
+    {
+      "path": "plugins/superagent/src/whatsapp.mjs",
+      "bytes": 9767,
+      "sha256": "f69161faab53f12f4eb4ac7af82d0afa7d492d6c005b05a2a9b794058708d537"
+    },
+    {
+      "path": "plugins/superagent/src/worker-artifact-checkpoint.mjs",
+      "bytes": 6818,
+      "sha256": "ae11fcc25af1bea493503636b4dd5663a0e9542902ba06a3129bdb6bf06f24a3"
+    },
+    {
+      "path": "plugins/superagent/src/worker-attention.mjs",
+      "bytes": 2552,
+      "sha256": "c729d95a166dc67348c1d879aacff12e8409a979af44d9a4e90f1e725414ac87"
+    },
+    {
+      "path": "plugins/superagent/src/worker-checkpoint-store.mjs",
+      "bytes": 14916,
+      "sha256": "c6fce25d0555d826a9355c243e5d0220f78d31acf6f51536c61e54d6d6c750ca"
+    },
+    {
+      "path": "plugins/superagent/src/worker-context-continuation.mjs",
+      "bytes": 1278,
+      "sha256": "2f74fd1da0e11f42f3c03794cc07d32e8771bf97ca4d6899dfb35bc67a482cbe"
+    },
+    {
+      "path": "plugins/superagent/src/worker-permissions.mjs",
+      "bytes": 1593,
+      "sha256": "86d60665400a11f5b94c3d7741709a0db227cd700cee546c738dfc0d3282bafc"
+    },
+    {
+      "path": "plugins/superagent/src/worker-vault.mjs",
+      "bytes": 7968,
+      "sha256": "eb820477fc60b07f1671b3b7f640ae72d10ab3bcf4dc648bf1563ab813da0fef"
+    },
+    {
+      "path": "plugins/superagent/src/worker-worktree.mjs",
+      "bytes": 759,
+      "sha256": "ac5f42c4d12551ed5c9a61aaa5701087a95e5bc3333ac7510f914c58b665103b"
+    },
+    {
+      "path": "plugins/superagent/test/activity-home.test.mjs",
+      "bytes": 4102,
+      "sha256": "e1c4f268946e147444e8b6dfda73bf358eaf96d4798d4a72bbc69e5e2a8fbfb6"
+    },
+    {
+      "path": "plugins/superagent/test/activity-panel.test.mjs",
+      "bytes": 1932,
+      "sha256": "3e62696a67ebbdb6e8c1f17d264cdcb781afe9ec105a0fa1210cd2df81053395"
+    },
+    {
+      "path": "plugins/superagent/test/approval.test.mjs",
+      "bytes": 1122,
+      "sha256": "97b37452c2d0ee4e7ad8937c7f6084ff1a356207d0bb3386f104fe823fc3a8a5"
+    },
+    {
+      "path": "plugins/superagent/test/artifacts.test.mjs",
+      "bytes": 8074,
+      "sha256": "fe576810314335feb449305041917a37d37467a51f8328ed99164e5ad52205f1"
+    },
+    {
+      "path": "plugins/superagent/test/assessment-context.test.mjs",
+      "bytes": 2369,
+      "sha256": "5494ba51a1516903943380d0c09057f4ecdba06dddf43db3eef1f428b5d73d42"
+    },
+    {
+      "path": "plugins/superagent/test/assessment-policy.test.mjs",
+      "bytes": 6662,
+      "sha256": "6a4630754648ee1c4980048c50c8f9939973b2f4c579cc827eaa0912bebb0d3e"
+    },
+    {
+      "path": "plugins/superagent/test/assessment-runner.test.mjs",
+      "bytes": 7566,
+      "sha256": "58decd32b39d4e1e59aff8d845cc91f14bfe97584efca4ce5a29bc183f928595"
+    },
+    {
+      "path": "plugins/superagent/test/assessment-source.test.mjs",
+      "bytes": 3061,
+      "sha256": "6c62957e3e5685b7a870648556ccc751a111d62041f926f772580bedfa3a9bef"
+    },
+    {
+      "path": "plugins/superagent/test/assessment.test.mjs",
+      "bytes": 2220,
+      "sha256": "5765b4bd774c96956238194bd31b8f5da0c5832094fda373904a577a7ff06cd4"
+    },
+    {
+      "path": "plugins/superagent/test/assignment-executor.test.mjs",
+      "bytes": 8053,
+      "sha256": "e23f0f17988346ce999472b28a3b2f476281845a2ba672c1d41a6858d7b96da1"
+    },
+    {
+      "path": "plugins/superagent/test/assignment-worker.test.mjs",
+      "bytes": 6706,
+      "sha256": "db2083f164e42e1a512c8a95aee521456263f6cd653de6dc45a086de281c5d64"
+    },
+    {
+      "path": "plugins/superagent/test/attention.test.mjs",
+      "bytes": 6788,
+      "sha256": "7c7ad8c57d3d6db7479f68425a06ff173f8bd8113fa2b76ce6d2f8d1321a15b4"
+    },
+    {
+      "path": "plugins/superagent/test/auxiliary-compaction.test.mjs",
+      "bytes": 5729,
+      "sha256": "0d490529d3e9461107c8f0b091d285bd7cfc22787312678d22981f5c8fa71c92"
+    },
+    {
+      "path": "plugins/superagent/test/auxiliary-config.test.mjs",
+      "bytes": 4760,
+      "sha256": "c98a72517496fa17bb6f727683a8c4f8e8238bb8940d2c403ab9ace5f4fc9d3f"
+    },
+    {
+      "path": "plugins/superagent/test/auxiliary-harness.test.mjs",
+      "bytes": 3237,
+      "sha256": "9d8a4da0637cbdb8107f4cdd41360fe86863e30f657d9a9bd10d7b782f71011c"
+    },
+    {
+      "path": "plugins/superagent/test/auxiliary-operations.test.mjs",
+      "bytes": 5233,
+      "sha256": "a078e236cba337e2c87df63b64b8de494d8203d9dc3b0a152edd76fa4f1f3c0e"
+    },
+    {
+      "path": "plugins/superagent/test/auxiliary-request.test.mjs",
+      "bytes": 6357,
+      "sha256": "bcd6be08fdb1a29c42847eea20bcb1416b626a7e9e0c45b9fd0bd0ac238a4897"
+    },
+    {
+      "path": "plugins/superagent/test/card-editor.test.mjs",
+      "bytes": 3344,
+      "sha256": "f8307a7773922b315d7ec001e838ecb745c40716d7b26ab8255fa820785947e9"
+    },
+    {
+      "path": "plugins/superagent/test/card.test.mjs",
+      "bytes": 4740,
+      "sha256": "61b94a4143b50d066401d0236caae171a0294b8218b4215b6e061645b3170ece"
+    },
+    {
+      "path": "plugins/superagent/test/channel-core.test.mjs",
+      "bytes": 7452,
+      "sha256": "b64069a5063c51333580ebde98f43496a5c936314ff138e91cd5f7d2814c0b61"
+    },
+    {
+      "path": "plugins/superagent/test/channel-credentials.test.mjs",
+      "bytes": 1933,
+      "sha256": "81fa16f27f7603f90ff79411ce93e475d6ed6f09934af75c2ccf4f2d1ac1cf6f"
+    },
+    {
+      "path": "plugins/superagent/test/checkpoint-executor.test.mjs",
+      "bytes": 3495,
+      "sha256": "5fa46c172e5981efa678428f2c7b78f1ec8f6f59cfcc3446cefa78cbea5ba758"
+    },
+    {
+      "path": "plugins/superagent/test/checkpoint-service.test.mjs",
+      "bytes": 5678,
+      "sha256": "377445a3b64f39da83adf972108f2aef1072bf92784c78bd22bcb90ef06780f8"
+    },
+    {
+      "path": "plugins/superagent/test/china-channels.test.mjs",
+      "bytes": 9625,
+      "sha256": "708e22a12c36ffa619a8f4a9a8655b4d6f02d0c4c4352f66922ae3cbf6c7082f"
+    },
+    {
+      "path": "plugins/superagent/test/config-sync.test.mjs",
+      "bytes": 1531,
+      "sha256": "49a9024db1b7abc7a2a8560bbe2fac663e9bb5e00aebed48f05b30979e5ce098"
+    },
+    {
+      "path": "plugins/superagent/test/connections-ui.test.mjs",
+      "bytes": 7895,
+      "sha256": "5a8cd64d72efdc85f30f7b9505b7ba86b84f8817109b0f9068e49a84e1c9304a"
+    },
+    {
+      "path": "plugins/superagent/test/connections.test.mjs",
+      "bytes": 3028,
+      "sha256": "27ba74c846588be8298fb1e475677df2ee1b33c1ff8efb94db66b222a7e2153a"
+    },
+    {
+      "path": "plugins/superagent/test/delivery-worker.test.mjs",
+      "bytes": 2629,
+      "sha256": "824c6d0e39e8e7e9fa74fdb439d808ea3fc2129ea1d0dc0a78d8d1f55c5bc7c9"
+    },
+    {
+      "path": "plugins/superagent/test/desktop-delegation-service.test.mjs",
+      "bytes": 7191,
+      "sha256": "f975879a3bce5e5e981764d5751e094f1d26015c8047579438ee66fbdf0bad6f"
+    },
+    {
+      "path": "plugins/superagent/test/desktop-ticket-access.test.mjs",
+      "bytes": 2255,
+      "sha256": "838e90bb953a77ffbe247738f4612ebb7977dab991ff709175da9680534a0291"
+    },
+    {
+      "path": "plugins/superagent/test/discord-voice.test.mjs",
+      "bytes": 5095,
+      "sha256": "3d7bc4f58c2f45264686d62c045b4da8b65484ddd7293613fc2e6a469fc46df6"
+    },
+    {
+      "path": "plugins/superagent/test/documents-ui.test.mjs",
+      "bytes": 5999,
+      "sha256": "4a0582e1e597c8884ea28afdd0390439f94080e8ea0c7a2464bf45007bdeca3d"
+    },
+    {
+      "path": "plugins/superagent/test/email-channel.test.mjs",
+      "bytes": 6848,
+      "sha256": "54bb33caf88dfe8de16d3bba52fd83f5623dedd05aea2869aa70724c15a8d471"
+    },
+    {
+      "path": "plugins/superagent/test/engine.test.mjs",
+      "bytes": 94263,
+      "sha256": "2532cd823f06cff57ba5440679ba3855e44104d6e3e8dec6805196a63667008a"
+    },
+    {
+      "path": "plugins/superagent/test/eval-disposition.test.mjs",
+      "bytes": 4784,
+      "sha256": "d849452b09c463e082ec795ac49282919ec0f6a461d30d8916b70fca621f9902"
+    },
+    {
+      "path": "plugins/superagent/test/execution-evidence.test.mjs",
+      "bytes": 2754,
+      "sha256": "567fb5f937bb1c3e24042bde8308c756df023b5b29f3e40f396ca63719793e65"
+    },
+    {
+      "path": "plugins/superagent/test/feishu-stream.test.mjs",
+      "bytes": 3744,
+      "sha256": "11279ff3dcfe407bd676bf8b77ada43eb4dcc795fea49698cd1fdc5e39ccefec"
+    },
+    {
+      "path": "plugins/superagent/test/feishu.test.mjs",
+      "bytes": 9502,
+      "sha256": "0cc2a5363546670403725cc94b3b8ae2a0a52215807096db8c27fc8cfe63efff"
+    },
+    {
+      "path": "plugins/superagent/test/gateway-channels.test.mjs",
+      "bytes": 4170,
+      "sha256": "1cfb4583972349835da729b68208ca62f42b0f619be594b8b3c29abeb9cb1bf4"
+    },
+    {
+      "path": "plugins/superagent/test/goal-budget-gate.test.mjs",
+      "bytes": 2389,
+      "sha256": "8f8ec5f00ea798d920431003ccd917b53a58458aeca13d078870df0ef0a64e01"
+    },
+    {
+      "path": "plugins/superagent/test/goal-budget-store.test.mjs",
+      "bytes": 8967,
+      "sha256": "6848b7998e1cf515e71535d3d51577b8666f0efe2a6def8bebb9aa29532a0377"
+    },
+    {
+      "path": "plugins/superagent/test/goal-budget-ui.test.mjs",
+      "bytes": 6304,
+      "sha256": "ec89d8aae6b653f9eb6cc8cb53cf1528e984b9f195a24c5bbd9ec7f293bb6f12"
+    },
+    {
+      "path": "plugins/superagent/test/goal-budget-usage.test.mjs",
+      "bytes": 2854,
+      "sha256": "66230a69395931dafbdb27ee4aa4fc8e719e2c1cf4da09e241e0009b07f61422"
+    },
+    {
+      "path": "plugins/superagent/test/goal-ticket-adapter.test.mjs",
+      "bytes": 2466,
+      "sha256": "107cfb5bea36e40713ac7fb2d3e6c3099568e1ee90705217d442f05a233fed42"
+    },
+    {
+      "path": "plugins/superagent/test/goal-ticket-creation.test.mjs",
+      "bytes": 13407,
+      "sha256": "7fb5466b1859c8d9d7365bb1e032ecd2d1954eb33f9bc0dd2b5c0aa43ede7017"
+    },
+    {
+      "path": "plugins/superagent/test/goal.test.mjs",
+      "bytes": 4883,
+      "sha256": "dabb3f9730612ca35fe5170b2047d6c20570d040daca0dc4a0d0c6eba058aca5"
+    },
+    {
+      "path": "plugins/superagent/test/home-ui.test.mjs",
+      "bytes": 4519,
+      "sha256": "58c8733f0d34931c5124a3fc551964bc853c74d16b4d03e233a6d0bd0e9cfe70"
+    },
+    {
+      "path": "plugins/superagent/test/identity.test.mjs",
+      "bytes": 2525,
+      "sha256": "cd98cf8feeed90460d31a38d268a0912ecd375edb2cca0abd5b2357047fbe7be"
+    },
+    {
+      "path": "plugins/superagent/test/intake.test.mjs",
+      "bytes": 9776,
+      "sha256": "9f834e560eac8a48767eb18b2361ce4d081e31b2e0d423c644d9295b4add24b9"
+    },
+    {
+      "path": "plugins/superagent/test/learning-counters.test.mjs",
+      "bytes": 4837,
+      "sha256": "c8c54bb8bf7fdf3bda71c45968e542ffad649000a5af9c22135409c9fe43a6f4"
+    },
+    {
+      "path": "plugins/superagent/test/learning-processor.test.mjs",
+      "bytes": 6227,
+      "sha256": "cc1b183494111fa3b41f72d20de5e72bfd99aadeb11bd4f785470d148abf467c"
+    },
+    {
+      "path": "plugins/superagent/test/ledger.test.mjs",
+      "bytes": 3780,
+      "sha256": "0401272a813348657190420703be46f1f65c0fc2ad8305cc620a6b662ab9bea5"
+    },
+    {
+      "path": "plugins/superagent/test/live-startup.mjs",
+      "bytes": 8404,
+      "sha256": "b70629b3a6abc9fb4165914eeb1f2713b84ac3f61868f9df343337096155d62b"
+    },
+    {
+      "path": "plugins/superagent/test/media.test.mjs",
+      "bytes": 12711,
+      "sha256": "23dec52f6e21a51cbfb274a7c6cbc9bf30f3d7622fead3eb16e8ddc73d9efa1f"
+    },
+    {
+      "path": "plugins/superagent/test/memory.test.mjs",
+      "bytes": 16354,
+      "sha256": "b101e92d282bd9aff65008d8d9e7bb2f321bf415aa7d7a29ab00582b24c08e39"
+    },
+    {
+      "path": "plugins/superagent/test/model-action-ticket.test.mjs",
+      "bytes": 10522,
+      "sha256": "a0ca5d9081cfa804e923566597212be434d43bffdbf633f5e5171ee7962951f9"
+    },
+    {
+      "path": "plugins/superagent/test/operations-ui.test.mjs",
+      "bytes": 6812,
+      "sha256": "e66be39604c6bf27e7a2d5456eb76d143d60eb0c7b63c933f0b330421d6a3c45"
+    },
+    {
+      "path": "plugins/superagent/test/orchestration-runtime.test.mjs",
+      "bytes": 15309,
+      "sha256": "548151ce155abd45df36459794c9f4de95faa03b3634f4a7327096bb0656744a"
+    },
+    {
+      "path": "plugins/superagent/test/orchestration-store.test.mjs",
+      "bytes": 30156,
+      "sha256": "f5235aa4fd2df86470f17331b97074dd43818e9a4366d3c6b4965808a7eebe2f"
+    },
+    {
+      "path": "plugins/superagent/test/owned-skill-provider.test.mjs",
+      "bytes": 6466,
+      "sha256": "e04a3fbcaaf38d7855396dd37964c4b06ce249d90cb75a5c12cf55c79f21a6f1"
+    },
+    {
+      "path": "plugins/superagent/test/owned-skill-store.test.mjs",
+      "bytes": 3977,
+      "sha256": "da203d67dc53f36acf09798044269f4371ce7abf378361835e6b4f8e75d95dfe"
+    },
+    {
+      "path": "plugins/superagent/test/owned-skills-integration.test.mjs",
+      "bytes": 2727,
+      "sha256": "707cb6dd3ebf8ca6eef1d084b28272e6be368b0f690ed107a8cd454e2504a2ce"
+    },
+    {
+      "path": "plugins/superagent/test/owned-skills-ui.test.mjs",
+      "bytes": 3970,
+      "sha256": "b5bae1449202dcc7ccb0573e3d8b546a2c15f9c1ae8d450d33b85e93b1f85484"
+    },
+    {
+      "path": "plugins/superagent/test/preview-entry.test.mjs",
+      "bytes": 2739,
+      "sha256": "143106e51c5e47a812771ac858752da362c7a042df7bdbde341cf5b009fd48bd"
+    },
+    {
+      "path": "plugins/superagent/test/project-rules.test.mjs",
+      "bytes": 4072,
+      "sha256": "4be50046e5ed377b07440b0b91b62cd405a61746e62b9f09a447b2d1bfd28014"
+    },
+    {
+      "path": "plugins/superagent/test/resource-controls.test.mjs",
+      "bytes": 3811,
+      "sha256": "297ef2081b2ebdb841cc3b940253f217c17cde6bc0de43cac1a4b97053557421"
+    },
+    {
+      "path": "plugins/superagent/test/review-continuation.test.mjs",
+      "bytes": 8210,
+      "sha256": "d06637678d68daee1bf66b65ef7b9e5d660b0f6e58819fe29b56ae821e02bb10"
+    },
+    {
+      "path": "plugins/superagent/test/review-worker.test.mjs",
+      "bytes": 2063,
+      "sha256": "f0c359bf088ab00fc147f85d36ef1abff0f9ee7f9d61b40249f83085793d4969"
+    },
+    {
+      "path": "plugins/superagent/test/review.test.mjs",
+      "bytes": 2421,
+      "sha256": "d729628488959afee621ef18c92e743992306085a9858dee135c07d075ccb4db"
+    },
+    {
+      "path": "plugins/superagent/test/router-action-store.test.mjs",
+      "bytes": 6878,
+      "sha256": "0f8bb4c8c822037943679be780009ed29c89403d4f3f5bc908953815355d290a"
+    },
+    {
+      "path": "plugins/superagent/test/router-permissions.test.mjs",
+      "bytes": 3126,
+      "sha256": "a1402f6e9f7c23adba6033074bcd844df0e16cc1502a238d47bc0f96ffa4e47a"
+    },
+    {
+      "path": "plugins/superagent/test/router-recovery.test.mjs",
+      "bytes": 2967,
+      "sha256": "03cfb18b9125da61196fed4063373d8904f27ff9f580ae2024ad4ca0e7e2f131"
+    },
+    {
+      "path": "plugins/superagent/test/routing.test.mjs",
+      "bytes": 1965,
+      "sha256": "ca60de47234c0cfbb55cc63d6ad473a6d4c1012363d26365156bd69b8fbd5ec3"
+    },
+    {
+      "path": "plugins/superagent/test/rule-admission.test.mjs",
+      "bytes": 5005,
+      "sha256": "3ad310e3cf3238fe3e31bd0857fc227566af255b3855eedfde734a07afa0dd5b"
+    },
+    {
+      "path": "plugins/superagent/test/runtime-store.test.mjs",
+      "bytes": 2832,
+      "sha256": "1aa47226cad1983d16127d34f1bd16f26801338300c0b9728a1200fd2205fe4c"
+    },
+    {
+      "path": "plugins/superagent/test/schedule-bridge.test.mjs",
+      "bytes": 7126,
+      "sha256": "176f414a9e0b4cb710a8c0a993c1001e825dbd6ab5f200d39d474219bbd0218b"
+    },
+    {
+      "path": "plugins/superagent/test/schedule-host.test.mjs",
+      "bytes": 5700,
+      "sha256": "f689430ab4e7ca7dabf22c68570a6a159aa7a03151972ecd4befd930a0581522"
+    },
+    {
+      "path": "plugins/superagent/test/service.test.mjs",
+      "bytes": 30008,
+      "sha256": "f9d432e20c6731a5912d0f3e3354254c402eaff5030508d8beda48cac3f26630"
+    },
+    {
+      "path": "plugins/superagent/test/social-channels.test.mjs",
+      "bytes": 4846,
+      "sha256": "172f9311cd12f5d4090ea755e6c8e201410ce889332ed4aa9849712fe31e2ad5"
+    },
+    {
+      "path": "plugins/superagent/test/store.test.mjs",
+      "bytes": 12755,
+      "sha256": "c3b99a2596b2cee2e4422cef3b1ae03151f84dd30d2c8034b49389cbd13bb946"
+    },
+    {
+      "path": "plugins/superagent/test/system-files.test.mjs",
+      "bytes": 4937,
+      "sha256": "c6919ee6d5876e5b556cfa8995fd208d46a1fbe4424df6f46fb0a4143d03fe6e"
+    },
+    {
+      "path": "plugins/superagent/test/task-settings-ui.test.mjs",
+      "bytes": 3388,
+      "sha256": "52c2aef6b1823e098aa936479cf240e6054b472e8385178bb224136daea581c6"
+    },
+    {
+      "path": "plugins/superagent/test/ticket-review-ui.test.mjs",
+      "bytes": 3954,
+      "sha256": "0dbb43ad88d3f8ef9664f3a013056ce4250043dc6ae32f9aed45d17f7e452271"
+    },
+    {
+      "path": "plugins/superagent/test/ticket-revisions.test.mjs",
+      "bytes": 11993,
+      "sha256": "ff6b80e45c275f1e348965806b24fca60346b78d2867c03ded1080d96dc4e4d1"
+    },
+    {
+      "path": "plugins/superagent/test/ui.test.mjs",
+      "bytes": 27812,
+      "sha256": "15c1da342681d690d4f09e83b742d8cc45c790834c45fddbc98412d322f3614b"
+    },
+    {
+      "path": "plugins/superagent/test/whatsapp.test.mjs",
+      "bytes": 4662,
+      "sha256": "f7043ab8338b515427318a82b28db20e3f047c80f1069574a2471588672dcec1"
+    },
+    {
+      "path": "plugins/superagent/test/worker-artifact-checkpoint.test.mjs",
+      "bytes": 5057,
+      "sha256": "a2d30daaab8d6cb2337d757c0a85eeaadd24de779b2bd9d146f3666d1fc38cf7"
+    },
+    {
+      "path": "plugins/superagent/test/worker-checkpoint-store.test.mjs",
+      "bytes": 7930,
+      "sha256": "3c682de2c481e665e8ca31debce4fa2915f5684932fbe14f9944ddb4dc45a47a"
+    },
+    {
+      "path": "plugins/superagent/test/worker-context-continuation.test.mjs",
+      "bytes": 2568,
+      "sha256": "eb0cf64a6c58aa4da1b9f55a7e878f08b33afc95c3b70cae4160d236e32ee212"
+    },
+    {
+      "path": "plugins/superagent/test/worker-permissions.test.mjs",
+      "bytes": 4168,
+      "sha256": "73402499b7b260b54c32c5539c07a7ec48726b00e2da521ffc03d98351fe30b1"
+    },
+    {
+      "path": "plugins/superagent/test/worker-vault.test.mjs",
+      "bytes": 7865,
+      "sha256": "82264c522e06126c278d58a7fca73f4c6cbf84ce914cf595067a18a9d615afab"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/admission-rules.mjs",
+      "bytes": 1352,
+      "sha256": "0f173dadb586cf758f87b57d6471c7f54d65fa1d6f7da04100fa0b6ba71916e4"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/approval.mjs",
+      "bytes": 493,
+      "sha256": "ad73cff9db5ed11544e97e1e7a85969497769b57b73c6486ceddc0ae17eb6fb0"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/assessment-context.mjs",
+      "bytes": 2233,
+      "sha256": "a8e2dda517567f1973b43af754b87fece4cefdda2789e840cb5447ab3959296b"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/assessment-policy.mjs",
+      "bytes": 8302,
+      "sha256": "92b7a8b4108563ee1d319127c44073dad85324d4841413c12c205cec2434f93c"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/assessment-runner.mjs",
+      "bytes": 5207,
+      "sha256": "6552e16119d3674097b349d8215b4ff0db8c1bbbf23c5219f0e65def890ffa7f"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/assessment-source.mjs",
+      "bytes": 2090,
+      "sha256": "04343ebf8795a024d68d9bba61cb46d89d16c6b8fc2508c830c988f9385a4dfd"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/assessment.mjs",
+      "bytes": 7152,
+      "sha256": "8874f459bedd908deecb7f13bab40424389c2c97a466f5a37823ea3aeb245270"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/assignment-executor.mjs",
+      "bytes": 16585,
+      "sha256": "a75321b29c8d359f3ba024c37be9780093746b47a8a7b32cffcb1252b0f08216"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/assignment-worker.mjs",
+      "bytes": 5671,
+      "sha256": "fde03c0d36f44fd76357ef8e79810aa815313eb17a6c077f4a6e4aac57e6902d"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/attention-store.mjs",
+      "bytes": 13002,
+      "sha256": "f65634424fb9c5cfd20a6d6a6e2bacde760fbffa8515940fe0e84177477f6002"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/auxiliary-compaction.mjs",
+      "bytes": 4527,
+      "sha256": "b8e93fdb1d59179fdb7475d00b8bd3d4bbe1c5536a8ea915af849a25e95ecdb6"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/auxiliary-operations.mjs",
+      "bytes": 5280,
+      "sha256": "d07301fbfd56d110ac0caad59f53036e9c919b4bd4af791f04ce0d268203c6df"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/auxiliary-request.mjs",
+      "bytes": 3437,
+      "sha256": "cca1dff3914ebf1a58fff69e9427ed0b77817aa66cd21d6c7bc9891d7ea6b612"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channel-catalog.mjs",
+      "bytes": 5634,
+      "sha256": "d4ed161c1bc9a5e8fedc18070857c005a21dfcf3db4ae57c4b21181cf64cbabc"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channel-credentials.mjs",
+      "bytes": 2901,
+      "sha256": "2ab81b2fb5b6e3c9b0aec94747511ecb56f523a3dd47515e5037108a19d63482"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channel-runtime.mjs",
+      "bytes": 8226,
+      "sha256": "82134d23067c9313c296fc926303a80c11d44a5d794788b34f16c8ea1efd4d46"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/api.mjs",
+      "bytes": 3804,
+      "sha256": "141eb097a0fd7a91535bd57c34e931f6fd3f1dd73ff2fa444d2867ad3c1f5734"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/china-common.mjs",
+      "bytes": 7904,
+      "sha256": "ec88967c5d8f079063b148bb869d0fd1579de6a0485349cb21f47b0c9eaf10f7"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/discord-voice.mjs",
+      "bytes": 9802,
+      "sha256": "eae952db16147622db1314262bcc0ef412a0e1217aa51ee94b95aa643f692b92"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/discord.mjs",
+      "bytes": 5258,
+      "sha256": "a7ed1bd7e6a0092e4f130b18bbc2e4a04ffbabcdab9f4067c1600d417191167a"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/email.mjs",
+      "bytes": 12451,
+      "sha256": "434cbeeb95b465b1cb89cf9dfa3a4adf529139be833ebbc11d3ad3dd8956f590"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/message-chunks.mjs",
+      "bytes": 603,
+      "sha256": "f32b7e711f7ecbbb7b8fac0ff0e64fdc633dac4c2e9ab5d128e1b0ed5008b634"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/qq.mjs",
+      "bytes": 5670,
+      "sha256": "5c7d02e876a01b2b4c54dc43f16a41046c783412382a5c9b018df288fce32e04"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/social-common.mjs",
+      "bytes": 1552,
+      "sha256": "21805d26eadbcc35735f9cc4b6d6515f9480dc23bb9ec6d886fbc044800f6425"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/telegram.mjs",
+      "bytes": 4492,
+      "sha256": "fb9dc8d9dd202a1b4bef612e798e12c240c1f57ac4637abdcc71cdef1860ab22"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/webhook.mjs",
+      "bytes": 4596,
+      "sha256": "f09d65916335fe0a4fe00ccda661737ce3ece5b3fd4b25547dad8053a132a0a8"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/wecom.mjs",
+      "bytes": 5104,
+      "sha256": "1c85e0e83b87875a48d7330afa4c4eec0a78b6290122bf32dca1ecbbf175643c"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/weixin.mjs",
+      "bytes": 10388,
+      "sha256": "235526b6b458a5db6b3d8389d222c7d7f34d8d0e557e0b4ec9708ebea59e6b19"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/channels/whatsapp.mjs",
+      "bytes": 746,
+      "sha256": "06183435405fa699fbc77c4d44e35832faa4ba72327a3196532cb62b087c4f33"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/checkpoint-service.mjs",
+      "bytes": 4032,
+      "sha256": "4ffe6dfefda9ab807801a995dd76877e444fdf4af16b02352732fc449ce6efbe"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/connections.mjs",
+      "bytes": 2016,
+      "sha256": "5b1793daac54ffa6365902d9c0f37ab84a01e176cd6fc5c8684f98079b87556e"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/context-privacy.mjs",
+      "bytes": 1719,
+      "sha256": "0780cc31aad235979246328ae9e5d493597390b18d60cab820c84edcdf9a08b0"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/delivery-worker.mjs",
+      "bytes": 3525,
+      "sha256": "a5129df0119813fc0a9c3e9833f6870f4b37456e7d1a009e476577e35ed12bd1"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/desktop-delegation-service.mjs",
+      "bytes": 6022,
+      "sha256": "188629b3219d4593ad45138053bdad6dd2c0a2ca5c8379386fbbcbeec5861f51"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/desktop-ticket-access.mjs",
+      "bytes": 1869,
+      "sha256": "69bccf7c6d456da98e2a5caf22b4a8e4bca6d9f26018adf3281958be1f63d87a"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/desktop-ticket-store.mjs",
+      "bytes": 3303,
+      "sha256": "865fc56b19528d1ad41dde0941a7112d1d858a459abeaee888efe9529cce02f8"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/desktop-trigger.mjs",
+      "bytes": 989,
+      "sha256": "8f0ce19748cdffdedcbfe4bb3709b0ee7e9823490d37e732df70509c44f66c45"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/documents.mjs",
+      "bytes": 17702,
+      "sha256": "8dbe0e16dbf0518491c757cfcf5df316aa26349e9b3b96834bd03bf9a379f9e8"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/engine.mjs",
+      "bytes": 35554,
+      "sha256": "d3a95a30406ed6ddc28f0fdf954c522aa3d44d68e637ba037b26ca0008a86d01"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/eval-disposition-store.mjs",
+      "bytes": 4110,
+      "sha256": "4d45ec2b6ccc8ffbd2e18e03f3449024fc53de42369f3430fdc290027348a5b8"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/eval-disposition.mjs",
+      "bytes": 1031,
+      "sha256": "21a60906e03293994997ad5e802ea18490853e3f185539e0766a6f94e56066dc"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/execution-evidence.mjs",
+      "bytes": 3963,
+      "sha256": "3f62a49b09c4b5e8464722de36416763d1c46470707de1fd29d43a147f9ec321"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/feishu-stream.mjs",
+      "bytes": 3470,
+      "sha256": "17cc2b110110d82afafa8c87ec7cc4797e77eb6b5ed6e605791b3ee1b7aecc05"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/feishu.mjs",
+      "bytes": 14913,
+      "sha256": "a65b266d07aca019ac1d87fb51d77d14768a8c0920f8d705849e3349075c708c"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/goal-budget-gate.mjs",
+      "bytes": 2795,
+      "sha256": "beb94c88e81437fffd445ebd5f45abdaefbb6080a85b9f25f1e6640151ebc1ff"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/goal-budget-store.mjs",
+      "bytes": 8964,
+      "sha256": "09338a6e03689a94a1c0be91b6e54ed7f6f4ecde623159620d7d81eb572ab2c3"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/goal-budget-usage.mjs",
+      "bytes": 1935,
+      "sha256": "f044e4ac5e2b02dcec22fd6c678666f50718ae817967d3d76b27f835d9368956"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/goal-ticket-creation.mjs",
+      "bytes": 4554,
+      "sha256": "2b8f426ed130e359001c16ec619c2083045f1d574dd0167fa22d118543d5528a"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/goal-ticket-record.mjs",
+      "bytes": 2574,
+      "sha256": "1990fc8cc443facf629ba384b3f90544f97c8a271048d262394fd632af2b1fde"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/identity.mjs",
+      "bytes": 1901,
+      "sha256": "b20d9ebd3375bb3b3a93d074eee814cf4b85eb8cd162a89d258256e5b226101f"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/intake.mjs",
+      "bytes": 2873,
+      "sha256": "fb5d48f97a59c01de7788e21c25e3d63b3338324f1f7ce61293d82691100b199"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/learning-counters.mjs",
+      "bytes": 6828,
+      "sha256": "412dacc4e83d3e962391767d6b032e04cab96c11f9a0447d2894bd8f86cd6cf8"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/learning-processor.mjs",
+      "bytes": 7160,
+      "sha256": "19f681b7acaeccab449116a0c603f269e64e51f12221ee8daeb9d8cdb4aa9118"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/ledger.mjs",
+      "bytes": 7491,
+      "sha256": "49c27d2fb1bdf2c94afdced6b87806bbc5827f9625a96bda3d8490594c6b5f83"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/media.mjs",
+      "bytes": 10551,
+      "sha256": "a08de6c9b52627caa6aa740350cfd2818854754db43780b1abac73d5a6238c8a"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/memory.mjs",
+      "bytes": 25954,
+      "sha256": "3d60f8794c0646fc1d7f5bed3950f18ef8888d8c4ff94746b60b92c24fb4ca44"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/model-action-ticket.mjs",
+      "bytes": 10620,
+      "sha256": "05cd5534963980f907cc7862e10e39dce61009cb8e574d8524683916cd56bdd8"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/orchestration-runtime.mjs",
+      "bytes": 11947,
+      "sha256": "6b3845f35313fd091d71fc22b1907df2eb8c8f2d2df809176512c80b17ebb43f"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/orchestration-store.mjs",
+      "bytes": 83006,
+      "sha256": "e347c8f5db871072181668b509b147360b4ac8b693f82ddb47b5ab74eadb4698"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/owned-skill-provider.mjs",
+      "bytes": 5471,
+      "sha256": "287e1c80fa8415418801b6352fd2d0bfa179807ee521f250294c167c70d7ce50"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/owned-skill-store.mjs",
+      "bytes": 7279,
+      "sha256": "fd1965a15c3444f774007f733c42ac4fce93a7a983c102d76757fa7c64583c32"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/owned-skills.mjs",
+      "bytes": 5764,
+      "sha256": "f8cc001f5d396a0b702b18ee1463091335df22cd19e9445ecdafd0299e1bfa91"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/plugin.mjs",
+      "bytes": 665,
+      "sha256": "d1159cdb9d5906515447cd367f3f6b77f27eaa3a2ac7fe9ff90bb5d6c5ad2343"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/project-rules.mjs",
+      "bytes": 7125,
+      "sha256": "da7efb61eec9c55f4d465526159c3ebb4a62c31706bbf3ad30477fa8cf924f75"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/review-continuation.mjs",
+      "bytes": 3150,
+      "sha256": "e08df581750af852d4a8efaf69b1db1a3eaa4bbfb9f0e70f519c2c09c077538b"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/review-worker.mjs",
+      "bytes": 4209,
+      "sha256": "69851f7ff7d6cc395629db09cbdc77a45b44c0c520e308029ba631c0c15a9c1b"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/review.mjs",
+      "bytes": 9411,
+      "sha256": "98251b23ba2324f2d0ee6be9a2a8b1e4df26ffb73699dc5726f8207c667249d0"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/router-action-store.mjs",
+      "bytes": 12340,
+      "sha256": "aeb24f0af85cf4df735d80fd1663fab1d1c246aa04573b5e22276a5ccfed82bb"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/router-permissions.mjs",
+      "bytes": 1557,
+      "sha256": "b9be8b29b3a442fea2d58cc0dedeb75947c61a4c3e7715c8f8afc060aee37907"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/router-recovery.mjs",
+      "bytes": 3131,
+      "sha256": "1d5de050c2026661770fccdca7eade2a7d8238d85c67fb432d31089534c95517"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/routing.mjs",
+      "bytes": 1938,
+      "sha256": "ea0497317e7322afb1e1aaa77001820994954b53c301feac002125506ed3fb31"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/runtime-store.mjs",
+      "bytes": 13101,
+      "sha256": "40f3dfd5d43d94e3c40eaa424713f576f57d985a2d23847c64d5fe0e1d3542ce"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/schedule-bridge.mjs",
+      "bytes": 7891,
+      "sha256": "52bb21de5ddc730f1bafb010647ecfb1098b5eca244100b3a968d79d00759fff"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/scheduler.mjs",
+      "bytes": 22774,
+      "sha256": "05a9b865c0a1f8f89294afc10d4582def734ecbd7b2effe741cee01ae503fa13"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/service.mjs",
+      "bytes": 62053,
+      "sha256": "dde4c5faa990a57693a23dcc11ff46a4db832aa56c7fe809e04bd7616126321a"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/store.mjs",
+      "bytes": 21432,
+      "sha256": "91449878a923abf6bb1583800f319862295d154aff49bc1bc91c16e6b5543988"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/subscription-inbox.mjs",
+      "bytes": 1855,
+      "sha256": "18de8e60381c01acd70a8d70fe72c95aaeb990d823b5f799a5f66731b1e5b8ca"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/system-files.mjs",
+      "bytes": 8780,
+      "sha256": "d62e8fd6b6b2ec1f71aebf703e0a3defe11b8074c35404993283cf4aa1a22d9c"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/ticket-review.mjs",
+      "bytes": 2484,
+      "sha256": "b75bcfa46201a739a891e46159334071cde814f4eabf403fccd6531878ed04aa"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/ticket-revision-service.mjs",
+      "bytes": 5108,
+      "sha256": "718d6cf93ee19f5e9ca55804d5d4dff0704955288c3876efabafb47ae519646c"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/ticket-revisions.mjs",
+      "bytes": 6026,
+      "sha256": "c81be46467ceb63790e9bed08486ce856e3265068ac88c17be6cd6afcc6f2ef0"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/whatsapp.mjs",
+      "bytes": 9767,
+      "sha256": "f69161faab53f12f4eb4ac7af82d0afa7d492d6c005b05a2a9b794058708d537"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/worker-artifact-checkpoint.mjs",
+      "bytes": 6818,
+      "sha256": "ae11fcc25af1bea493503636b4dd5663a0e9542902ba06a3129bdb6bf06f24a3"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/worker-attention.mjs",
+      "bytes": 2552,
+      "sha256": "c729d95a166dc67348c1d879aacff12e8409a979af44d9a4e90f1e725414ac87"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/worker-checkpoint-store.mjs",
+      "bytes": 14916,
+      "sha256": "c6fce25d0555d826a9355c243e5d0220f78d31acf6f51536c61e54d6d6c750ca"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/worker-context-continuation.mjs",
+      "bytes": 1278,
+      "sha256": "2f74fd1da0e11f42f3c03794cc07d32e8771bf97ca4d6899dfb35bc67a482cbe"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/worker-permissions.mjs",
+      "bytes": 1593,
+      "sha256": "86d60665400a11f5b94c3d7741709a0db227cd700cee546c738dfc0d3282bafc"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/worker-vault.mjs",
+      "bytes": 7968,
+      "sha256": "eb820477fc60b07f1671b3b7f640ae72d10ab3bcf4dc648bf1563ab813da0fef"
+    },
+    {
+      "path": "plugins/benchgo/lib/modules/superagent/src/worker-worktree.mjs",
+      "bytes": 759,
+      "sha256": "ac5f42c4d12551ed5c9a61aaa5701087a95e5bc3333ac7510f914c58b665103b"
+    }
+  ]
+}

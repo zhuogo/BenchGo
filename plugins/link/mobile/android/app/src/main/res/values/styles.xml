@@ -4,8 +4,8 @@
         <item name="android:colorAccent">#9ca8ff</item>
         <item name="android:navigationBarColor">@color/benchgo_brand_background</item>
         <item name="android:statusBarColor">@color/benchgo_brand_background</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
         <item name="android:windowBackground">@drawable/benchgo_splash</item>
     </style>
     <style name="Theme.BenchGo.Scanner" parent="Theme.AppCompat.Light.NoActionBar">

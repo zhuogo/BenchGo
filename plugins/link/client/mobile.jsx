@@ -1,7 +1,8 @@
+import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import { Select } from '../../shared/client/select.jsx';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as nativeRuntime from './api.mjs';
-import { UIIcon } from '../../commander/client/iconsax.jsx';
+import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import mobileCss from './mobile.css';
 import { Button, ErrorText, StatusDot, useLinkStyle } from './app.jsx';
 import { Interaction } from './interaction.jsx';
@@ -34,7 +35,7 @@ export function LinkMobileApp({ runtime = nativeRuntime, theme: controlledTheme,
   const drafts = useRef(new Map()), stayAtBottom = useRef(true);
   const [pairUri, setPairUri] = useState(() => contextUri(initial) || (!runtime.isPreview ? new URLSearchParams(location.hash.slice(1)).get('code') : '') || '');
   const [autoPairUri, setAutoPairUri] = useState(() => initial?.token ? '' : pairUri);
-  const [name, setName] = useState(() => deviceName(initial?.name, { persist: !runtime.isPreview })), [pairing, setPairing] = useState(null), [pairState, setPairState] = useState('');
+  const [name, setName] = useState(() => deviceName(initial?.localName, { persist: !runtime.isPreview })), [pairing, setPairing] = useState(null), [pairState, setPairState] = useState('');
   const [state, setState] = useState(null), [projectId, setProjectId] = useState(''), [session, setSession] = useState(null), [history, setHistory] = useState({ messages: [], interactions: [], running: false });
   const [draft, setDraft] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false), [sendPending, setSendPending] = useState(null), [revision, setRevision] = useState(0), [model, setModel] = useState('');
   const [online, setOnline] = useState(() => navigator.onLine !== false);
@@ -52,7 +53,7 @@ export function LinkMobileApp({ runtime = nativeRuntime, theme: controlledTheme,
       setAutoPairUri(next?.token ? '' : contextUri(next));
       setState(null); setSession(null); setSidebarOpen(false); setSendPending(null); setDraft(''); setStateError(''); setHistoryError(''); drafts.current.clear(); pendingCreate.current = null;
       setPairing(null); setPairState(''); setError(''); setBusy(false);
-      if (next?.name) setName(next.name);
+      if (next?.localName) setName(next.localName);
     };
     if (runtime.subscribe) return runtime.subscribe(changed);
     window.addEventListener('link:bootstrap', changed); return () => window.removeEventListener('link:bootstrap', changed);
@@ -105,7 +106,7 @@ export function LinkMobileApp({ runtime = nativeRuntime, theme: controlledTheme,
         setPairState(result.status);
         setError('');
         if (result.status === 'approved' && result.token) {
-          const next = { ...pairing.context, token: result.token, deviceId: result.deviceId }; saveIdentity(next); setIdentity(next); setPairing(null); setScreen('recent'); setError(''); return;
+          const next = { ...pairing.context, name: result.hostName || result.name || pairing.context.name || new URL(pairing.context.url).host, token: result.token, deviceId: result.deviceId }; saveIdentity(next); setIdentity(next); setPairing(null); setScreen('recent'); setError(''); return;
         }
         if (result.status === 'rejected' || result.status === 'expired') return;
       } catch (e) { if (!closed && pairing.generation === pairGeneration.current) setError(e.message); }
@@ -120,11 +121,11 @@ export function LinkMobileApp({ runtime = nativeRuntime, theme: controlledTheme,
     pairFlight.current = true;
     const generation = ++pairGeneration.current; setBusy(true); setError(''); setPairing(null); setPairState('');
     try {
-      const context = { ...pairingContext(input), name: name.trim() || deviceName('', { persist: !runtime.isPreview }) };
+      const context = { ...pairingContext(input), localName: name.trim() || deviceName('', { persist: !runtime.isPreview }) };
       if (!context.code) throw new Error('配对地址缺少一次性配对码');
       if (!isNative() && new URL(context.url).origin !== location.origin) throw new Error('请打开该主机的 HTTPS 配对页面');
-      setName(context.name);
-      saveIdentity(context); const result = await call('pair', { code: context.code, name: context.name });
+      setName(context.localName);
+      saveIdentity(context); const result = await call('pair', { code: context.code, name: context.localName, deviceType: 'mobile' });
       if (generation !== pairGeneration.current) return;
       setPairing({ ...result, context, generation }); setPairState('pending');
       if (!runtime.isPreview && location.hash) window.history.replaceState(null, '', location.pathname + location.search);
@@ -205,7 +206,7 @@ export function LinkMobileApp({ runtime = nativeRuntime, theme: controlledTheme,
       {pairState && <div className={'link-mobile-pair-feedback ' + (pairWaiting ? '' : 'is-warning')} role="status"><StatusDot state={pairWaiting ? 'waiting' : pairState === 'approved' ? 'running' : 'failed'} /><div><strong>{pairWaiting ? runtime.isPreview ? '模拟连接：等待演示授权' : '请在电脑上允许连接' : pairState === 'rejected' ? '电脑未允许这次连接' : pairState === 'expired' ? '配对码已过期' : '已确认'}</strong><p>{pairWaiting ? runtime.isPreview ? '点击本页顶部「模拟电脑允许」继续，真实电脑不会出现请求。' : '打开电脑的「远程连接」，确认设备名称后点击「允许」。' : '请在电脑上生成新的二维码，再重新扫码。'}</p></div></div>}
       {error && <div className="link-mobile-pair-feedback is-warning"><ErrorText>{connectionError(error, isNative() && !!identity?.pin)}</ErrorText></div>}
     </section>
-    <details className="link-mobile-backup" open={!isNative() || undefined}><summary>使用配对地址<UIIcon name="chevronDown" size={16} /></summary><form onSubmit={pair}><label className="link-mobile-field" htmlFor="pair-uri"><span>{isNative() ? '完整配对地址' : '一次性配对码或完整配对地址'}</span><textarea id="pair-uri" value={pairUri} disabled={pairPending} onChange={e => updatePairUri(e.target.value)} placeholder={isNative() ? '粘贴电脑复制的 dshlink://pair?…' : '粘贴电脑提供的配对码或链接'} rows="3" spellCheck="false" /></label><Button type="submit" disabled={!pairUri.trim() || pairPending || pairTerminal}>使用地址连接</Button></form></details>
+    <Disclosure className="link-mobile-backup" defaultOpen={!isNative()} title="使用配对地址"><form onSubmit={pair}><label className="link-mobile-field" htmlFor="pair-uri"><span>{isNative() ? '完整配对地址' : '一次性配对码或完整配对地址'}</span><textarea id="pair-uri" value={pairUri} disabled={pairPending} onChange={e => updatePairUri(e.target.value)} placeholder={isNative() ? '粘贴电脑复制的 benchgo://pair?…' : '粘贴电脑提供的配对码或链接'} rows="3" spellCheck="false" /></label><Button type="submit" disabled={!pairUri.trim() || pairPending || pairTerminal}>使用地址连接</Button></form></Disclosure>
     <div className="link-mobile-network-note"><UIIcon name="check" size={17} /><p>{isNative() ? '手机与电脑在同一 Wi-Fi 下可直接连接，无需公网。不同网络需使用可访问的 HTTPS 地址。' : '当前通过 HTTPS 连接工作台。浏览器使用电脑提供的同源配对页；Android App 也可在同一 Wi-Fi 内直连。'}</p></div>
   </main>;
 

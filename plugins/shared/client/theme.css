@@ -1,0 +1,15 @@
+/* Tailwind v4 tokens are inlined into bg:-prefixed utilities, never :root. */
+@theme inline prefix(bg) {
+  --spacing: 0.25rem;
+  --color-background: var(--bg-ui-paper);
+  --color-foreground: var(--bg-ui-ink);
+  --color-muted: var(--bg-ui-hover);
+  --color-muted-foreground: var(--bg-ui-muted);
+  --color-primary: var(--bg-ui-accent);
+  --color-primary-foreground: #fff;
+  --color-border: var(--bg-ui-line);
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+@tailwind utilities;

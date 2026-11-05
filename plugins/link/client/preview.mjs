@@ -26,7 +26,7 @@ export function createPreviewRuntime({ native = true, onScan = () => {}, onChang
     isLocalIdentitySave: () => false,
     saveIdentity(value) { identity = copy(value); changed(); },
     clearIdentity() { identity = null; pairing = null; failed = false; changed(); },
-    contextUri(value) { return value?.code ? 'dshlink://pair?url=https%3A%2F%2Fpreview.invalid&code=DEMO-ONLY' : ''; },
+    contextUri(value) { return value?.code ? 'benchgo://pair?url=https%3A%2F%2Fpreview.invalid&code=DEMO-ONLY' : ''; },
     pairingContext(input) { if (!input.trim()) throw new Error('请先完成扫码演示，或输入任意演示配对码'); return { url: native ? 'https://preview.invalid' : globalThis.location?.origin || 'https://preview.invalid', code: 'DEMO-ONLY' }; },
     requestId: () => 'preview-request-' + (++sequence),
     scan: () => onScan(),

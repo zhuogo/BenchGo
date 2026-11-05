@@ -1,0 +1,51 @@
+.ba-quiet-chat{width:100%;margin:0 auto;padding:16px calc(var(--dsh-composer-side-clearance,16px) + 16px);box-sizing:border-box;min-width:0}
+.ba-official-conversation [data-conversation-scroll]{overflow:hidden;min-height:0;scrollbar-gutter:auto}
+.ba-chat-viewport{position:relative;display:flex;flex-direction:column;flex:1 1 0;min-height:0;min-width:0}
+.ba-chat-feed{flex:1 1 0;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable;overflow-anchor:none}
+.ba-chat-feed:focus-visible{outline:2px solid var(--text-secondary,#737373);outline-offset:-2px}
+.ba-chat-bottom{position:absolute;bottom:16px;left:0;right:0;display:flex;justify-content:center;z-index:8;pointer-events:none;opacity:0;visibility:hidden;transform:translateY(6px);transition:opacity .16s ease,transform .16s ease,visibility .16s}
+.ba-chat-bottom[data-visible=true]{opacity:1;visibility:visible;transform:translateY(0)}
+.ba-chat-bottom-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:36px;min-height:36px;padding:8px;border:1px solid var(--dsw-alias-border-l3,#ddd);border-radius:24px;background:var(--dsw-alias-button-floating-fill,var(--bg-primary,#fff));color:var(--dsw-alias-label-primary,var(--text-primary,#222));box-shadow:0 2px 8px #0001;font:inherit;font-size:12px;cursor:pointer;pointer-events:none;transition:background .15s ease,transform .15s ease}
+.ba-chat-bottom[data-visible=true] .ba-chat-bottom-button{pointer-events:auto}
+.ba-chat-bottom-button:has(span){padding-left:14px}
+.ba-chat-bottom-button:hover{background:var(--dsw-alias-button-floating-hover,var(--bg-secondary,#f3f3f3))}
+.ba-chat-bottom-button:active{transform:scale(.94)}
+.ba-chat-bottom-button:focus-visible{outline:2px solid var(--text-secondary,#737373);outline-offset:3px}
+@media(pointer:coarse){.ba-chat-bottom-button{min-width:44px;min-height:44px}}
+@media(prefers-reduced-motion:reduce){.ba-chat-bottom,.ba-chat-bottom-button{transition:none;transform:none}.ba-chat-bottom-button:active{transform:none}}
+.ba-official-conversation [data-composer-seat]{position:relative;flex:0 0 auto;margin-top:auto;z-index:7;background:var(--dsw-alias-bg-base,#fff)}
+.ba-quiet-chat-column{width:100%;max-width:var(--dsh-chat-content-width,768px);margin:0 auto;min-width:0}
+.ba-chat-message{margin:0 0 16px;min-width:0;overflow-wrap:anywhere}
+.ba-chat-message[data-role=user]{margin-left:auto;max-width:88%;width:fit-content}
+.ba-chat-message time{font-variant-numeric:tabular-nums}
+.ba-chat-user-text{white-space:pre-wrap;line-height:1.6}
+.ba-chat-load{display:block;margin:0 auto 24px}
+.ba-chat-work{display:flex;gap:12px;align-items:center;color:var(--text-secondary,#737373);font-size:13px;margin:16px 0}
+.ba-chat-attachment{display:block;font-size:13px;margin-top:8px;color:var(--text-secondary,#737373)}
+@media(max-width:600px){.ba-chat-message[data-role=user]{max-width:94%}}
+
+.ba-chat-options{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.ba-chat-message[data-role=user] .ba-chat-content{padding:12px 16px;background:var(--bg-secondary,#f3f3f3);border-radius:16px;width:fit-content;max-width:100%;box-sizing:border-box;margin-left:auto}
+.ba-message-actions{position:relative;display:flex;align-items:center;gap:6px;min-height:36px;margin-top:5px;width:fit-content;max-width:100%}
+.ba-chat-message[data-role=user] .ba-message-actions{margin-left:auto}
+.ba-message-toolbar{display:flex;align-items:center;gap:2px;opacity:0;transition:opacity .15s ease;color:var(--text-secondary,#737373)}
+.ba-chat-message:hover .ba-message-toolbar,.ba-chat-message:focus-within .ba-message-toolbar{opacity:1}
+.ba-message-toolbar button,.ba-reaction-chip,.ba-action-popover button{display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;color:inherit;border-radius:8px;cursor:pointer;min-width:32px;min-height:32px;padding:6px}
+.ba-message-toolbar button:hover,.ba-message-toolbar button[aria-expanded=true],.ba-action-popover button:hover{background:var(--bg-secondary,#f3f3f3)}
+.ba-message-toolbar button:focus-visible,.ba-reaction-chip:focus-visible,.ba-action-popover button:focus-visible{outline:2px solid var(--text-secondary,#737373);outline-offset:2px}
+.ba-message-toolbar svg{width:18px;height:18px}
+.ba-message-toolbar time{font-size:11px;white-space:nowrap;padding:0 6px;font-variant-numeric:tabular-nums}
+.ba-reaction-chip{background:var(--bg-secondary,#f3f3f3);font-size:17px;animation:ba-reaction-in .18s ease-out}
+.ba-action-popover{position:absolute;bottom:calc(100% + 6px);left:0;z-index:20;display:flex;padding:6px;border:1px solid var(--border-color,#ddd);border-radius:14px;background:var(--bg-primary,#fff);color:var(--text-primary,#222);box-shadow:0 6px 24px #0002;max-width:calc(100vw - 48px);flex-wrap:wrap;width:max-content}
+.ba-chat-message[data-role=user] .ba-action-popover{left:auto;right:0}
+.ba-action-popover button{font-size:22px;width:38px;height:38px;transition:transform .15s ease}
+.ba-action-popover button:hover{transform:translateY(-3px) scale(1.12)}
+.ba-action-popover button[aria-pressed=true]{background:var(--bg-secondary,#f3f3f3);outline:1px solid var(--text-secondary,#737373)}
+.ba-action-popover:has(dl),.ba-action-popover:has(p){display:block;padding:12px 16px;font-size:12px;min-width:170px}
+.ba-action-popover strong{font-weight:500}.ba-action-popover dl{margin:10px 0 0}.ba-action-popover dl div{display:flex;justify-content:space-between;gap:28px;margin-top:5px}.ba-action-popover dd{margin:0;font-variant-numeric:tabular-nums}
+.ba-loading-dots{display:flex;gap:4px}.ba-loading-dots i{width:4px;height:4px;border-radius:50%;background:currentColor;animation:ba-loading 1.25s ease-in-out infinite}.ba-loading-dots i:nth-child(2){animation-delay:.15s}.ba-loading-dots i:nth-child(3){animation-delay:.3s}
+.ba-chat-sr{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@keyframes ba-loading{0%,70%,100%{opacity:.3;transform:translateY(0)}35%{opacity:1;transform:translateY(-3px)}}
+@keyframes ba-reaction-in{from{transform:scale(.8)}to{transform:scale(1)}}
+@media(hover:none),(pointer:coarse){.ba-message-toolbar{opacity:1}.ba-message-toolbar button,.ba-action-popover button,.ba-reaction-chip{min-width:44px;min-height:44px}}
+@media(prefers-reduced-motion:reduce){.ba-loading-dots i,.ba-reaction-chip{animation:none}.ba-message-toolbar,.ba-action-popover button{transition:none}.ba-action-popover button:hover{transform:none}}

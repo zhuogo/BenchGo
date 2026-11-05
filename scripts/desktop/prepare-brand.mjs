@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const require = createRequire(new URL('../../deepseek-harness/apps/desktop/package.json', import.meta.url));
 
@@ -8,7 +9,6 @@ const require = createRequire(new URL('../../deepseek-harness/apps/desktop/packa
 export async function prepareDesktopBrand(root, output) {
   const sharp = require('sharp');
   const brand = join(root, 'assets/brand');
-  const logo = join(brand, 'benchgo-logo.png');
   const mascot = await readFile(join(brand, 'benchgo-app.svg'), 'utf8');
   await mkdir(output, { recursive: true });
 
@@ -41,12 +41,27 @@ export async function prepareDesktopBrand(root, output) {
     }
   }
   const sidebar = await sharp({ create: { width: 164, height: 314, channels: 3, background: '#151517' } })
-    .composite([{ input: await sharp(logo).resize(112, 112).png().toBuffer(), gravity: 'centre' }])
+    .composite([{ input: await sharp(Buffer.from(mascot)).resize(112, 112).png().toBuffer(), gravity: 'centre' }])
     .removeAlpha().raw().toBuffer();
   await writeFile(join(output, 'uninstaller-sidebar.bmp'), bitmap24(sidebar, 164, 314));
-  const strings = await readFile(join(root, 'deepseek-harness/apps/desktop/installer/strings.nsh'), 'utf8');
+  const localeScript = join(root, 'deepseek-harness/apps/desktop/scripts/installer-locales.mjs');
+  const { readInstallerLocales, renderInstallerStrings } = await import(pathToFileURL(localeScript).href);
+  const strings = renderInstallerStrings(readInstallerLocales());
   await writeFile(join(output, 'strings-plus.nsh'), strings.replaceAll('DeepSeek Harness', 'BenchGo'));
   await sharp(Buffer.from(mascot)).resize(1024, 1024).png().toFile(join(output, 'benchgo-icon.png'));
+}
+
+/** Embed the canonical artwork so packaged startup pages stay fully local. */
+export async function prepareDesktopRenderer(root, output) {
+  const source = join(root, 'scripts/desktop/renderer');
+  const icon = await readFile(join(root, 'assets/brand/benchgo-app.svg'));
+  const reference = 'src="../../../assets/brand/benchgo-app.svg"';
+  await cp(source, output, { recursive: true });
+  for (const name of ['welcome.html', 'splash.html']) {
+    const html = await readFile(join(source, name), 'utf8');
+    if (html.split(reference).length !== 2) throw new Error(`BenchGo startup artwork reference changed: ${name}`);
+    await writeFile(join(output, name), html.replace(reference, `src="data:image/svg+xml;base64,${icon.toString('base64')}"`));
+  }
 }
 
 /** NSIS bitmap controls consume bottom-up, padded BGR scanlines. */

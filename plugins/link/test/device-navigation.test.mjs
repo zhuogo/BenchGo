@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { connectDeviceNavigation, deviceLauncherMode, workbenchNavigationMessage } from '../client/device-navigation.mjs';
-import { readJsonResponse } from '../../commander/client/http-response.mjs';
+import { readJsonResponse } from '../../benchgo/client/http-response.mjs';
 import { observeHostTheme, readHostTheme } from '../client/device-theme.mjs';
 
 const require = createRequire(new URL('../package.json', import.meta.url));

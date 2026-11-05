@@ -17,7 +17,7 @@
 .link-mobile-v3 :is(h1, h2, h3, p) { overflow-wrap: anywhere; }
 .link-mobile-v3 h1 { margin: 0; font-size: 29px; line-height: 1.25; font-weight: 650; letter-spacing: -.045em; }
 .link-mobile-v3 h2 { margin: 0; font-size: 15px; line-height: 1.4; font-weight: 600; letter-spacing: -.015em; }
-.link-mobile-v3 .link-button { min-height: 44px; padding: 10px 15px; border: 1px solid var(--link-faint); border-radius: 10px; background: var(--link-paper); color: var(--link-ink); font-size: 13px; font-weight: 550; }
+.link-mobile-v3 .link-button { min-height: 44px; padding: 10px 15px; border: 0; border-radius: 8px; background: transparent; color: var(--link-ink); font-size: 14px; font-weight: 550; }
 .link-mobile-v3 .link-button:hover:not(:disabled) { transform: none; border-color: var(--link-faint); background: var(--link-hover); }
 .link-mobile-v3 .link-button-primary { border-color: var(--link-accent); background: var(--link-accent); color: var(--link-accent-ink); }
 .link-mobile-v3 .link-button-primary:hover:not(:disabled) { border-color: var(--link-accent); background: var(--link-accent); opacity: .86; }
@@ -183,7 +183,7 @@
 .link-mobile-section { margin: 0; padding: 30px 0 25px; }
 .link-mobile-section > p { margin: 10px 0 0; color: var(--link-muted); font-size: 13px; line-height: 1.7; }
 .link-mobile-pair-intro, .link-mobile-pair-card, .link-mobile-backup, .link-mobile-network-note { margin-left: 22px; margin-right: 22px; }
-.link-mobile-pair-card { display: flex; flex-direction: column; align-items: stretch; gap: 15px; padding: 23px 20px 20px; border: 1px solid var(--link-faint); border-radius: 17px; background: var(--link-paper); }
+.link-mobile-pair-card { display: flex; flex-direction: column; align-items: stretch; gap: 15px; padding: 8px 0 20px; border: 0; background: transparent; }
 .link-mobile-pair-symbol { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: 2px; border-radius: 13px; color: var(--link-ink); background: var(--link-panel); }
 .link-mobile-pair-card > h2 { font-size: 18px; font-weight: 600; }
 .link-mobile-pair-card > p { margin: -7px 0 5px; color: var(--link-muted); font-size: 12px; line-height: 1.8; }
@@ -192,11 +192,8 @@
 .link-mobile-pair-details > strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
 .link-mobile-pair-details input[readonly] { min-width: 0; font-family: monospace; font-size: 12px; user-select: all; }
 .link-mobile-scan-button { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 49px; padding: 12px 16px; border: 0; border-radius: 11px; color: var(--link-accent-ink); background: var(--link-accent); font-size: 13px !important; font-weight: 600 !important; }
-.link-mobile-backup { min-width: 0; margin-top: 15px; overflow: hidden; border: 1px solid var(--link-faint); border-radius: 12px; background: var(--link-paper); }
-.link-mobile-backup > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 49px; padding: 14px 16px; color: var(--link-muted); font-size: 12px; list-style: none; cursor: pointer; }
-.link-mobile-backup > summary::-webkit-details-marker { display: none; }
-.link-mobile-backup[open] > summary > .cmd-ui-icon { transform: rotate(180deg); }
-.link-mobile-backup form { display: grid; gap: 13px; padding: 0 16px 16px; }
+.link-mobile-backup { min-width: 0; margin-top: 15px; overflow: hidden; border: 0; background: transparent; }
+.link-mobile-backup form { display: grid; gap: 13px; padding: 0 0 16px; }
 .link-mobile-backup textarea { font-size: 16px; word-break: break-all; }
 .link-mobile-network-note { display: flex; align-items: flex-start; gap: 9px; margin-top: 20px; color: var(--link-muted); }
 .link-mobile-network-note > .cmd-ui-icon { margin-top: 3px; }
@@ -258,7 +255,7 @@
   .link-app-body > :is(.link-recents, .link-new-session, .link-connection-page) { padding-left: 17px; padding-right: 17px; }
   .link-mobile-topbar { padding-left: 16px; padding-right: 16px; }
   .link-mobile-pair-intro, .link-mobile-pair-card, .link-mobile-backup, .link-mobile-network-note { margin-left: 16px; margin-right: 16px; }
-  .link-mobile-pair-card { padding: 20px 16px; }
+  .link-mobile-pair-card { padding: 8px 0 20px; }
   .link-mobile-v3 .link-messages { padding-left: 17px; padding-right: 17px; }
   .link-recent-row { gap: 8px; }
   .link-recent-glyph { width: 27px; }

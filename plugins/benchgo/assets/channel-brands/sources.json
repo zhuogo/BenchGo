@@ -1,0 +1,46 @@
+{
+  "feishu": {
+    "officialPage": "https://www.feishu.cn",
+    "asset": "https://www.feishu.cn/favicon.ico",
+    "mime": "image/vnd.microsoft.icon",
+    "sha256": "69da9be6053530750202e4f674d621274bd86a9fc23f44a16c5e6c7aa56dfd9e"
+  },
+  "wecom": {
+    "officialPage": "https://work.weixin.qq.com",
+    "asset": "https://work.weixin.qq.com/favicon.ico",
+    "mime": "image/x-icon",
+    "sha256": "b11c0e4016a8e04ee32a85a638e23126cd6434dd9e4dc6b762aca3a61951a9d0"
+  },
+  "weixin": {
+    "officialPage": "https://weixin.qq.com",
+    "asset": "https://res.wx.qq.com/a/wx_fed/assets/res/NTI4MWU5.ico",
+    "mime": "image/png",
+    "sha256": "a62d7d84bd02b1718106d294d1f2c8387f9967239696c1e8b446201b63f34dc7",
+    "responseMime": "image/x-icon"
+  },
+  "qq": {
+    "officialPage": "https://im.qq.com",
+    "asset": "https://im.qq.com/favicon.ico",
+    "mime": "image/x-icon",
+    "sha256": "585d59893db6b11bf8793c8247ab359552a9cc2852a695f8e140a0ff0840c89d"
+  },
+  "telegram": {
+    "officialPage": "https://telegram.org",
+    "asset": "https://telegram.org/img/t_logo.svg",
+    "mime": "image/svg+xml",
+    "sha256": "85059d5e5bf7bda91ebab30664993c49867a26be6b947834aca16c846581766a"
+  },
+  "discord": {
+    "officialPage": "https://discord.com",
+    "asset": "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/62fddf0fde45a8baedcc7ee5_847541504914fd33810e70a0ea73177e%20(2)-1.png",
+    "mime": "image/png",
+    "sha256": "11848b5f1c8a7f294c6211c2f0d0dc83a8a28bfe1ef0829a8dacfdf475c5e5a2"
+  },
+  "whatsapp": {
+    "officialPage": "https://www.whatsapp.com",
+    "asset": "https://www.whatsapp.com/favicon.ico",
+    "mime": "image/webp",
+    "sha256": "48e94afeffb29c66f5e84dc8df4ee247f838c287f87cb8960cbf67f4e8d3dd37",
+    "responseMime": "image/png"
+  }
+}

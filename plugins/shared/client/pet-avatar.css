@@ -1,0 +1,12 @@
+.benchgo-pet-avatar{display:inline-flex;align-items:center;justify-content:center;flex:none;vertical-align:middle;position:relative}
+.benchgo-pet-avatar>img{display:block;width:100%;height:100%;object-fit:contain;transform-origin:50% 70%}
+.benchgo-pet-unavailable{font-size:11px;line-height:1.3;color:var(--text-secondary,#777);text-align:center}
+.benchgo-pet-avatar[data-action=acknowledge]>img{animation:benchgo-pet-nod .55s ease-out 1}
+.benchgo-pet-avatar[data-action=focus]>img{animation:benchgo-pet-attend .7s ease-out 1}
+.benchgo-pet-avatar[data-action=happy]>img{animation:benchgo-pet-lift .65s ease-out 1}
+.benchgo-pet-avatar[data-action=waiting]>img{animation:benchgo-pet-sway 1.1s ease-in-out 1}
+@keyframes benchgo-pet-sway{25%{transform:translateX(-4%)}75%{transform:translateX(4%)}100%{transform:none}}
+@keyframes benchgo-pet-nod{40%{transform:translateY(3%) rotate(3deg)}100%{transform:none}}
+@keyframes benchgo-pet-attend{45%{transform:rotate(-4deg)}100%{transform:none}}
+@keyframes benchgo-pet-lift{40%{transform:translateY(-6%)}75%{transform:translateY(1%)}100%{transform:none}}
+@media(prefers-reduced-motion:reduce){.benchgo-pet-avatar>img{animation:none!important}}

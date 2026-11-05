@@ -1,7 +1,6 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { hostname } from 'node:os';
 import { openDeviceRegistry, normalizeTarget } from './registry.mjs';
 import { remoteJson } from './remote.mjs';
 import { selectRoute } from './routes.mjs';
@@ -11,10 +10,11 @@ const secret = () => randomBytes(32).toString('base64url');
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 export function parsePairingUri(input) {
   let uri; try { uri = new URL(input); } catch { throw fail('请粘贴完整 Link 配对地址'); }
-  let target, code;
-  if (uri.protocol === 'dshlink:' && uri.hostname === 'pair') {
+  let target, code, name;
+  if (['benchgo:', 'dshlink:'].includes(uri.protocol) && uri.hostname === 'pair' && !uri.username && !uri.password && !uri.port && ['', '/'].includes(uri.pathname) && !uri.hash) {
     target = normalizeTarget({ url: uri.searchParams.get('url'), pin: uri.searchParams.get('pin') });
     code = uri.searchParams.get('code');
+    name = uri.searchParams.get('name')?.trim().slice(0, 100);
   } else if (uri.protocol === 'https:' && !uri.username && !uri.password && uri.pathname === '/link/' && !uri.search) {
     target = normalizeTarget({ url: uri.origin });
     const fragment = new URLSearchParams(uri.hash.slice(1));
@@ -22,7 +22,7 @@ export function parsePairingUri(input) {
     code = fragment.get('code');
   } else throw fail('请粘贴完整 Link 配对地址');
   if (!code || code.length > 256) throw fail('配对码无效');
-  return { target, code };
+  return { target, code, ...(name ? { name } : {}) };
 }
 async function body(req) {
   if (!req.headers['content-type']?.startsWith('application/json')) throw fail('需要 application/json', 415);
@@ -31,8 +31,9 @@ async function body(req) {
   const input = JSON.parse(Buffer.concat(chunks).toString());
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('请求必须是对象'); return input;
 }
-export async function createDeviceCenter({ directory, webRoot, managerFactory = createServerManager, hostAdmin, publicOrigin, workbenchOrigin, registerProxy }) {
-  const registry = await openDeviceRegistry(directory), pending = new Map(), proxies = new Map(), tickets = new Map(), sessions = new Map(), parents = new Set(), sockets = new Set();
+export async function createDeviceCenter({ directory, webRoot, managerFactory = createServerManager, hostAdmin, localName, publicOrigin, workbenchOrigin, registerProxy }) {
+  let renamedLocal;
+  const registry = await openDeviceRegistry(directory, { localName: () => localName?.() || renamedLocal || '本机' }), pending = new Map(), proxies = new Map(), tickets = new Map(), sessions = new Map(), parents = new Set(), sockets = new Set();
   let origin, closed = false;
   const manager = await managerFactory({ directory, onRelay: async value => {
     if (typeof hostAdmin !== 'function') throw fail('此客户端不支持配置主机中继');
@@ -48,19 +49,20 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
   const api = async input => {
     const id = idOf(input);
     if (input.action === 'list') return { ...registry.list(), relayJob: manager?.activeRelayJob?.() ?? null, capabilities: { ssh: Boolean(manager), relayDeploy: Boolean(manager?.deployRelay) && typeof hostAdmin === 'function', hostAdmin: typeof hostAdmin === 'function' } };
-    const hostActions = { hostRelayConfigure: 'relay-configure', hostRelayPoolConfigure: 'relay-pool-configure', hostStatus: 'status', hostConfigure: 'configure', hostPairing: 'pairing', hostConfirm: 'confirm', hostReject: 'reject', hostRevoke: 'revoke' };
+    const hostActions = { hostRelayTest: 'relay-test', hostRelayConfigure: 'relay-configure', hostRelayPoolConfigure: 'relay-pool-configure', hostStatus: 'status', hostConfigure: 'configure', hostPairing: 'pairing', hostConfirm: 'confirm', hostReject: 'reject', hostRevoke: 'revoke', hostRenameDevice: 'rename-device' };
     if (Object.hasOwn(hostActions, input.action)) {
       if (typeof hostAdmin !== 'function') throw fail('此客户端不支持本机连接管理，请更新应用');
-      const fields = { hostRelayConfigure: ['url', 'token', 'enabled'], hostRelayPoolConfigure: ['nodes'], hostStatus: [], hostConfigure: ['enabled', 'host', 'port', 'publicUrl'], hostPairing: ['mode', 'address'], hostConfirm: ['id'], hostReject: ['id'], hostRevoke: ['id'] }[input.action];
+      const fields = { hostRelayTest: ['id', 'url', 'token'], hostRelayConfigure: ['url', 'token', 'enabled'], hostRelayPoolConfigure: ['nodes'], hostStatus: [], hostConfigure: ['enabled', 'host', 'port', 'publicUrl', 'name'], hostPairing: ['mode', 'address'], hostConfirm: ['id'], hostReject: ['id'], hostRevoke: ['id'], hostRenameDevice: ['id', 'name'] }[input.action];
       return hostAdmin({ action: hostActions[input.action], ...Object.fromEntries(fields.filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]])) });
     }
     if (input.action === 'pair') {
       for (const [key, item] of pending) if (item.expiresAt < Date.now()) pending.delete(key);
       if (pending.size >= 16) throw fail('配对请求过多');
-      const { target, code } = parsePairingUri(input.uri);
-      const { value } = await remoteJson(target, '/link/api/pair', { code, name: input.name || hostname().slice(0, 100) });
+      const { target, code, name } = parsePairingUri(input.uri);
+      const host = typeof hostAdmin === 'function' ? await hostAdmin({ action: 'status' }) : undefined;
+      const { value } = await remoteJson(target, '/link/api/pair', { code, name: localName?.() || host?.hostName || renamedLocal || `BenchGo-${randomBytes(3).toString('hex')}` });
       const requestId = randomUUID();
-      pending.set(requestId, { ...target, remote: value, expiresAt: Math.min(value.expiresAt || Date.now() + 300000, Date.now() + 300000) });
+      pending.set(requestId, { ...target, name, remote: value, expiresAt: Math.min(value.expiresAt || Date.now() + 300000, Date.now() + 300000) });
       return { requestId, expiresAt: value.expiresAt };
     }
     if (input.action === 'pairStatus') {
@@ -68,7 +70,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
       if (pair.device) return { status: 'approved', device: pair.device };
       const { value } = await remoteJson(pair, '/link/api/pair/status', { requestId: pair.remote.requestId, pollToken: pair.remote.pollToken });
       if (value.status !== 'approved') return { status: value.status };
-      pair.device = await registry.upsert({ ...pair, remote: undefined, token: value.token, routes: value.routes, kind: 'computer', name: new URL(pair.url).hostname });
+      pair.device = await registry.upsert({ url: pair.url, pin: pair.pin, token: value.token, routes: value.routes, kind: 'computer', name: value.hostName || value.name || pair.name });
       return { status: 'approved', device: pair.device };
     }
     if (input.action === 'select') {
@@ -89,7 +91,13 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
         const url = await proxy.enter(); registry.markRoute(id, target.routes?.find(route => route.url === target.url && (route.pin || '') === (target.pin || ''))?.kind || 'direct'); registry.mark(id, 'online'); return { device: await registry.select(id), url };
       } catch (error) { registry.mark(id, 'offline', error.message); throw error; }
     }
-    if (input.action === 'rename') return { device: await registry.rename(id, input.name) };
+    if (input.action === 'rename') {
+      if (id !== 'local') return { device: await registry.rename(id, input.name) };
+      if (typeof hostAdmin !== 'function') throw fail('此客户端不支持本机名称管理，请更新应用');
+      const host = await hostAdmin({ action: 'configure', name: input.name });
+      renamedLocal = host.hostName;
+      return { device: registry.list().devices[0] };
+    }
     if (input.action === 'remove') { await registry.remove(id); const proxy = proxies.get(id); proxies.delete(id); await proxy?.close(); await manager?.disconnect?.(id); return { ok: true }; }
     if (!manager) throw fail('此客户端不支持 SSH，请更新应用');
     if (input.action === 'relayProbe') return manager.relayProbe(input);

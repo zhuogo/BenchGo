@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { createPreviewRuntime } from '../client/preview.mjs';
 
 const require = createRequire(new URL('../package.json', import.meta.url));
@@ -76,8 +77,11 @@ test('preview browser mode stays same-origin while scan and workspace remain loc
 
 test('shared mobile view renders compact pairing and accessible navigation; /mobile enters the real Link flow', async () => {
   const result = await build({
-  stdin: { contents: "import React from 'react'; import { renderToStaticMarkup } from 'react-dom/server'; import { LinkMobileApp } from './client/mobile.jsx'; import { MobileSidebar, SessionList } from './client/mobile-navigation.jsx'; import { createPreviewRuntime } from './client/preview.mjs'; export const renderNavigation = () => { const state={ projects:[{id:'a',name:'项目甲'},{id:'b',name:'项目乙'}], sessions:[{id:'one',projectId:'a',title:'第一项工作',updatedAt:Date.now()},{id:'two',projectId:'b',title:'第二项工作',running:true,updatedAt:Date.now()}] }; return renderToStaticMarkup(<><MobileSidebar state={state} screen='recent' selectedId='two' connectionLabel='已连接' connectionState='running' theme='light' /><SessionList sessions={state.sessions} projects={state.projects} /></>); }; export const renderPair = () => renderToStaticMarkup(<LinkMobileApp runtime={createPreviewRuntime()} />); export const renderHome = () => { const runtime=createPreviewRuntime(); runtime.enterWorkspace(); return renderToStaticMarkup(<LinkMobileApp runtime={runtime} />); };", resolveDir: root.pathname, loader: 'jsx' },
-    bundle: true, write: false, format: 'cjs', platform: 'node', jsx: 'automatic', loader: { '.css': 'text', '.svg': 'text' }, nodePaths: [new URL('../node_modules', import.meta.url).pathname], logLevel: 'silent', define: { 'process.env.NODE_ENV': '"production"' },
+  stdin: { contents: "import React from 'react'; import { renderToStaticMarkup } from 'react-dom/server'; import { LinkMobileApp } from './client/mobile.jsx'; import { MobileSidebar, SessionList } from './client/mobile-navigation.jsx'; import { createPreviewRuntime } from './client/preview.mjs'; export const renderNavigation = () => { const state={ projects:[{id:'a',name:'项目甲'},{id:'b',name:'项目乙'}], sessions:[{id:'one',projectId:'a',title:'第一项工作',updatedAt:Date.now()},{id:'two',projectId:'b',title:'第二项工作',running:true,updatedAt:Date.now()}] }; return renderToStaticMarkup(<><MobileSidebar state={state} screen='recent' selectedId='two' connectionLabel='已连接' connectionState='running' theme='light' /><SessionList sessions={state.sessions} projects={state.projects} /></>); }; export const renderPair = () => renderToStaticMarkup(<LinkMobileApp runtime={createPreviewRuntime()} />); export const renderHome = () => { const runtime=createPreviewRuntime(); runtime.enterWorkspace(); return renderToStaticMarkup(<LinkMobileApp runtime={runtime} />); };", resolveDir: fileURLToPath(root), loader: 'jsx' },
+    bundle: true, write: false, format: 'cjs', platform: 'node', jsx: 'automatic', loader: { '.css': 'text', '.svg': 'text' },
+    nodePaths: [fileURLToPath(new URL('../node_modules/', import.meta.url)), fileURLToPath(new URL('../../benchgo/node_modules/', import.meta.url))],
+    alias: { react: fileURLToPath(new URL('../node_modules/react', import.meta.url)), 'react-dom': fileURLToPath(new URL('../node_modules/react-dom', import.meta.url)) },
+    logLevel: 'silent', define: { 'process.env.NODE_ENV': '"production"' },
   });
   const module = { exports: {} }; new Function('module', 'exports', 'require', result.outputFiles[0].text)(module, module.exports, require);
   const pairing = module.exports.renderPair();
@@ -96,7 +100,7 @@ test('shared mobile view renders compact pairing and accessible navigation; /mob
 
 test('mobile icons exist in the shared catalog and component keeps pairing generation guards', async () => {
   const source = await readFile(new URL('../client/mobile.jsx', import.meta.url), 'utf8');
-  const catalog = JSON.parse(await readFile(new URL('../../commander/client/assets/iconsax/catalog.json', import.meta.url), 'utf8'));
+  const catalog = JSON.parse(await readFile(new URL('../../benchgo/client/assets/iconsax/catalog.json', import.meta.url), 'utf8'));
   const navigation = await readFile(new URL('../client/mobile-navigation.jsx', import.meta.url), 'utf8');
   const names = [...(source + navigation).matchAll(/(?:name|icon)="([A-Za-z]+)"/g)].map(match => match[1]);
   for (const name of names) assert.ok(catalog[name], 'missing icon ' + name);

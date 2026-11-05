@@ -52,16 +52,16 @@ async function writeChunk(res, chunk, signal) {
 
 /** Same installed UI and Gateway, admitted exclusively by a paired device. */
 export function createWorkbench(ctx, store, { webRoot, workbenchRoot } = {}) {
-  const cookies = new Map(), peers = new Map();
+  const peers = new Map();
   const realtime = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
   let closed = false;
   const authenticate = req => {
     const cookie = req.headers.cookie?.split(';').map(row => row.trim()).find(row => row.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
     if (!cookie || cookie.length > 128) return;
-    const session = cookies.get(digest(cookie));
+    const session = store.workbenchSession(digest(cookie));
     if (!session) return;
     const device = store.state.devices.find(device => device.id === session.id && device.tokenHash === session.tokenHash);
-    if (!device || session.expires <= Date.now()) { cookies.delete(digest(cookie)); return; }
+    if (!device || session.expires <= Date.now()) return;
     device.lastSeenAt = Date.now();
     return device;
   };
@@ -69,13 +69,12 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot } = {}) {
     let record = peers.get(device.id);
     if (!record) {
       if (peers.size >= 32) throw fail('连接设备过多', 429);
-      record = { peer: ctx.connection.createPeer({ principal: { kind: 'owner' }, interactions: 'answer' }), abort: new AbortController(), streams: new Map(), realtime: new Set() };
+      record = { peer: ctx.connection.createPeer({ principal: { kind: 'owner', deviceId: device.id, deviceName: device.alias || device.name || device.id }, interactions: 'answer' }), abort: new AbortController(), streams: new Map(), realtime: new Set() };
       peers.set(device.id, record);
     }
     return record;
   };
-  const revoke = async id => {
-    for (const [key, session] of cookies) if (session.id === id) cookies.delete(key);
+  const disposePeer = async id => {
     const record = peers.get(id);
     if (!record) return;
     peers.delete(id); record.abort.abort();
@@ -83,6 +82,10 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot } = {}) {
     record.realtime.clear();
     for (const stream of record.streams.values()) { stream.abort.abort(); stream.wake?.(); }
     await record.peer.dispose();
+  };
+  const revoke = async id => {
+    await store.removeWorkbenchSessions({ id });
+    await disposePeer(id);
   };
   const upgrade = (req, socket, head) => {
     if (closed) throw fail('Link 已关闭', 503);
@@ -98,13 +101,10 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot } = {}) {
       try { voice.acceptRealtimeSocket(ws); } catch { ws.terminate(); }
     });
   };
-  const begin = (device, res) => {
+  const begin = async (device, res) => {
     if (closed) throw fail('Link 已关闭', 503);
-    for (const [key, session] of cookies) if (session.expires <= Date.now() || !store.state.devices.some(device => device.id === session.id)) cookies.delete(key);
-    const sessions = [...cookies].filter(([, session]) => session.id === device.id);
-    while (sessions.length >= 8) cookies.delete(sessions.shift()[0]);
     const token = randomBytes(32).toString('base64url');
-    cookies.set(digest(token), { id: device.id, tokenHash: device.tokenHash, expires: Date.now() + SESSION_AGE });
+    await store.saveWorkbenchSession(digest(token), { id: device.id, tokenHash: device.tokenHash, expires: Date.now() + SESSION_AGE });
     res.setHeader('set-cookie', COOKIE + '=' + token + '; Path=' + WORKBENCH_PATH + '; HttpOnly; Secure; SameSite=Strict; Max-Age=' + SESSION_AGE / 1000);
     return { url: WORKBENCH_PATH };
   };
@@ -177,7 +177,7 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot } = {}) {
       }
       if (path === 'disconnect' && req.method === 'POST') {
         const cookie = req.headers.cookie?.split(';').map(row => row.trim()).find(row => row.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
-        if (cookie) cookies.delete(digest(cookie));
+        if (cookie) await store.removeWorkbenchSessions({ digest: digest(cookie) });
         res.setHeader('set-cookie', COOKIE + '=; Path=' + WORKBENCH_PATH + '; HttpOnly; Secure; SameSite=Strict; Max-Age=0');
         res.writeHead(200, { ...headers, 'content-type': 'application/json' }); res.end('{"ok":true}'); return;
       }
@@ -227,5 +227,5 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot } = {}) {
       res.end(req.method === 'HEAD' ? undefined : data);
     } finally { record.abort.signal.removeEventListener('abort', onAbort); res.off('close', onClose); }
   };
-  return { begin, handle, upgrade, revoke, close: async () => { closed = true; await Promise.all([...peers.keys()].map(revoke)); realtime.close(); cookies.clear(); } };
+  return { begin, handle, upgrade, revoke, close: async () => { closed = true; await Promise.all([...peers.keys()].map(disposePeer)); realtime.close(); } };
 }

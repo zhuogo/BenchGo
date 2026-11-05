@@ -9,7 +9,7 @@ import { stagePluginBundle } from './plugin-bundle.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const { values } = parseArgs({ options: { out: { type: 'string' }, runtime: { type: 'string' } } });
-const plugin = join(root, 'plugins/commander');
+const plugin = join(root, 'plugins/benchgo');
 const manifest = JSON.parse(await readFile(join(plugin, 'package.json')));
 const output = resolve(values.out || join(root, 'artifacts/plugins'));
 const tar = createRequire(join(plugin, 'package.json'))('tar');

@@ -1,0 +1,187 @@
+{
+  "goal": {
+    "id": "7d7ac463-cda3-49e6-abec-ec575751ce89",
+    "budgetGoalId": "519f1f49aba3c407cd5e3424d3ce6211b405c84edfc09853232ea889326daf6b",
+    "requestId": "[\"goal-form\",\"0b35b11a-947a-4365-841e-18d437264cd8\",\"eval-goal\"]",
+    "requestFingerprint": "92347ae8b8dc3badcc86236e3f2bef30e382358e408f0247c3effea082d7b6de",
+    "inputFingerprint": "229a134288126878474123e0b742a9bc2d1e7f69e72563f1b76ab62b51abc774",
+    "executionKind": "ticket",
+    "ticketIds": [
+      "22c572c5-abe4-411f-b06e-c10ebc44f1e1"
+    ],
+    "ticketRevisions": {
+      "22c572c5-abe4-411f-b06e-c10ebc44f1e1": 1
+    },
+    "ownerSessionId": "0b35b11a-947a-4365-841e-18d437264cd8",
+    "status": "active",
+    "title": "计算并给出结果",
+    "objective": "计算并给出结果",
+    "acceptance": "输出准确计算结果391，有实际执行会话证据。",
+    "scope": null,
+    "budget": {
+      "requests": 8
+    },
+    "projectId": "d51025dc-b7a5-4506-94ff-f1dd06caab65",
+    "provider": "assistant-smoke",
+    "model": "deepseek-v4.1-flash",
+    "text": "计算17乘23。无需修改文件，无需工具，只输出计算结果391。",
+    "threadId": "main",
+    "parentGoalId": null,
+    "childGoalIds": [],
+    "nextStep": "verify",
+    "createdAt": "2026-11-03T10:46:23.728Z",
+    "updatedAt": "2026-11-03T10:46:23.735Z",
+    "rowVersion": 2,
+    "waitReason": null
+  },
+  "ticket": {
+    "id": "22c572c5-abe4-411f-b06e-c10ebc44f1e1",
+    "threadId": "desktop:0b35b11a-947a-4365-841e-18d437264cd8",
+    "target": "计算17乘23。无需修改文件，无需工具，只输出计算结果391。",
+    "acceptance": "输出准确计算结果391，有实际执行会话证据。",
+    "instructionRevision": 1,
+    "status": "completed",
+    "pauseReason": null,
+    "mandate": {
+      "actorId": "desktop-owner",
+      "source": {
+        "channel": "desktop",
+        "sessionId": "0b35b11a-947a-4365-841e-18d437264cd8",
+        "messageId": "goal-form:eval-goal",
+        "threadId": "main"
+      },
+      "instruction": "{\"requestId\":\"eval-goal\",\"objective\":\"计算并给出结果\",\"projectId\":\"d51025dc-b7a5-4506-94ff-f1dd06caab65\",\"provider\":\"assistant-smoke\",\"model\":\"deepseek-v4.1-flash\",\"text\":\"计算17乘23。无需修改文件，无需工具，只输出计算结果391。\",\"acceptance\":\"输出准确计算结果391，有实际执行会话证据。\",\"budget\":{\"requests\":8}}",
+      "policyVersion": "6b702add831adc8dd081b7932dc60bb503a281bd5f5cfc3c5be3a444672b7d35",
+      "admission": "desktop-approved-delegation",
+      "controlledActions": "require-current-policy-and-harness-approval",
+      "project": {
+        "id": "d51025dc-b7a5-4506-94ff-f1dd06caab65",
+        "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-J87urF\\eval-project"
+      }
+    },
+    "createdByDecision": "70af5236-f61e-4284-a647-9774eb5242f7",
+    "createdAt": "2026-11-03T10:46:23.720Z",
+    "updatedAt": "2026-11-03T10:46:46.860Z",
+    "resultVersion": 1,
+    "revisions": [],
+    "assignments": [
+      {
+        "id": "desktop:a7f2f7aeff4bab167afc801aaf0405eabe67dbd239206656180c1520b92947c4",
+        "ticketId": "22c572c5-abe4-411f-b06e-c10ebc44f1e1",
+        "executor": "harness",
+        "model": {
+          "providerId": "assistant-smoke",
+          "modelId": "deepseek-v4.1-flash"
+        },
+        "text": "计算17乘23。无需修改文件，无需工具，只输出计算结果391。",
+        "acceptance": "输出准确计算结果391，有实际执行会话证据。",
+        "instructionRevision": 1,
+        "executionStopped": {
+          "owner": "assignment-worker-df7760dd-bcab-40bc-9b8e-d01bc2408790",
+          "fence": 1,
+          "at": "2026-11-03T10:46:39.314Z"
+        },
+        "state": "completed",
+        "priority": 0,
+        "owner": null,
+        "leaseUntil": null,
+        "fence": 1,
+        "attempts": 1,
+        "createdAt": "2026-11-03T10:46:23.718Z",
+        "updatedAt": "2026-11-03T10:46:46.860Z"
+      }
+    ],
+    "attentions": [],
+    "results": [
+      {
+        "summary": "391\n\n（17 × 23 = 391）",
+        "transcript": {
+          "lastSeq": 23,
+          "hash": "0bf657be17f5b5a17899861f047306dafc764da90d6d9249e84a41d9232a6277"
+        },
+        "evidenceRefs": [
+          {
+            "sessionId": "3f76552a-d078-44c2-ae92-e02f1f5a85a0",
+            "runId": "f200a4a3-c7b0-479f-b7e2-f15cc6296bb6"
+          }
+        ],
+        "sessionId": "3f76552a-d078-44c2-ae92-e02f1f5a85a0",
+        "runId": "f200a4a3-c7b0-479f-b7e2-f15cc6296bb6",
+        "directory": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-J87urF\\eval-project\\.agents\\worktrees\\benchgo-f200a4a3-c7b0-479f-b7e2-f15cc6296bb6",
+        "remainingExecutionMs": 585390,
+        "environment": {
+          "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-J87urF\\eval-project\\.agents\\worktrees\\benchgo-f200a4a3-c7b0-479f-b7e2-f15cc6296bb6",
+          "branch": "benchgo-f200a4a3-c7b0-479f-b7e2-f15cc6296bb6",
+          "baseCommit": "b40b4416758af31f908e8b247b632a17a9739f94",
+          "repositoryRoot": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-J87urF\\eval-project"
+        },
+        "checkpoint": {
+          "version": 1,
+          "path": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-J87urF\\eval-project\\.agents\\worktrees\\benchgo-f200a4a3-c7b0-479f-b7e2-f15cc6296bb6",
+          "repositoryRoot": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-J87urF\\eval-project",
+          "commonDir": "C:\\Users\\DraftGo\\AppData\\Local\\Temp\\benchgo-assistant-live-J87urF\\eval-project\\.git",
+          "branch": "benchgo-f200a4a3-c7b0-479f-b7e2-f15cc6296bb6",
+          "baseCommit": "b40b4416758af31f908e8b247b632a17a9739f94",
+          "head": "b40b4416758af31f908e8b247b632a17a9739f94",
+          "indexHash": "d348c308c584d31d3e0540fe1592884eee558df405cca1b742faa354b5b32a88",
+          "files": 1,
+          "bytes": 31,
+          "manifestHash": "ef61c070ecd43448d9cf2a3b1d54177b600bfa25639c7d75d3ef47c3eb8f9349"
+        },
+        "review": {
+          "verdict": "passed",
+          "reason": "结果摘要明确输出 391（17 × 23 = 391），计算正确，符合验收标准；并提供了实际执行会话证据（sessionId 3f76552a…、runId f200a4a3…、transcript lastSeq=23 及哈希），满足“有实际执行会话证据”的要求。",
+          "routing": {
+            "configRevision": 1,
+            "capability": "review",
+            "auxiliary": false,
+            "switched": false,
+            "attempts": [
+              {
+                "providerId": "assistant-smoke",
+                "modelId": "deepseek-v4.1-flash",
+                "retry": 0,
+                "status": "completed"
+              }
+            ]
+          }
+        },
+        "ticketId": "22c572c5-abe4-411f-b06e-c10ebc44f1e1",
+        "instructionRevision": 1,
+        "version": 1,
+        "committedAt": "2026-11-03T10:46:46.860Z"
+      }
+    ],
+    "deliveries": [
+      {
+        "id": "4251fac3-88db-46a7-9b15-ee990afaf076",
+        "uniqueKey": "assignment-result:desktop:a7f2f7aeff4bab167afc801aaf0405eabe67dbd239206656180c1520b92947c4:f200a4a3-c7b0-479f-b7e2-f15cc6296bb6",
+        "ticketId": "22c572c5-abe4-411f-b06e-c10ebc44f1e1",
+        "payload": {
+          "type": "ticket.result",
+          "source": {
+            "channel": "desktop",
+            "sessionId": "0b35b11a-947a-4365-841e-18d437264cd8",
+            "messageId": "goal-form:eval-goal",
+            "threadId": "main"
+          },
+          "text": "已完成：计算17乘23。无需修改文件，无需工具，只输出计算结果391。\n391\n\n（17 × 23 = 391）\n验收：结果摘要明确输出 391（17 × 23 = 391），计算正确，符合验收标准；并提供了实际执行会话证据（sessionId 3f76552a…、runId f200a4a3…、transcript lastSeq=23 及哈希），满足“有实际执行会话证据”的要求。",
+          "evidenceRefs": [
+            {
+              "sessionId": "3f76552a-d078-44c2-ae92-e02f1f5a85a0",
+              "runId": "f200a4a3-c7b0-479f-b7e2-f15cc6296bb6"
+            }
+          ]
+        },
+        "state": "sent",
+        "attempts": 1,
+        "nextAt": 1793702806860,
+        "owner": null,
+        "leaseUntil": null,
+        "sentAt": "2026-11-03T10:46:47.744Z",
+        "lastError": null,
+        "createdAt": "2026-11-03T10:46:46.860Z"
+      }
+    ]
+  }
+}

@@ -143,16 +143,19 @@ export function pairingContext(input) {
     return { url: location.origin, code: value };
   }
   const uri = new URL(value);
-  if (uri.protocol === 'dshlink:') {
+  if (['benchgo:', 'dshlink:'].includes(uri.protocol)) {
+    if (uri.hostname !== 'pair' || uri.username || uri.password || uri.port || !['', '/'].includes(uri.pathname) || uri.hash) throw new Error('配对地址无效');
     const url = uri.searchParams.get('url');
     if (!url || new URL(url).protocol !== 'https:') throw new Error('配对主机必须使用 HTTPS');
-    return { url, code: uri.searchParams.get('code') || '', pin: uri.searchParams.get('pin') || '' };
+    return { url, code: uri.searchParams.get('code') || '', pin: uri.searchParams.get('pin') || '', ...(uri.searchParams.get('name') ? { name: uri.searchParams.get('name').slice(0, 128) } : {}) };
   }
   if (uri.protocol !== 'https:' || (!isNative() && uri.origin !== location.origin)) throw new Error('请在主机提供的 HTTPS 页面中配对');
-  return { url: uri.origin, code: new URLSearchParams(uri.hash.slice(1)).get('code') || uri.searchParams.get('code') || '' };
+  const fragment = new URLSearchParams(uri.hash.slice(1));
+  const name = fragment.get('name') || uri.searchParams.get('name');
+  return { url: uri.origin, code: fragment.get('code') || uri.searchParams.get('code') || '', ...(name ? { name: name.slice(0, 128) } : {}) };
 }
 export function contextUri(value) {
   if (!value?.url || !value?.code) return '';
-  return `dshlink://pair?${new URLSearchParams({ url: value.url, pin: value.pin || '', code: value.code })}`;
+  return `benchgo://pair?${new URLSearchParams({ url: value.url, pin: value.pin || '', code: value.code, ...(value.name ? { name: value.name } : {}) })}`;
 }
 export function requestId() { return globalThis.crypto?.randomUUID?.() || `link-${Date.now()}-${Math.random().toString(36).slice(2)}`; }

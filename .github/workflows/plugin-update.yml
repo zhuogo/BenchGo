@@ -42,10 +42,10 @@ jobs:
         run: |
           npm run setup
           npm ci --prefix plugins/link
-          npm ci --prefix plugins/commander
+          npm ci --prefix plugins/benchgo
       - name: Verify update feed and build plugins
         run: |
-          node --test plugins/commander/test/update-feed.test.mjs
+          node --test plugins/benchgo/test/update-feed.test.mjs
           npm run build:plus
       - name: Create plugin archive
         run: node scripts/desktop/package-plugin-update.mjs --out artifacts/plugins
@@ -72,7 +72,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          version=$(node -p "JSON.parse(require('fs').readFileSync('plugins/commander/package.json','utf8')).version")
+          version=$(node -p "JSON.parse(require('fs').readFileSync('plugins/benchgo/package.json','utf8')).version")
           tag="plugin-v${version}"
           tags=$(git ls-remote --tags origin "refs/tags/${tag}")
           if [ -n "$tags" ]; then

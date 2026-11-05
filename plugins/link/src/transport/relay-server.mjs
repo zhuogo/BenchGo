@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createSecureServer } from 'node:http2';
 import { WebSocketServer } from 'ws';
-import { RELAY_CHUNK_BYTES as CHUNK, RELAY_CONTROL_PATH as CONTROL, RELAY_DATA_PATH as DATA, RELAY_VOICE_PATH as VOICE, RELAY_WORKBENCH_PATH as WORKBENCH, relayPathAllowed } from './relay-protocol.mjs';
+import { RELAY_CHUNK_BYTES as CHUNK, RELAY_CONTROL_PATH as CONTROL, RELAY_DATA_PATH as DATA, RELAY_VOICE_PATH as VOICE, RELAY_WORKBENCH_PATH as WORKBENCH, RELAY_PROBE_PATH as PROBE, RELAY_PROTOCOL, RELAY_PROTOCOL_VERSION, relayPathAllowed } from './relay-protocol.mjs';
 
 const MAX_BUFFERED = 256 * 1024;
 const MAX_STREAM_BYTES = 512 * 1024 * 1024;
@@ -129,6 +129,13 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
       const authority = req.headers[':authority'] || req.headers.host;
       if (closed || authority !== publicOrigin.host) throw fail('中继地址未授权', 403);
       const raw = req.url || '/';
+      if (raw === PROBE && req.method === 'GET') {
+        if (req.headers.origin && req.headers.origin !== publicOrigin.origin) throw fail('来源未授权', 403);
+        const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+        if (!supplied || !same(supplied, token)) throw fail('中继主机密钥无效', 401);
+        res.writeHead(200, { ...headers, 'content-type': 'application/json' });
+        res.end(JSON.stringify({ protocol: RELAY_PROTOCOL, version: RELAY_PROTOCOL_VERSION, authenticated: true })); return;
+      }
       if (!relayPathAllowed(req.method, raw)) throw fail('Link 路径未授权', 404);
       const url = new URL(raw, publicOrigin);
       if (url.origin !== publicOrigin.origin || !(url.pathname === '/link' || url.pathname.startsWith('/link/'))) throw fail('Link 路径未授权', 404);
@@ -226,4 +233,4 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
   };
 }
 
-export const relayRoutes = Object.freeze({ control: CONTROL, data: DATA, workbench: WORKBENCH, voice: VOICE });
+export const relayRoutes = Object.freeze({ control: CONTROL, data: DATA, probe: PROBE, workbench: WORKBENCH, voice: VOICE });

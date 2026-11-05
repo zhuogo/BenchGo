@@ -1,0 +1,332 @@
+{
+  "at": "2026-11-04T17:08:17.351Z",
+  "snapshots": [
+    {
+      "sessionId": "a9562ba9-d05f-4577-ad62-cb40811c55c8",
+      "updatedAt": "2026-11-04T17:07:25.752Z",
+      "compressedBytes": 300897,
+      "decodedBytes": 300897,
+      "counts": {
+        "session": 1,
+        "permission/preset": 1,
+        "sandbox/mode": 1,
+        "approval/policy": 1,
+        "agent/inbox/spliced": 2,
+        "turn/start": 1,
+        "step/start": 16,
+        "system/message": 1,
+        "user/message": 5,
+        "request/header": 1,
+        "request/context": 1,
+        "session/title": 2,
+        "session/title-llm-request": 1,
+        "assistant/message": 16,
+        "tool/call": 44,
+        "tool/result": 44,
+        "job/registered": 2,
+        "job/settled": 2,
+        "step/end": 16,
+        "turn/end": 1
+      },
+      "tools": [
+        {
+          "name": "web_search",
+          "hosts": []
+        },
+        {
+          "name": "pwsh",
+          "hosts": []
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.reuters.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "news.google.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.bing.com"
+          ]
+        },
+        {
+          "name": "pwsh",
+          "hosts": []
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "cn.bing.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.cls.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinanews.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "apnews.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinanews.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinanews.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinanews.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinanews.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.bbc.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.thepaper.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.news.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.news.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.reuters.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.theguardian.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.news.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.thepaper.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinanews.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinanews.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.zaobao.com.sg"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.dw.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "cn.nytimes.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinanews.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.zaobao.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.cs.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.news.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.cls.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.zaobao.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.zaobao.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.zaobao.com"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "jnzstatic.cs.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinanews.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.news.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.cs.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.thepaper.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.thepaper.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinanews.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.chinanews.com.cn"
+          ]
+        },
+        {
+          "name": "web_fetch",
+          "hosts": [
+            "www.zaobao.com"
+          ]
+        }
+      ],
+      "eventCount": 159,
+      "transcriptHash": "a87e1c064706957c4dd57a3d88230d33296815573f58defcd23d1abae29b00bb",
+      "toolResultStats": {
+        "total": 44,
+        "markedError": 12,
+        "notMarkedError": 32
+      },
+      "lastEvents": [
+        {
+          "type": "tool/result",
+          "seq": 152,
+          "time": 1793811911962
+        },
+        {
+          "type": "step/end",
+          "seq": 153,
+          "time": 1793811911963
+        },
+        {
+          "type": "step/start",
+          "seq": 154,
+          "time": 1793811912024
+        },
+        {
+          "type": "assistant/message",
+          "seq": 155,
+          "time": 1793812043224
+        },
+        {
+          "type": "step/end",
+          "seq": 156,
+          "time": 1793812043230
+        },
+        {
+          "type": "turn/end",
+          "seq": 157,
+          "time": 1793812043232
+        }
+      ]
+    }
+  ]
+}

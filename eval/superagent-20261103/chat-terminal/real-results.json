@@ -1,0 +1,70 @@
+{
+  "mode": "real",
+  "extra": false,
+  "diagnostic": false,
+  "caseFilter": "R09",
+  "startedAt": "2026-11-03T13:04:53.254Z",
+  "scenarios": [
+    {
+      "id": "R09",
+      "title": "普通用户问法不依赖发布工具提示",
+      "expected": "直接问模型身份，结束后必须有可见正式回复",
+      "layer": "真实模型 + 隔离 Harness HTTP",
+      "startedAt": "2026-11-03T13:05:06.856Z",
+      "evidence": {
+        "threadId": "cb415cd1-ce2f-40e5-8c77-855140785fce",
+        "sessionId": "49cb7ec3-d5e9-4e55-8193-09ae5b28aeb0",
+        "messages": [
+          {
+            "id": "6ecf00f1-ddf4-432a-b3bd-e983f515afa8",
+            "role": "user",
+            "text": "你是什么模型？",
+            "content": [
+              {
+                "type": "text",
+                "text": "你是什么模型？"
+              }
+            ],
+            "time": 1793711107268
+          },
+          {
+            "id": "reply:6ecf00f1-ddf4-432a-b3bd-e983f515afa8",
+            "role": "assistant",
+            "kind": "final",
+            "requestId": "6ecf00f1-ddf4-432a-b3bd-e983f515afa8",
+            "text": "当前会话配置使用的模型是 **deepseek-v4.1-flash**，来自 `assistant-smoke` 供应商。\n\n需要说明的是：我是 BenchGo 的个人助手，具体底层模型由这套配置决定，配置本身可以更换。如果你希望换成其他模型，可以告诉我。",
+            "content": [
+              {
+                "type": "text",
+                "text": "当前会话配置使用的模型是 **deepseek-v4.1-flash**，来自 `assistant-smoke` 供应商。\n\n需要说明的是：我是 BenchGo 的个人助手，具体底层模型由这套配置决定，配置本身可以更换。如果你希望换成其他模型，可以告诉我。"
+              }
+            ],
+            "time": 1793711133466
+          }
+        ],
+        "images": [],
+        "hasMore": false,
+        "nextBefore": null,
+        "status": "idle",
+        "running": false,
+        "error": null,
+        "failures": [],
+        "model": {
+          "providerId": "assistant-smoke",
+          "modelId": "deepseek-v4.1-flash"
+        },
+        "notifications": []
+      },
+      "status": "pass",
+      "durationMs": 26829
+    }
+  ],
+  "requests": [],
+  "provider": {
+    "id": "routergo",
+    "model": "deepseek-v4.1-flash",
+    "protocol": "openai-completions",
+    "isolatedAlias": "assistant-smoke"
+  },
+  "finishedAt": "2026-11-03T13:05:34.104Z"
+}

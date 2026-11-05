@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { managementCall } from '../client/api.mjs';
+import { managementCall, pairingContext, contextUri } from '../client/api.mjs';
+
+test('branded connection information round trips while legacy links remain accepted', () => {
+  const value = { url: 'https://desk.example', pin: 'a+b/c=', code: 'one-use', name: '办公室电脑' };
+  const uri = contextUri(value);
+  assert(uri.startsWith('benchgo://pair?'));
+  assert.deepEqual(pairingContext(uri), value);
+  assert.deepEqual(pairingContext(uri.replace('benchgo:', 'dshlink:')), value);
+  for (const uri of ['benchgo://other?code=x', 'benchgo://pair/other?code=x', 'benchgo://user@pair?code=x', 'benchgo://pair:123?code=x', 'benchgo://pair?code=x#extra']) assert.throws(() => pairingContext(uri), /地址无效/);
+});
 
 test('management API preserves same-origin credentials, bounds requests and returns recoverable 404 diagnostics', async () => {
   const previous = new Map();

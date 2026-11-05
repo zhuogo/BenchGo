@@ -1,0 +1,4 @@
+你负责渠道连续任务准入修复，前端不改。独占intake.mjs、assessment-runner.mjs、assessment.mjs、direct-reply-delivery.mjs及对应测试。orchestration-store由recovery代理负责，不直接改，必要补丁写eval/continuous_intake_wiring.md给root。
+审计确认：orchestration-store ingest在存在活跃订阅时不生成候选；intake单订阅直接转context，多订阅无人处理，导致同线程新请求丢失。修复明确人类新请求必须分诊，模型有已有ticket列表可attach/accept；只有精确已绑定事件才订阅直通，不把所有同聊天@/DM都认作旧任务。群未@讨论仍context，机器按原准入。避免candidate与subscription双投。
+刚补的sourceMessageSuperseded仅同人同群超过5分钟就忽略，会丢有效任务。不要按年龄丢任务：旧消息到达传freshness元数据给研判，过时问候可ignore，实质明确任务仍需接手或说明，不默认丢弃。保留真实message ID去重。发送前不能仅凭新消息存在压掉合法answer/ask（direct-reply-delivery需收紧或删除这段粗糙策略）。研究当前迟到hi是真实有效旧消息重投，勿编关键词黑名单；以结构化disposition考虑是否仍值得响应。
+研判最终unavailable状态需让用户获知一次失败，优先交给ack/root接线；报告准确接口。docs根负责，完成写eval/continuous_intake_result.md，不build/restart。

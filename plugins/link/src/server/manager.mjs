@@ -157,7 +157,7 @@ export function createServerManager({ directory, onDevice = async () => {}, runt
         client = await open(input);
         let relayAssets = relayAssetsRoot;
         if (!relayAssets) {
-          const candidates = [fileURLToPath(new URL('../relay/', import.meta.url)), fileURLToPath(new URL('../../../commander/lib/relay/', import.meta.url)), join(assets, '..', 'relay')];
+          const candidates = [fileURLToPath(new URL('../relay/', import.meta.url)), fileURLToPath(new URL('../../../benchgo/lib/relay/', import.meta.url)), join(assets, '..', 'relay')];
           for (const candidate of candidates) { try { await access(join(candidate, 'run-relay-server.cjs')); await access(join(candidate, 'ip-certificate.mjs')); relayAssets = candidate; break; } catch {} }
         }
         if (!relayAssets) throw new Error('未找到打包的中继部署工具');

@@ -1,0 +1,449 @@
+{
+  "scenario": {
+    "id": "worker-block",
+    "marker": "P0_WORKER_BLOCK",
+    "title": "Worker原生问题回答后原单继续",
+    "condition": "原始请求保留真实测试用户的阅读重点选择；隔离Worker首轮要求用已注册的原生问答工具发问。",
+    "blocking": "worker",
+    "startedAt": "2026-11-04T23:21:44.795Z",
+    "status": "running",
+    "timeline": [
+      {
+        "at": "2026-11-04T23:21:45.105Z",
+        "routerRunning": true
+      },
+      {
+        "at": "2026-11-04T23:21:57.470Z",
+        "routerRunning": true,
+        "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+        "ticketStatus": "open",
+        "resultVersion": 0,
+        "assignments": [
+          {
+            "id": "desktop:d0b56c1c65fcf2944fe37654d5a25624a46bb7a9764ebc3af2e1251c835bcb5f",
+            "state": "queued",
+            "fence": 0
+          }
+        ],
+        "attentions": [],
+        "deliveries": []
+      },
+      {
+        "at": "2026-11-04T23:21:59.040Z",
+        "routerRunning": true,
+        "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+        "ticketStatus": "open",
+        "resultVersion": 0,
+        "assignments": [
+          {
+            "id": "desktop:d0b56c1c65fcf2944fe37654d5a25624a46bb7a9764ebc3af2e1251c835bcb5f",
+            "state": "claimed",
+            "fence": 1
+          }
+        ],
+        "attentions": [],
+        "deliveries": []
+      },
+      {
+        "at": "2026-11-04T23:22:02.135Z",
+        "routerRunning": false,
+        "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+        "ticketStatus": "open",
+        "resultVersion": 0,
+        "assignments": [
+          {
+            "id": "desktop:d0b56c1c65fcf2944fe37654d5a25624a46bb7a9764ebc3af2e1251c835bcb5f",
+            "state": "claimed",
+            "fence": 1
+          }
+        ],
+        "attentions": [],
+        "deliveries": []
+      },
+      {
+        "at": "2026-11-04T23:31:31.324Z",
+        "routerRunning": false,
+        "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+        "ticketStatus": "waiting",
+        "resultVersion": 0,
+        "assignments": [
+          {
+            "id": "desktop:d0b56c1c65fcf2944fe37654d5a25624a46bb7a9764ebc3af2e1251c835bcb5f",
+            "state": "waiting",
+            "fence": 1
+          }
+        ],
+        "attentions": [
+          {
+            "id": "6199da01-8d9d-4da3-9e40-46ba4394d278",
+            "origin": "worker",
+            "state": "waiting",
+            "sessionId": "df37644e-846b-42cd-a0a0-e6877a1ef213"
+          }
+        ],
+        "deliveries": [
+          {
+            "id": "43ca6487-c525-4bd0-968b-8051b05ef9ef",
+            "state": "sent",
+            "resultVersion": 0
+          }
+        ]
+      },
+      {
+        "at": "2026-11-04T23:31:32.922Z",
+        "routerRunning": false,
+        "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+        "ticketStatus": "open",
+        "resultVersion": 0,
+        "assignments": [
+          {
+            "id": "desktop:d0b56c1c65fcf2944fe37654d5a25624a46bb7a9764ebc3af2e1251c835bcb5f",
+            "state": "uncertain",
+            "fence": 2
+          }
+        ],
+        "attentions": [
+          {
+            "id": "6199da01-8d9d-4da3-9e40-46ba4394d278",
+            "origin": "worker",
+            "state": "answered",
+            "sessionId": "df37644e-846b-42cd-a0a0-e6877a1ef213"
+          }
+        ],
+        "deliveries": [
+          {
+            "id": "43ca6487-c525-4bd0-968b-8051b05ef9ef",
+            "state": "sent",
+            "resultVersion": 0
+          },
+          {
+            "id": "cb226137-a8d2-44f8-a1ac-34b65405ea68",
+            "state": "sent",
+            "resultVersion": 0
+          }
+        ]
+      }
+    ],
+    "threadId": "20339907-a658-419e-91bd-b0ac82986481",
+    "routerSessionId": "99ce5623-c185-4afd-a497-529c6db86f1d",
+    "originalInstruction": "请调研2026年11月4日的新闻热点，整理一份简明中文摘要交给用户。这里是明确的历史日期2026-11-04，不是执行当天。\n要求：\n1. 通过联网搜索/浏览实际抓取该日最新报道，注明信息来源与报道时间，不要凭记忆编造。\n2. 覆盖国内外政治经济、科技（尤其AI）、社会民生等主要领域的6–10条热点，每条1–2句话说明事件与影响。本次选择非生命科学领域新闻。\n3. 区分“已验证有多个可靠来源”与“单一来源/待确认”，转载同一报道不当成独立来源。\n4. 最后给出整体概览，用一句话总结当天的大势。\n5. 若某些渠道无法访问，如实说明缺失部分，不要补写。\n6. 直接在本次聊天中交付中文文本摘要即可，无需创建实际产物文件。热点用1.起的连续阿拉伯数字编号，来源写在对应条目中。\n请自主派工，并在开单时把上述数目、日期、来源、标注和文本交付条件写进工单任务书的验收条件。\n本次最终摘要需根据我的阅读重点取舍：AI科技优先或宏观经济优先。我尚未作出选择，不能替我默认。请先开原工单调查候选事实，候选调查后再向我问这个选择；我回答后在原工单继续并交付最终6–10条。不要在开单前问，也不要将未定稿当成最终交付。\n隔离运行编号：P0_WORKER_BLOCK_22fa35d3-caf1-4772-a865-12eb5ca14741。派工时在任务目标正文保留此编号便于关联；编号不改变验收条件。",
+    "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+    "latest": {
+      "status": "open",
+      "resultVersion": 0,
+      "results": [],
+      "attentions": [
+        {
+          "id": "6199da01-8d9d-4da3-9e40-46ba4394d278",
+          "assignmentId": "desktop:d0b56c1c65fcf2944fe37654d5a25624a46bb7a9764ebc3af2e1251c835bcb5f",
+          "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+          "sessionId": "df37644e-846b-42cd-a0a0-e6877a1ef213",
+          "callId": "call-179b166c-af81-449a-8b5c-918576cd713a",
+          "question": {
+            "id": "final-focus",
+            "question": "第二阶段最终 6–10 条摘要按哪个阅读重点取舍？请选择其一（AI科技优先 或 宏观经济优先）。",
+            "header": "阅读重点",
+            "options": [
+              {
+                "label": "AI科技优先",
+                "description": "最终摘要优先选取 AI/科技主线候选，宏观经济条目压缩为背景。"
+              },
+              {
+                "label": "宏观经济优先",
+                "description": "最终摘要优先选取宏观经济/政策主线候选，AI/科技条目压缩为背景。"
+              }
+            ]
+          },
+          "outboxId": "43ca6487-c525-4bd0-968b-8051b05ef9ef",
+          "answerTriggerId": "5ae1e22c-9f83-4688-a4d9-b38d7a075bad",
+          "state": "answered",
+          "createdAt": "2026-11-04T23:31:29.856Z",
+          "origin": "worker"
+        }
+      ]
+    },
+    "beforeAnswer": {
+      "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+      "instructionRevision": 1,
+      "resultVersion": 0,
+      "assignments": [
+        "desktop:d0b56c1c65fcf2944fe37654d5a25624a46bb7a9764ebc3af2e1251c835bcb5f"
+      ],
+      "results": [],
+      "attention": {
+        "id": "6199da01-8d9d-4da3-9e40-46ba4394d278",
+        "assignmentId": "desktop:d0b56c1c65fcf2944fe37654d5a25624a46bb7a9764ebc3af2e1251c835bcb5f",
+        "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+        "sessionId": "df37644e-846b-42cd-a0a0-e6877a1ef213",
+        "callId": "call-179b166c-af81-449a-8b5c-918576cd713a",
+        "question": {
+          "id": "final-focus",
+          "question": "第二阶段最终 6–10 条摘要按哪个阅读重点取舍？请选择其一（AI科技优先 或 宏观经济优先）。",
+          "header": "阅读重点",
+          "options": [
+            {
+              "label": "AI科技优先",
+              "description": "最终摘要优先选取 AI/科技主线候选，宏观经济条目压缩为背景。"
+            },
+            {
+              "label": "宏观经济优先",
+              "description": "最终摘要优先选取宏观经济/政策主线候选，AI/科技条目压缩为背景。"
+            }
+          ]
+        },
+        "outboxId": "43ca6487-c525-4bd0-968b-8051b05ef9ef",
+        "answerTriggerId": null,
+        "state": "waiting",
+        "createdAt": "2026-11-04T23:31:29.856Z",
+        "origin": "worker"
+      },
+      "deliveredQuestion": {
+        "id": "022837f5-a11c-4ba8-92fe-6be8089bdc56",
+        "eventId": "022837f5-a11c-4ba8-92fe-6be8089bdc56",
+        "taskId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+        "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+        "threadId": "20339907-a658-419e-91bd-b0ac82986481",
+        "createdAt": "2026-11-04T23:31:30.425Z",
+        "title": "11/4新闻候选",
+        "status": "waiting",
+        "attentionId": "6199da01-8d9d-4da3-9e40-46ba4394d278",
+        "instructionRevision": 1,
+        "resultVersion": 0,
+        "seq": 1,
+        "readAt": null,
+        "type": "ticket.attention",
+        "threadRefs": [
+          "20339907-a658-419e-91bd-b0ac82986481"
+        ],
+        "text": "第二阶段最终 6–10 条摘要按哪个阅读重点取舍？请选择其一（AI科技优先 或 宏观经济优先）。\nAI科技优先：最终摘要优先选取 AI/科技主线候选，宏观经济条目压缩为背景。\n宏观经济优先：最终摘要优先选取宏观经济/政策主线候选，AI/科技条目压缩为背景。",
+        "ticketStatus": "waiting",
+        "currentInstructionRevision": 1,
+        "currentResultVersion": 0,
+        "continuationWait": null,
+        "attention": {
+          "id": "6199da01-8d9d-4da3-9e40-46ba4394d278",
+          "assignmentId": "desktop:d0b56c1c65fcf2944fe37654d5a25624a46bb7a9764ebc3af2e1251c835bcb5f",
+          "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+          "sessionId": "df37644e-846b-42cd-a0a0-e6877a1ef213",
+          "callId": "call-179b166c-af81-449a-8b5c-918576cd713a",
+          "question": {
+            "id": "final-focus",
+            "question": "第二阶段最终 6–10 条摘要按哪个阅读重点取舍？请选择其一（AI科技优先 或 宏观经济优先）。",
+            "header": "阅读重点",
+            "options": [
+              {
+                "label": "AI科技优先",
+                "description": "最终摘要优先选取 AI/科技主线候选，宏观经济条目压缩为背景。"
+              },
+              {
+                "label": "宏观经济优先",
+                "description": "最终摘要优先选取宏观经济/政策主线候选，AI/科技条目压缩为背景。"
+              }
+            ]
+          },
+          "outboxId": "43ca6487-c525-4bd0-968b-8051b05ef9ef",
+          "answerTriggerId": null,
+          "state": "waiting",
+          "createdAt": "2026-11-04T23:31:29.856Z",
+          "origin": "worker",
+          "instructionRevision": 1
+        }
+      }
+    },
+    "answer": {
+      "at": "2026-11-04T23:31:31.344Z",
+      "attentionId": "6199da01-8d9d-4da3-9e40-46ba4394d278",
+      "instructionRevision": 1,
+      "answer": {
+        "selected": [],
+        "custom": "本次测试用户选择：AI科技优先。请保留政治经济和社会民生的必要覆盖，最终总数仍为6–10条；在原工单与已有会话继续，直接交付到原聊天，不要新建工单。"
+      }
+    },
+    "answerReceipt": {
+      "id": "6199da01-8d9d-4da3-9e40-46ba4394d278",
+      "assignmentId": "desktop:d0b56c1c65fcf2944fe37654d5a25624a46bb7a9764ebc3af2e1251c835bcb5f",
+      "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+      "sessionId": "df37644e-846b-42cd-a0a0-e6877a1ef213",
+      "callId": "call-179b166c-af81-449a-8b5c-918576cd713a",
+      "question": {
+        "id": "final-focus",
+        "question": "第二阶段最终 6–10 条摘要按哪个阅读重点取舍？请选择其一（AI科技优先 或 宏观经济优先）。",
+        "header": "阅读重点",
+        "options": [
+          {
+            "label": "AI科技优先",
+            "description": "最终摘要优先选取 AI/科技主线候选，宏观经济条目压缩为背景。"
+          },
+          {
+            "label": "宏观经济优先",
+            "description": "最终摘要优先选取宏观经济/政策主线候选，AI/科技条目压缩为背景。"
+          }
+        ]
+      },
+      "outboxId": "43ca6487-c525-4bd0-968b-8051b05ef9ef",
+      "answerTriggerId": "5ae1e22c-9f83-4688-a4d9-b38d7a075bad",
+      "state": "answered",
+      "createdAt": "2026-11-04T23:31:29.856Z",
+      "origin": "worker",
+      "duplicate": false
+    }
+  },
+  "history": {
+    "threadId": "20339907-a658-419e-91bd-b0ac82986481",
+    "sessionId": "99ce5623-c185-4afd-a497-529c6db86f1d",
+    "messages": [
+      {
+        "seq": 8,
+        "id": "e2119988-c927-4010-b1fa-7fa2e5dd575a",
+        "role": "user",
+        "rpcId": "P0_WORKER_BLOCK_22fa35d3-caf1-4772-a865-12eb5ca14741",
+        "text": "请调研2026年11月4日的新闻热点，整理一份简明中文摘要交给用户。这里是明确的历史日期2026-11-04，不是执行当天。\n要求：\n1. 通过联网搜索/浏览实际抓取该日最新报道，注明信息来源与报道时间，不要凭记忆编造。\n2. 覆盖国内外政治经济、科技（尤其AI）、社会民生等主要领域的6–10条热点，每条1–2句话说明事件与影响。本次选择非生命科学领域新闻。\n3. 区分“已验证有多个可靠来源”与“单一来源/待确认”，转载同一报道不当成独立来源。\n4. 最后给出整体概览，用一句话总结当天的大势。\n5. 若某些渠道无法访问，如实说明缺失部分，不要补写。\n6. 直接在本次聊天中交付中文文本摘要即可，无需创建实际产物文件。热点用1.起的连续阿拉伯数字编号，来源写在对应条目中。\n请自主派工，并在开单时把上述数目、日期、来源、标注和文本交付条件写进工单任务书的验收条件。\n本次最终摘要需根据我的阅读重点取舍：AI科技优先或宏观经济优先。我尚未作出选择，不能替我默认。请先开原工单调查候选事实，候选调查后再向我问这个选择；我回答后在原工单继续并交付最终6–10条。不要在开单前问，也不要将未定稿当成最终交付。\n隔离运行编号：P0_WORKER_BLOCK_22fa35d3-caf1-4772-a865-12eb5ca14741。派工时在任务目标正文保留此编号便于关联；编号不改变验收条件。",
+        "content": [
+          {
+            "type": "text",
+            "text": "请调研2026年11月4日的新闻热点，整理一份简明中文摘要交给用户。这里是明确的历史日期2026-11-04，不是执行当天。\n要求：\n1. 通过联网搜索/浏览实际抓取该日最新报道，注明信息来源与报道时间，不要凭记忆编造。\n2. 覆盖国内外政治经济、科技（尤其AI）、社会民生等主要领域的6–10条热点，每条1–2句话说明事件与影响。本次选择非生命科学领域新闻。\n3. 区分“已验证有多个可靠来源”与“单一来源/待确认”，转载同一报道不当成独立来源。\n4. 最后给出整体概览，用一句话总结当天的大势。\n5. 若某些渠道无法访问，如实说明缺失部分，不要补写。\n6. 直接在本次聊天中交付中文文本摘要即可，无需创建实际产物文件。热点用1.起的连续阿拉伯数字编号，来源写在对应条目中。\n请自主派工，并在开单时把上述数目、日期、来源、标注和文本交付条件写进工单任务书的验收条件。\n本次最终摘要需根据我的阅读重点取舍：AI科技优先或宏观经济优先。我尚未作出选择，不能替我默认。请先开原工单调查候选事实，候选调查后再向我问这个选择；我回答后在原工单继续并交付最终6–10条。不要在开单前问，也不要将未定稿当成最终交付。\n隔离运行编号：P0_WORKER_BLOCK_22fa35d3-caf1-4772-a865-12eb5ca14741。派工时在任务目标正文保留此编号便于关联；编号不改变验收条件。"
+          }
+        ],
+        "time": 1793834505216
+      },
+      {
+        "seq": 30,
+        "id": "reply:e2119988-c927-4010-b1fa-7fa2e5dd575a",
+        "role": "assistant",
+        "kind": "final",
+        "requestId": "e2119988-c927-4010-b1fa-7fa2e5dd575a",
+        "text": "工单已开出，第一阶段——2026年11月4日的候选事实调查——已在后台启动。本次派工使用的是 routergo / deepseek-v4.1-flash。\n\n工单任务书里已写清验收条件：日期锁定在 2026-11-04（历史日期）；每条都要有可访问的原文链接、来源媒体和报道时间；10–14 条候选；覆盖国内外政治与宏观、科技（AI）、社会民生；明确排除生命科学类选题；区分“多源已验证”与“单一来源/待确认”，转载或同一通讯社稿件不算独立来源；无法访问的渠道要如实列出缺失部分；以中文文本交付。隔离运行编号 P0_WORKER_BLOCK_22fa35d3-caf1-4772-a865-12eb5ca14741 已保留在任务目标正文里。\n\n候选清单回来、我看过之后，会把 AI/科技主线和宏观经济/政策主线各占多少清楚地摆给你，请你确定以哪个为重点；你回复之后，我就在这张同一个工单上继续，定稿 6–10 条并给出概览句。现在还没定稿，候选清单不算最终交付。",
+        "content": [
+          {
+            "type": "text",
+            "text": "工单已开出，第一阶段——2026年11月4日的候选事实调查——已在后台启动。本次派工使用的是 routergo / deepseek-v4.1-flash。\n\n工单任务书里已写清验收条件：日期锁定在 2026-11-04（历史日期）；每条都要有可访问的原文链接、来源媒体和报道时间；10–14 条候选；覆盖国内外政治与宏观、科技（AI）、社会民生；明确排除生命科学类选题；区分“多源已验证”与“单一来源/待确认”，转载或同一通讯社稿件不算独立来源；无法访问的渠道要如实列出缺失部分；以中文文本交付。隔离运行编号 P0_WORKER_BLOCK_22fa35d3-caf1-4772-a865-12eb5ca14741 已保留在任务目标正文里。\n\n候选清单回来、我看过之后，会把 AI/科技主线和宏观经济/政策主线各占多少清楚地摆给你，请你确定以哪个为重点；你回复之后，我就在这张同一个工单上继续，定稿 6–10 条并给出概览句。现在还没定稿，候选清单不算最终交付。"
+          }
+        ],
+        "time": 1793834521082,
+        "usage": {
+          "inputTokens": 3378,
+          "outputTokens": 253,
+          "totalTokens": 13487,
+          "cacheReadTokens": 9856
+        }
+      }
+    ],
+    "requests": [
+      {
+        "threadId": "20339907-a658-419e-91bd-b0ac82986481",
+        "sessionId": "99ce5623-c185-4afd-a497-529c6db86f1d",
+        "requestId": "P0_WORKER_BLOCK_22fa35d3-caf1-4772-a865-12eb5ca14741",
+        "messageId": "e2119988-c927-4010-b1fa-7fa2e5dd575a",
+        "status": "processed",
+        "createdAt": "2026-11-04T23:21:45.012Z",
+        "updatedAt": "2026-11-04T23:22:01.105Z"
+      }
+    ],
+    "images": [],
+    "hasMore": false,
+    "nextBefore": null,
+    "status": "idle",
+    "running": false,
+    "activeReply": null,
+    "error": null,
+    "failures": [],
+    "model": {
+      "providerId": "routergo",
+      "modelId": "deepseek-v4.1-flash"
+    },
+    "reactions": {},
+    "notifications": [
+      {
+        "id": "022837f5-a11c-4ba8-92fe-6be8089bdc56",
+        "eventId": "022837f5-a11c-4ba8-92fe-6be8089bdc56",
+        "taskId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+        "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+        "threadId": "20339907-a658-419e-91bd-b0ac82986481",
+        "createdAt": "2026-11-04T23:31:30.425Z",
+        "title": "11/4新闻候选",
+        "status": "waiting",
+        "attentionId": "6199da01-8d9d-4da3-9e40-46ba4394d278",
+        "instructionRevision": 1,
+        "resultVersion": 0,
+        "seq": 1,
+        "readAt": null,
+        "type": "ticket.attention",
+        "threadRefs": [
+          "20339907-a658-419e-91bd-b0ac82986481"
+        ],
+        "text": "第二阶段最终 6–10 条摘要按哪个阅读重点取舍？请选择其一（AI科技优先 或 宏观经济优先）。\nAI科技优先：最终摘要优先选取 AI/科技主线候选，宏观经济条目压缩为背景。\n宏观经济优先：最终摘要优先选取宏观经济/政策主线候选，AI/科技条目压缩为背景。",
+        "ticketStatus": "open",
+        "currentInstructionRevision": 1,
+        "currentResultVersion": 0,
+        "continuationWait": null,
+        "attention": {
+          "id": "6199da01-8d9d-4da3-9e40-46ba4394d278",
+          "assignmentId": "desktop:d0b56c1c65fcf2944fe37654d5a25624a46bb7a9764ebc3af2e1251c835bcb5f",
+          "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+          "sessionId": "df37644e-846b-42cd-a0a0-e6877a1ef213",
+          "callId": "call-179b166c-af81-449a-8b5c-918576cd713a",
+          "question": {
+            "id": "final-focus",
+            "question": "第二阶段最终 6–10 条摘要按哪个阅读重点取舍？请选择其一（AI科技优先 或 宏观经济优先）。",
+            "header": "阅读重点",
+            "options": [
+              {
+                "label": "AI科技优先",
+                "description": "最终摘要优先选取 AI/科技主线候选，宏观经济条目压缩为背景。"
+              },
+              {
+                "label": "宏观经济优先",
+                "description": "最终摘要优先选取宏观经济/政策主线候选，AI/科技条目压缩为背景。"
+              }
+            ]
+          },
+          "outboxId": "43ca6487-c525-4bd0-968b-8051b05ef9ef",
+          "answerTriggerId": "5ae1e22c-9f83-4688-a4d9-b38d7a075bad",
+          "state": "answered",
+          "createdAt": "2026-11-04T23:31:29.856Z",
+          "origin": "worker",
+          "instructionRevision": 1
+        }
+      },
+      {
+        "id": "5fc00b45-b2a2-4a94-b63d-462f70f10190",
+        "eventId": "5fc00b45-b2a2-4a94-b63d-462f70f10190",
+        "taskId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+        "ticketId": "67e16fcb-4b0c-4539-b0d4-98c5071ffe4a",
+        "threadId": "20339907-a658-419e-91bd-b0ac82986481",
+        "createdAt": "2026-11-04T23:31:32.452Z",
+        "title": "11/4新闻候选",
+        "status": "open",
+        "instructionRevision": 1,
+        "resultVersion": 0,
+        "seq": 2,
+        "readAt": null,
+        "type": "ticket.result",
+        "threadRefs": [
+          "20339907-a658-419e-91bd-b0ac82986481"
+        ],
+        "origin": "system",
+        "systemState": {
+          "state": "continuation_wait",
+          "code": "UNAVAILABLE",
+          "stage": "execution"
+        },
+        "text": "系统状态：任务续做暂不可用。执行记录已保留，正在等待恢复所需条件。",
+        "publication": {
+          "action": "deliver",
+          "text": "系统状态：任务续做暂不可用。执行记录已保留，正在等待恢复所需条件。",
+          "origin": "system",
+          "systemState": {
+            "state": "continuation_wait",
+            "code": "UNAVAILABLE",
+            "stage": "execution"
+          }
+        },
+        "ticketStatus": "open",
+        "currentInstructionRevision": 1,
+        "currentResultVersion": 0,
+        "continuationWait": null
+      }
+    ]
+  }
+}

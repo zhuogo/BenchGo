@@ -13,7 +13,7 @@ internal fun parsePairingLink(raw: String): PairingLink {
     require(!uri.isOpaque && uri.rawUserInfo == null) { "配对地址无效" }
     val query = pairingParameters(uri.rawQuery)
     val result = when (uri.scheme) {
-        "dshlink" -> {
+        "benchgo", "dshlink" -> {
             require(uri.host == "pair" && uri.port == -1 && uri.rawFragment == null &&
                 (uri.rawPath.isNullOrEmpty() || uri.rawPath == "/")) { "配对地址无效" }
             val hostUri = URI(query["url"] ?: error("配对地址缺少主机"))

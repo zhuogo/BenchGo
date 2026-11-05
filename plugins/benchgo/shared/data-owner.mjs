@@ -1,0 +1,67 @@
+import { lstat, mkdir, open, readFile, rm } from 'node:fs/promises';
+import { hostname } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { withFileLock } from '@deepseek-ai/dsh-atomic-write';
+
+const failure = (code, message, cause) => Object.assign(new Error(message, { cause }), { code });
+
+/** Single-machine ownership; only a confirmed exited process permits recovery. */
+export class DataOwner {
+  constructor(directory) { this.directory = directory; }
+
+  async open() {
+    if (this.lock) throw failure('BENCHGO_DATA_LOCKED', 'BenchGo store is already open');
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    this.lockPath = join(this.directory, 'owner.lock');
+    this.guardPath = join(this.directory, 'owner-guard');
+    // The short-lived official writer lock serializes recovery with acquisition
+    // and release, so competing recoverers cannot remove a successor's lock.
+    await withFileLock(this.guardPath, async () => {
+      let existing;
+      try {
+        const metadata = await lstat(this.lockPath);
+        if (!metadata.isFile() || metadata.isSymbolicLink()) throw failure('BENCHGO_LOCK_UNREADABLE', 'BenchGo owner lock is not a regular file; existing data was preserved');
+        existing = await readFile(this.lockPath, 'utf8');
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+      if (existing !== undefined) {
+        let owner;
+        try { owner = JSON.parse(existing); }
+        catch (cause) { throw failure('BENCHGO_LOCK_UNREADABLE', 'BenchGo owner lock is unreadable; existing data was preserved', cause); }
+        if (!owner || typeof owner !== 'object' || !Number.isInteger(owner.pid) || owner.pid <= 0 || owner.pid > 2147483647 || typeof owner.host !== 'string' || !owner.host) {
+          throw failure('BENCHGO_LOCK_UNREADABLE', 'BenchGo owner lock has an invalid PID or host; existing data was preserved');
+        }
+        if (owner.host !== hostname()) throw failure('BENCHGO_LOCK_OTHER_HOST', 'BenchGo data directory is owned by another host');
+        let exited = false;
+        try { process.kill(owner.pid, 0); }
+        catch (cause) {
+          if (cause.code === 'ESRCH') exited = true;
+          else throw failure('BENCHGO_LOCK_PROBE_FAILED', 'BenchGo cannot verify the owner process; existing lock was preserved', cause);
+        }
+        if (!exited) throw failure('BENCHGO_DATA_LOCKED', 'BenchGo data directory is already in use');
+        await rm(this.lockPath);
+      }
+      const lock = await open(this.lockPath, 'wx', 0o600);
+      const record = JSON.stringify({ pid: process.pid, host: hostname(), token: randomUUID() });
+      try { await lock.writeFile(record); }
+      catch (error) { await lock.close(); await rm(this.lockPath, { force: true }); throw error; }
+      this.lock = lock;
+      this.lockRecord = record;
+    });
+  }
+
+  async close() {
+    if (!this.lock) return;
+    await withFileLock(this.guardPath, async () => {
+      if (!this.lock) return;
+      await this.lock.close(); this.lock = undefined;
+      let record;
+      try { record = await readFile(this.lockPath, 'utf8'); }
+      catch (error) { if (error.code === 'ENOENT') return; throw error; }
+      if (record !== this.lockRecord) throw failure('BENCHGO_LOCK_OWNERSHIP_CHANGED', 'BenchGo owner lock changed; successor lock was preserved');
+      await rm(this.lockPath);
+    });
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "at": "2026-11-04T16:45:45.224Z",
+  "reason": "Real Worker hit its unchanged 10-minute deadline; original Assignment became uncertain, Ticket stayed open and no result/status was delivered. Runner then reached its 12-minute observation deadline and failed honestly. By the time an explicit parent-directed stop was attempted, the isolated child had already exited (ESRCH) and normal runner cleanup had completed.",
+  "lastObserved": {
+    "at": "2026-11-04T16:43:37.570Z",
+    "routerRunning": false,
+    "ticketId": "0700aa52-21ea-471e-b557-49469d056ef9",
+    "ticketStatus": "open",
+    "resultVersion": 0,
+    "assignments": [
+      {
+        "id": "desktop:af97de7cd1a9b9af7b6b2f369366e05c74bdaaecc474c77a4c11e3dda9d712c3",
+        "state": "uncertain",
+        "fence": 1
+      }
+    ],
+    "attentions": [],
+    "deliveries": []
+  },
+  "isolatedChildPid": 57860,
+  "cleanup": {
+    "childStopped": true,
+    "isolatedDirectoryRemoved": true
+  },
+  "runnerFinishedAt": "2026-11-04T16:45:19.488Z"
+}

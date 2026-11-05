@@ -39,14 +39,14 @@ jobs:
         run: |
           npm ci --prefix plugins/link
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm ci --prefix plugins/commander
+          npm ci --prefix plugins/benchgo
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build:plus
           exit $LASTEXITCODE
       - name: Build full Windows installer and verify runtime
         run: npm run package:plus:win
       - name: Verify plugin enrollment and legacy shadow migration
-        run: node --test scripts/desktop/plugin-bundle.test.mjs plugins/commander/test/plugin-install.test.mjs
+        run: node --test scripts/desktop/plugin-bundle.test.mjs plugins/benchgo/test/plugin-install.test.mjs
       - name: Download previous installer for in-place upgrade verification
         env:
           GH_TOKEN: ${{ github.token }}

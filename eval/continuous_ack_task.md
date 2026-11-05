@@ -1,0 +1,2 @@
+你负责持久接单确认和来源交付。读docs/06-superagent/持续主会话后端.md。前端禁止修改。
+独占 desktop-ticket-store.mjs、必要新的ticket-ack模块、result-delivery.mjs、notification-publication.mjs及测试。不得改orchestration-store.mjs（recovery代理负责）、runtime-store.mjs、service.mjs（root负责）、engine。研究已有outbox和desktop delivery，工单成功落库后产生一次确认，绑定原来源和ticketId；桌面与飞书共用能力，不能只promise后内存通知。尽量通过现有事务store扩展安装器或调度原子方法实现，若需orchestration-store接线把明确补丁建议写eval/continuous_ack_wiring.md由root接入。不能把模型Worker原文转发为确认，不对已完成历史工单补发确认。与最终结果去重独立，pending确认不应晚于最终结果发出。完成测试，写eval/continuous_ack_result.md，不build/restart。

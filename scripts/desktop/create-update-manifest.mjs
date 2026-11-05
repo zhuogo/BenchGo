@@ -2,7 +2,7 @@ import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'nod
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { releaseDownloadUrl, validateReleaseManifest } from '../../plugins/commander/shared/update-feed.mjs';
+import { releaseDownloadUrl, validateReleaseManifest } from '../../plugins/benchgo/shared/update-feed.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -26,7 +26,7 @@ export async function createUpdateManifest({ pluginPath, outDir, version, engine
   });
   const payload = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
   const signature = sign(null, payload, key);
-  const trusted = createPublicKey(publicKey ?? await readFile(new URL('../../plugins/commander/shared/update-public-key.pem', import.meta.url)));
+  const trusted = createPublicKey(publicKey ?? await readFile(new URL('../../plugins/benchgo/shared/update-public-key.pem', import.meta.url)));
   if (trusted.asymmetricKeyType !== 'ed25519' || !verify(null, payload, trusted, signature)) throw new Error('发布密钥与客户端内置信任公钥不匹配');
   await mkdir(outDir, { recursive: true });
   await writeFile(path.join(outDir, 'benchgo-update.json'), payload);
@@ -43,7 +43,7 @@ async function main() {
     if (!allowed.has(option) || !value || value.startsWith('--')) throw new Error(`未知参数或缺少参数值：${option}`);
     options[option] = value;
   }
-  const pkg = JSON.parse(await readFile(path.join(root, 'plugins/commander/package.json'), 'utf8'));
+  const pkg = JSON.parse(await readFile(path.join(root, 'plugins/benchgo/package.json'), 'utf8'));
   const upstream = JSON.parse(await readFile(path.join(root, 'upstream.json'), 'utf8'));
   const outDir = path.resolve(options['--out'] || path.join(root, 'artifacts/plugins'));
   let app;

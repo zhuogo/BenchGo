@@ -2,8 +2,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { copyFile, access, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createElectronBuilderConfig } from '../../deepseek-harness/apps/desktop/scripts/electron-builder-config.mjs';
-import { prepareDesktopBrand } from './prepare-brand.mjs';
+import { prepareDesktopBrand, prepareDesktopRenderer } from './prepare-brand.mjs';
 import { verifyTrayBundle } from './prepare-tray.mjs';
 import { verifyStartupBundle } from './prepare-startup.mjs';
 
@@ -30,6 +31,7 @@ const officialBeforeBuild = config.beforeBuild;
 config.beforeBuild = async (...args) => {
   const result = await officialBeforeBuild(...args);
   await prepareDesktopBrand(root, brandOutput);
+  await prepareDesktopRenderer(root, `${brandOutput}/renderer`);
   await copyFile(`${root}/deepseek-harness/apps/desktop/.desktop-build/targets/win-x64/installer-ui/window-frame.dll`, `${brandOutput}/window-frame.dll`);
   return result;
 };
@@ -72,28 +74,49 @@ process.once('exit', () => {
   writeFileSync(desktopMain, officialMainBytes);
 });
 config.files.push('!renderer/welcome.html',
-  { from: `${root}/scripts/desktop/renderer`, to: 'renderer', filter: ['**/*'] });
+  { from: `${brandOutput}/renderer`, to: 'renderer', filter: ['**/*'] });
 // A physical runtime also lets installation initialize a profile entirely offline.
 config.asarUnpack.push('**/dsh/**/*');
 config.extraResources.push({ from: `${root}/scripts/desktop/plugin-bundle.mjs`, to: 'benchgo/plugin-bundle.mjs' });
-config.extraResources.push({ from: `${root}/plugins/commander/shared/plugin-install.mjs`, to: 'benchgo/shared/plugin-install.mjs' });
-config.extraResources.push({ from: `${root}/plugins/commander/shared/update-feed.mjs`, to: 'benchgo/shared/update-feed.mjs' });
+config.extraResources.push({ from: `${root}/plugins/benchgo/shared/plugin-install.mjs`, to: 'benchgo/shared/plugin-install.mjs' });
+config.extraResources.push({ from: `${root}/plugins/benchgo/shared/update-feed.mjs`, to: 'benchgo/shared/update-feed.mjs' });
 const pluginSeed = `${root}/deepseek-harness/apps/desktop/.desktop-build/targets/win-x64/plus-seed`;
 config.extraResources.push({ from: pluginSeed, to: 'benchgo/seed', filter: ['**/*'] });
 // Like the official runtime mapping, the seed needs an explicit node_modules
 // source: electron-builder excludes a source directory's root node_modules.
 config.extraResources.push({ from: `${pluginSeed}/node_modules`, to: 'benchgo/seed/node_modules', filter: ['**/*'] });
+
+/** Check the published entry contract instead of retaining pre-split source paths. */
+export async function verifyPackagedPluginSeed(seed) {
+  await access(join(seed, 'release.json'));
+  const plugin = join(seed, 'node_modules', 'benchgo-plugin');
+  const manifest = JSON.parse(await readFile(join(plugin, 'package.json'), 'utf8'));
+  const files = new Set(['lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'cordis.patch.yml']);
+  for (const key of ['.', './harness-plugin', './superagent-plugin', './voice-plugin', './link-plugin', './runtime']) {
+    const entry = manifest.exports?.[key];
+    if (typeof entry !== 'string' || !entry.endsWith('.mjs')) throw new Error(`Packaged BenchGo export is missing: ${key}`);
+    files.add(entry);
+  }
+  for (const file of files) {
+    const target = resolve(plugin, file), child = relative(plugin, target);
+    if (isAbsolute(child) || child === '..' || child.startsWith(`..${sep}`)) throw new Error(`Packaged BenchGo entry escapes package: ${file}`);
+    await access(target);
+  }
+}
+
 config.afterPack = async context => {
   await officialAfterPack?.(context);
   const require = createRequire(new URL('../../deepseek-harness/apps/desktop/package.json', import.meta.url));
   const { extractFile } = createRequire(require.resolve('app-builder-lib'))('@electron/asar');
   verifyTrayBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
   verifyStartupBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
-  extractFile(`${context.appOutDir}/resources/app.asar`, 'renderer/splash.html');
-  const seed = `${context.appOutDir}/resources/benchgo/seed`;
-  for (const file of ['release.json', 'node_modules/benchgo-plugin/package.json', 'node_modules/benchgo-plugin/src/plugin.mjs', 'node_modules/benchgo-plugin/lib/client.js', 'node_modules/benchgo-plugin/lib/link.mjs', 'node_modules/benchgo-plugin/lib/link-web/index.html', 'node_modules/benchgo-plugin/voice/src/plugin.mjs']) {
-    await access(`${seed}/${file}`);
+  const startupIcon = `data:image/svg+xml;base64,${(await readFile(`${root}/assets/brand/benchgo-app.svg`)).toString('base64')}`;
+  for (const name of ['welcome.html', 'splash.html']) {
+    if (!extractFile(`${context.appOutDir}/resources/app.asar`, `renderer/${name}`).toString('utf8').includes(startupIcon)) {
+      throw new Error(`Packaged BenchGo startup artwork does not match the brand master: ${name}`);
+    }
   }
+  await verifyPackagedPluginSeed(`${context.appOutDir}/resources/benchgo/seed`);
 };
 config.publish = [{ provider: 'generic', url: 'https://ghfast.top/https://github.com/zhuogo/BenchGo/releases/download/app-updates/', channel: 'latest' }];
 config.nsis.shortcutName = 'BenchGo';

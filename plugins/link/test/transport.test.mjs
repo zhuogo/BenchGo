@@ -49,13 +49,37 @@ test('single-use pairing needs desktop approval and a secret poll token; devices
   await assert.rejects(f.store.decide(query.requestId, true), /失效/);
   const approved = (await f.call('/link/api/pair/status', { body: query })).value;
   assert.equal(approved.status, 'approved');
+  assert.equal(approved.hostName, f.store.state.name);
+  assert.equal(approved.name, f.store.state.name);
+  await f.store.renameDevice(approved.deviceId, '随身手机');
+  assert.equal(f.store.state.devices[0].name, 'Phone', 'a local alias cannot change the paired device identity');
+  assert.equal(f.store.state.devices[0].alias, '随身手机');
+  await assert.rejects(f.store.renameDevice(approved.deviceId, '   '), /备注/);
+  await assert.rejects(f.store.renameDevice('missing', '手机'), /不存在/);
   assert.equal((await f.call('/link/api/rpc', { token: approved.token, body: { action: 'state' } })).value.device, approved.deviceId);
   assert(!(await readFile(join(f.directory, 'devices.json'), 'utf8')).includes(approved.token));
   const reopened = await openStore(f.directory);
   assert.equal(reopened.authenticate(approved.token).id, approved.deviceId);
+  assert.equal(reopened.state.devices[0].alias, '随身手机');
   await f.store.revoke(approved.deviceId);
   assert.equal((await f.call('/link/api/rpc', { token: approved.token })).status, 401);
   assert.equal((await f.call('/link/api/pair/status', { body: query })).status, 400);
+});
+
+test('pairing expiry does not expire durable device credentials and revoked tokens stay rejected', async t => {
+  const f = await setup(t), pairing = f.store.begin();
+  const request = f.store.request(pairing.code);
+  await f.store.decide(request.requestId, true);
+  const approved = f.store.poll(request.requestId, request.pollToken);
+  const now = Date.now();
+  t.mock.method(Date, 'now', () => now + 301_000);
+  assert.throws(() => f.store.poll(request.requestId, request.pollToken), /过期/);
+  assert.equal(f.store.authenticate(approved.token).id, approved.deviceId);
+  assert.equal((await f.call('/link/api/rpc', { token: approved.token })).status, 200);
+  const restored = await openStore(f.directory);
+  assert.equal(restored.authenticate(approved.token).id, approved.deviceId);
+  await f.store.revoke(approved.deviceId);
+  assert.equal((await f.call('/link/api/rpc', { token: approved.token })).status, 401);
 });
 test('cross-origin, forged Host, admin RPC, traversal and oversized bodies are blocked', async t => {
   const f = await setup(t);

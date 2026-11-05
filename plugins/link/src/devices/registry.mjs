@@ -37,7 +37,7 @@ export function normalizeRoutes(value) {
     };
   });
 }
-export async function openDeviceRegistry(directory) {
+export async function openDeviceRegistry(directory, { localName = () => '本机' } = {}) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const file = join(directory, 'connections.json');
   let state = { version: 1, activeId: 'local', devices: [] };
@@ -53,19 +53,20 @@ export async function openDeviceRegistry(directory) {
   };
   const get = id => { const result = state.devices.find(value => value.id === id); if (!result) throw new Error('设备不存在'); return result; };
   const publicDevice = value => ({ id: value.id, name: value.name, kind: value.kind, url: value.kind === 'ssh' ? value.ssh?.host : value.url, status: value.status || 'unknown', lastError: value.lastError || null, currentPath: value.currentPath ?? null, ...(value.warning ? { warning: value.warning } : {}) });
+  const localDevice = () => ({ id: 'local', name: localName(), kind: 'local', status: 'online' });
   return {
     get, publicDevice,
-    list() { return { activeId: state.activeId, devices: [{ id: 'local', name: '本机', kind: 'local', status: 'online' }, ...state.devices.map(publicDevice)] }; },
+    list() { return { activeId: state.activeId, devices: [localDevice(), ...state.devices.map(publicDevice)] }; },
     async upsert(input) {
       const target = normalizeTarget(input), routes = normalizeRoutes(input.routes), existing = input.id ? state.devices.find(value => value.id === input.id) : state.devices.find(value => value.kind !== 'ssh' && value.url === target.url && value.pin === target.pin);
       if (state.devices.length >= 32 && !existing) throw new Error('最多保存 32 台设备');
       if (typeof input.token !== 'string' || !input.token || input.token.length > 4096) throw new Error('设备授权无效');
-      const value = { ...existing, ...input, ...target, ...(routes === undefined ? {} : { routes }), id: existing?.id || input.id || randomUUID(), name: label(input.name || existing?.name || new URL(target.url).hostname), kind: input.kind === 'ssh' ? 'ssh' : 'computer', status: 'online', lastError: null, currentPath: existing?.currentPath ?? null };
+      const value = { ...existing, ...input, ...target, ...(routes === undefined ? {} : { routes }), id: existing?.id || input.id || randomUUID(), name: label(existing?.alias || input.name || existing?.name || `BenchGo-${randomUUID().slice(0, 6)}`), kind: input.kind === 'ssh' ? 'ssh' : 'computer', status: 'online', lastError: null, currentPath: existing?.currentPath ?? null };
       state.devices = [...state.devices.filter(row => row.id !== value.id), value];
       await persist(); return publicDevice(value);
     },
-    async select(id) { if (id !== 'local') get(id); state.activeId = id; await persist(); return id === 'local' ? { id, name: '本机', kind: 'local', status: 'online' } : publicDevice(get(id)); },
-    async rename(id, name) { const value = get(id); value.name = label(name); await persist(); return publicDevice(value); },
+    async select(id) { if (id !== 'local') get(id); state.activeId = id; await persist(); return id === 'local' ? localDevice() : publicDevice(get(id)); },
+    async rename(id, name) { const value = get(id); value.alias = value.name = label(name); await persist(); return publicDevice(value); },
     async remove(id) { get(id); state.devices = state.devices.filter(row => row.id !== id); if (state.activeId === id) state.activeId = 'local'; await persist(); },
     mark(id, status, lastError = null) { const value = get(id); value.status = status; value.lastError = lastError; },
     markRoute(id, kind) { if (kind !== 'direct' && kind !== 'relay') throw new Error('设备连接路线无效'); get(id).currentPath = kind; },

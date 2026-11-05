@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { bash, requiresBash } from './platform.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 test('bootstrap rejects a modified payload before creating an installation or running commands', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-bootstrap-integrity-'));
@@ -15,8 +16,9 @@ test('bootstrap rejects a modified payload before creating an installation or ru
   const result = spawnSync(process.execPath, [join(directory, 'bootstrap.mjs'), 'mirror', 'connect'], { env: { ...process.env, HOME: join(directory, 'home') }, encoding: 'utf8' });
   assert.notEqual(result.status, 0); assert.match(result.stderr, /插件包校验失败/); assert.equal(result.stdout, '');
 });
-test('installer fails closed for unsupported source and never accepts command-shaped parameters', () => {
-  const result = spawnSync('bash', [join(root, 'scripts/server/bootstrap.sh'), 'mirror;touch /tmp/not-allowed', 'connect'], { encoding: 'utf8' });
+test('installer fails closed for unsupported source and never accepts command-shaped parameters', requiresBash, async () => {
+  const source = (await readFile(join(root, 'scripts/server/bootstrap.sh'), 'utf8')).replace(/\r\n/g, '\n');
+  const result = spawnSync(bash, ['-s', '--', 'mirror;touch /tmp/not-allowed', 'connect'], { input: source, encoding: 'utf8' });
   assert.notEqual(result.status, 0); assert.match(result.stderr, /无效下载源/);
 });
 test('generated launcher is valid JavaScript and redacts split token chunks before journald', async t => {

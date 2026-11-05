@@ -116,6 +116,9 @@ export function createRelayHost(options) {
         control = new WebSocket(controlUrl, { headers: { authorization: 'Bearer ' + options.token }, ...(options.relayCa ? { ca: options.relayCa } : {}), handshakeTimeout: 10_000, maxPayload: 16 * 1024, perMessageDeflate: false });
         const currentControl = control;
         sockets.add(currentControl); currentControl.once('close', () => sockets.delete(currentControl));
+        let opened = false;
+        // terminate() during CONNECTING emits an asynchronous error after handshake cleanup.
+        currentControl.on('error', error => { if (opened && !closed) { lastError = error.message; options.onError?.(error); } });
         await new Promise((resolve, reject) => {
           let settled = false;
           const finish = error => {
@@ -124,15 +127,14 @@ export function createRelayHost(options) {
             currentControl.off('open', onOpen); currentControl.off('error', onError); currentControl.off('close', onClose);
             if (error) reject(error); else resolve();
           };
-          const onOpen = () => { connected = true; lastError = null; delay = 1000; finish(); };
+          const onOpen = () => { opened = true; connected = true; lastError = null; delay = 1000; finish(); };
           const onError = error => finish(error);
           const onClose = () => finish(new Error('中继在握手完成前关闭'));
-          const timer = setTimeout(() => { currentControl.terminate(); finish(new Error('中继连接超时')); }, 10_000); timer.unref?.();
+          const timer = setTimeout(() => { finish(new Error('中继连接超时')); currentControl.terminate(); }, 10_000); timer.unref?.();
           currentControl.once('open', onOpen); currentControl.once('error', onError); currentControl.once('close', onClose);
         });
         let lastPong = Date.now();
-        currentControl.on('error', error => { if (!closed) { lastError = error.message; options.onError?.(error); } });
-        control.on('pong', () => { lastPong = Date.now(); });
+        currentControl.on('pong', () => { lastPong = Date.now(); });
         heartbeat = setInterval(() => {
           if (currentControl.readyState !== WebSocket.OPEN) return;
           if (Date.now() - lastPong > 45_000) { currentControl.terminate(); return; }
@@ -155,7 +157,6 @@ export function createRelayHost(options) {
       if (closed) return;
       closed = true; clearTimeout(retryTimer); retryResolve?.(); retryResolve = undefined; connected = false;
       clearInterval(heartbeat);
-      control?.close(1001, 'host stopped');
       for (const socket of sockets) socket.terminate();
       agent.destroy(); await Promise.allSettled([...work]); work.clear();
     },

@@ -1,0 +1,446 @@
+﻿{
+  "sessionId": "d407b6da-bbea-420f-bdb3-0fd0ba4b863a",
+  "updatedAt": "2026-11-04T16:43:34.913Z",
+  "compressedBytes": 216369,
+  "decodedBytes": 216369,
+  "counts": {
+    "session": 1,
+    "permission/preset": 1,
+    "sandbox/mode": 1,
+    "approval/policy": 1,
+    "agent/inbox/spliced": 2,
+    "turn/start": 1,
+    "step/start": 20,
+    "system/message": 1,
+    "user/message": 4,
+    "request/header": 1,
+    "request/context": 1,
+    "session/title": 2,
+    "session/title-llm-request": 1,
+    "assistant/message": 19,
+    "tool/call": 64,
+    "tool/result": 64,
+    "job/registered": 1,
+    "job/settled": 1,
+    "step/end": 19
+  },
+  "tools": [
+    {
+      "name": "web_search",
+      "hosts": []
+    },
+    {
+      "name": "pwsh",
+      "hosts": []
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.reuters.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.bbc.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "apnews.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.aljazeera.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.theguardian.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "english.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.chinadaily.com.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.scmp.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www3.nhk.or.jp"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "feeds.bbci.co.uk"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.chinadaily.com.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.chinadaily.com.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.chinadaily.com.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.chinadaily.com.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "tass.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.theverge.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.theverge.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "techcrunch.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.dw.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.france24.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.france24.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www3.nhk.or.jp"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.bbc.co.uk"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.aljazeera.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.reuters.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.pbc.gov.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.euronews.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.npr.org"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.politico.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.axios.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.timesofisrael.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.npr.org"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.npr.org"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "english.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.chinadaily.com.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.cnbc.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.japantimes.co.jp"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.straitstimes.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.news.cn"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.theverge.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.npr.org"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "techcrunch.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.theverge.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "arstechnica.com"
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "hosts": [
+        "www.gov.cn"
+      ]
+    }
+  ],
+  "toolResultStats": {
+    "total": 64,
+    "markedError": 22,
+    "notMarkedError": 42
+  },
+  "lastEvents": [
+    {
+      "type": "tool/call",
+      "seq": 198,
+      "time": 1793810595270
+    },
+    {
+      "type": "tool/result",
+      "seq": 199,
+      "time": 1793810609033
+    },
+    {
+      "type": "tool/result",
+      "seq": 200,
+      "time": 1793810614827
+    },
+    {
+      "type": "tool/result",
+      "seq": 201,
+      "time": 1793810614828
+    },
+    {
+      "type": "step/end",
+      "seq": 202,
+      "time": 1793810614829
+    },
+    {
+      "type": "step/start",
+      "seq": 203,
+      "time": 1793810614901
+    }
+  ]
+}
