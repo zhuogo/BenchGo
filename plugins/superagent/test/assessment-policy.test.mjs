@@ -36,6 +36,23 @@ test('platform members receive task authority only within enabled Feishu scope',
 });
 import { readAssessmentPolicy, authorizeAssessment, validateTicketMandate } from '../src/assessment-policy.mjs';
 
+test('assessment keeps Router and Worker role queues separate and resolves Worker inheritance', async () => {
+  const router = { providerId: 'Router/@', modelId: 'Exact: Router/1' };
+  const worker = { providerId: 'Worker/@', modelId: 'Exact: Worker/2' };
+  const auxiliary = { models: [{ providerId: 'Aux/@', modelId: 'Exact: Aux/3' }], capabilities: ['review'] };
+  let config = { revision: 1, models: [router], workerModels: [worker], auxiliary };
+  const store = { getConfig: async () => config, connections: { read: () => ({ revision: 1, config: {} }) }, documents: { read: async () => ({ hash: 'rules', content: '' }) } };
+  const policy = await readAssessmentPolicy(store);
+  assert.deepEqual(policy.model, router);
+  assert.deepEqual(policy.models, [router]);
+  assert.deepEqual(policy.workerModels, [worker]);
+  assert.deepEqual(policy.routingConfig, config);
+  for (const workerModels of [[], undefined]) {
+    config = { ...config, workerModels };
+    assert.deepEqual((await readAssessmentPolicy(store)).workerModels, [router]);
+  }
+});
+
 test('policy binds disk rules and channel revision; revoked ownership cannot open tickets', async () => {
   let revision = 1, configRevision = 1, hash = 'rules-1';
   const connection = { enabled: true, appId: 'app', chatIds: ['chat'], ownerOpenIds: ['owner'] };

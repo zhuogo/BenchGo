@@ -20,7 +20,8 @@ export function createDesktopTicketAccess(database) {
       const rows = database.listTickets({ ...(scope ? { ownerSessionIds: scope.sessionIds, ownerThreadId: scope.threadId } : {}), status, projectId, limit: limit + 1, offset, newestFirst: true });
       return {
         tickets: rows.slice(0, limit).map(ticket => ({
-          id: ticket.id, title: normalizeTicketTitle(ticket.title, ticket.target), status: ticket.status,
+          id: ticket.id, title: normalizeTicketTitle(ticket.title, ticket.target), status: ticket.status, liveSummary: ticket.liveSummary,
+          adjustmentOfTicketId: ticket.adjustmentOfTicketId,
           project: ticket.mandate.project, threadId: ticket.threadId,
           instructionRevision: ticket.instructionRevision,
           createdAt: ticket.createdAt, updatedAt: ticket.updatedAt,

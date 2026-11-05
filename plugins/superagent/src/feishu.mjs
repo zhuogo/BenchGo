@@ -1,4 +1,5 @@
 import { createHash, createDecipheriv, timingSafeEqual } from 'node:crypto';
+import { beforeDelivery, deliveryFailure, httpRejected } from './channels/delivery-outcome.mjs';
 
 const origin = 'https://open.feishu.cn/open-apis';
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -114,11 +115,12 @@ export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalC
   const request = async (path, options) => {
     let response;
     try { response = await fetcher(origin + path, { ...options, redirect: 'error', signal: AbortSignal.any([shutdown.signal, AbortSignal.timeout(requestTimeoutMs), ...(options?.signal ? [options.signal] : [])]) }); }
-    catch { throw fail('飞书请求未取得确定回执', 502); }
+    catch { throw deliveryFailure('飞书请求未取得确定回执', 'unknown', 502); }
     let body;
-    try { body = await response.json(); } catch { throw fail('飞书返回无效回执', 502); }
+    try { body = await response.json(); } catch { throw deliveryFailure('飞书返回无效回执', 'unknown', 502); }
     // Do not expose provider error text: it can echo request bodies or credentials.
-    if (!response.ok || body?.code !== 0) throw fail(`飞书接口失败（HTTP ${response.status}，code ${Number.isInteger(body?.code) ? body.code : 'unknown'}）`, 502);
+    if (!response.ok || body?.code !== 0) throw deliveryFailure(`飞书接口失败（HTTP ${response.status}，code ${Number.isInteger(body?.code) ? body.code : 'unknown'}）`,
+      Number.isInteger(body?.code) && body.code !== 0 || httpRejected(response.status) ? 'not_sent' : 'unknown', 502);
     return body;
   };
   const accessToken = async config => {
@@ -141,9 +143,12 @@ export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalC
     if (JSON.stringify(current) !== JSON.stringify(config)) throw fail('飞书连接配置已变更，请重试', 409);
   };
   const api = async (config, path, options = {}, requireEnabled = true) => {
-    const bearer = await accessToken(config);
-    // Token acquisition may await the network; revocation must take effect before sending.
-    await stillCurrent(config, requireEnabled);
+    const bearer = await beforeDelivery(async () => {
+      const token = await accessToken(config);
+      // Token acquisition may await the network; revocation takes effect before sending.
+      await stillCurrent(config, requireEnabled);
+      return token;
+    });
     return request(path, { ...options, headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` } });
   };
   return {
@@ -270,13 +275,16 @@ export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalC
       }
     },
     async send({ source, text, idempotencyKey }) {
-      const config = await readConfig(); enabled(config);
-      if (source?.channel !== 'feishu' || !id(source.messageId) || !feishuSourceAllowed(config, source)) throw fail('飞书交付来源不在当前连接范围', 403);
-      if (typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > 20_000 || !id(idempotencyKey)) throw fail('飞书交付内容或幂等键无效');
+      const config = await beforeDelivery(async () => {
+        const current = await readConfig(); enabled(current);
+        if (source?.channel !== 'feishu' || !id(source.messageId) || !feishuSourceAllowed(current, source)) throw fail('飞书交付来源不在当前连接范围', 403);
+        if (typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > 20_000 || !id(idempotencyKey)) throw fail('飞书交付内容或幂等键无效');
+        return current;
+      });
       const uuid = createHash('sha256').update(config.appId + '\0' + idempotencyKey).digest('hex').slice(0, 32);
       try {
         const body = await api(config, `/im/v1/messages/${encodeURIComponent(source.messageId)}/reply`, { method: 'POST', body: JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }), uuid, reply_in_thread: source.replyInThread === true }) });
-        if (!id(body.data?.message_id)) throw fail('飞书发送回执缺少消息标识', 502);
+        if (!id(body.data?.message_id)) throw deliveryFailure('飞书发送回执缺少消息标识', 'unknown', 502);
         state.sending = 'verified'; state.lastSendAt = now(); state.error = null;
         return { status: 'accepted', messageId: body.data.message_id, idempotencyKey, uuid };
       } catch (error) { state.sending = 'failed'; state.error = error.message; throw error; }

@@ -9,6 +9,7 @@ import { readAssessmentPolicy, authorizeAssessment } from '../src/assessment-pol
 import { ingestAssistantEvent } from '../src/intake.mjs';
 import { createDirectReplyDelivery } from '../src/direct-reply-delivery.mjs';
 import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
+import { deliveryFailure } from '../src/channels/delivery-outcome.mjs';
 
 async function fixture(t, { kind = 'answer', send, actorKind = 'human', available = true } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-direct-delivery-'));
@@ -74,6 +75,15 @@ test('unknown transport outcome stays uncertain and never blindly retries', asyn
   await h.sender.tick(); await h.sender.tick();
   assert.equal(h.calls.length, 1);
   assert.equal(h.store.orchestration.directReplies()[0].state, 'uncertain');
+});
+
+test('proven unsent transport rejection queues backoff without immediate duplicate send', async t => {
+  const h = await fixture(t, { send: async () => { throw deliveryFailure('rejected', 'not_sent'); } });
+  await h.sender.tick(); await h.sender.tick();
+  const row = h.store.orchestration.directReplies()[0];
+  assert.equal(h.calls.length, 1);
+  assert.equal(row.state, 'queued');
+  assert.ok(row.nextAt > Date.now());
 });
 
 test('missing transport retains a queued reply with retry backoff', async t => {

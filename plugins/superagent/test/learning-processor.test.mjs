@@ -6,14 +6,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createOwnedSkills } from '../src/owned-skills.mjs';
 
-function fixture(output, ownedSkills) {
+function fixture(output, ownedSkills, original = '我偏好中文回复') {
   const candidates = [], requests = [];
   let settings = { enabled: true, excludedScopes: [], excludedTerms: ['私密'], hash: 'p1' };
   const store = { ownedSkills, getConfig: async () => ({ models: [{ providerId: 'provider', modelId: 'Exact:ID' }] }), memory: {
     learning: async () => settings, propose: async (input, options) => { candidates.push({ input, options }); return { status: 'accepted' }; },
   } };
   const ctx = { sessionQuery: { readSession: async () => ({ events: [
-    { type: 'user/message', data: { id: 'visible', source: { kind: 'user' }, content: [{ type: 'text', text: '我偏好中文回复' }] } },
+    { type: 'user/message', data: { id: 'visible', source: { kind: 'user' }, content: [{ type: 'text', text: original }] } },
     { type: 'user/message', data: { id: 'hidden', source: { kind: 'user' }, content: [{ type: 'text', text: '私密资料' }] } },
   ] }) }, llm: { async *stream(request) { requests.push(request); yield { type: 'text-delta', text: JSON.stringify(output()) }; yield { type: 'finish', reason: { kind: 'stop' } }; } } };
   return { process: createLearningProcessor({ ctx, store }), candidates, requests, revoke() { settings = { ...settings, enabled: false, hash: 'p2' }; } };
@@ -26,7 +26,17 @@ test('learning filters excluded sources before inference and preserves verified 
   assert.equal(JSON.stringify(f.requests).includes('私密资料'), false);
   assert.equal(f.requests[0].model, 'Exact:ID');
   assert.equal(f.candidates[0].options.verifiedSource.messageId, 'visible');
+  assert.equal(f.candidates[0].options.verifiedSource.excerpt, '我偏好中文回复');
+  assert.equal(f.candidates[0].options.verifiedSource.excerptTruncated, false);
   assert.equal('autoSave' in f.candidates[0].options, false);
+});
+
+test('learning excerpts retain bounded host text rather than the model summary', async () => {
+  const original = '用户原文'.repeat(1600);
+  const f = fixture(() => ({ memories: [{ content: '模型总结', sourceMessageId: 'visible' }] }), undefined, original);
+  await f.process(item, options);
+  assert.equal(f.candidates[0].input.source.excerpt, original.slice(0, 6000));
+  assert.equal(f.candidates[0].input.source.excerptTruncated, true);
 });
 test('fabricated source or policy revocation cannot write learning candidates', async () => {
   const invalid = fixture(() => ({ memories: [{ content: 'valid', sourceMessageId: 'visible' }, { content: 'forged', sourceMessageId: 'other' }] }));

@@ -1,0 +1,352 @@
+{
+  "id": "attention-1",
+  "title": "阻塞问答一",
+  "attention": true,
+  "nonblocking": false,
+  "choice": "列表",
+  "status": "fail",
+  "startedAt": "2026-11-05T13:04:32.848Z",
+  "timeline": [
+    {
+      "at": "2026-11-05T13:04:33.509Z",
+      "routerRunning": true
+    },
+    {
+      "at": "2026-11-05T13:04:51.045Z",
+      "routerRunning": true,
+      "ticketId": "e60b8dca-783c-4457-a481-2eb25349d298",
+      "status": "open",
+      "resultVersion": 0,
+      "assignments": [
+        {
+          "id": "desktop:f74d368280b5618153a0034475539240a7bb15ae8a8a7c339e4758e8a3c470ed",
+          "state": "queued",
+          "fence": 0
+        }
+      ],
+      "attentions": [],
+      "attentionResolutions": []
+    },
+    {
+      "at": "2026-11-05T13:04:52.180Z",
+      "routerRunning": true,
+      "ticketId": "e60b8dca-783c-4457-a481-2eb25349d298",
+      "status": "open",
+      "resultVersion": 0,
+      "assignments": [
+        {
+          "id": "desktop:f74d368280b5618153a0034475539240a7bb15ae8a8a7c339e4758e8a3c470ed",
+          "state": "claimed",
+          "fence": 1
+        }
+      ],
+      "attentions": [],
+      "attentionResolutions": []
+    },
+    {
+      "at": "2026-11-05T13:04:53.167Z",
+      "routerRunning": false,
+      "ticketId": "e60b8dca-783c-4457-a481-2eb25349d298",
+      "status": "open",
+      "resultVersion": 0,
+      "assignments": [
+        {
+          "id": "desktop:f74d368280b5618153a0034475539240a7bb15ae8a8a7c339e4758e8a3c470ed",
+          "state": "claimed",
+          "fence": 1
+        }
+      ],
+      "attentions": [],
+      "attentionResolutions": []
+    },
+    {
+      "at": "2026-11-05T13:14:51.615Z",
+      "routerRunning": false,
+      "ticketId": "e60b8dca-783c-4457-a481-2eb25349d298",
+      "status": "waiting",
+      "resultVersion": 0,
+      "assignments": [
+        {
+          "id": "desktop:f74d368280b5618153a0034475539240a7bb15ae8a8a7c339e4758e8a3c470ed",
+          "state": "waiting",
+          "fence": 1
+        }
+      ],
+      "attentions": [],
+      "attentionResolutions": []
+    },
+    {
+      "at": "2026-11-05T13:15:06.548Z",
+      "routerRunning": false,
+      "ticketId": "e60b8dca-783c-4457-a481-2eb25349d298",
+      "status": "waiting",
+      "resultVersion": 0,
+      "assignments": [
+        {
+          "id": "desktop:f74d368280b5618153a0034475539240a7bb15ae8a8a7c339e4758e8a3c470ed",
+          "state": "waiting",
+          "fence": 1
+        }
+      ],
+      "attentions": [],
+      "attentionResolutions": []
+    }
+  ],
+  "userActions": [],
+  "threadId": "76bd55b4-4480-484b-a8ef-ad3e37e88a07",
+  "routerSessionId": "ba59c534-9987-4fa1-9b6c-4f8b01743ef9",
+  "originalInstruction": "请派一个 Worker 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据文档在本聊天交付三条事实：Alpha、Beta和总计。使用简体中文，完整保留三项数字；无需联网，无需创建或修改任何文件。请将这些完整条件写入同一工单任务书，不增加阶段、数量或交付物。\n本任务还包含一次明确的协作路径验证，请先开单，由 Worker 读取文档后通过正式 ask_user_question 分别提出两个问题：\nQ-known：“交付语言使用简体中文还是英文？”——我已在本请求授权简体中文，总助手可根据原请求答复，无需再次问我。\nQ-user：“最终展示采用列表还是短句？”——请给出“列表”和“短句”两个选项。\nQ-user是阻塞最终排版的选择：我尚未选择，请先完成独立的三条事实读取，再把这个问题回传本聊天，我会按问题编号答复；不能替我选展示方式。收到真实答案后，用我的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。不要在开单前由总助手询问，也不要把待回答说明作为最终完成。",
+  "latest": {
+    "ticketId": "e60b8dca-783c-4457-a481-2eb25349d298",
+    "instructionRevision": 1,
+    "assignmentIds": [
+      "desktop:f74d368280b5618153a0034475539240a7bb15ae8a8a7c339e4758e8a3c470ed"
+    ],
+    "resultVersion": 0,
+    "status": "waiting",
+    "reviews": []
+  },
+  "error": "AssertionError [ERR_ASSERTION]: Live deadline expired; ticket remains waiting\n+ actual - expected\n\n+ 'waiting'\n- 'completed'\n\n    at runCase (file:///E:/BenchGo/eval/superagent-evening-20261105/cases.mjs:110:12)\n    at async file:///E:/BenchGo/eval/superagent-evening-20261105/run-live.mjs:98:3",
+  "final": {
+    "ticket": {
+      "id": "e60b8dca-783c-4457-a481-2eb25349d298",
+      "threadId": "desktop:ba59c534-9987-4fa1-9b6c-4f8b01743ef9",
+      "title": "读取fixture三",
+      "target": "读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据该文档内容提取三项事实：Alpha、Beta 和总计，并完整保留三项数字。使用简体中文。无需联网，无需创建或修改任何文件。\n\n本任务包含一次明确的协作路径验证：\n1) 先把三条事实读取完成（独立于排版选择）。\n2) 然后通过正式 ask_user_question 依次提出两个问题：\n   - Q-known：“交付语言使用简体中文还是英文？”——用户已在原请求中授权简体中文，Router/总助手可根据原请求自行答复，无需再次询问用户。\n   - Q-user：“最终展示采用列表还是短句？”——必须给出“列表”和“短句”两个选项。\n3) Q-user 是阻塞最终排版的选择，用户尚未选择；不要把待回答状态当作最终完成。先把独立的三条事实读取结果就绪，再把 Q-user 回传本聊天，等待用户按问题编号答复；不得替用户选择展示方式。\n4) 收到真实答案后，按用户选择的展示方式（列表或短句）完成三条事实的交付。\n\n约束：全过程保持原工单和原执行会话；不增加阶段、不增加数量、不增加交付物。",
+      "acceptance": "在同一工单和同一执行会话中：1) 从 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md 提取并交付三条事实：Alpha、Beta、总计，三项数字完整保留，使用简体中文，内容只依据该文档；2) 不联网，不创建或修改任何文件；3) 通过正式 ask_user_question 提出 Q-known（交付语言：简体中文/英文）与 Q-user（最终展示：列表/短句，两个选项均须给出），Q-known 可由总助手依原请求（简体中文）答复而无需再次询问用户，Q-user 必须回传本聊天等待用户选择，不得代替用户选择；4) 未收到 Q-user 真实答案前不得视为最终完成；5) 收到答案后按用户选择的展示方式（列表或短句）给出三条事实的最终交付。",
+      "instructionRevision": 1,
+      "adjustmentOfTicketId": null,
+      "liveSummary": {
+        "goal": "读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据该文档内容提取三项事实：Alpha、Beta 和总计，并完整保留三项数字。使用简体中文。无需联网，无需创建或修改任何文件。\n\n本任务包含一次明确的协作路径验证：\n1) 先把三条事实读取完成（独立于排版选择）。\n2) 然后通过正式 ask_user_question 依次提出两个问题：\n   - Q-known：“交付语言使用简体中文还是英文？”——用户已在原请求中授权简体中文，Router/总助手可根据原请求自行答复，无需再次询问用户。\n   - Q-user：“最终展示采用列表还是短句？”——必须给出“列表”和“短句”两个选项。\n3) Q-user 是阻塞最终排版的选择，用户尚未选择；不要把待回答状态当作最终完成。先把独立的三条事实读取结果就绪，再把 Q-user 回传本聊天，等待用户按问题编号答复；不得替用户选择展示方式。\n4) 收到真实答案后，按用户选择的展示方式（列表或短句）完成三条事实的交付。\n\n约束：全过程保持原工单和原执行会话；不增加阶段、不增加数量、不增加交付物。",
+        "progress": "等待继续条件",
+        "blocker": "EXECUTION_EFFECTS_UNKNOWN",
+        "status": "waiting",
+        "updatedAt": "2026-11-05T13:14:51.445Z"
+      },
+      "status": "waiting",
+      "pauseReason": {
+        "kind": "execution-budget"
+      },
+      "reviewRetry": null,
+      "continuationWait": {
+        "code": "EXECUTION_EFFECTS_UNKNOWN",
+        "sourceResultVersion": 0,
+        "assignmentId": "desktop:f74d368280b5618153a0034475539240a7bb15ae8a8a7c339e4758e8a3c470ed",
+        "runId": "4f20bacf-3a64-44cb-9f38-0481b6e1bc00",
+        "sessionId": "fb78e49e-9337-4845-b982-be4331c134bb"
+      },
+      "mandate": {
+        "actorId": "desktop-owner",
+        "source": {
+          "channel": "desktop",
+          "sessionId": "ba59c534-9987-4fa1-9b6c-4f8b01743ef9",
+          "messageId": "94f94e1f-f1ef-40e5-baca-3b2dc782aa29",
+          "threadId": "76bd55b4-4480-484b-a8ef-ad3e37e88a07"
+        },
+        "instruction": "请派一个 Worker 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据文档在本聊天交付三条事实：Alpha、Beta和总计。使用简体中文，完整保留三项数字；无需联网，无需创建或修改任何文件。请将这些完整条件写入同一工单任务书，不增加阶段、数量或交付物。\n本任务还包含一次明确的协作路径验证，请先开单，由 Worker 读取文档后通过正式 ask_user_question 分别提出两个问题：\nQ-known：“交付语言使用简体中文还是英文？”——我已在本请求授权简体中文，总助手可根据原请求答复，无需再次问我。\nQ-user：“最终展示采用列表还是短句？”——请给出“列表”和“短句”两个选项。\nQ-user是阻塞最终排版的选择：我尚未选择，请先完成独立的三条事实读取，再把这个问题回传本聊天，我会按问题编号答复；不能替我选展示方式。收到真实答案后，用我的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。不要在开单前由总助手询问，也不要把待回答说明作为最终完成。",
+        "policyVersion": "5ed644bff03fac209e8817edf5e804f930ab8c97a97ca66152747110c1edeabd",
+        "target": "读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据该文档内容提取三项事实：Alpha、Beta 和总计，并完整保留三项数字。使用简体中文。无需联网，无需创建或修改任何文件。\n\n本任务包含一次明确的协作路径验证：\n1) 先把三条事实读取完成（独立于排版选择）。\n2) 然后通过正式 ask_user_question 依次提出两个问题：\n   - Q-known：“交付语言使用简体中文还是英文？”——用户已在原请求中授权简体中文，Router/总助手可根据原请求自行答复，无需再次询问用户。\n   - Q-user：“最终展示采用列表还是短句？”——必须给出“列表”和“短句”两个选项。\n3) Q-user 是阻塞最终排版的选择，用户尚未选择；不要把待回答状态当作最终完成。先把独立的三条事实读取结果就绪，再把 Q-user 回传本聊天，等待用户按问题编号答复；不得替用户选择展示方式。\n4) 收到真实答案后，按用户选择的展示方式（列表或短句）完成三条事实的交付。\n\n约束：全过程保持原工单和原执行会话；不增加阶段、不增加数量、不增加交付物。",
+        "acceptance": "在同一工单和同一执行会话中：1) 从 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md 提取并交付三条事实：Alpha、Beta、总计，三项数字完整保留，使用简体中文，内容只依据该文档；2) 不联网，不创建或修改任何文件；3) 通过正式 ask_user_question 提出 Q-known（交付语言：简体中文/英文）与 Q-user（最终展示：列表/短句，两个选项均须给出），Q-known 可由总助手依原请求（简体中文）答复而无需再次询问用户，Q-user 必须回传本聊天等待用户选择，不得代替用户选择；4) 未收到 Q-user 真实答案前不得视为最终完成；5) 收到答案后按用户选择的展示方式（列表或短句）给出三条事实的最终交付。",
+        "admission": "desktop-approved-delegation",
+        "controlledActions": "require-current-policy-and-harness-approval"
+      },
+      "createdByDecision": "14b37eeb-4d11-4af4-8909-c827d168207e",
+      "createdAt": "2026-11-05T13:04:50.597Z",
+      "updatedAt": "2026-11-05T13:14:51.445Z",
+      "resultVersion": 0,
+      "revisions": [],
+      "assignments": [
+        {
+          "id": "desktop:f74d368280b5618153a0034475539240a7bb15ae8a8a7c339e4758e8a3c470ed",
+          "ticketId": "e60b8dca-783c-4457-a481-2eb25349d298",
+          "executor": "harness",
+          "text": "读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据该文档内容提取三项事实：Alpha、Beta 和总计，并完整保留三项数字。使用简体中文。无需联网，无需创建或修改任何文件。\n\n本任务包含一次明确的协作路径验证：\n1) 先把三条事实读取完成（独立于排版选择）。\n2) 然后通过正式 ask_user_question 依次提出两个问题：\n   - Q-known：“交付语言使用简体中文还是英文？”——用户已在原请求中授权简体中文，Router/总助手可根据原请求自行答复，无需再次询问用户。\n   - Q-user：“最终展示采用列表还是短句？”——必须给出“列表”和“短句”两个选项。\n3) Q-user 是阻塞最终排版的选择，用户尚未选择；不要把待回答状态当作最终完成。先把独立的三条事实读取结果就绪，再把 Q-user 回传本聊天，等待用户按问题编号答复；不得替用户选择展示方式。\n4) 收到真实答案后，按用户选择的展示方式（列表或短句）完成三条事实的交付。\n\n约束：全过程保持原工单和原执行会话；不增加阶段、不增加数量、不增加交付物。",
+          "acceptance": "在同一工单和同一执行会话中：1) 从 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md 提取并交付三条事实：Alpha、Beta、总计，三项数字完整保留，使用简体中文，内容只依据该文档；2) 不联网，不创建或修改任何文件；3) 通过正式 ask_user_question 提出 Q-known（交付语言：简体中文/英文）与 Q-user（最终展示：列表/短句，两个选项均须给出），Q-known 可由总助手依原请求（简体中文）答复而无需再次询问用户，Q-user 必须回传本聊天等待用户选择，不得代替用户选择；4) 未收到 Q-user 真实答案前不得视为最终完成；5) 收到答案后按用户选择的展示方式（列表或短句）给出三条事实的最终交付。",
+          "instructionRevision": 1,
+          "executionStopped": {
+            "owner": "assignment-worker-4f9f105f-b021-44d1-840a-ce98d78cba9b",
+            "fence": 1,
+            "at": "2026-11-05T13:14:51.398Z"
+          },
+          "state": "waiting",
+          "priority": 0,
+          "owner": null,
+          "leaseUntil": null,
+          "fence": 1,
+          "attempts": 1,
+          "createdAt": "2026-11-05T13:04:50.595Z",
+          "updatedAt": "2026-11-05T13:14:51.445Z"
+        }
+      ],
+      "attentions": [],
+      "attentionResolutions": [],
+      "results": [],
+      "deliveries": [
+        {
+          "receipt": {
+            "status": "accepted",
+            "messageId": "db08b208-f01d-476d-b43c-e7e95c76742a"
+          },
+          "reconciliations": [],
+          "id": "5d611cc8-3d05-4767-9356-98faae286424",
+          "uniqueKey": "continuation-state:e60b8dca-783c-4457-a481-2eb25349d298:0:EXECUTION_EFFECTS_UNKNOWN",
+          "ticketId": "e60b8dca-783c-4457-a481-2eb25349d298",
+          "payload": {
+            "type": "ticket.result",
+            "ticketId": "e60b8dca-783c-4457-a481-2eb25349d298",
+            "source": {
+              "channel": "desktop",
+              "sessionId": "ba59c534-9987-4fa1-9b6c-4f8b01743ef9",
+              "messageId": "94f94e1f-f1ef-40e5-baca-3b2dc782aa29",
+              "threadId": "76bd55b4-4480-484b-a8ef-ad3e37e88a07"
+            },
+            "instructionRevision": 1,
+            "resultVersion": 0,
+            "publication": {
+              "action": "deliver",
+              "origin": "system",
+              "systemState": {
+                "state": "continuation_wait",
+                "code": "EXECUTION_EFFECTS_UNKNOWN",
+                "stage": "continuation"
+              },
+              "text": "系统状态：有外部动作的效果尚未核实，核实前不会重放执行。执行记录已保留。"
+            },
+            "text": "系统状态：有外部动作的效果尚未核实，核实前不会重放执行。执行记录已保留。"
+          },
+          "state": "sent",
+          "attempts": 1,
+          "nextAt": 1793884491445,
+          "owner": null,
+          "leaseUntil": null,
+          "sentAt": "2026-11-05T13:14:52.261Z",
+          "lastError": null,
+          "createdAt": "2026-11-05T13:14:51.445Z"
+        }
+      ],
+      "taskMeta": {
+        "version": 0
+      },
+      "taskCanOrganize": false
+    },
+    "history": {
+      "threadId": "76bd55b4-4480-484b-a8ef-ad3e37e88a07",
+      "sessionId": "ba59c534-9987-4fa1-9b6c-4f8b01743ef9",
+      "messages": [
+        {
+          "seq": 9,
+          "id": "94f94e1f-f1ef-40e5-baca-3b2dc782aa29",
+          "role": "user",
+          "rpcId": "EVENING_attention-1_5ab729d3-9cb2-4ce8-a8f7-e5a768b54a69",
+          "text": "请派一个 Worker 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据文档在本聊天交付三条事实：Alpha、Beta和总计。使用简体中文，完整保留三项数字；无需联网，无需创建或修改任何文件。请将这些完整条件写入同一工单任务书，不增加阶段、数量或交付物。\n本任务还包含一次明确的协作路径验证，请先开单，由 Worker 读取文档后通过正式 ask_user_question 分别提出两个问题：\nQ-known：“交付语言使用简体中文还是英文？”——我已在本请求授权简体中文，总助手可根据原请求答复，无需再次问我。\nQ-user：“最终展示采用列表还是短句？”——请给出“列表”和“短句”两个选项。\nQ-user是阻塞最终排版的选择：我尚未选择，请先完成独立的三条事实读取，再把这个问题回传本聊天，我会按问题编号答复；不能替我选展示方式。收到真实答案后，用我的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。不要在开单前由总助手询问，也不要把待回答说明作为最终完成。",
+          "content": [
+            {
+              "type": "text",
+              "text": "请派一个 Worker 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据文档在本聊天交付三条事实：Alpha、Beta和总计。使用简体中文，完整保留三项数字；无需联网，无需创建或修改任何文件。请将这些完整条件写入同一工单任务书，不增加阶段、数量或交付物。\n本任务还包含一次明确的协作路径验证，请先开单，由 Worker 读取文档后通过正式 ask_user_question 分别提出两个问题：\nQ-known：“交付语言使用简体中文还是英文？”——我已在本请求授权简体中文，总助手可根据原请求答复，无需再次问我。\nQ-user：“最终展示采用列表还是短句？”——请给出“列表”和“短句”两个选项。\nQ-user是阻塞最终排版的选择：我尚未选择，请先完成独立的三条事实读取，再把这个问题回传本聊天，我会按问题编号答复；不能替我选展示方式。收到真实答案后，用我的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。不要在开单前由总助手询问，也不要把待回答说明作为最终完成。"
+            }
+          ],
+          "time": 1793883874582
+        },
+        {
+          "seq": 35,
+          "id": "reply:94f94e1f-f1ef-40e5-baca-3b2dc782aa29",
+          "role": "assistant",
+          "kind": "final",
+          "requestId": "94f94e1f-f1ef-40e5-baca-3b2dc782aa29",
+          "text": "工单已开好（ID：e60b8dca），任务书里写全了你的条件：只读 fixture.md 提取 Alpha、Beta、总计三项数字，用简体中文，不联网，不创建或修改文件；以及 Q-known / Q-user 两个问题的处理规则——Q-known 我按你原请求的授权答“简体中文”，Q-user 由 Worker 回传给你，按编号答复后再排版。\n\n按你的要求，我在开单前没有先问你任何问题。Worker 现在开始读文档，等情况回传。",
+          "content": [
+            {
+              "type": "text",
+              "text": "工单已开好（ID：e60b8dca），任务书里写全了你的条件：只读 fixture.md 提取 Alpha、Beta、总计三项数字，用简体中文，不联网，不创建或修改文件；以及 Q-known / Q-user 两个问题的处理规则——Q-known 我按你原请求的授权答“简体中文”，Q-user 由 Worker 回传给你，按编号答复后再排版。\n\n按你的要求，我在开单前没有先问你任何问题。Worker 现在开始读文档，等情况回传。"
+            }
+          ],
+          "time": 1793883893065,
+          "usage": {
+            "inputTokens": 1991,
+            "outputTokens": 119,
+            "totalTokens": 13758,
+            "cacheReadTokens": 11648
+          }
+        }
+      ],
+      "requests": [
+        {
+          "threadId": "76bd55b4-4480-484b-a8ef-ad3e37e88a07",
+          "sessionId": "ba59c534-9987-4fa1-9b6c-4f8b01743ef9",
+          "requestId": "EVENING_attention-1_5ab729d3-9cb2-4ce8-a8f7-e5a768b54a69",
+          "messageId": "94f94e1f-f1ef-40e5-baca-3b2dc782aa29",
+          "status": "processed",
+          "createdAt": "2026-11-05T13:04:33.390Z",
+          "updatedAt": "2026-11-05T13:04:53.090Z"
+        }
+      ],
+      "images": [],
+      "hasMore": false,
+      "nextBefore": null,
+      "status": "idle",
+      "running": false,
+      "activeReply": null,
+      "error": null,
+      "failures": [],
+      "model": {
+        "providerId": "routergo",
+        "modelId": "deepseek-v4.1-flash"
+      },
+      "reactions": {},
+      "notifications": [
+        {
+          "id": "db08b208-f01d-476d-b43c-e7e95c76742a",
+          "eventId": "db08b208-f01d-476d-b43c-e7e95c76742a",
+          "taskId": "e60b8dca-783c-4457-a481-2eb25349d298",
+          "ticketId": "e60b8dca-783c-4457-a481-2eb25349d298",
+          "threadId": "76bd55b4-4480-484b-a8ef-ad3e37e88a07",
+          "createdAt": "2026-11-05T13:14:52.231Z",
+          "title": "读取fixture三",
+          "status": "waiting",
+          "instructionRevision": 1,
+          "resultVersion": 0,
+          "seq": 1,
+          "readAt": null,
+          "type": "ticket.result",
+          "threadRefs": [
+            "76bd55b4-4480-484b-a8ef-ad3e37e88a07"
+          ],
+          "origin": "system",
+          "systemState": {
+            "state": "continuation_wait",
+            "code": "EXECUTION_EFFECTS_UNKNOWN",
+            "stage": "continuation"
+          },
+          "text": "系统状态：有外部动作的效果尚未核实，核实前不会重放执行。执行记录已保留。",
+          "publication": {
+            "action": "deliver",
+            "text": "系统状态：有外部动作的效果尚未核实，核实前不会重放执行。执行记录已保留。",
+            "origin": "system",
+            "systemState": {
+              "state": "continuation_wait",
+              "code": "EXECUTION_EFFECTS_UNKNOWN",
+              "stage": "continuation"
+            }
+          },
+          "ticketStatus": "waiting",
+          "currentInstructionRevision": 1,
+          "currentResultVersion": 0,
+          "continuationWait": {
+            "code": "EXECUTION_EFFECTS_UNKNOWN",
+            "sourceResultVersion": 0,
+            "assignmentId": "desktop:f74d368280b5618153a0034475539240a7bb15ae8a8a7c339e4758e8a3c470ed",
+            "runId": "4f20bacf-3a64-44cb-9f38-0481b6e1bc00",
+            "sessionId": "fb78e49e-9337-4845-b982-be4331c134bb"
+          },
+          "currentResult": null,
+          "currentAttention": null,
+          "currentPauseReason": {
+            "kind": "execution-budget"
+          }
+        }
+      ]
+    }
+  },
+  "finishedAt": "2026-11-05T13:16:33.512Z",
+  "elapsedMs": 720664
+}

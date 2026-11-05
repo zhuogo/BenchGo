@@ -58,10 +58,11 @@ test('official Host Schedule persists a due reminder and enters SuperAgent Eval 
   assert.equal(mounted, true, 'Schedule must be available from the actual scoped plugin');
   await bridge.start();
   const agent = await engine.ensureSession();
-  const record = await ctx.schedule.create(agent.id, { title: 'Host integration', prompt: '检查一次并交付证据', after_seconds: 1 });
+  const record = await ctx.schedule.create({ title: 'Host integration', prompt: '检查一次并交付证据', timing: { kind: 'after', after_seconds: 1 },
+    target: { kind: 'session', sessionId: agent.id } }, agent.id);
   let history;
   for (const deadline = Date.now() + 6000; Date.now() < deadline;) {
-    history = await ctx.schedule.history({ id: record.id, sessionId: agent.id, limit: 1 });
+    history = await ctx.schedule.history({ id: record.id, limit: 1 });
     if (history.records?.length && store.orchestration.candidates().length) break;
     await delay(20);
   }

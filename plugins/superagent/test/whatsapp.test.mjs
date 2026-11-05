@@ -18,6 +18,8 @@ test('configuration rejects inline secrets and deduplicates permitted identities
 });
 test('normalization scopes phone identity, preserves thread, and derives ownership from configuration', () => {
   const body = event(), c = config();
+  body.entry[0].changes[0].value.messages[0].context = { id: 'opaque-parent' };
+  assert.equal(normalizeWhatsAppEvents(body, c)[0].source.parentMessageId, 'opaque-parent');
   const [input] = normalizeWhatsAppEvents(body, c);
   assert.equal(input.actor.owner, true);
   assert.equal(input.sourceKey, 'whatsapp:phone:message');

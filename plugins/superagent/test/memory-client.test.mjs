@@ -19,7 +19,7 @@ function fixture({ api, refresh = async () => {}, entries = [] }) {
   const code = transformSync(readFileSync(new URL('../client/memory.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
   runInNewContext(code, { module, exports: module.exports,
     window: { confirm() { confirmations++; return true; }, matchMedia: () => ({ matches: true }) },
-    require: id => id === 'react' ? react : id.endsWith('time-groups.mjs') ? { groupByDay } : id.endsWith('button.jsx') ? { Button: 'button' } : {},
+    require: id => id === 'react' ? react : id.endsWith('time-groups.mjs') ? { groupByDay } : id.endsWith('button.jsx') ? { Button: 'button' } : id.endsWith('collapsible.jsx') ? { Disclosure: 'disclosure' } : {},
   });
   const render = () => { cursor = 0; return walk(module.exports.MemoryFeed({ api, refresh, entries, threadId: 'main' })); };
   const button = label => render().find(node => node.type === 'button' && node.children.includes(label));
@@ -68,6 +68,8 @@ test('editing and forgetting pass the observed revision without confirmation', a
   assert.equal(calls[0].input.revision, 3);
   assert.equal(calls[0].input.memory.id, entry.id);
   assert.equal(calls[0].input.memory.content, '新偏好');
+  assert.equal(calls[0].input.memory.source.type, 'user-edit');
+  assert.equal(calls[0].input.memory.source.messageId, undefined);
   await f.button('忘记').props.onClick();
   assert.equal(calls[1].action, 'memoryDelete');
   assert.equal(calls[1].input.id, entry.id);
@@ -84,4 +86,23 @@ test('rapid repeated submits persist a memory only once', async () => {
   assert.equal(writes, 1);
   release(); await saving;
   assert.equal(f.draft(), '');
+});
+
+test('memory timeline exposes original sources and version references with local display times', () => {
+  const updatedAt = '2026-11-05T06:45:00.000Z';
+  const entry = { id: 'memory-2', content: '新偏好', revision: 2, updatedAt, document: 'MEMORY.md',
+    source: { messageId: 'source-message', sessionId: 'source-session', excerpt: '用户原始表述', excerptTruncated: true },
+    versionChain: [{ id: 'memory-2', revision: 1, updatedAt: '2026-11-04T06:45:00.000Z' }] };
+  const f = fixture({ api: async () => {}, entries: [entry] });
+  const nodes = f.render();
+  assert.deepEqual(nodes.filter(node => node.type === 'disclosure').map(node => node.props.title), ['来源原文', '替代版本 · 1 次']);
+  assert.ok(nodes.some(node => node.type === 'p' && node.children.includes('用户原始表述')));
+  assert.ok(nodes.some(node => node.type === 'p' && node.children.includes('原文较长，已保留前 6000 个字符。')));
+  const times = nodes.filter(node => node.type === 'time');
+  assert.equal(times[0].props.dateTime, updatedAt);
+  assert.ok(times.every(node => !node.children.includes(node.props.dateTime)));
+  assert.ok(nodes.some(node => node.type === 'li' && node.children.includes(1)));
+  const old = fixture({ api: async () => {}, entries: [{ ...entry, source: { messageId: 'old-message' }, versionChain: [] }] });
+  assert.ok(old.render().some(node => node.type === 'p' && node.children.includes('此记录未保存来源原文。')));
+  assert.equal(old.render().filter(node => node.type === 'disclosure').length, 1);
 });

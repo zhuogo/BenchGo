@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { createAssistantEngine } from '../src/engine.mjs';
+import { createAssistantEngine, readBuiltinLayer } from '../src/engine.mjs';
 import { createAssistantStore } from '../src/store.mjs';
 import { createAssignmentExecutor } from '../src/assignment-executor.mjs';
 import { captureArtifactCheckpoint } from '../src/worker-artifact-checkpoint.mjs';
+import { createWorkerCheckpointStore } from '../src/worker-checkpoint-store.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createDesktopDelegationService } from '../src/desktop-delegation-service.mjs';
 import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
@@ -69,6 +70,32 @@ async function fixture(t, script, options = {}) {
   t.after(async () => { await engine.dispose(); await ctx.fiber.dispose(); if (options.store?.close) options.store.close(); });
   return { ctx, engine, requests, state: () => state, setConfig: value => { config = value; }, setProfile: value => { profile = value; } };
 }
+
+test('builtin layer reads only prompt body and reloads changed files without a module cache', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-builtin-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, 'builtin-layer.md');
+  await writeFile(file, '# Maintainer notes\n\n> Not a prompt.\n\n# 内置层\n\nFirst rules.');
+  assert.equal(await readBuiltinLayer(file), '# 内置层\n\nFirst rules.');
+  await writeFile(file, '# Maintainer notes\n\n# 内置层\n\nChanged rules after restart.');
+  assert.equal(await readBuiltinLayer(file), '# 内置层\n\nChanged rules after restart.');
+  await writeFile(file, '# 内置层\n');
+  await assert.rejects(readBuiltinLayer(file), { code: 'BUILTIN_LAYER_INVALID' });
+  await assert.rejects(readBuiltinLayer(join(directory, 'missing.md')), { code: 'BUILTIN_LAYER_UNAVAILABLE' });
+});
+
+test('Router requests include builtin layer before user context without maintainer notes', async t => {
+  const f = await fixture(t, () => text('Acknowledged'));
+  await f.engine.send({ text: 'Read the current context.' });
+  await (await f.engine.ensureSession()).whenIdle();
+  assert.equal(f.requests.length, 1);
+  const request = JSON.stringify(f.requests[0].messages);
+  const body = await readBuiltinLayer();
+  assert.ok(request.includes(JSON.stringify(body).slice(1, -1)), 'the complete source body reaches the official request');
+  assert.ok(request.indexOf('You are the BenchGo personal assistant.') < request.indexOf('# 内置层'));
+  assert.ok(request.indexOf('# 内置层') < request.indexOf('Be concise.'));
+  assert.doesNotMatch(request, /本节说明文字不属于提示词正文|插件发布清单包含本文件/);
+});
 
 test('new side chats reuse empty drafts even when creation is concurrent', async t => {
   const f = await fixture(t, () => text('Answer'));
@@ -261,6 +288,39 @@ test('official skill invocation and Worker loading persist usage while Router to
   assert.equal(skills.audit(active.id).filter(row => row.action === 'use').length, 2);
 });
 
+test('official timed Worker question waits for Router triage and self/default answers create no user cards', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'worker-triage-'));
+  const database = createAssistantOrchestrationStore({ directory });
+  t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
+  let workerRequests = 0;
+  const f = await fixture(t, async request => {
+    if (request.purpose === 'attention-triage') {
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      return text(JSON.stringify({ decisions: [{ questionId: 'language', route: 'self', basis: '原文明确语言', evidence: '简体中文' },
+        { questionId: 'format', route: 'default', basis: '原文授权列表默认', evidence: '列表', authorization: '你可自行决定，采用默认列表', nonBlocking: true }] }));
+    }
+    workerRequests++;
+    return workerRequests === 1 ? [{ type: 'block-start', index: 0, blockType: 'tool-call' },
+      { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'triage-call', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'language', question: '使用什么语言？' }, { id: 'format', question: '列表还是短句？' }], timeout: 1 }) } },
+      { type: 'finish', reason: { kind: 'tool-calls' } }] : text('简体中文列表交付完成');
+  }, { async install(ctx) {
+    await ctx.plugin((await loadPackage('interaction/user-questions', '@deepseek-ai/dsh-user-questions')).default);
+  } });
+  database.createThread({ id: 'thread', source: { type: 'desktop', id: 'main' } });
+  const ticket = database.createTicket({ threadId: 'thread', target: '完成输出', mandate: { instruction: '使用简体中文。若需选择格式，你可自行决定，采用默认列表。', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'main' } } });
+  database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'Worker/opaque' } });
+  const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const result = await executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
+  assert.equal(result.waitingAttention, undefined);
+  assert.equal(result.summary, '简体中文列表交付完成');
+  assert.equal(workerRequests, 2); assert.equal(f.requests.filter(row => row.purpose === 'attention-triage').length, 1);
+  assert.equal(f.requests.find(row => row.purpose === 'attention-triage').model, 'Router/opaque');
+  assert.deepEqual(database.attentions(ticket.id), []);
+  assert.deepEqual(database.attentionResolutions(ticket.id).map(row => row.route), ['self', 'default']);
+  assert.match(JSON.stringify(f.requests.at(-1).messages), /简体中文.*列表/s);
+});
+
 test('official user question resumes the same live Worker from its exact source answer', async t => {
   const f = await fixture(t, (_request, count) => count === 1 ? [
     { type: 'block-start', index: 0, blockType: 'tool-call' },
@@ -299,14 +359,17 @@ test('official user question resumes the same live Worker from its exact source 
   assert.equal(database.pendingSubscriptionMessages(ticket.id).length, 0);
 });
 
-for (const tamper of [false, true]) test(`timed official Attention resumes after host restart without replay, rejects altered artifacts (tamper=${tamper})`, async t => {
+for (const [restart, tamper] of [[false, false], [true, false], [true, true]]) test(`timed official Attention resumes without replay (restart=${restart}, tamper=${tamper})`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'worker-timed-attention-'));
   let effects = 0;
-  const f = await fixture(t, (_request, count) => count === 1 ? [
+  const f = await fixture(t, (request, count) => request.purpose === 'attention-triage' ? text(JSON.stringify({ decisions: [
+    { questionId: 'known-language', route: 'self', basis: '原指令已指定简体中文', evidence: '简体中文' },
+    { questionId: 'answer', route: 'user', basis: '缺失资料必须由用户提供' },
+  ] })) : count === 1 ? [
     { type: 'block-start', index: 0, blockType: 'tool-call' },
     { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'effect-before-question', name: 'attention_probe', arguments: '{}' } },
     { type: 'block-start', index: 1, blockType: 'tool-call' },
-    { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'timed-question', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'answer', question: '请给出缺失资料' }], timeout: 1 }) } },
+    { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'timed-question', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'known-language', question: '输出用什么语言？' }, { id: 'answer', question: '请给出缺失资料' }], timeout: 1 }) } },
     { type: 'finish', reason: { kind: 'tool-calls' } },
   ] : text('Continued from the original question'), { persistenceRoot: join(directory, 'sessions'), async install(ctx) {
     await ctx.plugin((await loadPackage('interaction/user-questions', '@deepseek-ai/dsh-user-questions')).default);
@@ -316,23 +379,25 @@ for (const tamper of [false, true]) test(`timed official Attention resumes after
   let database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   database.createThread({ id: 'thread', source: { type: 'feishu', id: 'thread' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'Ask', mandate: { actorId: 'owner', source: { channel: 'feishu', appId: 'app', chatId: 'chat', messageId: 'original' } } });
+  const ticket = database.createTicket({ threadId: 'thread', target: 'Ask', mandate: { instruction: '使用简体中文，所需资料由用户补充。', actorId: 'owner', source: { channel: 'feishu', appId: 'app', chatId: 'chat', messageId: 'original' } } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const makeExecutor = (ctx = f.ctx) => createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+  const makeExecutor = (ctx = f.ctx) => createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
   const result = await makeExecutor()(assignment, { ticket, signal: AbortSignal.timeout(5000), renew: async () => {} });
   assert.equal(result.waitingAttention.callIds[0], 'timed-question');
   database.parkAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence, result });
-  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests.length, 2);
+  assert.equal(database.attentions(ticket.id).length, 1, 'the already answered language question creates no user card');
+  assert.deepEqual(database.attentionResolutions(ticket.id).map(row => row.route), ['self', 'user']);
   assert.equal(database.attentions(ticket.id)[0].state, 'waiting');
   assert.equal(database.runs(assignment.id)[0].state, 'waiting');
   assert.equal(database.getAssignment(assignment.id).owner, null);
   assert.equal(effects, 1);
-  await f.engine.dispose(); await f.ctx.fiber.dispose();
-  database.close(); database = createAssistantOrchestrationStore({ directory });
-  const restarted = await fixture(t, () => text('Continued from the original question'), { persistenceRoot: join(directory, 'sessions'), async install(ctx) {
+  if (restart) { await f.engine.dispose(); await f.ctx.fiber.dispose(); database.close(); database = createAssistantOrchestrationStore({ directory }); }
+  const restarted = restart ? await fixture(t, () => text('Continued from the original question'), { persistenceRoot: join(directory, 'sessions'), async install(ctx) {
     await ctx.plugin((await loadPackage('interaction/user-questions', '@deepseek-ai/dsh-user-questions')).default);
-  } });
+  } }) : f;
+  const previousRequests = restarted.requests.length;
   assert.equal(database.queueAnsweredAttention({ validateMandate: () => true }), 0);
   const [delivery] = database.claimOutbox('sender');
   database.finishOutbox(delivery.id, { owner: 'sender', sent: true, receipt: { messageId: 'delivered-question' } });
@@ -342,18 +407,84 @@ for (const tamper of [false, true]) test(`timed official Attention resumes after
   const [continued] = database.claimAssignments('resumed-worker', { validateMandate: () => true });
   if (tamper) {
     await writeFile(join(result.directory, 'foreign-change.txt'), 'changed after parking');
-    await assert.rejects(makeExecutor(restarted.ctx)(continued, { ticket: database.getTicket(ticket.id), signal: AbortSignal.timeout(5000), renew: async () => {} }), /checkpoint no longer matches/);
-    assert.equal(restarted.requests.length, 0);
+    await assert.rejects(makeExecutor(restarted.ctx)(continued, { ticket: database.getTicket(ticket.id), signal: AbortSignal.timeout(5000), renew: async () => {} }), error => {
+      assert.match(error.message, /checkpoint no longer matches/);
+      assert.equal(error.executionPhase, 'resume');
+      return true;
+    });
+    assert.equal(restarted.requests.length, previousRequests);
     assert.equal(effects, 1);
     return;
   }
   const completed = await makeExecutor(restarted.ctx)(continued, { ticket: database.getTicket(ticket.id), signal: AbortSignal.timeout(5000), renew: async () => {} });
   assert.equal(completed.sessionId, result.sessionId);
   assert.equal(completed.runId, result.runId);
-  assert.equal(restarted.requests.length, 1);
+  assert.equal(restarted.requests.length, previousRequests + 1);
   assert.equal(effects, 1);
-  assert.match(JSON.stringify(restarted.requests[0].messages), /补充资料原文/);
+  assert.match(JSON.stringify(restarted.requests.at(-1).messages), /补充资料原文/);
+  assert.match(JSON.stringify(restarted.requests.at(-1).messages), /简体中文/);
+  assert.equal(database.attentions(ticket.id).length, 1, 'resuming does not reopen the automatically answered question');
   assert.equal(database.runs(assignment.id).length, 1);
+});
+
+for (const knownFirst of [false, true]) test(`desktop timed Attention resumes with action checkpoints (knownFirst=${knownFirst})`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'worker-desktop-sequential-'));
+  const checkpoints = createWorkerCheckpointStore({ directory: join(directory, 'checkpoints') });
+  let workerCalls = 0, reads = 0;
+  const call = (id, question) => [
+    { type: 'block-start', index: 0, blockType: 'tool-call' },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: 'ask_user_question', arguments: JSON.stringify({ questions: [question], timeout: 1 }) } },
+    { type: 'finish', reason: { kind: 'tool-calls' } },
+  ];
+  const known = { id: 'Q-known', question: '交付语言使用简体中文还是英文？' };
+  const question = { id: 'Q-user', question: '最终展示采用列表还是短句？', options: [{ label: '列表' }, { label: '短句' }] };
+  const f = await fixture(t, request => {
+    if (request.purpose === 'attention-triage') {
+      const first = JSON.stringify(request.messages).includes('Q-known');
+      return text(JSON.stringify({ decisions: [first
+        ? { questionId: 'Q-known', route: 'self', basis: '原文已指定', evidence: '简体中文' }
+        : { questionId: 'Q-user', route: 'user', basis: '用户决定格式' }] }));
+    }
+    workerCalls++;
+    if (workerCalls === 1) return [
+      { type: 'block-start', index: 0, blockType: 'tool-call' },
+      { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'read-call', name: 'fixture_read', arguments: '{}' } },
+      { type: 'finish', reason: { kind: 'tool-calls' } },
+    ];
+    if (knownFirst && workerCalls === 2) return call('known-call', known);
+    if (workerCalls === (knownFirst ? 3 : 2)) return call('user-call', question);
+    return text('已按列表交付');
+  }, { persistenceRoot: join(directory, 'sessions'), async install(ctx) {
+    await ctx.plugin((await loadPackage('interaction/user-questions', '@deepseek-ai/dsh-user-questions')).default);
+    await ctx.plugin(await loadPackage('interaction/tool-ask-user', '@deepseek-ai/dsh-tool-ask-user'), { mode: 'timed', timeout: 1 });
+    ctx.tools.register({ name: 'fixture_read', description: 'Read fixture facts', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: value => [{ type: 'text', text: value }] }, execute: async () => { reads++; return 'Alpha 1, Beta 2, total 3'; } });
+  } });
+  const database = createAssistantOrchestrationStore({ directory });
+  t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
+  database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
+  const ticket = database.createTicket({ threadId: 'thread', target: '读取事实并询问格式', mandate: { instruction: '使用简体中文，展示格式由用户选择。', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' } } });
+  database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
+  const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
+  const execute = createAssignmentExecutor({ ctx: f.ctx, database, checkpoints, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const result = await execute(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
+  assert.deepEqual(result.waitingAttention.callIds, ['user-call']);
+  assert.deepEqual(database.attentionResolutions(ticket.id).map(row => row.questionId), knownFirst ? ['Q-known', 'Q-user'] : ['Q-user']);
+  const records = await checkpoints.list({ runId: result.runId });
+  assert.equal(records.length, knownFirst ? 3 : 2);
+  assert.ok(records.every(row => row.state === 'complete'));
+  database.parkAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence, result });
+  const [attention] = database.attentions(ticket.id);
+  database.answerDesktopAttention({ ticketId: ticket.id, attentionId: attention.id, instructionRevision: 1, requestId: 'answer', answer: { selected: [], custom: '我选择列表' } });
+  assert.equal(database.queueAnsweredAttention({ validateMandate: () => true }), 1);
+  const [continued] = database.claimAssignments('worker', { validateMandate: () => true });
+  assert.equal(continued.fence, assignment.fence + 1);
+  const completed = await execute(continued, { ticket: database.getTicket(ticket.id), signal: AbortSignal.timeout(10000), renew: async () => {} });
+  assert.equal(completed.sessionId, result.sessionId);
+  assert.equal(completed.runId, result.runId);
+  assert.equal(database.runs(assignment.id).length, 1);
+  assert.match(JSON.stringify(f.requests.at(-1).messages), /我选择列表/);
+  assert.equal(workerCalls, knownFirst ? 4 : 3);
+  assert.equal(reads, 1);
 });
 
 test('assignment executor uses the real Harness writer and current permission hook', async t => {
@@ -862,6 +993,32 @@ test('profile understanding stays frozen until a new main session', async t => {
   assert.match(JSON.stringify(f.requests.at(-1).messages), /New snapshot identity/);
 });
 
+test('Router model context strips document and memory comments while retaining the raw frozen snapshot', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-context-projection-'));
+  const store = await createAssistantStore({ dataDirectory: directory });
+  let f;
+  t.after(async () => { await f?.engine.dispose(); await f?.ctx.fiber.dispose(); store.close(); await rm(directory, { recursive: true, force: true }); });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }] });
+  await store.updateProfile({ identity: 'Visible identity <!-- hidden-identity-marker -->', user: 'Visible user <!-- hidden-user-marker -->' });
+  await store.saveMemory({ content: 'Visible memory <!-- hidden-memory-marker -->', source: { messageId: 'source-1', excerpt: 'Visible source <!-- hidden-excerpt-marker -->' } });
+  f = await fixture(t, () => text('Acknowledged'), { store });
+  await f.engine.send({ text: 'Read visible context' });
+  const agent = await f.engine.ensureSession();
+  await agent.whenIdle();
+  assert.equal(f.requests.length, 1);
+  const request = JSON.stringify(f.requests[0].messages);
+  for (const value of ['Visible identity', 'Visible user', 'Visible memory', 'Visible source']) assert.ok(request.includes(value));
+  assert.doesNotMatch(request, /hidden-(?:identity|user|memory|excerpt)-marker|<!--|benchgo-memory/);
+  const frozen = await store.getSessionContext(agent.id);
+  const original = JSON.stringify(frozen);
+  for (const value of ['hidden-identity-marker', 'hidden-user-marker', 'hidden-memory-marker', 'hidden-excerpt-marker', 'benchgo-memory']) assert.ok(original.includes(value));
+  await store.updateProfile({ identity: 'Next-session identity' });
+  await f.engine.send({ text: 'Continue with the frozen context' });
+  await agent.whenIdle();
+  assert.doesNotMatch(JSON.stringify(f.requests.at(-1).messages), /Next-session identity|hidden-(?:identity|user|memory|excerpt)-marker/);
+  assert.deepEqual(await store.getSessionContext(agent.id), frozen);
+});
+
 test('runtime context exposes the full current name card as data and refreshes after edits', async t => {
   const f = await fixture(t, () => text('Card reply'));
   const models = [{ providerId: 'test', modelId: 'exact-card-model' }];
@@ -931,6 +1088,39 @@ test('official JSONL disk persistence resumes the same main identity after engin
   assert.doesNotMatch(JSON.stringify(second.requests[0].messages), /new-persona-after-restart/);
 });
 
+test('resumed Router cleans legacy runtime memory comments from the model surface and preserves original events', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-legacy-context-'));
+  const store = await createAssistantStore({ dataDirectory: directory });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }] });
+  const options = { store, persistenceRoot: join(directory, 'sessions') };
+  const first = await fixture(t, () => text('Before restart'), options);
+  const sent = await first.engine.send({ text: 'Original request' });
+  const agent = await first.engine.ensureSession();
+  await agent.whenIdle();
+  const legacy = JSON.stringify({ assistantIdentity: 'Legacy identity <!-- hidden-history-identity -->',
+    userProfile: 'Legacy user <!-- hidden-history-user -->',
+    documents: [{ name: 'MEMORY.md', content: 'Legacy memory <!-- hidden-history-document -->' }],
+    memories: [{ id: 'legacy-1', content: 'Legacy fact <!-- hidden-history-memory -->', source: { excerpt: 'Legacy source <!-- hidden-history-excerpt -->' } }] });
+  const message = createUserMessage({ content: [{ type: 'text', text: `Legacy runtime context\n${legacy}\nOther context remains` }],
+    source: { kind: 'runtime-context', form: 'snapshot', sections: [{ name: 'benchgo-assistant-memory', text: legacy }, { name: 'another-plugin', text: 'Other context remains' }] } });
+  agent.session.append('user/message', message, { surfaceOp: 'append' });
+  const original = agent.session.snapshotEvents().find(event => event.type === 'user/message' && event.data.id === message.id);
+  await first.engine.dispose();
+  await first.ctx.fiber.dispose();
+  const second = await fixture(t, () => text('After restart'), options);
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const resumed = await second.engine.ensureSession();
+  assert.equal(resumed.id, sent.sessionId);
+  await second.engine.send({ text: 'Continue original request' });
+  await resumed.whenIdle();
+  assert.equal(second.requests.length, 1);
+  const request = JSON.stringify(second.requests[0].messages);
+  assert.doesNotMatch(request, /hidden-history-|<!--/);
+  for (const value of ['Legacy identity', 'Legacy user', 'Legacy memory', 'Legacy fact', 'Legacy source', 'Other context remains']) assert.ok(request.includes(value));
+  assert.deepEqual(resumed.session.snapshotEvents().find(event => event.seq === original.seq), original);
+  assert.ok(!resumed.session.surface.nodes.includes(original.seq));
+});
+
 test('Router watchdog restores its official session after host restart without replaying a completed request', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-router-recovery-'));
   const store = await createAssistantStore({ dataDirectory: directory });
@@ -988,7 +1178,7 @@ test('Router recovery resumes disposed work from the durable transcript with one
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-router-interrupted-'));
   const store = await createAssistantStore({ dataDirectory: directory });
   await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }] });
-  const options = { store, persistenceRoot: join(directory, 'sessions') };
+  const options = { store, persistenceRoot: join(directory, 'sessions'), contextWindow: 131072 };
   let started;
   const ready = new Promise(resolve => { started = resolve; });
   const first = await fixture(t, async () => { started(); await new Promise(resolve => setTimeout(resolve, 50)); return text('Interrupted response'); }, options);
@@ -996,6 +1186,7 @@ test('Router recovery resumes disposed work from the durable transcript with one
   await ready;
   assert.equal((await first.engine.recoverMain()).status, 'live');
   await first.engine.dispose(); await first.ctx.fiber.dispose();
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'next-primary/opaque' }] });
   const second = await fixture(t, () => text('Recovered original work'), options);
   t.after(() => rm(directory, { recursive: true, force: true }));
   const recovered = await second.engine.recoverMain();
@@ -1005,10 +1196,14 @@ test('Router recovery resumes disposed work from the durable transcript with one
   await agent.whenIdle();
   assert.equal(agent.id, sent.sessionId);
   assert.equal(second.requests.length, 1);
+  assert.equal(second.requests[0].model, 'exact', 'recovery preserves the recorded model despite a changed primary');
   const events = (await second.ctx.sessionQuery.readSession(agent.id)).events;
   assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'user').length, 1);
   assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-router-recovery').length, 1);
   assert.equal((await second.engine.recoverMain()).status, 'live');
+  await second.engine.send({ text: 'Start a new request', requestId: 'new-after-recovery' });
+  await agent.whenIdle();
+  assert.equal(second.requests.at(-1).model, 'next-primary/opaque');
 });
 
 test('side chats reject model overrides and follow shared SuperAgent configuration', async t => {
@@ -1154,9 +1349,44 @@ test('generated image results expose only a safe local artifact URL', async t =>
   assert.deepEqual((await f.engine.history()).images.map(image => image.url), ['api/commander/assistant/artifact?file=safe-123.png']);
 });
 
+test('inbox selects and freezes each Router queue before official step preparation', async t => {
+  let f, changed = false;
+  const captured = [];
+  f = await fixture(t, (_request, count) => count === 1 ? [
+    { type: 'block-start', index: 0, blockType: 'tool-call' },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'route-snapshot', name: 'route_probe', arguments: '{}' } },
+    { type: 'finish', reason: { kind: 'tool-calls' } },
+  ] : text('Done'), { contextWindow: 131072, setupTools(scope) {
+    scope.on('agent/pre-step', (payload, next) => {
+      captured.push({ ...payload.modelSelection });
+      Object.freeze(payload.modelSelection);
+      if (!changed) {
+        changed = true;
+        f.setConfig({ models: [{ providerId: 'test', modelId: 'Next Router/opaque' }] });
+      }
+      return next();
+    });
+    scope.tools.register({ name: 'route_probe', description: 'Read a fixture value', parameters: { type: 'object', properties: {} },
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => 'read' });
+  } });
+  const agent = await f.engine.ensureSession();
+  agent.model.select({ provider: 'test', model: 'Old Router/opaque', reasoningEffort: 'high' });
+  f.setConfig({ models: [{ providerId: 'test', modelId: 'Primary Router/opaque' }],
+    workerModels: [{ providerId: 'test', modelId: 'Worker/opaque' }],
+    auxiliary: { capabilities: ['review'], models: [{ providerId: 'test', modelId: 'Auxiliary/opaque' }] } });
+  await f.engine.send({ text: 'Use the selected Router for the whole message' });
+  await agent.whenIdle();
+  assert.deepEqual(f.requests.map(request => request.model), ['Primary Router/opaque', 'Primary Router/opaque']);
+  assert.ok(captured.every(model => model.model === 'Primary Router/opaque' && model.reasoningEffort === undefined));
+  await f.engine.send({ text: 'Use the updated queue for this new message' });
+  await agent.whenIdle();
+  assert.equal(f.requests.at(-1).model, 'Next Router/opaque');
+  assert.equal(captured.at(-1).model, 'Next Router/opaque');
+});
+
 test('request failure switches once without replaying input and every new message restores primary', async t => {
   let clock = 0;
-  const f = await fixture(t, (_request, count) => count === 1 ? [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'offline' } } }] : text('Done'), { now: () => clock, cooldownMs: 10 });
+  const f = await fixture(t, (_request, count) => count === 1 ? [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'offline' } } }] : text('Done'), { now: () => clock, cooldownMs: 10, contextWindow: 131072 });
   await f.engine.send({ text: 'Run once' });
   const agent = await f.engine.ensureSession();
   await agent.whenIdle();
@@ -1174,21 +1404,22 @@ test('request failure switches once without replaying input and every new messag
   assert.equal(f.requests.at(-1).model, 'first');
 });
 
-test('main and side chats use the same ordered fallback configuration', async t => {
-  const f = await fixture(t, request => request.model.endsWith('/3') ? text('Completed') : [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503 } } }]);
-  f.setConfig({ models: ['Main/1', 'Main/2', 'Main/3'].map(modelId => ({ providerId: 'test', modelId })) });
+test('main and side chats keep the Router fallback queue independent of Worker and auxiliary models', async t => {
+  const f = await fixture(t, request => request.model.endsWith('/3') ? text('Completed') : [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'Test provider unavailable' } } }], { contextWindow: 131072 });
+  const otherRoles = { workerModels: [{ providerId: 'test', modelId: 'Worker Model/opaque' }], auxiliary: { capabilities: ['review'], models: [{ providerId: 'test', modelId: 'Auxiliary Model/opaque' }] } };
+  f.setConfig({ models: ['Main/1', 'Main/2', 'Main/3'].map(modelId => ({ providerId: 'test', modelId })), ...otherRoles });
   await f.engine.send({ text: 'Main queue' });
   await (await f.engine.ensureSession()).whenIdle();
   assert.deepEqual(f.requests.map(request => request.model), ['Main/1', 'Main/2', 'Main/3']);
   const thread = await f.engine.createThread({ title: 'Explicit side chat' });
-  f.setConfig({ models: ['New/1', 'New/2', 'New/3'].map(modelId => ({ providerId: 'test', modelId })) });
+  f.setConfig({ models: ['New/1', 'New/2', 'New/3'].map(modelId => ({ providerId: 'test', modelId })), ...otherRoles });
   await f.engine.send({ threadId: thread.id, text: 'Side queue' });
   await (await f.engine.ensureSession({ threadId: thread.id })).whenIdle();
   assert.deepEqual(f.requests.slice(3).map(request => request.model), ['New/1', 'New/2', 'New/3']);
 });
 
 test('permission denial remains terminal and configuration changes apply to next turn', async t => {
-  const f = await fixture(t, (_request, count) => count === 1 ? [{ type: 'finish', reason: { kind: 'error', failure: { code: 'AUTH', status: 403, message: 'denied' } } }] : text('Done'));
+  const f = await fixture(t, (_request, count) => count === 1 ? [{ type: 'finish', reason: { kind: 'error', failure: { code: 'AUTH', status: 403, message: 'denied' } } }] : text('Done'), { contextWindow: 131072 });
   await f.engine.send({ text: 'Denied' });
   const agent = await f.engine.ensureSession();
   await agent.whenIdle();

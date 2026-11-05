@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { authorizeAssessment } from './assessment-policy.mjs';
+import { knownNotSent } from './channels/delivery-outcome.mjs';
 
 /** Durable human-facing answers share channel transports, never invent Tickets. */
 export function createDirectReplyDelivery({ database, readPolicy, getAdapter, signal }) {
@@ -31,9 +32,10 @@ export function createDirectReplyDelivery({ database, readPolicy, getAdapter, si
         const receipt = await adapter.send({ source: trigger.source, text: row.text, idempotencyKey: `direct-reply:${row.id}` });
         if (receipt?.status !== 'accepted' || !receipt.messageId) throw new Error('No confirmed receipt');
         database.finishDirectReply(row.id, { owner, sent: true, receipt });
-      } catch {
+      } catch (error) {
         // The remote side may already have accepted the request. Never resend blindly.
-        database.finishDirectReply(row.id, { owner, uncertain: true, error: '来源发送结果待核实' });
+        database.finishDirectReply(row.id, { owner, uncertain: !knownNotSent(error), retryMs: 30000, receipt: error?.receipt,
+          error: knownNotSent(error) ? '来源确认未发送，等待恢复后重试' : '来源发送结果待核实' });
       }
     }
   }

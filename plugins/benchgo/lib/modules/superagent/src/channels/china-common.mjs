@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { beforeDelivery, deliveryFailure, httpRejected } from './delivery-outcome.mjs';
 
 export const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 export const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 512 && !/[\x00-\x1f\x7f]/u.test(value);
@@ -47,20 +48,23 @@ export function createBoundary(definition, { getConfig, credentials, ingest, fet
     reset() { controller.abort(); controller = new AbortController(); Object.assign(state, { authentication: 'unverified', events: 'unverified', sending: 'unverified', error: null }); },
     stop() { controller.abort(); state.connection = { state: 'stopped' }; },
     async request(config, url, options = {}, timeout = 15_000) {
-      await current(config);
+      await beforeDelivery(() => current(config));
       let response, body;
       try { response = await fetcher(url, { ...options, redirect: 'error', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(timeout)]) }); body = await response.json(); }
-      catch { throw Object.assign(fail('渠道请求未获得确定回执', 502), { code: 'DELIVERY_UNCERTAIN', deliveryUncertain: true }); }
-      if (!response.ok) throw fail(`渠道请求失败（HTTP ${response.status}）`, 502);
+      catch { throw deliveryFailure('渠道请求未获得确定回执', 'unknown', 502); }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) throw deliveryFailure('渠道返回无效回执', 'unknown', 502);
+      if (!response.ok) throw deliveryFailure(`渠道请求失败（HTTP ${response.status}）`, httpRejected(response.status) ? 'not_sent' : 'unknown', 502);
       return body;
     },
     async receive(config, event) { await current(config); if (event) { await ingest(event); state.events = 'verified'; } },
     async status() { const c = await read(); return { enabled: c.enabled, configured: definition.fields.filter(f => f.required).every(f => Boolean(c[f.key])), ...structuredClone(state) }; },
     async outgoing(source, text, key) {
-      const c = await read(); await current(c);
-      if (source?.channel !== definition.id || source.accountId !== account(c) || !validId(source.chatId) || !validId(source.messageId) || !allowed(c, source.chatId)) throw fail('交付来源不在当前渠道范围', 403);
-      if (typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > 4000 || !validId(key)) throw fail('交付内容或幂等键无效，文本最多 4000 字节');
-      return c;
+      return beforeDelivery(async () => {
+        const c = await read(); await current(c);
+        if (source?.channel !== definition.id || source.accountId !== account(c) || !validId(source.chatId) || !validId(source.messageId) || !allowed(c, source.chatId)) throw fail('交付来源不在当前渠道范围', 403);
+        if (typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > 4000 || !validId(key)) throw fail('交付内容或幂等键无效，文本最多 4000 字节');
+        return c;
+      });
     },
   };
 }
@@ -72,7 +76,10 @@ export function createSocketLifecycle({ boundary, connect, onFrame, WebSocketImp
   let activeConfig;
   const clear = () => { clearInterval(heartbeat); clearTimeout(reconnect); heartbeat = reconnect = undefined; };
   const stop = () => { generation++; clear(); socket?.close(); socket = undefined; boundary.stop(); };
-  const send = async frame => { await boundary.current(activeConfig); if (socket?.readyState !== 1) throw fail('渠道连接不可用', 503); socket.send(JSON.stringify(frame)); };
+  const send = async frame => {
+    await beforeDelivery(async () => { await boundary.current(activeConfig); if (socket?.readyState !== 1) throw fail('渠道连接不可用', 503); });
+    try { socket.send(JSON.stringify(frame)); } catch { throw deliveryFailure('渠道发送未取得确定回执', 'unknown', 502); }
+  };
   const pulse = (callback, milliseconds) => { clearInterval(heartbeat); heartbeat = setInterval(() => Promise.resolve(callback()).catch(() => socket?.close()), milliseconds); heartbeat.unref?.(); };
   const open = async gen => {
     const config = await boundary.read(); if (!config.enabled || gen !== generation) return;

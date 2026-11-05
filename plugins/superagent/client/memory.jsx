@@ -7,6 +7,7 @@ import { Button } from '../../shared/client/ui/button.jsx';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { ResourceState } from './resource-state.jsx';
 import { groupByDay } from './time-groups.mjs';
+import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 
 export function MemoryPage({ api, refresh, onDirtyChange, entries, threadId }) {
   const [tab, setTab] = useState('entries'), [dirty, setDirty] = useState(false), id = useId();
@@ -59,7 +60,7 @@ export function MemoryFeed({ api, entries = [], refresh, threadId, onDirtyChange
     event.preventDefault();
     if (!draft.trim() || !dirty) return;
     return mutate(() => api('memorySave', {
-      memory: { ...(editing ? { id: editing.id } : {}), content: draft, source: editing?.source || { kind: 'user', threadId } },
+      memory: { ...(editing ? { id: editing.id } : {}), content: draft, source: { type: 'user-edit', threadId } },
       ...(editing ? { revision: editing.revision } : {}),
     }), editing ? '记忆已修改' : '已记住', clearDraft);
   };
@@ -87,6 +88,14 @@ export function MemoryFeed({ api, entries = [], refresh, threadId, onDirtyChange
         return <article className="ba-memory-post" key={entry.id} data-editing={editing?.id === entry.id}>
           <header><span className="ba-memory-source">{sourceLabel(entry)}</span><span>{time && !Number.isNaN(new Date(time).getTime()) ? <time dateTime={time}>{new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</time> : '手动记录'}</span></header>
           <p>{entry.content}</p>
+          <Disclosure title="来源原文">
+            {entry.source?.excerpt ? <p className="ba-note" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{entry.source.excerpt}</p> : <p className="ba-note">此记录未保存来源原文。</p>}
+            {entry.source?.excerptTruncated && <p className="ba-note">原文较长，已保留前 6000 个字符。</p>}
+            {entry.source?.messageId && <p className="ba-note" style={{ overflowWrap: 'anywhere' }}>消息：{entry.source.messageId}{entry.source.sessionId && <> · 会话：{entry.source.sessionId}</>}</p>}
+          </Disclosure>
+          {!!entry.versionChain?.length && <Disclosure title={`替代版本 · ${entry.versionChain.length} 次`}>
+            <ul>{[...entry.versionChain].reverse().map(version => <li key={`${version.id}:${version.revision}`}>版本 {version.revision}{version.updatedAt && !Number.isNaN(Date.parse(version.updatedAt)) && <> · <time dateTime={version.updatedAt}>{new Date(version.updatedAt).toLocaleString()}</time></>}</li>)}</ul>
+          </Disclosure>}
           <footer><Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={() => edit(entry)}><UIIcon name="edit" size={15} />编辑</Button><Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={() => forget(entry)}><UIIcon name="trash" size={15} />忘记</Button></footer>
         </article>;
       })}

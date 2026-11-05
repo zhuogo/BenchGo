@@ -5,10 +5,12 @@ export function socialConfig(input, defaults) {
   return c;
 }
 export function socialEvent(channel, accountId, message, config) {
-  const { chatId, messageId, actorId, text, group, mentioned, topic, timestamp } = message;
-  if (!chatId || !messageId || !actorId || !text || (group && !mentioned) || (config.chatIds.length && !config.chatIds.includes(chatId))) return null;
+  const { chatId, messageId, actorId, text, group, mentioned, topic, timestamp, parentMessageId } = message;
+  // Replies and explicit Attention numbers must reach the exact-match resolver.
+  // They retain mentioned=false, so an unmatched answer grants no new authority.
+  if (!chatId || !messageId || !actorId || !text || (group && !mentioned && !parentMessageId && !/^\/answer\s/u.test(text)) || (config.chatIds.length && !config.chatIds.includes(chatId))) return null;
   const threadId = `${channel}:${accountId}:${chatId}:${topic || 'main'}`;
-  return { channel, sourceKey: `${channel}:${accountId}:${messageId}`, threadId, messageId, actor: { id: actorId, kind: 'human', owner: config.ownerIds.includes(actorId) }, kind: group ? 'group' : 'direct', mentioned: !!mentioned, text, occurredAt: new Date(timestamp).toISOString(), source: { channel, accountId, chatId, messageId, threadId, ...(topic ? { topicId: topic } : {}) }, raw: {} };
+  return { channel, sourceKey: `${channel}:${accountId}:${messageId}`, threadId, messageId, actor: { id: actorId, kind: 'human', owner: config.ownerIds.includes(actorId) }, kind: group ? 'group' : 'direct', mentioned: !!mentioned, text, occurredAt: new Date(timestamp).toISOString(), source: { channel, accountId, chatId, messageId, threadId, ...(topic ? { topicId: topic } : {}), ...(parentMessageId ? { parentMessageId } : {}) }, raw: {} };
 }
 export function sourceAllowed(source, channel, accountId, config) {
   if (!config.enabled || source?.channel !== channel || source.accountId !== accountId || typeof source.chatId !== 'string' || !source.chatId || (config.chatIds.length && !config.chatIds.includes(source.chatId))) throw new Error('交付来源已撤销或不属于当前连接');

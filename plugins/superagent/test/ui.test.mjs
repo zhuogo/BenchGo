@@ -64,6 +64,38 @@ test('auxiliary capability switch saves independently on the same model page', a
   assert(empty.filter(node => node.type === 'Switch').every(node => node.props.disabled));
 });
 
+test('Worker queue edits save independently and removing all entries visibly restores Router inheritance', async () => {
+  const config = { revision: 20, name: 'BenchGo', models: [{ providerId: 'Router/@', modelId: 'Exact: Router/1' }],
+    workerModels: [{ providerId: 'Worker/@', modelId: 'Exact: Worker/2', options: { maxTokens: 700 } }, { providerId: 'Backup/@', modelId: 'Exact: Worker/3' }],
+    auxiliary: { models: [{ providerId: 'Aux/@', modelId: 'Exact: Aux/4' }], capabilities: ['review'] } };
+  const reversed = [...config.workerModels].reverse();
+  const h = harness({ response: { ...config, workerModels: reversed, revision: 21 } });
+  const props = { initialTab: 'models', snapshot: { config }, execute: operation => operation(), refresh: async () => {} };
+  let nodes = walk(h.render('Identity', props));
+  const workerSection = nodes.find(node => node.props['aria-label'] === '工作模型 Worker 配置');
+  walk(workerSection).find(node => node.props.label === '提高优先级' && !node.props.disabled).props.onClick();
+  nodes = walk(h.render('Identity', props));
+  await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [{ action: 'config', revision: 20, patch: { workerModels: reversed } }]);
+  const reopened = walk(harness().render('Identity', { ...props, snapshot: { config: { ...config, workerModels: reversed, revision: 21 } } }));
+  assert.deepEqual(reopened.filter(node => node.type?.name === 'ModelFields').map(node => node.props.value), [...config.models, ...reversed, ...config.auxiliary.models]);
+  for (let remaining = 2; remaining > 0; remaining--) {
+    nodes = walk(h.render('Identity', props));
+    walk(nodes.find(node => node.props['aria-label'] === '工作模型 Worker 配置')).find(node => node.props.label === '移除模型').props.onClick();
+  }
+  nodes = walk(h.render('Identity', props));
+  assert.ok(nodes.some(node => node.children.includes('当前跟随 Router')));
+  assert.ok(nodes.some(node => node.type === 'Disclosure' && node.props.description === '跟随 Router · Router/@ / Exact: Router/1'));
+  assert.deepEqual(nodes.filter(node => node.type?.name === 'ModelFields').map(node => node.props.value), [...config.models, ...config.auxiliary.models]);
+  const configure = nodes.find(node => node.type === 'button' && node.children.includes('配置工作模型'));
+  assert.ok(configure);
+  configure.props.onClick();
+  const updated = walk(h.render('Identity', props));
+  const workerFields = walk(updated.find(node => node.props['aria-label'] === '工作模型 Worker 配置')).filter(node => node.type?.name === 'ModelFields');
+  assert.equal(workerFields.length, 1);
+  assert.equal(workerFields[0].props.value.providerId, '');
+});
+
 test('archived side chats expose only unarchive and delete with the distinct restore icon', () => {
   const h = harness({ threads: [{ id: 'side', title: 'Side', archived: true, pinned: true }] });
   const props = { showArchived: true, ctx: { layout: { panelInfo: { getSnapshot: () => ({ activePanelId: 'benchgo-assistant' }), subscribe: () => () => {} } } } };
@@ -336,6 +368,23 @@ test('ticket resource recovery opens existing Goal settings rather than creating
   chat.effects.find(item => item.deps?.[0] === 'goals').effect();
   assert(walk(chat.render('Studio', requested)).some(node => node.props.onViewTickets));
 });
+test('linked task navigation carries its ticket through the page and existing Studio detail entry', () => {
+  const snapshot = { config: { models: [] }, state: { threads: [] } };
+  const page = harness({ state: [snapshot, '', 'chat', 'main', { sessionId: 'chat', messages: [] }] });
+  const ctx = { layout: { selectPanel() {} } };
+  let nodes = walk(page.render('AssistantPage', { ctx }));
+  for (const effect of page.effects.filter(item => item.deps?.length === 0)) effect.effect();
+  nodes.find(node => node.props.sessionId === 'chat' && node.props.onOpenResources).props.onOpenResources('tasks', { ticketId: 'linked' });
+  const studio = walk(page.render('AssistantPage', { ctx })).find(node => node.type === page.exports.Studio);
+  assert.equal(studio.props.requestedTab, 'tasks');
+  assert.equal(studio.props.requestedTicket.ticketId, 'linked');
+  const view = harness();
+  view.render('Studio', studio.props);
+  view.effects.find(item => item.deps?.[0] === studio.props.requestedTicket).effect();
+  const tickets = walk(view.render('Studio', studio.props)).find(node => node.props.onOpenGoals);
+  assert.equal(tickets.props.requestedTicket.ticketId, 'linked');
+});
+
 test('identity body is edited only through documents; model priority remains exact', async () => {
   const config = { revision: 4, name: 'A', models: [{ providerId: 'cloud', modelId: 'Exact:First' }, { providerId: 'cloud', modelId: 'Exact:Second' }] };
   const h = harness({ response: { ...config, revision: 5 } }), props = { snapshot: { config, profile: { identity: 'old' } }, execute: operation => operation(), refresh: async () => {} };

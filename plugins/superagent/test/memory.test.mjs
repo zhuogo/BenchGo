@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { createAssistantStore } from '../src/store.mjs';
 import { ASSISTANT_DOCUMENTS, ASSISTANT_CONTEXT_DOCUMENTS, documentHash } from '../src/documents.mjs';
+import { cleanMemoryContext, createAssistantMemory } from '../src/memory.mjs';
 
 test('context uses the ordered five-document chain while preserving legacy tool notes', async t => {
   const { store } = await fixture(t);
@@ -129,6 +130,9 @@ test('verified learning saves immediately without approval flags and obeys curre
   assert.equal((await store.listMemories()).length, 0);
   const saved = await store.memory.propose(input, { verifiedSource: evidence });
   assert.equal(saved.status, 'accepted');
+  assert.notEqual(saved.id, saved.memoryId);
+  assert.doesNotMatch(saved.memoryId, /candidate-/u);
+  assert.equal((await store.listMemories())[0].candidateId, saved.id);
   assert.equal((await store.listMemories())[0].document, 'USER.md');
   assert.equal((await store.memory.search({ query: '简洁中文' }))[0].id, saved.memoryId);
   assert.deepEqual(await store.memory.candidates(), []);
@@ -164,11 +168,12 @@ test('legacy pending and interrupted writes recover once while rejected and untr
   legacyCandidate(store, { content: '没有可信来源', evidence: null });
   const restarted = await open();
   const entries = await restarted.listMemories();
-  assert.deepEqual(new Set(entries.map(row => row.id)), new Set([`candidate-${pending.id}`, `candidate-${interrupted.id}`]));
+  assert.deepEqual(new Set(entries.map(row => row.candidateId)), new Set([pending.id, interrupted.id]));
+  assert.ok(entries.every(row => !row.id.startsWith('candidate-')));
   assert.deepEqual(await restarted.memory.candidates(), []);
   assert.equal((await restarted.memory.accept(pending.id)).status, 'accepted');
   assert.equal((await (await open()).listMemories()).length, 2);
-  await restarted.memory.forget(`candidate-${pending.id}`);
+  await restarted.memory.forget(entries.find(row => row.candidateId === pending.id).id);
   assert.equal((await restarted.memory.propose(pending.input, { verifiedSource: pending.evidence })).status, 'excluded');
 });
 
@@ -197,7 +202,9 @@ test('failed automatic persistence is reported and retries reuse the same durabl
   store.documents.mutate = mutate;
   const restarted = await open();
   const saved = await restarted.memory.propose(input, { verifiedSource: evidence });
-  assert.equal(saved.memoryId, `candidate-${retry.id}`);
+  assert.equal(saved.id, retry.id);
+  assert.doesNotMatch(saved.memoryId, /candidate-/u);
+  assert.equal((await store.listMemories())[0].candidateId, retry.id);
   assert.equal((await store.listMemories()).length, 1);
   assert.equal((await (await open()).listMemories()).length, 1);
 });
@@ -222,8 +229,115 @@ test('concurrent automatic learning across stores creates one durable memory', a
   const input = { content: '唯一的自动记忆', source: evidence };
   const results = await Promise.all([store.memory.propose(input, { verifiedSource: evidence }), other.memory.propose(input, { verifiedSource: evidence })]);
   assert.equal(results[0].memoryId, results[1].memoryId);
+  assert.doesNotMatch(results[0].memoryId, /candidate-/u);
+  assert.equal((await store.listMemories())[0].candidateId, results[0].id);
   assert.equal((await store.listMemories()).filter(row => row.content === input.content).length, 1);
   assert.equal((await other.memory.propose(input, { verifiedSource: evidence })).memoryId, results[0].memoryId);
+});
+
+test('legacy candidate IDs migrate once, repair an interrupted receipt and remain editable and forgettable by alias', async t => {
+  const { store, open } = await fixture(t);
+  const candidate = legacyCandidate(store, { status: 'saving', content: '旧版学习得到的长期偏好' });
+  const legacyId = `candidate-${candidate.id}`;
+  const metadata = { id: legacyId, source: candidate.evidence, scope: 'personal', revision: 4, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' };
+  await store.documents.mutate('MEMORY.md', body => body + `\n<!-- benchgo-memory ${JSON.stringify(metadata)} -->\n${candidate.input.content}\n<!-- /benchgo-memory -->\n`);
+  await store.listMemories(); // Seed the previous index, which must not treat ID migration as correction.
+  await store.getSessionContext('pre-migration');
+  const mutate = store.documents.mutate;
+  let interrupted = false;
+  const documents = { ...store.documents, async mutate(...args) {
+    const result = await mutate(...args);
+    if (!interrupted && args[2]?.source?.type === 'memory-id-migration') { interrupted = true; throw new Error('migration receipt interrupted'); }
+    return result;
+  } };
+  await assert.rejects(createAssistantMemory({ directory: store.paths.directory, documents }), /migration receipt interrupted/);
+  const restarted = await open(), [entry] = await restarted.listMemories();
+  assert.notEqual(entry.id, legacyId);
+  assert.doesNotMatch(entry.id, /candidate-/u);
+  assert.deepEqual(entry.legacyIds, [legacyId]);
+  assert.equal(entry.candidateId, candidate.id);
+  assert.equal(entry.revision, metadata.revision);
+  assert.equal(entry.updatedAt, metadata.updatedAt);
+  assert.deepEqual(entry.source, candidate.evidence);
+  assert.equal(entry.source.excerpt, undefined);
+  const accepted = await restarted.memory.accept(candidate.id);
+  assert.equal(accepted.status, 'accepted');
+  assert.equal(accepted.memoryId, entry.id);
+  assert.deepEqual((await (await open()).listMemories()).map(row => row.id), [entry.id]);
+  const db = new DatabaseSync(store.paths.database);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memory_tombstones').get().n, 0);
+  db.close();
+  const edited = await restarted.saveMemory({ id: legacyId, content: '修正后的偏好', source: { type: 'user-edit' } }, { revision: entry.revision });
+  assert.equal(edited.id, entry.id);
+  assert.equal(edited.supersedes.id, entry.id);
+  await restarted.memory.forget(legacyId, { revision: edited.revision });
+  assert.equal((await restarted.listMemories()).length, 0);
+  assert.doesNotMatch(JSON.stringify(await restarted.getSessionContext('pre-migration')), /旧版学习得到的长期偏好/u);
+  assert.deepEqual(await restarted.memory.candidates({ status: 'accepted' }), []);
+});
+
+test('manual source excerpts use current input and corrections retain ID and version references', async t => {
+  const { store } = await fixture(t);
+  const first = await store.saveMemory({ content: '最初的原文', source: { kind: 'user', excerpt: '不应复用的摘要' } });
+  assert.equal(first.source.excerpt, '最初的原文');
+  const second = await store.saveMemory({ ...first, content: '第二次手工输入' }, { revision: first.revision });
+  const third = await store.saveMemory({ ...second, content: '新'.repeat(6500) }, { revision: second.revision });
+  assert.equal(third.id, first.id);
+  assert.equal(third.revision, 3);
+  assert.equal(third.source.excerpt.length, 6000);
+  assert.equal(third.source.excerptTruncated, true);
+  assert.deepEqual(third.supersedes, { id: first.id, revision: 2, updatedAt: second.updatedAt });
+  assert.deepEqual(third.versionChain.map(row => row.revision), [1, 2]);
+  assert.ok(third.versionChain.every(row => row.id === first.id && !('content' in row)));
+  assert.ok((await store.documents.versions('MEMORY.md')).some(row => row.content.includes('第二次手工输入')));
+});
+
+test('model projections strip HTML comments without changing stored or frozen originals', async t => {
+  const { store } = await fixture(t);
+  const entry = await store.saveMemory({ content: '可用正文<!-- 不发送的内部注释 -->', source: { type: 'user-edit' } });
+  const frozen = await store.getSessionContext('projection');
+  const before = structuredClone(frozen);
+  const projected = cleanMemoryContext({ ...frozen, userProfile: '用户<!-- 注释 -->', assistantIdentity: '身份<!-- 未闭合' });
+  assert.deepEqual(frozen, before);
+  assert.equal(projected.memories.find(row => row.id === entry.id).content, '可用正文');
+  assert.equal(projected.memories.find(row => row.id === entry.id).source.excerpt, '可用正文');
+  assert.equal(projected.userProfile, '用户');
+  assert.equal(projected.assistantIdentity, '身份');
+  assert.ok(projected.documents.every(row => !row.content.includes('<!--')));
+  assert.match((await store.documents.read('MEMORY.md')).content, /benchgo-memory/u);
+  assert.deepEqual(await store.getSessionContext('projection'), before);
+});
+
+test('forget removes verified excerpts from managed documents, versions, candidate receipts and frozen snapshots', async t => {
+  const { store } = await fixture(t);
+  const secret = '用户原话中的私人事实';
+  const evidence = { role: 'user', sessionId: 's-excerpt', messageId: 'm-excerpt', excerpt: secret, excerptTruncated: false };
+  const candidate = await store.memory.propose({ content: '整理后的私人记忆', source: evidence }, { verifiedSource: evidence });
+  assert.equal((await store.listMemories())[0].source.excerpt, secret);
+  await store.getSessionContext('excerpt-forget');
+  await store.memory.forget(candidate.memoryId);
+  assert.doesNotMatch(JSON.stringify(await store.documents.list()), /用户原话中的私人事实|整理后的私人记忆/u);
+  assert.doesNotMatch(JSON.stringify(await store.documents.versions('MEMORY.md')), /用户原话中的私人事实|整理后的私人记忆/u);
+  assert.doesNotMatch(JSON.stringify(await store.getSessionContext('excerpt-forget')), /用户原话中的私人事实|整理后的私人记忆/u);
+  assert.deepEqual(await store.memory.candidates({ status: 'accepted' }), []);
+});
+
+test('forget scrubs clean full documents even when selected memories are absent, truncated or an older revision', async t => {
+  const { store } = await fixture(t);
+  const text = `## 长期私密事项\n\n${'个人细节'.repeat(650)}<!-- 内部注释 -->\n\n后续说明`;
+  const entry = await store.saveMemory({ content: text, document: 'USER.md', source: { type: 'user-edit' } });
+  await store.saveMemory({ content: '保留的公共偏好', document: 'USER.md', source: { type: 'user-edit' } });
+  const frozen = await store.getSessionContext('old-revision');
+  const projected = cleanMemoryContext(frozen);
+  const first = { ...projected, userProfile: projected.documents.find(row => row.name === 'USER.md').content, memories: projected.memories.map(row => ({ ...row, content: row.content.slice(0, 2000) })) };
+  const omitted = { ...first, memories: [] };
+  await store.saveMemory({ id: entry.id, content: '修正后的个人细节', source: { type: 'user-edit' } }, { revision: entry.revision });
+  await store.memory.forget(entry.id);
+  for (const context of [first, omitted, frozen]) {
+    const redacted = store.memory.redactForgottenContext(context);
+    assert.doesNotMatch(JSON.stringify(redacted), /长期私密事项|个人细节|后续说明/u);
+    assert.match(JSON.stringify(redacted), /保留的公共偏好/u);
+  }
 });
 
 test('profile import without memories preserves all target memory documents', async t => {

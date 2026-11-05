@@ -1,4 +1,4 @@
-import { ticketSnapshot } from './ticket-state.mjs';
+import { ticketSnapshot, ticketWaiting } from './ticket-state.mjs';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
 
 export const terminalActivityStates = new Set(['completed', 'failed', 'cancelled', 'closed']);
@@ -14,7 +14,8 @@ export const activityLabels = { open: '已接收', queued: '等待执行', claim
 export function activityTask(row, kind) {
   const { assignment, result, delivery, status: ticketStatus, safetyWait } = ticketSnapshot(row);
   const status = kind === 'goal' ? row.status : ticketStatus;
-  const detail = kind === 'goal' ? row.error || ({ building_children: '正在拆分子目标', verify: '正在核验目标' })[row.nextStep] : result?.delivery?.text || result?.review?.reason || result?.summary;
+  const waiting = kind === 'ticket' ? ticketWaiting(row) : null;
+  const detail = kind === 'goal' ? row.error || ({ building_children: '正在拆分子目标', verify: '正在核验目标' })[row.nextStep] : waiting?.reason || result?.delivery?.text || result?.review?.reason || result?.summary;
   const phase = kind === 'goal' ? `${row.ticketIds?.length || 0} 项关联工单`
     : status === 'reworking' ? '沿原会话补做并重新核验'
     : status === 'awaiting_user' ? '等待你的答复 · 原工单保留'

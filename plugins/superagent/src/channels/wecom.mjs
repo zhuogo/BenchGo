@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { configFor, createBoundary, createSocketLifecycle, eventFor, fail, deliveryId } from './china-common.mjs';
+import { deliveryFailure } from './delivery-outcome.mjs';
 
 export const channelDefinition = {
   id: 'wecom', label: '企业微信', defaults: { enabled: false, ownerIds: [], chatIds: [], botId: '', secretRef: '' },
@@ -19,7 +20,7 @@ export function normalizeWecomEvent(frame, config) {
 export function createWecomAdapter(options) {
   const b = createBoundary(channelDefinition, options), acknowledgements = new Map();
   let subscription;
-  const uncertain = message => Object.assign(fail(message, 502), { code: 'DELIVERY_UNCERTAIN', deliveryUncertain: true });
+  const uncertain = message => deliveryFailure(message, 'unknown', 502);
   const rejectPending = () => { for (const wait of acknowledgements.values()) { clearTimeout(wait.timer); wait.reject(uncertain('连接关闭，交付状态未知')); } acknowledgements.clear(); };
   const lifecycle = createSocketLifecycle({ boundary: b, WebSocketImpl: options.WebSocketImpl,
     async connect(config) {
@@ -38,7 +39,7 @@ export function createWecomAdapter(options) {
       const waiter = acknowledgements.get(requestId);
       if (waiter && !frame.cmd?.includes('callback')) {
         acknowledgements.delete(requestId); clearTimeout(waiter.timer);
-        frame.errcode === 0 ? waiter.resolve() : waiter.reject(fail('企业微信未接受交付', 502)); return;
+        frame.errcode === 0 ? waiter.resolve() : waiter.reject(deliveryFailure('企业微信未接受交付', Number.isInteger(frame.errcode) ? 'not_sent' : 'unknown', 502)); return;
       }
       if (b.state.authentication !== 'verified') return;
       await b.receive(config, normalizeWecomEvent(frame, config));
@@ -51,8 +52,8 @@ export function createWecomAdapter(options) {
     async send({ source, text, idempotencyKey }) {
       await b.outgoing(source, text, idempotencyKey);
       const reqId = source.chatType === 'group' ? source.replyRequestId : deliveryId(idempotencyKey);
-      if (!reqId) throw fail('企业微信群回复上下文已失效，请重新 @ 机器人', 409);
-      if (acknowledgements.has(reqId)) throw fail('该会话正在交付，请稍后重试', 409);
+      if (!reqId) throw deliveryFailure('企业微信群回复上下文已失效，请重新 @ 机器人', 'not_sent', 409);
+      if (acknowledgements.has(reqId)) throw deliveryFailure('该会话正在交付，请稍后重试', 'not_sent', 409);
       let resolve, reject;
       const receipt = new Promise((yes, no) => { resolve = yes; reject = no; });
       const timer = setTimeout(() => { acknowledgements.delete(reqId); reject(uncertain('企业微信交付回执超时，送达状态未知')); }, options.ackTimeoutMs || 15_000);

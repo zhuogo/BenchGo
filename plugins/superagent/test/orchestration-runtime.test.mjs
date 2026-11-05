@@ -30,7 +30,7 @@ for (const failDelivery of [false, true]) test(`desktop explicit model runs with
   runtime = createOrchestrationRuntime({ ctx: {}, store,
     execute: async assignment => { executions++; assert.deepEqual(assignment.model, model); return { summary: 'done', evidenceRefs: [] }; },
     review: async input => {
-      assert.deepEqual(input.model, model);
+      assert.deepEqual(input.model, policy.model || model, 'Configured Router reviews; explicit execution model is only the legacy fallback without a Router');
       const connection = store.connections.read();
       store.connections.update({ enabled: false }, { revision: connection.revision });
       return { verdict: 'passed', reason: 'verified', delivery: { action: 'deliver', text: 'Verified result.' } };

@@ -1,7 +1,6 @@
 import { Button } from '../../shared/client/ui/button.jsx';
 import React, { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Tooltip, useAnchoredPosition, useDismissOnOutsidePointer, writeClipboard, IconCopyOutlineMedium, IconCheckOutlineMedium, IconGaugeOutlineMedium, IconClockOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives';
+import { Tooltip, Menu, writeClipboard, IconCopyOutlineMedium, IconCheckOutlineMedium, IconGaugeOutlineMedium, IconClockOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives';
 
 const reactions = [['👍', '赞同'], ['❤️', '喜欢'], ['😂', '有趣'], ['🎉', '庆祝'], ['🤔', '思考'], ['👎', '不赞同']];
 const usageLabels = { inputTokens: '输入', outputTokens: '输出', totalTokens: '合计', cacheReadTokens: '缓存读取', cacheWriteTokens: '缓存写入', reasoningTokens: '推理' };
@@ -11,8 +10,6 @@ export function MessageActions({ row, home }) {
   const [override, setOverride] = useState(undefined);
   const [side, setSide] = useState('top');
   const root = useRef(null), trigger = useRef(null), popup = useRef(null), timer = useRef(null);
-  const position = useAnchoredPosition({ open: !!panel, anchorRef: trigger, panelRef: popup, side, align: row.role === 'user' ? 'end' : 'start', gap: 8, margin: 12 });
-  useDismissOnOutsidePointer(root, !!panel, () => setPanel(''), popup);
   const saved = home.history?.reactions?.[row.key] || null;
   const reaction = override === undefined ? saved : override;
   useEffect(() => { setOverride(undefined); }, [saved, home.threadId, row.key]);
@@ -54,9 +51,9 @@ export function MessageActions({ row, home }) {
       {row.role !== 'user' && <Tooltip side="top" portal delayMs={250} label="本条回复用量"><Button variant="ghost" type="button" aria-label="本条回复用量" aria-haspopup="dialog" aria-expanded={panel === 'usage'} onClick={event => togglePanel('usage', event)}><IconGaugeOutlineMedium size={18} /></Button></Tooltip>}
       {validDate && <Tooltip side="top" portal delayMs={250} label={date.toLocaleString('zh-CN')}><time tabIndex={0} dateTime={date.toISOString()} aria-label={date.toLocaleString('zh-CN')}><span className="ba-message-time-label">{date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span><IconClockOutlineMedium size={18} className="ba-message-time-icon" /></time></Tooltip>}
     </div>
-    {panel && createPortal(<div className="ba-action-popover" ref={popup} style={position || { visibility: 'hidden', top: 0, left: 0 }} data-action-panel={panel} role="dialog" tabIndex={-1} aria-label={panel === 'reactions' ? '选择表情' : '本条回复用量'}>
+    {panel && <Menu open anchor={null} anchorRef={trigger} side={side} align={row.role === 'user' ? 'end' : 'start'} portal listClassName="ba-message-menu" onClose={() => setPanel('')}><div className="ba-action-popover" ref={popup} data-action-panel={panel} role="dialog" tabIndex={-1} aria-label={panel === 'reactions' ? '选择表情' : '本条回复用量'}>
       {panel === 'reactions' ? <><div className="ba-reaction-title">回应这条消息</div><div className="ba-reaction-options">{reactions.map(([emoji, label]) => <Tooltip key={emoji} side="top" portal delayMs={250} label={label}><Button variant="ghost" type="button" aria-label={`回应 ${emoji}`} aria-pressed={reaction === emoji} disabled={busy} onClick={() => react(emoji)}><span>{emoji}</span></Button></Tooltip>)}</div></> : <><strong>本次回复请求 · Token</strong>{usage.length ? <dl>{usage.map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{row.usage[key].toLocaleString('zh-CN')}</dd></div>)}</dl> : <p>未记录用量</p>}</>}
-    </div>, document.body)}
+    </div></Menu>}
     {error && <span className="ba-action-error" role="alert">{error}</span>}
     <span className="ba-chat-sr" role="status">{copied ? '已复制' : ''}</span>
   </div>;

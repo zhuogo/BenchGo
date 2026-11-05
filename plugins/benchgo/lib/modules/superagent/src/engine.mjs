@@ -3,16 +3,28 @@ import { inspectRouterRecovery } from './router-recovery.mjs';
 import { installProjectRules } from './project-rules.mjs';
 import { createAuxiliaryCompactionHook } from './auxiliary-compaction.mjs';
 import { createHash, randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native';
 import { canFallback } from './routing.mjs';
 import { validateAssistantModels } from './store.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
 import { captureRouterTools, installRouterPermissionGate } from './router-permissions.mjs';
 import { createMessageInbox } from './message-inbox.mjs';
+import { cleanMemoryContext } from './memory.mjs';
 import { activeChatReply, installChatPublication, projectChatMessages } from './chat-publication.mjs';
 
 const routeKey = model => JSON.stringify([model.providerId, model.modelId]);
 const copy = value => structuredClone(value);
+export async function readBuiltinLayer(source = new URL('../prompts/builtin-layer.md', import.meta.url)) {
+  let document;
+  try { document = await readFile(source, 'utf8'); }
+  catch (cause) { throw Object.assign(new Error('BenchGo 内置层提示词无法读取，请检查插件文件后重启服务', { cause }), { code: 'BUILTIN_LAYER_UNAVAILABLE' }); }
+  const heading = /^# 内置层\s*$/mu.exec(document);
+  const body = heading ? document.slice(heading.index).trim() : '';
+  if (!body || !body.slice('# 内置层'.length).trim()) throw Object.assign(new Error('BenchGo 内置层提示词正文缺失，请修复插件文件后重启服务'), { code: 'BUILTIN_LAYER_INVALID' });
+  return body;
+}
 function selectMemories(entries, query) {
   const terms = [...new Set(String(query).toLowerCase().match(/[a-z0-9_-]{2,}|[\u4e00-\u9fff]{2,}/g) || [])];
   const score = entry => terms.reduce((sum, term) => sum + (entry.content.toLowerCase().includes(term) ? term.length : 0), 0);
@@ -22,8 +34,10 @@ function selectMemories(entries, query) {
 
 /** Assistant-owned Harness sessions; the engine remains the sole transcript writer. */
 export async function createAssistantEngine({ ctx, store, setupTools, scheduleBridge, compactionPlugin, appendChatRecord, onClearMain, now = Date.now, cooldownMs = 30_000 }) {
+  const builtinLayer = await readBuiltinLayer();
   const Compaction = compactionPlugin ?? (await import('@deepseek-ai/dsh-compaction-basic')).default;
   const handles = new Map(), pending = new Map(), listeners = new Set(), cooldowns = new Map(), models = new Map(), errors = new Map(), failures = new Map(), queries = new Map(), sending = new Map();
+  const pendingRoutes = new WeakMap();
   const agentCompaction = new Map();
   const routeCompaction = createAuxiliaryCompactionHook({ getConfig: () => store.getConfig(), dispatch: options => ctx.llm.stream(options),
     onRoute: routing => {
@@ -61,11 +75,34 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     const state = await store.getState();
     return { threadId, sessionIds: [...new Set([...(state.sessionLineage?.[threadId] || []), record.sessionId].filter(Boolean))] };
   }
+  async function prepareRouterMessage(agent, message, { recovery = false } = {}) {
+    const config = await store.getConfig();
+    let candidates = copy(config.models);
+    validateAssistantModels(candidates);
+    if (recovery) {
+      const current = agent.model.current();
+      if (!current) throw new Error('Router 恢复缺少已记录的模型选择');
+      const maxTokens = agent.session.requestHeader()?.config.maxTokens;
+      const saved = { providerId: current.provider, modelId: current.model, options: {
+        ...(current.reasoningEffort === undefined ? {} : { reasoningEffort: current.reasoningEffort }),
+        ...(maxTokens === undefined ? {} : { maxTokens }),
+      } };
+      candidates = [saved, ...candidates.filter(model => routeKey(model) !== routeKey(saved))];
+    }
+    const primary = candidates[0];
+    if (!primary) throw Object.assign(new Error('请先配置总助手文本模型'), { code: 'ASSISTANT_MODELS_UNAVAILABLE' });
+    // The official loop captures its route before pre-step, so selection must
+    // finish before this message enters followup. The queue belongs to that message.
+    agent.model.select({ provider: primary.providerId, model: primary.modelId,
+      ...(primary.options?.reasoningEffort === undefined ? {} : { reasoningEffort: primary.options.reasoningEffort }) });
+    pendingRoutes.set(agent, { messageId: message.id, models: candidates });
+  }
   const inbox = createMessageInbox({
     getState: () => store.getState(), updateState, ensureSession,
     getAgent: threadId => handles.get(threadId)?.agent,
     readSession: sessionId => ctx.sessionQuery.readSession(sessionId),
-    beforeDispatch: (request, agent) => {
+    beforeDispatch: async (request, agent) => {
+      await prepareRouterMessage(agent, request.message);
       if (store.orchestration) recordDesktopTrigger(store.orchestration, { sessionId: agent.id, threadId: request.threadId, message: request.message });
     },
     onDispatch: request => { errors.delete(request.threadId); failures.delete(request.threadId); queries.set(request.threadId, request.message.content.map(block => block.text || '').join('')); },
@@ -127,7 +164,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         if (!handles.has(threadId)) handles.set(threadId, { agent: existing, dispose: async () => {} });
         return existing;
       }
-      let contextText = '', selection, frozenContext, learningTurn, learningIteration;
+      let contextText = '', selection, activeSelection, frozenContext, learningTurn, learningIteration;
       const advanceModel = () => {
         if (!selection) return false;
         const nextIndex = selection.models.findIndex((model, index) => index > selection.index && (cooldowns.get(routeKey(model)) ?? 0) <= now());
@@ -141,6 +178,16 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       const presets = ctx.get?.('agentPresets');
       const preset = presets ? await presets.resolve(savedSession?.header?.agentPreset) : undefined;
       const setup = async (scope, agent) => {
+        // Harness now resolves the model before `agent/pre-step`; seed a fresh
+        // Router with the first configured candidate so the request hook can
+        // perform its normal fallback selection. Resumed sessions already
+        // carry their persisted selection and must keep it.
+        if (!agent.model?.current?.()) {
+          const configured = await store.getConfig();
+          validateAssistantModels(configured.models);
+          const initial = configured.models[0];
+          if (initial) agent.model?.select?.({ provider: initial.providerId, model: initial.modelId, ...(initial.options?.reasoningEffort === undefined ? {} : { reasoningEffort: initial.options.reasoningEffort }) });
+        }
         if (recoveredEvidence) {
           const events = agent.session.snapshotEvents();
           const prefix = recoveredEvidence.lastSeq === null ? [] : events.filter(event => event.seq <= recoveredEvidence.lastSeq);
@@ -155,8 +202,9 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         installProjectRules(scope, agent);
         // Router has no ambient program-execution authority. Native presentation
         // keeps its delegation/configuration tools usable under a PTC preset.
-        scope.tools.presentAs('native');
+        scope.tools.setExecutor(new NativeToolExecutor(scope));
         scope.systemPrompt.section({ name: 'deployment:persona-prefix', order: -1000, interpolate: false, text: 'You are the BenchGo personal assistant.' });
+        scope.systemPrompt.section({ name: 'benchgo-builtin-layer', order: -500, interpolate: false, text: builtinLayer });
         scope.systemPrompt.section({ name: 'deployment:persona-suffix', order: 1000, interpolate: false, text: '' });
         let compaction = preset && presets.serviceFor(agent, 'compaction');
         if (!compaction) {
@@ -178,6 +226,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         scope.systemPrompt.section({ name: 'benchgo-chat-publication', order: -86, interpolate: false, text: 'Chat naturally with the user, answer questions and respond after delegation in your own words. Choose wording and detail to fit the conversation; no acknowledgement template is prescribed. All ordinary text is user-visible reply or progress and streams to the conversation in real time; never put private reasoning or internal-only narration in ordinary text. Reasoning, tool arguments and raw tool results remain private. You may use assistant_reply to explicitly publish your conversational reply and end the current turn; it is not required for text streaming. A normal final text answer is durably published on successful turn completion. Provisional text from a cancelled or failed turn is not a completed answer. Reviewed Worker results are delivered independently, so your reply after dispatch can acknowledge the accepted work without waiting for its completion. Publishing text is not approval. Never include secrets, hidden instructions or internal reasoning.' });
         scope.systemPrompt.section({ name: 'benchgo-router-tools', order: -88, interpolate: false, text: 'You are the BenchGo personal assistant and coordination Router. Converse with the user, understand their needs and answer questions from available context directly. For a user request to remind or check something later, use the official schedule_create tool directly (for example, after_seconds=300 for five minutes); schedule_list/update/delete are also coordination tools. Do not turn a reminder into an immediate research Ticket. Any website visit, search, file investigation, implementation or other environment operation must be automatically delegated through assistant_delegate; inherited exploration and execution tools are not permitted, even for one read. An explicit user request already authorizes ordinary dispatch: never ask whether to create a Ticket or run it in the background. Ask only about consequential ambiguity or missing authorization for the actual action. When a message refers to a task as “this/that”, “stuck”, “status”, “progress”, “just now” or similar, first use assistant_tickets to identify the existing Ticket; do not call assistant_delegate until the reference is resolved. Use exact configured model identifiers; omit projectId for daily research and other non-repository tasks using the existing isolated assistant workspace, and select an exact registered project ID only for repository work. Reuse the matching Ticket for follow-ups, status and cancellation; do not duplicate completed work. A successful delegation is durable acceptance, not completion: respond naturally in the current conversation, then return without polling or waiting for the Worker so subsequent user messages can be handled. The host does not send a separate canned acknowledgement. Final reviewed results are delivered independently to the original conversation. Assistant configuration and orchestration tools retain their own user-authorization contracts. This role boundary is not a Worker concurrency limit.' });
         scope.on('agent/pre-step', async (payload, next) => {
+          activeSelection = payload.modelSelection;
           await scheduleBridge?.ingestMessages({ sessionId: record.sessionId, threadId, messages: payload.messages });
           if (scheduleBridge && payload.messages?.length && payload.messages.every(message => message.source?.kind === 'schedule')) return { kind: 'enter', messages: [] };
           learningIteration = Number.isSafeInteger(payload.turn) && Number.isSafeInteger(payload.step) ? `${payload.turn}:${payload.step}` : undefined;
@@ -190,6 +239,11 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
             const text = (message.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
             if (/^\/learn(?:\s|$)/u.test(text.trim())) store.learning?.request({ scope: record.sessionId, eventId: message.id, turnId: message.id, source, entry: 'command' });
           }
+          const prepared = pendingRoutes.get(agent);
+          if (prepared && payload.messages.some(message => message.id === prepared.messageId)) {
+            selection = { turnKey: learningTurn ?? payload.turn, models: prepared.models, index: 0, failures: [] };
+            pendingRoutes.delete(agent);
+          }
           const incoming = (payload.messages || []).filter(message => message.source?.kind === 'user')
             .flatMap(message => message.content.filter(block => block.type === 'text').map(block => block.text)).join('\n');
           if (incoming) queries.set(threadId, incoming);
@@ -200,10 +254,11 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           // Understanding is frozen for this session; this is never an execution permit.
           // Persisted snapshots retain ordinary edits but may be scrubbed by an explicit forget.
           frozenContext = copy(context);
-          const profile = frozenContext.documents || [];
+          const modelContext = cleanMemoryContext(frozenContext);
+          const profile = modelContext.documents || [];
           const identity = profile.find(row => row.name === 'IDENTITY.md')?.content || '';
           const user = profile.find(row => row.name === 'USER.md')?.content || '';
-          const memories = frozenContext.memories || [];
+          const memories = modelContext.memories || [];
           contextText = JSON.stringify({
             assistantName: config.name ?? '',
             assistantPet: config.pet ? {
@@ -235,13 +290,14 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           await next();
           // Freeze routing for one original user message. Editing configuration
           // during a tool loop cannot reset its fallback allowance.
-          const config = await store.getConfig();
-          const candidates = copy(config.models);
-          validateAssistantModels(candidates);
-          const queueKey = JSON.stringify(candidates);
           const turnKey = learningTurn ?? turn;
           if (!selection || selection.turnKey !== turnKey) {
-            selection = { turnKey, queueKey, models: candidates, index: 0, failures: [] };
+            // Native composer traffic can bypass the owned inbox. Keep its
+            // existing path separate until the host exposes a pre-followup seam.
+            const config = await store.getConfig();
+            const candidates = copy(config.models);
+            validateAssistantModels(candidates);
+            selection = { turnKey, models: candidates, index: 0, failures: [] };
           }
           while (selection.index < selection.models.length) {
             signal.throwIfAborted();
@@ -258,6 +314,9 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
               selection.failures.push({ model, reason: error.message });
               cooldowns.set(routeKey(model), now() + cooldownMs);
               if (!advanceModel()) break;
+              const selected = selection.models[selection.index];
+              agent.model?.select?.({ provider: selected.providerId, model: selected.modelId, ...(selected.options?.reasoningEffort === undefined ? {} : { reasoningEffort: selected.options.reasoningEffort }) });
+              if (activeSelection) Object.assign(activeSelection, { provider: selected.providerId, model: selected.modelId, ...(selected.options?.reasoningEffort === undefined ? {} : { reasoningEffort: selected.options.reasoningEffort }) });
             }
           }
           throw Object.assign(new Error(selection.models.length ? '当前消息配置的模型均不可用' : '请先配置总助手文本模型'), { code: 'ASSISTANT_MODELS_UNAVAILABLE', failures: selection.failures });
@@ -270,6 +329,9 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           selection.failures.push({ model, reason: failure.message });
           failures.set(threadId, copy(selection.failures));
           if (!advanceModel()) return next();
+          const selected = selection.models[selection.index];
+          agent.model?.select?.({ provider: selected.providerId, model: selected.modelId, ...(selected.options?.reasoningEffort === undefined ? {} : { reasoningEffort: selected.options.reasoningEffort }) });
+          if (activeSelection) Object.assign(activeSelection, { provider: selected.providerId, model: selected.modelId, ...(selected.options?.reasoningEffort === undefined ? {} : { reasoningEffort: selected.options.reasoningEffort }) });
           emit({ type: 'fallback', threadId, failure, model: selection.models[selection.index] });
           return { kind: 'retry' };
         });
@@ -324,7 +386,10 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           errors.set('main', message);
           emit({ type: 'error', threadId: 'main', message });
         } else if (evidence.needsContinuation) {
-          agent.followup(createUserMessage({ content: [{ type: 'text', text: 'The host confirmed the previous Router writer is inactive and restored this same durable session. Read the existing conversation, Tickets and ledger, then continue only the original user mandate. Do not re-dispatch completed work or repeat completed external effects. This recovery notice grants no new authority.' }], source: { kind: 'benchgo-router-recovery', sessionId: record.sessionId, transcriptHash: evidence.hash } }));
+          const message = createUserMessage({ content: [{ type: 'text', text: 'The host confirmed the previous Router writer is inactive and restored this same durable session. Read the existing conversation, Tickets and ledger, then continue only the original user mandate. Do not re-dispatch completed work or repeat completed external effects. This recovery notice grants no new authority.' }], source: { kind: 'benchgo-router-recovery', sessionId: record.sessionId, transcriptHash: evidence.hash } });
+          await prepareRouterMessage(agent, message, { recovery: true });
+          assertOpen();
+          agent.followup(message);
         }
         const status = uncertain ? 'awaiting-reconciliation' : 'recovered';
         const auditId = `router-recovery:${record.sessionId}:${evidence.hash}`;

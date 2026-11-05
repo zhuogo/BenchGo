@@ -1,5 +1,6 @@
 ﻿import { createRequire } from 'node:module';
 import { socialConfig, socialEvent, sourceAllowed } from './social-common.mjs';
+import { beforeDelivery, deliveryFailure, httpRejected } from './delivery-outcome.mjs';
 const require = createRequire(import.meta.url);
 function discordSdk() {
   try { return require('discord.js'); }
@@ -12,7 +13,7 @@ export const channelDefinition = { id: 'discord', label: 'Discord', defaults: { 
 export function normalizeDiscordEvent(message, botId, config) {
   if (message.author?.bot || !message.author?.id || !message.channelId || !message.id) return null;
   const text = message.content || '[Discord 附件暂不支持读取，请发送文字描述]';
-  return socialEvent('discord', botId, { chatId: message.channelId, messageId: message.id, actorId: message.author.id, text, group: !!message.guildId, mentioned: !!message.mentions?.users?.has(botId), topic: message.channel?.isThread?.() ? message.channelId : undefined, timestamp: message.createdTimestamp }, config);
+  return socialEvent('discord', botId, { chatId: message.channelId, messageId: message.id, actorId: message.author.id, text, group: !!message.guildId, mentioned: !!message.mentions?.users?.has(botId), parentMessageId: message.reference?.messageId, topic: message.channel?.isThread?.() ? message.channelId : undefined, timestamp: message.createdTimestamp }, config);
 }
 export function createDiscordAdapter({ getConfig, credentials, ingest, clientFactory, voice } = {}) {
   let client, botId, error = null, disposed = false, pending = Promise.resolve(), sending = 'unverified', events = 'unverified';
@@ -44,13 +45,19 @@ export function createDiscordAdapter({ getConfig, credentials, ingest, clientFac
   return { start, status, async verify() { await start(); if (!client?.isReady?.()) throw new Error('Discord 尚未连接'); return status(); },
     async action(input) { if (!read().voiceEnabled || !voice?.action) throw new Error('Discord 实时语音不可用'); return voice.action({ ...input, client }); },
     async send({ source, text, idempotencyKey, voiceText = text }) {
-      const c = read(); sourceAllowed(source, 'discord', botId, c);
-      if (!client?.isReady?.()) throw new Error('Discord 尚未连接');
-      if (typeof text !== 'string' || !text.trim() || text.length > 2000) throw new Error('Discord 正文需为 1–2000 字符');
-      const channel = await client.channels.fetch(source.chatId);
-      sourceAllowed(source, 'discord', botId, read());
-      if (!channel?.isTextBased?.() || typeof channel.send !== 'function') throw new Error('Discord 目标不可发送');
-      const result = await channel.send({ content: text, allowedMentions: { parse: [], repliedUser: false }, ...(idempotencyKey ? { nonce: String(idempotencyKey).slice(-25), enforceNonce: true } : {}) });
+      const channel = await beforeDelivery(async () => {
+        const c = read(); sourceAllowed(source, 'discord', botId, c);
+        if (!client?.isReady?.()) throw new Error('Discord 尚未连接');
+        if (typeof text !== 'string' || !text.trim() || text.length > 2000) throw new Error('Discord 正文需为 1–2000 字符');
+        const target = await client.channels.fetch(source.chatId);
+        sourceAllowed(source, 'discord', botId, read());
+        if (!target?.isTextBased?.() || typeof target.send !== 'function') throw new Error('Discord 目标不可发送');
+        return target;
+      });
+      let result;
+      try { result = await channel.send({ content: text, allowedMentions: { parse: [], repliedUser: false }, ...(idempotencyKey ? { nonce: String(idempotencyKey).slice(-25), enforceNonce: true } : {}) }); }
+      catch (failure) { throw deliveryFailure('Discord 发送失败', httpRejected(failure?.status) ? 'not_sent' : 'unknown'); }
+      if (!result?.id) throw deliveryFailure('Discord 缺少发送回执');
       sending = 'verified';
       if (source.voiceChannelId && voice?.speak) { try { await voice.speak({ source, text: voiceText }); } catch { error = '文字已送达，但语音播放失败，请检查 Voice 配置'; } }
       return { status: 'accepted', messageId: result.id };

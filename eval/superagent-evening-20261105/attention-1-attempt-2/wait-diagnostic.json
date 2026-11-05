@@ -1,0 +1,90 @@
+{
+  "capturedAt": "2026-11-05T13:10:27.025Z",
+  "kind": "read-only-wait-diagnostic",
+  "session": {
+    "sessionId": "fb78e49e-9337-4845-b982-be4331c134bb",
+    "updatedAt": "2026-11-05T13:05:07.678Z",
+    "compressedBytes": 28738,
+    "decodedBytes": 28738,
+    "counts": {
+      "session": 1,
+      "model/selection": 1,
+      "permission/preset": 1,
+      "sandbox/mode": 1,
+      "approval/policy": 1,
+      "agent/inbox/spliced": 2,
+      "turn/start": 1,
+      "step/start": 2,
+      "system/message": 1,
+      "user/message": 4,
+      "request/header": 1,
+      "request/context": 1,
+      "session/title": 2,
+      "session/title-llm-request": 1,
+      "assistant/attempt": 2,
+      "llm/retry": 2,
+      "llm/retry-started": 2,
+      "assistant/message": 2,
+      "tool/call": 2,
+      "tool/result": 1,
+      "step/end": 1
+    },
+    "tools": [
+      {
+        "name": "read",
+        "hosts": []
+      },
+      {
+        "name": "ask_user_question",
+        "hosts": []
+      }
+    ],
+    "eventCount": 32,
+    "transcriptHash": "1f3b2745bf4030584e0833f3124b9a99bba7c0550397f9d93f080046fd2c78b4",
+    "toolResultStats": {
+      "total": 1,
+      "markedError": 0,
+      "notMarkedError": 1
+    },
+    "lastEvents": [
+      {
+        "type": "tool/call",
+        "seq": 25,
+        "time": 1793883899235
+      },
+      {
+        "type": "tool/result",
+        "seq": 26,
+        "time": 1793883899300
+      },
+      {
+        "type": "step/end",
+        "seq": 27,
+        "time": 1793883899301
+      },
+      {
+        "type": "step/start",
+        "seq": 28,
+        "time": 1793883899367
+      },
+      {
+        "type": "assistant/message",
+        "seq": 29,
+        "time": 1793883907668
+      },
+      {
+        "type": "tool/call",
+        "seq": 30,
+        "time": 1793883907669
+      }
+    ]
+  },
+  "officialQuestionCalls": [
+    {
+      "type": "tool-call",
+      "id": "call-ecf93682-858c-4451-a66e-cb4d0669ba0e",
+      "name": "ask_user_question",
+      "arguments": "{\"questions\":[{\"id\":\"Q-known\",\"header\":\"交付语言\",\"question\":\"Q-known：交付语言使用简体中文还是英文？\",\"options\":[{\"label\":\"简体中文（Recommended）\",\"description\":\"原请求已授权简体中文，总助手可依原请求直接答复，无需再次询问用户。\"},{\"label\":\"英文\",\"description\":\"改用英文交付，但与原请求授权不一致。\"}]},{\"id\":\"Q-user\",\"header\":\"最终展示方式\",\"question\":\"Q-user：最终展示采用列表还是短句？\",\"options\":[{\"label\":\"列表\",\"description\":\"以列表形式逐条展示 Alpha、Beta 和总计。\"},{\"label\":\"短句\",\"description\":\"以短句形式连贯展示 Alpha、Beta 和总计。\"}]}],\"timeout\":-1}"
+    }
+  ]
+}

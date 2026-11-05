@@ -163,17 +163,19 @@ test('internal review_wait cannot create a user Attention', async t => {
   assert.throws(() => f.db.answerDesktopAttention(answer(saved)), /requirements changed/);
 });
 
-test('external reply to a review question uses its durable receipt and resumes the same task', async t => {
-  const f = await fixture(t), saved = blockedResult(f, { channel: 'feishu' });
+for (const channel of ['feishu', 'telegram', 'discord', 'whatsapp', 'weixin']) test(`${channel} reply to a review question resumes the same task`, async t => {
+  const f = await fixture(t), saved = blockedResult(f, { channel });
   const [outbox] = f.db.claimOutbox('sender');
   f.db.finishOutbox(outbox.id, { owner: 'sender', sent: true, receipt: { messageId: 'published-question' } });
   f.restart();
-  const accepted = ingestAssistantEvent(f.db, { channel: 'feishu', sourceKey: 'reply', threadId: 'reply-thread',
-    source: { ...saved.ticket.mandate.source, messageId: 'answer', parentMessageId: 'published-question' },
-    actor: { kind: 'human', id: 'owner' }, text: '按北京时间整理。', kind: 'group', mentioned: true },
+  const text = channel === 'weixin' ? `/answer ${saved.attention.id} 按北京时间整理。` : '按北京时间整理。';
+  const accepted = ingestAssistantEvent(f.db, { channel, sourceKey: 'reply', threadId: 'reply-thread',
+    source: { ...saved.ticket.mandate.source, messageId: 'answer', ...(channel === 'weixin' ? {} : { parentMessageId: 'published-question' }) },
+    actor: { kind: 'human', id: 'owner' }, text, kind: 'group', mentioned: true },
   { version: 'p1', ownerIds: ['owner'], threadIds: ['chat'] });
   assert.equal(accepted.attention.id, saved.attention.id);
   assert.equal(accepted.requiresEval, false);
   assert.equal(f.db.queueAnsweredAttention({ validateMandate: () => true }), 1);
-  assert.equal(f.db.getAssignment(saved.assignment.id).reviewContinuation.reviewAnswer.text, '按北京时间整理。');
+  assert.equal(f.db.getAssignment(saved.assignment.id).reviewContinuation.reviewAnswer.text, text);
+  assert.equal(f.db.getAssignment(saved.assignment.id).reviewContinuation.reviewAnswer.answer.custom, '按北京时间整理。');
 });

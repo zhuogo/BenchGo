@@ -1,0 +1,12 @@
+{
+  "kind": "read-only-product-capability-audit",
+  "status": "unsupported",
+  "providerRequestsMade": 0,
+  "reason": "费用预算没有可靠计价来源，正式 Goal 创建入口拒绝 cost；实际请求与 Worker 用量均记 cost=null。",
+  "evidence": [
+    "plugins/superagent/src/goal-ticket-creation.mjs rejects node.budget.cost",
+    "plugins/superagent/src/goal-budget-gate.mjs records cost:null",
+    "plugins/superagent/src/goal-budget-usage.mjs returns cost:null"
+  ],
+  "limitation": "请求次数、token、截止时间或主动暂停恢复都不能替代金额耗尽/补额真实验收。没有运行模拟费用测试。"
+}

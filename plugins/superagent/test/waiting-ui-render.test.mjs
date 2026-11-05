@@ -1,0 +1,173 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+
+const root = fileURLToPath(new URL('../../../', import.meta.url));
+const webRequire = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
+const { chromium } = webRequire('playwright');
+const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
+
+// Render production components. Only service responses and the host session boundary are fixtures.
+// This is functional validation, not a live Desktop restart or visual acceptance.
+async function fixture() {
+  const result = await build({
+    stdin: { resolveDir: root, loader: 'jsx', contents: `
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { TicketWaiting } from './plugins/superagent/client/ticket-waiting.jsx';
+      import { Tickets } from './plugins/superagent/client/tickets.jsx';
+      import { QuietChat } from './plugins/superagent/client/quiet-chat.jsx';
+      import { AssistantConversation } from './plugins/superagent/client/conversation.jsx';
+      import { AssistantHome } from './plugins/superagent/client/home.jsx';
+      import css from './plugins/superagent/client/style.css';
+      const root = createRoot(document.getElementById('root')); let serial = 0;
+      window.renderScenario = (surface, state='data', overrides={}) => {
+        window.calls=[];
+        const control=window.control={state,fail:false};
+        const ticket={id:'original',title:'核验工作结果',target:'核验工作结果',status:'waiting',instructionRevision:2,resultVersion:3,
+          mandate:{source:{channel:'desktop'}}, createdAt:'2026-11-05T10:00:00Z',updatedAt:'2026-11-05T10:02:00Z',
+          results:[{instructionRevision:2,version:3,review:{verdict:'wait',waitKind:'review_wait',reason:'核验服务暂不可用'}}],...overrides};
+        const api=async(name,input)=>{
+          window.calls.push([name,input]);
+          if(control.state==='loading') return new Promise(()=>{});
+          if(control.state==='error'||control.fail) throw Error('测试连接暂不可用');
+          if(name==='tickets') return {tickets:control.state==='empty'?[]:[ticket]};
+          if(name==='goalList') return {goals:[]};
+          if(name==='checkpointList') return {checkpoints:[]};
+          if(name==='state') return {config:{revision:1,workerConcurrency:2}};
+          if(name==='ticketResume') return control.blocked ? {queued:false,code:'MANDATE_REVOKED'} : {queued:true};
+          return {};
+        };
+        const refresh=()=>{window.calls.push(['refresh']);};
+        const resources=(...args)=>window.calls.push(['resources',...args]);
+        const home={api,onRefresh:refresh,onOpenResources:resources,threadId:'main',history:{messages:[],notifications:[]},assistantName:'BenchGo'};
+        let content;
+        if(surface==='waiting') content=<TicketWaiting api={api} ticket={ticket} onRefresh={refresh} onOpenResources={resources}/>;
+        if(surface==='tickets') content=<Tickets api={api} requestedTicket={state==='linked'?{ticketId:'original'}:state==='missing'?{ticketId:'missing'}:undefined} onCreateGoal={()=>window.calls.push(['createGoal'])} onOpenGoals={()=>resources('goals')}/>;
+        if(surface==='chat') {
+          const notification={eventId:'wait',threadId:'main',ticketId:ticket.id,ticketStatus:ticket.status,currentInstructionRevision:2,currentResultVersion:3,
+            currentResult:ticket.results[0],currentAttention:ticket.attentions?.[0],continuationWait:ticket.continuationWait,text:'先前的报告',createdAt:'2026-11-05T10:01:00Z'};
+          const events=state==='schedule'?['created','triggered','completed','failed'].map((phase,index)=>({eventId:phase,threadId:'main',type:'schedule.lifecycle',origin:'system',text:'系统定时记录',createdAt:'2026-11-05T10:02:00Z',schedule:{id:'schedule',title:'每日总结',phase,at:'2026-11-05T10:02:00Z',occurrenceAt:'2026-11-05T10:00:00Z',...(index>1?{ticketId:'original'}:{})}})):[notification];
+          home.history.notifications=state==='empty'?[]:events;
+          content=state==='empty'?<AssistantHome {...home} input={{draft:''}} inputActions={{setDraft(){},persistDraft(){}}}/>:<QuietChat home={home} session={{running:false}}/>;
+        }
+        if(surface==='connection') {
+          const ctx={sessions:{retain(){if(control.state==='error')throw Error('test connection');return {ready:control.state==='loading'?new Promise(()=>{}):Promise.resolve(),release(){window.calls.push(['release']);}}}},uiConversation:{binding(){return {activate:view=>window.calls.push(['activate',view])}}}};
+          content=<AssistantConversation ctx={ctx} sessionId='session' SessionProvider={({children})=><>{children}</>} renderSlot={()=><div data-connected=''>聊天已就绪</div>}/>;
+        }
+        root.render(<div className='ba-root' key={++serial}><style>{css}</style><main style={{width:'100%',padding:24}}>{content}</main></div>);
+      };
+    ` },
+    bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-waiting-test-output'), format: 'iife', jsx: 'automatic',
+    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    alias: { react: dirname(webRequire.resolve('react/package.json')), 'react-dom': dirname(webRequire.resolve('react-dom/package.json')),
+      '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts') },
+    loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.woff2': 'dataurl', '.woff': 'dataurl', '.ttf': 'dataurl' },
+    plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent',
+  });
+  const css = result.outputFiles.filter(file => file.path.endsWith('.css')).map(file => file.text).join('\n');
+  const js = result.outputFiles.find(file => file.path.endsWith('.js')).text.replaceAll('</script', '<\\/script');
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>${css}</style></head><body><div id="root"></div><script>${js}</script></body></html>`;
+}
+
+test('real waiting controls and chat/ticket connection states remain actionable and version-bound', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html = await fixture();
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    const page = await browser.newPage();
+    const errors = []; page.on('pageerror', error => errors.push(error.message));
+    await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort());
+    page.setDefaultTimeout(5000);
+    await page.goto('http://localhost/');
+    const scenario = async (surface, state = 'data', overrides = {}) => {
+      await page.evaluate(args => window.renderScenario(...args), [surface, state, overrides]);
+    };
+    const calls = () => page.evaluate(() => window.calls);
+    const button = name => page.getByRole('button', { name, exact: true });
+    await scenario('waiting');
+    await button('重试核验').click();
+    assert.deepEqual((await calls()).slice(0, 2), [['ticketRetryReview', { ticketId: 'original', expectedResultVersion: 3 }], ['refresh']]);
+    await page.evaluate(() => window.control.fail = true);
+    await button('重试核验').click();
+    await page.getByRole('alert').waitFor();
+    assert.match(await page.getByRole('alert').innerText(), /先刷新状态/);
+    await scenario('waiting', 'data', { continuationWait: { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 3 } });
+    await button('增加10分钟并继续').click();
+    assert.deepEqual((await calls())[0], ['ticketResume', { ticketId: 'original', expectedResultVersion: 3, additionalExecutionMs: 600000 }]);
+    await page.evaluate(() => window.control.blocked = true);
+    await button('增加10分钟并继续').click();
+    await page.getByRole('alert').waitFor();
+    assert.match(await page.getByRole('alert').innerText(), /MANDATE_REVOKED/);
+    await scenario('waiting', 'data', { continuationWait: { code: 'GOAL_BUDGET_EXHAUSTED', sourceResultVersion: 3 } });
+    await button('管理持续目标额度').click();
+    assert.equal((await calls())[0][0], 'resources');
+    assert(!(await calls()).some(([name]) => name === 'ticketResume'));
+    for (const code of ['EXECUTION_EFFECTS_UNKNOWN', 'EXECUTION_NOT_VERIFIED', 'EXECUTION_STOP_UNCONFIRMED']) {
+      await scenario('waiting', 'data', { continuationWait: { code, sourceResultVersion: 3 } });
+      await button('核实当前状态').waitFor();
+      assert.equal(await page.getByRole('button', { name: /继续|恢复|重试核验/ }).count(), 0);
+      await button('核实当前状态').click();
+      assert.deepEqual(await calls(), [['refresh']]);
+      await button('停止工单').click();
+      assert((await calls()).some(([name, input]) => name === 'ticketStop' && input.ticketId === 'original'));
+    }
+    const question = { id: 'question', state: 'waiting', origin: 'review', instructionRevision: 2, resultVersion: 3,
+      question: { question: '请选择本次范围', options: [{ label: '全部' }] } };
+    await scenario('chat', 'data', { attentions: [question] });
+    await page.getByRole('radio', { name: '全部' }).check();
+    await button('提交答复').click();
+    await page.waitForFunction(() => window.calls.some(([name]) => name === 'ticketAnswer'));
+    const answer = (await calls()).find(([name]) => name === 'ticketAnswer')[1];
+    assert.equal(answer.ticketId, 'original'); assert.equal(answer.attentionId, 'question'); assert.equal(answer.instructionRevision, 2);
+    assert.deepEqual(answer.answer, { selected: ['全部'] });
+    await scenario('chat', 'schedule');
+    await page.locator('.ba-schedule-lifecycle').first().waitFor();
+    assert.deepEqual(await page.locator('.ba-schedule-phase').allTextContents(), ['已创建', '已触发执行', '已完成', '执行失败']);
+    assert.equal(await page.locator('.ba-schedule-lifecycle time').count(), 4);
+    await button('查看关联工单').first().click();
+    assert.deepEqual((await calls())[0], ['resources', 'tasks', { ticketId: 'original' }]);
+    await scenario('chat', 'empty');
+    await page.locator('.ba-home').waitFor();
+    for (const state of ['loading', 'error', 'data']) {
+      await scenario('connection', state);
+      if (state === 'loading') await page.getByText('正在连接聊天', { exact: true }).waitFor();
+      if (state === 'error') {
+        await page.getByRole('alert').waitFor();
+        await page.evaluate(() => window.control.state = 'data');
+        await button('重新连接').click();
+      }
+      if (state !== 'loading') await page.locator('[data-connected]').waitFor();
+    }
+    for (const state of ['loading', 'empty', 'error', 'data']) {
+      await scenario('tickets', state);
+      if (state === 'loading') await page.getByText('正在读取工单', { exact: true }).waitFor();
+      if (state === 'empty') {
+        await page.getByText('暂无工单', { exact: true }).waitFor();
+        assert(await button('新建持续目标').count() > 0);
+      }
+      if (state === 'error') {
+        await page.getByRole('alert').waitFor();
+        await page.evaluate(() => window.control.state = 'data');
+        await button('重试').click();
+      }
+      if (state === 'data' || state === 'error') await page.locator('.ba-task-list').getByText('核验工作结果', { exact: true }).waitFor();
+    }
+    await page.locator('.ba-task-list').getByText('核验工作结果', { exact: true }).click();
+    await page.getByRole('dialog').waitFor();
+    assert.equal(await page.getByRole('dialog').getByRole('button', { name: '停止工单', exact: true }).count(), 1);
+    await button('重试核验').click();
+    assert((await calls()).some(([name, input]) => name === 'ticketRetryReview' && input.expectedResultVersion === 3));
+    await scenario('tickets', 'linked');
+    await page.getByRole('dialog').waitFor();
+    assert.equal(await page.getByRole('dialog').getByRole('heading', { name: '核验工作结果', exact: true }).count(), 1);
+    await scenario('tickets', 'missing');
+    await page.getByText('关联工单暂不可用', { exact: true }).waitFor();
+    assert(await button('重新读取').isVisible());
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});

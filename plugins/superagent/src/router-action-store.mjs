@@ -1,4 +1,4 @@
-import { resultOutbox } from './result-delivery.mjs';
+import { resultOutbox, systemStateDelivery } from './result-delivery.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
@@ -114,7 +114,7 @@ export function installRouterActionStore({ db, tx, api, insertTicket }) {
         const runPayload = { ...parse(db.prepare('SELECT payload FROM sa_runs WHERE id=?').get(actionRow.run_id).payload), evidence };
         db.prepare("UPDATE sa_runs SET state='verifying',payload=?,updated_at=? WHERE id=? AND state IN ('prepared','submitted','running')").run(json(runPayload), at, actionRow.run_id);
         const ticket = action.ticket, version = ticket.resultVersion + 1;
-        const delivery = { action: 'deliver', text: '操作已完成，回执已核实，详情可在工单中查看。' };
+        const delivery = systemStateDelivery({ state: 'action_verified', code: 'ACTION_VERIFIED', stage: 'action' });
         const result = { delivery, actionReceipt: evidence.receipt, readback: evidence.readback, action: { kind: evidence.kind, toolName: evidence.toolName, callId, argsHash, verified: true },
           summary, ticketId: ticket.id, instructionRevision: ticket.instructionRevision, version, committedAt: at, runId: actionRow.run_id, sessionId: run.sessionId };
         db.prepare('INSERT INTO sa_results VALUES (?,?,?,?)').run(ticket.id, version, json(result), at);

@@ -1,8 +1,10 @@
 import { validateDelivery } from './result-delivery.mjs';
 import { isRouterTicketAck } from './ticket-ack.mjs';
+import { scheduleLifecyclePublication } from './schedule-lifecycle.mjs';
 
 /** The transport and history share one allowlist; raw result packages stay in Tickets. */
 export function notificationPublication(event) {
+  if (event?.type === 'schedule.lifecycle') return scheduleLifecyclePublication(event);
   if (!event || !['ticket.result', 'ticket.attention', 'ticket.accepted'].includes(event.type)) return null;
   if (event.type === 'ticket.accepted' && !isRouterTicketAck(event)) return null;
   let publication;

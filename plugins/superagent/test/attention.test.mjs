@@ -58,7 +58,7 @@ for (const machine of [false, true]) test(`Attention replies require authenticat
   assert.deepEqual(db.openAttention(assignment.id, request), [attention]);
   assert.equal(db.deliveries(ticket.id).length, 1);
   const [outbox] = db.claimOutbox('sender');
-  assert.equal(outbox.payload.text, '原样的问题？\n原样详情\n原样选项');
+  assert.equal(outbox.payload.text, `原样的问题？\n原样详情\n原样选项\n\n问题编号：${attention.id}\n可引用这条消息回答，或发送 /answer ${attention.id} 你的回答`);
   db.finishOutbox(outbox.id, { owner: 'sender', sent: true, receipt: { messageId: 'sent-question' } });
   db.close(); db = createAssistantOrchestrationStore({ directory });
   const policy = { version: 'v1', ownerIds: machine ? ['owner'] : ['owner', 'other-owner'], threadIds: ['chat', 'other-chat'] };

@@ -5,6 +5,7 @@ import { createAssignmentExecutor } from './assignment-executor.mjs';
 import { createAssistantAssignmentWorker } from './assignment-worker.mjs';
 import { readAssessmentPolicy, validateTicketMandate } from './assessment-policy.mjs';
 import { reviewTicketResult, recoverableReview } from './ticket-review.mjs';
+import { TICKET_REVIEW_TIMEOUT_MS } from './review-policy.mjs';
 import { createReviewContinuation } from './review-continuation.mjs';
 import { recoveryStorage, withRecoveredEvidence, withRecoveredPause, verifyExecutionArtifacts } from './execution-evidence.mjs';
 import { createWorkerCheckpointStore } from './worker-checkpoint-store.mjs';
@@ -12,6 +13,7 @@ import { createCheckpointService } from './checkpoint-service.mjs';
 import { createDirectReplyDelivery } from './direct-reply-delivery.mjs';
 import { createReviewEvidenceReader } from './review-evidence-reader.mjs';
 import { commitReviewedResult } from './review-result-commit.mjs';
+import { knownNotSent } from './channels/delivery-outcome.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
 export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, execute, review = reviewTicketResult, intervalMs = 1000, now = Date.now }) {
@@ -24,7 +26,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   async function reviewAndCommit(result, { assignment, ticket, signal, beforeCommit }) {
       const policy = await readPolicy();
       if (!validateTicketMandate(ticket.mandate, { policy })) throw new Error('Ticket authorization changed before review');
-      const reviewSignal = AbortSignal.any([signal, shutdown.signal, AbortSignal.timeout(120000)]);
+      const reviewSignal = AbortSignal.any([signal, shutdown.signal, AbortSignal.timeout(TICKET_REVIEW_TIMEOUT_MS)]);
       const verifyArtifacts = async () => {
         if (!ticket.mandate.project) return;
         const run = database.runs(assignment.id).find(item => item.id === result.runId && item.fence === assignment.fence);
@@ -39,7 +41,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       }
       const answeredAttentions = database.answeredAttentionForReview(ticket.id, { instructionRevision: ticket.instructionRevision,
         runId: result.runId, sessionId: result.sessionId });
-      const verdict = await recoverableReview(review, { llm: ctx.llm, database, model: (ticket.mandate.source?.channel === 'desktop' ? assignment.model : undefined) || policy.model, ticket, result, rules: policy.rules, signal: reviewSignal, routingConfig: policy.routingConfig, readEvidence, answeredAttentions }, signal);
+      const verdict = await recoverableReview(review, { llm: ctx.llm, database, model: policy.model || assignment.model, ticket, result, rules: policy.rules, signal: reviewSignal, routingConfig: policy.routingConfig, readEvidence, answeredAttentions }, signal);
       signal.throwIfAborted();
       shutdown.signal.throwIfAborted();
       await verifyArtifacts();
@@ -242,7 +244,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       // The Router's persisted acceptance carries the task package. Scheduling
       // only materializes that decision; it does not make another model decision.
       if (!database.assignments(ticket.id).length) database.createAssignment(ticket.id, {
-        id: `initial:${ticket.id}`, executor: 'harness', model: policy.model,
+        id: `initial:${ticket.id}`, executor: 'harness',
         text: ticket.target, acceptance: ticket.acceptance,
       });
     }
@@ -304,8 +306,11 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       } catch (error) {
         // A failed/expired network request may already have sent. Preserve it for
         // receipt reconciliation, never rerun the task or blindly resend.
-        database.finishOutbox(delivery.id, { owner, uncertain: true, error: '来源发送结果待核实' });
-        ctx.logger?.warn?.('SuperAgent 结果已保存，来源发送待核实');
+        const notSent = knownNotSent(error);
+        database.finishOutbox(delivery.id, { owner, uncertain: !notSent, retryMs: 30000,
+          error: notSent ? '来源确认未发送，稍后重试' : '来源发送结果待核实',
+          ...(error?.receipt && typeof error.receipt === 'object' ? { receipt: error.receipt } : {}) });
+        ctx.logger?.warn?.(notSent ? 'SuperAgent 结果已保存，来源确认未发送' : 'SuperAgent 结果已保存，来源发送待核实');
       }
     }
   }
@@ -320,7 +325,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     retryReview,
     resumeReviewWork,
     tick,
-    state: () => database.listTickets({ limit: 1000 }).map(ticket => ({ ...ticket, revisions: database.ticketRevisions(ticket.id), assignments: database.assignments(ticket.id), attentions: database.attentions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id) })),
+    state: () => database.listTickets({ limit: 1000 }).map(ticket => ({ ...ticket, revisions: database.ticketRevisions(ticket.id), assignments: database.assignments(ticket.id), attentions: database.attentions(ticket.id), attentionResolutions: database.attentionResolutions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id) })),
     start() { if (timer || shutdown.signal.aborted) return; timer = setInterval(tick, intervalMs); timer.unref?.(); void tick(); },
     async stop() {
       shutdown.abort(); clearInterval(timer);

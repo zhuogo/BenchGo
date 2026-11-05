@@ -1,13 +1,14 @@
 import { validateDelivery, systemStateDelivery, publicationContext as reviewPublicationContext } from './result-delivery.mjs';
-import { collectAuxiliaryText, auxiliaryFailureDiagnostic } from './auxiliary-request.mjs';
+import { collectAuxiliaryText, auxiliaryFailureDiagnostic, auxiliaryFailureRouting } from './auxiliary-request.mjs';
 import { goalBudgetDenial, goalBudgetLlm } from './goal-budget-gate.mjs';
 import { reviewInputHash } from './review-input.mjs';
+import { TICKET_REVIEW_REQUEST_POLICY, ticketReviewRequestBudget } from './review-policy.mjs';
 
-function internalWait(code, { stage = 'review', inputHash, budgetWait, streamDiagnostic } = {}) {
+function internalWait(code, { stage = 'review', inputHash, budgetWait, streamDiagnostic, routing } = {}) {
   return { verdict: 'wait', waitKind: 'review_wait', reason: code, retryable: true,
     diagnostic: { stage, code, at: new Date().toISOString(), ...(streamDiagnostic ? { stream: streamDiagnostic } : {}) },
     delivery: systemStateDelivery({ state: budgetWait ? 'budget_wait' : 'review_wait', code, stage }),
-    ...(inputHash ? { inputHash } : {}), ...(budgetWait ? { budgetWait } : {}) };
+    ...(inputHash ? { inputHash } : {}), ...(budgetWait ? { budgetWait } : {}), ...(routing ? { routing } : {}) };
 }
 
 function oneJsonObject(text) {
@@ -54,9 +55,9 @@ export async function recoverableReview(review, input, executionSignal) {
   try { return await review(input); }
   catch (error) {
     executionSignal?.throwIfAborted();
-    const allowed = ['AUXILIARY_QUALITY', 'NO_ADAPTER', 'RATE_LIMIT', 'HTTP', 'NETWORK', 'TIMEOUT', 'ABORTED'];
+    const allowed = ['AUXILIARY_QUALITY', 'NO_ADAPTER', 'RATE_LIMIT', 'HTTP', 'NETWORK', 'TIMEOUT', 'ABORTED', 'REVIEW_REQUEST_LIMIT'];
     const code = input.signal?.aborted ? 'TIMEOUT' : allowed.includes(error?.code) ? error.code : 'REVIEW_UNAVAILABLE';
-    return internalWait(code, { inputHash: reviewInputHash(input), streamDiagnostic: auxiliaryFailureDiagnostic(error) });
+    return internalWait(code, { inputHash: reviewInputHash(input), streamDiagnostic: auxiliaryFailureDiagnostic(error), routing: auxiliaryFailureRouting(error) });
   }
 }
 
@@ -213,10 +214,14 @@ Truncated or omitted evidence is not absent evidence. Read relevant omitted page
 Missing infrastructure access, unreadable evidence or temporary model/resource failure requires internal wait, not success and not a question for the user. In that case write a natural concise status explaining what remains unverified and what the system can recover; delivery.action is deliver and there is NO userDecision. Ask only when an actual user permission, missing information or scope decision prevents execution; then use wait plus delivery.action ask and include the concrete userDecision question and any useful bounded options. A blocked reply will resume the original task. Write completed user-facing conclusions in the request language with verified facts, usable references and limitations; never forward Worker prose or hidden reasoning. Silent is only for unchanged already-delivered passed results. Do not emit origin or systemState; those are reserved for host fault states. Current rules:\n${rules}` }] },
   { role: 'user', content: [{ type: 'text', text: JSON.stringify({ trustedClock: { now: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, taskCreatedAt: ticket.createdAt, resultCreatedAt: result.createdAt ?? result.committedAt }, publicationContext, taskContract: { objective: ticket.target, acceptance: ticket.acceptance || ticket.mandate?.acceptance || ticket.mandate?.instruction, originalInstruction: ticket.mandate?.instruction, instructionRevision: ticket.instructionRevision }, objective: ticket.target, acceptance: ticket.acceptance, instructionRevision: ticket.instructionRevision, mandate: ticket.mandate, answeredAttentions, result, evidenceIndex: index }) }] }];
   let routing;
+  const requestBudget = ticketReviewRequestBudget();
+  const collectReview = () => collectAuxiliaryText({ llm: database ? goalBudgetLlm(llm, { database, ticketId: ticket.id }) : llm,
+    model, config: routingConfig, capability: 'review', policy: TICKET_REVIEW_REQUEST_POLICY, requestBudget,
+    validate: text => parseDecision(text, index, publicationContext.silentAllowed),
+    request: { purpose: 'superagent-verification', maxTokens: 12288, signal, messages } });
   try {
     for (let round = 0; round < 4; round++) {
-      let response = await collectAuxiliaryText({ llm: database ? goalBudgetLlm(llm, { database, ticketId: ticket.id }) : llm, model, config: routingConfig, capability: 'review',
-        validate: text => parseDecision(text, index, publicationContext.silentAllowed), request: { purpose: 'superagent-verification', maxTokens: 12288, signal, messages } });
+      let response = await collectReview();
       routing = response.routing;
       let decision = parseDecision(response.text, index, publicationContext.silentAllowed);
       if (requiresUserContinuationCheck(decision, ticket, result, answeredAttentions)) {
@@ -224,8 +229,7 @@ Missing infrastructure access, unreadable evidence or temporary model/resource f
           { role: 'assistant', content: [{ type: 'text', text: response.text }] },
           { role: 'system', content: [{ type: 'text', text: 'Host consistency check: the persisted task explicitly requires a user decision before this Ticket can continue, and the current Worker submission still asks for that decision before continuing. Reassess against the complete saved task and evidence. If the required answer is absent, return verdict wait with delivery.action ask, a concise task-specific question and userDecision. Write a fresh Router report; do not forward Worker prose. If the saved evidence contains the answer already, assess the resulting final deliverable normally.' }] },
         );
-        const checked = await collectAuxiliaryText({ llm: database ? goalBudgetLlm(llm, { database, ticketId: ticket.id }) : llm, model, config: routingConfig, capability: 'review',
-          validate: text => parseDecision(text, index, publicationContext.silentAllowed), request: { purpose: 'superagent-verification', maxTokens: 12288, signal, messages } });
+        const checked = await collectReview();
         response = checked;
         routing = checked.routing;
         decision = parseDecision(checked.text, index, publicationContext.silentAllowed);
@@ -238,8 +242,7 @@ Missing infrastructure access, unreadable evidence or temporary model/resource f
           { role: 'assistant', content: [{ type: 'text', text: response.text }] },
           { role: 'system', content: [{ type: 'text', text: 'Host consistency check: answeredAttentions contains the human answers already recorded for this exact task revision and execution. Reassess the submitted result using those answers. Do not repeat an answered question or treat its answer as absent. If another user decision is genuinely required, explain how it differs from the recorded answers; otherwise assess the result normally.' }] },
         );
-        const checked = await collectAuxiliaryText({ llm: database ? goalBudgetLlm(llm, { database, ticketId: ticket.id }) : llm, model, config: routingConfig, capability: 'review',
-          validate: text => parseDecision(text, index, publicationContext.silentAllowed), request: { purpose: 'superagent-verification', maxTokens: 12288, signal, messages } });
+        const checked = await collectReview();
         response = checked;
         routing = checked.routing;
         decision = parseDecision(checked.text, index, publicationContext.silentAllowed);
@@ -257,6 +260,6 @@ Missing infrastructure access, unreadable evidence or temporary model/resource f
   } catch (error) {
     const decision = goalBudgetDenial(error);
     if (!decision) throw error;
-    return internalWait('GOAL_BUDGET_UNAVAILABLE', { inputHash, budgetWait: { goalId: decision.goalId, reason: decision.reason } });
+    return internalWait('GOAL_BUDGET_UNAVAILABLE', { inputHash, budgetWait: { goalId: decision.goalId, reason: decision.reason }, routing: auxiliaryFailureRouting(error) });
   }
 }

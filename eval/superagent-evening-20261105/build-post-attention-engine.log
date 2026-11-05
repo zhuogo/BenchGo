@@ -1,0 +1,29 @@
+
+> benchgo@0.1.0 reload:plus
+> node scripts/reload-plus-client.mjs
+
+BenchGo modules built
+BenchGo preview renderers built (lazy assets)
+Link web built: E:\BenchGo\plugins\link\dist\web\
+node:internal/fs/promises:697
+  return new FileHandle(await PromisePrototypeThen(
+                        ^
+
+Error: UNKNOWN: unknown error, open 'E:\BenchGo\plugins\benchgo\lib\LINK-THIRD-PARTY-LICENSES.txt'
+    at async open (node:internal/fs/promises:697:25)
+    at async writeFile (node:internal/fs/promises:1317:14)
+    at async writeLinkLicenses (file:///E:/BenchGo/plugins/benchgo/scripts/link-licenses.mjs:21:3)
+    at async buildLink (file:///E:/BenchGo/plugins/benchgo/scripts/build-link.mjs:26:3)
+    at async file:///E:/BenchGo/plugins/benchgo/scripts/build-client.mjs:16:1 {
+  errno: -4094,
+  code: 'UNKNOWN',
+  syscall: 'open',
+  path: 'E:\\BenchGo\\plugins\\benchgo\\lib\\LINK-THIRD-PARTY-LICENSES.txt'
+}
+
+Node.js v24.19.0
+npm notice
+npm notice New major version of npm available! 11.17.0 -> 12.2.2
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.2
+npm notice To update run: npm install -g npm@12.2.2
+npm notice

@@ -1,32 +1,72 @@
+import { triageWorkerQuestions } from './attention-triage.mjs';
+import { attentionReplyText } from './attention-store.mjs';
+
 /** Bridges the official question waterfall to authenticated source replies. */
 export function attentionAnswer(database, entry) {
   const trigger = database.getTrigger(entry.answerTriggerId);
   return { id: entry.question.id, ...(trigger.source.channel === 'desktop' && trigger.source.answer
-    ? trigger.source.answer : { selected: [], custom: trigger.content }) };
+    ? trigger.source.answer : { selected: [], custom: attentionReplyText(entry.id, trigger.content) }) };
 }
 
-export function installWorkerAttention(scope, agent, { database, assignment, signal, pauseDeadline, resumeDeadline, sessionProjections, pollMs = 250 }) {
+export function attentionBatchAnswers(database, ticketId, { sessionId, callId, questions }) {
+  const resolved = database.attentionResolutions?.(ticketId, { sessionId, callId }) || [];
+  if (resolved.some(row => row.instructionRevision !== database.getTicket(ticketId)?.instructionRevision)) throw new Error('Attention requirements changed');
+  const entries = database.attentions(ticketId).filter(entry => entry.sessionId === sessionId && entry.callId === callId);
+  const expected = questions || (resolved.length ? resolved.map(row => row.question) : entries.map(row => row.question));
+  if (!expected.length) throw new Error('Attention batch is missing');
+  return expected.map(question => {
+    const automatic = resolved.find(row => row.questionId === question.id && row.route !== 'user');
+    if (automatic) return automatic.answer;
+    const entry = entries.find(row => row.question.id === question.id);
+    if (!entry?.answerTriggerId) throw new Error('Attention answer is missing');
+    return attentionAnswer(database, entry);
+  });
+}
+
+export function installWorkerAttention(scope, agent, { database, assignment, signal, pauseDeadline, resumeDeadline, sessionProjections, llm, readPolicy, pollMs = 250 }) {
   const pending = new Map();
   let sequence = 0, waiting = 0;
   scope.on('user-questions/request', async (request, next) => {
     if (request.agent !== agent) return next();
     const ticket = database.getTicket(assignment.ticketId);
-    if (!['feishu', 'desktop'].includes(ticket?.mandate.source?.channel)) return next();
+    if (!['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'email', 'webhook', 'api'].includes(ticket?.mandate.source?.channel)) return next();
     const waitSignal = AbortSignal.any([signal, ...(request.signal ? [request.signal] : [])]);
     waitSignal.throwIfAborted();
-    const entries = database.openAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence,
-      sessionId: agent.id, callId: request.wait?.callId || `foreground:${++sequence}`, questions: request.questions });
-    const batch = ++sequence;
-    pending.set(batch, { callId: request.wait?.timed ? request.wait.callId : null, attentionIds: entries.map(entry => entry.id) });
     if (++waiting === 1) pauseDeadline();
+    let hold, holdAbort;
     try {
+      const callId = request.wait?.callId || `foreground:${++sequence}`;
+      let resolutions = database.attentionResolutions?.(assignment.ticketId, { sessionId: agent.id, callId }) || [];
+      if (!resolutions.length && database.saveAttentionResolutions) {
+        if (request.wait?.timed && scope.get?.('userQuestions')?.attachWait) {
+          holdAbort = new AbortController();
+          hold = scope.get('userQuestions').attachWait(agent, callId, AbortSignal.any([waitSignal, holdAbort.signal]))[Symbol.asyncIterator]();
+          await hold.next();
+        }
+        let policy;
+        try { policy = await readPolicy?.() || {}; } catch { policy = {}; }
+        const decisions = await triageWorkerQuestions({ llm, database, ticket, questions: request.questions, policy, signal: waitSignal });
+        waitSignal.throwIfAborted();
+        resolutions = database.saveAttentionResolutions(assignment.id, { owner: assignment.owner, fence: assignment.fence,
+          sessionId: agent.id, callId, questions: request.questions, decisions });
+      }
+      if (resolutions.length && (resolutions.length !== request.questions.length || resolutions.some(row =>
+        row.instructionRevision !== ticket.instructionRevision || !request.questions.some(question => JSON.stringify(question) === JSON.stringify(row.question))))) throw new Error('Attention triage batch changed');
+      const questions = request.questions.filter(question => !resolutions.some(row => row.questionId === question.id && row.route !== 'user'));
+      const entries = questions.length ? database.openAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence,
+        sessionId: agent.id, callId, questions }) : [];
+      const batch = ++sequence;
+      if (entries.length) pending.set(batch, { callId: request.wait?.timed ? callId : null, attentionIds: entries.map(entry => entry.id) });
+      holdAbort?.abort();
+      await hold?.return?.();
+      hold = undefined;
       for (;;) {
         waitSignal.throwIfAborted();
         const current = database.attentions(assignment.ticketId);
         const answered = entries.map(entry => current.find(item => item.id === entry.id));
         if (answered.every(entry => entry?.answerTriggerId)) {
           pending.delete(batch);
-          return { answers: answered.map(entry => attentionAnswer(database, entry)) };
+          return { answers: attentionBatchAnswers(database, assignment.ticketId, { sessionId: agent.id, callId, questions: request.questions }) };
         }
         await new Promise((resolve, reject) => {
           const abort = () => { clearTimeout(timer); reject(waitSignal.reason); };
@@ -34,8 +74,8 @@ export function installWorkerAttention(scope, agent, { database, assignment, sig
           waitSignal.addEventListener('abort', abort, { once: true });
         });
       }
-    } finally { if (--waiting === 0) resumeDeadline(); }
-  });
+    } finally { holdAbort?.abort(); await hold?.return?.(); if (--waiting === 0) resumeDeadline(); }
+  }, { prepend: true });
   return { waiting() {
     const entries = [...pending.values()];
     if (entries.some(entry => !entry.callId)) throw new Error('Unkeyed Attention requires session reconciliation');
@@ -51,6 +91,9 @@ export function installWorkerAttention(scope, agent, { database, assignment, sig
       const existing = database.attentions(assignment.ticketId).filter(entry =>
         entry.sessionId === agent.id && entry.callId === call.callId);
       const existingIds = new Set(existing.map(entry => entry.question.id));
+      for (const row of database.attentionResolutions?.(assignment.ticketId, { sessionId: agent.id, callId: call.callId }) || []) {
+        if (row.route !== 'user' && row.instructionRevision === database.getTicket(assignment.ticketId)?.instructionRevision) existingIds.add(row.questionId);
+      }
       const missing = call.questions.filter(question => !existingIds.has(question.id));
       const created = missing.length ? database.openAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence,
         sessionId: agent.id, callId: call.callId, questions: missing }) : [];

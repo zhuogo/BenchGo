@@ -1,5 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { validateDelivery } from './result-delivery.mjs';
+import { validateAttentionDecisions } from './attention-triage.mjs';
+
+const attentionChannels = new Set(['desktop', 'feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'email', 'webhook', 'api']);
+const attentionText = (source, attentionId, text) => source.channel === 'desktop' ? text
+  : `${text}\n\n问题编号：${attentionId}\n可引用这条消息回答，或发送 /answer ${attentionId} 你的回答`;
+
+export function attentionReplyText(attentionId, content) {
+  const command = /^\/answer ([0-9a-f-]{36})\s+(\S[\s\S]*)$/iu.exec(content.trim());
+  return command?.[1].toLowerCase() === attentionId ? command[2] : content;
+}
 
 /** Shares the orchestration transaction and outbox; no independent delivery queue. */
 export function installAttentionStore({ db, tx, api, ownedAssignment }) {
@@ -10,6 +20,13 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
     answer_trigger_id TEXT REFERENCES sa_triggers(id), created_at TEXT NOT NULL);
     CREATE UNIQUE INDEX IF NOT EXISTS sa_attention_answer ON sa_attentions(answer_trigger_id) WHERE answer_trigger_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS sa_receipt_message ON sa_delivery_receipts(json_extract(payload,'$.messageId'));`);
+  db.exec(`CREATE TABLE IF NOT EXISTS sa_attention_resolutions(
+    question_key TEXT PRIMARY KEY, assignment_id TEXT NOT NULL REFERENCES sa_assignments(id),
+    ticket_id TEXT NOT NULL REFERENCES sa_tickets(id), session_id TEXT NOT NULL, call_id TEXT NOT NULL,
+    instruction_revision INTEGER NOT NULL, question TEXT NOT NULL, resolution TEXT NOT NULL, created_at TEXT NOT NULL);`);
+  const resolutionValue = row => ({ assignmentId: row.assignment_id, ticketId: row.ticket_id, sessionId: row.session_id,
+    callId: row.call_id, instructionRevision: row.instruction_revision, question: JSON.parse(row.question),
+    ...JSON.parse(row.resolution), createdAt: row.created_at });
   // Extra key components are host-owned metadata; an official question's arbitrary
   // JSON fields never decide whether it is a Router review or an executing tool.
   const reviewKey = row => {
@@ -50,7 +67,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
       return { queued: false, code: 'USER_ANSWER_REQUIRED', ticket };
     }
     const answer = trigger.source?.channel === 'desktop' && trigger.source.answer
-      ? trigger.source.answer : { selected: [], custom: trigger.content };
+      ? trigger.source.answer : { selected: [], custom: attentionReplyText(entry.id, trigger.content) };
     return api.queueReviewContinuation(ticket.id, { assignmentId: entry.assignmentId, runId: entry.runId,
       sourceResultVersion, instruction: entry.question.question, reason: api.results(ticket.id).at(-1)?.review?.reason,
       reviewAnswer: { attentionId: entry.id, question: entry.question, kind: entry.kind,
@@ -58,6 +75,34 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
       validateMandate, ownerRetry: ownerRetry === true, additionalExecutionMs, now, inTransaction: true });
   };
   return {
+    attentionResolutions(ticketId, { sessionId, callId } = {}) {
+      return db.prepare('SELECT * FROM sa_attention_resolutions WHERE ticket_id=? ORDER BY created_at,rowid').all(ticketId)
+        .filter(row => (sessionId === undefined || row.session_id === sessionId) && (callId === undefined || row.call_id === callId)).map(resolutionValue);
+    },
+    saveAttentionResolutions(assignmentId, { owner, fence, sessionId, callId, questions, decisions, now = Date.now() }) {
+      if (!sessionId || !callId || !Array.isArray(questions) || !questions.length || new Set(questions.map(row => row.id)).size !== questions.length) throw new Error('Invalid Attention triage batch');
+      return tx(() => {
+        const assignment = ownedAssignment(assignmentId, owner, fence, now), ticket = api.getTicket(assignment.ticket_id);
+        if ((JSON.parse(assignment.payload).instructionRevision ?? 1) !== ticket.instructionRevision
+          || !api.runs(assignmentId).some(run => run.fence === fence && run.sessionId === sessionId && ['submitted', 'running'].includes(run.state))) throw new Error('Attention triage execution changed');
+        const normalized = validateAttentionDecisions({ decisions }, { questions, instruction: ticket.mandate?.instruction || '' }).map(row => {
+          const state = decisions.find(input => input.questionId === row.questionId)?.systemState;
+          return row.route === 'user' && ['mandate-unavailable', 'model-unavailable', 'timeout', 'budget-exhausted', 'triage-unavailable'].includes(state) ? { ...row, systemState: state } : row;
+        });
+        return questions.map(question => {
+          const key = JSON.stringify([sessionId, callId, question.id]), resolution = normalized.find(row => row.questionId === question.id);
+          const existing = db.prepare('SELECT * FROM sa_attention_resolutions WHERE question_key=?').get(key);
+          if (existing) {
+            if (existing.assignment_id !== assignmentId || existing.question !== JSON.stringify(question)
+              || existing.instruction_revision !== ticket.instructionRevision || existing.resolution !== JSON.stringify(resolution)) throw new Error('Attention triage identity conflict');
+            return resolutionValue(existing);
+          }
+          db.prepare('INSERT INTO sa_attention_resolutions VALUES (?,?,?,?,?,?,?,?,?)').run(key, assignmentId, ticket.id, sessionId, callId,
+            ticket.instructionRevision, JSON.stringify(question), JSON.stringify(resolution), new Date(now).toISOString());
+          return resolutionValue(db.prepare('SELECT * FROM sa_attention_resolutions WHERE question_key=?').get(key));
+        });
+      });
+    },
     queueAnsweredReviewContinuation(ticketId, options) {
       return tx(() => queueAnsweredReviewContinuation(ticketId, options));
     },
@@ -131,7 +176,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
           || !run || run.sessionId !== sessionId || !['verifying', 'waiting', 'completed'].includes(run.state)) throw new Error('Review Attention result changed');
         if (result.review?.verdict !== 'wait' || result.review?.waitKind !== 'blocked'
           || JSON.stringify(result.review.userDecision) !== JSON.stringify(userDecision)) throw new Error('Review Attention does not match the saved user decision');
-        if (!['desktop', 'feishu'].includes(ticket.mandate.source?.channel) || !ticket.mandate.actorId) throw new Error('Review Attention source unavailable');
+        if (!attentionChannels.has(ticket.mandate.source?.channel) || !ticket.mandate.actorId) throw new Error('Review Attention source unavailable');
         const question = { id: `review:${ticketId}:${resultVersion}`, question: userDecision.question.trim(),
           ...(publication.options?.length ? { options: publication.options.map(label => ({ label })) } : {}) };
         const key = JSON.stringify([sessionId, `review:${resultVersion}`, question.id, 'review', instructionRevision, resultVersion, runId, userDecision.kind]);
@@ -142,7 +187,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         }
         const attentionId = randomUUID(), outboxId = randomUUID(), at = new Date(now).toISOString();
         const body = publication.text.includes(question.question) ? publication.text : `${publication.text}\n${question.question}`;
-        const text = [body, ...(publication.options || [])].join('\n');
+        const text = attentionText(ticket.mandate.source, attentionId, [body, ...(publication.options || [])].join('\n'));
         const payload = { type: 'ticket.attention', attentionId, ticketId, source: ticket.mandate.source,
           instructionRevision, resultVersion, text, ...(publication.options ? { options: publication.options } : {}) };
         db.prepare("INSERT INTO sa_outbox(id,unique_key,ticket_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
@@ -163,7 +208,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         if ((JSON.parse(assignment.payload).instructionRevision ?? 1) !== ticket.instructionRevision) throw new Error('Attention requirements changed');
         const run = api.runs(assignmentId).find(item => item.fence === fence && item.sessionId === sessionId);
         if (!run || !['submitted', 'running'].includes(run.state)) throw new Error('Attention requires the executing session');
-        if (!['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'email', 'webhook', 'api'].includes(ticket.mandate.source?.channel) || !ticket.mandate.actorId) throw new Error('Attention source unavailable');
+        if (!attentionChannels.has(ticket.mandate.source?.channel) || !ticket.mandate.actorId) throw new Error('Attention source unavailable');
         return questions.map(question => {
           const key = JSON.stringify([sessionId, callId, question.id]);
           const previous = db.prepare('SELECT * FROM sa_attentions WHERE question_key=?').get(key);
@@ -172,11 +217,15 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
             return value(previous);
           }
           const attentionId = randomUUID(), outboxId = randomUUID(), at = new Date(now).toISOString();
+          const triageRow = db.prepare('SELECT * FROM sa_attention_resolutions WHERE question_key=?').get(key);
+          const triage = triageRow ? JSON.parse(triageRow.resolution) : null;
+          if (triage && triage.route !== 'user') throw new Error('Automatically resolved Attention cannot open a human question');
           // Preserve wording, detail and labels; no model rephrases the question.
-          const text = [question.question, question.detail, ...(question.options || []).map(option =>
-            option.label + (option.description ? `：${option.description}` : ''))].filter(part => part !== undefined).join('\n');
+          const text = attentionText(ticket.mandate.source, attentionId, [triage?.systemState ? triage.basis : undefined, question.question, question.detail, ...(question.options || []).map(option =>
+            option.label + (option.description ? `：${option.description}` : ''))].filter(part => part !== undefined).join('\n'));
           const payload = { type: 'ticket.attention', attentionId, ticketId: ticket.id, source: ticket.mandate.source,
             instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion, text,
+            ...(triage ? { triage } : {}),
             ...(question.options?.length ? { options: question.options.map(option => option.label) } : {}) };
           db.prepare("INSERT INTO sa_outbox(id,unique_key,ticket_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
             .run(outboxId, `attention:${attentionId}`, ticket.id, JSON.stringify(payload), now, at, at);
@@ -201,7 +250,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
           || !run || (entry.origin === 'review' && (entry.instructionRevision !== instructionRevision || entry.runId !== runId))
           || !trigger || trigger.actor?.kind !== 'human') return [];
         const answer = trigger.source?.channel === 'desktop' && trigger.source.answer
-          ? trigger.source.answer : { selected: [], custom: trigger.content };
+          ? trigger.source.answer : { selected: [], custom: attentionReplyText(entry.id, trigger.content) };
         return [{ attentionId: entry.id, question: entry.question, answer }];
       });
     },
@@ -243,14 +292,22 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
       if (!ownerAllowed) return null;
       return tx(() => {
         const trigger = api.getTrigger(triggerId), source = trigger?.source;
-        if (!source?.parentMessageId || trigger.actor.kind !== 'human') return null;
-        const rows = db.prepare(`SELECT a.*,r.payload AS receipt FROM sa_attentions a
-          JOIN sa_delivery_receipts r ON r.outbox_id=a.outbox_id WHERE json_extract(r.payload,'$.messageId')=?`).all(source.parentMessageId);
+        if (!source || trigger.actor.kind !== 'human') return null;
+        const explicitId = /^\/answer ([0-9a-f-]{36})\s+\S[\s\S]*$/iu.exec(trigger.content.trim())?.[1]?.toLowerCase();
+        if (!source.parentMessageId && !explicitId) return null;
+        // Old Telegram receipts used the provider-local integer; compare only
+        // after the same account/chat check below, never across namespaces.
+        const parentIds = [source.parentMessageId];
+        if (source.channel === 'telegram' && source.parentMessageId?.startsWith(`${source.chatId}:`)) parentIds.push(source.parentMessageId.slice(source.chatId.length + 1));
+        const rows = explicitId
+          ? db.prepare('SELECT * FROM sa_attentions WHERE id=?').all(explicitId)
+          : db.prepare(`SELECT a.*,r.payload AS receipt FROM sa_attentions a JOIN sa_delivery_receipts r ON r.outbox_id=a.outbox_id
+              WHERE json_extract(r.payload,'$.messageId') IN (?,?) OR EXISTS(
+                SELECT 1 FROM json_each(r.payload,'$.parts') p WHERE json_extract(p.value,'$.messageId') IN (?,?))`).all(parentIds[0], parentIds[1] ?? null, parentIds[0], parentIds[1] ?? null);
         const matches = rows.filter(row => {
-          const ticket = api.getTicket(row.ticket_id), origin = ticket.mandate.source;
+          const ticket = api.getTicket(row.ticket_id), origin = ticket?.mandate.source;
           if (!currentRevision(row, ticket)) return false;
-          return JSON.parse(row.receipt).messageId === source.parentMessageId
-            && source.channel === origin.channel && source.appId === origin.appId && source.accountId === origin.accountId && source.connectionRevision === origin.connectionRevision && source.chatId === origin.chatId
+          return source.channel === origin.channel && source.appId === origin.appId && source.accountId === origin.accountId && source.connectionRevision === origin.connectionRevision && source.chatId === origin.chatId && source.topicId === origin.topicId
             && (trigger.actor.id === ticket.mandate.actorId || (ticket.mandate.admission === 'enabled-rules' && ticket.mandate.actorKind === 'machine')) && !['cancelling', 'cancelled', 'closed', 'completed', 'failed'].includes(ticket.status);
         });
         if (matches.length !== 1) return null;

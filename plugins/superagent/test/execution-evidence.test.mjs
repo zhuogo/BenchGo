@@ -41,6 +41,87 @@ test('current deliverable is the final assistant text while complete draft histo
   assert.match(evidence.summary, /draft with 14 items/);
 });
 
+test('news evidence retains independent sources, publication and fetch times, including a failed site', () => {
+  const events = [];
+  for (const [id, url, isError, content] of [
+    ['one', 'https://one.example/news', false, JSON.stringify({ url: 'https://one.example/news', source: 'One News', publishedAt: '2026-11-05T08:00:00Z' })],
+    ['two', 'https://two.example/news', false, JSON.stringify({ url: 'https://two.example/news', published_at: '2026-11-05T09:00:00Z' })],
+    ['failed', 'https://blocked.example/news', true, 'HTTP 403'],
+  ]) {
+    events.push({ seq: events.length, type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id, name: 'web_fetch', arguments: { url } }] } } });
+    events.push({ seq: events.length, time: Date.parse('2026-11-05T10:00:00Z'), type: 'tool/result', data: { message: { toolCallId: id, isError, content: [{ type: 'text', text: content }] } } });
+  }
+  const evidence = executionEvidence({ events }).toolEvidence;
+  assert.equal(evidence.failedCount, 1);
+  assert.equal(evidence.entries.filter(row => !row.isError).length, 2);
+  assert.deepEqual(evidence.entries[0].sources[0], { url: 'https://one.example/news', source: 'One News', publishedAt: '2026-11-05T08:00:00Z', fetchedAt: '2026-11-05T10:00:00.000Z', status: 'observed' });
+  assert.equal(evidence.entries[2].sources[0].status, 'failed');
+  assert.equal(evidence.entries[2].sources[0].publishedAt, null);
+});
+
+test('structured news sources retain explicit failures and relationships through duplicate URL matches', () => {
+  const primary = 'https://wire.example/article', peer = 'https://paper.example/report', blocked = 'https://blocked.example/article';
+  const payload = { sources: [
+    { url: primary, source: 'Wire', publishedAt: '2026-11-05T08:00:00Z', relatedUrls: [peer], corroborates: [peer], relationship: { type: 'corroborates', url: peer } },
+    { url: blocked, source: 'Blocked', failureReason: 'Access\u0000 denied', error: { message: 'HTTP 403\r\nForbidden', debug: 'private-debug' }, status: 'failed' },
+    { url: primary, source: 'Later conflicting label', publishedAt: 'later', relatedUrls: [blocked, peer] },
+    { url: peer },
+  ] };
+  const text = JSON.stringify(payload);
+  const events = [
+    { seq: 0, type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'news', name: 'news_search', arguments: { url: primary } }] } } },
+    { seq: 1, time: Date.parse('2026-11-05T10:00:00Z'), type: 'tool/result', data: { message: { toolCallId: 'news', content: [{ type: 'text', text }] } } },
+  ];
+  const evidence = executionEvidence({ events }).toolEvidence;
+  const [entry] = evidence.entries, sources = new Map(entry.sources.map(source => [source.url, source]));
+  assert.equal(entry.text, text);
+  assert.equal(entry.isError, false);
+  assert.equal(sources.size, 3);
+  assert.equal(sources.get(primary).source, 'Wire');
+  assert.equal(sources.get(primary).publishedAt, payload.sources[0].publishedAt);
+  assert.deepEqual(sources.get(primary).relatedUrls, [peer, blocked]);
+  assert.deepEqual(sources.get(primary).corroborates, [peer]);
+  assert.deepEqual(sources.get(primary).relationship, { type: 'corroborates', url: peer });
+  assert.equal(sources.get(primary).status, 'observed');
+  assert.equal(sources.get(blocked).status, 'failed');
+  assert.equal(sources.get(blocked).failureReason, 'Access  denied');
+  assert.equal(sources.get(blocked).error, 'HTTP 403  Forbidden');
+  assert.doesNotMatch(JSON.stringify(entry.sources), /private-debug/);
+  assert.equal(sources.get(peer).publishedAt, null);
+  for (const key of ['failureReason', 'error', 'relatedUrls', 'corroborates', 'relationship']) assert.equal(sources.get(peer)[key], undefined);
+});
+
+test('structured fetch errors stay bounded and absent source facts remain unknown', () => {
+  const url = 'https://blocked.example/news';
+  const events = [
+    { seq: 0, type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'fetch', name: 'web_fetch', arguments: { url } }] } } },
+    { seq: 1, type: 'tool/result', data: { message: { toolCallId: 'fetch', isError: true, content: [{ type: 'text', text: JSON.stringify({ error: { message: 'Denied\u0000' + 'x'.repeat(600), stack: 'private-stack' }, relationship: { type: 'x'.repeat(400), url: 'javascript:alert(1)' }, relatedUrls: ['javascript:alert(1)', 'file:///secret'], corroborates: false }) }] } } },
+  ];
+  const [source] = executionEvidence({ events }).toolEvidence.entries[0].sources;
+  assert.equal(source.status, 'failed');
+  assert.equal(source.error.length, 500);
+  assert.doesNotMatch(source.error, /\u0000|private-stack/);
+  assert.equal(source.failureReason, undefined);
+  assert.equal(source.publishedAt, null);
+  assert.equal(source.fetchedAt, null);
+  assert.deepEqual(source.relationship, { type: 'x'.repeat(100) });
+  assert.equal(source.relatedUrls, undefined);
+  assert.equal(source.corroborates, undefined);
+});
+
+test('structured source metadata is merged at the existing sixteen-source limit', () => {
+  const urls = Array.from({ length: 20 }, (_, index) => `https://source.example/${index}`);
+  const events = [
+    { seq: 0, type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'news', name: 'news_search', arguments: { sources: urls.slice(0, 16).map(url => ({ url })) } }] } } },
+    { seq: 1, type: 'tool/result', data: { message: { toolCallId: 'news', content: [{ type: 'text', text: JSON.stringify({ sources: [{ url: urls[0], source: 'Explicit source', relatedUrls: urls, relationship: 'independent reporting' }, { url: urls[16] }] }) }] } } },
+  ];
+  const [entry] = executionEvidence({ events }).toolEvidence.entries;
+  assert.equal(entry.sources.length, 16);
+  assert.equal(entry.sources[0].source, 'Explicit source');
+  assert.deepEqual(entry.sources[0].relatedUrls, urls.slice(0, 16));
+  assert.equal(entry.sources[0].relationship, 'independent reporting');
+  assert.equal(entry.sources.some(source => source.url === urls[16]), false);
+});
 function fixture() {
   const events = [
     { seq: 0, type: 'turn/start', data: { turn: 1 } },

@@ -30,6 +30,12 @@ test('normal completed answer is visible without a publication tool and survives
   assert.doesNotMatch(JSON.stringify(rows), /PRIVATE/);
 });
 
+test('normal and explicit conversational replies preserve natural text verbatim', () => {
+  const text = '  自然正文。\n\n保留段落与末尾换行。\n';
+  assert.equal(projectChatMessages([start(), user, answer([{ type: 'text', text }]), end()])[1].text, text);
+  assert.equal(projectChatMessages([start(), user, reply(2, { text }), end()])[1].text, text);
+});
+
 test('only completed terminal text is published, never tool narration or failed partial output', () => {
   const narration = answer([{ type: 'text', text: 'PRIVATE PROCESS' }, { type: 'tool-call', name: 'read' }]);
   assert.equal(projectChatMessages([start(), user, narration, end()]).length, 1);

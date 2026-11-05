@@ -10,11 +10,18 @@ test('Telegram scopes group mentions, owners, topics and ignores bots', () => {
   assert.equal(event.actor.owner, true); assert.equal(event.source.topicId, '3');
   update.message.entities = []; assert.equal(normalizeTelegramEvent(update, { id: 1, username: 'bot' }, config()), null);
 });
+test('Telegram parent identifiers share sent receipt namespace and Discord replies survive absent mentions', () => {
+  const telegram = normalizeTelegramEvent({ message: { message_id: 3, from: { id: 'owner' }, chat: { id: -2, type: 'supergroup' }, text: 'answer', date: 1700000000, reply_to_message: { message_id: 2, from: { id: 1 } } } }, { id: 1, username: 'bot' }, config());
+  assert.equal(telegram.source.parentMessageId, '-2:2');
+  const discord = normalizeDiscordEvent({ id: 'reply', channelId: 'chat', guildId: 'guild', author: { id: 'owner' }, content: 'answer', reference: { messageId: 'question' }, createdTimestamp: 1700000000000 }, 'bot', config());
+  assert.equal(discord.source.parentMessageId, 'question');
+  assert.equal(discord.mentioned, false);
+});
 test('Telegram sends topic and refuses revoked destinations', async () => {
   const c = config(), calls = [];
   const adapter = createTelegramAdapter({ getConfig: () => c, credentials: { resolve: async () => ({ value: 'token' }) }, ingest: async () => {}, fetcher: async (url, options) => { calls.push(JSON.parse(options.body)); return Response.json({ ok: true, result: url.endsWith('getMe') ? { id: 1, is_bot: true } : { message_id: 2 } }); } });
   const source = { channel: 'telegram', accountId: '1', chatId: 'chat', topicId: '8' };
-  await adapter.send({ source, text: 'hello' }); assert.equal(calls[1].message_thread_id, 8);
+  const receipt = await adapter.send({ source, text: 'hello' }); assert.equal(calls[1].message_thread_id, 8); assert.equal(receipt.messageId, 'chat:2');
   c.chatIds = ['other']; await assert.rejects(adapter.send({ source, text: 'hello' }), /撤销/); await adapter.dispose();
 });
 test('Discord filters group mentions and bots', () => {
@@ -25,12 +32,15 @@ test('Discord filters group mentions and bots', () => {
 });
 test('Discord SDK lifecycle ingests and prevents output mention escalation', async () => {
   const client = new EventEmitter(), c = config(), received = [], sent = [];
+  let failure;
   client.login = async () => { client.user = { id: 'bot' }; }; client.isReady = () => !!client.user;
-  client.destroy = async () => { client.user = null; }; client.channels = { fetch: async () => ({ isTextBased: () => true, send: async x => { sent.push(x); return { id: 'sent' }; } }) };
+  client.destroy = async () => { client.user = null; }; client.channels = { fetch: async () => ({ isTextBased: () => true, send: async x => { sent.push(x); if (failure) throw failure; return { id: 'sent' }; } }) };
   const adapter = createDiscordAdapter({ getConfig: () => c, credentials: { resolve: async () => ({ value: 'secret' }) }, ingest: async event => received.push(event), clientFactory: async () => client });
   await adapter.start(); client.emit('messageCreate', { id: 'm', channelId: 'c', author: { id: 'owner' }, content: 'hello', createdTimestamp: 1700000000000 });
   await new Promise(resolve => setImmediate(resolve)); assert.equal(received.length, 1);
   await adapter.send({ source: received[0].source, text: '@everyone' }); assert.deepEqual(sent[0].allowedMentions.parse, []);
+  failure = { status: 403 }; await assert.rejects(adapter.send({ source: received[0].source, text: 'rejected' }), { deliveryOutcome: 'not_sent' });
+  failure = Error('socket timeout'); await assert.rejects(adapter.send({ source: received[0].source, text: 'unknown' }), { deliveryOutcome: 'unknown' });
   c.enabled = false; await assert.rejects(adapter.send({ source: received[0].source, text: 'no' }), /撤销/); await adapter.dispose();
 });
 test('Discord voice commands bypass mention requirement and TTS failure never retries sent text', async () => {

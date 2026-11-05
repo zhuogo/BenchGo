@@ -171,9 +171,12 @@ for (const kind of ['passed', 'failed', 'blocked']) test(`pause during review pr
 test('execution failure creates one explicit system notification without changing saved results', t => {
   const f = fixture(t), assignment = f.assignment();
   f.database.recordAssignmentFailure(assignment.id, { owner: assignment.owner, fence: assignment.fence,
-    stage: 'execution', code: 'NETWORK', now: Date.now() });
+    stage: 'execution', code: 'NETWORK', phase: 'attention-answer', now: Date.now() });
+  assert.equal(f.database.getAssignment(assignment.id).lastFailure.phase, 'attention-answer');
   f.database.recordAssignmentFailure(assignment.id, { owner: assignment.owner, fence: assignment.fence,
-    stage: 'execution', code: 'SECRET_RAW_PROVIDER_TEXT', now: Date.now() });
+    stage: 'execution', code: 'SECRET_RAW_PROVIDER_TEXT', phase: 'SECRET_RAW_PHASE', now: Date.now() });
+  assert.equal(f.database.getAssignment(assignment.id).lastFailure.phase, undefined);
+  assert.doesNotMatch(JSON.stringify(f.database.getAssignment(assignment.id)), /SECRET_RAW/);
   const rows = f.database.deliveries(f.ticket.id);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].payload.publication.origin, 'system');

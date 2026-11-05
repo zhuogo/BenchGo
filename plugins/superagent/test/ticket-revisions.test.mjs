@@ -47,16 +47,22 @@ test('requirements change keeps immutable history, a fresh execution and CAS acr
   assert.equal(f.db.renewAssignment(next.id, { owner: 'worker', fence: claimed[0].fence, leaseMs: 60000, validateMandate: m => m.policyVersion === 'current' }).allowed, true);
 });
 
-test('closed work reopens with new authorization without replacing the previous result', async t => {
+test('completed work creates an idempotent linked adjustment and never changes its prior result', async t => {
   const f = await fixture(t);
   f.db.commitResult(f.ticket.id, { result: { summary: 'old result' }, uniqueKey: 'old-result', instructionRevision: 1 });
-  assert.throws(() => f.db.changeTicket(f.ticket.id, f.input), { code: 'TICKET_STATE_CONFLICT' });
+  const before = f.db.getTicket(f.ticket.id), results = f.db.results(f.ticket.id);
   assert.throws(() => f.db.changeTicket(f.ticket.id, { ...f.input, operation: 'reopen', validateMandate: () => false }), { code: 'MANDATE_REVOKED' });
-  f.db.changeTicket(f.ticket.id, { ...f.input, operation: 'reopen' });
-  assert.equal(f.db.results(f.ticket.id)[0].summary, 'old result');
-  assert.equal(f.db.results(f.ticket.id)[0].instructionRevision, 1);
-  assert.throws(() => f.db.commitResult(f.ticket.id, { result: { summary: 'late old result' }, uniqueKey: 'late', instructionRevision: 1 }), { code: 'INSTRUCTION_REVISION_CONFLICT' });
-  assert.equal(f.db.getTicket(f.ticket.id).status, 'open');
+  const next = f.db.changeTicket(f.ticket.id, { ...f.input, operation: 'reopen' });
+  assert.notEqual(next.id, before.id);
+  assert.equal(next.adjustmentOfTicketId, before.id);
+  assert.equal(next.instructionRevision, 1);
+  assert.equal(next.resultVersion, 0);
+  assert.deepEqual(f.db.getTicket(f.ticket.id), before);
+  assert.deepEqual(f.db.results(f.ticket.id), results);
+  assert.equal(f.db.assignments(next.id)[0].sourceResultVersion, before.resultVersion);
+  f.reopen();
+  assert.equal(f.db.changeTicket(f.ticket.id, { ...f.input, operation: 'reopen' }).id, next.id);
+  assert.throws(() => f.db.changeTicket(f.ticket.id, { ...f.input, operation: 'adjustment', requestKey: 'duplicate-adjustment' }), { code: 'TRIGGER_ALREADY_ASSIGNED' });
 });
 
 test('live or uncertain executions and forged authorization cannot be revised', async t => {
@@ -69,12 +75,27 @@ test('live or uncertain executions and forged authorization cannot be revised', 
   assert.equal(f.db.ticketRevisions(f.ticket.id).length, 0);
 });
 
+test('live summary follows current goal, actual assignment progress and blocker without reusing old revision results', async t => {
+  const f = await fixture(t);
+  assert.equal(f.db.getTicket(f.ticket.id).liveSummary.progress, '等待执行');
+  const [assignment] = f.db.claimAssignments('worker', { validateMandate: () => true });
+  assert.equal(f.db.getTicket(f.ticket.id).liveSummary.progress, '执行中');
+  f.db.renewAssignment(assignment.id, { owner: assignment.owner, fence: assignment.fence, leaseMs: 60000, validateMandate: () => false });
+  assert.match(f.db.getTicket(f.ticket.id).liveSummary.blocker, /核实/);
+  const other = await fixture(t);
+  other.db.commitResult(other.ticket.id, { result: { summary: 'stale old result' }, uniqueKey: 'old-summary', instructionRevision: 1, status: 'waiting' });
+  other.db.updateTicket(other.ticket.id, { target: 'updated goal' });
+  const summary = other.db.getTicket(other.ticket.id).liveSummary;
+  assert.equal(summary.goal, 'updated goal');
+  assert.doesNotMatch(summary.progress, /stale old result/);
+});
+
 test('host revision uses exact model, current root instruction and revalidates authority after approval', async t => {
   const f = await fixture(t);
   const events = [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'new-owner-message', source: { kind: 'user' }, content: [{ type: 'text', text: '请修改验收条件' }] } }];
-  const ownerAgent = { id: 'owner', status: 'running', session: { snapshotEvents: () => events } };
+  const ownerAgent = { id: 'owner', status: 'running', session: { header: {}, snapshotEvents: () => events } };
   const policy = { desktopVersion: 'current', projects: [] };
-  const ctx = { agents: { get: () => ownerAgent, currentInitiator: () => ownerAgent, roots: () => [ownerAgent] }, sessionProjections: { stateOf: () => ({ openTurnStartSeq: 0 }) }, llm: { resolveModelInfo: async (provider, id) => ({ provider, id }) }, get: () => ({ request: async () => true }) };
+  const ctx = { agents: { get: () => ownerAgent, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) }, sessionProjections: { stateOf: () => ({ openTurnStartSeq: 0 }) }, llm: { resolveModelInfo: async (provider, id) => ({ provider, id }) }, get: () => ({ request: async () => true }) };
   const service = createTicketRevisionService({ ctx, database: f.db, readPolicy: async () => policy });
   const input = { id: f.ticket.id, operation: 'revise', expectedInstructionRevision: 1, requestId: 'host', reason: '验收要求更新', acceptance: 'new checks' };
   await assert.rejects(service.change(input, { agent: { id: 'other' } }, { ownerAgent }), /当前主人会话/);
@@ -92,10 +113,10 @@ test('a reopened Ticket executes, reviews and delivers the fresh revision while 
   const store = { orchestration: f.db, paths: { workspace: f.directory }, getConfig: async () => ({ models: [] }), connections: { read: () => ({ revision: 0, config: { enabled: false } }) }, documents: { read: async () => ({ hash: 'rules', content: '' }) } };
   const policy = await readAssessmentPolicy(store);
   f.db.commitResult(f.ticket.id, { result: { summary: 'historical' }, uniqueKey: 'historical', instructionRevision: 1 });
-  f.db.changeTicket(f.ticket.id, { ...f.input, operation: 'reopen', mandate: { ...f.input.mandate, policyVersion: policy.desktopVersion }, validateMandate: m => m.policyVersion === policy.desktopVersion });
+  const adjustment = f.db.changeTicket(f.ticket.id, { ...f.input, operation: 'reopen', mandate: { ...f.input.mandate, policyVersion: policy.desktopVersion }, validateMandate: m => m.policyVersion === policy.desktopVersion });
   let executions = 0, freshDelivery = false;
   const runtime = createOrchestrationRuntime({ ctx: {}, store,
-    execute: async (assignment, { ticket }) => { executions++; assert.equal(assignment.instructionRevision, 2); assert.equal(ticket.mandate.policyVersion, policy.desktopVersion); return { summary: 'fresh', evidenceRefs: [] }; },
+    execute: async (assignment, { ticket }) => { executions++; assert.equal(assignment.instructionRevision, 1); assert.equal(ticket.adjustmentOfTicketId, f.ticket.id); assert.equal(ticket.mandate.policyVersion, policy.desktopVersion); return { summary: 'fresh', evidenceRefs: [] }; },
     review: async ({ ticket }) => { assert.equal(ticket.acceptance, 'new checks'); return { verdict: 'passed', reason: 'new requirements verified', delivery: { action: 'deliver', text: 'fresh revision verified' } }; },
     deliverDesktop: async delivery => { if (delivery.payload.text?.includes('fresh')) { freshDelivery = true; assert.equal(delivery.payload.source.messageId, 'revision'); } return { status: 'accepted', messageId: delivery.id }; },
   });
@@ -104,7 +125,8 @@ test('a reopened Ticket executes, reviews and delivers the fresh revision while 
   await runtime.stop();
   assert.equal(freshDelivery, true);
   assert.equal(executions, 1);
-  assert.deepEqual(f.db.results(f.ticket.id).map(row => [row.summary, row.instructionRevision]), [['historical', 1], ['fresh', 2]]);
+  assert.deepEqual(f.db.results(f.ticket.id).map(row => [row.summary, row.instructionRevision]), [['historical', 1]]);
+  assert.deepEqual(f.db.results(adjustment.id).map(row => [row.summary, row.instructionRevision]), [['fresh', 1]]);
   assert.equal(f.db.getTicket(f.ticket.id).status, 'completed');
 });
 
@@ -125,9 +147,10 @@ test('Feishu owner reopens a completed subscribed Ticket through fresh Eval and 
   assert.equal(reopened.requiresEval, true);
   assert.equal(reopened.delivery, null);
   await runner.tick();
-  const current = db.getTicket(targetTicket.id);
+  const current = db.listTickets().find(row => row.adjustmentOfTicketId === targetTicket.id);
+  assert.equal(db.getTicket(targetTicket.id).status, 'completed');
   assert.equal(current.status, 'open');
-  assert.equal(current.instructionRevision, 2);
+  assert.equal(current.instructionRevision, 1);
   assert.equal(current.mandate.source.channel, 'feishu');
   assert.equal(current.mandate.source.messageId, 'reopen-message');
   assert.equal(db.getDecision(reopened.candidate.id).outcome, 'reopen');
@@ -136,6 +159,8 @@ test('Feishu owner reopens a completed subscribed Ticket through fresh Eval and 
   await runner.tick();
   assert.equal(repeated.duplicate, true);
   assert.equal(repeated.delivery, null);
-  assert.equal(db.assignments(targetTicket.id).length, 1);
-  assert.equal(db.ticketRevisions(targetTicket.id).length, 2);
+  assert.equal(db.assignments(targetTicket.id).length, 0);
+  assert.equal(db.assignments(current.id).length, 1);
+  assert.equal(db.ticketRevisions(targetTicket.id).length, 0);
+  assert.equal(db.ticketRevisions(current.id).length, 1);
 });

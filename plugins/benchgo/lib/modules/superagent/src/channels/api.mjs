@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { beforeDelivery } from './delivery-outcome.mjs';
 
 export const channelDefinition = {
   id: 'api', label: 'API Service', defaults: { accountId: 'benchgo-api' }, fields: [{ key: 'accountId', label: '接入名称', type: 'text', required: true }],
@@ -38,8 +39,10 @@ export function createApiAdapter({ getConfig, ingest }) {
       return { accepted: true, requestId: input.requestId, threadId: event.threadId, result };
     },
     async send({ source, idempotencyKey }) {
-      const c = await read();
-      if (!c.enabled || source?.channel !== 'api' || source.accountId !== c.accountId || (c.chatIds.length && !c.chatIds.includes(source.chatId))) throw fail('API 交付来源已撤销', 403);
+      await beforeDelivery(async () => {
+        const c = await read();
+        if (!c.enabled || source?.channel !== 'api' || source.accountId !== c.accountId || (c.chatIds.length && !c.chatIds.includes(source.chatId))) throw fail('API 交付来源已撤销', 403);
+      });
       // Tickets and direct replies each have a durable, owner-readable result mailbox.
       return { status: 'accepted', messageId: `pull:${createHash('sha256').update(String(idempotencyKey)).digest('hex')}`, deliveryMode: 'pull' };
     },

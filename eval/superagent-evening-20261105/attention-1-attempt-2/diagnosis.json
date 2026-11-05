@@ -1,0 +1,16 @@
+{
+  "observedAt": "2026-11-05T13:15:37.1493755Z",
+  "scenario": "attention-1-attempt-2",
+  "state": "waiting-official-question",
+  "facts": [
+    "Fixture read tool returned successfully",
+    "Worker issued official ask_user_question with Q-known and Q-user, timeout=-1",
+    "No Attention or triage resolution persisted",
+    "No provider request after worker question at 2026-11-05T13:05:07Z"
+  ],
+  "candidateCause": "Official api-remotes front global question gateway keeps pending without a remote owner; appended Worker Attention listener is not reached",
+  "confidence": "Source-based diagnosis; no runtime listener stack captured",
+  "source": "attention_diagnose agent read-only investigation",
+  "candidateFix": "Register Worker Attention listener with prepend:true, then focused tests and rebuild before another live attempt",
+  "intervention": "No answer, model request, service restart or task replacement performed"
+}

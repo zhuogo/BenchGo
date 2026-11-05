@@ -1,3 +1,4 @@
+import { roleModels } from './routing.mjs';
 import { readAdmissionRules } from './admission-rules.mjs';
 import { createHash } from 'node:crypto';
 import { isScheduledTrigger } from './schedule-bridge.mjs';
@@ -17,7 +18,7 @@ export async function readAssessmentPolicy(store, workspaceRegistry, threadId) {
   const selected = connections.find(row => row.channel === channel) || connection;
   const enabled = new Set(selected.config.enabledRuleIds || []);
   const writtenRules = readAdmissionRules(document.content).filter(rule => enabled.has(rule.id));
-  return { version, desktopVersion, connections: Object.fromEntries(connections.map(row => [row.channel, { ...row, enabledRuleIds: readAdmissionRules(document.content).filter(rule => (row.config.enabledRuleIds || []).includes(rule.id)).map(rule => rule.id) }])), projects, model: config.models[0], models: config.models, routingConfig: { revision: config.revision, auxiliary: config.auxiliary, models: config.models }, rules: document.content + '\nEnabled admission rules (exact IDs):\n' + JSON.stringify(writtenRules), connection: connection.config, mode: selected.config.admissionMode || 'manual', enabledRuleIds: writtenRules.map(rule => rule.id) };
+  return { version, desktopVersion, connections: Object.fromEntries(connections.map(row => [row.channel, { ...row, enabledRuleIds: readAdmissionRules(document.content).filter(rule => (row.config.enabledRuleIds || []).includes(rule.id)).map(rule => rule.id) }])), projects, model: config.models[0], models: config.models, workerModels: roleModels(undefined, config, 'worker'), routingConfig: { revision: config.revision, auxiliary: config.auxiliary, models: config.models, workerModels: config.workerModels }, rules: document.content + '\nEnabled admission rules (exact IDs):\n' + JSON.stringify(writtenRules), connection: connection.config, mode: selected.config.admissionMode || 'manual', enabledRuleIds: writtenRules.map(rule => rule.id) };
 }
 
 /** Admission records an owner's instruction; it does not preapprove controlled actions. */

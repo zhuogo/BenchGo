@@ -1,0 +1,8 @@
+
+> benchgo@0.1.0 reload:plus
+> node scripts/reload-plus-client.mjs
+
+BenchGo modules built
+BenchGo preview renderers built (lazy assets)
+Link web built: E:\BenchGo\plugins\link\dist\web\
+BenchGo client built

@@ -28,7 +28,7 @@ test('中国渠道配置严格校验且来源身份由可信配置决定', () =>
 });
 test('企业微信订阅认证、真实回执与停用释放', async () => {
   let config = wecomConfig({ enabled: true, botId: 'b', secretRef: 'ref' }); const received = [];
-  const adapter = createWecomAdapter({ getConfig: () => config, credentials, ingest: async e => received.push(e), WebSocketImpl: Socket });
+  const adapter = createWecomAdapter({ getConfig: () => config, credentials, ingest: async e => received.push(e), WebSocketImpl: Socket, ackTimeoutMs: 20 });
   await adapter.start(); const socket = Socket.all.at(-1); socket.open(); await tick();
   const subscription = socket.frames[0]; assert.equal(subscription.cmd, 'aibot_subscribe');
   socket.frame({ headers: subscription.headers, errcode: 0 }); await tick();
@@ -37,6 +37,9 @@ test('企业微信订阅认证、真实回执与停用释放', async () => {
   const sending = adapter.send({ source: received[0].source, text: 'hello', idempotencyKey: 'delivery1' }); await tick();
   const outgoing = socket.frames.at(-1); assert.equal(outgoing.cmd, 'aibot_send_msg'); socket.frame({ headers: outgoing.headers, errcode: 0 });
   assert.equal((await sending).status, 'accepted');
+  const rejected = assert.rejects(adapter.send({ source: received[0].source, text: 'rejected', idempotencyKey: 'delivery-rejected' }), { deliveryOutcome: 'not_sent' });
+  await tick(); socket.frame({ headers: socket.frames.at(-1).headers, errcode: 400 }); await rejected;
+  await assert.rejects(adapter.send({ source: received[0].source, text: 'uncertain', idempotencyKey: 'delivery-timeout' }), { deliveryOutcome: 'unknown' });
   config = { ...config, enabled: false }; await assert.rejects(adapter.send({ source: received[0].source, text: 'blocked', idempotencyKey: 'delivery2' }), /停用/);
   await adapter.dispose(); assert.equal(socket.readyState, 3);
 });
@@ -61,13 +64,17 @@ test('QQ 网关认证、消息受理及发送使用官方 API', async () => {
 });
 test('微信私聊长轮询保留回复上下文且不泄露进事件，取消轮询', async () => {
   const config = weixinConfig({ enabled: true, accountId: 'bot', tokenRef: 'ref' }), received = [], calls = [];
+  let delivery = { ret: 0 };
   assert.equal(normalizeWeixinEvent({ message_type: 1, group_id: 'g' }, config), null);
   assert.equal(normalizeWeixinEvent({ message_type: 1, chat_room_id: 'g' }, config), null);
   const adapter = createWeixinAdapter({ getConfig: () => config, credentials, ingest: async e => received.push(e), pollDelayMs: 50000,
-    fetcher: async (url, init) => { calls.push([url, init]); return Response.json(url.endsWith('getupdates') ? { ret: 0, msgs: [{ message_type: 1, message_id: 'm', from_user_id: 'u', context_token: 'private-context', item_list: [{ type: 1, text_item: { text: 'hi' } }] }], get_updates_buf: 'next' } : { ret: 0 }); } });
+    fetcher: async (url, init) => { calls.push([url, init]); return Response.json(url.endsWith('getupdates') ? { ret: 0, msgs: [{ message_type: 1, message_id: 'm', from_user_id: 'u', context_token: 'private-context', item_list: [{ type: 1, text_item: { text: 'hi' } }] }], get_updates_buf: 'next' } : delivery); } });
   await adapter.start(); await tick(); assert.equal(received.length, 1); assert.ok(!JSON.stringify(received).includes('private-context'));
   await adapter.send({ source: received[0].source, text: 'reply', idempotencyKey: 'k' });
-  assert.equal(JSON.parse(calls.at(-1)[1].body).msg.context_token, 'private-context'); await adapter.dispose(); assert.equal((await adapter.status()).connection.state, 'stopped');
+  assert.equal(JSON.parse(calls.at(-1)[1].body).msg.context_token, 'private-context');
+  delivery = { ret: -1 }; await assert.rejects(adapter.send({ source: received[0].source, text: 'reply', idempotencyKey: 'reject' }), { deliveryOutcome: 'not_sent' });
+  delivery = {}; await assert.rejects(adapter.send({ source: received[0].source, text: 'reply', idempotencyKey: 'unknown' }), { deliveryOutcome: 'unknown' });
+  await adapter.dispose(); assert.equal((await adapter.status()).connection.state, 'stopped');
 });
 
 test('微信扫码仅主人可用，确认凭据安全保存并只返回引用', async () => {

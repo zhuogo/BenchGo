@@ -1,0 +1,34 @@
+{
+  "scope": "isolated-controlled-real-supplier",
+  "selectedCase": "attention-1",
+  "startedAt": "2026-11-05T13:04:09.912Z",
+  "finishedAt": "2026-11-05T13:16:34.042Z",
+  "outcome": "fail",
+  "ticketId": "e60b8dca-783c-4457-a481-2eb25349d298",
+  "status": "waiting",
+  "resultVersion": 0,
+  "attentions": 0,
+  "attentionResolutions": 0,
+  "pauseReason": {
+    "kind": "execution-budget"
+  },
+  "continuationWait": {
+    "code": "EXECUTION_EFFECTS_UNKNOWN",
+    "sourceResultVersion": 0,
+    "assignmentId": "desktop:f74d368280b5618153a0034475539240a7bb15ae8a8a7c339e4758e8a3c470ed",
+    "runId": "4f20bacf-3a64-44cb-9f38-0481b6e1bc00",
+    "sessionId": "fb78e49e-9337-4845-b982-be4331c134bb"
+  },
+  "streamRequestCount": 11,
+  "exactModels": [
+    "routergo/deepseek-v4.1-flash"
+  ],
+  "allRequestsStreaming": true,
+  "cleanup": {
+    "childStopped": true,
+    "isolatedDirectoryRemoved": true,
+    "mainConfigurationUnchanged": true
+  },
+  "nextScenarios": "Not run; batch stopped after failure",
+  "retryPolicy": "One occurrence of this product blocker; interrupted attempt1 is preserved separately, no passing triple claimed"
+}

@@ -61,7 +61,7 @@ export function createAssistantAssignmentWorker({
       return { id: assignment.id, status: ['waiting', 'paused', 'queued'].includes(state) ? state : 'completed' };
     } catch (error) {
       // Neither exceptions nor shutdown prove that an external action did not happen.
-      try { database.recordAssignmentFailure?.(assignment.id, { ...ownership, stage, code: error?.code }); } catch { /* Preserve the original failure. */ }
+      try { database.recordAssignmentFailure?.(assignment.id, { ...ownership, stage, code: error?.code, phase: error?.executionPhase }); } catch { /* Preserve the original failure. */ }
       try { database.renewAssignment(assignment.id, { ...ownership, validateMandate: () => false }); }
       catch { /* Lost leases are reconciled by the store's next claim. */ }
       logger?.warn?.(`Assignment ${assignment.id}: ${error?.message || error}`);

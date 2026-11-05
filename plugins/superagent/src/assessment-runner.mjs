@@ -61,7 +61,7 @@ export function createAssessmentRunner({ database, llm, readPolicy, authorize, r
         ...(['answer', 'ask'].includes(decision.outcome) && permission?.allowed === true ? { reply: { text: decision.replyText, source: trigger.source, actor: trigger.actor, gate: candidate.gate, policyVersion: current.version } } : {}),
         ...(decision.outcome === 'accept' && permission?.allowed === true ? { replyText: decision.replyText, ticket: { title: decision.title, target: decision.target, mandate: { ...permission.mandate, acceptance: decision.acceptance, policyVersion: current.version, triggerId: candidate.triggerId } } } : {}),
         ...(['revise', 'reopen'].includes(decision.outcome) && permission?.allowed === true ? { change: { expectedInstructionRevision: decision.expectedInstructionRevision,
-          target: decision.target, acceptance: decision.acceptance, model: current.model,
+          target: decision.target, acceptance: decision.acceptance, model: database.assignments(decision.ticketId).at(-1)?.model || current.workerModels?.[0] || current.model,
           mandate: { ...permission.mandate, policyVersion: current.version, triggerId: candidate.triggerId } } } : {}),
       });
     }

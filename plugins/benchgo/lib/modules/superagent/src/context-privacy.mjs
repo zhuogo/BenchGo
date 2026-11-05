@@ -1,11 +1,11 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { cleanMemoryContext } from './memory.mjs';
 
 /** Remove only this plugin's model-visible memory contribution, preserving source logs. */
 export function createContextRedactor(agent, name, memory) {
   let previous;
   return () => {
-    if (!memory?.redactForgottenContext) return;
-    const revision = memory.forgottenRevision?.();
+    const revision = memory?.forgottenRevision?.();
     if (revision !== undefined && revision === previous) return;
     const visible = new Set(agent.session.surface.nodes);
     for (const event of agent.session.snapshotEvents()) {
@@ -14,10 +14,11 @@ export function createContextRedactor(agent, name, memory) {
       const sections = event.data.source.sections?.map(section => {
         if (section.name !== name) return section;
         const parsed = JSON.parse(section.text);
-        const cleaned = memory.redactForgottenContext(parsed);
-        if (cleaned === parsed) return section;
+        const cleaned = cleanMemoryContext(memory?.redactForgottenContext?.(parsed) ?? parsed);
+        const text = JSON.stringify(cleaned);
+        if (text === JSON.stringify(parsed)) return section;
         changed = true;
-        return { ...section, text: JSON.stringify(cleaned) };
+        return { ...section, text };
       });
       if (!changed) continue;
       const content = event.data.content.map(block => {

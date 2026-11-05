@@ -16,11 +16,27 @@ const blockPattern = () => /<!-- benchgo-memory (\{[^\n]*\}) -->\r?\n([\s\S]*?)\
 const learningPattern = /<!-- benchgo-learning (\{[^\n]*\}) -->/u;
 const intro = '记录有来源的长期事实、决定和经验；不保存原始聊天或当前任务状态。';
 const limit = (value, fallback, max) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : fallback;
+const matchesId = (entry, id) => entry.id === id || entry.legacyIds?.includes(id);
+const cleanText = value => String(value || '').replace(/<!--[\s\S]*?(?:-->|$)/gu, '');
+const sourceReference = ({ excerpt, excerptTruncated, ...source }) => source;
+
+/** Model projection only: stored Markdown and frozen snapshots retain their edit/forget metadata. */
+export function cleanMemoryContext(context) {
+  return { ...context,
+    documents: (context.documents || []).map(row => ({ ...row, content: cleanText(row.content) })),
+    memories: (context.memories || []).map(entry => ({ ...entry, content: cleanText(entry.content),
+      source: entry.source?.excerpt === undefined ? entry.source : { ...entry.source, excerpt: cleanText(entry.source.excerpt) } })),
+    ...(typeof context.userProfile === 'string' ? { userProfile: cleanText(context.userProfile) } : {}),
+    ...(typeof context.assistantIdentity === 'string' ? { assistantIdentity: cleanText(context.assistantIdentity) } : {}),
+  };
+}
 
 function inputValue(input) {
   if (!object(input) || typeof input.content !== 'string' || !input.content.trim() || input.content.length > 16000 || /<!--\s*\/?benchgo-memory/u.test(input.content) || !object(input.source)) throw new Error('Memory requires content and source');
   if (typeof input.scope !== 'undefined' && (typeof input.scope !== 'string' || !input.scope || input.scope.length > 256)) throw new Error('Invalid memory scope');
   if (input.document !== undefined && !['MEMORY.md', 'USER.md', 'TOOLS.md'].includes(input.document)) throw new Error('Invalid memory document');
+  if (input.source.excerpt !== undefined && (typeof input.source.excerpt !== 'string' || input.source.excerpt.length > 6000)) throw new Error('Invalid memory source excerpt');
+  if (input.source.excerptTruncated !== undefined && typeof input.source.excerptTruncated !== 'boolean') throw new Error('Invalid memory source excerpt truncation');
   if (JSON.stringify(input.source).length > 16000) throw new Error('Memory source exceeds limit');
   if (JSON.stringify(input).length > 64000) throw new Error('Memory input exceeds limit');
   return input;
@@ -46,7 +62,7 @@ export function parseMemoryDocument(content, document = 'MEMORY.md') {
       if (!text || /^#|^<!--/u.test(text) || text === intro || spans.some(([start, end]) => match.index < end && match.index + match[0].length > start)) continue;
       const id = `manual-${fingerprint(text).slice(0, 24)}`;
       if (entries.some(entry => entry.id === id)) continue;
-      entries.push({ id, content: text, source: { type: 'external-edit', document }, scope: 'personal', createdAt: null, updatedAt: null, revision: 1, document, manual: true, start: match.index, end: match.index + match[0].length });
+      entries.push({ id, content: text, source: { type: 'external-edit', document, excerpt: text.slice(0, 6000), excerptTruncated: text.length > 6000 }, scope: 'personal', createdAt: null, updatedAt: null, revision: 1, document, manual: true, start: match.index, end: match.index + match[0].length });
     }
   }
   if (new Set(entries.map(entry => entry.id)).size !== entries.length) throw Object.assign(new Error(`记忆 ID 重复：${document}`), { code: 'MEMORY_PARSE_ERROR', document });
@@ -81,7 +97,10 @@ export async function createAssistantMemory({ directory, documents }) {
   const setMeta = (key, value) => db.prepare('INSERT INTO memory_meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, JSON.stringify(value));
   let closed = false;
   function tombstone(entry, reason = 'corrected') {
-    db.prepare("INSERT INTO memory_tombstones VALUES (?,?,?,?,?) ON CONFLICT(entry_id,hash) DO UPDATE SET reason=CASE WHEN excluded.reason='forgotten' THEN excluded.reason ELSE memory_tombstones.reason END").run(entry.id, fingerprint(entry.content), hasSource(entry.source) ? sourceFingerprint(entry.source) : '', reason, now());
+    const put = db.prepare("INSERT INTO memory_tombstones VALUES (?,?,?,?,?) ON CONFLICT(entry_id,hash) DO UPDATE SET reason=CASE WHEN excluded.reason='forgotten' THEN excluded.reason ELSE memory_tombstones.reason END");
+    for (const id of new Set([entry.id, ...(entry.legacyIds || [])])) for (const hash of new Set([fingerprint(entry.content), fingerprint(cleanText(entry.content))])) {
+      put.run(id, hash, hasSource(entry.source) ? sourceFingerprint(entry.source) : '', reason, now());
+    }
   }
   function denied(input) {
     const byHash = db.prepare('SELECT 1 FROM memory_tombstones WHERE hash=? LIMIT 1').get(fingerprint(input.content));
@@ -89,16 +108,29 @@ export async function createAssistantMemory({ directory, documents }) {
     return Boolean(byHash || bySource);
   }
   function redactForgottenContext(context) {
-    const ids = new Set(db.prepare("SELECT entry_id FROM memory_tombstones WHERE reason='forgotten'").all().map(row => row.entry_id));
+    const forgotten = db.prepare("SELECT entry_id,hash FROM memory_tombstones WHERE reason='forgotten'").all();
+    const ids = new Set(forgotten.map(row => row.entry_id)), hashes = new Set(forgotten.map(row => row.hash));
     if (!ids.size) return context;
     const documents = (context.documents || []).map(row => {
       if (!['MEMORY.md', 'USER.md', 'TOOLS.md'].includes(row.name)) return row;
-      const removed = parseMemoryDocument(row.content, row.name).filter(entry => ids.has(entry.id));
+      const removed = parseMemoryDocument(row.content, row.name).filter(entry => [entry.id, ...(entry.legacyIds || [])].some(id => ids.has(id)));
       let content = row.content;
       for (const entry of removed.reverse()) content = content.slice(0, entry.start) + content.slice(entry.end);
+      // Runtime projections contain no HTML markers. Match full bounded paragraph ranges
+      // against hashes, including memories omitted/truncated by the structured selection.
+      if (!/<!--\s*benchgo-memory/u.test(content)) {
+        const spans = [...content.matchAll(/\S[\s\S]*?(?=\r?\n\s*\r?\n|$)/gu)];
+        const removals = [];
+        for (let start = 0; start < spans.length; start++) for (let end = start; end < spans.length; end++) {
+          const from = spans[start].index, to = spans[end].index + spans[end][0].length;
+          if (to - from > 16000) break;
+          if (hashes.has(fingerprint(content.slice(from, to)))) { removals.push([from, to]); start = end; break; }
+        }
+        for (const [from, to] of removals.reverse()) content = content.slice(0, from) + content.slice(to);
+      }
       return content === row.content ? row : { ...row, content, hash: documentHash(content) };
     });
-    const memories = (context.memories || []).filter(entry => !ids.has(entry.id));
+    const memories = (context.memories || []).filter(entry => ![entry.id, ...(entry.legacyIds || [])].some(id => ids.has(id)));
     if (documents.every((row, index) => row === context.documents[index]) && memories.length === (context.memories || []).length) return context;
     const result = { ...context, documents, memories };
     // Runtime context also carries USER.md under its historical profile alias.
@@ -118,7 +150,7 @@ export async function createAssistantMemory({ directory, documents }) {
     if (new Set(entries.map(entry => entry.id)).size !== entries.length) throw Object.assign(new Error('多个文档存在重复记忆 ID'), { code: 'MEMORY_PARSE_ERROR' });
     const hashes = Object.fromEntries(rows.map(row => [row.name, row.hash]));
     if (JSON.stringify(meta('index-hashes')) !== JSON.stringify(hashes)) tx(() => {
-      const byId = new Map(entries.map(entry => [entry.id, entry]));
+      const byId = new Map(entries.flatMap(entry => [entry.id, ...(entry.legacyIds || [])].map(id => [id, entry])));
       for (const previous of db.prepare('SELECT * FROM memory_index').all()) {
         const next = byId.get(previous.id);
         if (!next || fingerprint(next.content) !== previous.hash) db.prepare('INSERT OR IGNORE INTO memory_tombstones VALUES (?,?,?,?,?)').run(previous.id, previous.hash, previous.source_hash, 'external-edit', now());
@@ -144,7 +176,7 @@ export async function createAssistantMemory({ directory, documents }) {
   async function save(input, { revision, expectedHash, explicit = true, candidateId } = {}) {
     inputValue(input);
     const { entries } = await snapshot();
-    const previous = input.id ? entries.find(entry => entry.id === input.id) : null;
+    const previous = input.id ? entries.find(entry => matchesId(entry, input.id)) : null;
     if (input.id && !previous) throw new Error('Memory not found');
     if (!explicit && denied(input)) throw Object.assign(new Error('该来源或内容已被用户纠正、拒绝或遗忘'), { code: 'MEMORY_EXCLUDED' });
     const document = previous?.document || input.document || 'MEMORY.md';
@@ -152,56 +184,60 @@ export async function createAssistantMemory({ directory, documents }) {
     await documents.mutate(document, (body, current) => {
       if (!explicit && denied(input)) throw Object.assign(new Error('该来源或内容已被用户纠正、拒绝或遗忘'), { code: 'MEMORY_EXCLUDED' });
       const rows = parseMemoryDocument(body, document);
-      // Stable candidate identity makes retries and concurrent store instances idempotent.
-      const accepted = candidateId && rows.find(entry => entry.id === `candidate-${candidateId}` || fingerprint(entry.content) === fingerprint(input.content));
-      if (accepted) { saved = publicEntry(accepted); return body; }
+      // The candidate mapping is durable in Markdown before its DB receipt is updated.
+      const accepted = candidateId && rows.find(entry => entry.candidateId === candidateId || entry.id === `candidate-${candidateId}` || fingerprint(entry.content) === fingerprint(input.content));
+      if (accepted) {
+        saved = publicEntry(accepted.candidateId ? accepted : { ...accepted, candidateId });
+        return accepted.candidateId ? body : body.slice(0, accepted.start) + annotation(saved) + body.slice(accepted.end);
+      }
       const existing = previous ? rows.find(entry => entry.id === previous.id) : null;
       if (previous && (!existing || (revision !== undefined && existing.revision !== revision))) throw Object.assign(new Error('Assistant data changed; reload before saving'), { code: 'REVISION_CONFLICT', revision: existing?.revision });
       const timestamp = now();
-      saved = { id: existing?.id || (candidateId ? `candidate-${candidateId}` : randomUUID()), content: input.content.trim(), source: copy(input.source), scope: input.scope || existing?.scope || 'personal', createdAt: existing?.createdAt || timestamp, updatedAt: timestamp, revision: (existing?.revision || 0) + 1, document };
+      const source = copy(input.source);
+      if (source.type === 'user-edit' || source.kind === 'user') Object.assign(source, { excerpt: input.content.slice(0, 6000), excerptTruncated: input.content.length > 6000 });
+      const supersedes = existing ? { id: existing.id, revision: existing.revision, updatedAt: existing.updatedAt || existing.createdAt || null } : undefined;
+      saved = { id: existing?.id || randomUUID(), content: input.content.trim(), source, scope: input.scope || existing?.scope || 'personal', createdAt: existing?.createdAt || timestamp, updatedAt: timestamp, revision: (existing?.revision || 0) + 1, document,
+        ...(candidateId || existing?.candidateId ? { candidateId: candidateId || existing.candidateId } : {}),
+        ...(existing?.legacyIds ? { legacyIds: existing.legacyIds } : {}),
+        ...(supersedes ? { supersedes, versionChain: [...(existing.versionChain || []), supersedes] } : {}),
+      };
       if (existing && existing.content !== saved.content) tombstone(existing);
       if (existing) return body.slice(0, existing.start) + annotation(saved) + body.slice(existing.end);
       return body.trimEnd() + '\n\n' + annotation(saved) + '\n';
-    }, { expectedHash, source: input.source });
+    }, { expectedHash, source: sourceReference(input.source) });
     await snapshot();
     return saved;
   }
   async function remove(id, { revision, purgeHistory = false } = {}) {
     const { entries } = await snapshot();
-    const previous = entries.find(entry => entry.id === id);
+    const previous = entries.find(entry => matchesId(entry, id));
+    const aliases = new Set([id, ...(previous ? [previous.id, ...(previous.legacyIds || [])] : [])]);
     if (previous) await documents.mutate(previous.document, body => {
-      const existing = parseMemoryDocument(body, previous.document).find(entry => entry.id === id);
+      const existing = parseMemoryDocument(body, previous.document).find(entry => matchesId(entry, id));
       if (!existing) return body;
       if (revision !== undefined && existing.revision !== revision) throw Object.assign(new Error('Assistant data changed; reload before saving'), { code: 'REVISION_CONFLICT', revision: existing.revision });
       tombstone(existing, 'forgotten');
+      for (const alias of aliases) db.prepare("UPDATE memory_tombstones SET reason='forgotten' WHERE entry_id=?").run(alias);
       return body.slice(0, existing.start) + body.slice(existing.end);
     }, { source: { type: 'forget', entryId: id } });
     await snapshot();
     if (purgeHistory) {
       const redact = (body, document) => {
-        const matched = parseMemoryDocument(body, document).filter(entry => entry.id === id);
+        const matched = parseMemoryDocument(body, document).filter(entry => [entry.id, ...(entry.legacyIds || [])].some(value => aliases.has(value)));
         let result = body;
         for (const entry of matched.reverse()) result = result.slice(0, entry.start) + result.slice(entry.end);
         return result;
       };
       for (const document of ['MEMORY.md', 'USER.md', 'TOOLS.md']) await documents.redactHistory(document, body => redact(body, document));
-      await documents.redactSessionContexts(context => {
-        const documents = (context.documents || []).map(row => {
-          if (!['MEMORY.md', 'USER.md', 'TOOLS.md'].includes(row.name)) return row;
-          const content = redact(row.content, row.name);
-          return content === row.content ? row : { ...row, content, hash: documentHash(content) };
-        });
-        const hashes = Object.fromEntries(documents.map(row => [row.name, row.hash]));
-        return { ...context, documents, hashes, snapshotId: documentHash(JSON.stringify(hashes)), memories: (context.memories || []).filter(entry => entry.id !== id) };
-      });
+      await documents.redactSessionContexts(redactForgottenContext);
       for (const row of db.prepare('SELECT * FROM memory_candidates').all()) {
         const candidate = JSON.parse(row.payload);
-        if (candidate.memoryId === id || candidate.input?.id === id || (previous && fingerprint(candidate.input?.content || '') === fingerprint(previous.content))) db.prepare('DELETE FROM memory_candidates WHERE id=?').run(row.id);
+        if (aliases.has(candidate.memoryId) || aliases.has(candidate.input?.id) || candidate.id === previous?.candidateId || (previous && fingerprint(candidate.input?.content || '') === fingerprint(previous.content))) db.prepare('DELETE FROM memory_candidates WHERE id=?').run(row.id);
       }
       const backup = join(directory, 'migration-v1', 'entries.json');
       if (existsSync(backup)) {
         const data = JSON.parse(readFileSync(backup, 'utf8'));
-        if (Array.isArray(data.entries)) { data.entries = data.entries.filter(entry => entry?.id !== id); writeFileSync(backup, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 }); }
+        if (Array.isArray(data.entries)) { data.entries = data.entries.filter(entry => !aliases.has(entry?.id)); writeFileSync(backup, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 }); }
       }
     }
     return Boolean(previous);
@@ -239,6 +275,27 @@ export async function createAssistantMemory({ directory, documents }) {
     db.prepare('UPDATE memory_candidates SET status=?,payload=? WHERE id=?').run(candidate.status, JSON.stringify(candidate), candidate.id);
     return candidate;
   };
+  async function migrateCandidateIds() {
+    for (const document of ['MEMORY.md', 'USER.md', 'TOOLS.md']) await documents.mutate(document, body => {
+      let result = body;
+      for (const entry of parseMemoryDocument(body, document).filter(row => row.id.startsWith('candidate-')).reverse()) {
+        const migrated = { ...entry, id: randomUUID(), candidateId: entry.candidateId || entry.id.slice('candidate-'.length), legacyIds: [...new Set([...(entry.legacyIds || []), entry.id])] };
+        result = result.slice(0, entry.start) + annotation(migrated) + result.slice(entry.end);
+      }
+      return result;
+    }, { source: { type: 'memory-id-migration' } });
+    // Markdown is the durable receipt. Repair DB mappings even if an earlier startup
+    // stopped after the file write, without changing the entry's content or revision.
+    const { entries } = await snapshot();
+    for (const entry of entries) {
+      if (!entry.candidateId) continue;
+      const candidate = candidateRow(db.prepare('SELECT payload,status FROM memory_candidates WHERE id=?').get(entry.candidateId));
+      if (candidate && candidate.status !== 'rejected' && (candidate.memoryId !== entry.id || candidate.status !== 'accepted')) {
+        const { error, reason, ...saved } = candidate;
+        updateCandidate({ ...saved, status: 'accepted', memoryId: entry.id, resolvedAt: saved.resolvedAt || now() });
+      }
+    }
+  }
   async function resolveCandidate(id, patch = {}) {
     const candidate = candidateRow(db.prepare('SELECT payload,status FROM memory_candidates WHERE id=?').get(id));
     if (!candidate) throw new Error('记忆候选不存在');
@@ -268,7 +325,7 @@ export async function createAssistantMemory({ directory, documents }) {
       await resolveCandidate(row.id);
     }
   }
-  try { await migrate(); await snapshot(); await recoverCandidates(); } catch (error) { db.close(); throw error; }
+  try { await migrate(); await migrateCandidateIds(); await recoverCandidates(); } catch (error) { db.close(); throw error; }
   return {
     list: async () => (await snapshot()).entries.map(publicEntry),
     save, remove, redactForgottenContext,

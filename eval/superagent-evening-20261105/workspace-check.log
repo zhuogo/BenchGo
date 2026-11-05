@@ -1,0 +1,7 @@
+
+> benchgo@0.1.0 check
+> node scripts/harness.mjs check
+
+warning: unable to access 'C:\Users\DraftGo/.config/git/ignore': Permission denied
+warning: unable to access 'C:\Users\DraftGo/.config/git/ignore': Permission denied
+Official Harness 0.2.2-rc.1 at fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159; clean checkout, valid desktop entry points.

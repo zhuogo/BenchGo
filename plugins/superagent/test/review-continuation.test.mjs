@@ -13,6 +13,7 @@ import { ticketGoalRecord } from '../src/goal-ticket-record.mjs';
 import { captureArtifactCheckpoint } from '../src/worker-artifact-checkpoint.mjs';
 
 const passed = { verdict: 'passed', reason: 'verified', delivery: { action: 'deliver', text: '已核实原任务结果。' } };
+const router = { providerId: 'Router/@', modelId: 'Router: Opaque/01', options: { reasoningEffort: 'ultra', maxTokens: 7000 } };
 
 async function fixture(t, review, { uncertain = false, reviewState = { verdict: 'wait', reason: 'review again' } } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-review-continuation-'));
@@ -20,6 +21,7 @@ async function fixture(t, review, { uncertain = false, reviewState = { verdict: 
   await mkdir(workerDirectory);
   const store = await createAssistantStore({ dataDirectory: directory });
   t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }); });
+  await store.updateConfig({ models: [router] });
   const database = store.orchestration, readPolicy = () => readAssessmentPolicy(store), policy = await readPolicy();
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
   const ticket = database.createTicket({ threadId: 'thread', target: 'task', mandate: { source: { channel: 'desktop', sessionId: 'owner', messageId: 'source' }, admission: 'desktop-approved-delegation', actorId: 'desktop-owner', policyVersion: policy.desktopVersion, controlledActions: 'require-current-policy-and-harness-approval' } });
@@ -64,12 +66,15 @@ test('runtime automatically retries transient review without rerunning Worker', 
   assert.equal(f.database.assignments(f.ticket.id).length, 1);
 });
 
-test('waiting review continues from locked evidence without starting another execution', async t => {
-  const f = await fixture(t, async ({ model, result }) => { assert.equal(model.modelId, 'opaque'); assert.equal(result.summary, 'saved answer'); return passed; });
+test('waiting review uses current Router selection and locked evidence while retaining the original Worker', async t => {
+  const currentRouter = { ...router, modelId: 'Router: Updated/02', options: { reasoningEffort: 'high', maxTokens: 8000 } };
+  const f = await fixture(t, async ({ model, result }) => { assert.deepEqual(model, currentRouter); assert.equal(result.summary, 'saved answer'); return passed; });
+  await f.store.updateConfig({ models: [currentRouter] });
   const result = await f.retry(f.ticket.id, { expectedResultVersion: 1 });
   assert.equal(result.ticket.status, 'completed');
   assert.equal(result.result.version, 2);
   assert.equal(f.database.assignments(f.ticket.id).length, 1);
+  assert.equal(f.database.assignments(f.ticket.id)[0].model.modelId, 'opaque');
   assert.equal(f.database.runs(f.database.assignments(f.ticket.id)[0].id).length, 1);
   assert.equal(f.closed(), 1);
   await assert.rejects(f.retry(f.ticket.id, { expectedResultVersion: 1 }), /状态已变化/);

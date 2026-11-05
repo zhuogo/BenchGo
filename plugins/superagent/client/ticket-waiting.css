@@ -1,0 +1,7 @@
+.ba-ticket-waiting{min-width:0;font-size:13px;line-height:1.6}
+.ba-ticket-waiting>strong{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-primary)}
+.ba-ticket-waiting>strong>svg{flex:none;color:var(--dsw-alias-warning-default,#a06f2c)}
+.ba-ticket-waiting>p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ba-muted)}
+.ba-ticket-waiting>.ba-row-actions{margin-top:4px}
+.ba-ticket-waiting .ba-ticket-attention{margin:0}
+.ba-ticket-waiting>[role=alert]{color:var(--dsw-alias-danger-default,#c14b45)}

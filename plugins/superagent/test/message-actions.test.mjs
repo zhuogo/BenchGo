@@ -11,7 +11,7 @@ function render({ panel = '', saved = null, usage, clipboard = async () => true 
   const changes = [], calls = [];
   const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null && x !== false) }), useState: value => { const slot = index++; return [slot === 0 ? panel : value, next => changes.push([slot, next])]; }, useRef: () => ({ current: null }), useEffect() {} };
   const module = { exports: {} };
-  runInNewContext(code, { module, exports: module.exports, document: { body: {} }, setTimeout: () => 1, clearTimeout() {}, require: id => id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id === 'react-dom' ? { createPortal: content => content } : id === 'react' ? react : { writeClipboard: clipboard, useAnchoredPosition: () => null, useDismissOnOutsidePointer() {} } });
+  runInNewContext(code, { module, exports: module.exports, setTimeout: () => 1, clearTimeout() {}, require: id => id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id === 'react' ? react : { writeClipboard: clipboard, Menu: 'Menu' } });
   const tree = module.exports.MessageActions({ row: { key: 'message:m', role: 'assistant', text: '结果', usage }, home: { threadId: 'side', history: { reactions: { 'message:m': saved } }, api: async (...args) => calls.push(args) } });
   const walk = node => node && typeof node === 'object' ? [node, ...(node.children || []).flatMap(walk)] : [];
   return { nodes: walk(tree), calls, changes };

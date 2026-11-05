@@ -1,6 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canFallback, isTransientFailure } from '../src/routing.mjs';
+import { canFallback, isTransientFailure, roleModels, auxiliaryModels } from '../src/routing.mjs';
+
+test('role queues preserve explicit opaque IDs and keep Worker separate from Router and auxiliary', () => {
+  const router = { providerId: 'Router/@', modelId: 'Exact: Router/01' };
+  const worker = { providerId: 'Worker/@', modelId: 'Exact: Worker/02', options: { reasoningEffort: 'ultra' } };
+  const backup = { providerId: 'Backup/@', modelId: 'Exact: Worker/03' };
+  const auxiliary = { providerId: 'Aux/@', modelId: 'Exact: Aux/04' };
+  const config = { models: [router], workerModels: [worker, backup], auxiliary: { models: [auxiliary], capabilities: ['summary'] } };
+  assert.deepEqual(roleModels(undefined, config, 'router'), [router]);
+  assert.deepEqual(roleModels(undefined, config, 'worker'), [worker, backup]);
+  assert.deepEqual(roleModels(backup, config, 'worker'), [backup, worker]);
+  assert.deepEqual(roleModels(router, config, 'worker'), [router, worker, backup]);
+  assert.deepEqual(roleModels(undefined, { ...config, workerModels: [] }, 'worker'), [router]);
+  assert.deepEqual(roleModels(undefined, { models: [router] }, 'worker'), [router]);
+  assert.deepEqual(auxiliaryModels(router, config, 'summary'), [auxiliary, router]);
+  assert.deepEqual(auxiliaryModels(router, config, 'review'), [router]);
+  const detached = roleModels(undefined, config, 'worker');
+  detached[0].options.reasoningEffort = 'changed';
+  assert.equal(worker.options.reasoningEffort, 'ultra');
+});
+
+test('same-model auxiliary deduplication preserves explicitly selected options', () => {
+  const primary = { providerId: 'Exact/@', modelId: 'Exact: Model/1', options: { reasoningEffort: 'ultra', maxTokens: 700 } };
+  const configured = { ...primary, options: { reasoningEffort: 'low', maxTokens: 100 } };
+  const backup = { providerId: 'Backup/@', modelId: 'Exact: Model/2' };
+  const config = { models: [configured], auxiliary: { models: [configured, backup], capabilities: ['review'] } };
+  assert.deepEqual(auxiliaryModels(primary, config, 'review'), [primary, backup]);
+});
 
 test('Harness transient and credential failures permit bounded model failover', () => {
   for (const code of ['TIMEOUT', 'RATE_LIMIT', 'SERVER', 'QUOTA', 'ECONNRESET']) assert.equal(canFallback({ code }), true, code);

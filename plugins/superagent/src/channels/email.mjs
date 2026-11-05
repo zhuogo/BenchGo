@@ -1,5 +1,6 @@
 ﻿import { createRequire } from 'node:module';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { beforeDelivery, deliveryFailure } from './delivery-outcome.mjs';
 const require = createRequire(new URL('../../../benchgo/package.json', import.meta.url));
 const field = (key, label, extra = {}) => ({ key, label, type: key.endsWith('SecretRef') ? 'secretRef' : 'text', required: true, ...extra });
 export const channelDefinition = {
@@ -48,7 +49,8 @@ export function normalizeEmailEvent(mail, c, requestSecret) {
     actor: { id: actorId, kind: 'human', owner: false }, kind: 'direct', mentioned: false,
     occurredAt: mail.date instanceof Date && Number.isFinite(+mail.date) ? mail.date.toISOString() : new Date().toISOString(),
     text: `${mail.subject ? `主题：${String(mail.subject).replaceAll(requestSecret, '[已隐藏邮件校验码]').slice(0, 500)}\n\n` : ''}${body}${mail.attachments?.length ? '\n[邮件附件暂不支持，请使用 BenchGo 工作台提供附件内容]' : ''}`,
-    source: { channel: 'email', accountId: c.accountId, chatId, messageId: mail.messageId, threadId, subject: String(mail.subject || '').replaceAll(requestSecret, '[已隐藏邮件校验码]').replace(/[\r\n]/g, ' ').slice(0, 500), references: [...refs.slice(-19), mail.messageId] }, raw: { messageId: mail.messageId } };
+    source: { channel: 'email', accountId: c.accountId, chatId, messageId: mail.messageId, threadId,
+      ...(messageId(mail.inReplyTo) ? { parentMessageId: mail.inReplyTo } : {}), subject: String(mail.subject || '').replaceAll(requestSecret, '[已隐藏邮件校验码]').replace(/[\r\n]/g, ' ').slice(0, 500), references: [...refs.slice(-19), mail.messageId] }, raw: { messageId: mail.messageId } };
 }
 export function createEmailAdapter(options) {
   let imap, smtp, timer, reconnect, running, stopped = true, activeConfig;
@@ -108,15 +110,19 @@ export function createEmailAdapter(options) {
   }
   return { start, dispose, status, poll, async verify() { await start(); return status(); },
     async send({ source, text, idempotencyKey }) {
-      const c = activeConfig; if (!c) throw fail('邮件连接尚未启动', 503); await current(c);
-      if (!smtp || source?.channel !== 'email' || source.accountId !== c.accountId || !address(source.chatId) || !allowed(c, source.chatId) || !messageId(source.messageId)) throw fail('邮件回复来源未获授权', 403);
-      if (typeof text !== 'string' || !text.trim() || text.length > 100000 || typeof idempotencyKey !== 'string' || !idempotencyKey) throw fail('邮件内容或幂等键无效');
+      const c = await beforeDelivery(async () => {
+        const config = activeConfig; if (!config) throw fail('邮件连接尚未启动', 503); await current(config);
+        if (!smtp || source?.channel !== 'email' || source.accountId !== config.accountId || !address(source.chatId) || !allowed(config, source.chatId) || !messageId(source.messageId)) throw fail('邮件回复来源未获授权', 403);
+        if (typeof text !== 'string' || !text.trim() || text.length > 100000 || typeof idempotencyKey !== 'string' || !idempotencyKey) throw fail('邮件内容或幂等键无效');
+        return config;
+      });
       const id = `<benchgo-${createHash('sha256').update(idempotencyKey).digest('hex')}@${c.accountId.split('@')[1]}>`;
-      await current(c);
+      await beforeDelivery(() => current(c));
       let result;
       try { result = await smtp.sendMail({ from: c.accountId, to: source.chatId, subject: `Re: ${String(source.subject || '').replace(/[\r\n]/g, ' ').slice(0, 500)}`, text, messageId: id, inReplyTo: source.messageId, references: (source.references || []).filter(messageId).slice(-20), headers: { 'Auto-Submitted': 'auto-replied', 'X-Auto-Response-Suppress': 'All' }, disableFileAccess: true, disableUrlAccess: true }); }
-      catch { throw fail('SMTP 未返回确定回执，送达状态未知，请勿自动重发', 502); }
-      if (!result.accepted?.some(x => String(x).toLowerCase() === source.chatId.toLowerCase())) throw fail('SMTP 未接受目标收件人', 502);
+      catch (error) { throw deliveryFailure('SMTP 发送未成功', Number.isInteger(error?.responseCode) && error.responseCode >= 400 && error.responseCode < 600 ? 'not_sent' : 'unknown', 502); }
+      if (!Array.isArray(result?.accepted) || !result.accepted.some(x => String(x).toLowerCase() === source.chatId.toLowerCase())) throw deliveryFailure('SMTP 未接受目标收件人',
+        Array.isArray(result?.rejected) && result.rejected.some(x => String(x).toLowerCase() === source.chatId.toLowerCase()) ? 'not_sent' : 'unknown', 502);
       state.sending = 'verified'; return { status: 'accepted', messageId: result.messageId || id };
     },
   };

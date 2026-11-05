@@ -9,7 +9,8 @@ import taskCss from './tasks.css';
 import { TaskListRow, TaskDetail, TaskIconButton } from './task-list.jsx';
 import { ResourceState } from './resource-state.jsx';
 import { TicketAttention } from './ticket-attention.jsx';
-import { continuationRecovery, ticketSnapshot } from './ticket-state.mjs';
+import { TicketWaiting } from './ticket-waiting.jsx';
+import { continuationRecovery, ticketSnapshot, ticketWaiting } from './ticket-state.mjs';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
 
 const states = { open: '已开单', queued: '等待执行', claimed: '执行中', reworking: '原工单补做中', completed: '已完成', waiting: '等待处理', awaiting_user: '等待你的答复', review_wait: '系统自动核验中', continuation_wait: '系统等待续做资源', pausing: '正在暂停', paused: '已暂停', failed: '执行失败', cancelling: '正在停止 · 等待执行确认', cancelled: '已停止', uncertain: '执行待核实', blocked: '授权已变更' };
@@ -21,7 +22,7 @@ export function TicketChange({ api, ticket, reload, onDirtyChange, startOpen = f
   const request = useRef(null);
   useEffect(() => { onDirtyChange?.(!!draft); return () => onDirtyChange?.(false); }, [!!draft, onDirtyChange]);
   const terminal = terminalStates.includes(ticket.status);
-  const pending = ['pausing', 'cancelling', 'uncertain'].includes(ticket.status) || ticket.assignments?.some(row => ['claimed', 'uncertain'].includes(row.state));
+  const pending = ticketSnapshot(ticket).safetyWait || ['pausing', 'cancelling', 'uncertain'].includes(ticket.status) || ticket.assignments?.some(row => ['claimed', 'uncertain'].includes(row.state));
   const open = () => {
     setDraft({ operation: terminal ? 'reopen' : 'revise', expectedInstructionRevision: ticket.instructionRevision, target: ticket.target, acceptance: ticket.acceptance || '', reason: '' });
     request.current = null; setError('');
@@ -48,11 +49,12 @@ export function TicketChange({ api, ticket, reload, onDirtyChange, startOpen = f
   </section>;
 }
 
-export function Tickets({ api, onDirtyChange, onCreateGoal, onOpenGoals }) {
+export function Tickets({ api, onDirtyChange, onCreateGoal, onOpenGoals, requestedTicket }) {
   const dirtyEditor = useDirtyRegistry(onDirtyChange);
   const [rows, setRows] = useState(null), [error, setError] = useState(''), [busy, setBusy] = useState(null), [generation, setGeneration] = useState(0);
   const [concurrency, setConcurrency] = useState(''), [configRevision, setConfigRevision] = useState(null), [settingsOpen, setSettingsOpen] = useState(false), [configError, setConfigError] = useState('');
   const [selectedId, setSelectedId] = useState(null), [changeId, setChangeId] = useState(null), [detailDirty, setDetailDirty] = useState(false);
+  useEffect(() => { if (requestedTicket?.ticketId) { setSelectedId(requestedTicket.ticketId); setChangeId(null); } }, [requestedTicket]);
   const detailDirtyCallback = useRef(null);
   detailDirtyCallback.current = dirty => { setDetailDirty(dirty); dirtyEditor('ticket-detail')(dirty); };
   const detailChanged = React.useCallback(dirty => detailDirtyCallback.current?.(dirty), []);
@@ -91,10 +93,12 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onOpenGoals }) {
     <Modal open={settingsOpen} onClose={closeSettings} title="工单设置" closeLabel="关闭" footer={<><Button variant="ghost" className="cmd-dialog-button" disabled={busy === 'configuration'} onClick={closeSettings}>取消</Button><Button className="cmd-dialog-button cmd-dialog-primary" type="submit" form="ba-worker-settings" disabled={configRevision === null || busy === 'configuration' || !Number.isInteger(Number(concurrency)) || Number(concurrency) < 1}>{busy === 'configuration' ? '保存中…' : '保存'}</Button></>}><form id="ba-worker-settings" className="cmd-rename-form ba-worker-settings" aria-label="并发执行设置" onSubmit={saveConcurrency}><div className="ba-worker-settings-intro"><UIIcon name="settings" size={22} /><div><strong>执行容量</strong><p id="ba-worker-concurrency-help">设置同时执行的工单数量，按设备性能与模型额度调整。</p></div></div><label htmlFor="ba-worker-concurrency">并发数</label><div className="ba-worker-settings-input"><input id="ba-worker-concurrency" aria-describedby="ba-worker-concurrency-help" autoFocus type="number" min="1" step="1" required value={concurrency} disabled={configRevision === null || busy === 'configuration'} onChange={event => setConcurrency(event.target.value)} /><span>项工单</span></div>{configRevision === null && !configError && <p className="ba-worker-settings-status" role="status"><UIIcon name="refresh" size={16} />正在读取执行设置…</p>}{configError && <p className="ba-worker-settings-error" role="alert"><UIIcon name="close" size={16} /><span>{configError}</span><Button variant="ghost" type="button" disabled={busy === 'configuration'} onClick={loadConfig}>重新读取</Button></p>}</form></Modal>
     {error && (rows === null ? <ResourceState kind="error" title="工单暂时无法读取" description={error} onAction={() => setGeneration(value => value + 1)} /> : <div className="ba-task-feedback" role="alert"><UIIcon name="close" size={18} /><span>工单未能更新：{error}</span><Button variant="ghost" type="button" className="ba-quiet" onClick={() => setGeneration(value => value + 1)}>重试读取</Button></div>)}
     {rows === null && !error && <ResourceState kind="loading" title="正在读取工单" description="正在同步执行进展与交付结果。" />}
+    {rows !== null && selectedId && !visibleRows.some(row => row.id === selectedId) && <ResourceState kind="error" title="关联工单暂不可用" description="工单可能已移除，或尚未同步到当前列表。" actionLabel="重新读取" onAction={() => setGeneration(value => value + 1)} />}
     {visibleRows?.length === 0 && !error && <ResourceState icon="box" title="暂无工单" description="在聊天中交办任务，或创建一个持续目标，执行进展会显示在这里。" actionLabel="新建持续目标" onAction={onCreateGoal} />}
     <div className="ba-task-list">{visibleRows?.map(row => {
       const { result, delivery, status, safetyWait } = ticketSnapshot(row);
-      const stateLabel = safetyWait && status === 'continuation_wait' ? '系统等待安全条件' : states[status] || status;
+      const waiting = ticketWaiting(row);
+      const stateLabel = safetyWait ? '待核实外部效果' : states[status] || status;
       const recovery = continuationRecovery(row);
       const recover = () => recovery?.goalBudget ? onOpenGoals?.() : lifecycle(row, 'ticketResume', recovery?.input);
       const title = normalizeTicketTitle(row.taskMeta?.title || row.title, row.target);
@@ -102,7 +106,9 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onOpenGoals }) {
       const actions = [];
       if (!terminalStates.includes(row.status)) {
         if (recovery) actions.push({ icon: recovery.goalBudget ? 'settings' : 'play', label: recovery.label, onClick: recover, disabled: busy !== null || (recovery.goalBudget && !onOpenGoals) });
-        else if (row.status === 'paused') actions.push({ icon: 'play', label: '继续工单', onClick: () => lifecycle(row, 'ticketResume'), disabled: busy !== null });
+        else if (row.status === 'paused' && !safetyWait) actions.push(row.pauseReason?.kind === 'budget'
+          ? { icon: 'settings', label: '管理持续目标额度', onClick: onOpenGoals, disabled: busy !== null || !onOpenGoals }
+          : { icon: 'play', label: '继续工单', onClick: () => lifecycle(row, 'ticketResume'), disabled: busy !== null });
         else if (!['pausing', 'cancelling', 'uncertain', 'blocked'].includes(status)) actions.push({ icon: 'pause', label: '暂停工单', onClick: () => lifecycle(row, 'ticketPause'), disabled: busy !== null });
         actions.push({ icon: 'stop', label: '停止工单', onClick: () => stop(row), disabled: busy !== null });
       } else actions.push({ icon: 'refresh', label: '重开工单', onClick: () => { setChangeId(row.id); setSelectedId(row.id); }, disabled: busy !== null });
@@ -110,15 +116,14 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onOpenGoals }) {
       {selectedId === row.id && <TaskDetail open title={title} dirty={detailDirty} onClose={() => { setSelectedId(null); setChangeId(null); }}><header><span className="ba-goal-status">{stateLabel}</span></header>
         <section className="ba-task-instructions"><h3>任务要求</h3><p>{row.target}</p>{row.acceptance && <><h3>验收条件</h3><p>{row.acceptance}</p></>}</section>
         {error && <p role="alert">{error}</p>}
-        {['review_wait', 'continuation_wait'].includes(status) && <section className="ba-note" role="status" aria-label="系统状态"><strong>系统状态 · {stateLabel}</strong>{safetyWait ? <p>待核实外部效果</p> : (result?.delivery?.text || result?.review?.reason) && <p>{result?.delivery?.text || result?.review?.reason}</p>}{result?.review?.retryAt && <time dateTime={result.review.retryAt}>下次核验：{new Date(result.review.retryAt).toLocaleString('zh-CN')}</time>}</section>}
+        <TicketWaiting key={`${row.id}:${row.instructionRevision}:${row.resultVersion}`} api={api} ticket={row} onRefresh={() => setGeneration(value => value + 1)} onOpenResources={resource => resource === 'goals' ? onOpenGoals?.() : setChangeId(row.id)} canOpenGoals={!!onOpenGoals} showQuestion={false} />
         <p className="ba-note">{row.mandate?.source?.channel === 'feishu' ? '飞书' : '桌面'} · {delivery ? deliveryStates[delivery.state] || delivery.state : '尚无交付结果'}</p>
-        <section className="ba-stack" aria-label="待处理交互">{row.attentions?.map(attention => <TicketAttention key={`${attention.id}:${row.instructionRevision}`} api={api} ticket={row} attention={attention} onAnswered={() => setGeneration(value => value + 1)} />)}</section>
+        {!safetyWait && status !== 'uncertain' && <section className="ba-stack" aria-label="待处理交互">{row.attentions?.map(attention => <TicketAttention key={`${attention.id}:${row.instructionRevision}`} api={api} ticket={row} attention={attention} onAnswered={() => setGeneration(value => value + 1)} />)}</section>}
         {result && <Disclosure title={<>查看结果与证据 · 要求版本 {result.instructionRevision ?? 1}</>}>{(result.instructionRevision ?? 1) !== row.instructionRevision && <p className="ba-note">这是旧要求的结果，当前版本尚待执行与验收。</p>}<p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result.summary}</p>{result.review && <p>验收：{result.review.reason}</p>}<ul>{result.evidenceRefs?.map((ref, index) => <li key={index}>会话：{ref.sessionId || '—'}{ref.runId ? ` · 执行：${ref.runId}` : ''}</li>)}</ul></Disclosure>}
         {delivery?.lastError && <p role="status" className="ba-note">{delivery.lastError}</p>}
         <section className="ba-stack" aria-label="工单操作"><TicketChange api={api} ticket={row} reload={async () => setGeneration(value => value + 1)} onDirtyChange={detailChanged} startOpen={changeId === row.id} />
         <TicketCheckpoints ticket={row} list={async input => (await api('checkpointList', input)).checkpoints} preview={input => api('checkpointPreview', input)} restore={input => api('checkpointRestore', input)} reload={async () => setGeneration(value => value + 1)} /></section>
-        {recovery && <section className="ba-inline-actions">{recovery.goalBudget && <p className="ba-note">在持续目标的额度设置中调整预算后，恢复原工单。</p>}<Button variant="ghost" type="button" className="ba-quiet" disabled={busy !== null || (recovery.goalBudget && !onOpenGoals)} onClick={recover}>{recovery.label}</Button></section>}
-        {!terminalStates.includes(row.status) && <footer><div className="ba-row-actions"><TaskIconButton icon="stop" label="停止工单" disabled={busy === row.id} onClick={() => stop(row)} /></div></footer>}
+        {!terminalStates.includes(row.status) && !waiting && <footer><div className="ba-row-actions"><TaskIconButton icon="stop" label="停止工单" disabled={busy === row.id} onClick={() => stop(row)} /></div></footer>}
       </TaskDetail>}</React.Fragment>;
     })}</div>
   </section>;

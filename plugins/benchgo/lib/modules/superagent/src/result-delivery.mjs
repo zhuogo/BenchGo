@@ -1,6 +1,6 @@
 import { isRouterTicketAck } from './ticket-ack.mjs';
 
-const systemStates = new Set(['review_wait', 'delivery_wait', 'budget_wait', 'continuation_wait']);
+const systemStates = new Set(['review_wait', 'delivery_wait', 'budget_wait', 'continuation_wait', 'action_verified']);
 
 /** Host failures are explicit system states, never canned messages attributed to the assistant. */
 export function systemStateDelivery({ state = 'review_wait', code = 'REVIEW_UNAVAILABLE', stage = 'review' } = {}) {
@@ -13,7 +13,8 @@ export function systemStateDelivery({ state = 'review_wait', code = 'REVIEW_UNAV
   };
   if (!systemStates.has(state)) throw new Error('Invalid system state');
   return { action: 'deliver', origin: 'system', systemState: { state, code, stage },
-    text: `系统状态：${conditions[code] || labels[state]}。执行记录已保留${conditions[code] ? '。' : '，正在等待恢复所需条件。'}` };
+    text: state === 'action_verified' ? '系统状态：操作已完成，回执已核实。详情可在工单中查看。'
+      : `系统状态：${conditions[code] || labels[state]}。执行记录已保留${conditions[code] ? '。' : '，正在等待恢复所需条件。'}` };
 }
 
 /** Only Router-authored delivery may cross the human message boundary. */
@@ -29,7 +30,7 @@ export function validateDelivery(value) {
       || typeof value.systemState.stage !== 'string' || !/^[a-z0-9_-]{1,64}$/.test(value.systemState.stage)) throw new Error('Invalid system publication');
     system = { origin: 'system', systemState: { state: value.systemState.state, code: value.systemState.code, stage: value.systemState.stage } };
   } else if (value.systemState !== undefined) throw new Error('System state requires a system publication');
-  return { action: value.action, ...(value.action !== 'silent' ? { text: value.text.trim() } : {}), ...(value.options?.length ? { options: [...new Set(value.options.map(x => x.trim()))] } : {}), ...system };
+  return { action: value.action, ...(value.action !== 'silent' ? { text: value.text } : {}), ...(value.options?.length ? { options: [...new Set(value.options.map(x => x.trim()))] } : {}), ...system };
 }
 
 /** Host evidence of an unchanged successful delivery, never a Worker's claim. */

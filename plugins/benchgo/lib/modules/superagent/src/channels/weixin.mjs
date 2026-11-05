@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { configFor, createBoundary, eventFor, fail, deliveryId, validId } from './china-common.mjs';
+import { beforeDelivery, deliveryFailure } from './delivery-outcome.mjs';
 
 const officialOrigin = value => {
   let url; try { url = new URL(value); } catch { throw fail('微信服务地址无效'); }
@@ -38,12 +39,12 @@ export function createWeixinAdapter(options) {
     return body;
   };
   const request = async (config, endpoint, payload, timeout = 15_000) => {
-    const token = await b.secret(config.tokenRef);
+    const token = await beforeDelivery(() => b.secret(config.tokenRef));
     const body = await b.request(config, `${officialOrigin(config.baseUrl)}/ilink/bot/${endpoint}`, { method: 'POST',
       headers: { 'content-type': 'application/json', AuthorizationType: 'ilink_bot_token', authorization: `Bearer ${token}`,
         'X-WECHAT-UIN': Buffer.from(String(randomBytes(4).readUInt32BE())).toString('base64'), 'iLink-App-Id': 'bot', 'iLink-App-ClientVersion': '131584' },
       body: JSON.stringify({ ...payload, base_info: { channel_version: '2.2.0' } }) }, timeout);
-    if ((body.ret !== undefined && body.ret !== 0) || (body.errcode !== undefined && body.errcode !== 0)) throw fail('微信 iLink 请求失败，请检查登录是否过期', 502);
+    if ((body.ret !== undefined && body.ret !== 0) || (body.errcode !== undefined && body.errcode !== 0)) throw deliveryFailure('微信 iLink 请求失败，请检查登录是否过期', 'not_sent', 502);
     b.state.authentication = 'verified'; return body;
   };
   const poll = async (config, gen) => {
@@ -120,9 +121,10 @@ export function createWeixinAdapter(options) {
     },
     async send({ source, text, idempotencyKey }) {
       const config = await b.outgoing(source, text, idempotencyKey), context = contexts.get(source.chatId);
-      if (!context) throw fail('微信回复上下文不可用，请在微信重新发送一条消息', 409);
+      if (!context) throw deliveryFailure('微信回复上下文不可用，请在微信重新发送一条消息', 'not_sent', 409);
       const clientId = deliveryId(idempotencyKey);
-      await request(config, 'sendmessage', { msg: { from_user_id: '', to_user_id: source.chatId, client_id: clientId, message_type: 2, message_state: 2, context_token: context, item_list: [{ type: 1, text_item: { text } }] } });
+      const body = await request(config, 'sendmessage', { msg: { from_user_id: '', to_user_id: source.chatId, client_id: clientId, message_type: 2, message_state: 2, context_token: context, item_list: [{ type: 1, text_item: { text } }] } });
+      if (body.ret !== 0 && body.errcode !== 0) throw deliveryFailure('微信缺少确定发送回执', 'unknown', 502);
       b.state.sending = 'verified'; return { status: 'accepted', messageId: clientId };
     },
   };

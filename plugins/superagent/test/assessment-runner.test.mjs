@@ -3,6 +3,31 @@ import assert from 'node:assert/strict';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createAssessmentRunner } from '../src/assessment-runner.mjs';
 
+for (const outcome of ['revise', 'reopen']) for (const explicit of [false, true]) test(`assessment ${outcome} keeps Router apart from ${explicit ? 'explicit' : 'default Worker'} selection`, async t => {
+  const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+  t.after(() => database.close());
+  database.ingest({ dedupeKey: outcome, thread: { id: 'thread', source: { type: 'feishu', id: 'chat' } }, source: {}, actor: { id: 'owner' }, content: 'Change the task', gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p' });
+  const router = { providerId: 'Router/@', modelId: 'Exact: Router/1' };
+  const worker = { providerId: 'Worker/@', modelId: 'Exact: Worker/2' };
+  const selected = { providerId: 'Selected/@', modelId: 'Exact: Selected/3' };
+  if (explicit) {
+    database.createTicket({ id: 'ticket', threadId: 'thread', target: 'Original', mandate: {} });
+    database.createAssignment('ticket', { model: selected });
+  }
+  let committed;
+  const intercepted = new Proxy(database, { get(target, key) { return key === 'decide' ? (_id, decision) => { committed = decision; } : target[key]; } });
+  const runner = createAssessmentRunner({ database: intercepted, readPolicy: async () => ({ version: 'p', model: router, models: [router], workerModels: [worker] }),
+    authorize: async () => ({ allowed: true, mandate: {} }), assess: async ({ candidates, model, models }) => {
+      assert.deepEqual(model, router);
+      assert.deepEqual(models, [router]);
+      return [{ candidateId: candidates[0].candidateId, outcome, ticketId: 'ticket', expectedInstructionRevision: 1, reason: 'Changed requirements' }];
+    },
+  });
+  await runner.tick();
+  await runner.stop();
+  assert.deepEqual(committed.change.model, explicit ? selected : worker);
+});
+
 test('authorized channel admission delivers the same Router reply without another model call', async t => {
   for (const allowed of [true, false]) {
     const database = createAssistantOrchestrationStore({ filename: ':memory:' });

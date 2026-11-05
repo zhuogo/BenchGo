@@ -4,6 +4,7 @@ import { reviewInputHash } from './review-input.mjs';
 import { createReviewEvidenceReader } from './review-evidence-reader.mjs';
 import { commitReviewedResult } from './review-result-commit.mjs';
 import { recoverableReview } from './ticket-review.mjs';
+import { TICKET_REVIEW_TIMEOUT_MS } from './review-policy.mjs';
 
 /** Recheck saved evidence; execution corrections are queued separately in the same task. */
 export function createReviewContinuation({ ctx, database, readPolicy, review, signal }) {
@@ -22,11 +23,11 @@ export function createReviewContinuation({ ctx, database, readPolicy, review, si
     if (!run || assignment.state !== 'completed') throw new Error('原执行证据不可用');
     const policy = await readPolicy();
     if (!validateTicketMandate(ticket.mandate, { policy })) throw new Error('工单授权已变化');
-    const reviewSignal = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+    const reviewSignal = AbortSignal.any([signal, AbortSignal.timeout(TICKET_REVIEW_TIMEOUT_MS)]);
     return withRecoveredEvidence({ ctx, run, signal }, async saved => {
       const answeredAttentions = database.answeredAttentionForReview(ticket.id, { instructionRevision: ticket.instructionRevision,
         runId: saved.runId, sessionId: saved.sessionId });
-      const input = { llm: ctx.llm, database, model: ticket.mandate.source?.channel === 'desktop' ? assignment.model : policy.model,
+      const input = { llm: ctx.llm, database, model: policy.model || assignment.model,
         ticket, result: saved, rules: policy.rules, signal: reviewSignal, routingConfig: policy.routingConfig,
         answeredAttentions,
         ...(ctx.sessionQuery?.readSession ? { readEvidence: createReviewEvidenceReader({ ctx, result: saved }) } : {}) };

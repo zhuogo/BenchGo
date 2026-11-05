@@ -1,0 +1,21 @@
+{
+  "checkedAt": "2026-11-05T13:01:33.7413059Z",
+  "previousAttempt": "attention-1-attempt-1",
+  "previousOutcome": "fail",
+  "previousCause": "Parent-requested interruption after post-build owner updates; not acceptance success",
+  "processCheck": {
+    "processesTerminated": 0,
+    "matchingProcesses": 0,
+    "method": "Read-only Win32_Process command-line filter under approved escalation"
+  },
+  "dryRun": {
+    "configurationModified": false,
+    "providerId": "routergo",
+    "requestMade": false,
+    "modelId": "deepseek-v4.1-flash",
+    "auxiliary": null,
+    "revision": 14
+  },
+  "nextAction": "Await explicit second-build release from parent; attention-1-attempt-2",
+  "scope": "isolated-controlled-real-supplier"
+}

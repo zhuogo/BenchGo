@@ -97,3 +97,20 @@ test('first bridge installation never replays receipts already delivered by the 
   await f.bridge.start();
   assert.equal(f.database.candidates().length, 0);
 });
+
+test('current Host target and receipt session must match the owned destination', async t => {
+  const f = fixture(t), projections = [];
+  f.entry.target = { kind: 'session', sessionId: f.entry.sessionId };
+  delete f.entry.sessionId;
+  f.records[0].targetSessionId = 'foreign';
+  const bridge = createScheduleBridge({ ctx: f.ctx, store: f.store, readPolicy: f.readPolicy,
+    onOccurrence: value => projections.push(value) });
+  t.after(() => bridge.stop());
+  await bridge.start();
+  assert.equal(f.database.candidates().length, 0);
+  f.records[0].targetSessionId = 'main-session';
+  await bridge.tick();
+  assert.equal(f.database.candidates().length, 1);
+  assert.equal(projections[0].entry.sessionId, 'main-session');
+  assert.equal(f.database.getTrigger(f.database.candidates()[0].triggerId).source.sessionId, 'main-session');
+});

@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual, createHash } from 'node:crypto';
 import { apiConfig, gatewayEvent } from './api.mjs';
+import { beforeDelivery } from './delivery-outcome.mjs';
 
 export const channelDefinition = {
   id: 'webhook', label: 'Webhook', defaults: { accountId: 'benchgo-webhook', signingSecretRef: '' },
@@ -41,8 +42,10 @@ export function createWebhookAdapter({ getConfig, credentials, ingest, now = Dat
       } catch (error) { return Response.json({ error: error.status && error.status < 500 ? error.message : 'Webhook 暂未受理，请使用相同 requestId 重试' }, { status: error.status || 503 }); }
     },
     async send({ source, idempotencyKey }) {
-      const c = await read();
-      if (!c.enabled || source?.channel !== 'webhook' || source.accountId !== c.accountId || (c.chatIds.length && !c.chatIds.includes(source.chatId))) throw fail('Webhook 交付来源已撤销', 403);
+      await beforeDelivery(async () => {
+        const c = await read();
+        if (!c.enabled || source?.channel !== 'webhook' || source.accountId !== c.accountId || (c.chatIds.length && !c.chatIds.includes(source.chatId))) throw fail('Webhook 交付来源已撤销', 403);
+      });
       return { status: 'accepted', messageId: `pull:${createHash('sha256').update(String(idempotencyKey)).digest('hex')}`, deliveryMode: 'pull' };
     },
     dispose() { disposed = true; },

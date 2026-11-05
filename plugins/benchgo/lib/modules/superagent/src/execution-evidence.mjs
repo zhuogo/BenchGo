@@ -41,6 +41,8 @@ function projectToolEvidence(events) {
     const args = typeof call?.arguments === 'string' ? call.arguments : JSON.stringify(call?.arguments ?? null);
     const raw = { seq: event.seq, callId, name: call?.name, arguments: args, text,
       isError: message?.isError === true || !!event.data?.error };
+    const provenance = projectSourceEvidence(call, text, event, raw.isError);
+    if (provenance.length) raw.sources = provenance;
     results.push({ ...raw, arguments: args.slice(0, 2000), text: text.slice(0, 4000),
       argumentsLength: args.length, textLength: text.length,
       truncated: args.length > 2000 || text.length > 4000,
@@ -59,6 +61,63 @@ function projectToolEvidence(events) {
     truncated: entries.length !== results.length || entries.some(entry => entry.truncated) };
 }
 
+/** Provenance is observed tool data. Missing publication time stays unknown, never inferred. */
+function projectSourceEvidence(call, text, event, failed) {
+  let args, payload;
+  try { args = typeof call?.arguments === 'string' ? JSON.parse(call.arguments) : call?.arguments; } catch { /* Preserve raw evidence above. */ }
+  try { payload = JSON.parse(text); } catch { /* Plain text can still contain source links. */ }
+  const found = new Map(), namedSources = new Set();
+  const observedAt = Number.isFinite(event.time) ? new Date(event.time).toISOString() : null;
+  const boundedText = (value, limit) => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim().slice(0, limit) || undefined : undefined;
+  const httpUrl = value => {
+    if (typeof value !== 'string' || value.length > 2048) return;
+    try { if (['http:', 'https:'].includes(new URL(value).protocol)) return value; } catch { /* Unsupported source reference. */ }
+  };
+  const urls = value => (Array.isArray(value) ? value.slice(0, 16) : [value]).map(httpUrl).filter(Boolean);
+  const relation = value => {
+    if (typeof value === 'string') return boundedText(value, 300);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const type = boundedText(value.type, 100), url = httpUrl(value.url);
+    return type || url ? { ...(type ? { type } : {}), ...(url ? { url } : {}) } : undefined;
+  };
+  const add = (value, fields = {}) => {
+    if (!httpUrl(value) || (!found.has(value) && found.size >= 16)) return;
+    const prior = found.get(value);
+    const source = boundedText(fields.source, 300);
+    const entry = { ...prior, url: value, source: !namedSources.has(value) && source ? source : prior?.source || new URL(value).hostname,
+      publishedAt: prior?.publishedAt || boundedText(fields.publishedAt ?? fields.published_at ?? fields.publishedTime, 100) || null,
+      fetchedAt: observedAt, status: prior?.status || (failed ? 'failed' : 'observed') };
+    if (source) namedSources.add(value);
+    const failureReason = boundedText(fields.failureReason, 500);
+    const error = boundedText(typeof fields.error === 'object' ? fields.error?.message : fields.error, 500);
+    if (failureReason && !entry.failureReason) entry.failureReason = failureReason;
+    if (error && !entry.error) entry.error = error;
+    if (fields.isError === true || fields.status === 'failed' || failureReason || error) entry.status = 'failed';
+    for (const key of ['relatedUrls', 'corroborates']) {
+      const related = [...new Set([...(entry[key] || []), ...urls(fields[key])])].slice(0, 16);
+      if (related.length) entry[key] = related;
+    }
+    if (!entry.relationship) {
+      const relationship = relation(fields.relationship);
+      if (relationship) entry.relationship = relationship;
+    }
+    found.set(value, entry);
+  };
+  const visit = (value, depth = 0) => {
+    if (depth > 4 || !value || typeof value !== 'object') return;
+    if (Array.isArray(value)) { for (const row of value.slice(0, 16)) visit(row, depth + 1); return; }
+    add(value.url, value); add(value.link, value);
+    for (const key of ['sources', 'results', 'items', 'articles', 'data']) visit(value[key], depth + 1);
+  };
+  visit(args); visit(payload);
+  // A URL-less fetch error still describes the explicitly requested URL.
+  if (payload && typeof payload === 'object' && !Array.isArray(payload) && !payload.url && !payload.link) add(args?.url, payload);
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"'\]\[)]+/g)) {
+    if (found.size >= 16) break;
+    add(match[0]);
+  }
+  return [...found.values()];
+}
 export function recoveryStorage(ctx) {
   return ctx.get?.('sessionPersistence') || ctx.sessionPersistence;
 }

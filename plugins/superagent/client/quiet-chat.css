@@ -1,4 +1,4 @@
-﻿.ba-quiet-chat{width:100%;margin:0 auto;padding:16px calc(var(--dsh-composer-side-clearance,16px) + 16px);box-sizing:border-box;min-width:0;color:var(--dsw-alias-label-primary,#222)}
+.ba-quiet-chat{width:100%;margin:0 auto;padding:16px calc(var(--dsh-composer-side-clearance,16px) + 16px);box-sizing:border-box;min-width:0;color:var(--dsw-alias-label-primary,#222)}
 .ba-official-conversation [data-conversation-scroll]{overflow:hidden;min-height:0;scrollbar-gutter:auto}
 .ba-chat-viewport{position:relative;display:flex;flex-direction:column;flex:1 1 0;min-height:0;min-width:0;container-type:inline-size;container-name:ba-chat}
 .ba-chat-feed{flex:1 1 0;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable;overflow-anchor:none}
@@ -42,7 +42,7 @@
 .ba-message-toolbar .ba-message-time-icon{display:none}
 .ba-reaction-chip{grid-column:var(--ba-body-column);grid-row:2;justify-self:start;min-width:24px;min-height:24px;padding:3px;margin-top:4px;background:var(--dsw-specific-bubble,#f3f3f3);color:var(--dsw-alias-label-primary,#222);font-size:15px;animation:ba-reaction-in .18s ease-out}
 .ba-chat-message[data-role=user] .ba-reaction-chip{justify-self:end}
-.ba-action-popover{position:fixed;z-index:1000;display:flex;box-sizing:border-box;gap:2px;padding:6px;border:1px solid var(--dsw-alias-border-l3,#ddd);border-radius:14px;background:var(--dsw-alias-button-floating-fill,#fff);color:var(--dsw-alias-label-primary,#222);box-shadow:0 6px 24px #0003;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;flex-wrap:wrap;width:max-content;font-family:inherit}
+.ba-message-menu{padding:0;min-width:0;box-shadow:none;z-index:1000}.ba-action-popover{position:relative;display:flex;box-sizing:border-box;gap:2px;padding:6px;border:1px solid var(--dsw-alias-border-l3,#ddd);border-radius:14px;background:var(--dsw-alias-button-floating-fill,#fff);color:var(--dsw-alias-label-primary,#222);box-shadow:0 6px 24px #0003;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;flex-wrap:wrap;width:max-content;font-family:inherit}
 .ba-action-popover button{font-size:23px;width:40px;height:40px;border-radius:11px;transition:background .15s ease}
 .ba-action-popover button span{display:block;line-height:1;transition:transform .15s ease}
 .ba-action-popover button:hover span{transform:translateY(-1px) scale(1.08)}
@@ -67,3 +67,12 @@
 @container ba-chat (max-width:700px){.ba-quiet-chat{padding-left:16px;padding-right:16px}.ba-message-time-label{display:none}.ba-message-toolbar .ba-message-time-icon{display:block}.ba-message-toolbar time{width:32px;padding:0;margin-left:2px}}
 @media(hover:none),(pointer:coarse){.ba-message-toolbar{opacity:1;pointer-events:auto}.ba-message-toolbar button,.ba-message-toolbar time,.ba-action-popover button,.ba-reaction-chip,.ba-chat-bottom-button{min-width:44px;min-height:44px}}
 @media(prefers-reduced-motion:reduce){.ba-loading-dots i,.ba-reaction-chip{animation:none}.ba-message-toolbar,.ba-message-toolbar button,.ba-action-popover button,.ba-action-popover button span,.ba-chat-bottom,.ba-chat-bottom-button{transition:none;transform:none}.ba-action-popover button:hover span,.ba-chat-bottom-button:active{transform:none}}
+
+.ba-schedule-lifecycle{padding:16px;border:1px solid var(--ba-line);border-radius:12px;background:var(--ba-surface)}
+.ba-schedule-lifecycle>strong{display:flex;align-items:center;gap:8px}
+.ba-schedule-lifecycle p{margin:8px 0 0;color:var(--ba-muted);font-size:13px;line-height:1.6}
+.ba-schedule-phase{display:inline-flex;align-items:center;gap:6px;color:var(--dsw-alias-label-primary)}
+.ba-schedule-phase:before{content:'';width:6px;height:6px;border-radius:50%;background:var(--ba-muted)}
+.ba-schedule-lifecycle[data-phase=triggered] .ba-schedule-phase:before{background:var(--dsw-alias-brand-default,#4275e8)}
+.ba-schedule-lifecycle[data-phase=completed] .ba-schedule-phase:before{background:var(--dsw-alias-success-default,#32805a)}
+.ba-schedule-lifecycle[data-phase=failed] .ba-schedule-phase:before{background:var(--dsw-alias-danger-default,#c14b45)}

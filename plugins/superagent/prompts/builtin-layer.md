@@ -1,7 +1,7 @@
 # BenchGo 内置层提示词（Builtin Layer）
 
-> 本文件是 BenchGo SuperAgent 内置层的目标真源。2026-11-04 校对：运行时尚未读取，发布清单尚未包含本文件；当前实际提示仍由引擎内联 section 组成。
-> 待接线：由 `src/engine.mjs` 作为高优先级 systemPrompt section 装入（建议 order -500，位于 `deployment:persona-prefix`（-1000）之后、用户层上下文（order 100）之前），并纳入插件发布；角色上下文需按 Router/Worker/子代理边界裁剪。
+> 本文件是 BenchGo SuperAgent 内置层真源。2026-11-05 接线：`src/engine.mjs` 初始化读取正文，服务端重启后加载文件改动；插件发布清单包含本文件。
+> 由官方 systemPrompt section 装入（order -500，位于 `deployment:persona-prefix`（-1000）之后、用户层上下文（order 100）之前）。仅 Router 读取该开局包，不将全文注入 Worker 或子代理。
 > 本节说明文字不属于提示词正文；正文从下方「# 内置层」开始。
 
 ---

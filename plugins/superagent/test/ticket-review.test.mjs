@@ -27,6 +27,44 @@ test('review reads indexed omitted evidence and receives trusted clock', async (
   assert.equal((await reviewTicketResult({ ...args, readEvidence })).verdict, 'passed');
   assert.equal(readEvidence.count(), 1);
 });
+
+test('review preserves successful and failed request evidence across evidence rounds', async () => {
+  const args = input([passed]); let calls = 0;
+  args.readEvidence = reader();
+  args.routingConfig = { auxiliary: { capabilities: ['review'], models: [{ providerId: 'aux', modelId: 'Aux/Opaque' }] } };
+  args.llm = { async *stream(request) {
+    calls++;
+    if (calls === 1) throw Object.assign(new Error('private provider body'), { code: 'NO_ADAPTER' });
+    yield { type: 'text-delta', text: JSON.stringify(calls === 2 ? { readEvidence: [{ seq: 8 }] } : passed) };
+    yield { type: 'finish', reason: { kind: 'stop' } };
+  } };
+  const result = await reviewTicketResult(args);
+  assert.equal(result.verdict, 'passed');
+  assert.equal(result.routing.switched, true);
+  assert.deepEqual(result.routing.attempts.map(row => [row.providerId, row.modelId, row.status]), [
+    ['aux', 'Aux/Opaque', 'failed'], ['test', 'opaque', 'completed'], ['aux', 'Aux/Opaque', 'completed'],
+  ]);
+  assert.deepEqual(result.routing.attempts.map(row => row.timeoutMs), [45_000, 120_000, 45_000]);
+  assert.doesNotMatch(JSON.stringify(result.routing), /private provider body|source verified|已核实/);
+});
+
+test('evidence rounds share one main-model structure correction instead of restarting its allowance', async () => {
+  const args = input([passed]); let calls = 0;
+  args.readEvidence = reader();
+  args.llm = { async *stream() {
+    calls++;
+    yield { type: 'text-delta', text: calls === 2 ? JSON.stringify({ readEvidence: [{ seq: 8 }] }) : 'private invalid output' };
+    yield { type: 'finish', reason: { kind: 'stop' } };
+  } };
+  const result = await recoverableReview(reviewTicketResult, args);
+  assert.equal(calls, 3);
+  assert.equal(args.readEvidence.count(), 1);
+  assert.equal(result.waitKind, 'review_wait');
+  assert.equal(result.delivery.origin, 'system');
+  assert.equal(result.routing.attempts.length, 3);
+  assert.equal(result.diagnostic.stream.quality, 'INVALID_JSON');
+  assert.doesNotMatch(JSON.stringify(result), /private invalid output/);
+});
 test('repairable defects retain a natural explanation and instruction for the original task', async () => {
   for (const verdict of ['rework', 'failed']) {
     const result = await reviewTicketResult(input([{ verdict, reason: 'source missing', instruction: '核对原来源并纠正日期，不扩大范围。', delivery: { action: 'deliver', text: '摘要里有一处日期还没核实，我会在原任务里补查并修正。' } }]));
@@ -405,4 +443,53 @@ test('review output truncation persists only safe metadata and remains an intern
   assert.equal(verdict.diagnostic.stream.maxTokens, 12288);
   assert.equal(verdict.userDecision, undefined);
   assert.doesNotMatch(JSON.stringify(verdict), /private|secret|incomplete body/);
+});
+
+test('main review corrects an invalid ask shape once without inventing or replacing the Router report', async () => {
+  const question = '最终文档采用哪一份已批准模板？';
+  const args = input([
+    { verdict: 'passed', reason: 'template unknown', delivery: { action: 'ask', text: question } },
+    { verdict: 'wait', reason: '必须使用用户已批准的模板。', delivery: { action: 'ask', text: question }, userDecision: { kind: 'information', question } },
+  ], (request, attempt) => {
+    if (attempt === 1) assert.match(request.messages.at(-1).content[0].text, /INVALID_ASK/);
+  });
+  const result = await reviewTicketResult(args);
+  assert.equal(result.waitKind, 'blocked');
+  assert.equal(result.userDecision.question, question);
+  assert.equal(result.delivery.text, question);
+  assert.equal(result.routing.attempts.length, 2);
+});
+
+test('review auxiliary outage falls back to main without changing task acceptance', async () => {
+  const args = input([passed]), models = [];
+  args.ticket.acceptance = '仅总结本地文档的三个既定要点。';
+  args.routingConfig = { auxiliary: { capabilities: ['review'], models: [{ providerId: 'aux', modelId: 'Aux/Opaque' }] } };
+  args.llm = { async *stream(request) {
+    models.push(request.model);
+    assert.equal(JSON.parse(request.messages[1].content[0].text).taskContract.acceptance, args.ticket.acceptance);
+    if (request.provider === 'aux') throw Object.assign(new Error('unavailable'), { code: 'NO_ADAPTER' });
+    yield { type: 'text-delta', text: JSON.stringify(passed) }; yield { type: 'finish', reason: { kind: 'stop' } };
+  } };
+  assert.equal((await reviewTicketResult(args)).verdict, 'passed');
+  assert.deepEqual(models, ['Aux/Opaque', 'opaque']);
+});
+
+test('all evidence rounds share a bounded request allowance and exhaustion remains a system wait', async () => {
+  const args = input([passed]); let calls = 0;
+  args.routingConfig = { auxiliary: { capabilities: ['review'], models: [{ providerId: 'aux', modelId: 'aux' }] } };
+  args.readEvidence = reader();
+  args.llm = { async *stream(request) {
+    calls++;
+    if (request.provider === 'aux') throw Object.assign(new Error('unavailable'), { code: 'NO_ADAPTER' });
+    yield { type: 'text-delta', text: JSON.stringify({ readEvidence: [{ seq: 8 }] }) }; yield { type: 'finish', reason: { kind: 'stop' } };
+  } };
+  const result = await recoverableReview(reviewTicketResult, args);
+  assert.equal(calls, 6);
+  assert.equal(args.readEvidence.count(), 3);
+  assert.equal(result.waitKind, 'review_wait');
+  assert.equal(result.delivery.origin, 'system');
+  assert.equal(result.delivery.systemState.code, 'REVIEW_REQUEST_LIMIT');
+  assert.equal(result.retryable, true);
+  assert.equal(result.routing.attempts.length, 6);
+  assert.deepEqual(result.routing.attempts.map(row => row.status), ['failed', 'completed', 'failed', 'completed', 'failed', 'completed']);
 });

@@ -263,7 +263,7 @@
     "/api/commander/assistant": {
       "post": {
         "summary": "SuperAgent 主聊天、旁聊、配置、记忆与任务操作",
-        "description": "BenchGo SuperAgent owner 通道。Router 兼任对话助手与总调度，负责自然聊天、回答、协调和自动委派，无网页、文件、shell 探索权限。当前明确人类请求授权普通派工，无额外 Ticket 审批；实际副作用保留原授权门禁。send 持久接收并按会话分诊，history.requests 可查询处理状态。桌面派工成功后由当前 Router 自然回复；显式人类渠道请求的接单正文复用同次研判 replyText，通过 ticket.accepted 持久投递，无固定文案兜底。任务结果验收后回原来源。辅助 review 控制研判与成果验收，不额外限制 Worker 并发。",
+        "description": "BenchGo SuperAgent owner 通道。Router 兼任对话助手与总调度，负责自然聊天、回答、协调和自动委派，无网页、文件、shell 探索权限。当前明确人类请求授权普通派工，无额外 Ticket 审批；实际副作用保留原授权门禁。send 持久接收并按会话分诊，history.requests 可查询处理状态。桌面派工成功后由当前 Router 自然回复；显式人类渠道请求的接单正文复用同次研判 replyText，通过 ticket.accepted 持久投递，无固定文案兜底。任务结果验收后回原来源。辅助 review 控制研判与成果验收，不额外限制 Worker 并发。models 为 Router 首选与备用；workerModels 为 Worker 独立队列，缺省或空数组继承 Router；auxiliary 仅对启用用途使用，失败回 Router。显式模型选择优先，providerId/modelId 原样保存。directReplyReconcile/outboxReconcile 仅已认证 owner 可调用，核实 uncertain 投递，不重放执行。",
         "requestBody": {
           "required": true,
           "content": {
@@ -331,8 +331,7 @@
                 "additionalProperties": true
               },
               "config": {
-                "type": "object",
-                "additionalProperties": true
+                "$ref": "#/components/schemas/AssistantConfiguration"
               },
               "connectionConfigure": {
                 "$ref": "#/components/schemas/ChannelConnection"
@@ -422,7 +421,7 @@
               },
               "history": {
                 "type": "object",
-                "description": "主聊与旁聊的受控聊天历史：真实用户消息、assistant_reply 显式发布、官方 completed 回合确认的无工具调用终答，以及本来源已审核通知；不返回工具、过程说明或思维链。支持 before/limit 分页。",
+                "description": "主聊与旁聊的受控聊天历史：真实用户消息、assistant_reply 显式发布、官方 completed 回合确认的无工具调用终答，以及本来源已审核通知；不返回工具、过程说明或思维链。支持 before/limit 分页。notifications 包含四阶段 schedule.lifecycle 系统事实，以及同来源工单的当前结果、问题和暂停原因；仅当前待答问题可操作。",
                 "properties": {
                   "activeReply": {
                     "type": [
@@ -474,6 +473,12 @@
                           }
                         }
                       }
+                    }
+                  },
+                  "notifications": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantNotification"
                     }
                   }
                 },
@@ -565,10 +570,58 @@
               },
               "notifications": {
                 "type": "object",
+                "required": [
+                  "events",
+                  "cursor",
+                  "hasMore",
+                  "resyncRequired"
+                ],
+                "properties": {
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantNotification"
+                    }
+                  },
+                  "cursor": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "hasMore": {
+                    "type": "boolean"
+                  },
+                  "resyncRequired": {
+                    "type": "boolean"
+                  }
+                },
                 "additionalProperties": true
               },
               "notificationSync": {
                 "type": "object",
+                "required": [
+                  "events",
+                  "cursor",
+                  "hasMore",
+                  "resyncRequired"
+                ],
+                "properties": {
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantNotification"
+                    }
+                  },
+                  "cursor": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "hasMore": {
+                    "type": "boolean"
+                  },
+                  "resyncRequired": {
+                    "type": "boolean"
+                  }
+                },
                 "additionalProperties": true
               },
               "ownedSkillApprove": {
@@ -652,7 +705,10 @@
               "requestState": {
                 "type": "array",
                 "description": "指定逻辑聊天的持久 inbox 回执，只读对账，不重放未知请求。",
-                "items": { "type": "object", "additionalProperties": true }
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
               },
               "sessionSearch": {
                 "type": "object",
@@ -660,7 +716,30 @@
               },
               "state": {
                 "type": "object",
-                "additionalProperties": true
+                "additionalProperties": true,
+                "properties": {
+                  "config": {
+                    "$ref": "#/components/schemas/AssistantConfiguration"
+                  },
+                  "memories": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantMemoryEntry"
+                    }
+                  },
+                  "state": {
+                    "type": "object",
+                    "properties": {
+                      "notifications": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/AssistantNotification"
+                        }
+                      }
+                    },
+                    "additionalProperties": true
+                  }
+                }
               },
               "summarize": {
                 "type": "object",
@@ -686,8 +765,8 @@
                 "additionalProperties": true
               },
               "ticketChange": {
-                "type": "object",
-                "additionalProperties": true
+                "$ref": "#/components/schemas/AssistantTicket",
+                "description": "终态工单的 revise/reopen/adjustment 均创建关联新单；adjustmentOfTicketId 指向原单，新单 instructionRevision=1/resultVersion=0。原 completed 状态与结果保留；进行中仅允许 revise。"
               },
               "ticketRetryReview": {
                 "type": "object",
@@ -697,7 +776,15 @@
               "tickets": {
                 "type": "object",
                 "description": "工单及结果记录。独立 title 最多10个Unicode字符，target/acceptance保留完整任务要求。review.verdict 为 passed/failed/wait/rework，failed/rework 仅表示本轮结果未通过；内部待核验为 review_wait，真实缺用户决定为 blocked+Attention，资源/无进展保留 continuationWait。系统故障 publication.origin=system 与 AI 正文分开。普通选项和信息答复不能替代动作审批。",
-                "additionalProperties": true
+                "additionalProperties": true,
+                "properties": {
+                  "tickets": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantTicket"
+                    }
+                  }
+                }
               },
               "ticketStop": {
                 "type": "object",
@@ -903,17 +990,36 @@
                   }
                 },
                 "description": "Owner-authenticated direct channel reply mailbox. Optional channel and threadId filters; newest 100 entries. No Ticket is created for answer/ask."
+              },
+              "directReplyReconcile": {
+                "$ref": "#/components/schemas/AssistantDirectReply",
+                "description": "仅 owner；返回原直答记录及持久核实历史，不新建工单。"
+              },
+              "outboxReconcile": {
+                "$ref": "#/components/schemas/AssistantOutboxDelivery",
+                "description": "仅 owner；返回原工单投递。核实历史位于顶层 reconciliations，确认回执位于 receipt；原 payload 保持不变，工单执行与结果不重复。"
               }
             }
           },
           "400": {
-            "description": "请求无效"
+            "description": "请求无效；投递核实字段错误返回 INVALID_RECONCILIATION 或 DELIVERY_RECONCILIATION_INVALID。"
           },
           "403": {
-            "description": "未获 owner 授权"
+            "description": "未获 owner 授权；投递核实要求 principal.kind=owner，否则 OWNER_REQUIRED。"
+          },
+          "404": {
+            "description": "DIRECT_REPLY_NOT_FOUND 或 OUTBOX_NOT_FOUND：指定投递不存在。"
           },
           "409": {
-            "description": "版本冲突"
+            "description": "版本冲突；投递状态/attempts 已变化或已有成功分片时返回 DELIVERY_RECONCILIATION_CONFLICT / OUTBOX_RECONCILIATION_CONFLICT。"
+          }
+        },
+        "x-tool-input-schemas": {
+          "assistant_delegate": {
+            "$ref": "#/components/schemas/AssistantDelegationInput"
+          },
+          "assistant_ticket_change": {
+            "$ref": "#/components/schemas/AssistantTicketChangeInput"
           }
         }
       }
@@ -1744,7 +1850,9 @@
               "tickets",
               "notificationOption",
               "messageReaction",
-              "connectionReplies"
+              "connectionReplies",
+              "directReplyReconcile",
+              "outboxReconcile"
             ]
           },
           "threadId": {
@@ -1835,68 +1943,8 @@
           },
           "patch": {
             "type": "object",
-            "description": "局部更新，保留未编辑字段。models 为主模型及备用；auxiliary 为 null 或 {models: 模型列表, capabilities: 用途列表}。用途为 vision/compression/summary/review；未配置或未勾选时跟随当前主模型。review 包括接单研判、成果验收和学习复盘。providerId/modelId 原样保存。",
-            "additionalProperties": true,
-            "properties": {
-              "keyPools": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 16,
-                "items": {
-                  "type": "object",
-                  "required": [
-                    "providerId",
-                    "candidates"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "providerId": {
-                      "type": "string",
-                      "minLength": 1
-                    },
-                    "candidates": {
-                      "type": "array",
-                      "minItems": 1,
-                      "maxItems": 7,
-                      "uniqueItems": true,
-                      "items": {
-                        "type": "string",
-                        "minLength": 1
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "keyPools": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 16,
-            "items": {
-              "type": "object",
-              "required": [
-                "providerId",
-                "candidates"
-              ],
-              "additionalProperties": false,
-              "properties": {
-                "providerId": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "candidates": {
-                  "type": "array",
-                  "minItems": 1,
-                  "maxItems": 7,
-                  "uniqueItems": true,
-                  "items": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                }
-              }
-            }
+            "description": "局部更新，保留未编辑字段。config 操作使用 AssistantConfigurationPatch 的三角色模型契约。",
+            "additionalProperties": true
           },
           "goalIds": {
             "type": "array",
@@ -2006,8 +2054,7 @@
                 "maxLength": 16000
               },
               "source": {
-                "type": "object",
-                "additionalProperties": true
+                "$ref": "#/components/schemas/AssistantMemorySource"
               },
               "scope": {
                 "type": "string",
@@ -2038,13 +2085,7 @@
               }
             },
             "then": {
-              "required": [
-                "id",
-                "operation",
-                "expectedInstructionRevision",
-                "requestId",
-                "reason"
-              ]
+              "$ref": "#/components/schemas/AssistantTicketChangeInput"
             }
           },
           {
@@ -2375,6 +2416,40 @@
                   "minLength": 1
                 }
               }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "config"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "patch"
+              ],
+              "properties": {
+                "patch": {
+                  "$ref": "#/components/schemas/AssistantConfigurationPatch"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "directReplyReconcile",
+                    "outboxReconcile"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "$ref": "#/components/schemas/AssistantDeliveryReconciliationInput"
             }
           }
         ],
@@ -2910,8 +2985,7 @@
             "type": "string"
           },
           "source": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/components/schemas/AssistantMemorySource"
           },
           "revision": {
             "type": "integer",
@@ -2942,9 +3016,1381 @@
           },
           "score": {
             "type": "number"
+          },
+          "candidateId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "legacyIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "supersedes": {
+            "$ref": "#/components/schemas/AssistantMemoryVersionReference"
+          },
+          "versionChain": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantMemoryVersionReference"
+            }
+          }
+        },
+        "additionalProperties": true,
+        "description": "已保存记忆。candidateId/legacyIds 为可选来源与旧 ID 别名；supersedes 指向上一版，versionChain 累计版本引用，不含历史正文。可选字段缺失时省略。"
+      },
+      "AssistantModelSelection": {
+        "type": "object",
+        "required": [
+          "providerId",
+          "modelId"
+        ],
+        "properties": {
+          "providerId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f\\u007f])\\S(?:[\\s\\S]*\\S)?$",
+            "maxLength": 512
+          },
+          "modelId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f\\u007f])\\S(?:[\\s\\S]*\\S)?$",
+            "maxLength": 512
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "reasoningEffort": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "maxTokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": false
+          },
+          "credentialRef": false
+        },
+        "additionalProperties": true
+      },
+      "AssistantModelQueue": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/AssistantModelSelection"
+        },
+        "maxItems": 32,
+        "uniqueItems": true,
+        "description": "按首选、备用顺序保存；同一 providerId/modelId 不可重复，不按名称猜测别名。"
+      },
+      "AssistantAuxiliaryModels": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "object",
+            "required": [
+              "models",
+              "capabilities"
+            ],
+            "properties": {
+              "models": {
+                "$ref": "#/components/schemas/AssistantModelQueue",
+                "minItems": 1
+              },
+              "capabilities": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "vision",
+                    "compression",
+                    "summary",
+                    "review"
+                  ]
+                },
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "AssistantConfiguration": {
+        "type": "object",
+        "properties": {
+          "models": {
+            "$ref": "#/components/schemas/AssistantModelQueue"
+          },
+          "workerModels": {
+            "$ref": "#/components/schemas/AssistantModelQueue",
+            "description": "缺省或空数组跟随 Router；省略模型的工单由此队列执行。"
+          },
+          "auxiliary": {
+            "$ref": "#/components/schemas/AssistantAuxiliaryModels"
+          },
+          "keyPools": false
+        },
+        "additionalProperties": true,
+        "description": "models 为 Router 首选与备用；workerModels 为 Worker 独立队列，缺省或空数组继承 Router；auxiliary 仅对启用用途使用辅助队列，失败回 Router，不混入 Worker。显式模型选择优先；providerId/modelId 原样保存，局部修改保留其他配置。"
+      },
+      "AssistantConfigurationPatch": {
+        "type": "object",
+        "properties": {
+          "models": {
+            "$ref": "#/components/schemas/AssistantModelQueue"
+          },
+          "workerModels": {
+            "$ref": "#/components/schemas/AssistantModelQueue",
+            "description": "缺省或空数组跟随 Router；省略模型的工单由此队列执行。"
+          },
+          "auxiliary": {
+            "$ref": "#/components/schemas/AssistantAuxiliaryModels"
+          },
+          "keyPools": {
+            "type": "array",
+            "maxItems": 0,
+            "deprecated": true,
+            "description": "已移除；仅接受旧客户端空数组并丢弃，不保存凭据路由池。"
+          }
+        },
+        "additionalProperties": true,
+        "description": "models 为 Router 首选与备用；workerModels 为 Worker 独立队列，缺省或空数组继承 Router；auxiliary 仅对启用用途使用辅助队列，失败回 Router，不混入 Worker。显式模型选择优先；providerId/modelId 原样保存，局部修改保留其他配置。"
+      },
+      "AssistantMemoryVersionReference": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AssistantMemorySource": {
+        "type": "object",
+        "properties": {
+          "excerpt": {
+            "type": "string",
+            "maxLength": 6000,
+            "description": "可核对的原始输入摘录；旧记录缺原文时省略，不补造。"
+          },
+          "excerptTruncated": {
+            "type": "boolean"
           }
         },
         "additionalProperties": true
+      },
+      "AssistantDeliveryReceipt": {
+        "type": "object",
+        "required": [
+          "status",
+          "messageId"
+        ],
+        "properties": {
+          "status": {
+            "const": "accepted"
+          },
+          "messageId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": true
+      },
+      "AssistantDeliveryReconciliationInput": {
+        "type": "object",
+        "required": [
+          "id",
+          "attempts",
+          "outcome",
+          "evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "outcome": {
+            "enum": [
+              "sent",
+              "not_sent",
+              "unknown"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 2000
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/AssistantDeliveryReceipt"
+          }
+        },
+        "additionalProperties": true,
+        "description": "仅 principal.kind=owner；绑定当前 attempts 且仅核实 uncertain。sent 需要原消息确认回执；not_sent 重新排队同一投递；unknown 保持 uncertain。已有成功分片禁止整条重投。",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "outcome": {
+                  "const": "sent"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "receipt"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "receipt"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "AssistantDirectReplyReconciliation": {
+        "type": "object",
+        "required": [
+          "attempts",
+          "outcome",
+          "evidence",
+          "receipt",
+          "createdAt"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "outcome": {
+            "enum": [
+              "sent",
+              "not_sent",
+              "unknown"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 2000
+          },
+          "receipt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssistantDeliveryReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": true
+      },
+      "AssistantDirectReply": {
+        "type": "object",
+        "required": [
+          "id",
+          "triggerId",
+          "threadId",
+          "kind",
+          "text",
+          "state",
+          "attempts",
+          "reconciliations"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "triggerId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "answer",
+              "ask"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 6000
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "claimed",
+              "sent",
+              "suppressed",
+              "uncertain"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "receipt": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "reconciliations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantDirectReplyReconciliation"
+            }
+          }
+        }
+      },
+      "AssistantOutboxDelivery": {
+        "type": "object",
+        "required": [
+          "id",
+          "ticketId",
+          "state",
+          "attempts",
+          "payload",
+          "receipt",
+          "reconciliations"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "ticketId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "claimed",
+              "sent",
+              "uncertain",
+              "cancelled"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "receipt": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "原始投递载荷；核实不会改写此载荷或改变其幂等身份。"
+          },
+          "nextAt": {
+            "type": "number"
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "leaseUntil": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "sentAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "reconciliations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "attempts",
+                "outcome",
+                "evidence",
+                "at"
+              ],
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "outcome": {
+                  "enum": [
+                    "sent",
+                    "not_sent",
+                    "unknown"
+                  ]
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "maxLength": 2000
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "AssistantSystemState": {
+        "type": "object",
+        "required": [
+          "state",
+          "code",
+          "stage"
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "review_wait",
+              "delivery_wait",
+              "budget_wait",
+              "continuation_wait",
+              "action_verified"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z0-9_:-]{1,100}$"
+          },
+          "stage": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]{1,64}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AssistantPublication": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "enum": [
+              "deliver",
+              "ask",
+              "silent"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 12000
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "maxItems": 6
+          },
+          "origin": {
+            "enum": [
+              "system"
+            ]
+          },
+          "systemState": {
+            "$ref": "#/components/schemas/AssistantSystemState"
+          }
+        },
+        "additionalProperties": true,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "deliver",
+                    "ask"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "text"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "origin"
+              ],
+              "properties": {
+                "origin": {
+                  "const": "system"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "systemState"
+              ],
+              "properties": {
+                "action": {
+                  "const": "deliver"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "systemState"
+              ]
+            },
+            "then": {
+              "required": [
+                "origin"
+              ],
+              "properties": {
+                "origin": {
+                  "const": "system"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "AssistantScheduleLifecycle": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "phase",
+          "sourceSessionId",
+          "at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 500
+          },
+          "phase": {
+            "enum": [
+              "created",
+              "triggered",
+              "completed",
+              "failed"
+            ]
+          },
+          "sourceSessionId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "occurrenceAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ticketId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "enum": [
+                    "triggered",
+                    "completed",
+                    "failed"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "occurrenceAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "enum": [
+                    "completed",
+                    "failed"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "ticketId"
+              ]
+            }
+          }
+        ]
+      },
+      "AssistantCurrentResult": {
+        "type": "object",
+        "required": [
+          "version",
+          "instructionRevision"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "instructionRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "review": {
+            "type": "object",
+            "properties": {
+              "verdict": {
+                "enum": [
+                  "passed",
+                  "failed",
+                  "wait",
+                  "rework"
+                ]
+              },
+              "waitKind": {
+                "enum": [
+                  "review_wait",
+                  "blocked",
+                  "continuation_wait"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "retryAt": {
+                "type": [
+                  "string",
+                  "number",
+                  "null"
+                ]
+              },
+              "continuationWait": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      },
+      "AssistantAttention": {
+        "type": "object",
+        "required": [
+          "id",
+          "ticketId",
+          "assignmentId",
+          "sessionId",
+          "callId",
+          "question",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "ticketId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "assignmentId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "callId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "question": {
+            "type": "object"
+          },
+          "state": {
+            "enum": [
+              "waiting",
+              "answered"
+            ]
+          },
+          "answerTriggerId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "enum": [
+              "worker",
+              "review"
+            ]
+          },
+          "instructionRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "resultVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": true
+      },
+      "AssistantNotification": {
+        "type": "object",
+        "required": [
+          "type",
+          "text"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "ticket.result",
+              "ticket.attention",
+              "ticket.accepted",
+              "schedule.lifecycle"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "origin": {
+            "enum": [
+              "system",
+              "router"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "threadRefs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ticketId": {
+            "type": "string"
+          },
+          "publication": {
+            "$ref": "#/components/schemas/AssistantPublication"
+          },
+          "systemState": {
+            "$ref": "#/components/schemas/AssistantSystemState"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/AssistantScheduleLifecycle"
+          },
+          "ticketStatus": {
+            "type": "string"
+          },
+          "currentInstructionRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "currentResultVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currentResult": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssistantCurrentResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currentAttention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssistantAttention"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currentPauseReason": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "continuationWait": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "attention": {
+            "$ref": "#/components/schemas/AssistantAttention"
+          }
+        },
+        "additionalProperties": true,
+        "description": "正式发布通知；schedule.lifecycle 为宿主系统事实卡。history 对同来源桌面工单投影 currentResult/currentAttention/currentPauseReason，均可为 null；历史正文不改写为当前状态。",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "schedule.lifecycle"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "origin",
+                "schedule",
+                "threadId",
+                "threadRefs"
+              ],
+              "properties": {
+                "origin": {
+                  "const": "system"
+                },
+                "threadId": {
+                  "const": "main"
+                },
+                "threadRefs": {
+                  "const": [
+                    "main"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "systemState"
+              ]
+            },
+            "then": {
+              "required": [
+                "origin"
+              ],
+              "properties": {
+                "origin": {
+                  "const": "system"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "AssistantAttentionResolution": {
+        "type": "object",
+        "required": [
+          "assignmentId",
+          "ticketId",
+          "sessionId",
+          "callId",
+          "questionId",
+          "instructionRevision",
+          "question",
+          "route",
+          "basis",
+          "createdAt"
+        ],
+        "properties": {
+          "assignmentId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "ticketId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "callId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "questionId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "instructionRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "question": {
+            "type": "object"
+          },
+          "route": {
+            "enum": [
+              "self",
+              "default",
+              "user"
+            ]
+          },
+          "basis": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 2000
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 6000
+          },
+          "answer": {
+            "type": "object",
+            "required": [
+              "id",
+              "selected",
+              "custom"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "selected": {
+                "type": "array",
+                "maxItems": 0
+              },
+              "custom": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          "authorization": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "nonBlocking": {
+            "const": true
+          },
+          "systemState": {
+            "enum": [
+              "mandate-unavailable",
+              "model-unavailable",
+              "timeout",
+              "budget-exhausted",
+              "triage-unavailable"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "description": "只读宿主分流证据。self/default 引用主人原指令，不冒充人类答复，不创建 answerTriggerId；权限问题始终交给 user。",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "route": {
+                  "enum": [
+                    "self",
+                    "default"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "evidence",
+                "answer"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "route": {
+                  "const": "default"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "authorization",
+                "nonBlocking"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "route": {
+                  "const": "user"
+                }
+              }
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "answer"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "evidence"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "authorization"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "nonBlocking"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "AssistantTicket": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "instructionRevision",
+          "resultVersion",
+          "adjustmentOfTicketId",
+          "liveSummary"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "status": {
+            "type": "string"
+          },
+          "instructionRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "resultVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "adjustmentOfTicketId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "liveSummary": {
+            "type": "object",
+            "required": [
+              "goal",
+              "progress",
+              "blocker",
+              "status",
+              "updatedAt"
+            ],
+            "properties": {
+              "goal": {
+                "type": "string"
+              },
+              "progress": {
+                "type": "string"
+              },
+              "blocker": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "additionalProperties": true
+          },
+          "attentionResolutions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantAttentionResolution"
+            }
+          }
+        },
+        "additionalProperties": true,
+        "description": "终态工单的 revise/reopen/adjustment 均创建关联新单；adjustmentOfTicketId 指向原单，新单 instructionRevision=1/resultVersion=0。原 completed 状态与结果保留；进行中仅允许 revise。"
+      },
+      "AssistantDelegationInput": {
+        "type": "object",
+        "required": [
+          "text",
+          "acceptance",
+          "requestId"
+        ],
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 100000
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 100000
+          },
+          "title": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 100000
+          },
+          "acceptance": {
+            "type": "string",
+            "maxLength": 100000,
+            "description": "保留原验收要求；空字符串由宿主使用当前主人原始指令。"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 200
+          },
+          "duplicateOfTicketId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": true,
+        "dependentRequired": {
+          "provider": [
+            "model"
+          ],
+          "model": [
+            "provider"
+          ]
+        },
+        "description": "assistant_delegate 工具输入，不是新增 HTTP action。省略 provider/model 走 Worker；显式填写须成对。duplicateOfTicketId 只关联同来源当前在办工单，text/acceptance 必须保留原要求；宿主复核来源、项目、授权与预算，记录 attach 且不重复派工。已完成工单调整使用 assistant_ticket_change。"
+      },
+      "AssistantTicketChangeInput": {
+        "type": "object",
+        "required": [
+          "id",
+          "operation",
+          "expectedInstructionRevision",
+          "requestId",
+          "reason"
+        ],
+        "properties": {
+          "operation": {
+            "enum": [
+              "revise",
+              "reopen",
+              "adjustment"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 512
+          },
+          "expectedInstructionRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 10000
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 100000
+          },
+          "acceptance": {
+            "type": "string",
+            "maxLength": 100000
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "dependentRequired": {
+          "provider": [
+            "model"
+          ],
+          "model": [
+            "provider"
+          ]
+        },
+        "additionalProperties": true,
+        "description": "终态工单的 revise/reopen/adjustment 均创建关联新单；adjustmentOfTicketId 指向原单，新单 instructionRevision=1/resultVersion=0。原 completed 状态与结果保留；进行中仅允许 revise。"
       }
     }
   }

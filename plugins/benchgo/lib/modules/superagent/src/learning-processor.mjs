@@ -57,7 +57,7 @@ export function createLearningProcessor({ ctx, store }) {
       const source = digest.find(row => row.messageId === memory.sourceMessageId);
       if (!source || typeof memory.content !== 'string' || !memory.content.trim() || memory.content.length > 4000) throw new Error('学习结果缺少原文证据');
       // Host-verified evidence and current learning policy are sufficient for immediate persistence.
-      const evidence = { role: 'user', sessionId, messageId: source.messageId };
+      const evidence = { role: 'user', sessionId, messageId: source.messageId, excerpt: source.text, excerptTruncated: source.truncated };
       candidates.push(await store.memory.propose({ content: memory.content, document: 'MEMORY.md', scope: 'personal', source: evidence }, { verifiedSource: evidence }));
     }
     const skills = [];

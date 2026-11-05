@@ -2,6 +2,7 @@ import { channelIds, channelModule, channelDefinition } from './channel-catalog.
 import { ingestAssistantEvent } from './intake.mjs';
 import { createDiscordVoice } from './channels/discord-voice.mjs';
 import { channelMessageChunks } from './channels/message-chunks.mjs';
+import { beforeDelivery, deliveryFailure } from './channels/delivery-outcome.mjs';
 
 /** One lifecycle per saved connection; adapters have no scheduling authority. */
 export function createChannelRuntime({ ctx, store, adapterOptions = {} }) {
@@ -36,15 +37,24 @@ export function createChannelRuntime({ ctx, store, adapterOptions = {} }) {
       const send = adapter.send?.bind(adapter);
       if (send) adapter.send = async input => {
         const current = store.connections.read(channel);
-        if (!current.config.enabled || (input.source?.connectionRevision !== undefined && input.source.connectionRevision !== current.revision)) throw new Error('交付来源配置已撤销');
+        if (!current.config.enabled || (input.source?.connectionRevision !== undefined && input.source.connectionRevision !== current.revision)) throw deliveryFailure('交付来源配置已撤销', 'not_sent');
         if (['api', 'webhook', 'email'].includes(channel)) return send(input);
-        const parts = channelMessageChunks(input.text), receipts = [];
+        const parts = await beforeDelivery(() => channelMessageChunks(input.text)), receipts = [];
         for (let index = 0; index < parts.length; index++) {
           const latest = store.connections.read(channel);
-          if (!latest.config.enabled || latest.revision !== current.revision) throw new Error('交付期间链接配置已更改');
+          if (!latest.config.enabled || latest.revision !== current.revision) throw Object.assign(deliveryFailure('交付期间链接配置已更改', receipts.length ? 'unknown' : 'not_sent'),
+            receipts.length ? { receipt: { status: 'unknown', parts: receipts } } : {});
           const source = { ...input.source };
           if (index < parts.length - 1) delete source.voiceChannelId;
-          receipts.push(await send({ ...input, source, text: parts[index], voiceText: input.text, idempotencyKey: parts.length > 1 ? `${input.idempotencyKey}:${index}` : input.idempotencyKey }));
+          try {
+            const receipt = await send({ ...input, source, text: parts[index], voiceText: input.text, idempotencyKey: parts.length > 1 ? `${input.idempotencyKey}:${index}` : input.idempotencyKey });
+            if (receipt?.status !== 'accepted' || !receipt.messageId) throw deliveryFailure('渠道缺少确定发送回执');
+            receipts.push(receipt);
+          } catch (error) {
+            // A rejected later chunk cannot prove that the entire message was unsent.
+            if (receipts.length) throw Object.assign(deliveryFailure('部分正文已发送，剩余发送状态待核实'), { receipt: { status: 'unknown', parts: receipts } });
+            throw error;
+          }
         }
         const last = receipts.at(-1);
         return { ...last, ...(receipts.length > 1 ? { parts: receipts } : {}) };

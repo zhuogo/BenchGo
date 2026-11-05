@@ -22,14 +22,21 @@ export function installDirectReplyStore({ db, tx }) {
     policy_version TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
     next_at INTEGER NOT NULL, owner TEXT, lease_until INTEGER, last_error TEXT, receipt TEXT,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE INDEX IF NOT EXISTS sa_direct_replies_ready ON sa_direct_replies(state,next_at,created_at);`);
+    CREATE INDEX IF NOT EXISTS sa_direct_replies_ready ON sa_direct_replies(state,next_at,created_at);
+    CREATE TABLE IF NOT EXISTS sa_direct_reply_reconciliations(
+      id INTEGER PRIMARY KEY, reply_id TEXT NOT NULL REFERENCES sa_direct_replies(id), attempts INTEGER NOT NULL,
+      outcome TEXT NOT NULL, evidence TEXT NOT NULL, receipt TEXT, created_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS sa_direct_reply_reconciliation_reply ON sa_direct_reply_reconciliations(reply_id,id);`);
   const get = id => db.prepare('SELECT * FROM sa_direct_replies WHERE id=?').get(id);
   const value = row => row && ({ id: row.id, candidateId: row.candidate_id, triggerId: row.trigger_id,
     threadId: row.thread_id, text: row.text, kind: row.kind, source: JSON.parse(row.source),
     actor: JSON.parse(row.actor), gate: JSON.parse(row.gate), policyVersion: row.policy_version,
     state: row.state, attempts: row.attempts, nextAt: row.next_at, owner: row.owner,
     leaseUntil: row.lease_until, lastError: row.last_error, receipt: row.receipt ? JSON.parse(row.receipt) : null,
-    createdAt: row.created_at, updatedAt: row.updated_at });
+    createdAt: row.created_at, updatedAt: row.updated_at,
+    reconciliations: db.prepare('SELECT attempts,outcome,evidence,receipt,created_at FROM sa_direct_reply_reconciliations WHERE reply_id=? ORDER BY id').all(row.id)
+      .map(item => ({ attempts: item.attempts, outcome: item.outcome, evidence: item.evidence,
+        receipt: item.receipt ? JSON.parse(item.receipt) : null, createdAt: item.created_at })) });
   return {
     enqueue(candidate, trigger, input) {
       const reply = input.reply;
@@ -85,6 +92,31 @@ export function installDirectReplyStore({ db, tx }) {
           db.prepare('UPDATE sa_direct_replies SET state=?,owner=NULL,lease_until=NULL,last_error=?,receipt=COALESCE(?,receipt),next_at=?,updated_at=? WHERE id=?')
             .run(state, sent ? null : String(error || (suppressed ? 'delivery-suppressed' : 'delivery-failed')).slice(0, 1000), receiptJson,
               state === 'queued' ? now + retryMs : row.next_at, new Date(now).toISOString(), id);
+          return value(get(id));
+        });
+      },
+      // Only the authenticated owner service may submit external verification.
+      reconcileDirectReply(id, { attempts, outcome, evidence, receipt, now = Date.now() } = {}) {
+        time(now);
+        if (!Number.isSafeInteger(attempts) || attempts < 1 || !['sent', 'not_sent', 'unknown'].includes(outcome)
+          || typeof evidence !== 'string' || !evidence.trim() || evidence.length > 2000) throw fail('DELIVERY_RECONCILIATION_INVALID', 'Delivery verification requires an attempt, outcome and evidence');
+        if (outcome === 'sent' && (receipt?.status !== 'accepted' || typeof receipt.messageId !== 'string' || !receipt.messageId.trim()
+          || receipt.messageId.length > 512)) throw fail('DELIVERY_RECONCILIATION_INVALID', 'Confirmed delivery requires its original receipt');
+        if (outcome !== 'sent' && receipt !== undefined) throw fail('DELIVERY_RECONCILIATION_INVALID', 'Only confirmed delivery accepts a receipt');
+        const receiptJson = receipt === undefined ? null : objectJson(receipt);
+        return tx(() => {
+          const row = get(id);
+          if (!row) throw fail('DIRECT_REPLY_NOT_FOUND', 'Direct reply does not exist');
+          if (row.state !== 'uncertain' || row.attempts !== attempts) throw fail('DELIVERY_RECONCILIATION_CONFLICT', 'Delivery state or attempt changed');
+          if (outcome === 'not_sent' && row.receipt && JSON.parse(row.receipt).parts?.length) {
+            throw fail('DELIVERY_RECONCILIATION_CONFLICT', 'Partially delivered text cannot be retried as wholly unsent');
+          }
+          const at = new Date(now).toISOString(), state = outcome === 'sent' ? 'sent' : outcome === 'not_sent' ? 'queued' : 'uncertain';
+          db.prepare('INSERT INTO sa_direct_reply_reconciliations(reply_id,attempts,outcome,evidence,receipt,created_at) VALUES (?,?,?,?,?,?)')
+            .run(id, attempts, outcome, evidence.trim(), receiptJson, at);
+          db.prepare('UPDATE sa_direct_replies SET state=?,owner=NULL,lease_until=NULL,last_error=?,receipt=COALESCE(?,receipt),next_at=?,updated_at=? WHERE id=?')
+            .run(state, outcome === 'sent' ? null : outcome === 'not_sent' ? 'verified-not-sent' : 'delivery-still-unknown', receiptJson,
+              state === 'queued' ? now + 30000 : row.next_at, at, id);
           return value(get(id));
         });
       },

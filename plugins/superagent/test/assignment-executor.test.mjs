@@ -6,6 +6,51 @@ import { join } from 'node:path';
 import { createAssignmentExecutor } from '../src/assignment-executor.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 
+for (const selection of ['worker', 'inherit', 'explicit']) test(`Worker requests preserve ${selection} selection and its ordered role fallback`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-worker-models-'));
+  const database = createAssistantOrchestrationStore({ directory });
+  t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
+  database.createThread({ id: 'thread', source: { type: 'desktop', id: 'main' } });
+  const ticket = database.createTicket({ threadId: 'thread', target: 'inspect', mandate: {} });
+  const router = { providerId: 'Router/@', modelId: 'Exact: Router/1', options: { maxTokens: 100 } };
+  const worker = { providerId: 'Worker/@', modelId: 'Exact: Worker/2', options: { reasoningEffort: 'ultra', maxTokens: 700 } };
+  const backup = { providerId: 'Backup/@', modelId: 'Exact: Worker/3', options: { maxTokens: 200 } };
+  const explicit = { providerId: 'Explicit/@', modelId: 'Exact: Selected/4', options: { maxTokens: 900 } };
+  const workers = selection === 'inherit' ? [] : [worker, backup];
+  const expected = selection === 'explicit' ? [explicit, worker, backup] : selection === 'inherit' ? [router] : workers;
+  database.createAssignment(ticket.id, selection === 'explicit' ? { model: explicit } : {});
+  const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
+  const hooks = new Map(), seen = [], selected = [];
+  const signal = new AbortController().signal;
+  const ctx = {
+    on() { return () => {}; },
+    llm: { prepareCall: async request => {
+      seen.push([request.provider, request.model, request.maxTokens]);
+      if (seen.length < expected.length) throw Object.assign(new Error('Temporary failure'), { status: 503 });
+    } },
+    sessionQuery: { readSession: async () => ({ events: [{ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'done' }] } } }] }) },
+    agents: { create: async input => {
+      const agent = { model: { current: () => undefined, select: value => selected.push(value) }, followup() {
+        hooks.get('agent/status')({ status: 'running' });
+        queueMicrotask(async () => {
+          try {
+            await hooks.get('agent/request')({ signal }, async () => ({ provider: 'host-default', model: 'host-default' }));
+            hooks.get('agent/status')({ status: 'idle' });
+          } catch (error) { hooks.get('agent/error')({ error }); }
+        });
+      } };
+      await input.setup({ effect: fn => fn(), get: () => undefined, systemPrompt: { section() {}, context() {} }, on: (name, handler) => hooks.set(name, handler) }, agent);
+      return { agent, dispose: async () => {} };
+    } },
+  };
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: router, models: [router], workerModels: workers }), authorizeAction: async () => ({ allowed: true }), captureCheckpoint: async () => ({ version: 1, manifestHash: 'checkpoint' }) });
+  await executor(assignment, { ticket, signal, renew: async () => {} });
+  assert.deepEqual(seen, expected.map(model => [model.providerId, model.modelId, model.options.maxTokens]));
+  assert.equal(selected[0].provider, expected[0].providerId);
+  assert.equal(selected[0].model, expected[0].modelId);
+  assert.equal(selected[0].reasoningEffort, expected[0].options.reasoningEffort);
+});
+
 for (const projectMode of [false, true]) test(`host execution is persisted, isolated and permission-gated (project=${projectMode})`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-executor-'));
   const database = createAssistantOrchestrationStore({ directory });
@@ -25,6 +70,7 @@ for (const projectMode of [false, true]) test(`host execution is persisted, isol
     return environment;
   } };
   const ctx = {
+    on() { return () => {}; },
     llm: { prepareCall: async request => assert.equal(request.model, 'opaque/model') },
     sessionQuery: { readSession: async () => ({ events: [{ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'Evidence found' }] } } }] }) },
     agents: { create: async input => {
@@ -36,7 +82,7 @@ for (const projectMode of [false, true]) test(`host execution is persisted, isol
         events.get('agent/status')({ status: 'running' });
         queueMicrotask(() => events.get('agent/status')({ status: 'idle' }));
       } };
-      await input.setup({ get: name => name === 'worktrees' ? worktrees : undefined, systemPrompt: { section() {}, context(entry) { if (entry.name === 'benchgo-worker-source-reference') sourceReference = JSON.parse(entry.text()); } }, on: (name, listener) => events.set(name, listener) }, agent);
+      await input.setup({ effect: fn => fn(), get: name => name === 'worktrees' ? worktrees : undefined, systemPrompt: { section() {}, context(entry) { if (entry.name === 'benchgo-worker-source-reference') sourceReference = JSON.parse(entry.text()); } }, on: (name, listener) => events.set(name, listener) }, agent);
       return { agent, dispose: async () => { disposed = true; } };
     } },
   };

@@ -1,19 +1,14 @@
 import { createHash } from 'node:crypto';
 import { readAssessmentPolicy } from './assessment-policy.mjs';
 import { normalizeTicketTitle } from './ticket-title.mjs';
+import { roleModels } from './routing.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const followUpPattern = /(?:任务|工单|ticket|这个|那个|上述|上面|刚才|之前|已有|现有).{0,16}(?:卡住|卡着|挂住|转圈|状态|进展|进度|完成了吗|还没)|(?:卡住|卡着|挂住|转圈|状态|进展|进度|完成了吗|还没).{0,16}(?:任务|工单|ticket|这个|那个|上述|上面|刚才|之前|已有|现有)/iu;
-
-export function isTicketFollowUp(text) {
-  return typeof text === 'string' && followUpPattern.test(text);
-}
-
 export function currentHumanInstruction(ctx, agent) {
   if (ctx.agents?.get(agent.id) !== agent || agent.status !== 'running'
-    || ctx.agents.currentInitiator() !== agent || !ctx.agents.roots().includes(agent)) return null;
+    || ctx.agents.currentInitiator() !== agent || agent.session.header.origin === 'subagent') return null;
   const events = agent.session.snapshotEvents();
-  const start = ctx.sessionProjections?.stateOf(agent.session, 'turnBoundary')?.openTurnStartSeq;
+  const start = ctx.agents.turnBoundaryOf?.(agent.session)?.openTurnStartSeq;
   if (!Number.isSafeInteger(start) || start < 0) return null;
   const current = events.slice(start + 1);
   if (current.some(event => event.type === 'turn/end')) return null;
@@ -33,14 +28,15 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
     const sessionId = required(ownerAgent.id, '会话标识');
     const requestId = required(input.requestId, '请求标识', 200);
     const projectId = input.projectId == null ? undefined : required(input.projectId, '项目标识');
-    const providerId = required(input.provider, '供应商标识');
-    const modelId = required(input.model, '模型标识');
+    const duplicateOfTicketId = input.duplicateOfTicketId === undefined ? undefined : required(input.duplicateOfTicketId, '重复工单标识', 512);
+    if ((input.provider === undefined) !== (input.model === undefined)) throw new Error('供应商与模型标识必须同时提供或同时省略');
+    const explicitModel = input.provider === undefined ? undefined : { providerId: required(input.provider, '供应商标识'), modelId: required(input.model, '模型标识') };
     const target = required(input.text, '任务内容');
     const title = normalizeTicketTitle(input.title, target);
     const acceptance = input.acceptance ?? '';
     if (typeof acceptance !== 'string' || acceptance.length > 100000) throw new Error('无效验收条件');
     const requestKey = JSON.stringify([sessionId, requestId]);
-    const fingerprint = digest([projectId, providerId, modelId, target, acceptance, ...(input.title !== undefined ? [title] : []), ...(budgetGoalId ? [budgetGoalId] : [])]);
+    const fingerprint = digest([projectId, explicitModel?.providerId, explicitModel?.modelId, target, acceptance, ...(input.title !== undefined ? [title] : []), ...(budgetGoalId ? [budgetGoalId] : []), ...(duplicateOfTicketId ? [duplicateOfTicketId] : [])]);
     const prior = () => {
       const existing = database.desktopRequest(requestKey);
       if (existing && existing.fingerprint !== fingerprint) throw new Error('请求标识已用于不同任务');
@@ -62,12 +58,12 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       // Missing criteria preserve the literal owner request, never invent a
       // generic file/checkpoint requirement during later review.
       const taskAcceptance = acceptance.trim() || original.trim();
-      if (isTicketFollowUp(original)) {
-        throw Object.assign(new Error('当前消息是对已有任务的跟进或状态查询，请先使用 assistant_tickets，避免重复创建工单'), { code: 'ROUTER_TICKET_FOLLOWUP_REQUIRED' });
-      }
-      const policy = await readPolicy();
+      const policy = structuredClone(await readPolicy());
       const project = projectId === undefined ? undefined : policy.projects.find(item => item.id === projectId);
       if (projectId !== undefined && !project) throw new Error('项目不存在');
+      const selectedModel = explicitModel || roleModels(undefined, { models: policy.models || (policy.model ? [policy.model] : []), workerModels: policy.workerModels || policy.routingConfig?.workerModels }, 'worker')[0];
+      if (!selectedModel) throw new Error('尚未配置可用的 Worker 模型');
+      const { providerId, modelId } = selectedModel;
       const info = await ctx.llm.resolveModelInfo(providerId, modelId, exec.signal);
       if (info?.id !== modelId || info?.provider !== providerId) throw new Error('模型解析改变了显式标识，无法委派');
       exec.signal?.throwIfAborted();
@@ -77,7 +73,7 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       if (current.desktopVersion !== policy.desktopVersion || (project && !current.projects.some(item => item.id === projectId && item.path === project.path))) throw new Error('派工期间项目或授权规则已变化，请重试');
       const source = { channel: 'desktop', sessionId, messageId: message.id, threadId };
       const { trigger } = database.ingest({ dedupeKey: `desktop-message:${digest([sessionId, message.id])}`, thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' });
-      return database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, budgetGoalId, model: { providerId, modelId }, mandate: {
+      return database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, budgetGoalId, duplicateOfTicketId, model: explicitModel, mandate: {
         actorId: 'desktop-owner', source, instruction: original, policyVersion: policy.desktopVersion,
         target, acceptance: taskAcceptance,
         admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval', ...(project ? { project: { id: project.id, path: project.path } } : {}),

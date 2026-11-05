@@ -6,7 +6,6 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { Context } from '@deepseek-ai/cordis';
 import { webcrypto } from 'node:crypto';
-import { createComposerInboxBridge, serializeComposerText } from '../client/composer-inbox.mjs';
 
 const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
 function load(path, overrides = {}) {
@@ -25,7 +24,7 @@ test('declared client dependencies authorize uiConversation in optional child sc
   const entry = load('../../benchgo/client/index.jsx');
   const effects = [], errors = [], activated = [];
   const conversation = load('../client/conversation.jsx', { react: {
-    createContext: () => ({}), useEffect: effect => effects.push(effect),
+    createContext: () => ({}), createElement: () => null, useEffect: effect => effects.push(effect),
     useState: initial => [initial, value => { if (typeof value === 'string' && value) errors.push(value); }],
   } });
   const ctx = new Context();
@@ -46,25 +45,10 @@ test('declared client dependencies authorize uiConversation in optional child sc
   } finally { cleanup?.(); await ctx.fiber.dispose(); }
 });
 
-test('assistant composer sends the displayed draft through the durable inbox', async () => {
-  let draft = { draft: '你好', phase: 'plain', occurrences: [], attachmentIds: [] }, cleared = false;
-  const calls = [], home = { threadId: 'main', sessionId: 'assistant-session', ctx: { sessions: { scope: () => ({}) } },
-    api: async (action, args) => { calls.push({ action, args }); return { status: 'queued' }; } };
-  const react = { createContext: () => ({}), createElement: (type, props, ...children) => ({ type, props: props || {}, children }),
-    useContext: () => home, useMemo: fn => fn(), useRef: value => ({ current: value }), useState: initial => [initial, () => {}], useEffect: () => {} };
-  const conversation = load('../client/conversation.jsx', { react,
-    './composer-inbox.mjs': { createComposerInboxBridge, serializeComposerText } });
-  const tree = conversation.InboxComposer({ useInput: select => select(draft), inputActions: {
-    setDraft: text => { draft = { ...draft, draft: text }; cleared = text === ''; }, persistDraft() {}, submit() {},
-  }, session: { running: false } });
-  const find = node => !node || typeof node !== 'object' ? undefined : node.props?.['aria-label'] === '发送' ? node : node.children?.flat(Infinity).map(find).find(Boolean);
-  find(tree).props.onClick();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(calls[0].action, 'send');
-  assert.equal(calls[0].args.threadId, 'main');
-  assert.equal(calls[0].args.text, '你好');
-  assert.ok(calls[0].args.requestId);
-  assert.equal(cleared, true);
+test('assistant conversation retains the official composer without a replacement slot', () => {
+  const source = readFileSync(new URL('../client/conversation.jsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /InboxComposer|mountComposerInboxAdapter|<textarea|conversation\.composer/);
+  assert.match(source, /renderFactorySlot\('conversation\.content'/);
 });
 
 test('first registered main panel opens SuperAgent and remount does not steal navigation', () => {

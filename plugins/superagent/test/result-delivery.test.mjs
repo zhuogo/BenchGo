@@ -26,6 +26,16 @@ test('missing delivery never falls back to raw execution output', () => {
   assert.doesNotMatch(delivery.text, /任务已通过验收/);
 });
 
+test('natural Router delivery, correction and blocker texts survive publication unchanged', () => {
+  const text = '  保留首尾与段落。\n\n下一步说明。\n';
+  for (const verdict of ['passed', 'rework', 'failed', 'wait']) {
+    const delivery = resultDelivery({ ticket, result, verdict: { verdict, delivery: { action: 'deliver', text } } });
+    assert.equal(resultOutbox({ ticket, result, delivery }).text, text);
+  }
+  assert.equal(resultDelivery({ ticket, result, verdict: { verdict: 'wait', userDecision: { kind: 'information', question: '具体信息？' },
+    delivery: { action: 'ask', text } } }).text, text);
+});
+
 test('requested outcomes and failed work cannot be silenced by AI', () => {
   for (const verdict of ['passed', 'failed', 'wait']) {
     assert.equal(resultDelivery({ ticket, result, verdict: { verdict, delivery: { action: 'silent' } } }).action, 'deliver');

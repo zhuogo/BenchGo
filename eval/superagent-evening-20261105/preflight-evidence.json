@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-11-05T12:50:00.045Z",
+  "requestMade": false,
+  "userConfigurationModified": false,
+  "configRevision": 14,
+  "models": [
+    {
+      "providerId": "routergo",
+      "modelId": "deepseek-v4.1-flash"
+    }
+  ],
+  "auxiliary": null,
+  "workerModels": [],
+  "providers": [
+    {
+      "id": "routergo",
+      "api": "openai-completions",
+      "origin": "https://routergo.cn",
+      "registeredExactModelIds": [
+        "glm-5.3",
+        "deepseek-v4.1-flash",
+        "grok-4.7"
+      ]
+    }
+  ],
+  "scopeClarification": "gpt-6-astra/ultra/fast applies to development agents only; live acceptance inherits existing exact supplier configuration."
+}

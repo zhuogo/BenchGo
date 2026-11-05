@@ -81,11 +81,13 @@ function validateConfig(value) {
   if (typeof value.petHasPrevious !== 'boolean') throw new Error('Invalid pet history');
   if (value.video === undefined) value.video = null;
   if (value.auxiliary === undefined) value.auxiliary = null;
+  if (value.workerModels === undefined) value.workerModels = [];
   // Retired credential pools must not survive a legacy configuration load.
   delete value.keyPools;
   if (value.workerConcurrency === undefined) value.workerConcurrency = 2;
   if (!Number.isSafeInteger(value.workerConcurrency) || value.workerConcurrency < 1) throw new Error('Worker 并发数量必须是正整数');
   validateAssistantModels(value.models);
+  validateAssistantModels(value.workerModels);
   validateAssistantAuxiliary(value.auxiliary);
   noSecrets(value);
   if (typeof value.name !== 'string' || value.name.length > 100) throw new Error('Invalid assistant name');

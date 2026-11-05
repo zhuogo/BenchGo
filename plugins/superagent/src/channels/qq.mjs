@@ -1,4 +1,5 @@
 import { configFor, createBoundary, createSocketLifecycle, eventFor, fail, deliveryId } from './china-common.mjs';
+import { beforeDelivery, deliveryFailure } from './delivery-outcome.mjs';
 
 export const channelDefinition = {
   id: 'qq', label: 'QQ', defaults: { enabled: false, ownerIds: [], chatIds: [], appId: '', appSecretRef: '' },
@@ -24,9 +25,9 @@ export function createQqAdapter(options) {
     token = { key, value: body.access_token, expiresAt: Date.now() + Math.max(0, Number(body.expires_in) - 60) * 1000 }; b.state.authentication = 'verified'; return token.value;
   };
   const api = async (config, path, options = {}) => {
-    const bearer = await accessToken(config);
+    const bearer = await beforeDelivery(() => accessToken(config));
     const body = await b.request(config, 'https://api.sgroup.qq.com' + path, { ...options, headers: { 'content-type': 'application/json', authorization: `QQBot ${bearer}` } });
-    if (body.code) throw fail('QQ 接口未接受请求', 502); return body;
+    if (body.code) throw deliveryFailure('QQ 接口未接受请求', 'not_sent', 502); return body;
   };
   const lifecycle = createSocketLifecycle({ boundary: b, WebSocketImpl: options.WebSocketImpl,
     async connect(config) {
@@ -53,10 +54,10 @@ export function createQqAdapter(options) {
     async verify() { const config = await b.read(); try { await api(config, '/gateway'); return b.status(); } catch (error) { b.state.authentication = 'failed'; throw error; } },
     async send({ source, text, idempotencyKey }) {
       const config = await b.outgoing(source, text, idempotencyKey), kind = source.targetType;
-      if (!['users', 'groups', 'channels', 'dms'].includes(kind)) throw fail('QQ 交付目标类型无效');
+      if (!['users', 'groups', 'channels', 'dms'].includes(kind)) throw deliveryFailure('QQ 交付目标类型无效', 'not_sent', 400);
       const msgSeq = Number.parseInt(deliveryId(idempotencyKey).slice(0, 7), 16) + 1;
       const body = await api(config, `${['users', 'groups'].includes(kind) ? '/v2' : ''}/${kind}/${encodeURIComponent(source.chatId)}/messages`, { method: 'POST', body: JSON.stringify({ content: text, msg_id: source.messageId, ...(['users', 'groups'].includes(kind) ? { msg_type: 0, msg_seq: msgSeq } : {}) }) });
-      if (typeof body.id !== 'string') throw Object.assign(fail('QQ 未返回消息回执，送达状态未知', 502), { code: 'DELIVERY_UNCERTAIN', deliveryUncertain: true });
+      if (typeof body.id !== 'string' || !body.id) throw deliveryFailure('QQ 未返回消息回执，送达状态未知', 'unknown', 502);
       b.state.sending = 'verified'; return { status: 'accepted', messageId: body.id };
     },
   };

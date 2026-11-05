@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { quietChatRows } from '../client/quiet-chat.mjs';
 import { projectReplyStream } from '../client/reply-stream.mjs';
-import { continuationRecovery, ticketSnapshot } from '../client/ticket-state.mjs';
+import { continuationRecovery, ticketSnapshot, ticketWaiting } from '../client/ticket-state.mjs';
 import { PartialArguments } from '@deepseek-ai/dsh-util-values';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -109,14 +109,16 @@ test('option accompanies its body and uses the validated endpoint, never approva
   const recoveryEvent = { ticketId: 'original', ticketStatus: 'waiting', currentInstructionRevision: 2, currentResultVersion: 3,
     continuationWait: { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 3 }, threadId: 'side', text: '已答复，系统等待续做资源' };
   const recoveryTree = walk(module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side', api: async (...args) => recoveryCalls.push(args), history: { notifications: [{ ...recoveryEvent, eventId: 'old', createdAt: 1 }, { ...recoveryEvent, eventId: 'new', createdAt: 2 }] } } }));
-  const recoveryButtons = recoveryTree.filter(node => node.type === 'button' && node.children?.includes('增加10分钟并继续'));
-  assert.equal(recoveryButtons.length, 1, 'only the latest original-ticket message owns recovery');
+  const waitingCards = recoveryTree.filter(node => node.props?.ticket?.id === 'original' && node.props.onRefresh === undefined);
+  assert.equal(waitingCards.length, 1, 'only the latest original-ticket message owns recovery');
   assert.equal(recoveryCalls.length, 0);
-  await recoveryButtons[0].props.onClick();
-  assert.deepEqual(JSON.parse(JSON.stringify(recoveryCalls)), [['ticketResume', { ticketId: 'original', expectedResultVersion: 3, additionalExecutionMs: 600000 }]]);
+  const action = ticketWaiting(waitingCards[0].props.ticket).actions.find(action => action.kind === 'resume');
+  assert.deepEqual(action.input, { ticketId: 'original', expectedResultVersion: 3, additionalExecutionMs: 600000 });
   for (const code of ['EXECUTION_EFFECTS_UNKNOWN', 'EXECUTION_NOT_VERIFIED', 'EXECUTION_STOP_UNCONFIRMED']) {
     const safetyTree = walk(module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side', history: { notifications: [{ ...recoveryEvent, eventId: 'safety', continuationWait: { code, sourceResultVersion: 3 } }] } } }));
-    assert(safetyTree.some(node => node.props?.role === 'status' && node.children?.includes('系统状态 · 待核实外部效果')));
+    const ticket = safetyTree.find(node => node.props?.ticket?.id === 'original').props.ticket;
+    assert.equal(ticketWaiting(ticket).label, '等待核实外部效果');
+    assert(!ticketWaiting(ticket).actions.some(action => ['resume', 'review'].includes(action.kind)));
     assert(!safetyTree.some(node => node.props?.['aria-label'] === '系统续做操作'));
   }
 });

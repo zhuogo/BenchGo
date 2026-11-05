@@ -1,6 +1,5 @@
 import { Button } from '../../shared/client/ui/button.jsx';
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { IconSendOutlineMedium, IconStopFillMedium } from '@deepseek-ai/dsh-client-ui-primitives';
+import React, { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { AssistantHome } from './home.jsx';
 import { QuietChat } from './quiet-chat.jsx';
 import { ActivityTrigger } from './activity-panel.jsx';
@@ -11,56 +10,10 @@ import { assistantConfigSync } from './config-sync.mjs';
 import css from './pet-editor.css';
 import { retainAssistantSession } from './session-retain.mjs';
 import { ConversationWidth } from './conversation-width.jsx';
-import { createComposerInboxBridge, mountComposerInboxAdapter, serializeComposerText } from './composer-inbox.mjs';
+import { ResourceState } from './resource-state.jsx';
 
 const HomeContext = createContext(null);
 const EMPTY_PET_STATUSES = new Map();
-
-export function InboxComposer({ useInput, inputActions, session }) {
-  const home = useContext(HomeContext);
-  const input = useInput(value => value);
-  const latest = useRef({ home, input, inputActions });
-  latest.current = { home, input, inputActions };
-  const [error, setError] = useState('');
-  const bridge = useMemo(() => {
-    if (!home) return null;
-    let storage;
-    try { storage = globalThis.sessionStorage; } catch { /* Host inbox remains authoritative. */ }
-    return createComposerInboxBridge({ threadId: home.threadId,
-      storage, storageKey: `benchgo:assistant:composer:${home.sessionId}:${home.threadId}`,
-      getDraft: () => latest.current.input,
-      clearDraft: () => { const actions = latest.current.inputActions; actions.setDraft(''); actions.persistDraft(); },
-      submitCommand: () => latest.current.inputActions.submit(),
-      serialize: draft => {
-        const { ctx, sessionId } = latest.current.home;
-        const scope = ctx.sessions.scope(sessionId);
-        return serializeComposerText(draft, scope && ctx.inputTriggers?.sessionOf(scope));
-      },
-      send: async input => { setError(''); return latest.current.home.api('send', input); },
-      requests: () => latest.current.home.api('requestState', { threadId: latest.current.home.threadId }),
-      onAccepted: () => latest.current.home.onRefresh?.(), onSystemError: setError,
-    });
-  }, [home?.threadId, home?.sessionId]);
-  useEffect(() => { void bridge?.reconcile(); return () => bridge?.dispose(); }, [bridge]);
-  if (!home) return null;
-  const hasReferences = input.occurrences?.length > 0;
-  const hasAttachments = input.attachmentIds?.length > 0;
-  const stop = () => { void home.api('cancel', { threadId: home.threadId }).then(() => home.onRefresh?.()).catch(cause => setError(cause.message)); };
-  const submit = () => void bridge?.submit('queue');
-  return <div className="ba-inbox-composer">
-    {error && <p className="ba-note" role="status">系统状态：{error}</p>}
-    {hasReferences && <p className="ba-note" role="status">草稿包含引用，可直接发送；清空后可编辑。</p>}
-    {hasAttachments && <p className="ba-note" role="status">暂不支持发送附件，请先移除附件。{input.attachmentIds.map(id => <Button key={id} variant="ghost" onClick={() => inputActions.removeAttachment(id)}>移除附件</Button>)}</p>}
-    <textarea aria-label="发送消息" placeholder="发送消息" rows={2} value={input.draft} readOnly={hasReferences}
-      onChange={event => { inputActions.setDraft(event.target.value); inputActions.persistDraft(); }}
-      onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submit(); } }} />
-    <div className="ba-inbox-composer-actions">
-      {hasReferences && <Button variant="ghost" onClick={() => { inputActions.setDraft(''); inputActions.persistDraft(); }}>清空草稿</Button>}
-      {session?.running && <button type="button" className="ba-inbox-icon" onClick={stop} title="停止" aria-label="停止"><IconStopFillMedium size={16} /></button>}
-      <button type="button" className="ba-inbox-icon ba-inbox-send" onClick={submit} disabled={!input.draft.trim() && !hasAttachments} title="发送" aria-label="发送"><IconSendOutlineMedium size={16} /></button>
-    </div>
-  </div>;
-}
 
 export const ASSISTANT_CONVERSATION_SLOT = 'benchgo.assistant.conversation';
 export const assistantConversationChildren = {
@@ -147,7 +100,7 @@ export function AssistantConversation({ ctx, sessionId, SessionProvider, renderS
     if (!sessionId) return;
     const controller = new AbortController();
     let reference;
-    setError('');
+    setError(''); setRetained(null);
     void (async () => {
       reference = await retainAssistantSession(ctx.sessions, sessionId, controller.signal);
       if (controller.signal.aborted) { reference.release(); return; }
@@ -158,8 +111,8 @@ export function AssistantConversation({ ctx, sessionId, SessionProvider, renderS
     })().catch(cause => { if (!controller.signal.aborted) { console.warn('[BenchGo] conversation connection failed', cause); setError('聊天暂未连接，重试即可继续。'); } });
     return () => { controller.abort(); reference?.release(); };
   }, [ctx, sessionId, retry]);
-  if (error) return <div className="ba-note" role="status">{error}<Button variant="ghost" type="button" className="ba-quiet" onClick={() => setRetry(value => value + 1)}>重新连接</Button></div>;
-  if (!retained || retained.sessionId !== sessionId) return null;
+  if (error) return <ResourceState kind="error" title="聊天暂未连接" description={error} actionLabel="重新连接" onAction={() => setRetry(value => value + 1)} />;
+  if (!retained || retained.sessionId !== sessionId) return <ResourceState kind="loading" title="正在连接聊天" description="正在读取会话与聊天记录，请稍候。" />;
   return <div className="ba-official-conversation" data-assistant-chat="" style={{ display: 'flex', flex: '1 1 0', minHeight: 0, minWidth: 0, flexDirection: 'column' }}>
     <HomeContext.Provider value={api ? { ctx, api, assistantName, assistantConfig, petExpression, onOpenResources, threadId, history, onLoadEarlier, onRefresh, sessionStatus: ctx.uiSession?.sessionStatus, sessionId } : null}><SessionProvider session={retained.reference}>
       {renderSlot(ASSISTANT_CONVERSATION_SLOT, {})}

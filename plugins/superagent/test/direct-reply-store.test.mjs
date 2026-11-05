@@ -76,3 +76,43 @@ test('known unsent failure retries at next time; suppressed reply stops permanen
   assert.equal(db.directReplies()[0].state, 'suppressed');
   assert.deepEqual(db.claimDirectReplies({ owner: 'sender', now: 100000 }), []);
 });
+
+test('owner verification persists evidence, fences attempts and only requeues confirmed unsent delivery', async t => {
+  const { db, candidate, input } = await setup(t);
+  db.decide(candidate.id, input);
+  const [reply] = db.claimDirectReplies({ owner: 'sender', now: 2 });
+  db.finishDirectReply(reply.id, { owner: 'sender', uncertain: true, now: 3 });
+  for (const patch of [{ evidence: '' }, { outcome: 'sent' }, { attempts: 0 }, { outcome: 'not_sent', receipt: {} }]) {
+    assert.throws(() => db.reconcileDirectReply(reply.id, { attempts: 1, outcome: 'unknown', evidence: 'checked', now: 4, ...patch }), { code: 'DELIVERY_RECONCILIATION_INVALID' });
+  }
+  assert.throws(() => db.reconcileDirectReply(reply.id, { attempts: 2, outcome: 'unknown', evidence: 'checked', now: 4 }), { code: 'DELIVERY_RECONCILIATION_CONFLICT' });
+  const unknown = db.reconcileDirectReply(reply.id, { attempts: 1, outcome: 'unknown', evidence: 'provider log pending', now: 4 });
+  assert.equal(unknown.state, 'uncertain');
+  assert.deepEqual(db.claimDirectReplies({ owner: 'sender', now: 99999 }), []);
+  const queued = db.reconcileDirectReply(reply.id, { attempts: 1, outcome: 'not_sent', evidence: 'provider confirms no acceptance', now: 5 });
+  assert.equal(queued.nextAt, 30005);
+  assert.deepEqual(db.claimDirectReplies({ owner: 'sender', now: 30004 }), []);
+  assert.equal(db.claimDirectReplies({ owner: 'sender', now: 30005 })[0].attempts, 2);
+  assert.throws(() => db.reconcileDirectReply(reply.id, { attempts: 1, outcome: 'sent', evidence: 'stale reply', receipt: { status: 'accepted', messageId: 'old' }, now: 30006 }), { code: 'DELIVERY_RECONCILIATION_CONFLICT' });
+  db.finishDirectReply(reply.id, { owner: 'sender', uncertain: true, now: 30006 });
+  const receipt = { status: 'accepted', messageId: 'provider-receipt' };
+  db.reconcileDirectReply(reply.id, { attempts: 2, outcome: 'sent', evidence: 'provider message lookup', receipt, now: 30007 });
+  const reopened = createAssistantOrchestrationStore({ filename: db.path });
+  try {
+    const saved = reopened.directReplies()[0];
+    assert.equal(saved.state, 'sent');
+    assert.deepEqual(saved.receipt, receipt);
+    assert.deepEqual(saved.reconciliations.map(row => row.outcome), ['unknown', 'not_sent', 'sent']);
+    assert.equal(saved.reconciliations[2].evidence, 'provider message lookup');
+    assert.deepEqual(reopened.claimDirectReplies({ owner: 'sender', now: 99999 }), []);
+  } finally { reopened.close(); }
+});
+
+test('confirmed partial delivery cannot be requeued as wholly unsent', async t => {
+  const { db, candidate, input } = await setup(t);
+  db.decide(candidate.id, input);
+  const [reply] = db.claimDirectReplies({ owner: 'sender', now: 2 });
+  db.finishDirectReply(reply.id, { owner: 'sender', uncertain: true, receipt: { status: 'unknown', parts: [{ status: 'accepted', messageId: 'first-part' }] }, now: 3 });
+  assert.throws(() => db.reconcileDirectReply(reply.id, { attempts: 1, outcome: 'not_sent', evidence: 'remaining part missing', now: 4 }), { code: 'DELIVERY_RECONCILIATION_CONFLICT' });
+  assert.equal(db.directReplies()[0].state, 'uncertain');
+});

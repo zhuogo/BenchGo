@@ -9,6 +9,10 @@ import { mountVault } from '../src/vault.mjs';
 import { createAssistantOrchestrationStore } from '../../superagent/src/orchestration-store.mjs';
 import { createEvaluationDisposition } from '../../superagent/src/eval-disposition.mjs';
 import { createAssistantRuntimeStore } from '../../superagent/src/runtime-store.mjs';
+import { createAssistantStore, validateAssistantModels, validateAssistantAuxiliary } from '../../superagent/src/store.mjs';
+import { roleModels, auxiliaryModels } from '../../superagent/src/routing.mjs';
+import { scheduleLifecyclePublication } from '../../superagent/src/schedule-lifecycle.mjs';
+import { systemStateDelivery } from '../../superagent/src/result-delivery.mjs';
 
 const hostRequire = createRequire(new URL('../../../deepseek-harness/packages/boot/app-boot/package.json', import.meta.url));
 const { default: Ajv } = hostRequire('ajv/dist/2020.js');
@@ -164,4 +168,170 @@ test('Feishu lightweight configuration and paginated chat list have explicit con
   valid(chatList, { chats: [{ chatId: 'oc_exact', name: '无敌大队' }], nextPageToken: 'Opaque/+Token' });
   valid(chatList, { chats: [] });
   assert.equal(chatList({ chats: [{ name: 'Missing ID' }] }), false);
+});
+
+test('three model queues match persisted configuration and real role routing', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'benchgo-contract-models-'));
+  let store = await createAssistantStore({ dataDirectory: root });
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const router = { providerId: 'Opaque/@Provider', modelId: 'Router Model:07', options: { reasoningEffort: 'opaque-effort', maxTokens: 1000 } };
+  const worker = { providerId: 'Other/Provider', modelId: 'Worker:02' };
+  const auxiliary = { models: [{ providerId: 'Aux', modelId: 'Exact/Aux' }], capabilities: ['review'] };
+  const patch = { models: [router], workerModels: [worker], auxiliary };
+  valid(request, { action: 'config', patch });
+  const saved = await store.updateConfig(patch);
+  valid(response(path, 'config'), saved);
+  const edited = await store.updateConfig({ workerModels: [] }, { revision: saved.revision });
+  assert.deepEqual(edited.models, patch.models); assert.deepEqual(edited.auxiliary, auxiliary);
+  store.close(); store = await createAssistantStore({ dataDirectory: root });
+  const loaded = await store.getConfig();
+  valid(response(path, 'config'), loaded);
+  assert.deepEqual(roleModels(undefined, loaded, 'worker'), [router]);
+  assert.deepEqual(roleModels(worker, loaded, 'worker'), [worker, router]);
+  assert.deepEqual(auxiliaryModels(undefined, loaded, 'review'), [...auxiliary.models, router]);
+  assert.deepEqual(auxiliaryModels(undefined, loaded, 'summary'), [router]);
+  for (const models of [[{ ...router, providerId: ' padded' }], [{ ...router, modelId: 'bad\nID' }],
+    [{ ...router, options: { maxTokens: 0 } }], [{ ...router, credentialRef: 'legacy' }], Array(33).fill(router)]) {
+    assert.equal(request({ action: 'config', patch: { workerModels: models } }), false);
+    assert.throws(() => validateAssistantModels(models));
+  }
+  for (const auxiliary of [{ models: [], capabilities: [] }, { models: [worker], capabilities: ['unknown'] }]) {
+    assert.equal(request({ action: 'config', patch: { auxiliary } }), false);
+    assert.throws(() => validateAssistantAuxiliary(auxiliary));
+  }
+  assert.equal(request({ action: 'config', patch: { keyPools: [{ providerId: 'legacy' }] } }), false);
+});
+
+test('real memory responses retain bounded sources and correction version references', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'benchgo-contract-memory-'));
+  const store = await createAssistantStore({ dataDirectory: root });
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const first = await store.saveMemory({ content: 'a'.repeat(6001), source: { type: 'user-edit' } }, { candidateId: 'candidate-source' });
+  valid(response(path, 'memorySave'), first);
+  assert.equal(first.candidateId, 'candidate-source'); assert.equal(first.source.excerpt.length, 6000);
+  assert.equal(first.source.excerptTruncated, true);
+  const changed = await store.saveMemory({ id: first.id, content: '保存修订事实', source: { type: 'user-edit' } }, { revision: 1 });
+  valid(response(path, 'memorySave'), changed);
+  assert.equal(changed.supersedes.revision, 1); assert.deepEqual(changed.versionChain, [changed.supersedes]);
+  valid(response(path, 'memorySearch'), { memories: [{ ...changed, legacyIds: ['candidate-legacy'] }] });
+  for (const source of [{ excerpt: 'x'.repeat(6001) }, { excerptTruncated: 'true' }]) {
+    assert.equal(request({ action: 'memorySave', memory: { content: 'fact', source } }), false);
+    assert.equal(response(path, 'memorySave')({ ...changed, source }), false);
+    await assert.rejects(store.saveMemory({ content: 'fact', source }));
+  }
+  assert.equal(response(path, 'memorySave')({ ...changed, versionChain: [{ id: first.id, revision: 0, updatedAt: null }] }), false);
+});
+
+test('owner delivery reconciliation requests enforce attempts, evidence and sent-only receipts', async () => {
+  const service = await readFile(new URL('../../superagent/src/service.mjs', import.meta.url), 'utf8');
+  const branch = service.slice(service.indexOf("case 'directReplyReconcile':"), service.indexOf("case 'checkpointList':"));
+  assert.match(branch, /peer\?\.principal\?\.kind !== 'owner'/);
+  assert.match(branch, /status: 403, code: 'OWNER_REQUIRED'/);
+  for (const action of ['directReplyReconcile', 'outboxReconcile']) {
+    const base = { action, id: 'delivery', attempts: 1, outcome: 'unknown', evidence: '平台查询记录' };
+    valid(request, base); valid(request, { ...base, outcome: 'not_sent' });
+    valid(request, { ...base, outcome: 'sent', evidence: 'x'.repeat(2000), receipt: { status: 'accepted', messageId: 'x'.repeat(512) } });
+    for (const key of ['id', 'attempts', 'outcome', 'evidence']) { const missing = { ...base }; delete missing[key]; assert.equal(request(missing), false); }
+    for (const patch of [{ id: '' }, { attempts: 0 }, { attempts: 1.5 }, { attempts: Number.MAX_SAFE_INTEGER + 1 },
+      { outcome: 'pending' }, { evidence: '' }, { evidence: ' ' }, { evidence: 'x'.repeat(2001) },
+      { receipt: null }, { outcome: 'not_sent', receipt: {} }, { outcome: 'sent' },
+      ...[{ status: 'unknown', messageId: 'id' }, { status: 'accepted', messageId: '' },
+        { status: 'accepted', messageId: ' ' }, { status: 'accepted', messageId: 'x'.repeat(513) }].map(receipt => ({ outcome: 'sent', receipt }))]) {
+      assert.equal(request({ ...base, ...patch }), false, JSON.stringify(patch));
+    }
+  }
+});
+
+test('delivery response contracts accept persisted reconciliation records without changing outbox payload', t => {
+  const db = createAssistantOrchestrationStore({ filename: ':memory:' }); t.after(() => db.close());
+  const source = { channel: 'feishu', chatId: 'original', messageId: 'message' };
+  const actor = { kind: 'human', id: 'owner' }, gate = { allowed: true, strength: 'explicit' };
+  const { candidate } = db.ingest({ dedupeKey: 'message', thread: { id: 'thread', source: { type: 'feishu', id: 'original' } }, source, actor, gate, content: 'hello', policyVersion: 'p1' });
+  const evaluation = db.claimEval('thread', { owner: 'router', policyVersion: 'p1', now: 0 });
+  db.decide(candidate.id, { evalId: evaluation.id, owner: 'router', outcome: 'answer', assessment: {}, policyVersion: 'p1', now: 1,
+    reply: { text: '你好', source, actor, gate, policyVersion: 'p1' } });
+  const [reply] = db.claimDirectReplies({ owner: 'sender', now: 2 });
+  db.finishDirectReply(reply.id, { owner: 'sender', uncertain: true, now: 3 });
+  const ticket = db.createTicket({ threadId: 'thread', target: 'saved task', mandate: {} });
+  const commit = { result: { text: 'done' }, uniqueKey: 'result', outboxPayload: { text: 'done' }, now: 10 };
+  db.commitResult(ticket.id, commit);
+  const [delivery] = db.claimOutbox('sender', { now: 11 });
+  db.finishOutbox(delivery.id, { owner: 'sender', uncertain: true, now: 12 });
+  for (const [action, id, reconcile] of [['directReplyReconcile', reply.id, db.reconcileDirectReply], ['outboxReconcile', delivery.id, db.reconcileOutbox]]) {
+    const unknown = reconcile(id, { attempts: 1, outcome: 'unknown', evidence: 'pending lookup', now: 20 });
+    valid(response(path, action), unknown);
+    const sent = reconcile(id, { attempts: 1, outcome: 'sent', evidence: 'found original', receipt: { status: 'accepted', messageId: 'Opaque/receipt:1' }, now: 30 });
+    valid(response(path, action), sent);
+    assert.equal(sent.reconciliations.length, 2);
+    if (action === 'outboxReconcile') {
+      assert.deepEqual(sent.payload, commit.outboxPayload); assert.equal(sent.payload.reconciliations, undefined);
+      assert.equal(db.commitResult(ticket.id, commit).duplicate, true);
+      const { reconciliations, ...missing } = sent; assert.equal(response(path, action)(missing), false);
+    }
+  }
+});
+
+test('history accepts four real schedule lifecycle facts and current ticket projections', () => {
+  const at = '2026-11-05T10:00:00.000Z';
+  const events = ['created', 'triggered', 'completed', 'failed'].map(phase => scheduleLifecyclePublication({ type: 'schedule.lifecycle', origin: 'system',
+    schedule: { id: 'schedule', title: '定时检查', sourceSessionId: 'owner', phase, at,
+      ...(phase !== 'created' ? { occurrenceAt: at } : {}), ...(['completed', 'failed'].includes(phase) ? { ticketId: 'ticket' } : {}) } }));
+  assert.ok(events.every(Boolean)); valid(response(path, 'history'), { notifications: events });
+  for (const action of ['notifications', 'notificationSync']) valid(response(path, action), { events, cursor: 4, hasMore: false, resyncRequired: false });
+  const verified = systemStateDelivery({ state: 'action_verified', code: 'ACTION_VERIFIED', stage: 'action' });
+  const result = { type: 'ticket.result', ticketId: 'ticket', text: verified.text, publication: verified, origin: 'system', systemState: verified.systemState,
+    currentInstructionRevision: 2, currentResultVersion: 1, currentResult: { version: 1, instructionRevision: 2, review: { verdict: 'wait', waitKind: 'continuation_wait', reason: '资源待恢复' } },
+    currentAttention: null, currentPauseReason: { code: 'GOAL_BUDGET_EXHAUSTED' } };
+  valid(response(path, 'history'), { notifications: [result] });
+  valid(response(path, 'history'), { notifications: [{ ...result, currentResult: null, currentPauseReason: null }] });
+  const validate = compile({ $ref: '#/components/schemas/AssistantNotification' });
+  assert.equal(validate({ ...events[0], origin: 'router' }), false);
+  assert.equal(validate({ ...events[1], schedule: { ...events[1].schedule, occurrenceAt: undefined } }), false);
+  assert.equal(validate({ ...result, origin: 'router' }), false);
+});
+
+test('attention resolution evidence belongs to ticket rows and accepts real host decisions', t => {
+  const db = createAssistantOrchestrationStore({ filename: ':memory:' }); t.after(() => db.close());
+  db.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
+  const ticket = db.createTicket({ threadId: 'thread', target: '回答问题', mandate: { instruction: '使用简体中文', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' } } });
+  db.createAssignment(ticket.id, { model: { providerId: 'p', modelId: 'worker' } });
+  const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
+  const ownership = { owner: assignment.owner, fence: assignment.fence };
+  const run = db.prepareRun(assignment.id, { ...ownership, sessionId: 'worker-session', directory: '/fixture' });
+  db.updateRun(run.id, { ...ownership, state: 'submitted' });
+  const questions = [{ id: 'language', question: '输出语言？' }, { id: 'approval', question: '是否批准执行？' }];
+  const attentionResolutions = db.saveAttentionResolutions(assignment.id, { ...ownership, sessionId: run.sessionId, callId: 'call', questions,
+    decisions: [{ questionId: 'language', route: 'self', basis: '原指令已说明', evidence: '简体中文' }, { questionId: 'approval', route: 'user', basis: '需要主人决定' }] });
+  valid(response(path, 'tickets'), { tickets: [{ ...db.getTicket(ticket.id), attentionResolutions }] });
+  assert.equal(document.paths[path].post.responses['200']['x-action-schemas'].state.properties.attentionResolutions, undefined);
+  const resolution = compile({ $ref: '#/components/schemas/AssistantAttentionResolution' });
+  assert.equal(resolution({ ...attentionResolutions[1], answer: { id: 'approval', selected: [], custom: '批准' } }), false);
+  const [attention] = db.openAttention(assignment.id, { ...ownership, sessionId: run.sessionId, callId: 'call', questions: [questions[1]] });
+  valid(response(path, 'history'), { notifications: [{ type: 'ticket.attention', text: '请确认', currentAttention: { ...attention, instructionRevision: 1 }, currentResult: null, currentPauseReason: null }] });
+});
+
+test('delegation models are optional pairs and completed changes return linked new tickets', t => {
+  const tool = name => compile(document.paths[path].post['x-tool-input-schemas'][name]);
+  const delegate = tool('assistant_delegate'), base = { text: '检查原任务', acceptance: '保留原要求', requestId: 'request', duplicateOfTicketId: 'active-ticket' };
+  valid(delegate, base); valid(delegate, { ...base, provider: 'Opaque/@Provider', model: 'Exact Model:07' });
+  valid(delegate, { ...base, acceptance: '' });
+  for (const patch of [{ provider: 'p' }, { model: 'm' }, { duplicateOfTicketId: '' }, { duplicateOfTicketId: 'x'.repeat(513) }]) assert.equal(delegate({ ...base, ...patch }), false);
+  const db = createAssistantOrchestrationStore({ filename: ':memory:' }); t.after(() => db.close());
+  const source = { channel: 'desktop', sessionId: 'owner', messageId: 'original' }, actor = { kind: 'human', id: 'desktop-owner' };
+  const thread = { id: 'thread', source: { type: 'desktop', id: 'owner' } };
+  db.ingest({ dedupeKey: 'original', thread, source, actor, content: '原任务', mode: 'direct' });
+  const ticket = db.createTicket({ threadId: thread.id, target: '原任务', mandate: { source, actorId: actor.id } });
+  db.commitResult(ticket.id, { result: { summary: '原成果' }, uniqueKey: 'original-result' });
+  const before = db.getTicket(ticket.id), results = db.results(ticket.id);
+  const nextSource = { ...source, messageId: 'adjustment' };
+  const { trigger } = db.ingest({ dedupeKey: 'adjustment', thread, source: nextSource, actor, content: '调整成果', mode: 'direct' });
+  const change = { id: ticket.id, operation: 'adjustment', expectedInstructionRevision: 1, requestId: 'change', reason: '补充要求' };
+  valid(request, { action: 'ticketChange', ...change }); valid(tool('assistant_ticket_change'), change);
+  assert.equal(request({ action: 'ticketChange', ...change, expectedInstructionRevision: 0 }), false);
+  assert.equal(request({ action: 'ticketChange', ...change, provider: 'unpaired' }), false);
+  const next = db.changeTicket(ticket.id, { ...change, target: '调整成果', acceptance: '新要求', requestKey: 'change', triggerId: trigger.id,
+    mandate: { source: nextSource, actorId: actor.id, instruction: '调整成果' }, model: { providerId: 'p', modelId: 'm' }, validateMandate: () => true });
+  valid(response(path, 'ticketChange'), next);
+  assert.equal(next.adjustmentOfTicketId, ticket.id); assert.equal(next.instructionRevision, 1); assert.equal(next.resultVersion, 0);
+  assert.deepEqual(db.getTicket(ticket.id), before); assert.deepEqual(db.results(ticket.id), results);
 });

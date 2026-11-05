@@ -13,7 +13,8 @@ test('email rejects automated/unlisted mail and never promotes forged From to ow
 });
 test('email uses References thread and excludes attachment payload', () => {
   const a = normalizeEmailEvent(mail(), config(), 'secret');
-  const b = normalizeEmailEvent(mail({ messageId: '<m2@example.com>', references: ['<m1@example.com>'], attachments: [{ content: 'SECRET' }] }), config(), 'secret');
+  const b = normalizeEmailEvent(mail({ messageId: '<m2@example.com>', inReplyTo: '<m1@example.com>', references: ['<m1@example.com>'], attachments: [{ content: 'SECRET' }] }), config(), 'secret');
+  assert.equal(b.source.parentMessageId, '<m1@example.com>');
   assert.equal(a.threadId, b.threadId); assert.match(b.text, /附件暂不支持/); assert.ok(!JSON.stringify(b).includes('SECRET'));
 });
 test('email rejects missing/wrong/rotated tokens and strips token before Router', () => {
@@ -25,7 +26,7 @@ test('email rejects missing/wrong/rotated tokens and strips token before Router'
   assert.ok(event); assert.ok(!JSON.stringify(event).includes('secret')); assert.ok(!event.text.includes('BenchGo-Token:'));
 });
 test('email polls through IMAP, sends threaded SMTP and honors revocation', async () => {
-  let c = config(), seen = [], events = [], sent;
+  let c = config(), seen = [], events = [], sent, failure;
   class Imap {
     on() {} async connect() {} close() {} async getMailboxLock() { return { release() {} }; }
     async search() { return seen.length ? [] : [7]; }
@@ -33,12 +34,14 @@ test('email polls through IMAP, sends threaded SMTP and honors revocation', asyn
     async messageFlagsAdd(uid) { seen.push(uid); }
   }
   const adapter = createEmailAdapter({ getConfig: () => c, credentials: { resolve: async () => ({ value: 'secret' }) }, ImapFlow: Imap, parseMail: async () => mail(),
-    createTransport: () => ({ verify: async () => true, close() {}, sendMail: async value => { sent = value; return { accepted: [value.to], messageId: value.messageId }; } }), ingest: async event => events.push(event) });
+    createTransport: () => ({ verify: async () => true, close() {}, sendMail: async value => { sent = value; if (failure) throw failure; return { accepted: [value.to], messageId: value.messageId }; } }), ingest: async event => events.push(event) });
   try {
     await adapter.start(); assert.equal(events.length, 1); assert.deepEqual(seen, [7]);
     assert.equal((await adapter.status()).connection.state, 'connected');
     const result = await adapter.send({ source: events[0].source, text: '完成', idempotencyKey: 'reply1' });
     assert.equal(result.status, 'accepted'); assert.equal(sent.inReplyTo, '<m1@example.com>'); assert.equal(sent.headers['Auto-Submitted'], 'auto-replied');
+    failure = { responseCode: 550 }; await assert.rejects(adapter.send({ source: events[0].source, text: '完成', idempotencyKey: 'reject' }), { deliveryOutcome: 'not_sent' });
+    failure = Error('timeout'); await assert.rejects(adapter.send({ source: events[0].source, text: '完成', idempotencyKey: 'unknown' }), { deliveryOutcome: 'unknown' });
     c = { ...c, chatIds: [] };
     await assert.rejects(adapter.send({ source: events[0].source, text: '完成', idempotencyKey: 'reply2' }), /变更/);
   } finally { await adapter.dispose(); }

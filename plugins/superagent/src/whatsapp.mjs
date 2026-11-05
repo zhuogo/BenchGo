@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { beforeDelivery, deliveryFailure, httpRejected } from './channels/delivery-outcome.mjs';
 
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 512 && !/[\x00-\x1f\x7f]/u.test(value);
@@ -56,11 +57,12 @@ export function createWhatsAppAdapter({ getConfig, credentials, ingest, fetcher 
   const secret = async ref => { const value = (await credentials?.resolve(ref))?.value; if (typeof value !== 'string' || !value) throw fail('WhatsApp 凭据不可用', 503); return value; };
   const current = async config => { const latest = await read(); enabled(latest); if (JSON.stringify(config) !== JSON.stringify(latest)) throw fail('WhatsApp 配置已更改', 409); };
   const api = async (config, path = '', payload) => {
-    const token = await secret(config.accessTokenRef); await current(config);
+    const token = await beforeDelivery(async () => { const value = await secret(config.accessTokenRef); await current(config); return value; });
     let response, body;
     try { response = await fetcher(`https://graph.facebook.com/${config.apiVersion}/${encodeURIComponent(config.phoneNumberId)}${path}`, { method: payload ? 'POST' : 'GET', redirect: 'error', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, ...(payload ? { body: JSON.stringify(payload) } : {}), signal: AbortSignal.any([shutdown.signal, AbortSignal.timeout(requestTimeoutMs)]) }); body = await response.json(); }
-    catch { throw fail('WhatsApp 请求未取得确定回执', 502); }
-    if (!response.ok || body.error) throw fail(`WhatsApp 接口失败（HTTP ${response.status}，code ${Number.isInteger(body.error?.code) ? body.error.code : 'unknown'}）；请检查权限及客服会话窗口`, 502);
+    catch { throw deliveryFailure('WhatsApp 请求未取得确定回执', 'unknown', 502); }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw deliveryFailure('WhatsApp 返回无效回执', 'unknown', 502);
+    if (!response.ok || body.error) throw deliveryFailure(`WhatsApp 接口失败（HTTP ${response.status}，code ${Number.isInteger(body.error?.code) ? body.error.code : 'unknown'}）；请检查权限及客服会话窗口`, Number.isInteger(body.error?.code) || httpRejected(response.status) ? 'not_sent' : 'unknown', 502);
     return body;
   };
   return {
@@ -91,12 +93,15 @@ export function createWhatsAppAdapter({ getConfig, credentials, ingest, fetcher 
       } catch (error) { return Response.json({ error: error.status >= 500 || !error.status ? 'WhatsApp 事件暂未持久接收，请重试' : 'WhatsApp 事件校验失败' }, { status: error.status || 503 }); }
     },
     async send({ source, text, idempotencyKey }) {
-      const config = await read(); enabled(config);
-      if (source?.channel !== 'whatsapp' || source.appId !== config.phoneNumberId || !id(source.chatId) || !id(source.messageId) || (config.chatIds.length && !config.chatIds.includes(source.chatId))) throw fail('WhatsApp 交付来源不在当前链接范围', 403);
-      if (typeof text !== 'string' || !text.trim() || text.length > 4096 || !id(idempotencyKey)) throw fail('WhatsApp 交付正文或幂等键无效');
+      const config = await beforeDelivery(async () => {
+        const current = await read(); enabled(current);
+        if (source?.channel !== 'whatsapp' || source.appId !== current.phoneNumberId || !id(source.chatId) || !id(source.messageId) || (current.chatIds.length && !current.chatIds.includes(source.chatId))) throw fail('WhatsApp 交付来源不在当前链接范围', 403);
+        if (typeof text !== 'string' || !text.trim() || text.length > 4096 || !id(idempotencyKey)) throw fail('WhatsApp 交付正文或幂等键无效');
+        return current;
+      });
       try {
         const body = await api(config, '/messages', { messaging_product: 'whatsapp', recipient_type: 'individual', to: source.chatId, type: 'text', text: { body: text }, context: { message_id: source.messageId } });
-        if (!id(body.messages?.[0]?.id)) throw fail('WhatsApp 回执缺少消息标识', 502);
+        if (!id(body.messages?.[0]?.id)) throw deliveryFailure('WhatsApp 回执缺少消息标识', 'unknown', 502);
         state.sending = 'verified'; state.lastSendAt = now(); state.error = null;
         return { status: 'accepted', messageId: body.messages[0].id, idempotencyKey };
       } catch (error) { state.sending = 'failed'; state.error = error.message; throw error; }

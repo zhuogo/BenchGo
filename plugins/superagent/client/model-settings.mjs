@@ -6,7 +6,7 @@ export const auxiliaryCapabilities = Object.freeze([
 ]);
 
 export function identityConfigPatch(config, base) {
-  return Object.fromEntries(['name', 'cardHtml', 'cardMotion', 'models', 'auxiliary']
+  return Object.fromEntries(['name', 'cardHtml', 'cardMotion', 'models', 'workerModels', 'auxiliary']
     .filter(key => JSON.stringify(config[key]) !== JSON.stringify(base[key]))
     .map(key => [key, config[key]]));
 }

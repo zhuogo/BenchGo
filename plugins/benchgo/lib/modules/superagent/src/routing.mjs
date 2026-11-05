@@ -27,9 +27,17 @@ export function orderedModels(primary, models = []) {
     && all.findIndex(other => other?.providerId === model.providerId && other?.modelId === model.modelId) === index));
 }
 
+/** An empty Worker queue explicitly inherits Router; explicit selections stay first. */
+export function roleModels(primary, config = {}, role = 'router') {
+  if (!['router', 'worker'].includes(role)) throw new Error('Unknown model role');
+  const models = role === 'worker' && config.workerModels?.length ? config.workerModels : config.models;
+  return orderedModels(primary, models || []);
+}
+
 /** Share capability routing without changing each caller's tool permissions. */
 export function auxiliaryModels(primary, config = {}, capability) {
   const auxiliary = config.auxiliary?.capabilities?.includes(capability) ? config.auxiliary : null;
-  const models = [...(auxiliary?.models || []), ...orderedModels(primary, config.models)];
+  const selected = (auxiliary?.models || []).map(model => primary?.providerId === model.providerId && primary?.modelId === model.modelId ? primary : model);
+  const models = [...selected, ...roleModels(primary, config, 'router')];
   return orderedModels(models[0], models.slice(1));
 }

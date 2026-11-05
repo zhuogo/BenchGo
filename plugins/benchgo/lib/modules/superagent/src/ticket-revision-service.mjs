@@ -31,7 +31,8 @@ export function createTicketRevisionService({ ctx, store, database = store.orche
     const projectId = input.projectId ?? ticket.mandate.project?.id;
     const project = projectId ? policy.projects.find(row => row.id === projectId) : undefined;
     if (projectId && !project) throw new Error('工单项目不存在，请重新选择');
-    const priorModel = database.assignments(ticket.id).at(-1)?.model || policy.model;
+    if ((input.provider === undefined) !== (input.model === undefined)) throw new Error('供应商与模型标识必须同时提供或同时省略');
+    const priorModel = database.assignments(ticket.id).at(-1)?.model || policy.workerModels?.[0] || policy.model;
     const providerId = input.provider ?? priorModel?.providerId, modelId = input.model ?? priorModel?.modelId;
     text(providerId, '供应商标识'); text(modelId, '模型标识');
     const info = await ctx.llm.resolveModelInfo(providerId, modelId, exec?.signal);

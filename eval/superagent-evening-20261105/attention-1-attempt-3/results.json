@@ -1,0 +1,823 @@
+{
+  "kind": "isolated-controlled-real-supplier",
+  "selectedCase": "attention-1",
+  "startedAt": "2026-11-05T13:40:14.398Z",
+  "preflight": {
+    "checkedAt": "2026-11-05T13:40:14.394Z",
+    "requestMade": false,
+    "userConfigurationModified": false,
+    "configRevision": 14,
+    "models": [
+      {
+        "providerId": "routergo",
+        "modelId": "deepseek-v4.1-flash"
+      }
+    ],
+    "auxiliary": null,
+    "workerModels": [],
+    "providers": [
+      {
+        "id": "routergo",
+        "api": "openai-completions",
+        "origin": "https://routergo.cn",
+        "registeredExactModelIds": [
+          "glm-5.3",
+          "deepseek-v4.1-flash",
+          "grok-4.7"
+        ]
+      }
+    ],
+    "scopeClarification": "gpt-6-astra/ultra/fast applies to development agents only; live acceptance inherits existing exact supplier configuration."
+  },
+  "limitation": "Original user task includes a verification workflow; no review/worker/result injection. Not natural occurrence or desktop end-to-end acceptance.",
+  "monetaryBudget": {
+    "status": "unsupported",
+    "reason": "No reliable pricing source; cost is not substituted with tokens, requests or elapsed time."
+  },
+  "scenarios": [
+    {
+      "id": "attention-1",
+      "title": "阻塞问答一",
+      "attention": true,
+      "nonblocking": false,
+      "choice": "列表",
+      "status": "fail",
+      "startedAt": "2026-11-05T13:40:30.023Z",
+      "timeline": [
+        {
+          "at": "2026-11-05T13:40:30.281Z",
+          "routerRunning": true
+        },
+        {
+          "at": "2026-11-05T13:40:45.414Z",
+          "routerRunning": true,
+          "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+          "status": "open",
+          "resultVersion": 0,
+          "assignments": [
+            {
+              "id": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "state": "claimed",
+              "fence": 1
+            }
+          ],
+          "attentions": [],
+          "attentionResolutions": []
+        },
+        {
+          "at": "2026-11-05T13:40:47.930Z",
+          "routerRunning": false,
+          "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+          "status": "open",
+          "resultVersion": 0,
+          "assignments": [
+            {
+              "id": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "state": "claimed",
+              "fence": 1
+            }
+          ],
+          "attentions": [],
+          "attentionResolutions": []
+        },
+        {
+          "at": "2026-11-05T13:41:53.824Z",
+          "routerRunning": false,
+          "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+          "status": "waiting",
+          "resultVersion": 0,
+          "assignments": [
+            {
+              "id": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "state": "waiting",
+              "fence": 1
+            }
+          ],
+          "attentions": [
+            {
+              "id": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+              "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+              "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+              "question": {
+                "id": "Q-user",
+                "question": "Q-user：最终展示采用列表还是短句？"
+              },
+              "outboxId": "8f1904d7-9676-47df-8acc-6555d12ddd15",
+              "answerTriggerId": null,
+              "state": "waiting",
+              "createdAt": "2026-11-05T13:41:53.079Z",
+              "origin": "worker"
+            }
+          ],
+          "attentionResolutions": [
+            {
+              "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+              "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+              "instructionRevision": 1,
+              "question": {
+                "id": "Q-user",
+                "question": "Q-user：最终展示采用列表还是短句？"
+              },
+              "questionId": "Q-user",
+              "route": "user",
+              "basis": "用户未选择展示方式，明确保留给本聊天答复；属于阻塞最终排版的选择，不能代替用户选择。",
+              "createdAt": "2026-11-05T13:41:53.074Z"
+            }
+          ]
+        },
+        {
+          "at": "2026-11-05T13:41:54.686Z",
+          "routerRunning": false,
+          "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+          "status": "open",
+          "resultVersion": 0,
+          "assignments": [
+            {
+              "id": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "state": "claimed",
+              "fence": 2
+            }
+          ],
+          "attentions": [
+            {
+              "id": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+              "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+              "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+              "question": {
+                "id": "Q-user",
+                "question": "Q-user：最终展示采用列表还是短句？"
+              },
+              "outboxId": "8f1904d7-9676-47df-8acc-6555d12ddd15",
+              "answerTriggerId": "66c38ce7-cd0a-4678-83b6-32ceca0cb941",
+              "state": "answered",
+              "createdAt": "2026-11-05T13:41:53.079Z",
+              "origin": "worker"
+            }
+          ],
+          "attentionResolutions": [
+            {
+              "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+              "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+              "instructionRevision": 1,
+              "question": {
+                "id": "Q-user",
+                "question": "Q-user：最终展示采用列表还是短句？"
+              },
+              "questionId": "Q-user",
+              "route": "user",
+              "basis": "用户未选择展示方式，明确保留给本聊天答复；属于阻塞最终排版的选择，不能代替用户选择。",
+              "createdAt": "2026-11-05T13:41:53.074Z"
+            }
+          ]
+        },
+        {
+          "at": "2026-11-05T13:41:55.493Z",
+          "routerRunning": false,
+          "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+          "status": "open",
+          "resultVersion": 0,
+          "assignments": [
+            {
+              "id": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "state": "uncertain",
+              "fence": 2
+            }
+          ],
+          "attentions": [
+            {
+              "id": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+              "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+              "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+              "question": {
+                "id": "Q-user",
+                "question": "Q-user：最终展示采用列表还是短句？"
+              },
+              "outboxId": "8f1904d7-9676-47df-8acc-6555d12ddd15",
+              "answerTriggerId": "66c38ce7-cd0a-4678-83b6-32ceca0cb941",
+              "state": "answered",
+              "createdAt": "2026-11-05T13:41:53.079Z",
+              "origin": "worker"
+            }
+          ],
+          "attentionResolutions": [
+            {
+              "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+              "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+              "instructionRevision": 1,
+              "question": {
+                "id": "Q-user",
+                "question": "Q-user：最终展示采用列表还是短句？"
+              },
+              "questionId": "Q-user",
+              "route": "user",
+              "basis": "用户未选择展示方式，明确保留给本聊天答复；属于阻塞最终排版的选择，不能代替用户选择。",
+              "createdAt": "2026-11-05T13:41:53.074Z"
+            }
+          ]
+        },
+        {
+          "at": "2026-11-05T13:41:56.321Z",
+          "routerRunning": false,
+          "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+          "status": "open",
+          "resultVersion": 0,
+          "assignments": [
+            {
+              "id": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "state": "uncertain",
+              "fence": 2
+            }
+          ],
+          "attentions": [
+            {
+              "id": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+              "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+              "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+              "question": {
+                "id": "Q-user",
+                "question": "Q-user：最终展示采用列表还是短句？"
+              },
+              "outboxId": "8f1904d7-9676-47df-8acc-6555d12ddd15",
+              "answerTriggerId": "66c38ce7-cd0a-4678-83b6-32ceca0cb941",
+              "state": "answered",
+              "createdAt": "2026-11-05T13:41:53.079Z",
+              "origin": "worker"
+            }
+          ],
+          "attentionResolutions": [
+            {
+              "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+              "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+              "instructionRevision": 1,
+              "question": {
+                "id": "Q-user",
+                "question": "Q-user：最终展示采用列表还是短句？"
+              },
+              "questionId": "Q-user",
+              "route": "user",
+              "basis": "用户未选择展示方式，明确保留给本聊天答复；属于阻塞最终排版的选择，不能代替用户选择。",
+              "createdAt": "2026-11-05T13:41:53.074Z"
+            }
+          ]
+        }
+      ],
+      "userActions": [
+        {
+          "at": "2026-11-05T13:41:53.848Z",
+          "actor": "isolated-test-user",
+          "action": "ticketAnswer",
+          "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+          "attentionId": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+          "answer": {
+            "selected": [],
+            "custom": "问题编号 ab82dd64-b8cf-4d08-8347-92662184a1ad：我选择列表。请在原工单和原会话继续交付。"
+          }
+        }
+      ],
+      "threadId": "1c1314ab-9059-44ef-acea-8e7c608c1198",
+      "routerSessionId": "927de53a-135b-4ea3-b225-a0507b069a63",
+      "originalInstruction": "请派一个 Worker 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据文档在本聊天交付三条事实：Alpha、Beta和总计。使用简体中文，完整保留三项数字；无需联网，无需创建或修改任何文件。请将这些完整条件写入同一工单任务书，不增加阶段、数量或交付物。\n本任务还包含一次明确的协作路径验证，请先开单，由 Worker 读取文档后通过正式 ask_user_question 分别提出两个问题：\nQ-known：“交付语言使用简体中文还是英文？”——我已在本请求授权简体中文，总助手可根据原请求答复，无需再次问我。\nQ-user：“最终展示采用列表还是短句？”——请给出“列表”和“短句”两个选项。\nQ-user是阻塞最终排版的选择：我尚未选择，请先完成独立的三条事实读取，再把这个问题回传本聊天，我会按问题编号答复；不能替我选展示方式。收到真实答案后，用我的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。不要在开单前由总助手询问，也不要把待回答说明作为最终完成。",
+      "latest": {
+        "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+        "instructionRevision": 1,
+        "assignmentIds": [
+          "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53"
+        ],
+        "resultVersion": 0,
+        "status": "open",
+        "reviews": []
+      },
+      "beforeAnswer": {
+        "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+        "instructionRevision": 1,
+        "assignmentIds": [
+          "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53"
+        ],
+        "resultVersion": 0,
+        "attention": {
+          "id": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+          "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+          "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+          "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+          "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+          "question": {
+            "id": "Q-user",
+            "question": "Q-user：最终展示采用列表还是短句？"
+          },
+          "outboxId": "8f1904d7-9676-47df-8acc-6555d12ddd15",
+          "answerTriggerId": null,
+          "state": "waiting",
+          "createdAt": "2026-11-05T13:41:53.079Z",
+          "origin": "worker"
+        },
+        "notification": {
+          "id": "40c93290-fe08-4f4a-b4e1-cc101b0477cd",
+          "eventId": "40c93290-fe08-4f4a-b4e1-cc101b0477cd",
+          "taskId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+          "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+          "threadId": "1c1314ab-9059-44ef-acea-8e7c608c1198",
+          "createdAt": "2026-11-05T13:41:53.549Z",
+          "title": "读取文档三项事实",
+          "status": "waiting",
+          "attentionId": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+          "instructionRevision": 1,
+          "resultVersion": 0,
+          "seq": 1,
+          "readAt": null,
+          "type": "ticket.attention",
+          "threadRefs": [
+            "1c1314ab-9059-44ef-acea-8e7c608c1198"
+          ],
+          "text": "Q-user：最终展示采用列表还是短句？",
+          "ticketStatus": "waiting",
+          "currentInstructionRevision": 1,
+          "currentResultVersion": 0,
+          "continuationWait": null,
+          "currentResult": null,
+          "currentAttention": {
+            "id": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+            "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+            "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+            "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+            "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+            "question": {
+              "id": "Q-user",
+              "question": "Q-user：最终展示采用列表还是短句？"
+            },
+            "outboxId": "8f1904d7-9676-47df-8acc-6555d12ddd15",
+            "answerTriggerId": null,
+            "state": "waiting",
+            "createdAt": "2026-11-05T13:41:53.079Z",
+            "origin": "worker",
+            "instructionRevision": 1
+          },
+          "currentPauseReason": null,
+          "attention": {
+            "id": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+            "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+            "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+            "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+            "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+            "question": {
+              "id": "Q-user",
+              "question": "Q-user：最终展示采用列表还是短句？"
+            },
+            "outboxId": "8f1904d7-9676-47df-8acc-6555d12ddd15",
+            "answerTriggerId": null,
+            "state": "waiting",
+            "createdAt": "2026-11-05T13:41:53.079Z",
+            "origin": "worker",
+            "instructionRevision": 1
+          }
+        },
+        "runs": [
+          {
+            "id": "562ea0b9-23dc-4e8b-b151-f3ad356b4fc7",
+            "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+            "state": "waiting",
+            "fence": 1,
+            "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b"
+          }
+        ]
+      },
+      "answerReceipt": {
+        "id": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+        "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+        "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+        "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+        "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+        "question": {
+          "id": "Q-user",
+          "question": "Q-user：最终展示采用列表还是短句？"
+        },
+        "outboxId": "8f1904d7-9676-47df-8acc-6555d12ddd15",
+        "answerTriggerId": "66c38ce7-cd0a-4678-83b6-32ceca0cb941",
+        "state": "answered",
+        "createdAt": "2026-11-05T13:41:53.079Z",
+        "origin": "worker",
+        "duplicate": false
+      },
+      "error": "AssertionError [ERR_ASSERTION]: Live deadline expired; ticket remains open\n+ actual - expected\n\n+ 'open'\n- 'completed'\n\n    at runCase (file:///E:/BenchGo/eval/superagent-evening-20261105/cases.mjs:110:12)\n    at async file:///E:/BenchGo/eval/superagent-evening-20261105/run-live.mjs:98:3",
+      "final": {
+        "ticket": {
+          "id": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+          "threadId": "desktop:927de53a-135b-4ea3-b225-a0507b069a63",
+          "title": "读取文档三项事实",
+          "target": "读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，仅根据该文档内容，在本聊天交付三条事实：Alpha、Beta 和总计三项数值。使用简体中文，完整保留三项数字。无需联网，无需创建或修改任何文件。\n\n本工单还包含一次明确的协作路径验证：Worker 读取文档后，须通过正式的 ask_user_question 工具分别提出两个问题：\nQ-known：「交付语言使用简体中文还是英文？」——该请求已由用户授权简体中文，总助手可根据原请求直接答复，无需再次询问用户。\nQ-user：「最终展示采用列表还是短句？」——提供「列表」和「短句」两个选项。Q-user 是阻塞最终排版的选择，用户尚未选择；请先完成独立的三条事实读取，再把该问题回传本聊天，由用户按问题编号答复，不得替用户选择展示方式。收到用户真实答案后，用用户选择的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。",
+          "acceptance": "1. 仅依据 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md 内容交付 Alpha、Beta、总计三项事实，数字完整准确、与文档一致；2. 交付语言为简体中文；3. 通过正式 ask_user_question 依次提出 Q-known 与 Q-user 两个带编号问题，Q-user 提供「列表」「短句」两个选项；4. Q-known 依据原请求以简体中文作答；Q-user 不代替用户选择，先完成独立事实读取并将问题回传本聊天，收到用户真实答复后按所选展示方式完成三条事实交付；5. 全程保持原工单与原执行会话，不新建工单；6. 不联网，不创建或修改任何文件。",
+          "instructionRevision": 1,
+          "adjustmentOfTicketId": null,
+          "liveSummary": {
+            "goal": "读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，仅根据该文档内容，在本聊天交付三条事实：Alpha、Beta 和总计三项数值。使用简体中文，完整保留三项数字。无需联网，无需创建或修改任何文件。\n\n本工单还包含一次明确的协作路径验证：Worker 读取文档后，须通过正式的 ask_user_question 工具分别提出两个问题：\nQ-known：「交付语言使用简体中文还是英文？」——该请求已由用户授权简体中文，总助手可根据原请求直接答复，无需再次询问用户。\nQ-user：「最终展示采用列表还是短句？」——提供「列表」和「短句」两个选项。Q-user 是阻塞最终排版的选择，用户尚未选择；请先完成独立的三条事实读取，再把该问题回传本聊天，由用户按问题编号答复，不得替用户选择展示方式。收到用户真实答案后，用用户选择的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。",
+            "progress": "等待核实执行状态",
+            "blocker": "上次执行效果尚待核实",
+            "status": "open",
+            "updatedAt": "2026-11-05T13:41:54.537Z"
+          },
+          "status": "open",
+          "pauseReason": null,
+          "reviewRetry": null,
+          "continuationWait": null,
+          "mandate": {
+            "actorId": "desktop-owner",
+            "source": {
+              "channel": "desktop",
+              "sessionId": "927de53a-135b-4ea3-b225-a0507b069a63",
+              "messageId": "6322b225-f6de-4d56-b00d-996e42a7b03f",
+              "threadId": "1c1314ab-9059-44ef-acea-8e7c608c1198"
+            },
+            "instruction": "请派一个 Worker 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据文档在本聊天交付三条事实：Alpha、Beta和总计。使用简体中文，完整保留三项数字；无需联网，无需创建或修改任何文件。请将这些完整条件写入同一工单任务书，不增加阶段、数量或交付物。\n本任务还包含一次明确的协作路径验证，请先开单，由 Worker 读取文档后通过正式 ask_user_question 分别提出两个问题：\nQ-known：“交付语言使用简体中文还是英文？”——我已在本请求授权简体中文，总助手可根据原请求答复，无需再次问我。\nQ-user：“最终展示采用列表还是短句？”——请给出“列表”和“短句”两个选项。\nQ-user是阻塞最终排版的选择：我尚未选择，请先完成独立的三条事实读取，再把这个问题回传本聊天，我会按问题编号答复；不能替我选展示方式。收到真实答案后，用我的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。不要在开单前由总助手询问，也不要把待回答说明作为最终完成。",
+            "policyVersion": "5ed644bff03fac209e8817edf5e804f930ab8c97a97ca66152747110c1edeabd",
+            "target": "读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，仅根据该文档内容，在本聊天交付三条事实：Alpha、Beta 和总计三项数值。使用简体中文，完整保留三项数字。无需联网，无需创建或修改任何文件。\n\n本工单还包含一次明确的协作路径验证：Worker 读取文档后，须通过正式的 ask_user_question 工具分别提出两个问题：\nQ-known：「交付语言使用简体中文还是英文？」——该请求已由用户授权简体中文，总助手可根据原请求直接答复，无需再次询问用户。\nQ-user：「最终展示采用列表还是短句？」——提供「列表」和「短句」两个选项。Q-user 是阻塞最终排版的选择，用户尚未选择；请先完成独立的三条事实读取，再把该问题回传本聊天，由用户按问题编号答复，不得替用户选择展示方式。收到用户真实答案后，用用户选择的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。",
+            "acceptance": "1. 仅依据 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md 内容交付 Alpha、Beta、总计三项事实，数字完整准确、与文档一致；2. 交付语言为简体中文；3. 通过正式 ask_user_question 依次提出 Q-known 与 Q-user 两个带编号问题，Q-user 提供「列表」「短句」两个选项；4. Q-known 依据原请求以简体中文作答；Q-user 不代替用户选择，先完成独立事实读取并将问题回传本聊天，收到用户真实答复后按所选展示方式完成三条事实交付；5. 全程保持原工单与原执行会话，不新建工单；6. 不联网，不创建或修改任何文件。",
+            "admission": "desktop-approved-delegation",
+            "controlledActions": "require-current-policy-and-harness-approval"
+          },
+          "createdByDecision": "cc7acd6c-a326-4286-b09a-9dcfc444dd75",
+          "createdAt": "2026-11-05T13:40:44.743Z",
+          "updatedAt": "2026-11-05T13:41:54.537Z",
+          "resultVersion": 0,
+          "revisions": [],
+          "assignments": [
+            {
+              "id": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "executor": "harness",
+              "text": "读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，仅根据该文档内容，在本聊天交付三条事实：Alpha、Beta 和总计三项数值。使用简体中文，完整保留三项数字。无需联网，无需创建或修改任何文件。\n\n本工单还包含一次明确的协作路径验证：Worker 读取文档后，须通过正式的 ask_user_question 工具分别提出两个问题：\nQ-known：「交付语言使用简体中文还是英文？」——该请求已由用户授权简体中文，总助手可根据原请求直接答复，无需再次询问用户。\nQ-user：「最终展示采用列表还是短句？」——提供「列表」和「短句」两个选项。Q-user 是阻塞最终排版的选择，用户尚未选择；请先完成独立的三条事实读取，再把该问题回传本聊天，由用户按问题编号答复，不得替用户选择展示方式。收到用户真实答案后，用用户选择的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。",
+              "acceptance": "1. 仅依据 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md 内容交付 Alpha、Beta、总计三项事实，数字完整准确、与文档一致；2. 交付语言为简体中文；3. 通过正式 ask_user_question 依次提出 Q-known 与 Q-user 两个带编号问题，Q-user 提供「列表」「短句」两个选项；4. Q-known 依据原请求以简体中文作答；Q-user 不代替用户选择，先完成独立事实读取并将问题回传本聊天，收到用户真实答复后按所选展示方式完成三条事实交付；5. 全程保持原工单与原执行会话，不新建工单；6. 不联网，不创建或修改任何文件。",
+              "instructionRevision": 1,
+              "executionStopped": {
+                "owner": "assignment-worker-e8d64b27-cc02-40e0-8eea-830895fce983",
+                "fence": 2,
+                "at": "2026-11-05T13:41:54.785Z"
+              },
+              "attentionContinuation": {
+                "runId": "562ea0b9-23dc-4e8b-b151-f3ad356b4fc7"
+              },
+              "lastFailure": {
+                "stage": "execution",
+                "code": "UNAVAILABLE",
+                "at": "2026-11-05T13:41:54.790Z"
+              },
+              "revokedOwner": "assignment-worker-e8d64b27-cc02-40e0-8eea-830895fce983",
+              "verificationInspectionAttempts": 5,
+              "verificationAfter": 1793887048261,
+              "verificationError": "EVIDENCE_UNVERIFIED",
+              "state": "uncertain",
+              "priority": 0,
+              "owner": null,
+              "leaseUntil": null,
+              "fence": 2,
+              "attempts": 2,
+              "createdAt": "2026-11-05T13:40:44.742Z",
+              "updatedAt": "2026-11-05T13:49:28.261Z"
+            }
+          ],
+          "attentions": [
+            {
+              "id": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+              "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+              "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+              "question": {
+                "id": "Q-user",
+                "question": "Q-user：最终展示采用列表还是短句？"
+              },
+              "outboxId": "8f1904d7-9676-47df-8acc-6555d12ddd15",
+              "answerTriggerId": "66c38ce7-cd0a-4678-83b6-32ceca0cb941",
+              "state": "answered",
+              "createdAt": "2026-11-05T13:41:53.079Z",
+              "origin": "worker"
+            }
+          ],
+          "attentionResolutions": [
+            {
+              "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+              "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+              "instructionRevision": 1,
+              "question": {
+                "id": "Q-user",
+                "question": "Q-user：最终展示采用列表还是短句？"
+              },
+              "questionId": "Q-user",
+              "route": "user",
+              "basis": "用户未选择展示方式，明确保留给本聊天答复；属于阻塞最终排版的选择，不能代替用户选择。",
+              "createdAt": "2026-11-05T13:41:53.074Z"
+            }
+          ],
+          "results": [],
+          "deliveries": [
+            {
+              "receipt": {
+                "status": "accepted",
+                "messageId": "40c93290-fe08-4f4a-b4e1-cc101b0477cd"
+              },
+              "reconciliations": [],
+              "id": "8f1904d7-9676-47df-8acc-6555d12ddd15",
+              "uniqueKey": "attention:ab82dd64-b8cf-4d08-8347-92662184a1ad",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "payload": {
+                "type": "ticket.attention",
+                "attentionId": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+                "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+                "source": {
+                  "channel": "desktop",
+                  "sessionId": "927de53a-135b-4ea3-b225-a0507b069a63",
+                  "messageId": "6322b225-f6de-4d56-b00d-996e42a7b03f",
+                  "threadId": "1c1314ab-9059-44ef-acea-8e7c608c1198"
+                },
+                "instructionRevision": 1,
+                "resultVersion": 0,
+                "text": "Q-user：最终展示采用列表还是短句？",
+                "triage": {
+                  "questionId": "Q-user",
+                  "route": "user",
+                  "basis": "用户未选择展示方式，明确保留给本聊天答复；属于阻塞最终排版的选择，不能代替用户选择。"
+                }
+              },
+              "state": "sent",
+              "attempts": 1,
+              "nextAt": 1793886113079,
+              "owner": null,
+              "leaseUntil": null,
+              "sentAt": "2026-11-05T13:41:53.583Z",
+              "lastError": null,
+              "createdAt": "2026-11-05T13:41:53.079Z"
+            },
+            {
+              "receipt": {
+                "status": "accepted",
+                "messageId": "e8dcd7a5-9108-4969-aafe-f7ed36d3d4d6"
+              },
+              "reconciliations": [],
+              "id": "435ccc07-040c-497d-95e3-4fac3862a1ea",
+              "uniqueKey": "assignment-system-state:desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53:2:execution",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "payload": {
+                "type": "ticket.result",
+                "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+                "source": {
+                  "channel": "desktop",
+                  "sessionId": "927de53a-135b-4ea3-b225-a0507b069a63",
+                  "messageId": "6322b225-f6de-4d56-b00d-996e42a7b03f",
+                  "threadId": "1c1314ab-9059-44ef-acea-8e7c608c1198"
+                },
+                "instructionRevision": 1,
+                "resultVersion": 0,
+                "publication": {
+                  "action": "deliver",
+                  "origin": "system",
+                  "systemState": {
+                    "state": "continuation_wait",
+                    "code": "UNAVAILABLE",
+                    "stage": "execution"
+                  },
+                  "text": "系统状态：任务续做暂不可用。执行记录已保留，正在等待恢复所需条件。"
+                },
+                "text": "系统状态：任务续做暂不可用。执行记录已保留，正在等待恢复所需条件。"
+              },
+              "state": "sent",
+              "attempts": 1,
+              "nextAt": 1793886114790,
+              "owner": null,
+              "leaseUntil": null,
+              "sentAt": "2026-11-05T13:41:55.755Z",
+              "lastError": null,
+              "createdAt": "2026-11-05T13:41:54.790Z"
+            }
+          ],
+          "taskMeta": {
+            "version": 0
+          },
+          "taskCanOrganize": false
+        },
+        "history": {
+          "threadId": "1c1314ab-9059-44ef-acea-8e7c608c1198",
+          "sessionId": "927de53a-135b-4ea3-b225-a0507b069a63",
+          "messages": [
+            {
+              "seq": 9,
+              "id": "6322b225-f6de-4d56-b00d-996e42a7b03f",
+              "role": "user",
+              "rpcId": "EVENING_attention-1_26586098-cb38-470d-a1c4-3dabbc273bba",
+              "text": "请派一个 Worker 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据文档在本聊天交付三条事实：Alpha、Beta和总计。使用简体中文，完整保留三项数字；无需联网，无需创建或修改任何文件。请将这些完整条件写入同一工单任务书，不增加阶段、数量或交付物。\n本任务还包含一次明确的协作路径验证，请先开单，由 Worker 读取文档后通过正式 ask_user_question 分别提出两个问题：\nQ-known：“交付语言使用简体中文还是英文？”——我已在本请求授权简体中文，总助手可根据原请求答复，无需再次问我。\nQ-user：“最终展示采用列表还是短句？”——请给出“列表”和“短句”两个选项。\nQ-user是阻塞最终排版的选择：我尚未选择，请先完成独立的三条事实读取，再把这个问题回传本聊天，我会按问题编号答复；不能替我选展示方式。收到真实答案后，用我的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。不要在开单前由总助手询问，也不要把待回答说明作为最终完成。",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "请派一个 Worker 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据文档在本聊天交付三条事实：Alpha、Beta和总计。使用简体中文，完整保留三项数字；无需联网，无需创建或修改任何文件。请将这些完整条件写入同一工单任务书，不增加阶段、数量或交付物。\n本任务还包含一次明确的协作路径验证，请先开单，由 Worker 读取文档后通过正式 ask_user_question 分别提出两个问题：\nQ-known：“交付语言使用简体中文还是英文？”——我已在本请求授权简体中文，总助手可根据原请求答复，无需再次问我。\nQ-user：“最终展示采用列表还是短句？”——请给出“列表”和“短句”两个选项。\nQ-user是阻塞最终排版的选择：我尚未选择，请先完成独立的三条事实读取，再把这个问题回传本聊天，我会按问题编号答复；不能替我选展示方式。收到真实答案后，用我的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。不要在开单前由总助手询问，也不要把待回答说明作为最终完成。"
+                }
+              ],
+              "time": 1793886030384
+            },
+            {
+              "seq": 29,
+              "id": "reply:6322b225-f6de-4d56-b00d-996e42a7b03f",
+              "role": "assistant",
+              "kind": "final",
+              "requestId": "6322b225-f6de-4d56-b00d-996e42a7b03f",
+              "text": "已按你的原话建好工单「读取文档三项事实」，没有先行提问。Worker 会读取 fixture.md，并针对 Alpha、Beta、总计三项数值完成独立读取；你授权过的简体中文问题由我根据原请求代为答复；而“列表还是短句”的问题，Worker 读取完成后会带着编号回到本聊天，由你亲自选择。整个过程都在原工单和原执行会话里进行。",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "已按你的原话建好工单「读取文档三项事实」，没有先行提问。Worker 会读取 fixture.md，并针对 Alpha、Beta、总计三项数值完成独立读取；你授权过的简体中文问题由我根据原请求代为答复；而“列表还是短句”的问题，Worker 读取完成后会带着编号回到本聊天，由你亲自选择。整个过程都在原工单和原执行会话里进行。"
+                }
+              ],
+              "time": 1793886047586,
+              "usage": {
+                "inputTokens": 1681,
+                "outputTokens": 90,
+                "totalTokens": 13419,
+                "cacheReadTokens": 11648
+              }
+            }
+          ],
+          "requests": [
+            {
+              "threadId": "1c1314ab-9059-44ef-acea-8e7c608c1198",
+              "sessionId": "927de53a-135b-4ea3-b225-a0507b069a63",
+              "requestId": "EVENING_attention-1_26586098-cb38-470d-a1c4-3dabbc273bba",
+              "messageId": "6322b225-f6de-4d56-b00d-996e42a7b03f",
+              "status": "processed",
+              "createdAt": "2026-11-05T13:40:30.184Z",
+              "updatedAt": "2026-11-05T13:40:47.606Z"
+            }
+          ],
+          "images": [],
+          "hasMore": false,
+          "nextBefore": null,
+          "status": "idle",
+          "running": false,
+          "activeReply": null,
+          "error": null,
+          "failures": [],
+          "model": {
+            "providerId": "routergo",
+            "modelId": "deepseek-v4.1-flash"
+          },
+          "reactions": {},
+          "notifications": [
+            {
+              "id": "40c93290-fe08-4f4a-b4e1-cc101b0477cd",
+              "eventId": "40c93290-fe08-4f4a-b4e1-cc101b0477cd",
+              "taskId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "threadId": "1c1314ab-9059-44ef-acea-8e7c608c1198",
+              "createdAt": "2026-11-05T13:41:53.549Z",
+              "title": "读取文档三项事实",
+              "status": "waiting",
+              "attentionId": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+              "instructionRevision": 1,
+              "resultVersion": 0,
+              "seq": 1,
+              "readAt": null,
+              "type": "ticket.attention",
+              "threadRefs": [
+                "1c1314ab-9059-44ef-acea-8e7c608c1198"
+              ],
+              "text": "Q-user：最终展示采用列表还是短句？",
+              "ticketStatus": "open",
+              "currentInstructionRevision": 1,
+              "currentResultVersion": 0,
+              "continuationWait": null,
+              "currentResult": null,
+              "currentAttention": null,
+              "currentPauseReason": null,
+              "attention": {
+                "id": "ab82dd64-b8cf-4d08-8347-92662184a1ad",
+                "assignmentId": "desktop:49d93d630b5caa33af51b3989cfefb6b20b2a73907cc47e53cf5941a36e38a53",
+                "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+                "sessionId": "eec254d3-e7bd-4ca7-ac84-dc942f13bf3b",
+                "callId": "call-77b3d207-8e43-44a2-9754-7fd89e2edadf",
+                "question": {
+                  "id": "Q-user",
+                  "question": "Q-user：最终展示采用列表还是短句？"
+                },
+                "outboxId": "8f1904d7-9676-47df-8acc-6555d12ddd15",
+                "answerTriggerId": "66c38ce7-cd0a-4678-83b6-32ceca0cb941",
+                "state": "answered",
+                "createdAt": "2026-11-05T13:41:53.079Z",
+                "origin": "worker",
+                "instructionRevision": 1
+              }
+            },
+            {
+              "id": "e8dcd7a5-9108-4969-aafe-f7ed36d3d4d6",
+              "eventId": "e8dcd7a5-9108-4969-aafe-f7ed36d3d4d6",
+              "taskId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "ticketId": "b73353be-8e21-41f9-8e13-057ea32b20d3",
+              "threadId": "1c1314ab-9059-44ef-acea-8e7c608c1198",
+              "createdAt": "2026-11-05T13:41:55.610Z",
+              "title": "读取文档三项事实",
+              "status": "open",
+              "instructionRevision": 1,
+              "resultVersion": 0,
+              "seq": 2,
+              "readAt": null,
+              "type": "ticket.result",
+              "threadRefs": [
+                "1c1314ab-9059-44ef-acea-8e7c608c1198"
+              ],
+              "origin": "system",
+              "systemState": {
+                "state": "continuation_wait",
+                "code": "UNAVAILABLE",
+                "stage": "execution"
+              },
+              "text": "系统状态：任务续做暂不可用。执行记录已保留，正在等待恢复所需条件。",
+              "publication": {
+                "action": "deliver",
+                "text": "系统状态：任务续做暂不可用。执行记录已保留，正在等待恢复所需条件。",
+                "origin": "system",
+                "systemState": {
+                  "state": "continuation_wait",
+                  "code": "UNAVAILABLE",
+                  "stage": "execution"
+                }
+              },
+              "ticketStatus": "open",
+              "currentInstructionRevision": 1,
+              "currentResultVersion": 0,
+              "continuationWait": null,
+              "currentResult": null,
+              "currentAttention": null,
+              "currentPauseReason": null
+            }
+          ]
+        }
+      },
+      "finishedAt": "2026-11-05T13:52:30.806Z",
+      "elapsedMs": 720783
+    }
+  ],
+  "build": {
+    "pluginVersion": "0.1.0",
+    "files": [
+      {
+        "path": "plugins/benchgo/lib/modules/superagent/src/worker-attention.mjs",
+        "sha256": "d5e32b7b34537ebda8d76b22cdab330d9e34b7a27965d06b449b7121905d65ee"
+      },
+      {
+        "path": "plugins/benchgo/lib/modules/superagent/src/attention-store.mjs",
+        "sha256": "39fc4007a8cba517621c422b151886411c15713557c1300f3933884ff29ed43a"
+      },
+      {
+        "path": "plugins/benchgo/lib/modules/superagent/src/ticket-review.mjs",
+        "sha256": "ffbc79eea4532278def94273a5b4dcb5347b0aaeaa1c403b50e4ad4fd34bd582"
+      },
+      {
+        "path": "plugins/benchgo/lib/modules/superagent/src/auxiliary-request.mjs",
+        "sha256": "a3177c9ba5805b36da1e6951663db7ea92ba19701232abafafe268baf3a3a390"
+      },
+      {
+        "path": "plugins/benchgo/lib/modules/superagent/src/ticket-revisions.mjs",
+        "sha256": "445904dd1e977c2602c4042d17031de4679b267cea52f9ce7148729164e684e0"
+      },
+      {
+        "path": "plugins/benchgo/lib/modules/superagent/src/routing.mjs",
+        "sha256": "6049d0993c3e14ea8486a5aec98ac5febefd57ecacc3564e34eb16a5ca705a47"
+      }
+    ]
+  },
+  "loader": {
+    "pid": 5280,
+    "isolated": true,
+    "noOpen": true,
+    "origin": "http://127.0.0.1:60184"
+  },
+  "isolatedConfig": {
+    "models": [
+      {
+        "providerId": "routergo",
+        "modelId": "deepseek-v4.1-flash"
+      }
+    ],
+    "workerModels": [],
+    "auxiliary": null,
+    "revision": 1
+  },
+  "finishedAt": "2026-11-05T13:52:31.172Z",
+  "cleanup": {
+    "childStopped": true,
+    "isolatedDirectoryRemoved": true,
+    "mainConfigurationUnchanged": true
+  }
+}

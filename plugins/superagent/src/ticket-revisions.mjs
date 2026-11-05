@@ -4,7 +4,7 @@ const fail = (code, message) => Object.assign(new Error(message), { code });
 const terminal = new Set(['completed', 'failed', 'closed', 'cancelled']);
 
 /** Immutable authorization snapshots; the original Ticket Mandate is never overwritten. */
-export function installTicketRevisions({ db, tx, api }) {
+export function installTicketRevisions({ db, tx, api, insertTicket }) {
   db.exec(`CREATE TABLE IF NOT EXISTS sa_ticket_revisions(
     ticket_id TEXT NOT NULL REFERENCES sa_tickets(id), revision INTEGER NOT NULL,
     operation TEXT NOT NULL, snapshot TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -21,7 +21,7 @@ export function installTicketRevisions({ db, tx, api }) {
     },
     changeTicket(ticketId, input) { return tx(() => api.changeTicketInTransaction(ticketId, input)); },
     changeTicketInTransaction(ticketId, { operation, expectedInstructionRevision, target, acceptance, reason, requestKey, mandate, triggerId, model, validateMandate }) {
-      if (!['revise', 'reopen'].includes(operation) || !Number.isSafeInteger(expectedInstructionRevision) || expectedInstructionRevision < 1
+      if (!['revise', 'reopen', 'adjustment'].includes(operation) || !Number.isSafeInteger(expectedInstructionRevision) || expectedInstructionRevision < 1
         || typeof requestKey !== 'string' || !requestKey || requestKey.length > 1024
         || typeof target !== 'string' || !target.trim() || target.length > 100000
         || typeof acceptance !== 'string' || acceptance.length > 100000
@@ -31,18 +31,32 @@ export function installTicketRevisions({ db, tx, api }) {
         const previous = db.prepare('SELECT * FROM sa_ticket_revision_requests WHERE request_key=?').get(requestKey);
         if (previous) {
           if (previous.fingerprint !== fingerprint) throw fail('IDEMPOTENCY_CONFLICT', '请求标识已用于其他工单变更');
-          if (previous.ticket_id !== ticketId) throw fail('IDEMPOTENCY_CONFLICT', '请求标识属于其他工单');
-          return api.getTicket(ticketId);
+          return api.getTicket(previous.ticket_id);
         }
         const ticket = api.getTicket(ticketId);
         if (!ticket) throw fail('TICKET_NOT_FOUND', '工单不存在');
         if (ticket.instructionRevision !== expectedInstructionRevision) throw Object.assign(fail('INSTRUCTION_REVISION_CONFLICT', '工单要求已变化，请刷新后重试'), { revision: ticket.instructionRevision });
-        if (terminal.has(ticket.status) !== (operation === 'reopen')) throw fail('TICKET_STATE_CONFLICT', '已结束工单请重开，进行中的工单请修订');
+        const adjustment = terminal.has(ticket.status);
+        if (!adjustment && operation !== 'revise') throw fail('TICKET_STATE_CONFLICT', '进行中的工单请修订；关联调整只用于已结束工单');
         if (['pausing', 'cancelling'].includes(ticket.status) || api.assignments(ticketId).some(row => ['claimed', 'uncertain'].includes(row.state))) throw fail('EXECUTION_PENDING', '请先暂停或停止工单，确认执行结束后再变更');
         const trigger = api.getTrigger(triggerId);
         if (!trigger || trigger.actor.kind !== 'human' || trigger.actor.id !== mandate?.actorId
           || JSON.stringify(trigger.source) !== JSON.stringify(mandate.source) || trigger.content !== mandate.instruction
           || validateMandate(mandate) !== true) throw fail('MANDATE_REVOKED', '工单变更需要当前有效的主人原始授权');
+        const bound = db.prepare('SELECT ticket_id FROM sa_ticket_triggers WHERE trigger_id=? AND ticket_id<>? LIMIT 1').get(triggerId, ticketId);
+        if (bound) throw fail('TRIGGER_ALREADY_ASSIGNED', '当前指令已归属另一工单，请挂靠或使用新的调整指令');
+        if (adjustment) {
+          if (db.prepare('SELECT 1 FROM sa_ticket_triggers WHERE ticket_id=? AND trigger_id=?').get(ticketId, triggerId)) throw fail('TRIGGER_ALREADY_ASSIGNED', '关联调整需要新的用户指令');
+          const next = insertTicket({ threadId: trigger.threadId, target, acceptance,
+            title: `调整：${ticket.title}`, adjustmentOfTicketId: ticketId,
+            mandate: { ...mandate, adjustment: { ticketId, resultVersion: ticket.resultVersion, instructionRevision: ticket.instructionRevision, reason } }, sourceTriggerIds: [triggerId] });
+          const at = new Date().toISOString();
+          db.prepare('INSERT INTO sa_ticket_revisions VALUES (?,?,?,?,?)').run(next.id, 1, 'adjustment', JSON.stringify({ target, acceptance, mandate: next.mandate, reason, triggerId, adjustmentOfTicketId: ticketId }), at);
+          db.prepare("INSERT INTO sa_assignments(id,ticket_id,payload,state,priority,created_at,updated_at) VALUES (?,?,?,'queued',0,?,?)").run(randomUUID(), next.id,
+            JSON.stringify({ executor: 'harness', model, text: target, acceptance, instructionRevision: 1, adjustmentOfTicketId: ticketId, sourceResultVersion: ticket.resultVersion }), at, at);
+          db.prepare('INSERT INTO sa_ticket_revision_requests VALUES (?,?,?,?)').run(requestKey, fingerprint, next.id, 1);
+          return api.getTicket(next.id);
+        }
         const at = new Date().toISOString(), revision = ticket.instructionRevision + 1;
         const snapshot = row => JSON.stringify({ target: row.target, acceptance: row.acceptance, mandate: row.mandate });
         db.prepare('INSERT OR IGNORE INTO sa_ticket_revisions VALUES (?,?,?,?,?)').run(ticketId, ticket.instructionRevision, 'original', snapshot(ticket), ticket.updatedAt);

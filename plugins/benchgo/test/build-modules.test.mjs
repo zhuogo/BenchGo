@@ -23,6 +23,8 @@ test('module build preserves source and assets while excluding recovery files an
   await put('superagent/src/service.mjs', "import { value } from '../../benchgo/src/shared.mjs';\nexport { value };\n");
   await put('benchgo/src/shared.mjs', 'export const value = 1;');
   await put('superagent/shared/catalog.mjs', 'export default [];');
+  await put('superagent/prompts/builtin-layer.md', '# 内置层\n\nPublished runtime rules');
+  await put('superagent/src/prompt.mjs', "export const builtinLayer = new URL('../prompts/builtin-layer.md', import.meta.url);\n");
   await put('superagent/assets/pet/SOURCE.md', 'Preserved provenance');
   await put('voice/client/audio-worklet.js');
   await put('voice/locale/en.json', '{}');
@@ -34,9 +36,11 @@ test('module build preserves source and assets while excluding recovery files an
   const { buildModules } = await import(pathToFileURL(join(plugins, 'benchgo/scripts/build-modules.mjs')).href);
   await buildModules();
   const output = join(plugins, 'benchgo/lib/modules');
-  assert.deepEqual((await readdir(join(output, 'superagent/src'))).sort(), ['plugin.mjs', 'service.mjs']);
+  assert.deepEqual((await readdir(join(output, 'superagent/src'))).sort(), ['plugin.mjs', 'prompt.mjs', 'service.mjs']);
   assert.match(await readFile(join(output, 'superagent/src/service.mjs'), 'utf8'), /from '\.\.\/\.\.\/\.\.\/\.\.\/src\/shared\.mjs'/);
   assert.equal(await readFile(join(output, 'superagent/assets/pet/SOURCE.md'), 'utf8'), 'Preserved provenance');
+  const publishedPrompt = await import(pathToFileURL(join(output, 'superagent/src/prompt.mjs')).href);
+  assert.equal(await readFile(publishedPrompt.builtinLayer, 'utf8'), await readFile(join(plugins, 'superagent/prompts/builtin-layer.md'), 'utf8'));
   for (const file of backups) assert.equal(await readFile(join(plugins, 'superagent/src', file), 'utf8'), 'fixture');
   assert.equal(await readFile(join(plugins, 'superagent/src/recovery.bak/nested.mjs'), 'utf8'), 'fixture');
   assert.equal(await readFile(join(output, 'voice/client/audio-worklet.js'), 'utf8'), 'fixture');

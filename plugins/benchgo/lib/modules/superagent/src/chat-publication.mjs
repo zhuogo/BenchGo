@@ -52,8 +52,8 @@ export function projectChatMessages(events) {
       if (turn !== undefined && event.data?.turn === turn && event.data?.reason?.kind === 'completed'
         && request?.id && !explicit.has(request.id) && !published.has(request.id)
         && message?.source?.kind === 'model' && !message.content?.some(block => block.type === 'tool-call')) {
-        const text = textBlocks(message.content).map(block => block.text).join('\n').trim();
-        if (text) {
+        const text = textBlocks(message.content).map(block => block.text).join('\n');
+        if (text.trim()) {
           published.add(request.id);
           rows.push({ seq: event.seq, id: `reply:${request.id}`, role: 'assistant', kind: 'final', requestId: request.id,
             text, content: [{ type: 'text', text }], time: event.time, ...(publicUsage(lastAssistant.data.usage) ? { usage: publicUsage(lastAssistant.data.usage) } : {}) });
@@ -80,11 +80,11 @@ export function installChatPublication(scope, agent, { onPublish, appendRecord =
       if (!request?.id) throw fail('没有可回复的用户请求');
       const existing = events.find(event => event.type === chatPublicationType && event.data?.requestId === request.id);
       if (existing) {
-        if (existing.data.text !== text.trim()) throw fail('本次请求已发布正式回复；不能重复或改写已发送内容');
+        if (existing.data.text !== text) throw fail('本次请求已发布正式回复；不能重复或改写已发送内容');
         execution.concludeTurn();
         return { published: true, duplicate: true, requestId: request.id };
       }
-      appendRecord(agent.session, chatPublicationType, { kind: 'final', requestId: request.id, text: text.trim() });
+      appendRecord(agent.session, chatPublicationType, { kind: 'final', requestId: request.id, text });
       execution.concludeTurn();
       onPublish?.({ requestId: request.id });
       return { published: true, requestId: request.id };

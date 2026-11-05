@@ -21,7 +21,7 @@ test('internal review wait shows explicit automatic system state without a revie
   const h = harness({ ...row, results: [{ ...row.results[0], review: { verdict: 'wait', waitKind: 'review_wait', reason: '证据正在补充' } }] });
   h.render().find(n => n.type === 'TaskListRow').props.onOpen();
   const nodes = h.render();
-  assert(nodes.some(node => node.props.role === 'status' && node.props['aria-label'] === '系统状态'));
+  assert(nodes.some(node => node.props.ticket?.id === row.id && node.props.showQuestion === false));
   assert(nodes.some(node => node.children.includes('系统自动核验中')));
   assert(nodes.some(node => node.children.includes('证据正在补充')));
   assert(!nodes.some(node => node.type === 'button' && node.children.includes('重新验收')));
@@ -37,7 +37,7 @@ test('terminal, stale and non-review waiting tickets cannot offer review retry',
 test('resource wait resumes the original ticket with its result fence and exposes system errors', async () => {
   const h = harness({ ...row, results: [{ ...row.results[0], review: { verdict: 'wait', waitKind: 'continuation_wait' } }] }, '执行额度尚未恢复');
   h.render().find(n => n.type === 'TaskListRow').props.onOpen();
-  await h.render().find(node => node.type === 'button' && node.children.includes('恢复原单')).props.onClick();
+  await h.render().find(node => node.type === 'TaskListRow').props.actions.find(action => action.label === '恢复原单').onClick();
   assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [['ticketResume', { ticketId: 'ticket', expectedResultVersion: 3 }]]);
   assert(h.render().some(node => node.props.role === 'alert' && node.children.includes('执行额度尚未恢复')));
   assert(!h.render().some(node => node.children.some(value => typeof value === 'string' && value.includes('未重复调用模型'))));
@@ -50,21 +50,21 @@ test('answered blocked work adds only explicit execution time on the original re
   h.render().find(node => node.type === 'TaskListRow').props.onOpen();
   assert(h.render().some(node => node.children.includes('系统等待续做资源')));
   assert.equal(h.calls.length, 0, 'rendering never grants execution time');
-  await h.render().find(node => node.type === 'button' && node.children.includes('增加10分钟并继续')).props.onClick();
+  await h.render().find(node => node.type === 'TaskListRow').props.actions.find(action => action.label === '增加10分钟并继续').onClick();
   assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [['ticketResume', { ticketId: 'ticket', expectedResultVersion: 3, additionalExecutionMs: 600000 }]]);
 });
 
 test('Goal budget wait opens existing Goal settings and never grants execution or Goal quota', async () => {
   const h = harness({ ...row, continuationWait: { code: 'GOAL_BUDGET_EXHAUSTED', sourceResultVersion: 3 } });
   h.render().find(node => node.type === 'TaskListRow').props.onOpen();
-  await h.render().find(node => node.type === 'button' && node.children.includes('管理持续目标额度')).props.onClick();
+  await h.render().find(node => node.type === 'TaskListRow').props.actions.find(action => action.label === '管理持续目标额度').onClick();
   assert.deepEqual(h.calls, [['openGoals']]);
 });
 
 test('a recovery blocked by a higher-priority gate remains explicit rather than silently refreshing', async () => {
   const h = harness({ ...row, continuationWait: { code: 'NO_PROGRESS', sourceResultVersion: 3 } }, undefined, { queued: false, code: 'MANDATE_REVOKED' });
   h.render().find(node => node.type === 'TaskListRow').props.onOpen();
-  await h.render().find(node => node.type === 'button' && node.children.includes('恢复原单')).props.onClick();
+  await h.render().find(node => node.type === 'TaskListRow').props.actions.find(action => action.label === '恢复原单').onClick();
   assert(h.render().some(node => node.props.role === 'alert' && node.children.includes('系统状态：原工单暂未恢复（MANDATE_REVOKED）')));
 });
 
@@ -87,7 +87,7 @@ test('unknown or unverified external effects expose system verification state wi
     entry.props.onOpen();
     const nodes = h.render();
     assert(nodes.some(node => node.children.includes('待核实外部效果')));
-    assert(nodes.some(node => node.children.includes('系统等待安全条件')));
+    assert.equal(ticketState.ticketWaiting(ticket).label, '等待核实外部效果');
     assert(!nodes.some(node => node.type === 'button' && node.children.some(value => /恢复原单|增加10分钟/.test(value))));
     assert.equal(h.calls.length, 0);
   }

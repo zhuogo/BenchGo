@@ -4,6 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { resolve, relative, isAbsolute } from 'node:path';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { installWorkerPermissionGate } from './worker-permissions.mjs';
+import { installWorkerSubagents } from './worker-subagents.mjs';
 import { installWorkerVault } from './worker-vault.mjs';
 import { installSubscriptionInbox } from './subscription-inbox.mjs';
 import { continueWorkerContext } from './worker-context-continuation.mjs';
@@ -12,12 +13,13 @@ import { createContextRedactor } from './context-privacy.mjs';
 import { installProjectRules } from './project-rules.mjs';
 import { executionEvidence } from './execution-evidence.mjs';
 import { executionEffects } from './execution-effects.mjs';
-import { attentionAnswer, installWorkerAttention } from './worker-attention.mjs';
+import { attentionBatchAnswers, installWorkerAttention } from './worker-attention.mjs';
 import { captureArtifactCheckpoint, verifyArtifactCheckpoint } from './worker-artifact-checkpoint.mjs';
 import * as AskUserTool from '@deepseek-ai/dsh-tool-ask-user';
 import { installGoalBudgetUsage } from './goal-budget-usage.mjs';
 import { installGoalBudgetGate, isVerifiedPauseEnding, executionBudgetPause, EXECUTION_BUDGET_HOOK } from './goal-budget-gate.mjs';
-import { canFallback, orderedModels } from './routing.mjs';
+import { canFallback, roleModels } from './routing.mjs';
+import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native';
 
 /** Uses the host agent lifecycle and transcript; no separate model/tool loop. */
 export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readContext, readSourceContext, memory, checkpoints, executionTimeoutMs = 600_000, executionPauseGraceMs = 10_000, captureCheckpoint = captureArtifactCheckpoint }) {
@@ -46,6 +48,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
     const run = resumed || database.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence, sessionId, directory });
     const ownership = { owner: assignment.owner, fence: assignment.fence };
     let handle, settle, reject, environment, attention, waitingBudget, budgetGate, executionDeadlineAt, budgetDenialObserved = false, waitingPause = false, started = false;
+    let executionPhase = 'setup';
     environment = resumed?.environment;
     let timeout, pauseGraceTimer, failBudgetPause, remainingMs = Math.min(executionTimeoutMs, (resumed?.evidence?.remainingExecutionMs ?? executionTimeoutMs)
       + (assignment.reviewContinuation?.additionalExecutionMs || assignment.pauseContinuation?.additionalExecutionMs || 0)), resumedAt;
@@ -92,12 +95,25 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         waitingPause = true;
         pauseDeadline();
       } });
-      const models = orderedModels(assignment.model || policy.model, policy.models || policy.routingConfig?.models || []);
+      const models = roleModels(assignment.model, { models: policy.models || policy.routingConfig?.models || (policy.model ? [policy.model] : []), workerModels: policy.workerModels || policy.routingConfig?.workerModels }, 'worker');
       let modelIndex = 0;
+      let activeSelection;
       if (!models.length) throw new Error('Worker model is not configured');
       const presets = ctx.get?.('agentPresets');
       const preset = presets ? await presets.resolve(assignment.agentPreset) : undefined;
       const setup = async (scope, agent) => {
+        // The current Harness requires a model selection before pre-step
+        // admission. Worker routing still owns fallback selection in the
+        // request hook below, so seed only the first configured candidate.
+        if (!agent.model?.current?.() && models[0]) {
+          const initial = models[0];
+          agent.model?.select?.({ provider: initial.providerId, model: initial.modelId, ...(initial.options?.reasoningEffort === undefined ? {} : { reasoningEffort: initial.options.reasoningEffort }) });
+        }
+        scope.tools?.setExecutor?.(new NativeToolExecutor(scope));
+        scope.on('agent/pre-step', ({ modelSelection }, next) => {
+          activeSelection = modelSelection;
+          return next();
+        }, { prepend: true });
         installGoalBudgetUsage(scope, agent, { database, ticketId: ticket.id });
         if (resumed) {
           const events = agent.session.snapshotEvents(), saved = resumed.evidence;
@@ -128,7 +144,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         let context = await readContext?.(sessionId);
         if (['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'email', 'webhook', 'api'].includes(ticket.mandate.source?.channel) && scope.get?.('userQuestions')) await scope.plugin(AskUserTool, { mode: 'timed', timeout: 1 });
         attention = installWorkerAttention(scope, agent, { database, assignment, signal, pauseDeadline, resumeDeadline,
-          sessionProjections: ctx.get?.('sessionProjections') });
+          sessionProjections: ctx.get?.('sessionProjections'), llm: ctx.llm, readPolicy });
         const redactContext = createContextRedactor(agent, 'benchgo-worker-memory', memory);
         scope.systemPrompt.context?.({ name: 'benchgo-worker-memory', order: 100, interpolate: false, text: () => JSON.stringify(context || {}) });
         if (sourceReference) scope.systemPrompt.context?.({ name: 'benchgo-worker-source-reference', order: 101, interpolate: false, text: () => JSON.stringify(sourceReference) });
@@ -160,6 +176,11 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
             runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory, callId: execution.callId,
           }, dispatch) } : {}),
         });
+        installWorkerSubagents(scope, agent, { ctx, database, assignment, readPolicy, authorizeAction,
+          ...(checkpoints ? { withCheckpoint: (execution, dispatch) => checkpoints.protect({
+            runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory, callId: execution.callId,
+          }, dispatch) } : {}),
+        });
         installSubscriptionInbox(scope, agent, { database, assignment });
         installWorkerVault(scope, agent, { ctx, database, assignment, run, readPolicy, authorizeAction });
         scope.on('agent/request', async ({ signal: requestSignal }, next) => {
@@ -182,7 +203,9 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         scope.on('agent/request-error', async ({ failure, signal: requestSignal }, next) => {
           signal.throwIfAborted(); requestSignal.throwIfAborted();
           if (!canFallback(failure) || modelIndex + 1 >= models.length) return next();
-          modelIndex++;
+          const selected = models[++modelIndex];
+          agent.model?.select?.({ provider: selected.providerId, model: selected.modelId, ...(selected.options?.reasoningEffort === undefined ? {} : { reasoningEffort: selected.options.reasoningEffort }) });
+          if (activeSelection) Object.assign(activeSelection, { provider: selected.providerId, model: selected.modelId, ...(selected.options?.reasoningEffort === undefined ? {} : { reasoningEffort: selected.options.reasoningEffort }) });
           return { kind: 'retry' };
         });
         scope.on('agent/status', ({ status }) => {
@@ -191,6 +214,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         });
         scope.on('agent/error', ({ error }) => { if (budgetGate.owns(error)) budgetDenialObserved = true; else if (!executionDeadlineAt) reject(error); });
       };
+      executionPhase = resumed ? 'resume' : 'create';
       handle = resumed
         ? await ctx.agents.resume({ resumeSessionId: sessionId, signal, setup })
         : await ctx.agents.create({ sessionId, meta: { cwd: project?.path || directory, ...(preset ? { agentPreset: preset.id } : {}) }, setup });
@@ -198,6 +222,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       signal.throwIfAborted();
       // Persist submission intent before entering the host. A crash here is ambiguous,
       // so recovery inspects the official transcript instead of replaying the prompt.
+      executionPhase = 'submit';
       database.updateRun(run.id, { ...ownership, state: 'submitted' });
       resumeDeadline();
       if (assignment.reviewContinuation) {
@@ -211,16 +236,13 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       } else if (resumed?.evidence.waitingPause) {
         handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Resume the paused Ticket from the saved transcript. Continue only its original mandate; do not repeat completed actions.' }], source: { kind: 'benchgo-resume', ticketId: ticket.id, runId: run.id } }));
       } else if (resumed) {
-        const entries = database.attentions(ticket.id);
+        executionPhase = 'attention-answer';
         for (const callId of resumed.evidence.waitingAttention.callIds) {
-          const ids = resumed.evidence.waitingAttention.attentionIds;
-          const answers = entries.filter(entry => ids.includes(entry.id) && entry.callId === callId).map(entry => {
-            if (!entry.answerTriggerId) throw new Error('Attention answer is missing');
-            return attentionAnswer(database, entry);
-          });
+          const answers = attentionBatchAnswers(database, ticket.id, { sessionId: handle.agent.id, callId });
           if (!ctx.userQuestions.answer(handle.agent, callId, { answers })) throw new Error('Official continued question is unavailable');
         }
       } else handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: ticket.target }], source: { kind: 'user' } }));
+      executionPhase = 'completion';
       await completion;
       signal.throwIfAborted();
       await Promise.race([handle.agent.whenIdle?.(), budgetPauseFailure]);
@@ -245,6 +267,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       const waitingAttention = attention?.waiting();
       if (waitingAttention) pauseDeadline();
       await renew();
+      executionPhase = 'evidence';
       const log = await ctx.sessionQuery.readSession(sessionId);
       const { summary: text, finalSummary, transcript, toolEvidence } = executionEvidence(log);
       if (!waitingAttention && !waitingPause && !text.trim()) throw new Error('Worker stopped without a readable result');
@@ -261,6 +284,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       database.updateRun(run.id, { ...ownership, state: 'verifying', evidence: result });
       return result;
     } catch (error) {
+      try { if (error && typeof error === 'object') error.executionPhase = executionPhase; } catch { /* Preserve immutable host errors. */ }
       const current = database.runs(assignment.id).find(item => item.id === run.id);
       if (current && ['submitted', 'running', 'verifying'].includes(current.state)) {
         try { database.updateRun(run.id, { ...ownership, state: 'uncertain' }); } catch { /* Lease loss is handled by reconciliation. */ }

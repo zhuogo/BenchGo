@@ -1,0 +1,211 @@
+{
+  "scenario": {
+    "id": "attention-1",
+    "title": "阻塞问答一",
+    "attention": true,
+    "nonblocking": false,
+    "choice": "列表",
+    "status": "running",
+    "startedAt": "2026-11-05T12:57:17.086Z",
+    "timeline": [
+      {
+        "at": "2026-11-05T12:57:17.324Z",
+        "routerRunning": true
+      },
+      {
+        "at": "2026-11-05T12:57:28.215Z",
+        "routerRunning": true,
+        "ticketId": "a18a60c7-93b0-45ec-93bc-fc0497daaad5",
+        "status": "open",
+        "resultVersion": 0,
+        "assignments": [
+          {
+            "id": "desktop:b15cc8512976be7adca1c61c762503ff729f94a7988b5258c583b9f059d41b3f",
+            "state": "queued",
+            "fence": 0
+          }
+        ],
+        "attentions": [],
+        "attentionResolutions": []
+      },
+      {
+        "at": "2026-11-05T12:57:29.067Z",
+        "routerRunning": true,
+        "ticketId": "a18a60c7-93b0-45ec-93bc-fc0497daaad5",
+        "status": "open",
+        "resultVersion": 0,
+        "assignments": [
+          {
+            "id": "desktop:b15cc8512976be7adca1c61c762503ff729f94a7988b5258c583b9f059d41b3f",
+            "state": "claimed",
+            "fence": 1
+          }
+        ],
+        "attentions": [],
+        "attentionResolutions": []
+      },
+      {
+        "at": "2026-11-05T12:57:31.509Z",
+        "routerRunning": false,
+        "ticketId": "a18a60c7-93b0-45ec-93bc-fc0497daaad5",
+        "status": "open",
+        "resultVersion": 0,
+        "assignments": [
+          {
+            "id": "desktop:b15cc8512976be7adca1c61c762503ff729f94a7988b5258c583b9f059d41b3f",
+            "state": "claimed",
+            "fence": 1
+          }
+        ],
+        "attentions": [],
+        "attentionResolutions": []
+      }
+    ],
+    "userActions": [],
+    "threadId": "2506565e-a431-4671-983f-34c517c3e4ac",
+    "routerSessionId": "83e8415b-a624-4c00-9dbf-481e4fa57445",
+    "originalInstruction": "请派一个 Worker 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据文档在本聊天交付三条事实：Alpha、Beta和总计。使用简体中文，完整保留三项数字；无需联网，无需创建或修改任何文件。请将这些完整条件写入同一工单任务书，不增加阶段、数量或交付物。\n本任务还包含一次明确的协作路径验证，请先开单，由 Worker 读取文档后通过正式 ask_user_question 分别提出两个问题：\nQ-known：“交付语言使用简体中文还是英文？”——我已在本请求授权简体中文，总助手可根据原请求答复，无需再次问我。\nQ-user：“最终展示采用列表还是短句？”——请给出“列表”和“短句”两个选项。\nQ-user是阻塞最终排版的选择：我尚未选择，请先完成独立的三条事实读取，再把这个问题回传本聊天，我会按问题编号答复；不能替我选展示方式。收到真实答案后，用我的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。不要在开单前由总助手询问，也不要把待回答说明作为最终完成。",
+    "latest": {
+      "ticketId": "a18a60c7-93b0-45ec-93bc-fc0497daaad5",
+      "instructionRevision": 1,
+      "assignmentIds": [
+        "desktop:b15cc8512976be7adca1c61c762503ff729f94a7988b5258c583b9f059d41b3f"
+      ],
+      "resultVersion": 0,
+      "status": "open",
+      "reviews": []
+    }
+  },
+  "ticket": {
+    "id": "a18a60c7-93b0-45ec-93bc-fc0497daaad5",
+    "threadId": "desktop:83e8415b-a624-4c00-9dbf-481e4fa57445",
+    "title": "文档三事实",
+    "target": "任务书（单一工单，一次会话，不增设阶段）：\n1) 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，仅依据该文档内容，在本次聊天中向用户交付三条事实：Alpha、Beta、总计，完整保留三项数字，使用简体中文。\n2) 无需联网，无需创建或修改任何文件。不增加阶段、数量或交付物。\n3) 协作路径验证（同一工单、同一执行会话内完成）：读取文档后，通过正式 ask_user_question 提出以下两个问题：\n   Q-known：“交付语言使用简体中文还是英文？”——用户已在原请求中授权简体中文，Worker 可依据原请求自行答复，不必再次询问用户。\n   Q-user：“最终展示采用列表还是短句？”——必须提供“列表”和“短句”两个选项，不得替用户选择。\n4) Q-user 是阻塞最终排版的选择：用户尚未选择，因此先完成独立的三条事实读取，再把 Q-user 回传至本聊天，由用户按问题编号答复；不得把待回答说明当作最终完成。收到用户真实答复后，在同一个原工单、同一执行会话中按其选择的展示方式完成三条事实的最终交付。",
+    "acceptance": "仅依据 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md 交付三条事实：Alpha、Beta、总计，三项数字完整无误，简体中文；不联网、不创建或修改任何文件。Worker 读取文档后通过正式 ask_user_question 分别提出 Q-known 与 Q-user：Q-known 由 Worker 依据原请求授权（简体中文）自行答复；Q-user 提供“列表”和“短句”两个选项并回传本聊天等待用户真实选择，不得代替用户选择，也不得将待回答问题当作最终完成。收到用户答复后在同一原工单与同一执行会话内按所选展示方式完成交付。",
+    "instructionRevision": 1,
+    "adjustmentOfTicketId": null,
+    "liveSummary": {
+      "goal": "任务书（单一工单，一次会话，不增设阶段）：\n1) 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，仅依据该文档内容，在本次聊天中向用户交付三条事实：Alpha、Beta、总计，完整保留三项数字，使用简体中文。\n2) 无需联网，无需创建或修改任何文件。不增加阶段、数量或交付物。\n3) 协作路径验证（同一工单、同一执行会话内完成）：读取文档后，通过正式 ask_user_question 提出以下两个问题：\n   Q-known：“交付语言使用简体中文还是英文？”——用户已在原请求中授权简体中文，Worker 可依据原请求自行答复，不必再次询问用户。\n   Q-user：“最终展示采用列表还是短句？”——必须提供“列表”和“短句”两个选项，不得替用户选择。\n4) Q-user 是阻塞最终排版的选择：用户尚未选择，因此先完成独立的三条事实读取，再把 Q-user 回传至本聊天，由用户按问题编号答复；不得把待回答说明当作最终完成。收到用户真实答复后，在同一个原工单、同一执行会话中按其选择的展示方式完成三条事实的最终交付。",
+      "progress": "执行中",
+      "blocker": "",
+      "status": "open",
+      "updatedAt": "2026-11-05T12:57:27.971Z"
+    },
+    "status": "open",
+    "pauseReason": null,
+    "reviewRetry": null,
+    "continuationWait": null,
+    "mandate": {
+      "actorId": "desktop-owner",
+      "source": {
+        "channel": "desktop",
+        "sessionId": "83e8415b-a624-4c00-9dbf-481e4fa57445",
+        "messageId": "c293ca4d-1eb9-43a9-a05a-4f8df1ed0630",
+        "threadId": "2506565e-a431-4671-983f-34c517c3e4ac"
+      },
+      "instruction": "请派一个 Worker 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据文档在本聊天交付三条事实：Alpha、Beta和总计。使用简体中文，完整保留三项数字；无需联网，无需创建或修改任何文件。请将这些完整条件写入同一工单任务书，不增加阶段、数量或交付物。\n本任务还包含一次明确的协作路径验证，请先开单，由 Worker 读取文档后通过正式 ask_user_question 分别提出两个问题：\nQ-known：“交付语言使用简体中文还是英文？”——我已在本请求授权简体中文，总助手可根据原请求答复，无需再次问我。\nQ-user：“最终展示采用列表还是短句？”——请给出“列表”和“短句”两个选项。\nQ-user是阻塞最终排版的选择：我尚未选择，请先完成独立的三条事实读取，再把这个问题回传本聊天，我会按问题编号答复；不能替我选展示方式。收到真实答案后，用我的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。不要在开单前由总助手询问，也不要把待回答说明作为最终完成。",
+      "policyVersion": "5ed644bff03fac209e8817edf5e804f930ab8c97a97ca66152747110c1edeabd",
+      "target": "任务书（单一工单，一次会话，不增设阶段）：\n1) 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，仅依据该文档内容，在本次聊天中向用户交付三条事实：Alpha、Beta、总计，完整保留三项数字，使用简体中文。\n2) 无需联网，无需创建或修改任何文件。不增加阶段、数量或交付物。\n3) 协作路径验证（同一工单、同一执行会话内完成）：读取文档后，通过正式 ask_user_question 提出以下两个问题：\n   Q-known：“交付语言使用简体中文还是英文？”——用户已在原请求中授权简体中文，Worker 可依据原请求自行答复，不必再次询问用户。\n   Q-user：“最终展示采用列表还是短句？”——必须提供“列表”和“短句”两个选项，不得替用户选择。\n4) Q-user 是阻塞最终排版的选择：用户尚未选择，因此先完成独立的三条事实读取，再把 Q-user 回传至本聊天，由用户按问题编号答复；不得把待回答说明当作最终完成。收到用户真实答复后，在同一个原工单、同一执行会话中按其选择的展示方式完成三条事实的最终交付。",
+      "acceptance": "仅依据 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md 交付三条事实：Alpha、Beta、总计，三项数字完整无误，简体中文；不联网、不创建或修改任何文件。Worker 读取文档后通过正式 ask_user_question 分别提出 Q-known 与 Q-user：Q-known 由 Worker 依据原请求授权（简体中文）自行答复；Q-user 提供“列表”和“短句”两个选项并回传本聊天等待用户真实选择，不得代替用户选择，也不得将待回答问题当作最终完成。收到用户答复后在同一原工单与同一执行会话内按所选展示方式完成交付。",
+      "admission": "desktop-approved-delegation",
+      "controlledActions": "require-current-policy-and-harness-approval"
+    },
+    "createdByDecision": "91fd18d3-4758-4c95-a199-75904f339933",
+    "createdAt": "2026-11-05T12:57:27.971Z",
+    "updatedAt": "2026-11-05T12:57:27.971Z",
+    "resultVersion": 0,
+    "revisions": [],
+    "assignments": [
+      {
+        "id": "desktop:b15cc8512976be7adca1c61c762503ff729f94a7988b5258c583b9f059d41b3f",
+        "ticketId": "a18a60c7-93b0-45ec-93bc-fc0497daaad5",
+        "executor": "harness",
+        "text": "任务书（单一工单，一次会话，不增设阶段）：\n1) 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，仅依据该文档内容，在本次聊天中向用户交付三条事实：Alpha、Beta、总计，完整保留三项数字，使用简体中文。\n2) 无需联网，无需创建或修改任何文件。不增加阶段、数量或交付物。\n3) 协作路径验证（同一工单、同一执行会话内完成）：读取文档后，通过正式 ask_user_question 提出以下两个问题：\n   Q-known：“交付语言使用简体中文还是英文？”——用户已在原请求中授权简体中文，Worker 可依据原请求自行答复，不必再次询问用户。\n   Q-user：“最终展示采用列表还是短句？”——必须提供“列表”和“短句”两个选项，不得替用户选择。\n4) Q-user 是阻塞最终排版的选择：用户尚未选择，因此先完成独立的三条事实读取，再把 Q-user 回传至本聊天，由用户按问题编号答复；不得把待回答说明当作最终完成。收到用户真实答复后，在同一个原工单、同一执行会话中按其选择的展示方式完成三条事实的最终交付。",
+        "acceptance": "仅依据 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md 交付三条事实：Alpha、Beta、总计，三项数字完整无误，简体中文；不联网、不创建或修改任何文件。Worker 读取文档后通过正式 ask_user_question 分别提出 Q-known 与 Q-user：Q-known 由 Worker 依据原请求授权（简体中文）自行答复；Q-user 提供“列表”和“短句”两个选项并回传本聊天等待用户真实选择，不得代替用户选择，也不得将待回答问题当作最终完成。收到用户答复后在同一原工单与同一执行会话内按所选展示方式完成交付。",
+        "instructionRevision": 1,
+        "state": "claimed",
+        "priority": 0,
+        "owner": "assignment-worker-d2a29c56-ecbd-497e-99ea-d1f9319348b9",
+        "leaseUntil": 1793883508974,
+        "fence": 1,
+        "attempts": 1,
+        "createdAt": "2026-11-05T12:57:27.969Z",
+        "updatedAt": "2026-11-05T12:57:28.974Z"
+      }
+    ],
+    "attentions": [],
+    "attentionResolutions": [],
+    "results": [],
+    "deliveries": [],
+    "taskMeta": {
+      "version": 0
+    },
+    "taskCanOrganize": false
+  },
+  "history": {
+    "threadId": "2506565e-a431-4671-983f-34c517c3e4ac",
+    "sessionId": "83e8415b-a624-4c00-9dbf-481e4fa57445",
+    "messages": [
+      {
+        "seq": 9,
+        "id": "c293ca4d-1eb9-43a9-a05a-4f8df1ed0630",
+        "role": "user",
+        "rpcId": "EVENING_attention-1_61f811fe-51d3-4c13-97f1-6fdd5c53c7b3",
+        "text": "请派一个 Worker 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据文档在本聊天交付三条事实：Alpha、Beta和总计。使用简体中文，完整保留三项数字；无需联网，无需创建或修改任何文件。请将这些完整条件写入同一工单任务书，不增加阶段、数量或交付物。\n本任务还包含一次明确的协作路径验证，请先开单，由 Worker 读取文档后通过正式 ask_user_question 分别提出两个问题：\nQ-known：“交付语言使用简体中文还是英文？”——我已在本请求授权简体中文，总助手可根据原请求答复，无需再次问我。\nQ-user：“最终展示采用列表还是短句？”——请给出“列表”和“短句”两个选项。\nQ-user是阻塞最终排版的选择：我尚未选择，请先完成独立的三条事实读取，再把这个问题回传本聊天，我会按问题编号答复；不能替我选展示方式。收到真实答案后，用我的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。不要在开单前由总助手询问，也不要把待回答说明作为最终完成。",
+        "content": [
+          {
+            "type": "text",
+            "text": "请派一个 Worker 读取本地文档 E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md，只根据文档在本聊天交付三条事实：Alpha、Beta和总计。使用简体中文，完整保留三项数字；无需联网，无需创建或修改任何文件。请将这些完整条件写入同一工单任务书，不增加阶段、数量或交付物。\n本任务还包含一次明确的协作路径验证，请先开单，由 Worker 读取文档后通过正式 ask_user_question 分别提出两个问题：\nQ-known：“交付语言使用简体中文还是英文？”——我已在本请求授权简体中文，总助手可根据原请求答复，无需再次问我。\nQ-user：“最终展示采用列表还是短句？”——请给出“列表”和“短句”两个选项。\nQ-user是阻塞最终排版的选择：我尚未选择，请先完成独立的三条事实读取，再把这个问题回传本聊天，我会按问题编号答复；不能替我选展示方式。收到真实答案后，用我的展示方式完成三条事实交付。\n全过程保持原工单和原执行会话。不要在开单前由总助手询问，也不要把待回答说明作为最终完成。"
+          }
+        ],
+        "time": 1793883437429
+      },
+      {
+        "seq": 29,
+        "id": "reply:c293ca4d-1eb9-43a9-a05a-4f8df1ed0630",
+        "role": "assistant",
+        "kind": "final",
+        "requestId": "c293ca4d-1eb9-43a9-a05a-4f8df1ed0630",
+        "text": "工单已开好，编号「文档三事实」。你提出的全部条件都已写入任务书，没有增加阶段、数量或交付物：读取 `E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md`，仅依据该文档以简体中文交付 Alpha、Beta、总计三项事实且数字完整保留；无需联网，不创建或修改任何文件。Worker 读取文档后会通过正式提问通道处理 Q-known（我按你的原请求代为答复“简体中文”），然后把 Q-user 的“列表”或“短句”作为待选问题带回本聊天，等你按问题编号答复后再按你选的方式交付。全过程都留在同一工单和同一执行会话里。",
+        "content": [
+          {
+            "type": "text",
+            "text": "工单已开好，编号「文档三事实」。你提出的全部条件都已写入任务书，没有增加阶段、数量或交付物：读取 `E:\\BenchGo\\eval\\superagent-evening-20261105\\fixture.md`，仅依据该文档以简体中文交付 Alpha、Beta、总计三项事实且数字完整保留；无需联网，不创建或修改任何文件。Worker 读取文档后会通过正式提问通道处理 Q-known（我按你的原请求代为答复“简体中文”），然后把 Q-user 的“列表”或“短句”作为待选问题带回本聊天，等你按问题编号答复后再按你选的方式交付。全过程都留在同一工单和同一执行会话里。"
+          }
+        ],
+        "time": 1793883451142,
+        "usage": {
+          "inputTokens": 1819,
+          "outputTokens": 153,
+          "totalTokens": 13620,
+          "cacheReadTokens": 11648
+        }
+      }
+    ],
+    "requests": [
+      {
+        "threadId": "2506565e-a431-4671-983f-34c517c3e4ac",
+        "sessionId": "83e8415b-a624-4c00-9dbf-481e4fa57445",
+        "requestId": "EVENING_attention-1_61f811fe-51d3-4c13-97f1-6fdd5c53c7b3",
+        "messageId": "c293ca4d-1eb9-43a9-a05a-4f8df1ed0630",
+        "status": "processed",
+        "createdAt": "2026-11-05T12:57:17.243Z",
+        "updatedAt": "2026-11-05T12:57:31.159Z"
+      }
+    ],
+    "images": [],
+    "hasMore": false,
+    "nextBefore": null,
+    "status": "idle",
+    "running": false,
+    "activeReply": null,
+    "error": null,
+    "failures": [],
+    "model": {
+      "providerId": "routergo",
+      "modelId": "deepseek-v4.1-flash"
+    },
+    "reactions": {},
+    "notifications": []
+  }
+}

@@ -63,6 +63,9 @@ test('verified receipt and authoritative readback settle Run, Result and Outbox 
   assert.equal(f.db.deliveries(reserved.ticket.id).length, 1);
   const outgoing = f.db.deliveries(reserved.ticket.id)[0];
   assert.equal(outgoing.payload.publication.action, 'deliver');
+  assert.equal(outgoing.payload.publication.origin, 'system');
+  assert.equal(outgoing.payload.publication.systemState.state, 'action_verified');
+  assert.match(outgoing.payload.text, /^系统状态：/);
   assert.equal(outgoing.payload.text, outgoing.payload.publication.text);
   assert.notEqual(outgoing.payload.text, '设置已更新并核实');
   assert.equal(outgoing.payload.instructionRevision, reserved.ticket.instructionRevision);

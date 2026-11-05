@@ -102,7 +102,7 @@ test('Ticket admission atomically binds budgets and rolls back an invalid bindin
   const source = { channel: 'desktop', sessionId: 'owner', messageId: 'message' };
   const { trigger } = api.ingest({ dedupeKey: 'message', thread: { source: { type: 'desktop', id: 'owner' } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: 'work', mode: 'direct' });
   const input = { triggerId: trigger.id, requestKey: 'request', fingerprint: 'fingerprint', target: 'work', model: { providerId: 'provider', modelId: 'opaque' },
-    mandate: { source, actorId: 'desktop-owner', policyVersion: 'version', admission: 'desktop-approved-delegation' } };
+    mandate: { source, actorId: 'desktop-owner', instruction: 'work', policyVersion: 'version', admission: 'desktop-approved-delegation' } };
   assert.throws(() => api.acceptDesktop({ ...input, budgetGoalId: 'missing' }), /missing/);
   assert.equal(api.listTickets().length, 0);
   assert.equal(api.desktopRequest(input.requestKey), undefined);
