@@ -45,3 +45,9 @@
 定向验证 4/4 通过：同进程续做、重启续做、工件篡改拒绝及失败阶段白名单。两种正常续做均保持原 Run/session，且先前工具效果不重放；未复现真实失败，根因仍未知。
 
 补充桌面官方宿主无网络夹具 2/2：先执行模拟读取并保存真实动作检查点，分别只提出 Q-user、以及先提出自答 Q-known 再提出 Q-user；保存桌面用户答复后以 fence 1→2 恢复同一 Run/session，检查点完整、读取不重放、答案进入下一次请求。attempt-3 快照只保存 Q-user resolution，不能证明 Q-known 实际调用；模拟读取和固定模型输出也不能还原已清理的真实 transcript，现场故障仍未复现。
+
+### 2026-11-06 真实诊断重试
+
+为确认真实续跑前的分流是否稳定，使用固定 Mandate、固定 `routergo/deepseek-v4.1-flash`、全流式请求各运行一次诊断（`attention-1-diagnosis-20261106b`、`attention-1-diagnosis-20261106c`）。两次都在续跑前停止：supplier 请求出现 `finishKind=error`，Router triage 到达 45 秒边界后按设计返回 `systemState=timeout`，Q-known 与 Q-user 均 route=user；`cases.mjs:89` 因已授权 Q-known 未 self 直接终止。两次现场都保留 `isolated-state/`，主配置哈希未变，未产生答复后 Worker 请求，故没有新的 B/C/D 续跑阶段证据。
+
+这两次结果证明当前真实供应商在本轮诊断中先卡在 Attention triage 可用性，不能把它归因于续跑恢复层，也不能把系统兜底路径当成真实三连通过。按同一阻点两次无新证据即停止的规则，本轮不再重放；Attention 三连仍未开始计数，根因暂未定位。
