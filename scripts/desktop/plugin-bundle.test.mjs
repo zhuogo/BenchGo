@@ -15,6 +15,25 @@ function fixture(t) {
   return { root, put };
 }
 
+test('the bundled desktop entry loads shared helpers from packaged resources after relocation', t => {
+  const { root, put } = fixture(t);
+  const entry = join(root, 'resources/app.asar/lib/main.mjs');
+  put('resources/app.asar/lib/main.mjs', readFileSync(new URL('./plugin-bundle.mjs', import.meta.url), 'utf8'));
+  for (const name of ['plugin-install.mjs', 'update-feed.mjs']) {
+    put(`resources/benchgo/shared/${name}`, readFileSync(new URL(`../../plugins/benchgo/shared/${name}`, import.meta.url), 'utf8'));
+  }
+  const code = `
+    import { pathToFileURL } from 'node:url';
+    process.resourcesPath = process.argv[1];
+    const entry = await import(pathToFileURL(process.argv[2]).href);
+    if (typeof entry.initializePluginProfile !== 'function') throw new Error('Packaged enrollment entry is missing');
+    console.log('packaged helpers loaded');
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', code, join(root, 'resources'), entry], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(result.stdout.trim(), 'packaged helpers loaded');
+});
+
 test('published plugin payload excludes development/private files and contains its required dependency closure', t => {
   const { root, put } = fixture(t);
   const manifest = { name: 'benchgo-plugin', version: '0.1.0', type: 'module', files: ['src', 'lib', 'cordis.patch.yml', 'assets/icon.svg'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { 'fixture-required': '1.0.0' }, devDependencies: { 'fixture-dev': '1.0.0' }, optionalDependencies: { 'fixture-linux': '1.0.0' } };
@@ -82,6 +101,7 @@ test('official profile loader resolves the preinstalled Plus bundle and respects
   mkdirSync(join(modules, '@deepseek-ai'), { recursive: true });
   for (const [name, source] of [
     ['dsh-app-boot', 'packages/boot/app-boot'], ['dsh-home-paths', 'packages/util/home-paths'],
+    ['dsh-official-bundles', 'packages/util/official-bundles'],
     ['dsh', 'apps/cli'],
     ['dsh-base', 'packages/bundle/base'], ['dsh-web-app', 'packages/bundle/web-app'],
   ]) symlinkSync(join(officialRoot, source), join(modules, '@deepseek-ai', name), 'junction');
@@ -134,6 +154,7 @@ function enrollmentFixture(t) {
   const modules = join(root, 'runtime/node_modules/@deepseek-ai'); mkdirSync(modules, { recursive: true });
   symlinkSync(join(officialRoot, 'packages/boot/app-boot'), join(modules, 'dsh-app-boot'), 'junction');
   symlinkSync(join(officialRoot, 'packages/util/home-paths'), join(modules, 'dsh-home-paths'), 'junction');
+  symlinkSync(join(officialRoot, 'packages/util/official-bundles'), join(modules, 'dsh-official-bundles'), 'junction');
   seedFixture(put, 'seed');
   return { root, put, options: { runtime: join(root, 'runtime'), seed: join(root, 'seed'), profile: join(root, 'profile') } };
 }
@@ -284,6 +305,40 @@ test('old sealed runtime cannot claim to support overriding its in-box Plus pack
   await assert.rejects(initializePluginProfile(options), /新版桌面应用/);
 });
 
+test('a new plugin version migrates the profile when an official shared package changes', enrollmentOptions, async t => {
+  const { root, put, options } = enrollmentFixture(t);
+  const oldCordis = { name: '@deepseek-ai/cordis', version: '4.0.5-alpha.2' };
+  const newCordis = { name: '@deepseek-ai/cordis', version: '4.1.0' };
+  put('runtime/node_modules/@deepseek-ai/cordis/package.json', oldCordis);
+  seedFixture(put, 'old-seed', '0.1.0');
+  put('old-seed/release.json', { schemaVersion: 1, version: '0.1.0', platform: process.platform, arch: process.arch, shared: [oldCordis] });
+
+  const previous = await initializePluginProfile({ ...options, seed: join(root, 'old-seed') });
+  const manifestPath = join(options.profile, 'package.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.dependencies['kept-plugin'] = '1.2.3';
+  manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(name => name !== previous.bundleName);
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+
+  const modules = join(root, 'runtime-next/node_modules/@deepseek-ai');
+  mkdirSync(modules, { recursive: true });
+  for (const [name, source] of [
+    ['dsh-app-boot', 'packages/boot/app-boot'], ['dsh-home-paths', 'packages/util/home-paths'],
+    ['dsh-official-bundles', 'packages/util/official-bundles'],
+  ]) symlinkSync(join(officialRoot, source), join(modules, name), 'junction');
+  put('runtime-next/node_modules/@deepseek-ai/cordis/package.json', newCordis);
+  seedFixture(put, 'next-seed', '0.1.1');
+  put('next-seed/release.json', { schemaVersion: 1, version: '0.1.1', platform: process.platform, arch: process.arch, shared: [newCordis] });
+
+  const current = await initializePluginProfile({ ...options, seed: join(root, 'next-seed'), runtime: join(root, 'runtime-next') });
+  assert.equal(current.version, '0.1.1');
+  assert.equal(current.enabled, false);
+  assert.equal(current.previous.version, '0.1.0');
+  assert.equal(JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies['kept-plugin'], '1.2.3');
+  assert.equal(existsSync(join(options.profile, '.benchgo/releases/0.1.0/release.json')), true);
+  assert.equal(JSON.parse(readFileSync(join(current.directory, 'node_modules/@deepseek-ai/cordis/package.json'))).version, newCordis.version);
+});
+
 test('reinstall refreshes app version and moved shared-runtime links without downgrading or enabling a disabled plugin', enrollmentOptions, async t => {
   const { root, put, options } = enrollmentFixture(t);
   const service = { name: '@deepseek-ai/dsh-llm', version: '0.2.1-alpha.3' };
@@ -299,6 +354,7 @@ test('reinstall refreshes app version and moved shared-runtime links without dow
   mkdirSync(moved, { recursive: true });
   symlinkSync(join(officialRoot, 'packages/boot/app-boot'), join(moved, 'dsh-app-boot'), 'junction');
   symlinkSync(join(officialRoot, 'packages/util/home-paths'), join(moved, 'dsh-home-paths'), 'junction');
+  symlinkSync(join(officialRoot, 'packages/util/official-bundles'), join(moved, 'dsh-official-bundles'), 'junction');
   put('moved-runtime/node_modules/@deepseek-ai/dsh-llm/package.json', service);
   rmSync(join(root, 'runtime/node_modules/@deepseek-ai/dsh-llm'), { recursive: true });
   const result = await initializePluginProfile({ ...options, runtime: join(root, 'moved-runtime') });

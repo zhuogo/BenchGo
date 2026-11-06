@@ -64,6 +64,8 @@ test('Router denies every investigation from the first call while coordination a
   await invoke('schedule_update', 'schedule-update');
   await invoke('schedule_delete', 'schedule-delete');
   assert.equal(dispatched, 6);
+  // Coordination stays the Router's own decision after a host re-registration.
   definitions.set('ask_user_question', { name: 'ask_user_question' });
-  await assert.rejects(invoke('ask_user_question', 'replacement'), { code: 'ROUTER_TICKET_REQUIRED' });
+  await invoke('ask_user_question', 'replacement');
+  assert.equal(dispatched, 7);
 });

@@ -1,11 +1,25 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { syncDevelopmentPlugin } from './sync-dev-plugin.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const app = join(root, 'artifacts/windows/win-unpacked');
+const artifacts = join(root, 'artifacts');
+const defaultApp = join(artifacts, 'windows/win-unpacked');
+const configuredApp = process.env.BENCHGO_DEV_APP_DIR;
+const app = configuredApp
+  ? resolve(root, configuredApp)
+  : existsSync(join(defaultApp, 'BenchGo.exe'))
+    ? defaultApp
+    : existsSync(artifacts)
+      ? readdirSync(artifacts, { withFileTypes: true })
+        .filter(entry => entry.isDirectory() && /^windows(?:-|$)/i.test(entry.name))
+        .map(entry => join(artifacts, entry.name, 'win-unpacked'))
+        .filter(directory => existsSync(join(directory, 'BenchGo.exe')))
+        .sort((left, right) => statSync(join(right, 'BenchGo.exe')).mtimeMs - statSync(join(left, 'BenchGo.exe')).mtimeMs)[0]
+        ?? defaultApp
+      : defaultApp;
 const executable = join(app, 'BenchGo.exe');
 const resources = join(app, 'resources');
 

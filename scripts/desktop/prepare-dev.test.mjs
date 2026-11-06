@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 
@@ -11,15 +11,23 @@ const source = (await readFile(scriptUrl, 'utf8'))
   .replace(/^import .*;\r?\n/gm, '')
   .replaceAll('import.meta.url', JSON.stringify(scriptUrl.href));
 
-async function launch({ enrollmentCode = 0, output = '{"managed":true,"directory":"managed-release"}', syncError } = {}) {
+async function launch({ enrollmentCode = 0, output = '{"managed":true,"directory":"managed-release"}', syncError, appDirectory, discoverBuilds } = {}) {
   const children = [];
   const events = [];
   let forwarded = '';
   let complete;
   const finished = runInNewContext(`(async () => { ${source} })()`, {
-    URL, join, fileURLToPath,
-    existsSync: () => true,
-    process: { env: { BENCHGO_TEST_ENV: 'preserved' }, stdout: { write: chunk => { forwarded += chunk; } } },
+    URL, join, resolve, fileURLToPath,
+    existsSync: path => discoverBuilds
+      ? path.endsWith('artifacts')
+        ? true
+        : path.endsWith('artifacts/windows/win-unpacked/BenchGo.exe')
+        ? false
+        : path.endsWith('BenchGo.exe') && /windows-(?:fix|alt)/.test(path)
+      : true,
+    readdirSync: () => discoverBuilds ? [{ name: 'windows-alt', isDirectory: () => true }, { name: 'windows-fix', isDirectory: () => true }] : [],
+    statSync: path => ({ mtimeMs: path.includes('windows-fix') ? 20 : 10 }),
+    process: { env: { BENCHGO_TEST_ENV: 'preserved', BENCHGO_DEV_APP_DIR: appDirectory }, stdout: { write: chunk => { forwarded += chunk; } } },
     console: { log() {} },
     async syncDevelopmentPlugin({ root, enrollment }) {
       events.push('sync');
@@ -63,6 +71,25 @@ test('desktop detaches from launcher terminal streams after plugin enrollment', 
   assert.equal(children[1].child.unreferenced, true);
   assert.deepEqual(events, ['sync', 'launch']);
   assert.equal(forwarded, '{"managed":true,"directory":"managed-release"}');
+});
+
+test('development launcher can select another unpacked BenchGo build', async () => {
+  const appDirectory = join(fileURLToPath(new URL('../../', scriptUrl)), 'artifacts/windows-fix/win-unpacked');
+  const { children, finished } = await launch({ appDirectory });
+  await finished;
+  assert.equal(children[0].executable, join(appDirectory, 'BenchGo.exe'));
+  assert.ok(children[0].args.includes(join(appDirectory, 'resources')));
+  assert.equal(children[1].executable, join(appDirectory, 'BenchGo.exe'));
+});
+
+test('development launcher finds the newest Windows build when the default directory is empty', async () => {
+  const root = fileURLToPath(new URL('../../', scriptUrl));
+  const appDirectory = join(root, 'artifacts/windows-fix/win-unpacked');
+  const { children, finished } = await launch({ discoverBuilds: true });
+  await finished;
+  assert.equal(children[0].executable, join(appDirectory, 'BenchGo.exe'));
+  assert.ok(children[0].args.includes(join(appDirectory, 'resources')));
+  assert.equal(children[1].executable, join(appDirectory, 'BenchGo.exe'));
 });
 
 test('failed plugin enrollment prevents the desktop from opening', async () => {

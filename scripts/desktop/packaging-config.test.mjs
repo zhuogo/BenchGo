@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import config, { verifyPackagedPluginSeed } from './electron-builder.config.mjs';
+import { desktopUpdateChannel } from '../../deepseek-harness/apps/desktop/src/update-channel.ts';
 
 test('external seed explicitly includes root node_modules with the official packaging convention', () => {
   const seed = config.extraResources.find(item => item.to === 'benchgo/seed');
@@ -55,7 +56,8 @@ test('BenchGo display naming preserves installed application identity and update
   assert.equal(config.nsis.uninstallDisplayName, 'BenchGo ${version}');
   assert.equal(config.appId, 'cn.draftgo.benchgo');
   assert.equal(config.extraMetadata.name, 'benchgo-desktop');
-  assert.equal(config.extraMetadata.dshDesktopUpdateChannel, 'latest');
+  assert.equal(config.extraMetadata.dshDesktopUpdateChannel, 'stable');
+  assert.equal(desktopUpdateChannel(config.extraMetadata), 'stable');
   assert.deepEqual(config.protocols[0].schemes, ['dsh']);
   assert.match(config.publish[0].url, /releases\/download\/app-updates\/$/);
 });

@@ -5,9 +5,16 @@ import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-const helperBase = existsSync(fileURLToPath(new URL('./shared/plugin-install.mjs', import.meta.url))) ? './shared/' : '../../plugins/benchgo/shared/';
-const { activateRelease, getInstallState, prepareRelease, releaseBundleName } = await import(new URL(`${helperBase}plugin-install.mjs`, import.meta.url));
-const { compareVersions } = await import(new URL(`${helperBase}update-feed.mjs`, import.meta.url));
+const localShared = fileURLToPath(new URL('./shared', import.meta.url));
+const packagedShared = typeof process.resourcesPath === 'string' ? join(process.resourcesPath, 'benchgo', 'shared') : undefined;
+const helperRoot = existsSync(join(localShared, 'plugin-install.mjs'))
+  ? localShared
+  : packagedShared && existsSync(join(packagedShared, 'plugin-install.mjs'))
+    ? packagedShared
+    : resolve(import.meta.dirname, '../../plugins/benchgo/shared');
+const importShared = name => import(pathToFileURL(join(helperRoot, name)).href);
+const { activateRelease, getInstallState, prepareRelease, releaseBundleName } = await importShared('plugin-install.mjs');
+const { compareVersions } = await importShared('update-feed.mjs');
 
 const PLUS = 'benchgo-plugin';
 const LEGACY_PLUS = '@dowork/commander';
@@ -165,7 +172,10 @@ export async function initializePluginProfile({ runtime, resources, profile, see
       const state = await activateRelease({ profile, release: refreshed, appVersion: seedMetadata.version, migrateLegacy: true });
       return { profile, enrolled: false, reason: 'already-enrolled', ...state };
     }
-    if (!existsSync(manifestPath)) boot.initProfile(profile, boot.PROFILE_TEMPLATES.web.bundles);
+    if (!existsSync(manifestPath)) {
+      const { PROFILE_TEMPLATES } = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-official-bundles/lib/index.js')).href);
+      boot.initProfile(profile, PROFILE_TEMPLATES.web.bundles);
+    }
     const manifest = readJson(manifestPath);
     const bundles = manifest.dsh?.profile?.bundles;
     if (!Array.isArray(bundles) || !bundles.every(name => typeof name === 'string')) throw new Error('BenchGo: invalid desktop profile bundles; existing configuration was preserved');

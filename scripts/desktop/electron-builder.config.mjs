@@ -19,7 +19,7 @@ const config = createElectronBuilderConfig({
 delete config.extraMetadata.dshMandatoryUpdatePolicy;
 config.extraMetadata.name = 'benchgo-desktop';
 config.extraMetadata.version = version;
-config.extraMetadata.dshDesktopUpdateChannel = 'latest';
+config.extraMetadata.dshDesktopUpdateChannel = 'stable';
 config.extraMetadata.description = 'DeepSeek Harness with BenchGo, Voice and Link';
 config.productName = 'BenchGo';
 config.executableName = 'BenchGo';
