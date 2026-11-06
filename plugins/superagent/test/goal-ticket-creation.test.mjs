@@ -22,10 +22,9 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
   };
   let scheduler = createAssistantScheduler({ store, database: runtimeDatabase });
   t.after(async () => { await scheduler.dispose(); runtimeDatabase.close(); database.close(); await rm(directory, { recursive: true, force: true }); });
-  const ownerAgent = { id: 'owner', status: 'running', session: { snapshotEvents: () => [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'original', source: { kind: 'user' }, content: [{ type: 'text', text: 'complete work' }] } }] } };
+  const ownerAgent = { id: 'owner', status: 'running', session: { header: {}, snapshotEvents: () => [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'original', source: { kind: 'user' }, content: [{ type: 'text', text: 'complete work' }] } }] } };
   const ctx = { workspaceRegistry: { list: () => [{ id: 'project', path: directory }] }, llm: { resolveModelInfo: async (provider, id) => ({ provider, id }) } };
-  ctx.agents = { get: () => ownerAgent, currentInitiator: () => ownerAgent, roots: () => [ownerAgent] };
-  ctx.sessionProjections = { stateOf: () => ({ openTurnStartSeq: 0 }) };
+  ctx.agents = { get: () => ownerAgent, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) };
   const service = createDesktopDelegationService({ ctx, database, readPolicy: async () => ({ desktopVersion: 'policy', projects: ctx.workspaceRegistry.list() }) });
   let calls = 0, fail = true;
   const delegation = { delegate: async (...args) => { calls++; if (fail && calls === 2) throw new Error('interrupted'); return service.delegate(...args); } };
@@ -55,6 +54,11 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
   }
   const parent = await create(goal);
   assert.equal(database.listTickets().length, 2);
+  // Each Goal leaf is its own Trigger over the same original instruction; one Trigger still opens one Ticket.
+  const sources = database.listTickets().map(ticket => ticket.mandate.source);
+  assert.equal(new Set(sources.map(source => source.messageId)).size, 2);
+  assert.ok(sources.every(source => /#goal:root:\d$/.test(source.messageId)));
+  assert.equal(new Set(database.listTickets().map(ticket => ticket.mandate.instruction)).size, 1);
   if (!budgeted) {
     for (const ticket of database.listTickets()) assert.equal(ticket.acceptance, ticket.target, 'each legacy leaf uses its own full instruction, not the parent message');
     assert.equal(child.acceptance, undefined, 'normalization must not mutate submitted input');

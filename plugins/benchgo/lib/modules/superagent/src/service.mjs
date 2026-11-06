@@ -875,7 +875,7 @@ export async function mountAssistant(ctx, commander, providers) {
         const goal = { ...submitted, ownerSessionId: ownerAgent.id, threadId, parentGoalId: null,
           requestId: JSON.stringify(['goal-form', ownerAgent.id, submitted.requestId]) };
         return createGoalTickets({ goal, exec: { agent: ownerAgent }, ownerAgent, threadId, scheduler, ctx, database: store.orchestration,
-          delegation: { delegate: (args, _exec, options) => desktopDelegation.submitForm(args, { ownerAgent, threadId, budgetGoalId: options.budgetGoalId, requestId: submitted.requestId, original: JSON.stringify(submitted) }) } });
+          delegation: { delegate: (args, _exec, options) => desktopDelegation.submitForm(args, { ownerAgent, threadId, budgetGoalId: options.budgetGoalId, goalLeaf: options.goalLeaf, requestId: submitted.requestId, original: JSON.stringify(submitted) }) } });
       }
       case 'goalList': return { goals: taskManagement.project('goal', scheduler.goals()) };
       case 'goalCancel': return scheduler.cancelGoal(input.id, { rowVersion: input.rowVersion });

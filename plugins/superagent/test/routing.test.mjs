@@ -30,7 +30,8 @@ test('same-model auxiliary deduplication preserves explicitly selected options',
 });
 
 test('Harness transient and credential failures permit bounded model failover', () => {
-  for (const code of ['TIMEOUT', 'RATE_LIMIT', 'SERVER', 'QUOTA', 'ECONNRESET']) assert.equal(canFallback({ code }), true, code);
+  for (const code of ['TIMEOUT', 'RATE_LIMIT', 'SERVER', 'TRANSPORT', 'EMPTY_RESPONSE', 'STREAM_CLOSED', 'QUOTA', 'ECONNRESET']) assert.equal(canFallback({ code }), true, code);
+  for (const code of ['TRANSPORT', 'EMPTY_RESPONSE', 'STREAM_CLOSED']) assert.equal(isTransientFailure({ code }), true, code);
   for (const status of [401, 402, 404, 408, 429, 500, 502, 503, 504]) assert.equal(canFallback({ status }), true, String(status));
 });
 

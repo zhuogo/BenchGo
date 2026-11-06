@@ -17,6 +17,7 @@ test('production runtime protects dispatched Worker files and exposes authorized
   const ticket = db.createTicket({ threadId: 'thread', target: 'create artifact', mandate: { source: { channel: 'desktop', sessionId: 'owner', messageId: 'source' }, actorId: 'desktop-owner', admission: 'desktop-approved-delegation', policyVersion: policy.desktopVersion, controlledActions: 'require-current-policy-and-harness-approval' } });
   db.createAssignment(ticket.id, { model: { providerId: 'provider', modelId: 'opaque' } });
   const ctx = {
+    on() { return () => {}; },
     llm: { prepareCall: async () => {} },
     sessionQuery: { readSession: async () => ({ events: [{ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'Created artifact' }] } } }] }) },
     agents: {

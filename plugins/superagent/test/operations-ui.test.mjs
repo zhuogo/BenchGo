@@ -9,8 +9,10 @@ function harness(file, name, props, failure, initialState = []) {
   let cursor = 0, refCursor = 0; const state = [...initialState], refs = [], calls = [], module = { exports: {} };
   const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value != null && value !== false) }), useEffect() {},
     useState: initial => { const i = cursor++; if (!(i in state)) state[i] = initial; return [state[i], value => state[i] = typeof value === 'function' ? value(state[i]) : value]; }, useRef: initial => refs[refCursor++] ||= { current: initial } };
-  runInNewContext(transformSync(readFileSync(new URL(`../client/${file}`, import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code,
-    { module, exports: module.exports, crypto: { randomUUID: () => 'request-id' }, require: id => id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('task-list.jsx') ? { TaskIconButton: 'TaskIconButton' } : id.endsWith('dirty-registry.mjs') ? { useDirtyRegistry: notify => () => notify } : react });
+  const load = (path, target, require) => runInNewContext(transformSync(readFileSync(new URL(`../client/${path}`, import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code,
+    { module: target, exports: target.exports, crypto: { randomUUID: () => 'request-id' }, require });
+  const ticketState = { exports: {} }; load('ticket-state.mjs', ticketState, () => ({}));
+  load(file, module, id => id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('task-list.jsx') ? { TaskIconButton: 'TaskIconButton' } : id.endsWith('dirty-registry.mjs') ? { useDirtyRegistry: notify => () => notify } : id.endsWith('ticket-state.mjs') ? ticketState.exports : react);
   return { calls, render() { cursor = refCursor = 0; return walk(module.exports[name]({ ...props, api: async (action, input) => { calls.push({ action, input }); if (failure) throw new Error(failure); return {}; }, reload: async () => calls.push({ action: 'reload' }) })); } };
 }
 test('ticket revision submits the opened version and preserves failed draft and request ID', async () => {

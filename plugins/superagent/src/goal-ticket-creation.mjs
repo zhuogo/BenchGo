@@ -63,7 +63,7 @@ export async function createGoalTickets({ goal, exec, ownerAgent, threadId, dele
     }
     const requestId = createHash('sha256').update(JSON.stringify(['goal-ticket', goal.requestId, path])).digest('hex');
     const ticket = await delegation.delegate({ projectId: node.projectId, provider: node.provider, model: node.model,
-      text: node.text, acceptance: node.acceptance || '', requestId }, exec, { ownerAgent, threadId, ...(budgetGoalId ? { budgetGoalId } : {}) });
+      text: node.text, acceptance: node.acceptance || '', requestId }, exec, { ownerAgent, threadId, goalLeaf: path, ...(budgetGoalId ? { budgetGoalId } : {}) });
     if (budgetGoalId && database.ticketGoalBudget(ticket.id)?.goalId !== budgetGoalId) throw new Error('目标工单未原子绑定用量账本');
     return { ticketId: ticket.id, ...(budgetGoalId ? { budgetGoalId } : {}) };
   };

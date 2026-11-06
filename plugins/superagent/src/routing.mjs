@@ -6,7 +6,8 @@ const refusalCodes = new Set(['CONTENT_FILTER', 'CONTENT_POLICY_VIOLATION', 'POL
 const statusOf = error => Number(error?.status ?? error?.statusCode ?? error?.response?.status);
 
 export function isTransientFailure(error) {
-  return transientStatuses.has(statusOf(error)) || ['TIMEOUT', 'RATE_LIMIT', 'SERVER'].includes(error?.code)
+  // Mirrors the official retryable codes (dsh-llm retry-policy, session-controller continuation).
+  return transientStatuses.has(statusOf(error)) || ['TIMEOUT', 'RATE_LIMIT', 'SERVER', 'TRANSPORT', 'EMPTY_RESPONSE', 'STREAM_CLOSED'].includes(error?.code)
     || error?.name === 'TimeoutError' || networkCodes.has(error?.code) || networkCodes.has(error?.cause?.code);
 }
 

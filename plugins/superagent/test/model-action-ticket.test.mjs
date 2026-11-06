@@ -11,9 +11,8 @@ test('model persistent action is fenced, committed once and idempotent by callId
   const database = createAssistantOrchestrationStore({ directory });
   t.after(() => { database.close(); return rm(directory, { recursive: true, force: true }); });
   const message = { id: 'message-1', source: { kind: 'user' }, content: [{ type: 'text', text: '记住这个配置' }] };
-  const ownerAgent = { id: 'router-session', status: 'running', session: { snapshotEvents: () => [{ type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, data: message }] } }, calls = [];
-  const ctx = { agents: { get: id => id === ownerAgent.id ? ownerAgent : undefined, currentInitiator: () => ownerAgent, roots: () => [ownerAgent] },
-    sessionProjections: { stateOf: () => ({ openTurnStartSeq: 0 }) },
+  const ownerAgent = { id: 'router-session', status: 'running', session: { header: {}, snapshotEvents: () => [{ type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, data: message }] } }, calls = [];
+  const ctx = { agents: { get: id => id === ownerAgent.id ? ownerAgent : undefined, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) },
     get: name => name === 'approval' ? { request: async () => true } : undefined };
   const executor = createModelActionTicketExecutor({
     ctx, database, workspace: directory, readPolicy: async () => ({ desktopVersion: 'desktop-v1' }),
@@ -38,8 +37,8 @@ test('same callId with different arguments is rejected without a second action',
   const database = createAssistantOrchestrationStore({ directory });
   t.after(() => { database.close(); return rm(directory, { recursive: true, force: true }); });
   const message = { id: 'message-1', source: { kind: 'user' }, content: [{ type: 'text', text: '请保存' }] };
-  const ownerAgent = { id: 'router-session', status: 'running', session: { snapshotEvents: () => [{ type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, data: message }] } };
-  const ctx = { agents: { get: id => id === ownerAgent.id ? ownerAgent : undefined, currentInitiator: () => ownerAgent, roots: () => [ownerAgent] }, sessionProjections: { stateOf: () => ({ openTurnStartSeq: 0 }) }, get: name => name === 'approval' ? { request: async () => true } : undefined };
+  const ownerAgent = { id: 'router-session', status: 'running', session: { header: {}, snapshotEvents: () => [{ type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, data: message }] } };
+  const ctx = { agents: { get: id => id === ownerAgent.id ? ownerAgent : undefined, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) }, get: name => name === 'approval' ? { request: async () => true } : undefined };
   const executor = createModelActionTicketExecutor({ ctx, database, workspace: directory, readPolicy: async () => ({ desktopVersion: 'desktop-v1' }), perform: async ({ args }) => args, verify: async () => ({ verified: true, evidence: { kind: 'config' } }) });
   const base = { name: 'assistant_config', ownerAgent, threadId: 'main', exec: { agent: ownerAgent, callId: 'call-1', signal: new AbortController().signal } };
   await executor.execute({ ...base, args: { content: 'one' } });
@@ -51,10 +50,9 @@ test('approval denial and changed root instruction reserve no Ticket or execute 
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   const message = { id: 'message-1', source: { kind: 'user' }, content: [{ type: 'text', text: '请记住' }] };
-  const ownerAgent = { id: 'router-session', status: 'running', session: { snapshotEvents: () => [{ type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, data: message }] } };
+  const ownerAgent = { id: 'router-session', status: 'running', session: { header: {}, snapshotEvents: () => [{ type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, data: message }] } };
   let approve = async () => true, calls = 0, approvalCalls = 0;
-  const ctx = { agents: { get: id => id === ownerAgent.id ? ownerAgent : undefined, currentInitiator: () => ownerAgent, roots: () => [ownerAgent] },
-    sessionProjections: { stateOf: () => ({ openTurnStartSeq: 0 }) }, get: name => name === 'approval' ? { request: (...args) => { approvalCalls++; return approve(...args); } } : undefined };
+  const ctx = { agents: { get: id => id === ownerAgent.id ? ownerAgent : undefined, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) }, get: name => name === 'approval' ? { request: (...args) => { approvalCalls++; return approve(...args); } } : undefined };
   const executor = createModelActionTicketExecutor({ ctx, database, readPolicy: async () => ({ desktopVersion: 'desktop-v1' }), perform: async () => { calls++; return { id: 'm1' }; }, verify: async () => ({ verified: true, evidence: { kind: 'config', revision: 1 } }) });
   const input = { name: 'assistant_config', args: { content: 'fact' }, ownerAgent, exec: { agent: ownerAgent, callId: 'deny', authorized: true, signal: new AbortController().signal } };
   approve = async () => false;
@@ -71,8 +69,8 @@ test('arguments are frozen before dispatch and failed readback becomes non-repla
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   const message = { id: 'message-1', source: { kind: 'user' }, content: [{ type: 'text', text: '请修改配置' }] };
-  const ownerAgent = { id: 'router-session', status: 'running', session: { snapshotEvents: () => [{ type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, data: message }] } };
-  const ctx = { agents: { get: id => id === ownerAgent.id ? ownerAgent : undefined, currentInitiator: () => ownerAgent, roots: () => [ownerAgent] }, sessionProjections: { stateOf: () => ({ openTurnStartSeq: 0 }) }, get: name => name === 'approval' ? { request: async () => true } : undefined };
+  const ownerAgent = { id: 'router-session', status: 'running', session: { header: {}, snapshotEvents: () => [{ type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, data: message }] } };
+  const ctx = { agents: { get: id => id === ownerAgent.id ? ownerAgent : undefined, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) }, get: name => name === 'approval' ? { request: async () => true } : undefined };
   let calls = 0;
   const executor = createModelActionTicketExecutor({ ctx, database, readPolicy: async () => ({ desktopVersion: 'desktop-v1' }),
     perform: async ({ args }) => { calls++; assert.ok(Object.isFrozen(args) && Object.isFrozen(args.patch)); return { revision: 4 }; },
@@ -90,8 +88,8 @@ test('concurrent retry joins one identical operation and rejects changed inputs'
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   const message = { id: 'message-1', source: { kind: 'user' }, content: [{ type: 'text', text: '设置名称' }] };
-  const ownerAgent = { id: 'router-session', status: 'running', session: { snapshotEvents: () => [{ type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, data: message }] } };
-  const ctx = { agents: { get: id => id === ownerAgent.id ? ownerAgent : undefined, currentInitiator: () => ownerAgent, roots: () => [ownerAgent] }, sessionProjections: { stateOf: () => ({ openTurnStartSeq: 0 }) }, get: name => name === 'approval' ? { request: async () => true } : undefined };
+  const ownerAgent = { id: 'router-session', status: 'running', session: { header: {}, snapshotEvents: () => [{ type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, data: message }] } };
+  const ctx = { agents: { get: id => id === ownerAgent.id ? ownerAgent : undefined, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) }, get: name => name === 'approval' ? { request: async () => true } : undefined };
   let finish, calls = 0;
   const executor = createModelActionTicketExecutor({ ctx, database, readPolicy: async () => ({ desktopVersion: 'desktop-v1' }),
     perform: async ({ args }) => { calls++; await new Promise(resolve => { finish = resolve; }); return args; },

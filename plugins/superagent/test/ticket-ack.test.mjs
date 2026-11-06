@@ -14,7 +14,7 @@ function request(api, suffix = 'one') {
     actor: { kind: 'human', id: 'desktop-owner' }, content: 'Investigate website', mode: 'direct' });
   return { triggerId: trigger.id, requestKey: suffix, fingerprint: suffix, target: 'Investigate website',
     model: { providerId: 'provider', modelId: 'opaque' },
-    mandate: { source, actorId: 'desktop-owner', policyVersion: 'version', admission: 'desktop-approved-delegation' } };
+    mandate: { source, actorId: 'desktop-owner', instruction: 'Investigate website', policyVersion: 'version', admission: 'desktop-approved-delegation' } };
 }
 
 test('desktop acceptance stays durable and idempotent without a host-authored reply', async t => {

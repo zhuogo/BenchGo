@@ -8,8 +8,8 @@ function fixture(t) {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   const events = [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'followup', source: { kind: 'user' }, content: [{ type: 'text', text: '补充：请附上原文链接' }] } }];
-  const ownerAgent = { id: 'owner', status: 'running', session: { snapshotEvents: () => events } };
-  const ctx = { agents: { get: () => ownerAgent, currentInitiator: () => ownerAgent, roots: () => [ownerAgent] }, sessionProjections: { stateOf: () => ({ openTurnStartSeq: 0 }) } };
+  const ownerAgent = { id: 'owner', status: 'running', session: { header: {}, snapshotEvents: () => events } };
+  const ctx = { agents: { get: () => ownerAgent, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) } };
   const initial = recordDesktopTrigger(database, { sessionId: 'owner', message: { id: 'initial', source: { kind: 'user' }, content: [{ type: 'text', text: '调查网站' }] } }).trigger;
   function ticket(source = { channel: 'desktop', sessionId: 'owner', threadId: 'main' }) {
     const row = database.createTicket({ threadId: initial.threadId, target: '调查网站', mandate: { source, actorId: 'desktop-owner' } });
@@ -85,7 +85,7 @@ test('internal notifications and non-root callers cannot control tickets', t => 
   f.events[1].data.source.kind = 'benchgo-subscription';
   assert.throws(() => f.control(ticket.id), /原始用户/);
   f.events[1].data.source.kind = 'user';
-  f.ctx.agents.roots = () => [];
+  f.ownerAgent.session.header.origin = 'subagent';
   assert.throws(() => f.control(ticket.id, 'cancel'), /原始用户/);
 });
 

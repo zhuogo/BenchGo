@@ -30,10 +30,16 @@ const modules = await Promise.all(['@deepseek-ai/dsh-session', '@deepseek-ai/dsh
 const loadPackage = (directory, name) => import(pathToFileURL(createRequire(new URL(`../../../deepseek-harness/packages/${directory}/package.json`, import.meta.url)).resolve(name)).href);
 const { default: Compaction } = await loadPackage('compaction/compaction-basic', '@deepseek-ai/dsh-compaction-basic');
 const { default: TokenMeter } = await loadPackage('llm/token-meter', '@deepseek-ai/dsh-token-meter');
+const NativeToolExecutor = await loadPackage('core/tool-executor-native', '@deepseek-ai/dsh-tool-executor-native');
 const text = value => [{ type: 'block-start', index: 0, blockType: 'text' }, { type: 'text-delta', index: 0, text: value }, { type: 'block-end', index: 0, block: { type: 'text', text: value } }, { type: 'finish', reason: { kind: 'stop' } }];
+// Official tools.execute settles a raw model-call batch; tests issue one call and read its result.
+async function executeTool(ctx, { agent, name, arguments: args, callId, signal }) {
+  const batch = await ctx.tools.execute({ agent, signal, calls: [{ type: 'tool-call', id: callId, name, arguments: JSON.stringify(args ?? {}) }] });
+  return batch.results[0].result;
+}
 async function publish(f, value, agent) {
   agent ||= await f.engine.ensureSession();
-  const result = await f.ctx.tools.execute({ agent, name: 'assistant_reply', arguments: { text: value }, callId: 'publish-fixture', signal: new AbortController().signal });
+  const result = await executeTool(f.ctx, { agent, name: 'assistant_reply', arguments: { text: value }, callId: 'publish-fixture', signal: new AbortController().signal });
   assert.equal(result.isError, false, JSON.stringify(result));
 }
 
@@ -42,6 +48,7 @@ async function fixture(t, script, options = {}) {
   await ctx.plugin(LlmRuntime);
   for (let i = 0; i < modules.length; i++) await ctx.plugin(modules[i].default, i === modules.length - 1 ? { agents: [] } : i === 2 ? { personaPrefix: 'Coding agent using {{model}}' } : undefined);
   await ctx.plugin(TokenMeter);
+  await ctx.plugin(NativeToolExecutor);
   if (options.install) await options.install(ctx);
   if (options.persistenceRoot) await ctx.plugin(await loadPackage('session/session-persistence-jsonl', '@deepseek-ai/dsh-session-persistence-jsonl'), { root: options.persistenceRoot, compression: 'none' });
   let state = { revision: 0, mainSessionId: null, threads: [], tasks: [] };
@@ -49,7 +56,8 @@ async function fixture(t, script, options = {}) {
   let profile = { identity: 'Be concise.', user: 'User profile' };
   const requests = [];
   class Adapter extends LlmAdapter {
-    async resolveModel(provider, model) { return { provider, id: model, name: model, ...(options.contextWindow ? { context: { contextWindow: options.contextWindow } } : {}) }; }
+    // Official model switches check context capacity, so fixture models declare a window.
+    async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: options.contextWindow ?? 131072 } }; }
     async *stream(request) { requests.push(request); yield* await script(request, requests.length); }
   }
   ctx.llm.registerAdapter(['test'], new Adapter());
@@ -132,7 +140,7 @@ test('new side chats preserve drafts whose transcript cannot be read', async t =
 test('formal chat publication is durable, idempotent and rejects changed duplicate replies', async t => {
   const f = await fixture(t, () => text('Private execution narration'));
   const agent = await f.engine.ensureSession();
-  const reply = value => f.ctx.tools.execute({ agent, name: 'assistant_reply', arguments: { text: value }, callId: 'reply-check', signal: new AbortController().signal });
+  const reply = value => executeTool(f.ctx, { agent, name: 'assistant_reply', arguments: { text: value }, callId: 'reply-check', signal: new AbortController().signal });
   assert.equal((await reply('No human request')).isError, true);
   await f.engine.send({ text: 'A useful answer please' }); await agent.whenIdle();
   assert.deepEqual((await f.engine.history()).messages.map(row => row.role), ['user', 'assistant']);
@@ -283,7 +291,7 @@ test('official skill invocation and Worker loading persist usage while Router to
   assert.equal(skills.audit(active.id).filter(row => row.action === 'use').length, 1);
   const worker = await f.ctx.agents.create({ sessionId: 'skill-worker', meta: { cwd: directory } });
   t.after(() => worker.dispose());
-  const loaded = await f.ctx.tools.execute({ agent: worker.agent, name: 'skill', arguments: { name: 'verify-work' }, callId: 'worker-skill', signal: new AbortController().signal });
+  const loaded = await executeTool(f.ctx, { agent: worker.agent, name: 'skill', arguments: { name: 'verify-work' }, callId: 'worker-skill', signal: new AbortController().signal });
   assert.equal(loaded.isError, false);
   assert.equal(skills.audit(active.id).filter(row => row.action === 'use').length, 2);
 });
@@ -374,7 +382,7 @@ for (const [restart, tamper] of [[false, false], [true, false], [true, true]]) t
   ] : text('Continued from the original question'), { persistenceRoot: join(directory, 'sessions'), async install(ctx) {
     await ctx.plugin((await loadPackage('interaction/user-questions', '@deepseek-ai/dsh-user-questions')).default);
     await ctx.plugin(await loadPackage('interaction/tool-ask-user', '@deepseek-ai/dsh-tool-ask-user'), { mode: 'timed', timeout: 1 });
-    ctx.tools.register({ name: 'attention_probe', description: 'Effect counter', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: value => [{ type: 'text', text: value }] }, execute: async () => { effects++; return 'effect recorded'; } });
+    ctx.tools.register({ name: 'attention_probe', description: 'Effect counter', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => { effects++; return 'effect recorded'; } });
   } });
   let database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
@@ -457,7 +465,7 @@ for (const knownFirst of [false, true]) test(`desktop timed Attention resumes wi
   }, { persistenceRoot: join(directory, 'sessions'), async install(ctx) {
     await ctx.plugin((await loadPackage('interaction/user-questions', '@deepseek-ai/dsh-user-questions')).default);
     await ctx.plugin(await loadPackage('interaction/tool-ask-user', '@deepseek-ai/dsh-tool-ask-user'), { mode: 'timed', timeout: 1 });
-    ctx.tools.register({ name: 'fixture_read', description: 'Read fixture facts', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: value => [{ type: 'text', text: value }] }, execute: async () => { reads++; return 'Alpha 1, Beta 2, total 3'; } });
+    ctx.tools.register({ name: 'fixture_read', description: 'Read fixture facts', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => { reads++; return 'Alpha 1, Beta 2, total 3'; } });
   } });
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
@@ -494,7 +502,7 @@ test('assignment executor uses the real Harness writer and current permission ho
     { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'worker-call', name: 'worker_probe', arguments: '{}' } },
     { type: 'finish', reason: { kind: 'tool-calls' } },
   ] : text('Verified host result'); }, { install(ctx) {
-    ctx.tools.register({ name: 'worker_probe', description: 'Probe', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: value => [{ type: 'text', text: value }] }, execute: async () => { executed++; return 'evidence'; } });
+    ctx.tools.register({ name: 'worker_probe', description: 'Probe', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => { executed++; return 'evidence'; } });
   } });
   const directory = await mkdtemp(join(tmpdir(), 'worker-host-'));
   const database = createAssistantOrchestrationStore({ directory });
@@ -777,7 +785,7 @@ test('official preset is bound to the assistant while inherited execution tools 
     await ctx.plugin({ inject: ['agentPresets'], async *apply(child) {
       yield await child.agentPresets.register({ id: 'standard', plugins: [] });
     } });
-    ctx.tools.register({ name: 'inherited_test', description: 'Inherited tool', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: value => [{ type: 'text', text: value }] }, execute: async () => 'ok' });
+    ctx.tools.register({ name: 'inherited_test', description: 'Inherited tool', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => 'ok' });
   } });
   const agent = await f.engine.ensureSession();
   assert.equal(f.ctx.agentPresets.composedPreset(agent.ctx), 'standard');
@@ -792,7 +800,7 @@ test('inherited tools remain subject to Harness permission decisions', async t =
     { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'denied-call', name: 'ask_user_question', arguments: '{}' } },
     { type: 'finish', reason: { kind: 'tool-calls' } },
   ] : text('Denied'), { install(ctx) {
-    ctx.tools.register({ name: 'ask_user_question', description: 'Permission-gated tool', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: value => [{ type: 'text', text: value }] }, execute: async () => { executions++; return 'unexpected'; } });
+    ctx.tools.register({ name: 'ask_user_question', description: 'Permission-gated tool', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => { executions++; return 'unexpected'; } });
     ctx.on('tools/pre-execute', async (exec, next) => exec.name === 'ask_user_question' ? { kind: 'deny', reason: 'test denial' } : next());
   } });
   await f.engine.send({ text: 'Try the tool' });
@@ -950,7 +958,8 @@ test('Router hides inherited investigation and mutation while retaining coordina
     scope.tools.register({ name: 'assistant_delegate', description: 'Controlled admission fixture', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => { effects.push('delegate'); return 'ticket'; } });
   } });
   const agent = await f.engine.ensureSession();
-  const execute = name => f.ctx.tools.execute({ agent, name, arguments: {}, callId: name, signal: new AbortController().signal });
+  const question = { questions: [{ id: 'scope', question: 'Which scope?', options: [{ label: 'All', description: 'Everything' }] }] };
+  const execute = name => executeTool(f.ctx, { agent, name, arguments: name === 'ask_user_question' ? question : {}, callId: name, signal: new AbortController().signal });
   assert.deepEqual(f.ctx.tools.schemas(agent).map(tool => tool.name).sort(), ['ask_user_question', 'assistant_delegate', 'assistant_reply']);
   assert.equal((await execute('ask_user_question')).isError, false);
   assert.equal((await execute('assistant_delegate')).isError, false);
@@ -1439,7 +1448,7 @@ test('one message uses the frozen complete queue after a tool step without repla
     if (count === 4) return text('Third model completed');
     return [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'unavailable' } } }];
   }, { setupTools(scope) {
-    scope.tools.register({ name: 'fallback_effect', description: 'One effect', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: value => [{ type: 'text', text: value }] }, execute: async () => {
+    scope.tools.register({ name: 'fallback_effect', description: 'One effect', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => {
       effects++;
       f.setConfig({ models: [{ providerId: 'test', modelId: 'new-primary' }, { providerId: 'test', modelId: 'third' }] });
       return 'written';
@@ -1475,7 +1484,7 @@ test('parallel tools in one Harness step count as one learning iteration', async
     { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'parallel-b', name: 'learning_probe', arguments: '{}' } },
     { type: 'finish', reason: { kind: 'tool-calls' } },
   ] : text('Done'), { store, setupTools(scope) {
-    scope.tools.register({ name: 'learning_probe', description: 'Probe', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: value => [{ type: 'text', text: value }] }, execute: async () => 'checked' });
+    scope.tools.register({ name: 'learning_probe', description: 'Probe', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => 'checked' });
   } });
   t.after(async () => { await f.engine.dispose(); store.close(); await rm(directory, { recursive: true, force: true }); });
   await f.engine.send({ text: 'Inspect both' });
@@ -1571,7 +1580,7 @@ test('completed scoped tool survives later model failover without repeating the 
     if (count === 1) return [{ type: 'block-start', index: 0, blockType: 'tool-call' }, { type: 'tool-call-delta', index: 0, id: 'call-one', name: 'assistant_effect', argumentsDelta: '{}' }, { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'call-one', name: 'assistant_effect', arguments: '{}' } }, { type: 'finish', reason: { kind: 'tool-calls' } }];
     if (count === 2) return [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'offline' } } }];
     return text('Complete');
-  }, { setupTools(scope) { scope.tools.register({ name: 'assistant_effect', description: 'One effect', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: value => [{ type: 'text', text: value }] }, execute: async () => { effects++; return 'saved'; } }); } });
+  }, { setupTools(scope) { scope.tools.register({ name: 'assistant_effect', description: 'One effect', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => { effects++; return 'saved'; } }); } });
   await f.engine.send({ text: 'Execute' });
   await (await f.engine.ensureSession()).whenIdle();
   assert.equal(effects, 1);

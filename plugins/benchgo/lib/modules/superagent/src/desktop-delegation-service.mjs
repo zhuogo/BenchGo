@@ -23,8 +23,9 @@ const required = (value, name, max = 100000) => {
 /** Local owner entry point. Authority comes from the mounted root Agent, never tool arguments. */
 export function createDesktopDelegationService({ ctx, store, database = store.orchestration, readPolicy = () => readAssessmentPolicy(store, ctx.workspaceRegistry) }) {
   const pending = new Map();
-  async function admit(input, exec, { ownerAgent, threadId = 'main', budgetGoalId } = {}, form) {
+  async function admit(input, exec, { ownerAgent, threadId = 'main', budgetGoalId, goalLeaf } = {}, form) {
     if (!ownerAgent || exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可委派桌面工单');
+    if (goalLeaf !== undefined) required(goalLeaf, '目标子项路径', 512);
     const sessionId = required(ownerAgent.id, '会话标识');
     const requestId = required(input.requestId, '请求标识', 200);
     const projectId = input.projectId == null ? undefined : required(input.projectId, '项目标识');
@@ -71,8 +72,10 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       const latest = form || currentHumanInstruction(ctx, ownerAgent);
       if (!latest || digest(latest) !== instructionFingerprint) throw new Error('派工期间当前用户指令已变化，请重试');
       if (current.desktopVersion !== policy.desktopVersion || (project && !current.projects.some(item => item.id === projectId && item.path === project.path))) throw new Error('派工期间项目或授权规则已变化，请重试');
-      const source = { channel: 'desktop', sessionId, messageId: message.id, threadId };
-      const { trigger } = database.ingest({ dedupeKey: `desktop-message:${digest([sessionId, message.id])}`, thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' });
+      // Each approved Goal leaf is its own Trigger over the same original instruction,
+      // so one Trigger still opens exactly one Ticket. Host-supplied, never a model argument.
+      const source = { channel: 'desktop', sessionId, messageId: goalLeaf === undefined || goalLeaf === 'root' ? message.id : `${message.id}#goal:${goalLeaf}`, threadId };
+      const { trigger } = database.ingest({ dedupeKey: `desktop-message:${digest([sessionId, source.messageId])}`, thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' });
       return database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, budgetGoalId, duplicateOfTicketId, model: explicitModel, mandate: {
         actorId: 'desktop-owner', source, instruction: original, policyVersion: policy.desktopVersion,
         target, acceptance: taskAcceptance,
@@ -85,11 +88,11 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
   return {
     delegate: (input, exec, options) => admit(input, exec, options),
     // Called only by the authenticated resource dispatcher, never exposed as a model tool.
-    submitForm(input, { ownerAgent, threadId, requestId, original, budgetGoalId }) {
+    submitForm(input, { ownerAgent, threadId, requestId, original, budgetGoalId, goalLeaf }) {
       if (ctx.agents?.get(ownerAgent?.id) !== ownerAgent) throw new Error('表单缺少真实主助手会话');
       required(requestId, '表单请求标识', 200);
       required(original, '表单原文');
-      return admit(input, { agent: ownerAgent }, { ownerAgent, threadId, budgetGoalId }, {
+      return admit(input, { agent: ownerAgent }, { ownerAgent, threadId, budgetGoalId, goalLeaf }, {
         message: { id: `goal-form:${requestId}`, content: [{ type: 'text', text: original }] },
       });
     },
