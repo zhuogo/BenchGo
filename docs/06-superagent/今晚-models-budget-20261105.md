@@ -25,3 +25,5 @@
 - API 验证覆盖三角色配置保存/重载与实际路由、记忆来源及版本链、owner 核实入口与回执边界、独立顶层 outbox 核实记录和原 payload 幂等、四阶段 schedule.lifecycle 与 history 当前投影、tickets.tickets[] 的 attentionResolutions、委派可选成对模型及 completed 原单保留的新关联单。
 - 金额 cost 仍无可靠计价源，保持 `null` 并明确 unsupported；没有验证真实金额耗尽/补额闭环，不能以请求数或 token 数替代。
 - 未运行全量构建、上游全套测试或真实模型调用。真实供应商和用户视觉验收不属于本文件的受控测试结论。
+
+> 2026-11-06 注：预算闸门整体拆除，本记录预算部分仅作历史。
