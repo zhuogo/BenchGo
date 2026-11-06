@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { currentHumanInstruction } from './desktop-delegation-service.mjs';
-import { requestAssistantApproval } from './approval.mjs';
 import { readAssessmentPolicy, validateTicketMandate } from './assessment-policy.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -37,10 +36,11 @@ export function createTicketRevisionService({ ctx, store, database = store.orche
     text(providerId, '供应商标识'); text(modelId, '模型标识');
     const info = await ctx.llm.resolveModelInfo(providerId, modelId, exec?.signal);
     if (info?.id !== modelId || info?.provider !== providerId) throw new Error('模型解析改变了显式标识');
-    if (!form && !await requestAssistantApproval(ctx, exec, 'assistant_ticket_change', `${input.operation}: ${target}\n${input.reason}`)) throw new Error('工单变更未获批准');
+    // Bound to the current human instruction like assistant_delegate; no extra approval
+    // dialog blocks the Router turn. Worker controlled effects keep their own gates.
     exec?.signal?.throwIfAborted();
     const current = await readPolicy();
-    if (current.desktopVersion !== policy.desktopVersion || digest(form || currentHumanInstruction(ctx, options.ownerAgent)) !== instructionHash) throw new Error('审批期间主人指令或授权规则已变化');
+    if (current.desktopVersion !== policy.desktopVersion || digest(form || currentHumanInstruction(ctx, options.ownerAgent)) !== instructionHash) throw new Error('变更期间主人指令或授权规则已变化');
     const sessionId = options.ownerAgent.id;
     const source = { channel: 'desktop', sessionId, messageId: instruction.message.id, threadId: options.threadId || 'main' };
     // A local resource change is a new desktop authorization, including when the original

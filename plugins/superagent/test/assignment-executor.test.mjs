@@ -108,7 +108,7 @@ for (const projectMode of [false, true]) test(`host execution is persisted, isol
   await assert.rejects(executor(assignment, { ticket, signal, renew: async () => {} }), /reconciliation/);
 });
 
-test('deadline interrupts stalled execution and keeps its submitted run uncertain', async t => {
+test('elapsed time never interrupts execution; an explicit abort keeps its submitted run uncertain', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-executor-timeout-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
@@ -124,7 +124,14 @@ test('deadline interrupts stalled execution and keeps its submitted run uncertai
     agents: { create: async () => ({ agent: { followup() {}, cancel() { interrupted++; } }, dispose: async () => { disposed++; } }) },
   };
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 20, executionPauseGraceMs: 20 });
-  await assert.rejects(executor(assignment, { ticket, signal: new AbortController().signal, renew: async () => {} }), /deadline exceeded/);
+  const controller = new AbortController();
+  const execution = executor(assignment, { ticket, signal: controller.signal, renew: async () => {} });
+  execution.catch(() => {});
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(interrupted, 0, 'the removed execution-time gate no longer cancels long work');
+  assert.equal(database.getTicket(ticket.id).status, 'open');
+  controller.abort(new Error('owner stopped'));
+  await assert.rejects(execution, /owner stopped/);
   assert.equal(interrupted, 1);
   assert.equal(disposed, 1);
   assert.equal(database.runs(assignment.id)[0].state, 'uncertain');

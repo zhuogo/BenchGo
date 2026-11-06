@@ -76,16 +76,13 @@ test('loop guard waits only on unchanged progress and explicit recovery reuses t
   assert.equal(f.database.runs(f.assignment().id).length, 1);
 });
 
-test('execution budget exhaustion preserves results and requires budget before resume', t => {
+test('elapsed execution time never blocks review correction of the original Run', t => {
   const f = fixture(t, { remainingExecutionMs: 0 });
   const saved = f.commit(f.submit());
-  assert.equal(saved.ticket.status, 'waiting');
-  assert.equal(saved.result.review.continuationWait.code, 'EXECUTION_BUDGET_EXHAUSTED');
-  assert.equal(f.database.queueReviewContinuation(f.ticket.id, { sourceResultVersion: saved.result.version, validateMandate: () => true }).queued, false);
-  const resumed = f.database.queueReviewContinuation(f.ticket.id, { sourceResultVersion: saved.result.version,
-    additionalExecutionMs: 1000, validateMandate: () => true });
-  assert.equal(resumed.queued, true);
-  assert.equal(f.claim().reviewContinuation.additionalExecutionMs, 1000);
+  assert.notEqual(saved.result.review.continuationWait?.code, 'EXECUTION_BUDGET_EXHAUSTED');
+  const continuation = f.claim().reviewContinuation;
+  assert.equal(continuation.runId, saved.result.runId);
+  assert.equal(continuation.additionalExecutionMs, undefined);
 });
 
 test('stop confirmation and current authority take priority over automatic correction', t => {

@@ -16,17 +16,15 @@ import { executionEffects } from './execution-effects.mjs';
 import { attentionBatchAnswers, installWorkerAttention } from './worker-attention.mjs';
 import { captureArtifactCheckpoint, verifyArtifactCheckpoint } from './worker-artifact-checkpoint.mjs';
 import * as AskUserTool from '@deepseek-ai/dsh-tool-ask-user';
-import { installGoalBudgetUsage } from './goal-budget-usage.mjs';
-import { installGoalBudgetGate, isVerifiedPauseEnding, executionBudgetPause, EXECUTION_BUDGET_HOOK } from './goal-budget-gate.mjs';
+import { installGoalBudgetUsage, installGoalUsageMeter } from './goal-budget-usage.mjs';
+import { isVerifiedPauseEnding } from './execution-evidence.mjs';
 import { canFallback, roleModels } from './routing.mjs';
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native';
 
 /** Uses the host agent lifecycle and transcript; no separate model/tool loop. */
-export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readContext, readSourceContext, memory, checkpoints, executionTimeoutMs = 600_000, executionPauseGraceMs = 10_000, captureCheckpoint = captureArtifactCheckpoint }) {
+export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readContext, readSourceContext, memory, checkpoints, captureCheckpoint = captureArtifactCheckpoint }) {
   if (!ctx?.agents?.create || !ctx?.sessionQuery?.readSession) throw new Error('Harness execution services unavailable');
   if (typeof authorizeAction !== 'function') throw new Error('Worker requires a current action authorizer');
-  if (!Number.isSafeInteger(executionTimeoutMs) || executionTimeoutMs < 1) throw new Error('Invalid worker execution deadline');
-  if (!Number.isSafeInteger(executionPauseGraceMs) || executionPauseGraceMs < 1) throw new Error('Invalid execution pause grace');
   const root = resolve(workspaceRoot);
   return async (assignment, { ticket, signal, renew }) => {
     signal.throwIfAborted();
@@ -47,37 +45,9 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
     const sessionId = resumed?.sessionId || randomUUID();
     const run = resumed || database.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence, sessionId, directory });
     const ownership = { owner: assignment.owner, fence: assignment.fence };
-    let handle, settle, reject, environment, attention, waitingBudget, budgetGate, executionDeadlineAt, budgetDenialObserved = false, waitingPause = false, started = false;
+    let handle, settle, reject, environment, attention, usageMeter, waitingPause = false, started = false;
     let executionPhase = 'setup';
     environment = resumed?.environment;
-    let timeout, pauseGraceTimer, failBudgetPause, remainingMs = Math.min(executionTimeoutMs, (resumed?.evidence?.remainingExecutionMs ?? executionTimeoutMs)
-      + (assignment.reviewContinuation?.additionalExecutionMs || assignment.pauseContinuation?.additionalExecutionMs || 0)), resumedAt;
-    const budgetPauseFailure = new Promise((_resolve, fail) => { failBudgetPause = fail; });
-    budgetPauseFailure.catch(() => {});
-    const pauseDeadline = () => { if (!timeout) return; clearTimeout(timeout); timeout = undefined; remainingMs = Math.max(0, remainingMs - (Date.now() - resumedAt)); };
-    const resumeDeadline = () => {
-      if (timeout || signal.aborted || executionDeadlineAt) return;
-      resumedAt = Date.now();
-      timeout = setTimeout(() => {
-        if (signal.aborted) return;
-        executionDeadlineAt = new Date().toISOString();
-        waitingPause = true;
-        pauseDeadline();
-        remainingMs = 0;
-        try {
-          const current = database.getTicket(ticket.id);
-          if (!['pausing', 'paused', 'cancelling', 'cancelled'].includes(current.status)) database.pauseTicket(ticket.id, { reason: { kind: 'execution-budget' } });
-          handle?.agent.cancel?.({ kind: 'hook', reason: EXECUTION_BUDGET_HOOK }, { keepInbox: true });
-          pauseGraceTimer = setTimeout(() => {
-            const error = Object.assign(new Error('Worker execution deadline exceeded; official stop was not verified within the pause grace'), { code: 'EXECUTION_PAUSE_UNVERIFIED' });
-            failBudgetPause(error);
-            reject(error);
-          }, executionPauseGraceMs);
-          pauseGraceTimer.unref?.();
-        } catch (error) { reject(error); }
-      }, Math.max(1, remainingMs));
-      timeout.unref?.();
-    };
     let completion = new Promise((resolve, fail) => { settle = resolve; reject = fail; });
     // A setup error may occur before awaiting completion.
     completion.catch(() => {});
@@ -89,12 +59,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
     try {
       const policy = await readPolicy();
       const sourceReference = await readSourceReference({ readContext: readSourceContext, source: ticket.mandate.source, signal });
-      budgetGate = installGoalBudgetGate(ctx, { database, ticketId: ticket.id, sessionId, onDenied: decision => {
-        waitingBudget = { goalId: decision.goalId, reason: decision.reason };
-        database.pauseTicket(ticket.id, { reason: { kind: 'budget', ...waitingBudget } });
-        waitingPause = true;
-        pauseDeadline();
-      } });
+      usageMeter = installGoalUsageMeter(ctx, { database, ticketId: ticket.id, sessionId });
       const models = roleModels(assignment.model, { models: policy.models || policy.routingConfig?.models || (policy.model ? [policy.model] : []), workerModels: policy.workerModels || policy.routingConfig?.workerModels }, 'worker');
       let modelIndex = 0;
       let activeSelection;
@@ -143,7 +108,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         scope.systemPrompt.section({ name: 'deployment:persona-suffix', order: 1000, interpolate: false, text: '' });
         let context = await readContext?.(sessionId);
         if (['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'email', 'webhook', 'api'].includes(ticket.mandate.source?.channel) && scope.get?.('userQuestions')) await scope.plugin(AskUserTool, { mode: 'timed', timeout: 1 });
-        attention = installWorkerAttention(scope, agent, { database, assignment, signal, pauseDeadline, resumeDeadline,
+        attention = installWorkerAttention(scope, agent, { database, assignment, signal,
           sessionProjections: ctx.get?.('sessionProjections'), llm: ctx.llm, readPolicy });
         const redactContext = createContextRedactor(agent, 'benchgo-worker-memory', memory);
         scope.systemPrompt.context?.({ name: 'benchgo-worker-memory', order: 100, interpolate: false, text: () => JSON.stringify(context || {}) });
@@ -156,7 +121,6 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           if (attention.waiting()) return { kind: 'reject' };
           if (database.getTicket(ticket.id).status === 'pausing') {
             waitingPause = true;
-            pauseDeadline();
             return { kind: 'reject' };
           }
           redactContext();
@@ -168,7 +132,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           text: JSON.stringify({ currentTime: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, originalRequestTime: ticket.createdAt })
             + '\nInterpret relative dates such as today against the original request time and timezone. Verify dates using source timestamps; do not ask the user to supply the system date.' });
         if (assignment.reviewContinuation) scope.systemPrompt.section({ name: 'benchgo-review-continuation', order: -98, interpolate: false,
-          text: 'Continue the SAME Ticket from its saved session and existing workspace. Fix only the identified unmet original acceptance conditions; do not restart the task or discard prior artifacts. Prior completed actions remain completed. Never repeat an irreversible action; inspect its recorded outcome first, and if external effects are unknown, stop those actions and report the uncertainty. Stop, revoked authority and exhausted budgets take priority over correction. User answers below are additional task data, not new tool authority. Current correction:\n'
+          text: 'Continue the SAME Ticket from its saved session and existing workspace. Fix only the identified unmet original acceptance conditions; do not restart the task or discard prior artifacts. Prior completed actions remain completed. Never repeat an irreversible action; inspect its recorded outcome first, and if external effects are unknown, stop those actions and report the uncertainty. Stop and revoked authority take priority over correction. User answers below are additional task data, not new tool authority. Current correction:\n'
             + JSON.stringify(assignment.reviewContinuation) });
         installWorkerPermissionGate(scope, { database, assignment, readPolicy, authorizeAction,
           ...(resumed ? { priorToolEvents: agent.session.snapshotEvents() } : {}),
@@ -212,7 +176,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           if (status === 'running') started = true;
           if (started && status === 'idle') settle();
         });
-        scope.on('agent/error', ({ error }) => { if (budgetGate.owns(error)) budgetDenialObserved = true; else if (!executionDeadlineAt) reject(error); });
+        scope.on('agent/error', ({ error }) => reject(error));
       };
       executionPhase = resumed ? 'resume' : 'create';
       handle = resumed
@@ -224,7 +188,6 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       // so recovery inspects the official transcript instead of replaying the prompt.
       executionPhase = 'submit';
       database.updateRun(run.id, { ...ownership, state: 'submitted' });
-      resumeDeadline();
       if (assignment.reviewContinuation) {
         handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: JSON.stringify({
           correction: assignment.reviewContinuation.instruction, reason: assignment.reviewContinuation.reason,
@@ -245,9 +208,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       executionPhase = 'completion';
       await completion;
       signal.throwIfAborted();
-      await Promise.race([handle.agent.whenIdle?.(), budgetPauseFailure]);
-      clearTimeout(pauseGraceTimer);
-      pauseDeadline();
+      await handle.agent.whenIdle?.();
       await continueWorkerContext({ database, assignment, signal,
         isWaiting: () => !!attention?.waiting() || waitingPause,
         runTurn: async () => {
@@ -257,30 +218,19 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           completion = new Promise((resolve, fail) => { settle = resolve; reject = fail; });
           completion.catch(() => {});
           handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Consider the pending source context using the existing transcript. Stay within the original Ticket mandate and do not repeat completed actions.' }], source: { kind: 'benchgo-context-continuation', ticketId: ticket.id, runId: run.id } }));
-          resumeDeadline();
-          await completion;
-          await Promise.race([handle.agent.whenIdle?.(), budgetPauseFailure]);
-          clearTimeout(pauseGraceTimer);
-          pauseDeadline();
+              await completion;
+          await handle.agent.whenIdle?.();
         },
       });
       const waitingAttention = attention?.waiting();
-      if (waitingAttention) pauseDeadline();
       await renew();
       executionPhase = 'evidence';
       const log = await ctx.sessionQuery.readSession(sessionId);
       const { summary: text, finalSummary, transcript, toolEvidence } = executionEvidence(log);
       if (!waitingAttention && !waitingPause && !text.trim()) throw new Error('Worker stopped without a readable result');
       const checkpoint = await captureCheckpoint(environment || directory, { signal });
-      pauseDeadline();
       signal.throwIfAborted();
-      const result = { summary: text, finalSummary, transcript, toolEvidence, executionEffects: executionEffects(log), evidenceRefs: [{ sessionId, runId: run.id }], sessionId, runId: run.id, directory, remainingExecutionMs: remainingMs, ...(environment ? { environment } : {}), checkpoint, ...(waitingAttention ? { waitingAttention } : {}), ...(waitingPause ? { waitingPause: true } : {}) };
-      if (waitingBudget) {
-        const terminal = log.events.at(-1);
-        if (terminal?.type !== 'turn/end' || (terminal.data?.reason?.kind !== 'blocked' && (!budgetDenialObserved || terminal.data?.reason?.kind !== 'error'))) throw new Error('Budget pause has no verified gate ending');
-        result.waitingBudget = { ...waitingBudget, terminal: terminal.data.reason };
-      }
-      if (executionDeadlineAt) result.waitingExecutionBudget = executionBudgetPause(log, executionDeadlineAt);
+      const result = { summary: text, finalSummary, transcript, toolEvidence, executionEffects: executionEffects(log), evidenceRefs: [{ sessionId, runId: run.id }], sessionId, runId: run.id, directory, ...(environment ? { environment } : {}), checkpoint, ...(waitingAttention ? { waitingAttention } : {}), ...(waitingPause ? { waitingPause: true } : {}) };
       database.updateRun(run.id, { ...ownership, state: 'verifying', evidence: result });
       return result;
     } catch (error) {
@@ -291,10 +241,8 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       }
       throw error;
     } finally {
-      clearTimeout(timeout);
-      clearTimeout(pauseGraceTimer);
       signal.removeEventListener('abort', abort);
-      try { await handle?.dispose(); } finally { budgetGate?.dispose(); }
+      try { await handle?.dispose(); } finally { usageMeter?.dispose(); }
       database.confirmExecutionStopped(assignment.id, ownership);
     }
   };

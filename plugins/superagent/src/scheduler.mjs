@@ -109,7 +109,7 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
         const refreshed = (goal.childGoalIds || []).map(childId => db.goal(childId)).filter(Boolean);
         if (refreshed.some(child => child.status === 'failed' || child.status === 'cancelled')) return db.updateGoal(id, { status: 'failed', nextStep: 'review', error: '子目标未完成' });
         if (refreshed.length && refreshed.every(child => child.status === 'completed')) return db.updateGoal(id, { status: 'completed', nextStep: null, completedAt: iso(Date.now()) });
-        if (refreshed.some(child => child.status === 'waiting' || child.status === 'paused')) return db.updateGoal(id, { status: 'waiting', waitReason: refreshed.some(child => child.waitReason === 'budget') ? 'budget' : 'children', nextStep: 'children' });
+        if (refreshed.some(child => child.status === 'waiting' || child.status === 'paused')) return db.updateGoal(id, { status: 'waiting', waitReason: 'children', nextStep: 'children' });
         return db.updateGoal(id, { status: 'active', waitReason: null, nextStep: 'children' });
       }
       const rows = (goal.ticketIds || []).map(ticketId => ticketGoalRecord(store.orchestration, ticketId));
@@ -213,58 +213,7 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
       if (!goal) throw new Error('目标不存在');
       return goal.budgetGoalId ? store.orchestration?.goalBudget(goal.budgetGoalId) || null : null;
     },
-    updateGoalBudget(id, { budget, expectedVersion } = {}) {
-      const goal = db.goal(id);
-      if (!goal) throw new Error('目标不存在');
-      if (goal.executionKind !== 'ticket' || TERMINAL_GOAL.has(goal.status) || goal.status === 'cancelling') throw new Error('当前目标不能调整预算');
-      if (goal.nextStep === 'building_children') throw new Error('目标创建尚未完成，请先重试原创建请求');
-      if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new Error('预算调整需要当前版本');
-      if (budget === undefined) throw new Error('预算调整缺少 budget');
-      if (!goal.budgetGoalId) throw new Error('目标没有已绑定预算，请创建带预算的新目标');
-      if (!budget || budget.cost !== undefined) throw new Error('请提供请求、token 或截止时间预算；费用预算尚不支持');
-      return store.orchestration.updateGoalBudget({ goalId: goal.budgetGoalId, budget, expectedVersion });
-    },
-    resumeGoalBudget(id, { rowVersion } = {}) {
-      return serialize(`goal:${id}`, async () => {
-        const goal = db.goal(id);
-        if (!goal) throw new Error('目标不存在');
-        if (rowVersion !== undefined && goal.rowVersion !== rowVersion) throw Object.assign(new Error('目标状态已更新'), { code: 'ROW_CONFLICT' });
-        if (goal.executionKind !== 'ticket' || goal.status !== 'waiting' || goal.waitReason !== 'budget') throw new Error('目标不在预算等待状态');
-        const ancestors = new Set([id]);
-        let parentId = goal.parentGoalId;
-        while (parentId) {
-          if (ancestors.has(parentId)) throw new Error('Invalid Goal hierarchy');
-          ancestors.add(parentId);
-          const parent = db.goal(parentId);
-          if (!parent || ['paused', 'pausing', 'cancelling'].includes(parent.status) || TERMINAL_GOAL.has(parent.status)) throw new Error('Resume the parent Goal first');
-          parentId = parent.parentGoalId;
-        }
-        const tickets = [], seen = new Set();
-        const visit = node => {
-          if (!node || seen.has(node.id) || seen.size >= 100) throw new Error('Invalid Goal hierarchy');
-          seen.add(node.id);
-          if (TERMINAL_GOAL.has(node.status) || ['paused', 'pausing', 'cancelling'].includes(node.status)) return;
-          for (const childId of node.childGoalIds || []) visit(db.goal(childId));
-          for (const ticketId of node.ticketIds || []) {
-            const ticket = store.orchestration.getTicket(ticketId);
-            if (!ticket) throw new Error('Goal Ticket is missing');
-            if (ticketGoalRecord(store.orchestration, ticketId)?.waitReason !== 'budget') continue;
-            if (ticket.status === 'pausing') throw Object.assign(new Error('等待执行保存暂停检查点'), { code: 'PAUSE_PENDING' });
-            const decision = store.orchestration.checkGoalBudget({ ticketId });
-            if (!decision.allowed) throw Object.assign(new Error('请先调整耗尽的目标预算'), { code: 'GOAL_BUDGET_EXHAUSTED', budget: decision });
-            tickets.push(ticket);
-          }
-        };
-        visit(goal);
-        const reviewTicketIds = [];
-        for (const ticket of tickets) {
-          if (ticket.status === 'paused') store.orchestration.resumeTicket(ticket.id);
-          else if (ticket.status === 'waiting') reviewTicketIds.push(ticket.id);
-        }
-        // Evidence reviews are retried by the runtime, never re-dispatched as work.
-        return { goal: db.goal(id), reviewTicketIds };
-      });
-    },
+
     matchGoalRequest(input) {
       const goal = db.goalByRequest(input.requestId);
       if (goal && (goal.inputFingerprint !== fingerprint(input) || goal.parentGoalId !== (input.parentGoalId || null))) throw Object.assign(new Error('目标请求标识已用于不同内容或历史请求无法核实'), { code: 'IDEMPOTENCY_CONFLICT' });

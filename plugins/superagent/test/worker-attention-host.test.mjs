@@ -36,10 +36,9 @@ test('Worker Attention precedes official Remote forwarding without an owner Clie
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'attention-host-worker', directory: process.cwd() });
   database.updateRun(run.id, { ...ownership, state: 'submitted' });
-  let paused = 0, resumed = 0, triaged = 0;
+  let triaged = 0;
   const worker = await ctx.agents.create({ sessionId: run.sessionId, meta: { cwd: process.cwd() }, setup(scope, agent) {
     installWorkerAttention(scope, agent, { database, assignment, signal: controller.signal, pollMs: 1,
-      pauseDeadline: () => { paused++; }, resumeDeadline: () => { resumed++; },
       readPolicy: async () => ({ models: [{ providerId: 'fixture', modelId: 'Opaque Router' }] }),
       llm: { async *stream() {
         triaged++;
@@ -56,33 +55,31 @@ test('Worker Attention precedes official Remote forwarding without an owner Clie
   answer.catch(() => {});
   for (let i = 0; i < 1000 && !database.attentions(ticket.id).length && !ctx.typertGateway.getPendingRemoteEvents().length; i++) await nextTurn();
   assert.equal(triaged, 1);
-  assert.equal(paused, 1);
   assert.deepEqual(ctx.typertGateway.getPendingRemoteEvents(), [], 'owned Worker questions never wait for a Remote Client');
   const [attention] = database.attentions(ticket.id);
   assert.equal(attention?.question.id, 'format');
   database.answerDesktopAttention({ ticketId: ticket.id, attentionId: attention.id, instructionRevision: 1,
     requestId: 'real-user-answer', answer: { selected: ['列表'] } });
   assert.deepEqual(await answer, { answers: [{ id: 'known', selected: [], custom: '简体中文' }, { id: 'format', selected: ['列表'] }] });
-  assert.equal(resumed, 1);
 
   const foreign = await ctx.agents.create({ sessionId: 'foreign-worker', meta: { cwd: process.cwd() } });
   // A different live Agent, even on the owned dispatch scope, must delegate.
   await assert.rejects(async () => ctx.waterfall(scopeTarget(worker.agent, worker.agent), 'user-questions/request',
     { agent: foreign.agent, questions, signal: controller.signal }, () => assert.fail('Remote forwarding should reject the mismatched subject')),
   /must carry its Agent directly/);
-  assert.equal(paused, 1);
+  assert.equal(triaged, 1);
 
   await worker.dispose();
   installWorkerAttention(foreign.agent.ctx, foreign.agent, { assignment, signal: controller.signal,
     database: { ...database, getTicket: () => ({ ...ticket, mandate: { ...ticket.mandate, source: { channel: 'unsupported' } } }) },
-    pauseDeadline: () => assert.fail('unsupported channels must delegate'), resumeDeadline: () => {},
+    llm: { async *stream() { assert.fail('unsupported channels must delegate'); } },
   });
   const foreignAbort = new AbortController();
   const unowned = ctx.userQuestions.ask({ agent: foreign.agent, questions, signal: foreignAbort.signal });
   unowned.catch(() => {});
   for (let i = 0; i < 1000 && !ctx.typertGateway.getPendingRemoteEvents().length; i++) await nextTurn();
   assert.deepEqual(ctx.typertGateway.getPendingRemoteEvents(), [{ event: 'user-questions/request', agentId: foreign.agent.id }]);
-  assert.equal(paused, 1, 'disposing the Worker removes its answerer');
+  assert.equal(triaged, 1, 'disposing the Worker removes its answerer');
   foreignAbort.abort(new Error('fixture request ended'));
   await assert.rejects(unowned, { code: 'ASK_ABORTED' });
   await foreign.dispose();

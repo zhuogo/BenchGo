@@ -132,10 +132,10 @@ test('unchanged verified evidence does not repeatedly spend tokens or publish a 
   assert.equal(calls, 1);
 });
 
-for (const limit of [0, 1]) test(`review budget exhaustion preserves evidence and retries only review after adjustment (${limit})`, async t => {
+test('review requests on a Goal ledger are recorded, never refused, and retry only review', async t => {
   const f = await fixture(t, reviewTicketResult);
-  f.database.ensureGoalBudget({ goalId: 'budget', budget: { requests: limit } });
-  f.database.bindTicketGoal({ ticketId: f.ticket.id, goalId: 'budget' });
+  f.database.ensureGoalBudget({ goalId: 'ledger' });
+  f.database.bindTicketGoal({ ticketId: f.ticket.id, goalId: 'ledger' });
   let calls = 0, fail = true;
   f.ctx.llm = { stream: async function* () {
     calls++;
@@ -146,18 +146,19 @@ for (const limit of [0, 1]) test(`review budget exhaustion preserves evidence an
   } };
   const waiting = await f.retry(f.ticket.id, { expectedResultVersion: 1 });
   assert.equal(waiting.ticket.status, 'waiting');
-  assert.equal(waiting.result.review.budgetWait.reason, 'requests');
-  assert.equal(ticketGoalRecord(f.database, f.ticket.id).waitReason, 'budget');
-  assert.equal(calls, limit);
-  assert.equal(f.database.goalBudget('budget').usage.tokens, 5 * limit);
-  f.database.updateGoalBudget({ goalId: 'budget', expectedVersion: 1, budget: { requests: limit + 1 } });
+  assert.equal(waiting.result.review.budgetWait, undefined);
+  assert.notEqual(ticketGoalRecord(f.database, f.ticket.id).waitReason, 'budget');
+  assert.ok(calls >= 1);
+  const failedCalls = calls;
+  assert.equal(f.database.goalBudget('ledger').usage.requests, failedCalls);
+  assert.equal(f.database.goalBudget('ledger').usage.tokens, 5 * failedCalls);
   fail = false;
   const completed = await f.retry(f.ticket.id, { expectedResultVersion: 2 });
   assert.equal(completed.ticket.status, 'completed');
   assert.equal(f.database.assignments(f.ticket.id).length, 1);
   assert.equal(f.database.runs(f.database.assignments(f.ticket.id)[0].id).length, 1);
-  assert.equal(f.database.goalBudget('budget').usage.requests, limit + 1);
-  assert.equal(f.database.goalBudget('budget').usage.tokens, 5 * (limit + 1));
+  assert.equal(f.database.goalBudget('ledger').usage.requests, calls);
+  assert.equal(f.database.goalBudget('ledger').usage.tokens, 5 * calls);
 });
 
 test('changed transcript rejects continuation before review and preserves waiting', async t => {

@@ -1,14 +1,14 @@
 import { validateDelivery, systemStateDelivery, publicationContext as reviewPublicationContext } from './result-delivery.mjs';
 import { collectAuxiliaryText, auxiliaryFailureDiagnostic, auxiliaryFailureRouting } from './auxiliary-request.mjs';
-import { goalBudgetDenial, goalBudgetLlm } from './goal-budget-gate.mjs';
+import { goalUsageLlm } from './goal-budget-usage.mjs';
 import { reviewInputHash } from './review-input.mjs';
 import { TICKET_REVIEW_REQUEST_POLICY, ticketReviewRequestBudget } from './review-policy.mjs';
 
-function internalWait(code, { stage = 'review', inputHash, budgetWait, streamDiagnostic, routing } = {}) {
+function internalWait(code, { stage = 'review', inputHash, streamDiagnostic, routing } = {}) {
   return { verdict: 'wait', waitKind: 'review_wait', reason: code, retryable: true,
     diagnostic: { stage, code, at: new Date().toISOString(), ...(streamDiagnostic ? { stream: streamDiagnostic } : {}) },
-    delivery: systemStateDelivery({ state: budgetWait ? 'budget_wait' : 'review_wait', code, stage }),
-    ...(inputHash ? { inputHash } : {}), ...(budgetWait ? { budgetWait } : {}), ...(routing ? { routing } : {}) };
+    delivery: systemStateDelivery({ state: 'review_wait', code, stage }),
+    ...(inputHash ? { inputHash } : {}), ...(routing ? { routing } : {}) };
 }
 
 function oneJsonObject(text) {
@@ -215,51 +215,45 @@ Missing infrastructure access, unreadable evidence or temporary model/resource f
   { role: 'user', content: [{ type: 'text', text: JSON.stringify({ trustedClock: { now: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, taskCreatedAt: ticket.createdAt, resultCreatedAt: result.createdAt ?? result.committedAt }, publicationContext, taskContract: { objective: ticket.target, acceptance: ticket.acceptance || ticket.mandate?.acceptance || ticket.mandate?.instruction, originalInstruction: ticket.mandate?.instruction, instructionRevision: ticket.instructionRevision }, objective: ticket.target, acceptance: ticket.acceptance, instructionRevision: ticket.instructionRevision, mandate: ticket.mandate, answeredAttentions, result, evidenceIndex: index }) }] }];
   let routing;
   const requestBudget = ticketReviewRequestBudget();
-  const collectReview = () => collectAuxiliaryText({ llm: database ? goalBudgetLlm(llm, { database, ticketId: ticket.id }) : llm,
+  const collectReview = () => collectAuxiliaryText({ llm: database ? goalUsageLlm(llm, { database, ticketId: ticket.id }) : llm,
     model, config: routingConfig, capability: 'review', policy: TICKET_REVIEW_REQUEST_POLICY, requestBudget,
     validate: text => parseDecision(text, index, publicationContext.silentAllowed),
     request: { purpose: 'superagent-verification', maxTokens: 12288, signal, messages } });
-  try {
-    for (let round = 0; round < 4; round++) {
-      let response = await collectReview();
-      routing = response.routing;
-      let decision = parseDecision(response.text, index, publicationContext.silentAllowed);
-      if (requiresUserContinuationCheck(decision, ticket, result, answeredAttentions)) {
-        messages.push(
-          { role: 'assistant', content: [{ type: 'text', text: response.text }] },
-          { role: 'system', content: [{ type: 'text', text: 'Host consistency check: the persisted task explicitly requires a user decision before this Ticket can continue, and the current Worker submission still asks for that decision before continuing. Reassess against the complete saved task and evidence. If the required answer is absent, return verdict wait with delivery.action ask, a concise task-specific question and userDecision. Write a fresh Router report; do not forward Worker prose. If the saved evidence contains the answer already, assess the resulting final deliverable normally.' }] },
-        );
-        const checked = await collectReview();
-        response = checked;
-        routing = checked.routing;
-        decision = parseDecision(checked.text, index, publicationContext.silentAllowed);
-        if (!decision.readEvidence && (decision.verdict !== 'wait' || decision.waitKind !== 'blocked' || decision.delivery.action !== 'ask')) {
-          return { ...unavailable('USER_CONTINUATION_REVIEW_CONFLICT', 'review'), routing };
-        }
+  for (let round = 0; round < 4; round++) {
+    let response = await collectReview();
+    routing = response.routing;
+    let decision = parseDecision(response.text, index, publicationContext.silentAllowed);
+    if (requiresUserContinuationCheck(decision, ticket, result, answeredAttentions)) {
+      messages.push(
+        { role: 'assistant', content: [{ type: 'text', text: response.text }] },
+        { role: 'system', content: [{ type: 'text', text: 'Host consistency check: the persisted task explicitly requires a user decision before this Ticket can continue, and the current Worker submission still asks for that decision before continuing. Reassess against the complete saved task and evidence. If the required answer is absent, return verdict wait with delivery.action ask, a concise task-specific question and userDecision. Write a fresh Router report; do not forward Worker prose. If the saved evidence contains the answer already, assess the resulting final deliverable normally.' }] },
+      );
+      const checked = await collectReview();
+      response = checked;
+      routing = checked.routing;
+      decision = parseDecision(checked.text, index, publicationContext.silentAllowed);
+      if (!decision.readEvidence && (decision.verdict !== 'wait' || decision.waitKind !== 'blocked' || decision.delivery.action !== 'ask')) {
+        return { ...unavailable('USER_CONTINUATION_REVIEW_CONFLICT', 'review'), routing };
       }
-      if (repeatsAnsweredQuestion(decision, answeredAttentions)) {
-        messages.push(
-          { role: 'assistant', content: [{ type: 'text', text: response.text }] },
-          { role: 'system', content: [{ type: 'text', text: 'Host consistency check: answeredAttentions contains the human answers already recorded for this exact task revision and execution. Reassess the submitted result using those answers. Do not repeat an answered question or treat its answer as absent. If another user decision is genuinely required, explain how it differs from the recorded answers; otherwise assess the result normally.' }] },
-        );
-        const checked = await collectReview();
-        response = checked;
-        routing = checked.routing;
-        decision = parseDecision(checked.text, index, publicationContext.silentAllowed);
-        if (repeatsAnsweredQuestion(decision, answeredAttentions)) {
-          return { ...unavailable('ANSWERED_ATTENTION_REVIEW_CONFLICT', 'review'), routing };
-        }
-      }
-      if (!decision.readEvidence) return { ...decision, routing, inputHash };
-      if (round === 3) return { ...unavailable('EVIDENCE_READ_WINDOW_EXHAUSTED'), routing };
-      const pages = [];
-      try { for (const page of decision.readEvidence) pages.push(await readEvidence(page)); }
-      catch { signal?.throwIfAborted(); return { ...unavailable('REVIEW_EVIDENCE_UNAVAILABLE'), routing }; }
-      messages.push({ role: 'assistant', content: [{ type: 'text', text: response.text }] }, { role: 'user', content: [{ type: 'text', text: JSON.stringify({ evidencePages: pages, remainingReadRounds: 2 - round }) }] });
     }
-  } catch (error) {
-    const decision = goalBudgetDenial(error);
-    if (!decision) throw error;
-    return internalWait('GOAL_BUDGET_UNAVAILABLE', { inputHash, budgetWait: { goalId: decision.goalId, reason: decision.reason }, routing: auxiliaryFailureRouting(error) });
+    if (repeatsAnsweredQuestion(decision, answeredAttentions)) {
+      messages.push(
+        { role: 'assistant', content: [{ type: 'text', text: response.text }] },
+        { role: 'system', content: [{ type: 'text', text: 'Host consistency check: answeredAttentions contains the human answers already recorded for this exact task revision and execution. Reassess the submitted result using those answers. Do not repeat an answered question or treat its answer as absent. If another user decision is genuinely required, explain how it differs from the recorded answers; otherwise assess the result normally.' }] },
+      );
+      const checked = await collectReview();
+      response = checked;
+      routing = checked.routing;
+      decision = parseDecision(checked.text, index, publicationContext.silentAllowed);
+      if (repeatsAnsweredQuestion(decision, answeredAttentions)) {
+        return { ...unavailable('ANSWERED_ATTENTION_REVIEW_CONFLICT', 'review'), routing };
+      }
+    }
+    if (!decision.readEvidence) return { ...decision, routing, inputHash };
+    if (round === 3) return { ...unavailable('EVIDENCE_READ_WINDOW_EXHAUSTED'), routing };
+    const pages = [];
+    try { for (const page of decision.readEvidence) pages.push(await readEvidence(page)); }
+    catch { signal?.throwIfAborted(); return { ...unavailable('REVIEW_EVIDENCE_UNAVAILABLE'), routing }; }
+    messages.push({ role: 'assistant', content: [{ type: 'text', text: response.text }] }, { role: 'user', content: [{ type: 'text', text: JSON.stringify({ evidencePages: pages, remainingReadRounds: 2 - round }) }] });
   }
 }

@@ -10,15 +10,13 @@ export function ticketGoalRecord(database, ticketId) {
     && latest.instructionRevision === ticket.instructionRevision ? latest : null;
   const assignment = database.assignments(ticketId).at(-1);
   const blocked = ticket.status === 'open' && ['uncertain', 'blocked'].includes(assignment?.state);
-  const budgetWaiting = (['pausing', 'paused'].includes(ticket.status) && ticket.pauseReason?.kind === 'budget')
-    || (ticket.status === 'waiting' && !!current?.review?.budgetWait);
   return {
     id: ticket.id,
     kind: 'ticket',
-    status: blocked || budgetWaiting ? 'waiting' : ticket.status === 'open' ? 'running' : ticket.status,
+    status: blocked ? 'waiting' : ticket.status === 'open' ? 'running' : ticket.status,
     instructionRevision: ticket.instructionRevision,
     result: current ? { ...current, acceptanceVerdict: current.review?.verdict } : null,
-    waitReason: budgetWaiting ? 'budget' : ticket.status === 'cancelling' ? 'cancellation' : blocked || ticket.status === 'waiting' ? 'external' : undefined,
+    waitReason: ticket.status === 'cancelling' ? 'cancellation' : blocked || ticket.status === 'waiting' ? 'external' : undefined,
   };
 }
 

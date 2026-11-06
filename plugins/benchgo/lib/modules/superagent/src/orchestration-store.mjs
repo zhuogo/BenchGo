@@ -375,8 +375,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       return tx(() => cancelTicketInternal(ticketId));
     },
     pauseTicket(ticketId, { reason = { kind: 'manual' } } = {}) {
-      if (!record(reason) || !['manual', 'budget', 'execution-budget'].includes(reason.kind)) throw fail('INVALID_PAUSE_REASON', 'Invalid pause reason');
-      if (reason.kind === 'budget' && (typeof reason.goalId !== 'string' || !reason.goalId || !['requests', 'tokens', 'cost', 'deadline'].includes(reason.reason))) throw fail('INVALID_PAUSE_REASON', 'Invalid budget pause reason');
+      if (!record(reason) || reason.kind !== 'manual') throw fail('INVALID_PAUSE_REASON', 'Invalid pause reason');
       return tx(() => {
         const ticket = api.getTicket(ticketId);
         if (!ticket) throw fail('TICKET_NOT_FOUND', 'Ticket does not exist');
@@ -392,8 +391,6 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (!ticket) throw fail('TICKET_NOT_FOUND', 'Ticket does not exist');
         if (ticket.status === 'pausing') throw fail('PAUSE_PENDING', 'Execution has not reached its pause checkpoint');
         if (ticket.status !== 'paused') return ticket;
-        const budget = api.checkGoalBudget({ ticketId });
-        if (!budget.allowed) throw Object.assign(fail('GOAL_BUDGET_EXHAUSTED', 'Goal budget must be adjusted before resuming'), { budget });
         const at = new Date().toISOString();
         const reviewed = api.results(ticketId).at(-1);
         if (reviewed?.reviewPaused && reviewed.version === ticket.resultVersion && reviewed.instructionRevision === ticket.instructionRevision
@@ -435,26 +432,18 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (!run || run.state !== 'verifying' || !result.waitingPause || !result.checkpoint || !result.transcript || JSON.stringify(run.evidence) !== JSON.stringify(result)) throw fail('RUN_CONFLICT', 'Pause requires saved execution evidence');
         const stopped = parse(assignment.payload).executionStopped;
         if (stopped?.owner !== owner || stopped?.fence !== fence) throw fail('PAUSE_PENDING', 'Execution cleanup is not confirmed');
-        const executionBudget = result.waitingExecutionBudget;
-        if (executionBudget && (executionBudget.kind !== 'execution-time' || typeof executionBudget.effectsVerified !== 'boolean'
-          || executionBudget.terminal?.kind !== 'aborted' || executionBudget.terminal.reason?.kind !== 'hook'
-          || executionBudget.terminal.reason.reason !== 'benchgo-execution-budget-exhausted' || result.remainingExecutionMs !== 0)) {
-          throw fail('PAUSE_CONFLICT', 'Execution budget requires an official deadline ending and saved effects');
-        }
+        if (result.waitingExecutionBudget || result.waitingBudget) throw fail('PAUSE_CONFLICT', 'Budget pauses were removed on 2026-11-06');
         const at = timestamp(now);
         db.prepare("UPDATE sa_runs SET state='waiting',updated_at=? WHERE id=?").run(at, run.id);
-        const budgetWait = executionBudget && ticket.pauseReason?.kind === 'execution-budget';
-        db.prepare('UPDATE sa_assignments SET state=?,owner=NULL,lease_until=NULL,updated_at=? WHERE id=?').run(budgetWait ? 'waiting' : 'paused', at, assignmentId);
+        db.prepare("UPDATE sa_assignments SET state='paused',owner=NULL,lease_until=NULL,updated_at=? WHERE id=?").run(at, assignmentId);
         const pending = api.assignments(ticket.id).some(row => ['claimed', 'uncertain'].includes(row.state));
-        db.prepare('UPDATE sa_tickets SET status=?,updated_at=? WHERE id=?').run(pending ? 'pausing' : budgetWait ? 'waiting' : 'paused', at, ticket.id);
-        if (budgetWait && !pending) waitForContinuation(ticket.id, executionBudget.effectsVerified ? 'EXECUTION_BUDGET_EXHAUSTED' : 'EXECUTION_EFFECTS_UNKNOWN', now, true,
-          { assignmentId, runId: run.id, sessionId: run.sessionId });
+        db.prepare('UPDATE sa_tickets SET status=?,updated_at=? WHERE id=?').run(pending ? 'pausing' : 'paused', at, ticket.id);
         return api.getAssignment(assignmentId);
       });
     },
-    queueBudgetContinuation(ticketId, { expectedResultVersion, additionalExecutionMs = 0, validateMandate, now = Date.now() } = {}) {
+    /** Resumes a Ticket parked by the execution-time gate removed on 2026-11-06; no added time is required. */
+    queueBudgetContinuation(ticketId, { expectedResultVersion, validateMandate, now = Date.now() } = {}) {
       if (typeof validateMandate !== 'function') throw new Error('Execution budget continuation requires current authorization');
-      if (!Number.isSafeInteger(additionalExecutionMs) || additionalExecutionMs < 0 || additionalExecutionMs > 600000) throw new Error('Execution time addition must be between 0 and 10 minutes');
       return tx(() => {
         const ticket = api.getTicket(ticketId), continuation = ticket?.continuationWait;
         if (!ticket || !Number.isSafeInteger(expectedResultVersion) || ticket.resultVersion !== expectedResultVersion
@@ -474,10 +463,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           || payload.stopRequest) return unavailable('EXECUTION_NOT_VERIFIED');
         if (payload.executionStopped?.owner !== run.owner || payload.executionStopped?.fence !== row.fence) return unavailable('EXECUTION_STOP_UNCONFIRMED');
         if (saved.waitingExecutionBudget.effectsVerified !== true || saved.executionEffects?.effectsVerified === false) return unavailable('EXECUTION_EFFECTS_UNKNOWN');
-        const budget = api.checkGoalBudget({ ticketId, now });
-        if (!budget.allowed) return { ...unavailable('GOAL_BUDGET_EXHAUSTED'), budget };
-        if (!additionalExecutionMs) return unavailable('EXECUTION_BUDGET_EXHAUSTED');
-        payload.pauseContinuation = { runId: run.id, kind: 'execution-budget', additionalExecutionMs };
+        payload.pauseContinuation = { runId: run.id, kind: 'execution-budget' };
         for (const key of ['reviewContinuation', 'attentionContinuation', 'contextContinuation', 'verificationOnly']) delete payload[key];
         db.prepare("UPDATE sa_assignments SET state='queued',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?")
           .run(json(payload), timestamp(now), row.id);
@@ -604,21 +590,14 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
                 && saved.executionEffects?.effectsVerified !== false
                 && saved.sessionId === continuation.sourceSessionId && saved.runId === run.id
                 && currentTicket.resultVersion === continuation.sourceResultVersion
-                && (saved.remainingExecutionMs ?? 0) + (continuation.additionalExecutionMs || 0) > 0
-                && api.checkGoalBudget({ ticketId: row.ticket_id, now }).allowed
               : payload.contextContinuation
               ? ['verifying', 'uncertain'].includes(run?.state) && saved?.checkpoint && !saved.waitingPause && !saved.waitingAttention
               : run?.state === 'waiting' && (payload.pauseContinuation ? saved?.waitingPause : saved?.waitingAttention)
-                && (!payload.pauseContinuation || !saved?.waitingExecutionBudget
-                  || (payload.pauseContinuation.kind === 'execution-budget' && saved.waitingExecutionBudget.effectsVerified === true
-                    && payload.pauseContinuation.additionalExecutionMs > 0));
+                && (!payload.pauseContinuation || !saved?.waitingExecutionBudget || saved.waitingExecutionBudget.effectsVerified === true);
             if (!ready) {
               db.prepare('UPDATE sa_assignments SET state=?,updated_at=? WHERE id=?').run(payload.reviewContinuation ? 'waiting' : 'blocked', timestamp(now), row.id);
               if (payload.reviewContinuation) {
-                const budget = api.checkGoalBudget({ ticketId: row.ticket_id, now });
-                const code = saved?.executionEffects?.effectsVerified === false ? 'EXECUTION_EFFECTS_UNKNOWN' : !budget.allowed ? 'GOAL_BUDGET_EXHAUSTED'
-                  : (saved?.remainingExecutionMs ?? 0) + (continuation.additionalExecutionMs || 0) <= 0 ? 'EXECUTION_BUDGET_EXHAUSTED' : 'EXECUTION_NOT_VERIFIED';
-                waitForContinuation(row.ticket_id, code, now);
+                waitForContinuation(row.ticket_id, saved?.executionEffects?.effectsVerified === false ? 'EXECUTION_EFFECTS_UNKNOWN' : 'EXECUTION_NOT_VERIFIED', now);
               }
               continue;
             }
@@ -686,13 +665,10 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           || observation.hash !== run.evidence.transcript?.hash || observation.lastSeq !== run.evidence.transcript?.lastSeq) throw fail('PAUSE_CONFLICT', 'Saved pause evidence changed');
         const at = timestamp(now);
         payload.executionStopped = { owner: run.owner, fence, at, recovered: true };
-        const executionBudget = run.evidence.waitingExecutionBudget, budgetWait = executionBudget && ticket.pauseReason?.kind === 'execution-budget';
-        db.prepare('UPDATE sa_assignments SET state=?,owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?').run(budgetWait ? 'waiting' : 'paused', json(payload), at, row.id);
+        db.prepare("UPDATE sa_assignments SET state='paused',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?").run(json(payload), at, row.id);
         db.prepare("UPDATE sa_runs SET state='waiting',updated_at=? WHERE id=?").run(at, run.id);
         const pending = api.assignments(ticket.id).some(item => ['claimed','uncertain'].includes(item.state));
-        db.prepare('UPDATE sa_tickets SET status=?,updated_at=? WHERE id=?').run(pending ? 'pausing' : budgetWait ? 'waiting' : 'paused', at, ticket.id);
-        if (budgetWait && !pending) waitForContinuation(ticket.id, executionBudget.effectsVerified === true ? 'EXECUTION_BUDGET_EXHAUSTED' : 'EXECUTION_EFFECTS_UNKNOWN', now, true,
-          { assignmentId, runId: run.id, sessionId: run.sessionId });
+        db.prepare('UPDATE sa_tickets SET status=?,updated_at=? WHERE id=?').run(pending ? 'pausing' : 'paused', at, ticket.id);
         return api.getAssignment(row.id);
       });
     },
@@ -757,8 +733,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           || saved.evidence.transcript?.hash !== observation.hash || saved.evidence.transcript?.lastSeq !== observation.lastSeq) throw fail('RUN_CONFLICT', 'Observation does not match persisted execution evidence');
         if (api.pendingSubscriptionMessages(ticket.id, { limit: 1 }).length) {
           if (ownerRetry) throw fail('UNAPPLIED_CONTEXT', 'Review-only recovery cannot execute pending context');
-          if (!saved.evidence.checkpoint || saved.evidence.waitingPause || saved.evidence.waitingAttention
-            || !Number.isFinite(saved.evidence.remainingExecutionMs) || saved.evidence.remainingExecutionMs <= 0) throw fail('UNAPPLIED_CONTEXT', 'Safe context continuation evidence is unavailable');
+          if (!saved.evidence.checkpoint || saved.evidence.waitingPause || saved.evidence.waitingAttention) throw fail('UNAPPLIED_CONTEXT', 'Safe context continuation evidence is unavailable');
           payload.contextContinuation = { runId, observation: copy(observation) };
           delete payload.verificationOnly;
         } else {
@@ -1106,7 +1081,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   }
 
   function queueReviewContinuation(ticketId, { assignmentId, runId, sourceResultVersion, instruction, reason,
-    validateMandate, reviewAnswer, resetProgress = false, ownerRetry = false, additionalExecutionMs = 0, now = Date.now() } = {}) {
+    validateMandate, reviewAnswer, resetProgress = false, ownerRetry = false, now = Date.now() } = {}) {
     const ticket = api.getTicket(ticketId), latest = api.results(ticketId).at(-1);
     const unavailable = code => {
       if (ticket?.status === 'waiting' && code !== 'USER_ANSWER_REQUIRED') waitForContinuation(ticketId, code, now, !['failed', 'rework'].includes(latest?.review?.verdict));
@@ -1135,10 +1110,6 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     const executionFence = saved.executionFence ?? run.fence, executionOwner = saved.executionOwner ?? run.owner;
     if (payload.executionStopped?.fence !== executionFence || payload.executionStopped?.owner !== executionOwner) return unavailable('EXECUTION_STOP_UNCONFIRMED');
     if (evidence.executionEffects?.effectsVerified === false) return unavailable('EXECUTION_EFFECTS_UNKNOWN');
-    const budget = api.checkGoalBudget({ ticketId, now });
-    if (!budget.allowed) return { ...unavailable('GOAL_BUDGET_EXHAUSTED'), budget };
-    if (!Number.isSafeInteger(additionalExecutionMs) || additionalExecutionMs < 0) throw new Error('Invalid continuation execution budget');
-    if ((evidence.remainingExecutionMs ?? 0) + additionalExecutionMs <= 0) return unavailable('EXECUTION_BUDGET_EXHAUSTED');
     instruction = instruction || latest.review?.instruction || reviewAnswer?.content;
     if (typeof instruction !== 'string' || !instruction.trim() || instruction.length > 4000) return unavailable('CORRECTION_INSTRUCTION_MISSING');
     const progress = createHash('sha256').update(json({ summary: latest.finalSummary ?? latest.summary,
@@ -1153,7 +1124,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     }
     payload.reviewContinuation = { runId: run.id, sourceResultVersion, sourceSessionId: latest.sessionId,
       instruction: instruction.trim(), reason: String(reason || latest.review?.reason || '').slice(0, 4000),
-      ...(reviewAnswer ? { reviewAnswer: copy(reviewAnswer) } : {}), ...(additionalExecutionMs ? { additionalExecutionMs } : {}) };
+      ...(reviewAnswer ? { reviewAnswer: copy(reviewAnswer) } : {}) };
     for (const key of ['reviewRepair', 'attentionContinuation', 'pauseContinuation', 'contextContinuation', 'verificationOnly']) delete payload[key];
     db.prepare("UPDATE sa_assignments SET state='queued',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?").run(json(payload), timestamp(now), row.id);
     db.prepare("UPDATE sa_runs SET state='waiting',updated_at=? WHERE id=?").run(timestamp(now), run.id);

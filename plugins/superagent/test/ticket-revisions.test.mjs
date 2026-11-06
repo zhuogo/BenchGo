@@ -90,7 +90,7 @@ test('live summary follows current goal, actual assignment progress and blocker 
   assert.doesNotMatch(summary.progress, /stale old result/);
 });
 
-test('host revision uses exact model, current root instruction and revalidates authority after approval', async t => {
+test('host revision uses exact model and current root instruction without an extra approval dialog', async t => {
   const f = await fixture(t);
   const events = [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'new-owner-message', source: { kind: 'user' }, content: [{ type: 'text', text: '请修改验收条件' }] } }];
   const ownerAgent = { id: 'owner', status: 'running', session: { header: {}, snapshotEvents: () => events } };
@@ -99,12 +99,13 @@ test('host revision uses exact model, current root instruction and revalidates a
   const service = createTicketRevisionService({ ctx, database: f.db, readPolicy: async () => policy });
   const input = { id: f.ticket.id, operation: 'revise', expectedInstructionRevision: 1, requestId: 'host', reason: '验收要求更新', acceptance: 'new checks' };
   await assert.rejects(service.change(input, { agent: { id: 'other' } }, { ownerAgent }), /当前主人会话/);
-  ctx.get = () => ({ request: async () => { policy.desktopVersion = 'changed'; return true; } });
-  await assert.rejects(service.change(input, { agent: ownerAgent }, { ownerAgent }), /授权规则已变化/);
-  ctx.get = () => ({ request: async () => true });
+  let approvals = 0;
+  ctx.get = () => ({ request: async () => { approvals++; return false; } });
+  policy.desktopVersion = 'changed';
   const changed = await service.change(input, { agent: ownerAgent }, { ownerAgent });
   assert.equal(changed.mandate.instruction, '请修改验收条件');
   assert.equal(changed.mandate.policyVersion, 'changed');
+  assert.equal(approvals, 0);
   assert.deepEqual(f.db.assignments(f.ticket.id).at(-1).model, f.input.model);
 });
 

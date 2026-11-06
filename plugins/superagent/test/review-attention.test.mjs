@@ -97,7 +97,7 @@ test('identical option labels still resume only the question actually answered',
   assert.equal(f.db.attentions(second.ticket.id)[0].state, 'answered');
 });
 
-test('stop and authorization gates precede recovery while exhausted execution budget keeps answers waiting', async t => {
+test('stop and authorization gates precede recovery; elapsed execution time never holds an answer back', async t => {
   const f = await fixture(t), saved = blockedResult(f), exhausted = blockedResult(f, { key: 'exhausted', remainingExecutionMs: 0 });
   const stopped = blockedResult(f, { key: 'stopped' });
   f.db.answerDesktopAttention(answer(saved, 'first'));
@@ -106,25 +106,21 @@ test('stop and authorization gates precede recovery while exhausted execution bu
   f.db.cancelTicket(stopped.ticket.id);
   assert.equal(f.db.queueAnsweredAttention({ validateMandate: () => false }), 0);
   assert.equal(f.db.getTicket(saved.ticket.id).status, 'waiting');
-  assert.equal(f.db.queueAnsweredAttention({ validateMandate: () => true }), 1);
-  assert.equal(f.db.getTicket(exhausted.ticket.id).status, 'waiting');
-  assert.equal(f.db.attentions(exhausted.ticket.id)[0].state, 'answered', 'the persisted answer is retained for later recovery');
+  assert.equal(f.db.queueAnsweredAttention({ validateMandate: () => true }), 2);
+  assert.equal(f.db.getTicket(exhausted.ticket.id).status, 'open');
   assert.equal(f.db.getTicket(stopped.ticket.id).status, 'cancelled');
   assert.equal(f.db.getAssignment(stopped.assignment.id).reviewContinuation, undefined, 'answer cannot bypass a stopped Ticket');
 });
 
-test('explicit owner budget resumes an answered review in its original Run without inventing an answer', async t => {
+test('explicit owner retry resumes an answered review in its original Run without inventing an answer', async t => {
   const f = await fixture(t), unanswered = blockedResult(f, { key: 'unanswered', remainingExecutionMs: 0 });
   const saved = blockedResult(f, { key: 'answered', remainingExecutionMs: 0 });
-  const request = { sourceResultVersion: 1, validateMandate: () => true, ownerRetry: true, additionalExecutionMs: 600000 };
+  const request = { sourceResultVersion: 1, validateMandate: () => true, ownerRetry: true };
   const before = f.db.getTicket(unanswered.ticket.id);
   assert.equal(f.db.queueAnsweredReviewContinuation(unanswered.ticket.id, request).code, 'USER_ANSWER_REQUIRED');
   assert.deepEqual(f.db.getTicket(unanswered.ticket.id), before, 'no answer leaves the ticket untouched');
   assert.equal(f.db.getAssignment(unanswered.assignment.id).reviewContinuation, undefined);
   f.db.answerDesktopAttention(answer(saved));
-  assert.equal(f.db.queueAnsweredReviewContinuation(saved.ticket.id, { ...request, additionalExecutionMs: 0 }).code, 'EXECUTION_BUDGET_EXHAUSTED');
-  assert.deepEqual(f.db.getTicket(saved.ticket.id).continuationWait, { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 1 });
-  assert.throws(() => f.db.queueAnsweredReviewContinuation(saved.ticket.id, { ...request, ownerRetry: false }), /explicit owner retry/);
   assert.equal(f.db.queueAnsweredReviewContinuation(saved.ticket.id, { ...request, validateMandate: () => false }).code, 'MANDATE_REVOKED');
   f.restart();
   const resumed = f.db.queueAnsweredReviewContinuation(saved.ticket.id, request);
@@ -132,7 +128,7 @@ test('explicit owner budget resumes an answered review in its original Run witho
   assert.equal(resumed.assignment.id, saved.assignment.id);
   assert.equal(resumed.assignment.reviewContinuation.runId, saved.run.id);
   assert.equal(resumed.assignment.reviewContinuation.sourceSessionId, saved.run.sessionId);
-  assert.equal(resumed.assignment.reviewContinuation.additionalExecutionMs, 600000);
+  assert.equal(resumed.assignment.reviewContinuation.additionalExecutionMs, undefined);
   assert.deepEqual(resumed.assignment.reviewContinuation.reviewAnswer.answer, answer(saved).answer);
   assert.equal(resumed.ticket.continuationWait, null);
   assert.equal(f.db.runs(saved.assignment.id).length, 1);
@@ -143,7 +139,7 @@ test('explicit owner budget resumes an answered review in its original Run witho
 test('explicit review recovery still rejects stale versions and respects stop', async t => {
   const f = await fixture(t), saved = blockedResult(f);
   f.db.answerDesktopAttention(answer(saved));
-  const request = { sourceResultVersion: 1, validateMandate: () => true, ownerRetry: true, additionalExecutionMs: 600000 };
+  const request = { sourceResultVersion: 1, validateMandate: () => true, ownerRetry: true };
   assert.throws(() => f.db.queueAnsweredReviewContinuation(saved.ticket.id, { ...request, sourceResultVersion: 2 }), { code: 'REVIEW_CONFLICT' });
   f.db.cancelTicket(saved.ticket.id);
   assert.equal(f.db.queueAnsweredReviewContinuation(saved.ticket.id, request).code, 'TICKET_STOPPED');

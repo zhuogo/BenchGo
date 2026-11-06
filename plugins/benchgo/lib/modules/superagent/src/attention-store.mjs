@@ -49,11 +49,8 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
     return review.instructionRevision === ticket.instructionRevision && review.resultVersion === ticket.resultVersion
       && result?.version === review.resultVersion && result.runId === review.runId && result.sessionId === row.session_id;
   };
-  const queueAnsweredReviewContinuation = (ticketId, { sourceResultVersion, validateMandate, ownerRetry = false,
-    additionalExecutionMs = 0, now = Date.now() } = {}) => {
+  const queueAnsweredReviewContinuation = (ticketId, { sourceResultVersion, validateMandate, ownerRetry = false, now = Date.now() } = {}) => {
     if (typeof validateMandate !== 'function') throw new Error('Attention requires current authorization');
-    if (!Number.isSafeInteger(additionalExecutionMs) || additionalExecutionMs < 0
-      || (additionalExecutionMs > 0 && ownerRetry !== true)) throw new Error('Additional execution budget requires an explicit owner retry');
     const ticket = api.getTicket(ticketId);
     if (!ticket) throw new Error('Attention ticket not found');
     if (!Number.isSafeInteger(sourceResultVersion) || sourceResultVersion < 1 || sourceResultVersion !== ticket.resultVersion) {
@@ -72,7 +69,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
       sourceResultVersion, instruction: entry.question.question, reason: api.results(ticket.id).at(-1)?.review?.reason,
       reviewAnswer: { attentionId: entry.id, question: entry.question, kind: entry.kind,
         triggerId: entry.answerTriggerId, source: trigger.source, actor: trigger.actor, text: trigger.content, answer },
-      validateMandate, ownerRetry: ownerRetry === true, additionalExecutionMs, now, inTransaction: true });
+      validateMandate, ownerRetry: ownerRetry === true, now, inTransaction: true });
   };
   return {
     attentionResolutions(ticketId, { sessionId, callId } = {}) {

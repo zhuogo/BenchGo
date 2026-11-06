@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { validateGoalBudget } from './goal-budget-store.mjs';
 
 /** Host-only composition: approved live owner -> durable Tickets -> Goal aggregate. */
 export async function createGoalTickets({ goal, exec, ownerAgent, threadId, delegation, scheduler, ctx, database }) {
@@ -30,11 +29,7 @@ export async function createGoalTickets({ goal, exec, ownerAgent, threadId, dele
     requestIds.add(requestId);
     if (typeof node.objective !== 'string' || !node.objective.trim()) throw new Error('目标缺少 objective');
     if (node.scope != null) throw new Error('工单目标尚不支持旧式 scope，请明确执行要求');
-    if (node.budget != null) {
-      validateGoalBudget(node.budget);
-      if (node.budget.cost !== undefined) throw new Error('费用预算尚无可靠计价来源，请使用请求次数、token 或截止时间');
-      if (!database?.ensureGoalBudget) throw new Error('目标预算服务不可用');
-    }
+    if (node.budget != null) throw new Error('目标预算已移除，目标只记录用量，不设额度');
     if (node.acceptance != null && (typeof node.acceptance !== 'string' || node.acceptance.length > 100000)) throw new Error('验收条件必须为不超过100000字符的原文');
     if (node.children !== undefined && !Array.isArray(node.children)) throw new Error('目标 children 必须为数组');
     if (node.children?.length) {
@@ -48,12 +43,12 @@ export async function createGoalTickets({ goal, exec, ownerAgent, threadId, dele
   };
   await validate(goal, goal.requestId);
   scheduler.reserveGoalRequest(goal);
-  const budgeted = [...seen].some(node => node.budget != null);
+  // Every Goal node owns a usage ledger shared with its descendants; it records, never limits.
   const budgetIds = new Map();
-  if (budgeted) {
+  if (database?.ensureGoalBudget) {
     const prepare = (node, path = 'root', parentGoalId = null) => {
       const goalId = createHash('sha256').update(JSON.stringify(['goal-budget', ownerAgent.id, goal.requestId, path])).digest('hex');
-      database.ensureGoalBudget({ goalId, parentGoalId, budget: node.budget || {} });
+      database.ensureGoalBudget({ goalId, parentGoalId });
       budgetIds.set(node, goalId);
       node.children?.forEach((child, index) => prepare(child, `${path}:${index}`, goalId));
     };
@@ -69,7 +64,7 @@ export async function createGoalTickets({ goal, exec, ownerAgent, threadId, dele
     const requestId = createHash('sha256').update(JSON.stringify(['goal-ticket', goal.requestId, path])).digest('hex');
     const ticket = await delegation.delegate({ projectId: node.projectId, provider: node.provider, model: node.model,
       text: node.text, acceptance: node.acceptance || '', requestId }, exec, { ownerAgent, threadId, ...(budgetGoalId ? { budgetGoalId } : {}) });
-    if (budgetGoalId && database.ticketGoalBudget(ticket.id)?.goalId !== budgetGoalId) throw new Error('目标工单未原子绑定预算');
+    if (budgetGoalId && database.ticketGoalBudget(ticket.id)?.goalId !== budgetGoalId) throw new Error('目标工单未原子绑定用量账本');
     return { ticketId: ticket.id, ...(budgetGoalId ? { budgetGoalId } : {}) };
   };
   const binding = await bind(goal);

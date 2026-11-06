@@ -9,7 +9,7 @@ import { createDesktopDelegationService } from '../src/desktop-delegation-servic
 import { createGoalTickets } from '../src/goal-ticket-creation.mjs';
 import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
 
-for (const budgeted of [false, true]) test(`Ticket goal survives partial creation and restart without duplicate dispatch or changed retry (budget=${budgeted})`, async t => {
+for (const budgeted of [false, true]) test(`Ticket goal survives partial creation and restart without duplicate dispatch or changed retry (aggregateInterrupted=${budgeted})`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-goal-tickets-'));
   const database = createAssistantOrchestrationStore({ directory });
   const store = { orchestration: database, paths: { database: join(directory, 'assistant.db') } };
@@ -30,17 +30,17 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
   let calls = 0, fail = true;
   const delegation = { delegate: async (...args) => { calls++; if (fail && calls === 2) throw new Error('interrupted'); return service.delegate(...args); } };
   const child = { objective: 'leaf', projectId: 'project', provider: 'opaque', model: 'exact', text: 'work', ...(budgeted ? { acceptance: 'evidence' } : {}) };
-  const goal = { requestId: 'root-request', ownerSessionId: 'owner', objective: 'root', ...(budgeted ? { budget: { requests: 1 } } : {}), children: [child, { ...child, text: 'second' }] };
+  const goal = { requestId: 'root-request', ownerSessionId: 'owner', objective: 'root', children: [child, { ...child, text: 'second' }] };
   const create = input => createGoalTickets({ goal: input, ctx, ownerAgent, exec: { agent: ownerAgent, authorized: true }, threadId: 'main', delegation, scheduler, database });
   await assert.rejects(create({ ...goal, children: [{ ...child, requestId: goal.requestId }] }), /请求标识/);
+  await assert.rejects(create({ ...goal, budget: { requests: 1 } }), /目标预算已移除/);
   assert.equal(database.listTickets().length, 0, 'invalid tree cannot dispatch before validation');
   await assert.rejects(create(goal), /interrupted/);
   assert.equal(database.listTickets().length, 1);
   if (budgeted) {
     const first = database.listTickets()[0];
-    assert.ok(database.ticketGoalBudget(first.id), 'first runnable Ticket already has its ancestor budget');
+    assert.ok(database.ticketGoalBudget(first.id), 'first runnable Ticket already has its ancestor usage ledger');
     assert.equal(database.reserveGoalRequest({ ticketId: first.id, requestId: 'first-request' }).allowed, true);
-    await assert.rejects(create({ ...goal, budget: { requests: 2 } }), { code: 'IDEMPOTENCY_CONFLICT' });
   }
   await scheduler.dispose(); scheduler = createAssistantScheduler({ store, database: runtimeDatabase });
   fail = false;
@@ -51,7 +51,6 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
     const partial = scheduler.matchGoalRequest(goal);
     assert.equal(partial.nextStep, 'building_children');
     assert.equal(partial.childGoalIds.length, 1);
-    assert.throws(() => scheduler.updateGoalBudget(partial.id, { budget: { requests: 8 }, expectedVersion: 1 }), /创建尚未完成/);
     await scheduler.dispose(); scheduler = createAssistantScheduler({ store, database: runtimeDatabase });
   }
   const parent = await create(goal);
@@ -65,13 +64,9 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
   assert.equal((await create(goal)).id, parent.id);
   if (budgeted) {
     const second = database.listTickets().find(ticket => ticket.target === 'second');
-    const rejected = database.reserveGoalRequest({ ticketId: second.id, requestId: 'second-request' });
-    assert.equal(rejected.allowed, false);
-    assert.equal(rejected.reason, 'requests');
-    assert.equal(database.goalBudget(rejected.goalId).usage.requests, 1, 'retry creation does not reset shared usage');
-    assert.equal(scheduler.getGoal(parent.id).budgetState.goalId, rejected.goalId);
-    assert.equal(scheduler.getGoal(parent.id).budgetState.usage.requests, 1);
-    scheduler.updateGoalBudget(parent.id, { expectedVersion: 1, budget: { requests: 3 } });
+    assert.equal(database.reserveGoalRequest({ ticketId: second.id, requestId: 'second-request' }).allowed, true, 'shared usage never refuses a request');
+    const ledger = scheduler.getGoal(parent.id).budgetState;
+    assert.equal(ledger.usage.requests, 2, 'retry creation does not reset shared usage');
   }
   await scheduler.tick();
   assert.equal(scheduler.getGoal(parent.id).status, 'active');

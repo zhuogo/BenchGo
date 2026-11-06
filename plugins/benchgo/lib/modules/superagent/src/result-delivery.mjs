@@ -6,8 +6,8 @@ const systemStates = new Set(['review_wait', 'delivery_wait', 'budget_wait', 'co
 export function systemStateDelivery({ state = 'review_wait', code = 'REVIEW_UNAVAILABLE', stage = 'review' } = {}) {
   const labels = { review_wait: '结果核验暂不可用', delivery_wait: '交付正文尚未生成', budget_wait: '任务资源暂不足', continuation_wait: '任务续做暂不可用' };
   const conditions = {
-    EXECUTION_BUDGET_EXHAUSTED: '本轮执行时长额度已耗尽，正在等待明确增加时长后继续原工单',
-    GOAL_BUDGET_EXHAUSTED: '持续目标额度不足，正在等待额度调整后继续原工单',
+    // Legacy codes from budget gates removed on 2026-11-06; parked Tickets resume without added quota.
+    EXECUTION_BUDGET_EXHAUSTED: '此前的执行时长限制已取消，可直接继续原工单',
     EXECUTION_EFFECTS_UNKNOWN: '有外部动作的效果尚未核实，核实前不会重放执行',
     NO_PROGRESS: '多次续做未见成果或证据变化，已暂停自动续做，等待恢复决定',
   };

@@ -1,13 +1,5 @@
 const validId = value => { if (typeof value !== 'string' || !value.trim() || value.length > 512) throw new Error('Invalid budget identifier'); };
-export function validateGoalBudget(budget = {}) {
-  if (!budget || typeof budget !== 'object' || Array.isArray(budget) || Object.keys(budget).some(key => !['requests', 'tokens', 'cost', 'deadline'].includes(key))) throw new Error('Invalid goal budget');
-  for (const [key, value] of Object.entries(budget)) {
-    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || (key !== 'cost' && !Number.isSafeInteger(value))) throw new Error(`Invalid budget ${key}`);
-  }
-  return Object.fromEntries(['requests', 'tokens', 'cost', 'deadline'].filter(key => budget[key] !== undefined).map(key => [key, budget[key]]));
-}
-
-/** Request admission is hard/atomic. Observed token and cost totals are soft bounds. */
+/** Usage ledger only (budget gates removed 2026-11-06): requests and tokens are recorded, never refused. */
 export function installGoalBudgetStore({ db, tx }) {
   db.exec(`CREATE TABLE IF NOT EXISTS sa_goal_budgets(goal_id TEXT PRIMARY KEY,parent_id TEXT REFERENCES sa_goal_budgets(goal_id),budget TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 1,requests INTEGER NOT NULL DEFAULT 0,tokens INTEGER NOT NULL DEFAULT 0,cost REAL NOT NULL DEFAULT 0,unknown_tokens INTEGER NOT NULL DEFAULT 0,unknown_cost INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS sa_goal_ticket_bindings(ticket_id TEXT PRIMARY KEY,goal_id TEXT NOT NULL REFERENCES sa_goal_budgets(goal_id));
@@ -36,12 +28,6 @@ export function installGoalBudgetStore({ db, tx }) {
     db.prepare('INSERT OR IGNORE INTO sa_goal_ticket_bindings VALUES(?,?)').run(ticketId, goalId);
     return get(goalId);
   };
-  const blocked = (rows, now) => {
-    for (const row of rows) for (const key of ['deadline', 'requests', 'tokens', 'cost']) {
-      if (row.budget[key] !== undefined && (key === 'deadline' ? now : row.usage[key]) >= row.budget[key]) return { allowed: false, goalId: row.goalId, reason: key, budget: row.budget, usage: row.usage };
-    }
-    return { allowed: true };
-  };
   const usagePayload = (tokens, cost) => {
     if ((tokens !== null && (!Number.isSafeInteger(tokens) || tokens < 0)) || (cost !== null && (typeof cost !== 'number' || !Number.isFinite(cost) || cost < 0))) throw new Error('Invalid goal usage');
     return JSON.stringify({ tokens, cost });
@@ -52,16 +38,16 @@ export function installGoalBudgetStore({ db, tx }) {
   return {
     goalBudget: get,
     ticketGoalBudget(ticketId) { const goalId = binding(ticketId); return goalId ? get(goalId) : null; },
-    ensureGoalBudget({ goalId, parentGoalId = null, budget = {} }) {
-      validId(goalId); if (parentGoalId !== null) validId(parentGoalId); budget = validateGoalBudget(budget);
+    ensureGoalBudget({ goalId, parentGoalId = null }) {
+      validId(goalId); if (parentGoalId !== null) validId(parentGoalId);
       return tx(() => {
         const prior = get(goalId);
         if (prior) {
-          if (prior.parentGoalId !== parentGoalId || JSON.stringify(prior.budget) !== JSON.stringify(budget)) throw new Error('Goal budget identity conflict');
+          if (prior.parentGoalId !== parentGoalId) throw new Error('Goal budget identity conflict');
           return prior;
         }
         if (parentGoalId && (parentGoalId === goalId || chain(parentGoalId).length >= 100)) throw new Error('Invalid goal budget parent');
-        db.prepare('INSERT INTO sa_goal_budgets(goal_id,parent_id,budget) VALUES(?,?,?)').run(goalId, parentGoalId, JSON.stringify(budget)); return get(goalId);
+        db.prepare('INSERT INTO sa_goal_budgets(goal_id,parent_id,budget) VALUES(?,?,?)').run(goalId, parentGoalId, '{}'); return get(goalId);
       });
     },
     bindTicketGoal(input) { return tx(() => bind(input)); },
@@ -70,14 +56,13 @@ export function installGoalBudgetStore({ db, tx }) {
       if (!db.isTransaction) throw new Error('Budget binding requires an active transaction');
       return bind(input);
     },
-    checkGoalBudget({ ticketId, now = Date.now() }) { const goalId = binding(ticketId); return goalId ? blocked(chain(goalId), now) : { allowed: true }; },
     reserveGoalRequest({ ticketId, requestId, now = Date.now() }) {
       validId(ticketId); validId(requestId); if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid budget time');
       return tx(() => {
         const prior = db.prepare('SELECT * FROM sa_goal_requests WHERE request_id=?').get(requestId);
         if (prior) { if (prior.ticket_id !== ticketId) throw new Error('Budget request identity conflict'); return { allowed: true, duplicate: true }; }
         const goalId = binding(ticketId); if (!goalId) return { allowed: true, unbound: true };
-        const rows = chain(goalId), decision = blocked(rows, now); if (!decision.allowed) return decision;
+        const rows = chain(goalId);
         db.prepare('INSERT INTO sa_goal_requests VALUES(?,?,?,?)').run(requestId, ticketId, goalId, now);
         for (const row of rows) db.prepare('UPDATE sa_goal_budgets SET requests=requests+1 WHERE goal_id=?').run(row.goalId);
         return { allowed: true, duplicate: false };
@@ -116,13 +101,6 @@ export function installGoalBudgetStore({ db, tx }) {
         db.prepare('INSERT INTO sa_goal_usage VALUES(?,?,?,?)').run(sessionId, seq, ticketId, payload);
         addUsage(goalId, tokens, cost);
         return { duplicate: false };
-      });
-    },
-    updateGoalBudget({ goalId, budget, expectedVersion }) {
-      budget = validateGoalBudget(budget);
-      return tx(() => {
-        const row = get(goalId); if (!row || row.version !== expectedVersion) throw Object.assign(new Error('Goal budget version conflict'), { code: 'ROW_CONFLICT' });
-        db.prepare('UPDATE sa_goal_budgets SET budget=?,version=version+1 WHERE goal_id=?').run(JSON.stringify(budget), goalId); return get(goalId);
       });
     },
   };

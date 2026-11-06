@@ -1,7 +1,19 @@
 import { createHash } from 'node:crypto';
 import { verifyArtifactCheckpoint } from './worker-artifact-checkpoint.mjs';
-import { isVerifiedPauseEnding } from './goal-budget-gate.mjs';
 import { executionEffects } from './execution-effects.mjs';
+
+const LEGACY_EXECUTION_BUDGET_HOOK = 'benchgo-execution-budget-exhausted';
+
+/**
+ * A pause is resumable only on the official pre-step rejection ending. Runs parked
+ * by the removed budget gates (before 2026-11-06) keep their exact saved ending.
+ */
+export function isVerifiedPauseEnding(reason, saved) {
+  return reason?.kind === 'blocked' || (saved?.waitingExecutionBudget?.kind === 'execution-time'
+    && reason?.kind === 'aborted' && reason.reason?.kind === 'hook' && reason.reason.reason === LEGACY_EXECUTION_BUDGET_HOOK
+    && JSON.stringify(reason) === JSON.stringify(saved.waitingExecutionBudget.terminal)) || (saved?.waitingBudget?.terminal?.kind === 'error'
+    && reason?.kind === 'error' && JSON.stringify(reason) === JSON.stringify(saved.waitingBudget.terminal));
+}
 
 export async function verifyExecutionArtifacts(run, result, signal) {
   if (!run?.environment) throw new Error('Project execution environment is unavailable');

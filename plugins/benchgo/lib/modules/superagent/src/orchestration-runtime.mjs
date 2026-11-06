@@ -134,8 +134,6 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   }
   async function performReview(ticketId, options) {
     shutdown.signal.throwIfAborted();
-    const budget = database.checkGoalBudget({ ticketId, now: now() });
-    if (!budget.allowed) throw Object.assign(new Error('工单资源条件暂不满足核验要求'), { code: 'GOAL_BUDGET_EXHAUSTED' });
     for (const assignment of database.assignments(ticketId)) for (const run of database.runs(assignment.id)) await checkpointStore.assertRunnable(run.id);
     const ticket = database.getTicket(ticketId);
     if (ticket?.status === 'open' && ticket.resultVersion === 0 && options?.expectedResultVersion === 0) {
@@ -177,24 +175,24 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     activeReviews.set(ticketId, { expectedResultVersion: options?.expectedResultVersion, promise });
     return promise;
   }
-  async function performResumeReviewWork(ticketId, expectedResultVersion, { additionalExecutionMs = 0 } = {}) {
+  async function performResumeReviewWork(ticketId, expectedResultVersion) {
     shutdown.signal.throwIfAborted();
     const ticket = database.getTicket(ticketId), result = database.results(ticketId).at(-1);
     if (!Number.isSafeInteger(expectedResultVersion) || ticket?.status !== 'waiting'
       || ticket.resultVersion !== expectedResultVersion || (result?.review?.waitKind !== 'continuation_wait'
         && ticket.continuationWait?.sourceResultVersion !== expectedResultVersion)) throw new Error('工单续做状态已变化，请刷新');
-    if (!Number.isSafeInteger(additionalExecutionMs) || additionalExecutionMs < 0 || additionalExecutionMs > 600000) throw new Error('续做时长须在0到10分钟之间');
-    const budgetWait = ticket.continuationWait;
-    if (budgetWait?.code === 'EXECUTION_EFFECTS_UNKNOWN') return { queued: false, code: budgetWait.code, ticket };
-    if (budgetWait?.code === 'EXECUTION_BUDGET_EXHAUSTED' && budgetWait.assignmentId && budgetWait.runId) {
-      const run = database.runs(budgetWait.assignmentId).find(item => item.id === budgetWait.runId && item.sessionId === budgetWait.sessionId);
+    const wait = ticket.continuationWait;
+    if (wait?.code === 'EXECUTION_EFFECTS_UNKNOWN') return { queued: false, code: wait.code, ticket };
+    // Tickets parked by the execution-time gate before its 2026-11-06 removal resume without added time.
+    if (wait?.code === 'EXECUTION_BUDGET_EXHAUSTED' && wait.assignmentId && wait.runId) {
+      const run = database.runs(wait.assignmentId).find(item => item.id === wait.runId && item.sessionId === wait.sessionId);
       if (!run?.evidence?.waitingExecutionBudget) throw new Error('原执行额度等待记录不可用');
       await checkpointStore.assertRunnable(run.id);
       const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(60000)]);
       return withRecoveredPause({ ctx, run, signal }, async () => {
         const policy = await readPolicy();
         signal.throwIfAborted();
-        return database.queueBudgetContinuation(ticketId, { expectedResultVersion, additionalExecutionMs,
+        return database.queueBudgetContinuation(ticketId, { expectedResultVersion,
           validateMandate: mandate => validateTicketMandate(mandate, { policy }), now: now() });
       });
     }
@@ -208,9 +206,9 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       signal.throwIfAborted();
       const validateMandate = mandate => validateTicketMandate(mandate, { policy });
       if (result.review?.waitKind === 'blocked') return database.queueAnsweredReviewContinuation(ticketId, {
-        sourceResultVersion: expectedResultVersion, validateMandate, ownerRetry: true, additionalExecutionMs, now: now() });
+        sourceResultVersion: expectedResultVersion, validateMandate, ownerRetry: true, now: now() });
       return database.queueReviewContinuation(ticketId, { assignmentId: assignment.id, runId: run.id,
-        sourceResultVersion: expectedResultVersion, resetProgress: true, additionalExecutionMs,
+        sourceResultVersion: expectedResultVersion, resetProgress: true,
         validateMandate, now: now() });
     });
   }

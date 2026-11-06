@@ -383,14 +383,6 @@
                 "type": "object",
                 "additionalProperties": true
               },
-              "goalBudgetResume": {
-                "type": "object",
-                "additionalProperties": true
-              },
-              "goalBudgetUpdate": {
-                "type": "object",
-                "additionalProperties": true
-              },
               "goalCancel": {
                 "type": "object",
                 "additionalProperties": true
@@ -761,7 +753,7 @@
               },
               "ticketResume": {
                 "type": "object",
-                "description": "恢复暂停工单或原单续做等待。续做必须提供当前 expectedResultVersion（执行未提交时可为0）；执行额度耗尽时由用户显式提交 additionalExecutionMs，正整数且最多600000。不增加 Goal 额度。版本、停止、撤权、检查点或外部效果未核实时拒绝，返回 queued:false/code 或错误。",
+                "description": "恢复暂停工单或原单续做等待。续做必须提供当前 expectedResultVersion（执行未提交时可为0）；不设执行时长或 Goal 额度（2026-11-06 拆除预算闸门）。版本、停止、撤权、检查点或外部效果未核实时拒绝，返回 queued:false/code 或错误。",
                 "additionalProperties": true
               },
               "ticketChange": {
@@ -1786,8 +1778,6 @@
               "evaluations",
               "goalAdvance",
               "goalBudgetGet",
-              "goalBudgetResume",
-              "goalBudgetUpdate",
               "goalCancel",
               "goalCreate",
               "goalGet",
@@ -1879,11 +1869,6 @@
           "expectedResultVersion": {
             "type": "integer",
             "minimum": 0
-          },
-          "additionalExecutionMs": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 600000
           },
           "expectedUpdatedAt": {
             "type": "string",

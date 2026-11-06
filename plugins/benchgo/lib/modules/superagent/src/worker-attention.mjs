@@ -23,16 +23,15 @@ export function attentionBatchAnswers(database, ticketId, { sessionId, callId, q
   });
 }
 
-export function installWorkerAttention(scope, agent, { database, assignment, signal, pauseDeadline, resumeDeadline, sessionProjections, llm, readPolicy, pollMs = 250 }) {
+export function installWorkerAttention(scope, agent, { database, assignment, signal, sessionProjections, llm, readPolicy, pollMs = 250 }) {
   const pending = new Map();
-  let sequence = 0, waiting = 0;
+  let sequence = 0;
   scope.on('user-questions/request', async (request, next) => {
     if (request.agent !== agent) return next();
     const ticket = database.getTicket(assignment.ticketId);
     if (!['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'email', 'webhook', 'api'].includes(ticket?.mandate.source?.channel)) return next();
     const waitSignal = AbortSignal.any([signal, ...(request.signal ? [request.signal] : [])]);
     waitSignal.throwIfAborted();
-    if (++waiting === 1) pauseDeadline();
     let hold, holdAbort;
     try {
       const callId = request.wait?.callId || `foreground:${++sequence}`;
@@ -74,7 +73,7 @@ export function installWorkerAttention(scope, agent, { database, assignment, sig
           waitSignal.addEventListener('abort', abort, { once: true });
         });
       }
-    } finally { holdAbort?.abort(); await hold?.return?.(); if (--waiting === 0) resumeDeadline(); }
+    } finally { holdAbort?.abort(); await hold?.return?.(); }
   }, { prepend: true });
   return { waiting() {
     const entries = [...pending.values()];

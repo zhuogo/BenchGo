@@ -409,67 +409,73 @@ test('subscribed handback preserves its original machine gate across reopen and 
   } finally { reopened.close(); }
 });
 
-test('budget pause persists and shared ancestor limits prevent resume until adjusted', async t => {
+test('goal usage never blocks resume and budget pause reasons are rejected', async t => {
   const db = await fixture(t);
-  db.ingest({ ...input('budget-pause'), mode: 'direct' });
-  const ticket = db.createTicket({ threadId: 'thread', target: 'budget work', mandate: {} });
-  db.createAssignment(ticket.id, { id: 'budget-work' });
-  db.ensureGoalBudget({ goalId: 'parent', budget: { requests: 0 } });
-  db.ensureGoalBudget({ goalId: 'child', parentGoalId: 'parent', budget: { requests: 10 } });
+  db.ingest({ ...input('usage-pause'), mode: 'direct' });
+  const ticket = db.createTicket({ threadId: 'thread', target: 'usage work', mandate: {} });
+  db.createAssignment(ticket.id, { id: 'usage-work' });
+  db.ensureGoalBudget({ goalId: 'parent' });
+  db.ensureGoalBudget({ goalId: 'child', parentGoalId: 'parent' });
   db.bindTicketGoal({ ticketId: ticket.id, goalId: 'child' });
-  const reason = { kind: 'budget', goalId: 'parent', reason: 'requests' };
-  assert.deepEqual(db.pauseTicket(ticket.id, { reason }).pauseReason, reason);
+  for (let index = 0; index < 5; index++) assert.equal(db.reserveGoalRequest({ ticketId: ticket.id, requestId: `r-${index}` }).allowed, true);
+  for (const kind of ['budget', 'execution-budget']) assert.throws(() => db.pauseTicket(ticket.id, { reason: { kind, goalId: 'parent', reason: 'requests' } }), { code: 'INVALID_PAUSE_REASON' });
+  assert.deepEqual(db.pauseTicket(ticket.id).pauseReason, { kind: 'manual' });
   const reopened = createAssistantOrchestrationStore({ filename: db.path });
   try {
-    assert.deepEqual(reopened.getTicket(ticket.id).pauseReason, reason);
-    assert.throws(() => reopened.resumeTicket(ticket.id), error => error.code === 'GOAL_BUDGET_EXHAUSTED' && error.budget.goalId === 'parent');
-    assert.equal(reopened.getTicket(ticket.id).status, 'paused');
-    assert.equal(reopened.getAssignment('budget-work').state, 'queued');
-    reopened.updateGoalBudget({ goalId: 'parent', budget: { requests: 1 }, expectedVersion: 1 });
+    assert.deepEqual(reopened.getTicket(ticket.id).pauseReason, { kind: 'manual' });
+    assert.equal(reopened.goalBudget('parent').usage.requests, 5);
     assert.equal(reopened.resumeTicket(ticket.id).pauseReason, null);
     assert.equal(reopened.getTicket(ticket.id).status, 'open');
   } finally { reopened.close(); }
 });
 
-test('manual pause cannot bypass exhausted budget and rejects malformed reasons', async t => {
+test('new pause evidence cannot carry a removed budget ending', async t => {
   const db = await fixture(t);
-  db.ingest({ ...input('manual-budget-pause'), mode: 'direct' });
-  const ticket = db.createTicket({ threadId: 'thread', target: 'work', mandate: {} });
-  db.ensureGoalBudget({ goalId: 'expired', budget: { deadline: 1 } });
-  db.bindTicketGoal({ ticketId: ticket.id, goalId: 'expired' });
-  assert.throws(() => db.pauseTicket(ticket.id, { reason: { kind: 'budget' } }), { code: 'INVALID_PAUSE_REASON' });
-  assert.deepEqual(db.pauseTicket(ticket.id).pauseReason, { kind: 'manual' });
-  assert.throws(() => db.resumeTicket(ticket.id), { code: 'GOAL_BUDGET_EXHAUSTED' });
+  db.createThread({ id: 'pause-thread', source: { type: 'desktop', id: 'owner' } });
+  const ticket = db.createTicket({ threadId: 'pause-thread', target: 'work', mandate: { source: { channel: 'desktop', sessionId: 'owner' } } });
+  db.createAssignment(ticket.id, { id: 'pause-work' });
+  const [assignment] = db.claimAssignments('owner', { validateMandate: () => true });
+  const ownership = { owner: assignment.owner, fence: assignment.fence };
+  const run = db.prepareRun(assignment.id, { ...ownership, sessionId: 'session', directory: 'directory' });
+  db.updateRun(run.id, { ...ownership, state: 'submitted' });
+  db.pauseTicket(ticket.id);
+  const result = { runId: run.id, sessionId: run.sessionId, waitingPause: true, checkpoint: { manifestHash: 'saved' }, transcript: { hash: 'saved', lastSeq: 8 },
+    waitingExecutionBudget: { kind: 'execution-time', effectsVerified: true, terminal: { kind: 'aborted', reason: { kind: 'hook', reason: 'benchgo-execution-budget-exhausted' } } } };
+  db.updateRun(run.id, { ...ownership, state: 'verifying', evidence: result });
+  db.confirmExecutionStopped(assignment.id, ownership);
+  assert.throws(() => db.parkPause(assignment.id, { ...ownership, result }), { code: 'PAUSE_CONFLICT' });
 });
 
-test('execution budget pause recovery retains its original wait after ownership expires', async t => {
+test('a Ticket parked by the removed execution-time gate resumes its original Run without added time', async t => {
   const db = await fixture(t);
-  db.createThread({ id: 'budget-recovery-thread', source: { type: 'desktop', id: 'budget-owner' } });
-  const ticket = db.createTicket({ threadId: 'budget-recovery-thread', target: 'retain research', mandate: { source: { channel: 'desktop', sessionId: 'budget-owner' } } });
-  db.createAssignment(ticket.id, { id: 'budget-recovery-work' });
-  const [assignment] = db.claimAssignments('budget-owner', { validateMandate: () => true, now: 0, leaseMs: 10 });
+  db.createThread({ id: 'legacy-thread', source: { type: 'desktop', id: 'legacy-owner' } });
+  const ticket = db.createTicket({ threadId: 'legacy-thread', target: 'retain research', mandate: { source: { channel: 'desktop', sessionId: 'legacy-owner' } } });
+  db.createAssignment(ticket.id, { id: 'legacy-work' });
+  const [assignment] = db.claimAssignments('legacy-owner', { validateMandate: () => true });
   const ownership = { owner: assignment.owner, fence: assignment.fence };
-  const run = db.prepareRun(assignment.id, { ...ownership, sessionId: 'budget-original-session', directory: 'budget-original-directory', now: 1 });
-  db.updateRun(run.id, { ...ownership, state: 'submitted', now: 2 });
-  db.pauseTicket(ticket.id, { reason: { kind: 'execution-budget' } });
-  const result = { runId: run.id, sessionId: run.sessionId, waitingPause: true, remainingExecutionMs: 0,
+  const run = db.prepareRun(assignment.id, { ...ownership, sessionId: 'legacy-session', directory: 'legacy-directory' });
+  db.updateRun(run.id, { ...ownership, state: 'submitted' });
+  const evidence = { runId: run.id, sessionId: run.sessionId, waitingPause: true, remainingExecutionMs: 0,
     checkpoint: { manifestHash: 'saved' }, transcript: { hash: 'saved', lastSeq: 8 },
     waitingExecutionBudget: { kind: 'execution-time', effectsVerified: true, unknownCallIds: [],
       terminal: { kind: 'aborted', reason: { kind: 'hook', reason: 'benchgo-execution-budget-exhausted' } } } };
-  db.updateRun(run.id, { ...ownership, state: 'verifying', evidence: result, now: 4 });
-  db.claimAssignments('replacement', { validateMandate: () => true, now: 11 });
-  const recovered = db.recoverParkPause(assignment.id, { fence: assignment.fence, runId: run.id, now: 12,
-    observation: { paused: true, sessionId: run.sessionId, hash: 'saved', lastSeq: 8 } });
-  assert.equal(recovered.state, 'waiting');
-  assert.equal(db.getTicket(ticket.id).status, 'waiting');
-  assert.equal(db.getTicket(ticket.id).continuationWait.code, 'EXECUTION_BUDGET_EXHAUSTED');
-  assert.equal(db.getTicket(ticket.id).continuationWait.runId, run.id);
-  assert.equal(db.getTicket(ticket.id).resultVersion, 0);
-  assert.equal(db.deliveries(ticket.id)[0].payload.publication.origin, 'system');
-  const resumed = db.queueBudgetContinuation(ticket.id, { expectedResultVersion: 0, additionalExecutionMs: 600000, validateMandate: () => true, now: 13 });
+  db.updateRun(run.id, { ...ownership, state: 'verifying', evidence });
+  db.confirmExecutionStopped(assignment.id, ownership);
+  // Reproduce the row shape the pre-2026-11-06 gate persisted.
+  const raw = new DatabaseSync(db.path);
+  try {
+    raw.prepare("UPDATE sa_runs SET state='waiting' WHERE id=?").run(run.id);
+    raw.prepare("UPDATE sa_assignments SET state='waiting',owner=NULL,lease_until=NULL WHERE id=?").run(assignment.id);
+    raw.prepare("UPDATE sa_tickets SET status='waiting',pause_reason=?,continuation_wait=? WHERE id=?").run(JSON.stringify({ kind: 'execution-budget' }),
+      JSON.stringify({ code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 0, assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId }), ticket.id);
+  } finally { raw.close(); }
+  const resumed = db.queueBudgetContinuation(ticket.id, { expectedResultVersion: 0, validateMandate: () => true });
   assert.equal(resumed.queued, true);
-  const [continued] = db.claimAssignments('continued-owner', { validateMandate: () => true, now: 14 });
+  assert.equal(db.getTicket(ticket.id).status, 'open');
+  assert.equal(db.getTicket(ticket.id).continuationWait, null);
+  const [continued] = db.claimAssignments('continued-owner', { validateMandate: () => true });
   assert.equal(continued.id, assignment.id);
   assert.equal(continued.pauseContinuation.runId, run.id);
+  assert.equal(continued.pauseContinuation.additionalExecutionMs, undefined);
   assert.equal(db.runs(assignment.id).length, 1);
 });

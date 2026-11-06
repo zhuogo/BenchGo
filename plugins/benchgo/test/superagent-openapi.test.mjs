@@ -27,15 +27,14 @@ const valid = (validator, value) => assert.equal(validator(value), true, JSON.st
 const hash = 'a'.repeat(64);
 const path = '/api/commander/assistant';
 
-test('P0 inbox reconciliation and explicit continuation time keep the public contract', () => {
+test('P0 inbox reconciliation and quota-free continuation keep the public contract', () => {
   valid(request, { action: 'requestState', threadId: 'side' });
   valid(response(path, 'requestState'), [{ requestId: 'r', status: 'processing' }]);
   valid(request, { action: 'ticketPause', ticketId: 't' });
-  valid(request, { action: 'ticketResume', ticketId: 't', expectedResultVersion: 0, additionalExecutionMs: 600000 });
-  for (const input of [
-    { action: 'ticketResume', ticketId: 't', expectedResultVersion: -1 },
-    { action: 'ticketResume', ticketId: 't', expectedResultVersion: 0, additionalExecutionMs: 600001 },
-  ]) assert.equal(request(input), false);
+  valid(request, { action: 'ticketResume', ticketId: 't', expectedResultVersion: 0 });
+  assert.equal(request({ action: 'ticketResume', ticketId: 't', expectedResultVersion: -1 }), false);
+  // Budget gates were removed on 2026-11-06: no added-time field or Goal quota actions remain in the contract.
+  assert.doesNotMatch(JSON.stringify(document), /additionalExecutionMs|goalBudgetUpdate|goalBudgetResume/);
   valid(response(path, 'ticketResume'), { queued: false, code: 'EXECUTION_EFFECTS_UNKNOWN' });
   const review = document.paths[path].post.responses['200']['x-action-schemas'].ticketRetryReview.description;
   assert.doesNotMatch(review, /最多两轮/);
@@ -281,7 +280,7 @@ test('history accepts four real schedule lifecycle facts and current ticket proj
   const verified = systemStateDelivery({ state: 'action_verified', code: 'ACTION_VERIFIED', stage: 'action' });
   const result = { type: 'ticket.result', ticketId: 'ticket', text: verified.text, publication: verified, origin: 'system', systemState: verified.systemState,
     currentInstructionRevision: 2, currentResultVersion: 1, currentResult: { version: 1, instructionRevision: 2, review: { verdict: 'wait', waitKind: 'continuation_wait', reason: '资源待恢复' } },
-    currentAttention: null, currentPauseReason: { code: 'GOAL_BUDGET_EXHAUSTED' } };
+    currentAttention: null, currentPauseReason: { code: 'EXECUTION_EFFECTS_UNKNOWN' } };
   valid(response(path, 'history'), { notifications: [result] });
   valid(response(path, 'history'), { notifications: [{ ...result, currentResult: null, currentPauseReason: null }] });
   const validate = compile({ $ref: '#/components/schemas/AssistantNotification' });

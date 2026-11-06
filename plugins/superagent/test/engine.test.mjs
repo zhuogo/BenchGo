@@ -15,7 +15,7 @@ import { withRecoveredEvidence, withRecoveredPause } from '../src/execution-evid
 import { ingestAssistantEvent } from '../src/intake.mjs';
 import { createOwnedSkills } from '../src/owned-skills.mjs';
 import { registerOwnedSkillProvider } from '../src/owned-skill-provider.mjs';
-import { installGoalBudgetGate } from '../src/goal-budget-gate.mjs';
+import { installGoalUsageMeter } from '../src/goal-budget-usage.mjs';
 import { mkdtemp, rm, readFile, writeFile, realpath } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -338,13 +338,13 @@ test('official user question resumes the same live Worker from its exact source 
   const ticket = database.createTicket({ threadId: 'thread', target: 'Ask where to save', mandate: { actorId: 'owner', source } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 2000 });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
   const execution = executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   execution.catch(() => {});
   const until = Date.now() + 5000;
   while (!database.attentions(ticket.id).length && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(database.attentions(ticket.id).length, 1);
-  // Human waiting does not consume the execution budget.
+  // Human waiting is never cut off by elapsed time.
   await new Promise(resolve => setTimeout(resolve, 2100));
   assert.equal(f.requests.length, 1);
   const [delivery] = database.claimOutbox('sender');
@@ -561,7 +561,7 @@ test('late context after the final Worker request continues the same official se
   assert.equal(messages.filter(message => message.source?.kind === 'benchgo-subscription').length, 1);
 });
 
-for (const tamper of [false, true]) test(`review-time context resumes verified original session and retains budget (tamper=${tamper})`, async t => {
+for (const tamper of [false, true]) test(`review-time context resumes verified original session (tamper=${tamper})`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'worker-review-context-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
@@ -571,7 +571,7 @@ for (const tamper of [false, true]) test(`review-time context resumes verified o
   database.subscribe(ticket.id, 'thread');
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 30000 });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
   const context = { ticket, signal: AbortSignal.timeout(30000), renew: async () => {} };
   const original = await executor(assignment, context);
   const { trigger } = database.ingest({ dedupeKey: 'review-context', thread: { id: 'thread', source: { type: 'desktop', id: 'main' } }, source: { messageId: 'late' }, actor: { id: 'other' }, content: 'review-late-source-marker', mode: 'group', gate: { allowed: false } });
@@ -595,7 +595,6 @@ for (const tamper of [false, true]) test(`review-time context resumes verified o
   assert.equal(result.runId, original.runId);
   assert.equal(database.runs(assignment.id).length, 1);
   assert.equal(f.requests.length, 2);
-  assert.ok(result.remainingExecutionMs < original.remainingExecutionMs);
   assert.match(JSON.stringify(f.requests[1].messages), /review-late-source-marker/);
   assert.equal(database.pendingSubscriptionMessages(ticket.id).length, 0);
   await withRecoveredEvidence({ ctx: f.ctx, run: database.runs(assignment.id)[0], signal: context.signal }, saved => {
@@ -1301,10 +1300,10 @@ test('official compaction routes auxiliary fallback with frozen config and accur
   assert.deepEqual(audit[0].metadata.attempts.map(attempt => attempt.modelId), compactionModels);
 });
 
-for (const limit of [10, 2]) test(`official one-shot compaction accounts for and limits auxiliary retries (${limit})`, async t => {
+test('official one-shot compaction accounts for every auxiliary retry without refusing any request', async t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
-  database.ensureGoalBudget({ goalId: 'budget', budget: { requests: limit } });
+  database.ensureGoalBudget({ goalId: 'budget' });
   database.bindTicketGoal({ ticketId: 'ticket', goalId: 'budget' });
   class SmallCompaction extends Compaction {
     constructor(ctx, config) { super(ctx, { ...config, thresholdRatio: 0.5, headroomTokens: 0, retainTokens: 20, maxTokens: 32, compactionRetries: 0 }); }
@@ -1323,14 +1322,12 @@ for (const limit of [10, 2]) test(`official one-shot compaction accounts for and
   }, { compactionPlugin: SmallCompaction, contextWindow: 2048 });
   f.setConfig({ models: [{ providerId: 'test', modelId: 'first' }], auxiliary: { capabilities: ['compression'], models: [{ providerId: 'test', modelId: 'aux-primary' }, { providerId: 'test', modelId: 'aux-backup' }] } });
   const agent = await f.engine.ensureSession();
-  let denied = 0;
-  const gate = installGoalBudgetGate(f.ctx, { database, ticketId: 'ticket', sessionId: agent.id, onDenied: () => { denied++; } });
+  const gate = installGoalUsageMeter(f.ctx, { database, ticketId: 'ticket', sessionId: agent.id });
   t.after(() => gate.dispose());
   await f.engine.send({ text: 'Old context evidence. '.repeat(700) }); await agent.whenIdle();
   await f.engine.send({ text: 'Continue from before' }); await agent.whenIdle();
   assert.ok(summaries > 0);
-  assert.equal(summaries, limit === 10 ? 3 : 1);
-  assert.equal(denied, limit === 10 ? 0 : 2, 'failed compaction and the subsequent chat are both denied before dispatch');
+  assert.equal(summaries, 3);
   assert.equal(database.goalBudget('budget').usage.tokens, expectedTokens);
   assert.equal(database.goalBudget('budget').usage.requests, f.requests.length);
   assert.equal(database.goalBudget('budget').usage.unknownCost, summaries);
@@ -1609,44 +1606,33 @@ test('live partial text remains private and cancellation stops current turn', as
   assert.equal((await f.engine.requestState()).find(row => row.requestId === 'next-request').status, 'cancelled');
 });
 
-for (const budgetLimit of [0, 1]) test(`budget exhaustion parks the real Worker and resumes the same session (limit=${budgetLimit})`, async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'benchgo-budget-runtime-'));
+test('goal usage ledger records Worker requests without parking the Ticket', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-usage-runtime-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
-  database.createThread({ id: 'budget-thread', source: { type: 'desktop', id: 'main' } });
-  const ticket = database.createTicket({ threadId: 'budget-thread', target: 'Inspect then report', mandate: {} });
-  database.ensureGoalBudget({ goalId: 'shared-budget', budget: { requests: budgetLimit } });
-  database.bindTicketGoal({ ticketId: ticket.id, goalId: 'shared-budget' });
+  database.createThread({ id: 'usage-thread', source: { type: 'desktop', id: 'main' } });
+  const ticket = database.createTicket({ threadId: 'usage-thread', target: 'Inspect then report', mandate: {} });
+  database.ensureGoalBudget({ goalId: 'shared-usage' });
+  database.bindTicketGoal({ ticketId: ticket.id, goalId: 'shared-usage' });
   let effects = 0;
-  const f = await fixture(t, (_request, count) => count === 1 && budgetLimit === 1 ? [
+  const f = await fixture(t, (_request, count) => count <= 3 ? [
     { type: 'block-start', index: 0, blockType: 'tool-call' },
-    { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'budget-probe', name: 'budget_probe', arguments: '{}' } },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id: `probe-${count}`, name: 'usage_probe', arguments: '{}' } },
     { type: 'finish', reason: { kind: 'tool-calls' } },
-  ] : text('Continued after budget adjustment'), { persistenceRoot: join(directory, 'sessions'), async install(ctx) {
-    ctx.tools.register({ name: 'budget_probe', description: 'Recorded effect', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => { effects++; return 'effect recorded'; } });
+  ] : text('Finished every step'), { persistenceRoot: join(directory, 'sessions'), async install(ctx) {
+    ctx.tools.register({ name: 'usage_probe', description: 'Recorded effect', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => { effects++; return 'effect recorded'; } });
   } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'exact' } });
   const [first] = database.claimAssignments('worker', { validateMandate: () => true });
   const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
-  const paused = await executor(first, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
-  assert.equal(paused.waitingPause, true);
-  assert.equal(paused.waitingBudget.goalId, 'shared-budget');
-  assert.equal(paused.waitingBudget.reason, 'requests');
-  assert.equal(f.requests.length, budgetLimit);
-  database.parkPause(first.id, { ...first, result: paused });
-  assert.throws(() => database.resumeTicket(ticket.id), { code: 'GOAL_BUDGET_EXHAUSTED' });
-  assert.deepEqual((await f.ctx.sessionQuery.readSession(paused.sessionId)).events.at(-1).data.reason, paused.waitingBudget.terminal);
-  await withRecoveredPause({ ctx: f.ctx, run: database.runs(first.id)[0], signal: AbortSignal.timeout(10000) }, () => {});
-  database.updateGoalBudget({ goalId: 'shared-budget', expectedVersion: 1, budget: { requests: budgetLimit + 1 } });
-  database.resumeTicket(ticket.id);
-  const [next] = database.claimAssignments('resumed-worker', { validateMandate: () => true });
-  const result = await executor(next, { ticket: database.getTicket(ticket.id), signal: AbortSignal.timeout(10000), renew: async () => {} });
-  assert.equal(result.sessionId, paused.sessionId);
-  assert.equal(result.runId, paused.runId);
-  assert.equal(effects, budgetLimit);
-  assert.equal(f.requests.length, budgetLimit + 1);
-  assert.equal(database.goalBudget('shared-budget').usage.requests, budgetLimit + 1);
-  assert.match(result.summary, /Continued after budget adjustment/);
+  const result = await executor(first, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
+  assert.equal(result.waitingPause, undefined);
+  assert.equal(result.waitingBudget, undefined);
+  assert.match(result.summary, /Finished every step/);
+  assert.equal(effects, 3);
+  assert.equal(database.getTicket(ticket.id).status, 'open');
+  assert.equal(database.goalBudget('shared-usage').usage.requests, f.requests.length);
+  assert.ok(f.requests.length >= 4);
 });
 
 for (const recover of [false, true]) for (const tamper of [false, true]) test(`explicit pause resumes only verified official state (recover=${recover}, tamper=${tamper})`, async t => {
@@ -1748,7 +1734,7 @@ test('review failure resumes the official original session and preserves its exi
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('original-worker', { validateMandate: () => true });
   const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
-    readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 30000,
+    readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }),
     captureCheckpoint: async (workspace, options) => {
       artifactDirectory = workspace;
       await writeFile(join(workspace, 'draft.md'), 'retained original draft');
@@ -1770,7 +1756,6 @@ test('review failure resumes the official original session and preserves its exi
   assert.equal(f.requests.length, 2);
   assert.equal(corrected.finalSummary, '8 corrected items');
   assert.match(corrected.summary, /14 draft items/);
-  assert.ok(corrected.remainingExecutionMs < result.remainingExecutionMs);
   const persisted = await f.ctx.sessionQuery.readSession(result.sessionId);
   const messages = persisted.events.filter(event => event.type === 'user/message').map(event => event.data);
   assert.equal(messages.filter(message => message.source?.kind === 'user').length, 1);
@@ -1813,7 +1798,7 @@ for (const legacy of [false, true]) test(`ordinary review preserves unknown offi
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('effects-worker', { validateMandate: () => true });
   const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
-    readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 30000 });
+    readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
   const context = { ticket, signal: AbortSignal.timeout(30000), renew: async () => {} };
   const result = await executor(assignment, context);
   assert.deepEqual(result.executionEffects, { effectsVerified: false, unknownCallIds: ['send-original'] });
@@ -1842,72 +1827,40 @@ for (const legacy of [false, true]) test(`ordinary review preserves unknown offi
   assert.equal(database.results(ticket.id).length, 1);
 });
 
-for (const toolName of ['web_fetch', 'opaque_write']) test(`execution deadline saves the official paused session without replay (${toolName})`, async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'worker-execution-budget-'));
+test('a long-running Worker is never paused by elapsed execution time', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'worker-long-run-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   let dispatches = 0;
   const f = await fixture(t, (_request, count) => count === 1 ? [
     { type: 'block-start', index: 0, blockType: 'tool-call' },
-    { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'deadline-call', name: toolName, arguments: '{}' } },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'slow-call', name: 'web_fetch', arguments: '{}' } },
     { type: 'finish', reason: { kind: 'tool-calls' } },
   ] : text('8 sourced news items from the retained research'), {
     persistenceRoot: join(directory, 'sessions'),
     async install(ctx) {
-      ctx.tools.register({ name: toolName, description: 'Controlled cooperative deadline fixture', parameters: { type: 'object', properties: {} },
+      ctx.tools.register({ name: 'web_fetch', description: 'Slow fixture', parameters: { type: 'object', properties: {} },
         output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
-        execute: async (_args, execution) => {
-          dispatches++;
-          await new Promise((_resolve, reject) => {
-            if (execution.signal.aborted) reject(execution.signal.reason);
-            else execution.signal.addEventListener('abort', () => reject(execution.signal.reason), { once: true });
-          });
-          return 'unreachable';
-        } });
+        execute: async () => { dispatches++; await new Promise(resolve => setTimeout(resolve, 800)); return 'fetched'; } });
     },
   });
-  database.createThread({ id: 'budget-thread', source: { type: 'desktop', id: 'budget-chat' } });
-  const ticket = database.createTicket({ threadId: 'budget-thread', target: 'Research and return 6–10 dated news items.',
-    mandate: { source: { channel: 'desktop', sessionId: 'budget-chat' } } });
+  database.createThread({ id: 'long-thread', source: { type: 'desktop', id: 'long-chat' } });
+  const ticket = database.createTicket({ threadId: 'long-thread', target: 'Research and return 6-10 dated news items.',
+    mandate: { source: { channel: 'desktop', sessionId: 'long-chat' } } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
-  const [assignment] = database.claimAssignments('budget-worker', { validateMandate: () => true });
+  const [assignment] = database.claimAssignments('long-worker', { validateMandate: () => true });
+  // The removed gate paused at this deadline (150ms); the option is now ignored.
   const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
     readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 150 });
-  const execution = { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} };
-  const paused = await executor(assignment, execution);
-  assert.equal(paused.waitingPause, true);
-  assert.equal(paused.remainingExecutionMs, 0);
-  assert.equal(paused.waitingExecutionBudget.terminal.kind, 'aborted');
-  assert.deepEqual(paused.waitingExecutionBudget.terminal.reason, { kind: 'hook', reason: 'benchgo-execution-budget-exhausted' });
-  assert.equal(paused.waitingExecutionBudget.effectsVerified, toolName === 'web_fetch');
-  assert.equal(database.getAssignment(assignment.id).executionStopped.fence, assignment.fence);
-  database.parkPause(assignment.id, { owner: assignment.owner, fence: assignment.fence, result: paused });
-  assert.equal(database.getTicket(ticket.id).status, 'waiting');
-  assert.equal(database.getTicket(ticket.id).resultVersion, 0);
-  assert.deepEqual(database.results(ticket.id), []);
-  assert.equal(database.getTicket(ticket.id).continuationWait.runId, paused.runId);
-  assert.equal(database.deliveries(ticket.id)[0].payload.publication.origin, 'system');
-  let queued;
-  await withRecoveredPause({ ctx: f.ctx, run: database.runs(assignment.id)[0], signal: execution.signal }, () => {
-    queued = database.queueBudgetContinuation(ticket.id, { expectedResultVersion: 0, additionalExecutionMs: 600000, validateMandate: () => true });
-  });
-  if (toolName === 'opaque_write') {
-    assert.equal(queued.queued, false);
-    assert.equal(queued.code, 'EXECUTION_EFFECTS_UNKNOWN');
-    assert.deepEqual(database.claimAssignments('unsafe-replay', { validateMandate: () => true }), []);
-    assert.equal(dispatches, 1);
-    assert.equal(f.requests.length, 1);
-    return;
-  }
-  assert.equal(queued.queued, true);
-  const [continued] = database.claimAssignments('budget-continued', { validateMandate: () => true });
-  const result = await executor(continued, { ...execution, ticket: database.getTicket(ticket.id) });
-  assert.equal(result.sessionId, paused.sessionId);
-  assert.equal(result.runId, paused.runId);
-  assert.equal(result.directory, paused.directory);
-  assert.equal(database.runs(assignment.id).length, 1);
-  assert.equal(result.finalSummary, '8 sourced news items from the retained research');
+  const started = Date.now();
+  const result = await executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
+  assert.ok(Date.now() - started >= 800);
+  assert.equal(result.waitingPause, undefined);
   assert.equal(result.waitingExecutionBudget, undefined);
-  assert.equal(dispatches, 1, 'the prior tool is not replayed by session recovery');
+  assert.equal(result.remainingExecutionMs, undefined);
+  assert.equal(result.finalSummary, '8 sourced news items from the retained research');
+  assert.equal(database.getTicket(ticket.id).status, 'open');
+  assert.equal(database.getTicket(ticket.id).pauseReason ?? null, null);
+  assert.equal(dispatches, 1);
   assert.equal(f.requests.length, 2);
 });

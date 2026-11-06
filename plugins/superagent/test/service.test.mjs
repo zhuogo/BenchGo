@@ -174,13 +174,14 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal((await ctx.tools.get('schedule_delete', agent).execute({ id: scheduled.id }, scheduleExec)).deleted, true);
   response = await call({ action: 'send', text: 'hello', requestId: 'mounted-request' }); assert.equal(response.status, 200); await agent.whenIdle();
   response = await call({ action: 'send', text: 'hello', requestId: 'mounted-request' }); assert.equal((await response.json()).duplicate, true);
-  // This section validates budget HTTP contracts against a mounted runtime.
+  // This section validates Goal usage HTTP contracts against a mounted runtime.
   // Its empty project is not an executable Git/worktree fixture: reserve claims
   // while exercising queued pause/resume so a timer cannot start unrelated work.
   const claimAssignments = app.store.orchestration.claimAssignments;
   app.store.orchestration.claimAssignments = () => [];
   t.after(() => { app.store.orchestration.claimAssignments = claimAssignments; });
-  const formGoal = { requestId: 'form-goal', objective: 'Resource goal', projectId: 'project', provider: 'mounted', model: 'exact', text: 'Resource task', acceptance: 'Evidence', budget: { requests: 1 } };
+  const formGoal = { requestId: 'form-goal', objective: 'Resource goal', projectId: 'project', provider: 'mounted', model: 'exact', text: 'Resource task', acceptance: 'Evidence' };
+  assert.equal((await call({ action: 'goalCreate', goal: { ...formGoal, requestId: 'budgeted-goal', budget: { requests: 1 } } })).status, 400);
   const formCreatedResponse = await call({ action: 'goalCreate', goal: formGoal });
   assert.equal(formCreatedResponse.status, 200);
   const formCreated = await formCreatedResponse.json();
@@ -190,36 +191,13 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const formTicket = app.store.orchestration.getTicket(formCreated.ticketIds[0]);
   assert.equal(formTicket.mandate.instruction, JSON.stringify(formGoal));
   assert.equal(formTicket.mandate.source.messageId, 'goal-form:form-goal');
-  const initialBudget = await (await call({ action: 'goalBudgetGet', id: formCreated.id })).json();
-  assert.deepEqual(initialBudget.budget, { requests: 1 });
-  assert.equal(initialBudget.usage.requests, 0);
-  assert.equal(app.store.orchestration.reserveGoalRequest({ ticketId: formTicket.id, requestId: 'form-budget-use' }).allowed, true);
-  app.store.orchestration.pauseTicket(formTicket.id, { reason: { kind: 'budget', goalId: initialBudget.goalId, reason: 'requests' } });
-  // The real runtime may have claimed the assignment while HTTP assertions ran.
-  // Wait for its stop acknowledgement before asserting the stable paused state.
-  for (let attempt = 0; attempt < 200 && app.store.orchestration.getTicket(formTicket.id).status === 'pausing'; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 25));
-  }
-  const waitingGoal = await (await call({ action: 'goalAdvance', id: formCreated.id })).json();
-  assert.equal(waitingGoal.waitReason, 'budget');
-  assert.notEqual((await call({ action: 'goalBudgetResume', id: formCreated.id, rowVersion: waitingGoal.rowVersion })).status, 200);
-  assert.ok(['paused', 'pausing'].includes(app.store.orchestration.getTicket(formTicket.id).status));
-  assert.equal((await call({ action: 'goalBudgetUpdate', id: formCreated.id, budget: { requests: 2 } })).status, 400);
-  assert.equal((await call({ action: 'goalBudgetUpdate', id: formCreated.id, expectedVersion: initialBudget.version, budget: { cost: 1 } })).status, 400);
-  const budgetResponse = await call({ action: 'goalBudgetUpdate', id: formCreated.id, expectedVersion: initialBudget.version, budget: { requests: 2 } });
-  assert.equal(budgetResponse.status, 200);
-  const updatedBudget = await budgetResponse.json();
-  assert.equal(updatedBudget.usage.requests, 1);
-  assert.equal(updatedBudget.version, initialBudget.version + 1);
-  assert.ok(['paused', 'pausing'].includes(app.store.orchestration.getTicket(formTicket.id).status), 'adjustment does not resume execution');
-  assert.equal((await call({ action: 'goalBudgetUpdate', id: formCreated.id, expectedVersion: initialBudget.version, budget: { requests: 9 } })).status, 409);
-  assert.equal((await call({ action: 'goalBudgetResume', id: formCreated.id, rowVersion: -1 })).status, 409);
-  const currentGoal = await (await call({ action: 'goalGet', id: formCreated.id })).json();
-  const budgetResumedResponse = await call({ action: 'goalBudgetResume', id: formCreated.id, rowVersion: currentGoal.rowVersion });
-  assert.equal(budgetResumedResponse.status, 200, await budgetResumedResponse.clone().text());
-  const budgetResumed = await budgetResumedResponse.json();
-  assert.equal(app.store.orchestration.getTicket(formTicket.id).status, 'open');
-  assert.equal((await (await call({ action: 'goalGet', id: formCreated.id })).json()).budgetState.usage.requests, 1);
+  const initialUsage = await (await call({ action: 'goalBudgetGet', id: formCreated.id })).json();
+  assert.equal(initialUsage.usage.requests, 0);
+  for (let index = 0; index < 3; index++) assert.equal(app.store.orchestration.reserveGoalRequest({ ticketId: formTicket.id, requestId: `form-use-${index}` }).allowed, true);
+  for (const action of ['goalBudgetUpdate', 'goalBudgetResume']) assert.notEqual((await call({ action, id: formCreated.id, expectedVersion: 1, budget: { requests: 2 } })).status, 200);
+  assert.equal(app.store.orchestration.getTicket(formTicket.id).status, 'open', 'usage never parks the Ticket');
+  const budgetResumed = await (await call({ action: 'goalGet', id: formCreated.id })).json();
+  assert.equal(budgetResumed.budgetState.usage.requests, 3);
   const cancelledForm = await call({ action: 'goalCancel', id: formCreated.id, rowVersion: budgetResumed.rowVersion });
   assert.equal(cancelledForm.status, 200);
   assert.equal((await cancelledForm.json()).status, 'cancelled');

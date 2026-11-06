@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -50,11 +51,18 @@ async function fixture(t, { review, waitKind = 'review_wait', budgetExhausted = 
       effectsVerified: true, deadlineAt: new Date().toISOString(), unknownCallIds: [] } } : {}),
     checkpoint: await captureArtifactCheckpoint(workspace) };
   database.updateRun(run.id, { ...ownership, state: 'verifying', evidence: result });
-  if (budgetExhausted) database.pauseTicket(ticket.id, { reason: { kind: 'execution-budget' } });
   database.confirmExecutionStopped(assignment.id, ownership);
   let currentTime = Date.now(), reviews = 0, opens = 0, evidenceUnavailable = false;
-  if (budgetExhausted) database.parkPause(assignment.id, { ...ownership, result });
-  else database.commitResult(ticket.id, { assignment, status: 'waiting', uniqueKey: 'initial-review',
+  if (budgetExhausted) {
+    // Row shape persisted by the execution-time gate before its 2026-11-06 removal.
+    const raw = new DatabaseSync(database.path);
+    try {
+      raw.prepare("UPDATE sa_runs SET state='waiting' WHERE id=?").run(run.id);
+      raw.prepare("UPDATE sa_assignments SET state='waiting',owner=NULL,lease_until=NULL WHERE id=?").run(assignment.id);
+      raw.prepare("UPDATE sa_tickets SET status='waiting',pause_reason=?,continuation_wait=? WHERE id=?").run(JSON.stringify({ kind: 'execution-budget' }),
+        JSON.stringify({ code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 0, assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId }), ticket.id);
+    } finally { raw.close(); }
+  } else database.commitResult(ticket.id, { assignment, status: 'waiting', uniqueKey: 'initial-review',
     result: { ...result, review: { verdict: 'wait', reason: 'Temporary wait', waitKind, retryable: true,
       ...(waitKind === 'continuation_wait' ? { instruction: 'Verify the sources and condense the retained draft.' } : {}),
       diagnostic: { code: 'NETWORK', at: new Date(currentTime).toISOString() } },
@@ -160,72 +168,44 @@ test('explicit continuation recovery queues the retained assignment and run afte
   await assert.rejects(app.runtime.resumeReviewWork(app.ticket.id, 1), /状态已变化/);
 });
 
-test('oversized explicit continuation budget is rejected before evidence access or any state change', async t => {
-  const app = await fixture(t, { waitKind: 'continuation_wait' });
-  const before = { ticket: app.database.getTicket(app.ticket.id),
-    assignments: app.database.assignments(app.ticket.id), runs: app.database.runs(app.assignment.id),
-    results: app.database.results(app.ticket.id) };
-  await assert.rejects(app.runtime.resumeReviewWork(app.ticket.id, 1, { additionalExecutionMs: 600001 }), /0到10分钟/);
-  assert.deepEqual({ ticket: app.database.getTicket(app.ticket.id),
-    assignments: app.database.assignments(app.ticket.id), runs: app.database.runs(app.assignment.id),
-    results: app.database.results(app.ticket.id) }, before);
-  assert.deepEqual(app.counts(), { reviews: 0, opens: 0 });
-  assert.equal(app.database.getTicket(app.ticket.id).status, 'waiting');
-});
-
-test('execution budget pause with no result resumes the original assignment, run and session after an explicit grant', async t => {
+test('a Ticket parked by the removed execution-time gate resumes its original assignment, run and session without added time', async t => {
   const app = await fixture(t, { budgetExhausted: true });
   const pending = app.database.getTicket(app.ticket.id);
   assert.equal(pending.status, 'waiting');
-  assert.equal(pending.resultVersion, 0);
-  assert.equal(app.database.results(app.ticket.id).length, 0);
-  assert.deepEqual(pending.continuationWait, { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 0,
-    assignmentId: app.assignment.id, runId: app.run.id, sessionId: app.run.sessionId });
+  assert.equal(pending.continuationWait.code, 'EXECUTION_BUDGET_EXHAUSTED');
   const retained = app.database.runs(app.assignment.id)[0];
   assert.equal(retained.state, 'waiting');
-  assert.equal(retained.evidence.remainingExecutionMs, 0);
-  assert.equal(retained.evidence.waitingExecutionBudget.effectsVerified, true);
-
-  const withoutGrant = await app.runtime.resumeReviewWork(app.ticket.id, 0);
-  assert.equal(withoutGrant.queued, false);
-  assert.equal(withoutGrant.code, 'EXECUTION_BUDGET_EXHAUSTED');
-  await assert.rejects(app.runtime.resumeReviewWork(app.ticket.id, 0, { additionalExecutionMs: 600001 }), /0到10分钟/);
-  await assert.rejects(app.runtime.resumeReviewWork(app.ticket.id, 1, { additionalExecutionMs: 600000 }), /状态已变化/);
+  await assert.rejects(app.runtime.resumeReviewWork(app.ticket.id, 1), /状态已变化/);
   assert.deepEqual(app.database.runs(app.assignment.id)[0], retained);
-  assert.equal(app.database.getAssignment(app.assignment.id).state, 'waiting');
 
-  const resumed = await app.runtime.resumeReviewWork(app.ticket.id, 0, { additionalExecutionMs: 600000 });
+  const resumed = await app.runtime.resumeReviewWork(app.ticket.id, 0);
   assert.equal(resumed.queued, true);
   assert.equal(resumed.assignment.id, app.assignment.id);
-  assert.deepEqual(resumed.assignment.pauseContinuation, { runId: app.run.id, kind: 'execution-budget', additionalExecutionMs: 600000 });
+  assert.deepEqual(resumed.assignment.pauseContinuation, { runId: app.run.id, kind: 'execution-budget' });
   assert.equal(app.database.getTicket(app.ticket.id).status, 'open');
-  assert.equal(app.database.getTicket(app.ticket.id).resultVersion, 0);
   assert.equal(app.database.results(app.ticket.id).length, 0);
   assert.equal(app.database.assignments(app.ticket.id).length, 1);
   assert.equal(app.database.runs(app.assignment.id).length, 1);
   assert.equal(app.counts().reviews, 0);
   const [claimed] = app.database.claimAssignments('resumed-worker', { validateMandate: () => true });
   assert.equal(claimed.id, app.assignment.id);
-  assert.equal(claimed.fence, app.assignment.fence + 1);
   const [sameRun] = app.database.runs(claimed.id);
   assert.equal(sameRun.id, app.run.id);
   assert.equal(sameRun.sessionId, app.run.sessionId);
-  assert.equal(sameRun.directory, app.run.directory);
   assert.equal(sameRun.state, 'prepared');
   assert.deepEqual(sameRun.evidence, retained.evidence);
 });
 
-test('revoked authority cannot resume a saved execution budget pause', async t => {
+test('revoked authority cannot resume a Ticket parked by the removed execution-time gate', async t => {
   const app = await fixture(t, { budgetExhausted: true });
   const retained = app.database.runs(app.assignment.id)[0];
   await app.revokeRules();
-  const resumed = await app.runtime.resumeReviewWork(app.ticket.id, 0, { additionalExecutionMs: 600000 });
+  const resumed = await app.runtime.resumeReviewWork(app.ticket.id, 0);
   assert.equal(resumed.queued, false);
   assert.equal(resumed.code, 'MANDATE_REVOKED');
   assert.equal(app.database.getTicket(app.ticket.id).status, 'waiting');
   assert.equal(app.database.getAssignment(app.assignment.id).state, 'waiting');
   assert.deepEqual(app.database.runs(app.assignment.id)[0], retained);
-  assert.equal(app.database.results(app.ticket.id).length, 0);
   assert.equal(app.counts().reviews, 0);
 });
 

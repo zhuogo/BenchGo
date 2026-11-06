@@ -1,4 +1,5 @@
 import { lastAssistantStreamChunk } from '@deepseek-ai/dsh-llm';
+import { randomUUID } from 'node:crypto';
 
 /** Use durable attempt settlements, never UI projections or inherited parent usage. */
 export function goalBudgetUsage(event, { inheritedEventCount = 0 } = {}) {
@@ -29,4 +30,39 @@ export function installGoalBudgetUsage(scope, agent, { database, ticketId }) {
   return scope.on('session/event', (session, event) => {
     if (session === agent.session) record([event]);
   });
+}
+
+/** Non-Agent calls have no durable assistant event, so settle their own request receipt. */
+async function* meterRequest(next, { database, ticketId, requestId }) {
+  let tokens = null;
+  try {
+    for await (const chunk of next()) {
+      if (chunk.type === 'usage') tokens = Number.isSafeInteger(chunk.usage?.totalTokens) && chunk.usage.totalTokens >= 0 ? chunk.usage.totalTokens : null;
+      yield chunk;
+    }
+  } finally { database.recordGoalRequestUsage({ ticketId, requestId, tokens, cost: null }); }
+}
+
+/** Accounting only: requests are counted, never refused. */
+export function goalUsageLlm(llm, { database, ticketId }) {
+  if (!database.ticketGoalBudget(ticketId)) return llm;
+  return { stream(options) {
+    options.signal?.throwIfAborted();
+    const requestId = randomUUID();
+    database.reserveGoalRequest({ ticketId, requestId });
+    return meterRequest(() => llm.stream(options), { database, ticketId, requestId });
+  } };
+}
+
+/** Count each stream dispatch (retry and compaction included); meter compaction tokens. */
+export function installGoalUsageMeter(ctx, { database, ticketId, sessionId }) {
+  if (!database.ticketGoalBudget(ticketId)) return { dispose() {} };
+  const dispose = ctx.on('llm/stream', (options, next) => {
+    if (options.sessionId !== sessionId) return next();
+    options.signal?.throwIfAborted();
+    const requestId = randomUUID();
+    database.reserveGoalRequest({ ticketId, requestId });
+    return options.purpose === 'compaction' ? meterRequest(next, { database, ticketId, requestId }) : next();
+  });
+  return { dispose };
 }
