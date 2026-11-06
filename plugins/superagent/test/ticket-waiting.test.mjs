@@ -24,16 +24,18 @@ test('unknown external effects allow verification and stopping without resuming 
     }
   }
 });
-test('manual pause resumes while goal quota pause opens existing quota management', () => {
+test('manual and legacy quota pauses both resume directly; next steps never offer quota or added time', () => {
   assert.equal(ticketWaiting({ ...ticket, status: 'paused', pauseReason: { kind: 'manual' } }).actions[0].kind, 'resume');
-  const waiting = ticketWaiting({ ...ticket, status: 'paused', pauseReason: { kind: 'budget', reason: 'tokens' } });
-  assert.equal(waiting.actions[0].kind, 'goals');
-  assert.match(waiting.reason, /Token.*额度/);
+  const legacy = ticketWaiting({ ...ticket, status: 'paused', pauseReason: { kind: 'budget', reason: 'tokens' } });
+  assert.equal(legacy.actions[0].kind, 'resume');
+  assert.doesNotMatch(JSON.stringify(legacy), /额度|goals|additionalExecutionMs/);
 });
-test('execution time can be replenished before the first result exists', () => {
+test('a pre-result Ticket parked by the removed execution-time gate resumes without added time', () => {
   const waiting = ticketWaiting({ ...ticket, resultVersion: 0, results: [],
     continuationWait: { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 0 } });
-  assert.deepEqual(waiting.actions[0].input, { ticketId: 'original', expectedResultVersion: 0, additionalExecutionMs: 600000 });
+  assert.equal(waiting.actions[0].label, '恢复原单');
+  assert.deepEqual(waiting.actions[0].input, { ticketId: 'original', expectedResultVersion: 0 });
+  assert.notEqual(waiting.label, '等待续做资源');
 });
 test('current unanswered attention leads while stale attention never supplies a question', () => {
   const attention = { id: 'question', state: 'waiting', origin: 'review', instructionRevision: 2, resultVersion: 3,

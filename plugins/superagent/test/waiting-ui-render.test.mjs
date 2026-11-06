@@ -96,17 +96,15 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     await button('重试核验').click();
     await page.getByRole('alert').waitFor();
     assert.match(await page.getByRole('alert').innerText(), /先刷新状态/);
+    // Tickets parked by the execution-time gate removed on 2026-11-06 resume without added time.
     await scenario('waiting', 'data', { continuationWait: { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 3 } });
-    await button('增加10分钟并继续').click();
-    assert.deepEqual((await calls())[0], ['ticketResume', { ticketId: 'original', expectedResultVersion: 3, additionalExecutionMs: 600000 }]);
+    assert.equal(await page.getByRole('button', { name: /增加10分钟|额度/ }).count(), 0);
+    await button('恢复原单').click();
+    assert.deepEqual((await calls())[0], ['ticketResume', { ticketId: 'original', expectedResultVersion: 3 }]);
     await page.evaluate(() => window.control.blocked = true);
-    await button('增加10分钟并继续').click();
+    await button('恢复原单').click();
     await page.getByRole('alert').waitFor();
     assert.match(await page.getByRole('alert').innerText(), /MANDATE_REVOKED/);
-    await scenario('waiting', 'data', { continuationWait: { code: 'GOAL_BUDGET_EXHAUSTED', sourceResultVersion: 3 } });
-    await button('管理持续目标额度').click();
-    assert.equal((await calls())[0][0], 'resources');
-    assert(!(await calls()).some(([name]) => name === 'ticketResume'));
     for (const code of ['EXECUTION_EFFECTS_UNKNOWN', 'EXECUTION_NOT_VERIFIED', 'EXECUTION_STOP_UNCONFIRMED']) {
       await scenario('waiting', 'data', { continuationWait: { code, sourceResultVersion: 3 } });
       await button('核实当前状态').waitFor();

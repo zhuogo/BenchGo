@@ -14,7 +14,7 @@ function harness(row, failure, resumeResponse) {
   const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value != null && value !== false) }),
     useState: initial => { const i = cursor++; if (!(i in state)) state[i] = initial; return [state[i], value => state[i] = typeof value === 'function' ? value(state[i]) : value]; }, useCallback: fn => fn, useEffect() {}, useRef: current => refs[refCursor++] ||= { current } };
   runInNewContext(code, { module, exports: module.exports, require: id => id.endsWith('task-list.jsx') ? { TaskListRow: 'TaskListRow', TaskDetail: 'TaskDetail', TaskIconButton: 'TaskIconButton' } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('ticket-state.mjs') ? ticketState : id.endsWith('ticket-title.mjs') ? { normalizeTicketTitle } : id.endsWith('ticket-attention.jsx') ? { TicketAttention: 'TicketAttention' } : id.endsWith('.css') ? '' : id.endsWith('dirty-registry.mjs') ? { useDirtyRegistry: notify => () => notify } : react });
-  return { calls, render() { cursor = refCursor = 0; return walk(module.exports.Tickets({ onCreateGoal: () => calls.push(['createGoal']), onOpenGoals: () => calls.push(['openGoals']), api: async (...args) => { calls.push(args); if (failure) throw new Error(failure); if (args[0] === 'state') return { config: { workerConcurrency: 3, revision: 8 } }; if (args[0] === 'config') return { revision: 9 }; if (args[0] === 'ticketResume') return resumeResponse; } })); } };
+  return { calls, render() { cursor = refCursor = 0; return walk(module.exports.Tickets({ onCreateGoal: () => calls.push(['createGoal']), api: async (...args) => { calls.push(args); if (failure) throw new Error(failure); if (args[0] === 'state') return { config: { workerConcurrency: 3, revision: 8 } }; if (args[0] === 'config') return { revision: 9 }; if (args[0] === 'ticketResume') return resumeResponse; } })); } };
 }
 const row = { id: 'ticket', target: 'Task', status: 'waiting', instructionRevision: 2, resultVersion: 3, results: [{ instructionRevision: 2, version: 3, review: { verdict: 'wait' } }] };
 test('internal review wait shows explicit automatic system state without a review gate', () => {
@@ -43,22 +43,23 @@ test('resource wait resumes the original ticket with its result fence and expose
   assert(!h.render().some(node => node.children.some(value => typeof value === 'string' && value.includes('未重复调用模型'))));
 });
 
-test('answered blocked work adds only explicit execution time on the original result version', async () => {
+test('a Ticket parked by the removed execution-time gate resumes on its original result version without added time', async () => {
   const h = harness({ ...row, continuationWait: { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 3 },
     attentions: [{ id: 'answered', origin: 'review', instructionRevision: 2, resultVersion: 3, state: 'answered' }],
     results: [{ ...row.results[0], review: { verdict: 'wait', waitKind: 'blocked' } }] });
   h.render().find(node => node.type === 'TaskListRow').props.onOpen();
-  assert(h.render().some(node => node.children.includes('系统等待续做资源')));
-  assert.equal(h.calls.length, 0, 'rendering never grants execution time');
-  await h.render().find(node => node.type === 'TaskListRow').props.actions.find(action => action.label === '增加10分钟并继续').onClick();
-  assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [['ticketResume', { ticketId: 'ticket', expectedResultVersion: 3, additionalExecutionMs: 600000 }]]);
+  assert.equal(h.calls.length, 0, 'rendering never resumes execution');
+  assert(!h.render().some(node => node.children.some(value => typeof value === 'string' && /增加10分钟|持续目标额度|等待续做资源/.test(value))));
+  await h.render().find(node => node.type === 'TaskListRow').props.actions.find(action => action.label === '恢复原单').onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [['ticketResume', { ticketId: 'ticket', expectedResultVersion: 3 }]]);
 });
 
-test('Goal budget wait opens existing Goal settings and never grants execution or Goal quota', async () => {
-  const h = harness({ ...row, continuationWait: { code: 'GOAL_BUDGET_EXHAUSTED', sourceResultVersion: 3 } });
-  h.render().find(node => node.type === 'TaskListRow').props.onOpen();
-  await h.render().find(node => node.type === 'TaskListRow').props.actions.find(action => action.label === '管理持续目标额度').onClick();
-  assert.deepEqual(h.calls, [['openGoals']]);
+test('a legacy Goal quota pause resumes the Ticket directly with no quota management entry', async () => {
+  const h = harness({ ...row, status: 'paused', pauseReason: { kind: 'budget', reason: 'tokens' } });
+  const actions = h.render().find(node => node.type === 'TaskListRow').props.actions;
+  assert(!actions.some(action => /额度/.test(action.label)));
+  await actions.find(action => action.label === '继续工单').onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls))[0], ['ticketResume', { ticketId: 'ticket' }]);
 });
 
 test('a recovery blocked by a higher-priority gate remains explicit rather than silently refreshing', async () => {
@@ -72,7 +73,7 @@ test('stale and stopped resource waits cannot offer recovery or extra execution 
   for (const patch of [{ status: 'paused' }, { status: 'cancelled' }, { status: 'uncertain' }, { status: 'blocked' }, { resultVersion: 4 }]) {
     const h = harness({ ...row, ...patch, continuationWait: { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 3 } });
     h.render().find(node => node.type === 'TaskListRow').props.onOpen();
-    assert(!h.render().some(node => node.type === 'button' && node.children.includes('增加10分钟并继续')));
+    assert(!h.render().some(node => node.type === 'button' && node.children.includes('恢复原单')));
     assert.equal(h.calls.length, 0);
   }
 });

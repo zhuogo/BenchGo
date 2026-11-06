@@ -6,7 +6,7 @@ import { TicketAttention } from './ticket-attention.jsx';
 import css from './ticket-waiting.css';
 
 /** This is a system status, never an invented Router report or an implicit authorization. */
-export function TicketWaiting({ api, ticket, onRefresh, onOpenResources, canOpenGoals = !!onOpenResources, showQuestion = true }) {
+export function TicketWaiting({ api, ticket, onRefresh, onOpenResources, showQuestion = true }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const waiting = ticketWaiting(ticket);
   if (!waiting) return null;
@@ -14,7 +14,7 @@ export function TicketWaiting({ api, ticket, onRefresh, onOpenResources, canOpen
     if (busy) return;
     setBusy(true); setError('');
     try {
-      if (action.kind === 'goals' || action.kind === 'tasks') onOpenResources?.(action.kind, action.kind === 'tasks' ? { ticketId: ticket.id } : undefined);
+      if (action.kind === 'tasks') onOpenResources?.(action.kind, { ticketId: ticket.id });
       else if (action.kind !== 'refresh') {
         const response = await api(({ resume: 'ticketResume', review: 'ticketRetryReview', stop: 'ticketStop' })[action.kind], action.input);
         if (response?.queued === false) throw new Error(`原工单暂未恢复（${response.code || 'WAITING'}）`);
@@ -30,7 +30,7 @@ export function TicketWaiting({ api, ticket, onRefresh, onOpenResources, canOpen
     {waiting.retryAt && <p>下次自动核验：<time dateTime={waiting.retryAt}>{new Date(waiting.retryAt).toLocaleString('zh-CN')}</time></p>}
     {showQuestion && waiting.attention && <TicketAttention key={`${waiting.attention.id}:${ticket.instructionRevision}:${ticket.resultVersion}`} api={api} ticket={ticket} attention={waiting.attention} onAnswered={onRefresh} />}
     <div className="ba-row-actions">{waiting.actions.map(action => <Button key={action.kind} variant="ghost" type="button"
-      disabled={busy || (action.kind === 'goals' ? !canOpenGoals : action.kind === 'tasks' ? !onOpenResources : action.kind === 'refresh' ? !onRefresh : !api)}
+      disabled={busy || (action.kind === 'tasks' ? !onOpenResources : action.kind === 'refresh' ? !onRefresh : !api)}
       onClick={() => act(action)}>{action.label}</Button>)}</div>
     {busy && <p role="status">正在处理，请稍候…</p>}
     {error && <p role="alert">操作未完成：{error}。请先刷新状态，再选择下一步。</p>}

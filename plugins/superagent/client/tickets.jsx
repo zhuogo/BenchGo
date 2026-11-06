@@ -13,7 +13,7 @@ import { TicketWaiting } from './ticket-waiting.jsx';
 import { continuationRecovery, ticketSnapshot, ticketWaiting } from './ticket-state.mjs';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
 
-const states = { open: '已开单', queued: '等待执行', claimed: '执行中', reworking: '原工单补做中', completed: '已完成', waiting: '等待处理', awaiting_user: '等待你的答复', review_wait: '系统自动核验中', continuation_wait: '系统等待续做资源', pausing: '正在暂停', paused: '已暂停', failed: '执行失败', cancelling: '正在停止 · 等待执行确认', cancelled: '已停止', uncertain: '执行待核实', blocked: '授权已变更' };
+const states = { open: '已开单', queued: '等待执行', claimed: '执行中', reworking: '原工单补做中', completed: '已完成', waiting: '等待处理', awaiting_user: '等待你的答复', review_wait: '系统自动核验中', continuation_wait: '系统等待续做', pausing: '正在暂停', paused: '已暂停', failed: '执行失败', cancelling: '正在停止 · 等待执行确认', cancelled: '已停止', uncertain: '执行待核实', blocked: '授权已变更' };
 const deliveryStates = { queued: '等待交付', claimed: '正在交付', sent: '渠道已接收', uncertain: '发送结果待核实' };
 const terminalStates = ['completed', 'failed', 'cancelled', 'closed'];
 
@@ -49,7 +49,7 @@ export function TicketChange({ api, ticket, reload, onDirtyChange, startOpen = f
   </section>;
 }
 
-export function Tickets({ api, onDirtyChange, onCreateGoal, onOpenGoals, requestedTicket }) {
+export function Tickets({ api, onDirtyChange, onCreateGoal, requestedTicket }) {
   const dirtyEditor = useDirtyRegistry(onDirtyChange);
   const [rows, setRows] = useState(null), [error, setError] = useState(''), [busy, setBusy] = useState(null), [generation, setGeneration] = useState(0);
   const [concurrency, setConcurrency] = useState(''), [configRevision, setConfigRevision] = useState(null), [settingsOpen, setSettingsOpen] = useState(false), [configError, setConfigError] = useState('');
@@ -100,15 +100,12 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onOpenGoals, request
       const waiting = ticketWaiting(row);
       const stateLabel = safetyWait ? '待核实外部效果' : states[status] || status;
       const recovery = continuationRecovery(row);
-      const recover = () => recovery?.goalBudget ? onOpenGoals?.() : lifecycle(row, 'ticketResume', recovery?.input);
       const title = normalizeTicketTitle(row.taskMeta?.title || row.title, row.target);
       const updatedLabel = row.updatedAt ? new Date(row.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
       const actions = [];
       if (!terminalStates.includes(row.status)) {
-        if (recovery) actions.push({ icon: recovery.goalBudget ? 'settings' : 'play', label: recovery.label, onClick: recover, disabled: busy !== null || (recovery.goalBudget && !onOpenGoals) });
-        else if (row.status === 'paused' && !safetyWait) actions.push(row.pauseReason?.kind === 'budget'
-          ? { icon: 'settings', label: '管理持续目标额度', onClick: onOpenGoals, disabled: busy !== null || !onOpenGoals }
-          : { icon: 'play', label: '继续工单', onClick: () => lifecycle(row, 'ticketResume'), disabled: busy !== null });
+        if (recovery) actions.push({ icon: 'play', label: recovery.label, onClick: () => lifecycle(row, 'ticketResume', recovery.input), disabled: busy !== null });
+        else if (row.status === 'paused' && !safetyWait) actions.push({ icon: 'play', label: '继续工单', onClick: () => lifecycle(row, 'ticketResume'), disabled: busy !== null });
         else if (!['pausing', 'cancelling', 'uncertain', 'blocked'].includes(status)) actions.push({ icon: 'pause', label: '暂停工单', onClick: () => lifecycle(row, 'ticketPause'), disabled: busy !== null });
         actions.push({ icon: 'stop', label: '停止工单', onClick: () => stop(row), disabled: busy !== null });
       } else actions.push({ icon: 'refresh', label: '重开工单', onClick: () => { setChangeId(row.id); setSelectedId(row.id); }, disabled: busy !== null });
@@ -116,7 +113,7 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onOpenGoals, request
       {selectedId === row.id && <TaskDetail open title={title} dirty={detailDirty} onClose={() => { setSelectedId(null); setChangeId(null); }}><header><span className="ba-goal-status">{stateLabel}</span></header>
         <section className="ba-task-instructions"><h3>任务要求</h3><p>{row.target}</p>{row.acceptance && <><h3>验收条件</h3><p>{row.acceptance}</p></>}</section>
         {error && <p role="alert">{error}</p>}
-        <TicketWaiting key={`${row.id}:${row.instructionRevision}:${row.resultVersion}`} api={api} ticket={row} onRefresh={() => setGeneration(value => value + 1)} onOpenResources={resource => resource === 'goals' ? onOpenGoals?.() : setChangeId(row.id)} canOpenGoals={!!onOpenGoals} showQuestion={false} />
+        <TicketWaiting key={`${row.id}:${row.instructionRevision}:${row.resultVersion}`} api={api} ticket={row} onRefresh={() => setGeneration(value => value + 1)} onOpenResources={() => setChangeId(row.id)} showQuestion={false} />
         <p className="ba-note">{row.mandate?.source?.channel === 'feishu' ? '飞书' : '桌面'} · {delivery ? deliveryStates[delivery.state] || delivery.state : '尚无交付结果'}</p>
         {!safetyWait && status !== 'uncertain' && <section className="ba-stack" aria-label="待处理交互">{row.attentions?.map(attention => <TicketAttention key={`${attention.id}:${row.instructionRevision}`} api={api} ticket={row} attention={attention} onAnswered={() => setGeneration(value => value + 1)} />)}</section>}
         {result && <Disclosure title={<>查看结果与证据 · 要求版本 {result.instructionRevision ?? 1}</>}>{(result.instructionRevision ?? 1) !== row.instructionRevision && <p className="ba-note">这是旧要求的结果，当前版本尚待执行与验收。</p>}<p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result.summary}</p>{result.review && <p>验收：{result.review.reason}</p>}<ul>{result.evidenceRefs?.map((ref, index) => <li key={index}>会话：{ref.sessionId || '—'}{ref.runId ? ` · 执行：${ref.runId}` : ''}</li>)}</ul></Disclosure>}

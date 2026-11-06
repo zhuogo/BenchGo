@@ -9,7 +9,7 @@ export const inactiveActivityStates = new Set(['paused', 'pausing', 'cancelling'
 export const attentionActivityStates = new Set(['waiting', 'awaiting_user', 'continuation_wait', 'blocked', 'uncertain', 'failed']);
 export const liveActivityStates = status => !terminalActivityStates.has(status) && !inactiveActivityStates.has(status);
 export const activeActivityStates = status => liveActivityStates(status) && !attentionActivityStates.has(status);
-export const activityLabels = { open: '已接收', queued: '等待执行', claimed: '执行中', active: '进行中', reworking: '原工单补做中', completed: '已完成', waiting: '等待处理', awaiting_user: '等待你的答复', review_wait: '系统自动核验中', continuation_wait: '系统等待续做资源', paused: '已暂停', pausing: '正在暂停', resuming: '正在恢复', cancelling: '正在停止', cancelled: '已停止', failed: '执行失败', uncertain: '待核实', blocked: '受阻', closed: '已结束' };
+export const activityLabels = { open: '已接收', queued: '等待执行', claimed: '执行中', active: '进行中', reworking: '原工单补做中', completed: '已完成', waiting: '等待处理', awaiting_user: '等待你的答复', review_wait: '系统自动核验中', continuation_wait: '系统等待续做', paused: '已暂停', pausing: '正在暂停', resuming: '正在恢复', cancelling: '正在停止', cancelled: '已停止', failed: '执行失败', uncertain: '待核实', blocked: '受阻', closed: '已结束' };
 
 export function activityTask(row, kind) {
   const { assignment, result, delivery, status: ticketStatus, safetyWait } = ticketSnapshot(row);
@@ -20,7 +20,7 @@ export function activityTask(row, kind) {
     : status === 'reworking' ? '沿原会话补做并重新核验'
     : status === 'awaiting_user' ? '等待你的答复 · 原工单保留'
     : status === 'review_wait' ? '系统自动补证与核验'
-    : status === 'continuation_wait' ? safetyWait ? '系统待核实外部效果' : '系统等待续做资源'
+    : status === 'continuation_wait' ? safetyWait ? '系统待核实外部效果' : '系统等待续做'
     : delivery?.state === 'sent' ? '结果已交付' : delivery ? '结果交付阶段'
     : result?.review ? '自动核验已结束' : result ? '正在自动核验结果'
     : assignment ? `执行阶段 · ${activityLabels[assignment.state] || assignment.state || '状态未知'}` : '已接收 · 等待分配';

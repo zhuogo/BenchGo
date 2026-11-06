@@ -113,7 +113,7 @@ test('option accompanies its body and uses the validated endpoint, never approva
   assert.equal(waitingCards.length, 1, 'only the latest original-ticket message owns recovery');
   assert.equal(recoveryCalls.length, 0);
   const action = ticketWaiting(waitingCards[0].props.ticket).actions.find(action => action.kind === 'resume');
-  assert.deepEqual(action.input, { ticketId: 'original', expectedResultVersion: 3, additionalExecutionMs: 600000 });
+  assert.deepEqual(action.input, { ticketId: 'original', expectedResultVersion: 3 });
   for (const code of ['EXECUTION_EFFECTS_UNKNOWN', 'EXECUTION_NOT_VERIFIED', 'EXECUTION_STOP_UNCONFIRMED']) {
     const safetyTree = walk(module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side', history: { notifications: [{ ...recoveryEvent, eventId: 'safety', continuationWait: { code, sourceResultVersion: 3 } }] } } }));
     const ticket = safetyTree.find(node => node.props?.ticket?.id === 'original').props.ticket;

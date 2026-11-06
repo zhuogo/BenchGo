@@ -359,10 +359,9 @@ test('ticket header opens the goal form and returns to the ticket list', () => {
   assert(walk(h.render('Studio', props)).some(node => node.props.onCreateGoal));
 });
 
-test('ticket resource recovery opens existing Goal settings rather than creating a Goal', () => {
+test('the goals tab opens existing Goals rather than creating one, and Tickets expose no quota entry', () => {
   const h = harness(), props = { initialSection: 'tasks', snapshot: { config: { models: [] } }, ctx: {} };
-  walk(h.render('Studio', props)).find(node => node.props.onOpenGoals).props.onOpenGoals();
-  assert.equal(walk(h.render('Studio', props)).find(node => node.props.onViewTickets).props.initialCreating, false);
+  assert.equal(walk(h.render('Studio', props)).some(node => node.props.onOpenGoals), false);
   const chat = harness(), requested = { ...props, requestedTab: 'goals' };
   chat.render('Studio', requested);
   chat.effects.find(item => item.deps?.[0] === 'goals').effect();
@@ -381,7 +380,7 @@ test('linked task navigation carries its ticket through the page and existing St
   const view = harness();
   view.render('Studio', studio.props);
   view.effects.find(item => item.deps?.[0] === studio.props.requestedTicket).effect();
-  const tickets = walk(view.render('Studio', studio.props)).find(node => node.props.onOpenGoals);
+  const tickets = walk(view.render('Studio', studio.props)).find(node => node.props.requestedTicket && node.props.onCreateGoal);
   assert.equal(tickets.props.requestedTicket.ticketId, 'linked');
 });
 
