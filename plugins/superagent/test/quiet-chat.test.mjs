@@ -70,7 +70,7 @@ test('failed and uncertain inbox requests expose their real system error without
 test('option accompanies its body and uses the validated endpoint, never approval or raw send', async () => {
   const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
   const code = transformSync(readFileSync(new URL('../client/quiet-chat.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
-  const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null && x !== false) }), useState: value => [value, () => {}], useRef: () => ({ current: null }), useEffect() {} };
+  const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null && x !== false) }), useState: value => [value, () => {}], useRef: () => ({ current: null }), useEffect() {}, useSyncExternalStore: (_subscribe, snapshot) => snapshot() };
   const module = { exports: {} }, calls = [];
   runInNewContext(code, { module, exports: module.exports, require: id => id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('ticket-state.mjs') ? { continuationRecovery, ticketSnapshot } : id.endsWith('ticket-attention.jsx') ? { TicketAttention: 'TicketAttention' } : id.endsWith('message-actions.jsx') ? { MessageActions: 'MessageActions' } : id === 'react' ? react : id.endsWith('use-chat-scroll.jsx') ? { useChatScroll: () => ({ root: null, host: null }) } : id.endsWith('quiet-chat.mjs') ? { quietChatRows } : id.endsWith('reply-stream.mjs') ? { projectReplyStream } : {} });
   const tree = module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side', api: async (...args) => calls.push(args), history: { notifications: [{ eventId: 'e', threadId: 'side', text: '方案已准备好', options: ['就这么办'] }] } } });
@@ -121,4 +121,13 @@ test('option accompanies its body and uses the validated endpoint, never approva
     assert(!ticketWaiting(ticket).actions.some(action => ['resume', 'review'].includes(action.kind)));
     assert(!safetyTree.some(node => node.props?.['aria-label'] === '系统续做操作'));
   }
+});
+
+test('quiet chat keeps answered question bubbles in history order', () => {
+  const rows = quietChatRows({ messages: [
+    { id: 'u1', seq: 1, role: 'user', text: '规划服务器', time: 1 },
+    { id: 'question:c1', seq: 3, role: 'user', kind: 'question-reply', questions: [{ id: 'q', question: '预算？' }], answers: [{ id: 'q', selected: ['100 元内'] }], text: '预算？：100 元内', time: 2 },
+    { id: 'reply:u1', seq: 5, role: 'assistant', kind: 'final', requestId: 'u1', text: '好的', time: 3 },
+  ] }, 'main');
+  assert.deepEqual(rows.map(row => row.kind || row.role), ['user', 'question-reply', 'final']);
 });

@@ -71,3 +71,21 @@ test('publication projection keeps stable sequence cursors without exposing even
   assert.deepEqual(rows[1].content, [{ type: 'text', text: 'answer' }]);
   assert.equal('data' in rows[1], false);
 });
+
+test('answered official questions become one visible choice bubble; pending, failed or malformed answers stay private', () => {
+  const ask = (callId, questions, seq = 2) => ({ type: 'tool/call', seq, data: { turn: 1, callId, name: 'ask_user_question', arguments: JSON.stringify({ questions }) } });
+  const result = (callId, value, seq = 3, isError = false) => ({ type: 'tool/result', seq, time: 9, data: { message: { source: { callId }, isError, content: [{ type: 'text', text: JSON.stringify(value) }] } } });
+  const questions = [{ id: 'use', question: '主要用途？', header: '用途', options: [{ label: '网站' }] }, { id: 'budget', question: '预算？' }];
+  const rows = projectChatMessages([start(), user,
+    ask('c1', questions), result('c1', { answers: [{ id: 'use', selected: ['网站', '文件共享'] }, { id: 'budget', selected: [], custom: '100 元内' }] }),
+    ask('c2', [{ id: 'later', question: '稍后？' }], 4), result('c2', { pending: true, callId: 'c2' }, 5),
+    ask('c3', [{ id: 'x', question: 'X？' }], 6), result('c3', 'boom', 7, true),
+    ask('c4', [{ id: 'y', question: 'Y？' }], 8), result('c4', { answers: [{ id: 'other', selected: [] }] }, 9)]);
+  const replies = rows.filter(row => row.kind === 'question-reply');
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].role, 'user');
+  assert.equal(replies[0].id, 'question:c1');
+  assert.deepEqual(replies[0].questions, [{ id: 'use', question: '主要用途？', header: '用途' }, { id: 'budget', question: '预算？' }]);
+  assert.equal(replies[0].text, '用途：网站、文件共享\n预算？：100 元内');
+  assert.doesNotMatch(JSON.stringify(replies), /options/);
+});

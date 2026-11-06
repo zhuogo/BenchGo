@@ -21,6 +21,12 @@
 .ba-chat-content{width:fit-content;max-width:100%;min-width:0}
 .ba-chat-message[data-role=user] .ba-chat-content{padding:12px 16px;background:var(--dsw-specific-bubble,#f3f3f3);color:var(--dsw-alias-label-primary,#222);border-radius:18px 18px 6px 18px;box-sizing:border-box;margin-left:auto}
 .ba-chat-user-text{white-space:pre-wrap;line-height:1.6}
+.ba-chat-question-reply{display:grid;gap:12px;line-height:1.6}
+.ba-chat-question p{margin:0;white-space:pre-wrap}
+.ba-chat-question-text{color:var(--dsw-alias-label-secondary,#666);font-size:13px}
+.ba-chat-question-answer{margin-top:2px}
+.ba-chat-question-skipped{color:var(--dsw-alias-label-tertiary,#999)}
+.ba-chat-await{color:var(--dsw-alias-label-tertiary,#999)}
 .ba-chat-load{display:block;margin:0 auto 24px}
 .ba-chat-work{display:flex;gap:12px;align-items:center;color:var(--dsw-alias-label-secondary,#666);font-size:13px;margin:16px 0}
 .ba-chat-attachment{display:block;font-size:13px;margin-top:8px;color:var(--dsw-alias-label-secondary,#666)}

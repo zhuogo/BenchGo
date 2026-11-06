@@ -26,6 +26,7 @@ async function fixture() {
       const messages = [
         { id:'short', role:'user', text:'好的', time:1793808000000 },
         { id:'reply', role:'assistant', kind:'final', text:'已经记下。接下来按计划推进。', usage:{inputTokens:120,outputTokens:32}, time:1793808001000 },
+        { id:'question:c1', role:'user', kind:'question-reply', questions:[{id:'use',question:'这台服务器主要用来做什么？',header:'用途'},{id:'old',question:'旧服务器怎么处理？'},{id:'note',question:'还有补充吗？'}], answers:[{id:'use',selected:['网站','文件共享']},{id:'old',selected:[],custom:'先保留观察'},{id:'note',selected:[]}], text:'用途：网站、文件共享', time:1793808001500 },
         { id:'long', role:'user', text:'请检查暗主题下输入消息的可读性。\\n长消息也要清楚显示，工具栏不能遮住文字。'.repeat(3), time:1793808002000 },
         { id:'code', role:'assistant', kind:'final', text:'检查结果：\\n\\n~~~js\\nconst message = "BenchGo keeps your messages readable";\\nconsole.log(message);\\n~~~\\n\\n| 项目 | 结果 |\\n| --- | --- |\\n| 暗主题 | 文字和气泡清晰可辨 |\\n| 操作 | 复制、表情、用量 |', time:1793808003000 }
       ];
@@ -37,14 +38,15 @@ async function fixture() {
           if (state === 'error') throw new Error('测试连接暂不可用');
           return { tickets:[], goals:[] };
         };
-        const home = { api, threadId:'main', assistantName:'BenchGo', sessionId:'test-'+state,
+        const statuses = new Map(state==='question' ? [['test-question',{pendingInteraction:{kind:'question',key:'q',sessionId:'test-question'}}]] : []);
+        const home = { api, threadId:'main', assistantName:'BenchGo', sessionId:'test-'+state, sessionStatus:{ subscribe:()=>()=>{}, getSnapshot:()=>statuses },
           assistantConfig:{cardMotion:false}, onOpenResources(){},
           onRefresh:async()=>{}, history:{ messages:state==='data'?messages:[], reactions:{'message:reply':'👍'},
             notifications:state==='data'?[{eventId:'delivery',threadId:'main',text:'布局已调整，窄容器也保持侧边操作。',createdAt:1793808004000,options:['继续检查']}]:[] } };
         root.render(<div className="ba-root ba-official-conversation" data-assistant-chat="">
           <div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll="" tabIndex={0}>
-            {state !== 'data' && state !== 'waiting' && <AssistantHome key={'home-'+state} {...home} input={{phase:'plain',draft:''}} inputActions={{captureInsertion(){},insertText(){return true},persistDraft(){}}}/>}
-            <QuietChat key={'chat-'+state} home={home} session={{running:state==='waiting'}} />
+            {!['data','waiting','question'].includes(state) && <AssistantHome key={'home-'+state} {...home} input={{phase:'plain',draft:''}} inputActions={{captureInsertion(){},insertText(){return true},persistDraft(){}}}/>}
+            <QuietChat key={'chat-'+state} home={home} session={{running:state==='waiting'||state==='question'}} />
           </div></div>
         </div>);
       };
@@ -129,6 +131,14 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
         assert.notEqual(await short.locator('.ba-message-time-icon').evaluate(node=>getComputedStyle(node).display),'none','full timestamp remains accessible through the time icon');
         assert(await short.locator('time').getAttribute('aria-label'),'time icon has a full accessible timestamp');
       }
+      const choice=page.locator('[data-chat-key="message:question:c1"]');
+      assert.equal(await choice.getAttribute('data-role'),'user','answered choices sit on the user side');
+      assert(await choice.getByText('用途 · 这台服务器主要用来做什么？',{exact:true}).count(),'question keeps its header');
+      assert(await choice.getByText('网站、文件共享',{exact:true}).count(),'selected options are shown');
+      assert(await choice.getByText('先保留观察',{exact:true}).count(),'custom answer is shown');
+      assert(await choice.getByText('已跳过',{exact:true}).count(),'skipped question is explicit');
+      const tone=await choice.evaluate(node=>[getComputedStyle(node.querySelector('.ba-chat-question-text')).color,getComputedStyle(node.querySelector('.ba-chat-question-answer')).color]);
+      assert.notEqual(tone[0],tone[1],'question is muted relative to the answer');
       const delivery=page.locator('[data-chat-key="notification:delivery"]');
       assert.equal(await delivery.getAttribute('data-role'),'assistant','delivery is a normal assistant message');
       assert(await delivery.getByText('布局已调整，窄容器也保持侧边操作。',{exact:true}).count());
@@ -171,11 +181,12 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
     assert.equal(await reply.getByRole('button',{name:'本条回复用量',exact:true}).evaluate(node=>node===document.activeElement),true,'usage Escape returns to usage trigger');
     await page.locator('.ba-chat-feed').focus(); await page.mouse.move(1,1);
     assert.equal(await reply.locator('.ba-reaction-chip').evaluate(node=>getComputedStyle(node).opacity),'1','saved reaction stays visible');
-    for(const state of ['empty','loading','error','waiting']) {
+    for(const state of ['empty','loading','error','waiting','question']) {
       await page.evaluate(state=>window.renderScenario(state),state);
-      await page.locator(state==='waiting'?'.ba-chat-work':state==='error'?'.ba-home-error':state==='loading'?'.ba-home-loading':'.ba-home-starters').waitFor();
+      await page.locator(state==='question'?'.ba-chat-await':state==='waiting'?'.ba-chat-work':state==='error'?'.ba-home-error':state==='loading'?'.ba-home-loading':'.ba-home-starters').waitFor();
       await shot(page,'dark-'+state);
       if(state==='error') assert(await page.getByRole('button',{name:'重试',exact:true}).isVisible());
+      if(state==='question') { assert.equal(await page.locator('.ba-loading-dots').count(),0,'an open question card replaces the busy dots'); assert(await page.getByText('在下方选项卡中作答后继续',{exact:true}).isVisible()); }
     }
     const touch=await browser.newPage({viewport:{width:390,height:1000},hasTouch:true,isMobile:true,reducedMotion:'reduce'});
     await touch.setContent(html);

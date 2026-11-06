@@ -21,6 +21,39 @@ export function activeChatReply(events) {
   return turn !== undefined && requestId ? { turn, requestId } : null;
 }
 
+const record = value => typeof value === 'object' && value !== null && !Array.isArray(value);
+const parseJson = text => { try { const value = JSON.parse(text); return record(value) ? value : null; } catch { return null; } };
+// Same acceptance rules as the official answered-question node: only a settled
+// official answer whose ids match the asked questions becomes a visible bubble.
+function questionsOf(argumentsText) {
+  const value = parseJson(argumentsText), ids = new Set();
+  if (!Array.isArray(value?.questions) || !value.questions.length) return null;
+  const questions = [];
+  for (const row of value.questions) {
+    if (!record(row) || typeof row.id !== 'string' || typeof row.question !== 'string' || ids.has(row.id)) return null;
+    ids.add(row.id);
+    questions.push({ id: row.id, question: row.question, ...(typeof row.header === 'string' && row.header.trim() ? { header: row.header } : {}) });
+  }
+  return questions;
+}
+function answersOf(questions, message) {
+  const content = message?.content || [];
+  if (message?.isError === true || content.length !== 1 || content[0]?.type !== 'text') return null;
+  const value = parseJson(content[0].text);
+  if (!value || value.pending === true || !Array.isArray(value.answers) || value.answers.length !== questions.length) return null;
+  const ids = new Set(questions.map(row => row.id)), answers = [];
+  for (const row of value.answers) {
+    if (!record(row) || typeof row.id !== 'string' || !ids.delete(row.id) || !Array.isArray(row.selected)
+      || !row.selected.every(item => typeof item === 'string') || (row.custom !== undefined && typeof row.custom !== 'string')) return null;
+    answers.push({ id: row.id, selected: row.selected, ...(row.custom?.trim() ? { custom: row.custom } : {}) });
+  }
+  return answers;
+}
+const answerText = (questions, answers) => questions.map(row => {
+  const answer = answers.find(item => item.id === row.id), values = [...(answer?.selected || []), ...(answer?.custom ? [answer.custom] : [])];
+  return `${row.header || row.question}：${values.length ? values.join('、') : '已跳过'}`;
+}).join('\n');
+
 /** A projection, never a replacement for the private execution transcript. */
 export function projectChatMessages(events) {
   const users = new Set(), published = new Set(), rows = [];
@@ -32,6 +65,7 @@ export function projectChatMessages(events) {
   }
   users.clear();
   let turn, request, lastAssistant;
+  const asked = new Map();
   for (const event of events) {
     if (event.type === 'turn/start') { turn = event.data?.turn; request = undefined; lastAssistant = undefined; }
     if (userEvent(event)) {
@@ -45,6 +79,15 @@ export function projectChatMessages(events) {
       published.add(row.requestId);
       const usage = request?.id === row.requestId ? publicUsage(lastAssistant?.data?.usage) : undefined;
       rows.push({ seq: event.seq, id: `reply:${row.requestId}`, role: 'assistant', kind: 'final', requestId: row.requestId, text: row.text, content: [{ type: 'text', text: row.text }], time: event.time, ...(usage ? { usage } : {}) });
+    } else if (event.type === 'tool/call' && event.data?.name === 'ask_user_question' && !event.data.parentCallId) {
+      const questions = questionsOf(event.data.arguments);
+      if (questions) asked.set(String(event.data.callId), questions);
+    } else if (event.type === 'tool/result' && asked.has(String(event.data?.message?.source?.callId))) {
+      const callId = String(event.data.message.source.callId), questions = asked.get(callId);
+      asked.delete(callId);
+      const answers = answersOf(questions, event.data.message);
+      if (answers) rows.push({ seq: event.seq, id: `question:${callId}`, role: 'user', kind: 'question-reply', questions, answers,
+        text: answerText(questions, answers), content: [{ type: 'text', text: answerText(questions, answers) }], time: event.time });
     } else if (event.type === 'assistant/message' && turn !== undefined && event.data?.turn === turn) {
       lastAssistant = event;
     } else if (event.type === 'turn/end') {
