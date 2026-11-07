@@ -28,6 +28,8 @@ SuperAgent 本身就是宠物助手与 Router，默认无名，不增加陪伴 A
 
 Ticket、Assignment、Run、Result 与 Delivery 共同承载状态、验收和通知；新工作统一创建 Ticket，持续目标只聚合当前工单结果。
 
+聊天看板与工单详情共用执行动态投影，以简约任务线展示主 Worker、直接子 Worker 与真实活动；历史不完整、暂停旧记录和核验/交付阶段明确区分，交互边界见[任务列表设计](../../docs/02-工作台与Agent/任务列表交互.md#聊天任务线与执行动态)。
+
 Router 通过只读工具 `assistant_tickets` 查询当前桌面对话所属工单：`list` 支持 `status`、`projectId` 和 `limit`/`offset` 分页，按返回的 `nextOffset` 继续；`get` 按 `id` 读取执行结果、验收结论及待处理问题。查询直接复用工单数据库，不触发执行或审批，不读取其他会话或渠道的工单。
 
 ## 书面规则准入

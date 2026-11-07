@@ -30,11 +30,11 @@ async function fixture() {
         window.updateConfig = config => { assistantConfigSync.accept({...config,revision:++serial},assistantConfigSync.begin());setConfig(config); };
         return <ActivityProvider><style>{css}</style><div className="ba-root">
           <main className="ba-main fixture-chat"><header><h1>主聊天</h1><ActivityTrigger api={api}/></header><p>BenchGo · 看板组件验收</p></main>
-          <ActivityPanel api={api} assistantConfig={config} onOpenResources={tab=>window.resourceCalls.push(tab)}/>
+          <ActivityPanel api={api} assistantConfig={config} onOpenResources={(tab,selection)=>{window.resourceCalls.push(tab);window.resourceSelections.push(selection);}}/>
         </div></ActivityProvider>;
       }
       window.renderScenario = (state='data', supplied=true) => {
-        window.apiCalls=[];window.resourceCalls=[];
+        window.apiCalls=[];window.resourceCalls=[];window.resourceSelections=[];
         const control=window.scenarioControl={state,fail:false};
         const now=new Date(), at=minutes=>new Date(+now-minutes*60000).toISOString();
         const tickets=[
@@ -46,6 +46,22 @@ async function fixture() {
           {id:'done',title:'整理今天的工作记录',status:'completed',createdAt:at(60),updatedAt:at(6),results:[{version:1,summary:'内部工作摘要',review:{verdict:'passed',reason:'核验通过'},delivery:{action:'deliver',text:'已归档工作记录，保留了相关文件与说明。'}}],deliveries:[{state:'sent',payload:{type:'ticket.result',instructionRevision:1,resultVersion:1}}]},
         ];
         const goals=[{id:'goal',target:'持续维护 BenchGo 的一致体验',status:'active',rowVersion:7,createdAt:at(120),updatedAt:at(7),ticketIds:['running']}];
+        window.updateExecution = step => {
+          const row=tickets[0], finished=step==='delivered', verifying=step==='verifying';
+          const worker={id:'worker-main',label:'主 Worker',status:finished||verifying?'completed':step==='unknown'?'waiting':'running',activity:finished||verifying?'已提交结果核验':step==='unknown'?'等待后续事件':'正在搜索网页',updatedAt:at(0)};
+          const children=[
+            {id:'child-search',label:'查找候选项目',status:step==='running'?'running':'completed',activity:step==='running'?'正在搜索网页':'已返回父 Worker',updatedAt:at(0)},
+            {id:'child-check',label:'核对项目页面',status:step==='child-completed'?'failed':step==='unknown'?'unknown':finished||verifying?'completed':'running',activity:step==='child-completed'?'执行失败':step==='unknown'?'未读取到结束记录':finished||verifying?'已返回父 Worker':'正在读取网页',updatedAt:at(0)},
+          ];
+          Object.assign(row,{status:finished?'completed':step==='paused'?'paused':'open',instructionRevision:1,resultVersion:finished?1:0,updatedAt:at(0),
+            assignments:[{id:'assignment-main',instructionRevision:1,state:finished?'completed':'claimed'}],results:finished?[{instructionRevision:1,version:1,summary:'内部结果',review:{verdict:'passed'},delivery:{text:'已完成调研，来源与限制随结果交付。'}}]:[],
+            deliveries:finished?[{state:'sent',payload:{type:'ticket.result',instructionRevision:1,resultVersion:1}}]:[],
+            execution:{assignmentId:'assignment-main',runId:'run-main',sessionId:'worker-main',instructionRevision:1,phase:verifying?'verifying':'executing',updatedAt:at(0),observed:step!=='unknown',worker,children,
+              childCounts:{total:children.length,running:children.filter(c=>c.status==='running').length,completed:children.filter(c=>c.status==='completed').length,failed:children.filter(c=>c.status==='failed').length},
+              ...(step==='unknown'?{limitation:'历史会话尚未加载，部分执行状态无法确认。'}:{})}});
+          document.dispatchEvent(new Event('benchgo:assistant-changed'));
+        };
+        if(state==='dynamic'){tickets.splice(1);goals.splice(0);window.updateExecution('running');}
         const config={name:'BenchGo',models:[{modelId:'provider/opaque-model@2026-11'}],cardMotion:false};
         const api=async(name,args)=>{
           window.apiCalls.push([name,args]);
@@ -224,5 +240,81 @@ test('activity board renders honest states, keyboard navigation and responsive t
     await panel.waitFor({state:'hidden'});
     assert.deepEqual(await page.evaluate(()=>window.resourceCalls),['pet'],'identity appearance action opens the correct resource');
     assert.deepEqual(errors,[],'no browser runtime errors');
+  }finally{await browser.close();}
+});
+
+test('activity board updates Worker and child execution in place without declaring early completion', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
+  const html=await fixture();
+  const browser=await chromium.launch({headless:true,executablePath});
+  const errors=[];
+  try{
+    const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'});
+    page.setDefaultTimeout(5000);
+    page.on('pageerror',error=>errors.push(error.message));
+    await page.setContent(html);
+    await page.evaluate(()=>window.renderScenario('dynamic'));
+    await page.locator('.ba-activity-trigger').click();
+    const panel=page.locator('.ba-activity-panel');
+    const row=panel.locator('[data-task-key="ticket:running"]');
+    await row.waitFor();
+    assert.equal(await panel.locator('[data-task-key]').count(),1,'child workers never become top-level tickets');
+    assert(await row.getByText(/正在搜索网页/).isVisible(),'current activity appears in the two-line list');
+    assert.equal(await row.locator('.ba-board-children-count').innerText(),'子任务 0/2','list includes the count of returned children');
+    for(const width of [1440,768,390]){
+      await page.setViewportSize({width,height:900});
+      assert(await row.locator('.ba-board-children-count').evaluate(node=>node.scrollWidth<=node.clientWidth),'running child count is never truncated');
+      if(captureDir)await panel.screenshot({path:join(captureDir,`light-${width}-dynamic-list.png`)});
+    }
+    await row.locator('.ba-board-task-open').click();
+    const detail=page.getByRole('dialog');
+    await detail.waitFor();
+    assert.equal(await detail.locator('[data-worker-id]').count(),3,'one Worker and its two children are visible');
+    assert.equal(await detail.locator('[data-worker-status="running"]').count(),3);
+    assert.equal(await detail.getByRole('progressbar').count(),0,'observed work has no estimated completion percentage');
+    assert.equal(await detail.locator('.ba-execution-timeline').count(),1,'execution uses a single task line');
+    assert.equal(await detail.locator('.ba-task-execution time').count(),1,'task line has one shared freshness stamp');
+    assert.equal(await detail.locator('.ba-execution-status').count(),0,'current activity replaces repeated running labels');
+    assert(await detail.getByText('正在执行',{exact:true}).isVisible(),'execution phase appears once above the task line');
+    const handle=await detail.locator('[data-worker-id="child-search"]').elementHandle();
+    await page.evaluate(()=>window.updateExecution('child-completed'));
+    await detail.locator('[data-worker-id="child-search"][data-worker-status="completed"]').waitFor();
+    assert(await handle.evaluate(node=>node.isConnected),'child updates preserve the existing DOM row');
+    assert(await detail.locator('[data-worker-id="child-check"]').getByText('执行失败',{exact:true}).first().isVisible());
+    assert.equal(await detail.getByText('已完成',{exact:true}).count(),0,'one child ending does not complete the ticket');
+    for(const dark of [false,true])for(const width of [1440,768,390]){
+      await page.setViewportSize({width,height:900});
+      await page.evaluate(dark=>document.body.toggleAttribute('data-ds-dark-theme',dark),dark);
+      assert(await row.locator('.ba-board-children-count').evaluate(node=>node.scrollWidth<=node.clientWidth),'child count remains fully visible on the compact row');
+      assert(await detail.evaluate(node=>node.scrollWidth<=node.clientWidth),'execution tree fits the task dialog');
+      assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'execution tree never widens the document');
+      if(captureDir)await page.screenshot({path:join(captureDir,`${dark?'dark':'light'}-${width}-execution.png`)});
+    }
+    await page.evaluate(()=>{window.scenarioControl.fail=true;document.dispatchEvent(new Event('benchgo:assistant-changed'));});
+    await detail.getByText('动态更新暂不可用，以下保留上次记录。',{exact:true}).waitFor();
+    assert.equal(await detail.locator('[data-worker-id]').count(),3,'refresh errors keep observed children with a stale-state notice');
+    await page.evaluate(()=>{window.scenarioControl.fail=false;window.updateExecution('verifying');});
+    await detail.getByText('动态更新暂不可用，以下保留上次记录。',{exact:true}).waitFor({state:'hidden'});
+    await row.getByText('正在核验',{exact:true}).waitFor();
+    assert.equal(await detail.locator('[data-worker-status="completed"]').count(),3);
+    assert.equal(await detail.getByText('已完成',{exact:true}).count(),0,'Worker completion still waits for ticket verification and delivery');
+    if(captureDir)await page.screenshot({path:join(captureDir,'verifying-detail.png')});
+    await page.evaluate(()=>window.updateExecution('delivered'));
+    await detail.getByText('已完成 · 结果已交付',{exact:true}).waitFor();
+    assert(await detail.getByText('已完成调研，来源与限制随结果交付。',{exact:true}).isVisible());
+    assert.equal(await detail.getByRole('button',{name:'停止任务',exact:true}).count(),0);
+    if(captureDir)await page.screenshot({path:join(captureDir,'delivered-detail.png')});
+    await page.evaluate(()=>window.updateExecution('paused'));
+    await detail.getByRole('heading',{name:'最近执行记录',exact:true}).waitFor();
+    assert(await detail.getByText('以下为最近一次执行记录，不代表 Worker 当前仍在运行。',{exact:true}).isVisible(),'paused tickets label old activity as historical');
+    assert(await detail.locator('[data-worker-id="worker-main"]').getByText('上次记录为运行中',{exact:true}).isVisible(),'paused ticket does not present its previous Worker state as live');
+    await page.evaluate(()=>window.updateExecution('unknown'));
+    await detail.locator('[data-worker-id="child-check"][data-worker-status="unknown"]').waitFor();
+    assert(await detail.getByText('历史会话尚未加载，部分执行状态无法确认。',{exact:true}).isVisible());
+    assert(await detail.locator('[data-worker-id="worker-main"]').getByText('等待后续',{exact:true}).isVisible(),'idle worker does not become completed');
+    await detail.getByRole('button',{name:'前往任务管理',exact:true}).click();
+    await panel.waitFor({state:'hidden'});
+    assert.deepEqual(await page.evaluate(()=>window.resourceCalls),['tasks']);
+    assert.deepEqual(await page.evaluate(()=>window.resourceSelections),[{ticketId:'running'}],'management opens the selected ticket for revisions');
+    assert.deepEqual(errors,[],'dynamic updates produce no browser errors');
   }finally{await browser.close();}
 });

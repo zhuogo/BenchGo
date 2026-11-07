@@ -50,11 +50,13 @@
 .ba-board-section-intro h3{margin:0;font-size:14px;font-weight:600;line-height:1.5}
 .ba-board-section-intro p{margin:5px 0 0;color:var(--ba-muted);font-size:12px;line-height:1.6}
 
-.ba-board-row{margin:0 0 6px;border:1px solid var(--board-line);border-radius:10px;background:var(--board-base);color:inherit;transition:border-color .15s}
-.ba-board .ba-board-row:hover,.ba-board .ba-board-row:focus-within{border-color:color-mix(in srgb,var(--board-ink) 23%,transparent)}
-.ba-board .ba-board-task-open{display:flex;align-items:center;gap:10px;width:100%;min-width:0;margin:0;padding:11px 10px;border:0;border-radius:inherit;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;box-shadow:none}
+.ba-board-row{position:relative;margin:0;border:0;border-radius:6px;background:transparent;color:inherit}
+.ba-board-row::before{content:'';position:absolute;left:17px;top:0;bottom:0;border-left:1px solid var(--board-line);pointer-events:none}
+.ba-board-row:not(.ba-board-row+.ba-board-row)::before{top:26px}
+.ba-board-row:last-child::before{bottom:34px}
+.ba-root .ba-board .ba-board-task-open{position:relative;display:flex;align-items:flex-start;gap:10px;width:100%;min-width:0;margin:0;padding:10px;border:0;border-radius:inherit;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;box-shadow:none}
 .ba-board .ba-board-task-open:hover{background:color-mix(in srgb,var(--board-ink) 3%,transparent)}
-.ba-board-iconbox{display:flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:9px;color:var(--ba-muted);background:color-mix(in srgb,currentColor 8%,transparent)}
+.ba-board-iconbox{position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:16px;height:22px;color:var(--ba-muted);background:var(--board-ground)}
 .ba-board-iconbox[data-status=completed],.ba-board-chip[data-status=completed]{color:var(--board-good)}
 .ba-board-iconbox:is([data-status=failed],[data-status=blocked]),.ba-board-chip:is([data-status=failed],[data-status=blocked]){color:var(--board-danger)}
 .ba-board-iconbox:is([data-status=waiting],[data-status=awaiting_user],[data-status=continuation_wait],[data-status=uncertain]),.ba-board-chip:is([data-status=waiting],[data-status=awaiting_user],[data-status=continuation_wait],[data-status=uncertain]){color:var(--board-warning)}
@@ -62,14 +64,17 @@
 .ba-board-glyph-text{font-size:16px;font-weight:600;line-height:1}
 .ba-board-dot{width:9px;height:9px;border:1.5px solid currentColor;border-radius:50%}
 .ba-board-pulse{width:9px;height:9px;border-radius:50%;background:currentColor}
+.ba-board-iconbox[data-status=verifying],.ba-board-chip[data-status=verifying]{color:var(--board-running)}
 .ba-board-task-content{display:grid;gap:4px;min-width:0;flex:1}
 .ba-board-task-heading,.ba-board-task-meta{display:flex;align-items:center;gap:8px;min-width:0}
 .ba-board-task-heading strong{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600;line-height:20px}
 .ba-board-task-heading time{flex:none;font-size:11px;line-height:20px;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--ba-muted)}
 .ba-board-task-meta{font-size:12px;line-height:18px;color:var(--ba-muted)}
 .ba-board-chip{flex:none;font-weight:500;white-space:nowrap}
-.ba-board-summary{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ba-board-summary{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ba-board-summary::before{content:'·';margin-right:8px;color:var(--ba-muted)}
+.ba-board-children-count{flex:none;white-space:nowrap;font-size:11px;font-variant-numeric:tabular-nums;color:var(--ba-muted)}
+.ba-board-children-count[data-failed]{color:var(--board-danger)}
 .ba-board-empty{display:flex;flex-direction:column;align-items:center;gap:10px;margin:8px 0;padding:32px 18px 28px;border:1px solid var(--board-line);border-radius:16px;background:var(--board-base);text-align:center}
 .ba-board-empty>.benchgo-pet-avatar{margin-bottom:8px}
 .ba-board-empty strong{font-size:14px;font-weight:600;line-height:1.5}

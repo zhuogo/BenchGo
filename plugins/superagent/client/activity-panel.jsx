@@ -1,5 +1,6 @@
 import { TaskDetail } from './task-list.jsx';
 import { TicketWaiting } from './ticket-waiting.jsx';
+import { TaskExecution } from './task-execution.jsx';
 import { ticketWaiting } from './ticket-state.mjs';
 import taskCss from './task-list.css';
 import { Button } from '../../shared/client/ui/button.jsx';
@@ -15,6 +16,10 @@ import css from './activity-panel.css';
 import { activityLabels as labels, terminalActivityStates as terminal, liveActivityStates, activeActivityStates, attentionActivityStates } from './activity-data.mjs';
 import { useAssistantActivity } from './use-activity.jsx';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
+
+const executionPhases = { preparing: '准备执行', executing: '正在执行', verifying: '正在核验' };
+const detailPhase = row => row.execution?.observed !== false && ['open', 'claimed', 'reworking', 'verifying', 'resuming'].includes(row.status) && executionPhases[row.execution?.phase]
+  ? executionPhases[row.execution.phase] : `${labels[row.status] || row.status} · ${row.phase}`;
 
 const taskTitle = row => row?.kind === 'ticket' ? normalizeTicketTitle(row.taskMeta?.title || row.title, row.target) : row?.taskMeta?.title || row?.title || '任务详情';
 
@@ -59,12 +64,18 @@ function BoardEmpty({ identity, onReturn }) {
 }
 function BoardRow({ row, onOpen }) {
   const title = taskTitle(row);
+  const children = row.execution?.children || [];
+  const childCounts = row.execution?.childCounts || { total: children.length, completed: children.filter(child => child.status === 'completed').length, failed: children.filter(child => child.status === 'failed').length };
+  const hasChildren = childCounts.total > 0;
+  const summary = hasChildren && row.progressSummary && row.status !== 'verifying'
+    ? row.execution.worker?.activity || row.phase : row.progressSummary || row.detail || row.phase;
+  const childLabel = `${childCounts.total} 个子任务，${childCounts.completed || 0} 个已返回父 Worker${childCounts.failed ? `，${childCounts.failed} 个失败` : ''}`;
   return <article className="ba-activity-task ba-board-row" data-task-key={row.key}>
     <button type="button" className="ba-board-task-open" aria-label={title} aria-haspopup="dialog" onClick={() => onOpen(row.key)}>
       <span className="ba-board-iconbox" data-status={row.status} aria-hidden="true"><StatusGlyph status={row.status} /></span>
       <span className="ba-board-task-content">
         <span className="ba-board-task-heading"><strong title={title}>{title}</strong><time dateTime={dateValue(row.time)?.toISOString()} title={stamp(row.time)}>{timeShort(row.time) || '时间未知'}</time></span>
-        <span className="ba-board-task-meta"><span className="ba-board-chip" data-status={row.status}>{labels[row.status] || row.status || '状态未知'}</span><span className="ba-board-summary">{row.detail || row.phase}</span></span>
+        <span className="ba-board-task-meta"><span className="ba-board-chip" data-status={row.status}>{labels[row.status] || row.status || '状态未知'}</span><span className="ba-board-summary" title={summary}>{summary}</span>{hasChildren && <span className="ba-board-children-count" data-failed={childCounts.failed > 0 || undefined} aria-label={childLabel} title={childLabel}>子任务 {childCounts.completed || 0}/{childCounts.total}</span>}</span>
       </span>
     </button>
   </article>;
@@ -90,7 +101,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources }) {
   const [identityError, setIdentityError] = useState(''), [identityLoading, setIdentityLoading] = useState(false);
   const syncedIdentity = useSyncExternalStore(assistantConfigSync.subscribe, assistantConfigSync.getSnapshot);
   const identity = syncedIdentity || fetchedIdentity || assistantConfig;
-  const { rows, error, loading, updated, refresh } = useAssistantActivity(api);
+  const { rows, error, loading, updated, refresh } = useAssistantActivity(api, { live: open });
   const panel = useRef(null);
   const previous = useRef(null);
   const identityRequest = useRef(null);
@@ -196,5 +207,17 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources }) {
             {[['models', '身份与模型', '名字、偏好与模型配置', 'userlib'], ['memory', '记忆与档案', '保留重要的信息与约定', 'archive']].map(([key, title, description, icon]) => <Button variant="ghost" key={key} onClick={() => openResource(key)}><UIIcon name={icon} size={19} /><span className="ba-board-link-label"><strong>{title}</strong><small>{description}</small></span><UIIcon name="chevronLeft" className="ba-board-arrow" size={15} /></Button>)}
           </div></section>}
       </div><footer className="ba-board-footer"><Button variant="ghost" className="ba-board-manage" onClick={() => openResource('tasks')}><UIIcon name="schedules" size={16} />任务管理</Button><span className="ba-board-updated" title={updated ? `上次同步：${stamp(updated)}` : undefined}>{error || identityError ? '同步失败' : loading || identityLoading ? '更新中…' : updated ? `${timeShort(updated)} 更新` : '尚未同步'}</span><Tooltip label="刷新看板" side="top" delayMs={450} portal><Button variant="ghost" className="ba-icon" aria-label="刷新看板" disabled={loading || identityLoading} onClick={refreshAll}><UIIcon name="refresh" size={16} /></Button></Tooltip></footer>
-    </aside><style>{taskCss}</style><TaskDetail open={!!selected && open} title={taskTitle(selected)} onClose={() => setSelectedKey(null)}>{selected && <><div className="ba-activity-detail"><p>{labels[selected.status] || selected.status} · {selected.phase}</p>{selected.kind === 'ticket' && selected.target && <section className="ba-task-instructions"><h3>任务要求</h3><p>{selected.target}</p>{selected.acceptance && <><h3>验收条件</h3><p>{selected.acceptance}</p></>}</section>}{selected.detail && <p>{selected.detail}</p>}<div>创建：{stamp(selected.createdAt)}</div><div>更新：{stamp(selected.updatedAt)}</div></div>{actionError?.row.key === selected.key && <ResourceState kind="error" title="未能停止任务" description={actionError.message} onAction={() => stop(selected)} />}{selected.kind === 'ticket' && <TicketWaiting key={`${selected.id}:${selected.instructionRevision}:${selected.resultVersion}`} api={api} ticket={selected} onRefresh={refresh} onOpenResources={openResource} />}<div className="ba-activity-detail-actions"><Button variant="ghost" onClick={() => openResource('tasks')}>前往任务管理</Button>{!terminal.has(selected.status) && !(selected.kind === 'ticket' && ticketWaiting(selected)) && <Button variant="outline" disabled={stopping !== null} onClick={() => stop(selected)}>{stopping === selected.key ? '正在停止…' : '停止任务'}</Button>}</div></>}</TaskDetail></>;
+    </aside><style>{taskCss}</style>
+    <TaskDetail open={!!selected && open} title={taskTitle(selected)} onClose={() => setSelectedKey(null)}>{selected && <>
+      <div className="ba-activity-detail"><p>{detailPhase(selected)}</p></div>
+      {selected.kind === 'ticket' && <TaskExecution execution={selected.execution} ticketStatus={selected.status} stale={!!error} />}
+      <div className="ba-activity-detail">
+        {selected.kind === 'ticket' && selected.target && <section className="ba-task-instructions"><h3>任务要求</h3><p>{selected.target}</p>{selected.acceptance && <><h3>验收条件</h3><p>{selected.acceptance}</p></>}</section>}
+        {selected.detail && <p>{selected.detail}</p>}
+        <div>创建：{stamp(selected.createdAt)}</div><div>更新：{stamp(selected.updatedAt)}</div>
+      </div>
+      {actionError?.row.key === selected.key && <ResourceState kind="error" title="未能停止任务" description={actionError.message} onAction={() => stop(selected)} />}
+      {selected.kind === 'ticket' && <TicketWaiting key={`${selected.id}:${selected.instructionRevision}:${selected.resultVersion}`} api={api} ticket={selected} onRefresh={refresh} onOpenResources={openResource} />}
+      <div className="ba-activity-detail-actions"><Button variant="ghost" onClick={() => openResource('tasks', selected.kind === 'ticket' ? { ticketId: selected.id } : undefined)}>前往任务管理</Button>{!terminal.has(selected.status) && !(selected.kind === 'ticket' && ticketWaiting(selected)) && <Button variant="outline" disabled={stopping !== null} onClick={() => stop(selected)}>{stopping === selected.key ? '正在停止…' : '停止任务'}</Button>}</div>
+    </>}</TaskDetail></>;
 }

@@ -12,6 +12,8 @@ import { TicketAttention } from './ticket-attention.jsx';
 import { TicketWaiting } from './ticket-waiting.jsx';
 import { continuationRecovery, ticketSnapshot, ticketWaiting } from './ticket-state.mjs';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
+import { activityTask } from './activity-data.mjs';
+import { TaskExecution } from './task-execution.jsx';
 
 const states = { open: '已开单', queued: '等待执行', claimed: '执行中', reworking: '原工单补做中', completed: '已完成', waiting: '等待处理', awaiting_user: '等待你的答复', review_wait: '系统自动核验中', continuation_wait: '系统等待续做', pausing: '正在暂停', paused: '已暂停', failed: '执行失败', cancelling: '正在停止 · 等待执行确认', cancelled: '已停止', uncertain: '执行待核实', blocked: '授权已变更' };
 const deliveryStates = { queued: '等待交付', claimed: '正在交付', sent: '渠道已接收', uncertain: '发送结果待核实' };
@@ -96,9 +98,10 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, requestedTicket }) {
     {rows !== null && selectedId && !visibleRows.some(row => row.id === selectedId) && <ResourceState kind="error" title="关联工单暂不可用" description="工单可能已移除，或尚未同步到当前列表。" actionLabel="重新读取" onAction={() => setGeneration(value => value + 1)} />}
     {visibleRows?.length === 0 && !error && <ResourceState icon="box" title="暂无工单" description="在聊天中交办任务，或创建一个持续目标，执行进展会显示在这里。" actionLabel="新建持续目标" onAction={onCreateGoal} />}
     <div className="ba-task-list">{visibleRows?.map(row => {
-      const { result, delivery, status, safetyWait } = ticketSnapshot(row);
+      const { result, delivery, safetyWait } = ticketSnapshot(row);
+      const activity = activityTask(row, 'ticket'), status = activity.status;
       const waiting = ticketWaiting(row);
-      const stateLabel = safetyWait ? '待核实外部效果' : states[status] || status;
+      const stateLabel = safetyWait ? '待核实外部效果' : status === 'verifying' ? '正在核验' : states[status] || status;
       const recovery = continuationRecovery(row);
       const title = normalizeTicketTitle(row.taskMeta?.title || row.title, row.target);
       const updatedLabel = row.updatedAt ? new Date(row.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
@@ -109,9 +112,10 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, requestedTicket }) {
         else if (!['pausing', 'cancelling', 'uncertain', 'blocked'].includes(status)) actions.push({ icon: 'pause', label: '暂停工单', onClick: () => lifecycle(row, 'ticketPause'), disabled: busy !== null });
         actions.push({ icon: 'stop', label: '停止工单', onClick: () => stop(row), disabled: busy !== null });
       } else actions.push({ icon: 'refresh', label: '重开工单', onClick: () => { setChangeId(row.id); setSelectedId(row.id); }, disabled: busy !== null });
-      return <React.Fragment key={row.id}><TaskListRow api={api} kind="ticket" row={row} title={title} summary={<><span className="ba-task-state" data-state={status}>{stateLabel}</span><span className="ba-task-summary">{result?.delivery?.text || result?.review?.reason || result?.summary || row.acceptance || (row.mandate?.source?.channel === 'feishu' ? '来自飞书' : '来自桌面')}</span>{updatedLabel && <time className="ba-task-updated" dateTime={row.updatedAt}>更新 {updatedLabel}</time>}</>} completed={row.status === 'completed'} completionLocked={row.status === 'completed' && !row.taskMeta?.completed} onChanged={() => setGeneration(value => value + 1)} onOpen={() => { setChangeId(null); setSelectedId(row.id); }} actions={actions} onDirtyChange={dirtyEditor(`rename:${row.id}`)} />
+      return <React.Fragment key={row.id}><TaskListRow api={api} kind="ticket" row={row} title={title} summary={<><span className="ba-task-state" data-state={status}>{stateLabel}</span><span className="ba-task-summary">{activity.progressSummary || result?.delivery?.text || result?.review?.reason || result?.summary || row.acceptance || (row.mandate?.source?.channel === 'feishu' ? '来自飞书' : '来自桌面')}</span>{updatedLabel && <time className="ba-task-updated" dateTime={row.updatedAt}>更新 {updatedLabel}</time>}</>} completed={row.status === 'completed'} completionLocked={row.status === 'completed' && !row.taskMeta?.completed} onChanged={() => setGeneration(value => value + 1)} onOpen={() => { setChangeId(null); setSelectedId(row.id); }} actions={actions} onDirtyChange={dirtyEditor(`rename:${row.id}`)} />
       {selectedId === row.id && <TaskDetail open title={title} dirty={detailDirty} onClose={() => { setSelectedId(null); setChangeId(null); }}><header><span className="ba-goal-status">{stateLabel}</span></header>
         <section className="ba-task-instructions"><h3>任务要求</h3><p>{row.target}</p>{row.acceptance && <><h3>验收条件</h3><p>{row.acceptance}</p></>}</section>
+        <TaskExecution execution={activity.execution} ticketStatus={status} stale={!!error} />
         {error && <p role="alert">{error}</p>}
         <TicketWaiting key={`${row.id}:${row.instructionRevision}:${row.resultVersion}`} api={api} ticket={row} onRefresh={() => setGeneration(value => value + 1)} onOpenResources={() => setChangeId(row.id)} showQuestion={false} />
         <p className="ba-note">{row.mandate?.source?.channel === 'feishu' ? '飞书' : '桌面'} · {delivery ? deliveryStates[delivery.state] || delivery.state : '尚无交付结果'}</p>
