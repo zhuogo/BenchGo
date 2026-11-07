@@ -159,6 +159,22 @@ test('shared services link to matching official runtime and conflicting old seal
   assert.equal((await getInstallState(profile)).managed, false);
 });
 
+test('shared services already linked beside the plugin are removed so the official runtime copy is used', async t => {
+  const { root, profile, seed, put } = await fixture(t);
+  const runtime = join(root, 'runtime');
+  const shared = [{ name: '@deepseek-ai/dsh-llm', version: '0.2.1-alpha.3' }];
+  await put('runtime/node_modules/@deepseek-ai/dsh-llm/package.json', { name: shared[0].name, version: shared[0].version });
+  const options = await seed('0.1.0', shared);
+  const legacy = join(options.directory, 'node_modules/benchgo-plugin/node_modules/@deepseek-ai/dsh-llm');
+  await put('legacy/node_modules/@deepseek-ai/dsh-llm/package.json', { name: shared[0].name, version: shared[0].version });
+  await mkdir(join(options.directory, 'node_modules/benchgo-plugin/node_modules/@deepseek-ai'), { recursive: true });
+  await symlink(join(root, 'legacy/node_modules/@deepseek-ai/dsh-llm'), legacy, process.platform === 'win32' ? 'junction' : 'dir');
+  const release = await prepareRelease({ ...options, runtime });
+  await assert.rejects(lstat(join(release.directory, 'node_modules/benchgo-plugin/node_modules/@deepseek-ai/dsh-llm')), { code: 'ENOENT' });
+  assert.equal(JSON.parse(await readFile(join(root, 'legacy/node_modules/@deepseek-ai/dsh-llm/package.json'), 'utf8')).version, '0.2.1-alpha.3');
+  assert.equal((await getInstallState(profile)).managed, false);
+});
+
 test('rollback revalidates shared-service compatibility before changing the active version', async t => {
   const { root, profile, seed, put } = await fixture(t);
   const runtime = join(root, 'runtime');
