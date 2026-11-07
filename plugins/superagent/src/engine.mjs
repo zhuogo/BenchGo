@@ -5,7 +5,6 @@ import { createAuxiliaryCompactionHook } from './auxiliary-compaction.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import { createOfficialHostExecutor } from './host-tool-executor.mjs';
 import { canFallback } from './routing.mjs';
 import { validateAssistantModels } from './store.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
@@ -200,12 +199,8 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         }
         if (preset) await presets.mount(scope, preset.id);
         installProjectRules(scope, agent);
-        // Router has no ambient program-execution authority. Native presentation
-        // keeps its delegation/configuration tools usable under a PTC preset.
-        // Use the host's own executor instance: a plugin-side copy loads its own
-        // official tool pipeline, whose scope filter cannot see host-tagged agent
-        // scopes and lets one agent's listeners receive another's calls.
-        scope.tools.setExecutor(await createOfficialHostExecutor(scope));
+        // Keep the Harness-composed executor. A plugin-side executor copy has
+        // a separate Cordis scope registry and can dispatch across agents.
         scope.systemPrompt.section({ name: 'deployment:persona-prefix', order: -1000, interpolate: false, text: 'You are the BenchGo personal assistant.' });
         scope.systemPrompt.section({ name: 'benchgo-builtin-layer', order: -500, interpolate: false, text: builtinLayer });
         scope.systemPrompt.section({ name: 'deployment:persona-suffix', order: 1000, interpolate: false, text: '' });

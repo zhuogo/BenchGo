@@ -19,7 +19,6 @@ import * as AskUserTool from '@deepseek-ai/dsh-tool-ask-user';
 import { installGoalBudgetUsage, installGoalUsageMeter } from './goal-budget-usage.mjs';
 import { isVerifiedPauseEnding } from './execution-evidence.mjs';
 import { canFallback, roleModels } from './routing.mjs';
-import { createOfficialHostExecutor } from './host-tool-executor.mjs';
 
 /** Uses the host agent lifecycle and transcript; no separate model/tool loop. */
 export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readContext, readSourceContext, memory, checkpoints, captureCheckpoint = captureArtifactCheckpoint }) {
@@ -74,8 +73,8 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           const initial = models[0];
           agent.model?.select?.({ provider: initial.providerId, model: initial.modelId, ...(initial.options?.reasoningEffort === undefined ? {} : { reasoningEffort: initial.options.reasoningEffort }) });
         }
-        // One host-owned executor instance per worker scope; see host-tool-executor.mjs.
-        scope.tools?.setExecutor?.(await createOfficialHostExecutor(scope));
+        // Keep the Harness-composed executor so tool dispatch stays in the
+        // host's Cordis scope registry.
         scope.on('agent/pre-step', ({ modelSelection }, next) => {
           activeSelection = modelSelection;
           return next();

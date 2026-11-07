@@ -108,17 +108,6 @@ export function projectChatMessages(events) {
   return rows;
 }
 
-/**
- * System note shown when the Router permission gate denies a tool.
- *
- * The refusal surface carries the same code and name the gate threw, so the
- * chat shows the real reason instead of whatever the model made of it.
- */
-export function toolFailureNote(name, { code = 'TOOL_FAILED', reason } = {}) {
-  const detail = typeof reason === 'string' && reason.trim() ? reason.trim() : '该操作须通过工单下发给 Worker，不能在 Router 回合里直接执行。';
-  return `系统状态：Router 工具 ${name} 未能执行（${code}）。${detail}`;
-}
-
 /** Only the owner Router can publish; Worker/tool output has no publication authority. */
 export function installChatPublication(scope, agent, { onPublish, appendRecord = appendPluginRecord } = {}) {
   scope.tools.register({
