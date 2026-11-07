@@ -1,4 +1,5 @@
 import test from 'node:test';
+import * as activityData from '../client/activity-data.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -9,11 +10,14 @@ const { transformSync } = createRequire(new URL('../../benchgo/package.json', im
 const code = transformSync(readFileSync(new URL('../client/tickets.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 const walk = node => node && typeof node === 'object' ? [node, ...node.children.flatMap(walk)] : [];
 function harness(row, failure, resumeResponse) {
-  let cursor = 0, refCursor = 0; const refs = [];
-  const state = [row ? [row] : []], calls = [], module = { exports: {} };
+  let cursor = 0, refCursor = 0, rowsInjected = false; const refs = [];
+  const state = [], calls = [], module = { exports: {} };
   const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value != null && value !== false) }),
-    useState: initial => { const i = cursor++; if (!(i in state)) state[i] = initial; return [state[i], value => state[i] = typeof value === 'function' ? value(state[i]) : value]; }, useCallback: fn => fn, useEffect() {}, useRef: current => refs[refCursor++] ||= { current } };
-  runInNewContext(code, { module, exports: module.exports, require: id => id.endsWith('task-list.jsx') ? { TaskListRow: 'TaskListRow', TaskDetail: 'TaskDetail', TaskIconButton: 'TaskIconButton' } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('ticket-state.mjs') ? ticketState : id.endsWith('ticket-title.mjs') ? { normalizeTicketTitle } : id.endsWith('ticket-attention.jsx') ? { TicketAttention: 'TicketAttention' } : id.endsWith('.css') ? '' : id.endsWith('dirty-registry.mjs') ? { useDirtyRegistry: notify => () => notify } : react });
+    useState: initial => { const i = cursor++; if (!(i in state)) {
+      // Seed the first unloaded resource, preserving any preceding UI state.
+      state[i] = initial === null && !rowsInjected ? (rowsInjected = true, row ? [row] : []) : initial;
+    } return [state[i], value => state[i] = typeof value === 'function' ? value(state[i]) : value]; }, useCallback: fn => fn, useEffect() {}, useRef: current => refs[refCursor++] ||= { current } };
+  runInNewContext(code, { module, exports: module.exports, require: id => id.endsWith('activity-data.mjs') ? activityData : id.endsWith('task-list.jsx') ? { TaskListRow: 'TaskListRow', TaskDetail: 'TaskDetail', TaskIconButton: 'TaskIconButton' } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('ticket-state.mjs') ? ticketState : id.endsWith('ticket-title.mjs') ? { normalizeTicketTitle } : id.endsWith('ticket-attention.jsx') ? { TicketAttention: 'TicketAttention' } : id.endsWith('.css') ? '' : id.endsWith('dirty-registry.mjs') ? { useDirtyRegistry: notify => () => notify } : react });
   return { calls, render() { cursor = refCursor = 0; return walk(module.exports.Tickets({ onCreateGoal: () => calls.push(['createGoal']), api: async (...args) => { calls.push(args); if (failure) throw new Error(failure); if (args[0] === 'state') return { config: { workerConcurrency: 3, revision: 8 } }; if (args[0] === 'config') return { revision: 9 }; if (args[0] === 'ticketResume') return resumeResponse; } })); } };
 }
 const row = { id: 'ticket', target: 'Task', status: 'waiting', instructionRevision: 2, resultVersion: 3, results: [{ instructionRevision: 2, version: 3, review: { verdict: 'wait' } }] };
