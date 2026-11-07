@@ -86,7 +86,7 @@ npm run check
 
 安装现成 BenchGo 插件包无需单独安装 Link。源码重建需先安装 Link 的依赖，根目录仍无独立依赖树。
 
-服务协议：桌面 owner 管理接口 `POST /api/commander-link`；独立 TLS 远端提供配对页 `/link/`、受设备令牌保护的 `POST /link/api/workbench` 会话签发、cookie 保护的 `/link/workbench/` 网页/API/模块资源/Gateway 流，以及 Link 会话 API。远程设备不能访问 owner 管理 API；设备撤销会清除会话并释放 Peer。测试与实际联调边界见 [实现记录](../../docs/01-设备与远程连接/设计.md)。
+服务协议：桌面 owner 管理接口 `POST /api/commander-link`；独立 TLS 远端提供配对页 `/link/`、受设备令牌保护的 `POST /link/api/workbench` 会话签发、cookie 保护的 `/link/workbench/` 网页/API/模块资源/Gateway 流，以及 Link 会话 API。远程设备不能访问 owner 管理 API；设备撤销会清除会话并释放 Peer。测试与实际联调边界见 [设计与验收边界](../../docs/01-设备与远程连接/设计.md)。
 
 ## 设备与服务器管理
 

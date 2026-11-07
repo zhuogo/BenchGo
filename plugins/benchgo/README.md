@@ -18,7 +18,7 @@ SuperAgent 主聊天与旁聊复用输入框中的语音输入、自动朗读和
 
 基础层的 Cordis 模块名必须为完整包名 `benchgo-plugin`，以便官方 `clientModules` 发现本包客户端；其余四项使用上述子入口。客户端注册 ID 仍为 `benchgo-plugin`，基础条目 ID 保持 `commander`，延续用户配置与禁用状态。
 
-构建将 Harness、SuperAgent、Voice 的发布源码及动态资源生成到 `lib/modules/`，Link 继续构建为 `lib/link.mjs`、`lib/link-web/` 等产物。最终插件不依赖同级源码目录，不发布旧的包根业务源码目录。客户端仍只注册 `benchgo-plugin`。具体职责、路径和实际验证范围见 [源码架构](../../docs/02-工作台与Agent/设计.md#architecture)，总助手原有待实施与待验收事项不因拆包而视为完成。
+构建将 Harness、SuperAgent、Voice 的发布源码及动态资源生成到 `lib/modules/`，Link 继续构建为 `lib/link.mjs`、`lib/link-web/` 等产物。最终插件不依赖同级源码目录，不发布旧的包根业务源码目录。客户端仍只注册 `benchgo-plugin`。具体职责、路径和实际验证范围见 [源码架构](../../docs/02-工作台与Agent/源码架构.md)，总助手原有待实施与待验收事项不因拆包而视为完成。
 
 ### 加载与侧栏
 

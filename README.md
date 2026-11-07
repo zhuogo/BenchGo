@@ -76,7 +76,7 @@ deepseek-harness      官方引擎，子模块，不修改
 
 Windows 安装包、Android APK 和 npm 发布由 GitHub Actions 构建。正式签名密钥不进入仓库。
 
-五个源码包统一交付为一个 `benchgo-plugin`，在 DSH 的 BenchGo 插件详情中通过五个 Cordis 入口分别管理。基础层提供公共服务；SuperAgent 依赖 Harness 聚合，Voice 与 Link 不硬依赖总助手或聚合运行时。客户端仍只注册 `benchgo-plugin`，已有接口与数据标识保持兼容。整体机制见[总架构](docs/总架构.html)，目录、依赖及验证边界见[工作台设计](docs/02-工作台与Agent/设计.md#architecture)。docs 每板块仅保留一份设计文档，详细规则与待实施边界在对应文档内维护。
+五个源码包统一交付为一个 `benchgo-plugin`，在 DSH 的 BenchGo 插件详情中通过五个 Cordis 入口分别管理。基础层提供公共服务；SuperAgent 依赖 Harness 聚合，Voice 与 Link 不硬依赖总助手或聚合运行时。客户端仍只注册 `benchgo-plugin`，已有接口与数据标识保持兼容。整体机制见[总架构](docs/总架构.html)，目录、依赖及验证边界见[源码架构](docs/02-工作台与Agent/源码架构.md)。docs 按板块组织，小模块可独立成文；同一主题只维护一份设计，跨模块通过链接引用。
 
 ## 许可
 

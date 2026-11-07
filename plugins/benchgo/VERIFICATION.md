@@ -26,7 +26,7 @@
 - 单包模块闭包与实际 MCP 子进程验证通过；安装、升级、回滚、开发同步 37 项通过。官方 loader 实测从两入口升级为五入口保留原配置与禁用状态，插件详情元数据为基础层、Harness 聚合、SuperAgent、Voice、Link。
 - `npm run reload:plus` 最终成功，生成 `lib/modules/`、`lib/client.js` 与 Link 网页，不包含服务器种子、不重启 Web。`npm run check` 与 `git diff --check` 通过，官方子模块保持干净。
 - 基础层回归同时修复两处 Windows 路径问题：项目克隆使用已独占预留的空目录，避免替换空目录失败；OpenCode 用量导入同时识别 Windows 与 POSIX 目录分隔符。模型标识、供应商配置与既有存储格式保持不变。
-- 未进行本次真实桌面安装、Android 设备、麦克风、供应商请求、服务器种子与远端发布验收。结构与依赖细节见 [源码架构](../../docs/02-工作台与Agent/设计.md#architecture)。
+- 未进行本次真实桌面安装、Android 设备、麦克风、供应商请求、服务器种子与远端发布验收。结构与依赖细节见 [源码架构](../../docs/02-工作台与Agent/源码架构.md)。
 
 ## 2026-11-01 SuperAgent 复用 Voice
 
@@ -35,7 +35,7 @@
 - 页面、Voice UI/控制器/AgentFeed 定向测试 55/55；真实 Harness service 测试 1/1；共享供应商及能力测试 3/3。OpenAPI 34 个引用均可解析，5 路由与 9 action 完整。子任务扩展后端检查发现既有 Windows POSIX 模式断言失败（0666 ≠ 0600），与本次语音功能无关，未修改。
 - npm run reload:plus 成功，仅重建客户端与 Link 网页产物；随后用已有 syncDevelopmentPlugin 同步当前登记的开发插件，核对 client.js、service.mjs、availability.mjs、web.mjs 哈希一致。未重启 Web 或手动重启 Desktop；未执行真实音频、供应商网络与视觉验收。
 
-以下为各次变更的历史记录，命令中的源码路径已随本轮目录迁移同步；既有通过数量与实测结论不代表本次结构迁移已完成验证。本轮验证范围与状态见 [源码架构](../../docs/02-工作台与Agent/设计.md#architecture)。
+以下为各次变更的历史记录，命令中的源码路径已随本轮目录迁移同步；既有通过数量与实测结论不代表本次结构迁移已完成验证。本轮验证范围与状态见 [源码架构](../../docs/02-工作台与Agent/源码架构.md)。
 
 ## 2026-10-20 Windows 本地旧插件遮蔽修复（未重新发布）
 

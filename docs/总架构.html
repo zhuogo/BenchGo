@@ -82,7 +82,7 @@
     <header>
       <div>
         <h1>BenchGo 总架构与运行机制</h1>
-        <p class="subtitle">官方 Harness 提供运行底座，BenchGo 的五个源码模块合成一个插件。此页是唯一总架构图，展示板块关系与 SuperAgent 全链路；各板块的详细设计和实现边界分别维护在一份设计文档中。</p>
+        <p class="subtitle">官方 Harness 提供运行底座，BenchGo 的五个源码模块合成一个插件。此页是唯一总架构图，展示板块关系与 SuperAgent 全链路；详细设计按板块和小模块分别维护，同一主题只保留一份正文。</p>
       </div>
       <div class="badge"><span class="dot"></span>已定目标路线 · 实现状态另列</div>
     </header>
@@ -318,7 +318,7 @@
         <article class="card"><h3>待对齐目标</h3><p>官方桌面输入与持久 inbox、外部私聊直达 Router、完整上下文及任务切片仍有缺口。失败续做、Attention、恢复与治理虽有实现，完整用户路径仍需验收。密钥池与技能自动审核生效保留为目标，不冒充已完成。</p></article>
         <article class="card"><h3>真实运行边界</h3><p>真实档案中 Router 工具拒绝的根因修复与双会话验收尚未完成；一次本地自检不能替代原条件复验。供应商、渠道收发、重启恢复、真机语音和目标服务须分别验收，测试总数不代表产品链路通过。</p></article>
       </div>
-      <div class="callout" style="margin-top:16px">维护规则：每个板块只维护一份“设计.md”，本页是唯一总架构 HTML。详细服务约束、实现边界与验收条件并入所属设计，不再另立现状、开发清单或验收报告。历史证据保留在 Git 和本地验收产物中。此页可直接打开，不依赖构建工具或外部 CDN。</div>
+      <div class="callout" style="margin-top:16px">维护规则：板块内的小模块可独立为 Markdown，同一主题只维护一份设计，跨模块通过链接引用；板块入口负责范围与导航。本页是唯一总架构 HTML。服务约束、实现边界与验收条件随所属模块维护，不另立现状、开发清单或验收流水。历史证据保留在 Git、eval/ 或本地 artifacts/。此页可直接打开，不依赖构建工具或外部 CDN。</div>
     </section>
 
     <footer>架构依据：已商定的产品路线与五源码包约定。整理日期：2026-11-07；实现核对：plugins/ 与各板块设计。本文档整理不构成运行验收，不改变已定架构路线。</footer>

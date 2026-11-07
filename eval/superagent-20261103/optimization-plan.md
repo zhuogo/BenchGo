@@ -4,7 +4,7 @@
 
 ## 依据和边界
 
-- BenchGo 定版：`docs/06-superagent/设计.md`；任务细则：`docs/06-superagent/设计.md`。Worker 交结果包，Router 对照工单验收，宿主控制关闭。
+- BenchGo 定版：`docs/06-superagent/设计.md`；任务细则：`docs/06-superagent/任务与执行.md`。Worker 交结果包，Router 对照工单验收，宿主控制关闭。
 - DSH 参考版本：`6337fc823ce20251c8de8085948165c81aaa701e`。`src/core/evals.ts` 是接单准入，不是成果质量验收；`src/core/assignments.ts:99–132` 接收 Worker 报告，按状态和 follows 生命周期结束任务。不能把准入 Gate 宣称为已实现通用成果证明器。
 - 用户提供的实验数字只作为调度方向证据，本轮未独立复核文章；不据此承诺真实编码质量或生产性能收益。
 - 本地已有证据：可控模型 30/30，真实模型 6/7；BUG-01 是实际文件存在但验收缺少可读执行证据，重审同一结果仍 wait。不是所有分派、订阅、权限机制都缺失。

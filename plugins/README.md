@@ -18,7 +18,7 @@
 - 公共服务、HTTP 边界和配置解析复用 `benchgo/src/`、`benchgo/shared/`；界面组件复用 `shared/client/`，不为拆包复制代码。
 - 插件互调走显式服务契约和依赖注入，不读取其他插件的私有存储。
 
-`benchgo/lib/modules/` 是 Harness、SuperAgent、Voice 发布源码的生成目录，Link 服务与网页继续使用现有构建产物。最终运行不依赖源码仓库的同级目录，也不引入额外常驻进程。目录与启停验证边界见 [源码架构](../docs/02-工作台与Agent/设计.md#architecture)，各业务未验收项统一在对应板块设计中维护。
+`benchgo/lib/modules/` 是 Harness、SuperAgent、Voice 发布源码的生成目录，Link 服务与网页继续使用现有构建产物。最终运行不依赖源码仓库的同级目录，也不引入额外常驻进程。目录与启停验证边界见 [源码架构](../docs/02-工作台与Agent/源码架构.md)，各业务未验收项统一在对应板块设计中维护。
 
 ## 开发约定
 

@@ -1,6 +1,6 @@
 # 执行证据修复交接
 
-责任范围：仅 `execution-evidence.mjs`、`assignment-executor.mjs`、`execution-evidence.test.mjs` 与 `docs/06-superagent/设计.md` 中的执行证据章节。先写设计再开发。
+责任范围：仅 `execution-evidence.mjs`、`assignment-executor.mjs`、`execution-evidence.test.mjs` 与 `docs/06-superagent/验收与交付.md` 中的执行证据设计。先写设计再开发。
 
 结果包新增 `toolEvidence: { entries, total, omitted, failedCount, truncated }`。entry 含 seq、callId、name、arguments、text、isError、argumentsLength、textLength、truncated、hash。源自真实 Session 工具调用及结果，保留不透明工具名，剔除 reasoning/二进制；最近 64 条以内，合计约 24k 字符，参数 2k、结果 4k，全部遗漏与截断显式标记。failedCount 是全部历史工具错误数量，不应自动一票否决：Worker 可能已完成补救。
 
