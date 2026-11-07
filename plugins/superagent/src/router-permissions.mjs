@@ -9,7 +9,13 @@ export function captureRouterTools(tools, agent) {
   return new Map(tools.schemas(agent).map(({ name }) => [name, tools.get(name, agent)]));
 }
 
-/** Host-owned setupTools registrations enforce their own configuration/admission contracts. */
+/**
+ * Install the Router permission gate.
+ *
+ * A call routed to another agent passes through untouched: it is decided by that
+ * agent's own gate, not this one. Denied tools name the delegation path rather
+ * than their own identity, because inherited tools are hidden from the model.
+ */
 export function installRouterPermissionGate(scope, { agent, inherited, controlled }) {
   const approved = new Set();
   for (const [name, definition] of controlled) {
@@ -20,9 +26,14 @@ export function installRouterPermissionGate(scope, { agent, inherited, controlle
   scope.tools.restrict?.({ allow: [...inherited.keys()].filter(name => coordination.has(name)) });
   return scope.on('tools/execute', async (execution, next) => {
     execution.signal.throwIfAborted();
+    // Dispatch scoping can deliver this listener another agent's call when the
+    // executor and the host loaded different official copies. That call belongs
+    // to another router scope; leaving it alone lets its own gate decide instead
+    // of rejecting it here. Ownership checks inside each tool still apply.
+    if (execution.agent !== agent) return next();
     if (coordination.has(execution.name)) return next();
     const definition = scope.tools.get(execution.name, execution.agent);
-    if (execution.agent !== agent || !definition || !approved.has(definition)) throw denied(execution.name);
+    if (!definition || !approved.has(definition)) throw denied(execution.name);
     return next();
   });
 }

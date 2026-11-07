@@ -37,8 +37,9 @@ test('Router gates exact definitions, operations, nested calls and unknown tools
   await assert.rejects(invoke('bash', { ticketId: 'forged', readOnly: true }, { parent: Symbol('nested') }), { code: 'ROUTER_TICKET_REQUIRED' });
   definitions.set('read', { name: 'read' });
   await assert.rejects(invoke('read'), { code: 'ROUTER_TICKET_REQUIRED' });
-  await assert.rejects(invoke('assistant_config', {}, { agent: {} }), { code: 'ROUTER_TICKET_REQUIRED' });
-  assert.equal(executions, 1);
+  // A call routed to another agent is not this gate's to decide: it passes on.
+  assert.equal(await invoke('assistant_config', {}, { agent: {} }), 2);
+  assert.equal(executions, 2);
 });
 
 test('Router denies every investigation from the first call while coordination and delegation remain available', async () => {
@@ -68,4 +69,23 @@ test('Router denies every investigation from the first call while coordination a
   definitions.set('ask_user_question', { name: 'ask_user_question' });
   await invoke('ask_user_question', 'replacement');
   assert.equal(dispatched, 7);
+});
+
+test('Router leaves another agent’s calls to that agent’s own gate', async () => {
+  const agent = {}, otherAgent = {};
+  const definitions = new Map(['read', 'assistant_config', 'ask_user_question'].map(name => [name, { name }]));
+  const tools = { schemas: () => [...definitions.values()], get: name => definitions.get(name) };
+  const inherited = captureRouterTools(tools, agent);
+  definitions.set('assistant_delegate', { name: 'assistant_delegate' });
+  let guard, dispatched = 0;
+  installRouterPermissionGate({ tools, on: (_event, fn) => { guard = fn; } }, { agent, inherited, controlled: captureRouterTools(tools, agent) });
+  const invoke = extra => guard({ agent, ...extra, signal: new AbortController().signal }, async () => ++dispatched);
+  // Another router's delegate, inherited read and coordination call all pass through untouched here.
+  await invoke({ agent: otherAgent, name: 'assistant_delegate' });
+  await invoke({ agent: otherAgent, name: 'read' });
+  await invoke({ agent: otherAgent, name: 'ask_user_question' });
+  assert.equal(dispatched, 3);
+  // Its own inherited execution tool is still denied.
+  await assert.rejects(invoke({ name: 'read' }), { code: 'ROUTER_TICKET_REQUIRED' });
+  assert.equal(dispatched, 3);
 });
