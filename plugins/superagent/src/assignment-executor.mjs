@@ -3,6 +3,7 @@ import { readSourceReference } from './assessment-context.mjs';
 import { mkdir } from 'node:fs/promises';
 import { resolve, relative, isAbsolute } from 'node:path';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native';
 import { installWorkerPermissionGate } from './worker-permissions.mjs';
 import { installWorkerSubagents } from './worker-subagents.mjs';
 import { installWorkerVault } from './worker-vault.mjs';
@@ -73,8 +74,9 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           const initial = models[0];
           agent.model?.select?.({ provider: initial.providerId, model: initial.modelId, ...(initial.options?.reasoningEffort === undefined ? {} : { reasoningEffort: initial.options.reasoningEffort }) });
         }
-        // Keep the Harness-composed executor so tool dispatch stays in the
+        // Use the host-linked official package so worker dispatch shares the
         // host's Cordis scope registry.
+        scope.tools?.setExecutor?.(new NativeToolExecutor(scope));
         scope.on('agent/pre-step', ({ modelSelection }, next) => {
           activeSelection = modelSelection;
           return next();

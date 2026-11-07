@@ -5,6 +5,7 @@ import { createAuxiliaryCompactionHook } from './auxiliary-compaction.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native';
 import { canFallback } from './routing.mjs';
 import { validateAssistantModels } from './store.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
@@ -199,8 +200,9 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         }
         if (preset) await presets.mount(scope, preset.id);
         installProjectRules(scope, agent);
-        // Keep the Harness-composed executor. A plugin-side executor copy has
-        // a separate Cordis scope registry and can dispatch across agents.
+        // The package is linked to the host copy by the installer. Construct
+        // per-agent executors against that shared scope registry.
+        scope.tools.setExecutor(new NativeToolExecutor(scope));
         scope.systemPrompt.section({ name: 'deployment:persona-prefix', order: -1000, interpolate: false, text: 'You are the BenchGo personal assistant.' });
         scope.systemPrompt.section({ name: 'benchgo-builtin-layer', order: -500, interpolate: false, text: builtinLayer });
         scope.systemPrompt.section({ name: 'deployment:persona-suffix', order: 1000, interpolate: false, text: '' });
