@@ -324,3 +324,38 @@ test('runtime recovers a saved pause without executing or reviewing it', async t
   assert.equal(db.runs(assignment.id).length, 1);
   assert.equal(db.results(ticket.id).length, 0);
 });
+
+test('runtime state projects actual database runs through preparing, executing and verifying', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-progress-runtime-'));
+  const store = await createAssistantStore({ dataDirectory: directory });
+  let runtime;
+  t.after(async () => { await runtime?.stop(); await store.close(); await rm(directory, { recursive: true, force: true }); });
+  const db = store.orchestration;
+  db.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
+  const ticket = db.createTicket({ threadId: 'thread', target: 'inspect progress', mandate: {} });
+  const queued = db.createAssignment(ticket.id, {});
+  const [assignment] = db.claimAssignments('progress-worker', { assignmentId: queued.id, leaseMs: 60000, validateMandate: () => true });
+  const ownership = { owner: assignment.owner, fence: assignment.fence };
+  const run = db.prepareRun(assignment.id, { ...ownership, sessionId: 'progress-session', directory });
+  runtime = createOrchestrationRuntime({ ctx: {}, store,
+    execute: async () => assert.fail('projection must not execute'), review: async () => assert.fail('projection must not review') });
+  const read = () => runtime.state().find(row => row.id === ticket.id);
+  let row = read();
+  assert.equal(row.execution.assignmentId, assignment.id);
+  assert.equal(row.execution.runId, run.id);
+  assert.equal(row.execution.sessionId, run.sessionId);
+  assert.equal(row.execution.instructionRevision, row.instructionRevision);
+  assert.equal(row.assignments[0].fence, run.fence);
+  assert.equal(row.execution.phase, 'preparing');
+  db.updateRun(run.id, { ...ownership, state: 'submitted' });
+  row = read();
+  assert.equal(row.execution.phase, 'executing');
+  assert.equal(row.execution.worker.status, 'unknown', 'database submission without observed host activity is not live success');
+  db.updateRun(run.id, { ...ownership, state: 'verifying', evidence: { runId: run.id, sessionId: run.sessionId, summary: 'PRIVATE EVIDENCE' } });
+  row = read();
+  assert.equal(row.execution.phase, 'verifying');
+  assert.equal(row.execution.worker.status, 'waiting');
+  assert.equal(row.execution.worker.activity, '执行结果正在核验');
+  assert.doesNotMatch(JSON.stringify(row.execution), /PRIVATE EVIDENCE/);
+  assert.equal(db.getTicket(ticket.id).status, 'open', 'observing execution leaves the business lifecycle untouched');
+});

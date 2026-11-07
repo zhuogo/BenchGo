@@ -14,10 +14,12 @@ import { createDirectReplyDelivery } from './direct-reply-delivery.mjs';
 import { createReviewEvidenceReader } from './review-evidence-reader.mjs';
 import { commitReviewedResult } from './review-result-commit.mjs';
 import { knownNotSent } from './channels/delivery-outcome.mjs';
+import { createTaskExecutionProgress } from './task-execution-progress.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
 export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, execute, review = reviewTicketResult, intervalMs = 1000, now = Date.now }) {
   const database = store.orchestration, owner = `delivery:${randomUUID()}`, shutdown = new AbortController();
+  const executionProgress = createTaskExecutionProgress({ ctx, database, now });
   const readPolicy = threadId => readAssessmentPolicy(store, ctx.workspaceRegistry, threadId);
   const directReplies = createDirectReplyDelivery({ database, readPolicy, signal: shutdown.signal,
     getAdapter: channel => channels?.get(channel) || (channel === 'feishu' ? feishu : null) });
@@ -323,10 +325,17 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     retryReview,
     resumeReviewWork,
     tick,
-    state: () => database.listTickets({ limit: 1000 }).map(ticket => ({ ...ticket, revisions: database.ticketRevisions(ticket.id), assignments: database.assignments(ticket.id), attentions: database.attentions(ticket.id), attentionResolutions: database.attentionResolutions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id) })),
+    state() {
+      const progress = executionProgress.batch();
+      return database.listTickets({ limit: 1000 }).map(ticket => {
+        const assignments = database.assignments(ticket.id);
+        return { ...ticket, revisions: database.ticketRevisions(ticket.id), assignments, attentions: database.attentions(ticket.id), attentionResolutions: database.attentionResolutions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id), execution: progress(ticket, assignments) };
+      });
+    },
     start() { if (timer || shutdown.signal.aborted) return; timer = setInterval(tick, intervalMs); timer.unref?.(); void tick(); },
     async stop() {
       shutdown.abort(); clearInterval(timer);
+      executionProgress.dispose();
       const stopped = worker.stop();
       await running;
       await Promise.allSettled([recovery, stopped, directReplies.stop(), ...reviews, ...[...activeReviews.values()].map(item => item.promise)]);
