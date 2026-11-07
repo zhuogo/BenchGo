@@ -2,7 +2,7 @@
 
 BenchGo 总助手源码包 `@benchgo/superagent`，统一构建进 `benchgo-plugin`，不单独安装。
 
-2026-11-04 架构校对：主聊天优先，项目聊天押后。以下说明当前代码；现行目标与尚未接线的能力分别见[设计](../../docs/06-superagent/设计.md)、[现状](../../docs/06-superagent/现状.md)和[首版验收缺口](../../docs/06-superagent/首版验收缺口.md)。
+主聊天优先，项目聊天押后。以下说明模块入口；现行目标、服务契约与尚未完成的边界统一见[SuperAgent 设计](../../docs/06-superagent/设计.md)，整体流程见[总架构](../../docs/总架构.html)。
 
 - `src/`：对话引擎、工单编排、记忆、审批、通知、文档与产物服务。
 - `client/`：总助手对话、旁聊、资源和任务界面。
@@ -12,7 +12,7 @@ BenchGo 总助手源码包 `@benchgo/superagent`，统一构建进 `benchgo-plug
 
 公共模型管理和界面组件直接复用 BenchGo；语音适配直接复用 Voice。`assistant` 工具名、HTTP 路径及存储标识保留原协议，已有会话与记忆按当前存储继续使用。
 
-主聊与旁聊共用 SuperAgent 模型设置和受控聊天发布：Router 可直接正常结束文本回答，由官方 completed 回合确认后展示，也可通过 `assistant_reply` 显式发布；工具过程留在后台。Worker 结果经过验收生成交付正文，持久去重后只回原来源；活动记录按日期查询与停止。完整边界见 [统一对话与交付层](../../docs/06-superagent/统一对话与交付层.md)。自由主动机会推送与通知偏好尚未开放，显式定时委派仍按工单交付。
+主聊与旁聊共用 SuperAgent 模型设置和受控聊天发布：Router 可直接正常结束文本回答，由官方 completed 回合确认后展示，也可通过 `assistant_reply` 显式发布；工具过程留在后台。Worker 结果经过验收生成交付正文，持久去重后只回原来源；活动记录按日期查询与停止。完整边界见 [统一对话与交付层](../../docs/06-superagent/设计.md#conversation)。自由主动机会推送与通知偏好尚未开放，显式定时委派仍按工单交付。
 
 Router 同时负责聊天与总调度。桌面派工成功后，由当前 Router 根据对话自然回复，沿用普通文本终答或 `assistant_reply`，不再发送固定接单句，也不等待 Worker。渠道显式人类请求的接单回复复用同次 Router 研判 `replyText`，经准入复核后随工单持久入队并去重；没有正文时不补模板，旧固定待发回执不再投递。工单持久化、授权检查与结果验收继续保留。
 
@@ -22,7 +22,7 @@ SuperAgent 本身就是宠物助手与 Router，默认无名，不增加陪伴 A
 
 在身份 → 形象中组合基准表情/装饰/配色，或上传自己的主图与表情；先预览再应用，支持取消、恢复上一版和默认。选择“让 AI 帮我设计”进入已有聊天，生成产物经 `assistant_pet` 预览和应用。首页、聊天和侧栏共用身份形象；已有 HTML 名片优先显示，当前需展开 HTML 编辑、清空并保存才恢复默认形象，旧的模式选择提示尚待同步。
 
-运行及待确认状态可切换基准表情；形象页可预览短动作，但聊天名片固定静态，尚未接入计算出的 action 与原创角色短表情。图像生成需配置可用供应商，不支持参考图局部换装；桌面悬浮尚未实现。边界见[宠物设计报告](../../docs/06-superagent/宠物.md)。
+运行及待确认状态可切换基准表情；形象页可预览短动作，但聊天名片固定静态，尚未接入计算出的 action 与原创角色短表情。图像生成需配置可用供应商，不支持参考图局部换装；桌面悬浮尚未实现。边界见[身份与宠物设计](../../docs/06-superagent/设计.md#identity)。
 
 工单执行统一由 `orchestration-store.mjs` 落册、`assignment-worker.mjs` 调度和 `assignment-executor.mjs` 接入官方 Harness。`desktop-delegation-service.mjs` 处理桌面来源；`goal-ticket-creation.mjs` 将持续目标绑定到工单，`goal-ticket-record.mjs` 只读取验收结果，不创建第二套执行队列。
 

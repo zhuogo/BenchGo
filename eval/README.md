@@ -45,6 +45,6 @@ node eval/verify-report.mjs
 
 优化后报告仍为 `index.html`，顶部展示本轮 132 项定向回归、30 场景 HTTP 和 2 项真实模型复测；下方保留修复前基线。生成顺序：`node eval/finalize-optimization.mjs` → `node eval/build-report.mjs` → `node eval/verify-report.mjs`。
 
-初始评估仅新增 `eval/`，未修改产品实现。后续用户授权优化，方案见 `superagent-20261103/optimization-plan.md`，设计见 `../docs/06-superagent/验收与模型配置优化.md`；修复后复测使用 `--output-dir eval/superagent-20261103/after` 保留原始证据。
+初始评估仅新增 `eval/`，未修改产品实现。后续用户授权优化，方案见 `superagent-20261103/optimization-plan.md`，设计见 `../docs/06-superagent/设计.md`；修复后复测使用 `--output-dir eval/superagent-20261103/after` 保留原始证据。
 
 `node --import ./scripts/source-loader.mjs eval/measure-subscription-routing.mjs` 测量 300 条消息的订阅直通与去重，只统计宿主入口和候选数量，不宣称实际模型调用、缓存 token 或编码质量收益。

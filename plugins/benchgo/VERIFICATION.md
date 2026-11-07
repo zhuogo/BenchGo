@@ -26,7 +26,7 @@
 - 单包模块闭包与实际 MCP 子进程验证通过；安装、升级、回滚、开发同步 37 项通过。官方 loader 实测从两入口升级为五入口保留原配置与禁用状态，插件详情元数据为基础层、Harness 聚合、SuperAgent、Voice、Link。
 - `npm run reload:plus` 最终成功，生成 `lib/modules/`、`lib/client.js` 与 Link 网页，不包含服务器种子、不重启 Web。`npm run check` 与 `git diff --check` 通过，官方子模块保持干净。
 - 基础层回归同时修复两处 Windows 路径问题：项目克隆使用已独占预留的空目录，避免替换空目录失败；OpenCode 用量导入同时识别 Windows 与 POSIX 目录分隔符。模型标识、供应商配置与既有存储格式保持不变。
-- 未进行本次真实桌面安装、Android 设备、麦克风、供应商请求、服务器种子与远端发布验收。结构与依赖细节见 [源码架构](../../docs/02-工作台与Agent/源码架构.md)。
+- 未进行本次真实桌面安装、Android 设备、麦克风、供应商请求、服务器种子与远端发布验收。结构与依赖细节见 [源码架构](../../docs/02-工作台与Agent/设计.md#architecture)。
 
 ## 2026-11-01 SuperAgent 复用 Voice
 
@@ -35,7 +35,7 @@
 - 页面、Voice UI/控制器/AgentFeed 定向测试 55/55；真实 Harness service 测试 1/1；共享供应商及能力测试 3/3。OpenAPI 34 个引用均可解析，5 路由与 9 action 完整。子任务扩展后端检查发现既有 Windows POSIX 模式断言失败（0666 ≠ 0600），与本次语音功能无关，未修改。
 - npm run reload:plus 成功，仅重建客户端与 Link 网页产物；随后用已有 syncDevelopmentPlugin 同步当前登记的开发插件，核对 client.js、service.mjs、availability.mjs、web.mjs 哈希一致。未重启 Web 或手动重启 Desktop；未执行真实音频、供应商网络与视觉验收。
 
-以下为各次变更的历史记录，命令中的源码路径已随本轮目录迁移同步；既有通过数量与实测结论不代表本次结构迁移已完成验证。本轮验证范围与状态见 [源码架构](../../docs/02-工作台与Agent/源码架构.md)。
+以下为各次变更的历史记录，命令中的源码路径已随本轮目录迁移同步；既有通过数量与实测结论不代表本次结构迁移已完成验证。本轮验证范围与状态见 [源码架构](../../docs/02-工作台与Agent/设计.md#architecture)。
 
 ## 2026-10-20 Windows 本地旧插件遮蔽修复（未重新发布）
 
@@ -49,7 +49,7 @@
 - Windows 39375681901 与发布 39378135760 成功；默认用户目录强杀后旧锁恢复、会话及原生句柄保留、新装、0.1.3 原位升级与实际插件 0.1.9 检查均通过。首轮失败包未发布；未给 smoke 增加重试绕过。
 - Android 39375686798 与插件包 39375691388 成功；Android 35/35 独立验收与持久签名连续性通过；插件 Ed25519、SHA256、源码及客户端核对通过，无 SSH 可选原生 ABI 产物。v0.1.7 / plugin-v0.1.9 及两个独立更新通道已公开，国内镜像与 GitHub 清单验签一致。
 - 默认国内镜像完整下载 EXE / 插件包 / APK，大小与 SHA256 全部通过；分片及临时验证脚本已清理，证据见 .local/release-0.1.7/full-mirror-verification.json。
-- 源码服务器已加载 0.1.9，14 条原会话保留，state/ensureRecent/updates 200、无自动重启，已最新时不再产生更新红点。实际 GUI / 真机自动更新未验收，Windows 未配置 Authenticode。详细摘要、产物哈希与边界见 docs/05-更新与发布/发布.md。
+- 源码服务器已加载 0.1.9，14 条原会话保留，state/ensureRecent/updates 200、无自动重启，已最新时不再产生更新红点。实际 GUI / 真机自动更新未验收，Windows 未配置 Authenticode。现行机制与边界见 [更新与发布设计](../../docs/05-更新与发布/设计.md)；本次旧发行明细与哈希保留在 Git 历史，不作为当前发布结论。
 
 ## 2026-10-20 0.1.7 发布门槛与启动就绪修正
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>BenchGo SuperAgent 全链路架构</title>
+  <title>BenchGo 总架构与运行机制</title>
   <style>
     :root {
       --bg: #f5f7fb;
@@ -81,14 +81,29 @@
   <main class="wrap">
     <header>
       <div>
-        <h1>SuperAgent 全链路架构</h1>
-        <p class="subtitle">先按噪音给入口分档（直通档 / 筛选档），再由 Router（总调度）统一派工、Worker（执行者）干活；上下文由专门一层负责装配、传递与清理；模型按角色分工：角色模型、工作模型、辅助模型。</p>
+        <h1>BenchGo 总架构与运行机制</h1>
+        <p class="subtitle">官方 Harness 提供运行底座，BenchGo 的五个源码模块合成一个插件。此页是唯一总架构图，展示板块关系与 SuperAgent 全链路；各板块的详细设计和实现边界分别维护在一份设计文档中。</p>
       </div>
       <div class="badge"><span class="dot"></span>已定目标路线 · 实现状态另列</div>
     </header>
 
-    <section class="panel architecture">
-      <h2>一、运行时总架构</h2>
+    <section class="panel" id="modules">
+      <h2>一、产品板块与宿主</h2>
+      <div class="callout">桌面 / Web / Link 移动入口 → 官方 Harness 会话、模型与工具服务 → BenchGo 业务模块。基础层提供公共配置、模型、项目和更新；Harness 聚合提供 commander 服务；SuperAgent 依赖基础层与聚合；Voice、Link 独立启停，不硬依赖聚合或总助手。只安装一个 <code>benchgo-plugin</code>，不修改官方引擎源码。</div>
+      <div class="grid" style="margin-top:16px">
+        <article class="card"><h3><a href="01-设备与远程连接/设计.md">设备与远程连接</a></h3><p>Link 管理配对、授权设备、远程工作台与直连 / 中继传输。远程会话复用原宿主能力，不另建 Agent 引擎。</p></article>
+        <article class="card"><h3><a href="02-工作台与Agent/设计.md">工作台与 Agent</a></h3><p>工作台、项目与会话入口，原生 Agent 聚合，共享组件、视觉规范与产物预览；统一产品形象与交互。</p></article>
+        <article class="card"><h3><a href="03-实时语音/设计.md">实时语音</a></h3><p>ASR → 原会话 Agent → TTS。提供输入、朗读和通话，复用原会话权限与审批，不另建语音助手。</p></article>
+        <article class="card"><h3><a href="04-模型与工具/设计.md">模型与工具</a></h3><p>共享供应商、模型、工具与技能能力。显式选择优先，模型 ID 和协议值原样保存，可用性必须反映真实状态。</p></article>
+        <article class="card"><h3><a href="05-更新与发布/设计.md">更新与发布</a></h3><p>官方引擎 pin、BenchGo 单包构建、品牌注入、独立插件更新与回滚；开发产物和正式发布分别验证。</p></article>
+        <article class="card"><h3><a href="06-superagent/设计.md">SuperAgent</a></h3><p>对话、事件准入、工单、执行、验收、交付、上下文与记忆；执行使用官方 Harness Agent。</p></article>
+      </div>
+      <p class="note" style="margin-top:12px">六个文档板块是产品设计分类，不是六个安装包。源码只有基础层、Harness 聚合、SuperAgent、Voice、Link 五个包，经构建统一交付；参考仓库只供设计核对，不参与产品依赖或构建。</p>
+    </section>
+
+    <section class="panel architecture" id="superagent">
+      <h2>二、SuperAgent 全链路目标</h2>
+      <p class="note">按噪音分为直通与筛选两档；图中 Router 包含逻辑上的调度、验收与交付职责。当前实际实现由对话 Agent、研判与编排后台、交付服务共同承担，并非全部在同一个聊天会话中执行。</p>
       <svg viewBox="0 0 1400 1790" role="img" aria-label="SuperAgent 运行时总架构图">
         <defs>
           <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#4a6384"/></marker>
@@ -277,7 +292,7 @@
     </section>
 
     <section class="panel sequence">
-      <h2>二、一次请求的时序</h2>
+      <h2>三、一次请求的时序</h2>
       <div class="seq-wrap">
         <div class="seq-row seq-head">
           <div class="seq-cell actor">阶段</div><div class="seq-cell actor">用户 / 飞书</div><div class="seq-cell actor">intake</div><div class="seq-cell actor">Assessment</div><div class="seq-cell actor">Router</div><div class="seq-cell actor">Ticket / Assignment</div><div class="seq-cell actor">Harness</div><div class="seq-cell actor">Review</div><div class="seq-cell actor">Delivery</div>
@@ -292,21 +307,21 @@
         <div class="seq-row"><div class="seq-cell actor"><span class="step">8</span>交付</div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell action"><span>写 Outbox，桌面 / 飞书回执</span></div></div>
         <div class="seq-row"><div class="seq-cell actor"><span class="step">9</span>沉淀</div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell action"><span>Review / Learning</span></div><div class="seq-cell action"><span>记忆写入、技能候选</span></div></div>
       </div>
-      <p class="note" style="margin-top:12px">注：上表按「需要开工单的任务」画。直通档的问答类消息由 Router（总调度）直接回答，不走第 4–5 步；筛选档的消息先在入口完成归一、门卫与研判，合格后才从第 5 步汇入。</p>
+      <p class="note" style="margin-top:12px">注：上表按「需要开工单的任务」画。桌面直通消息登记 Trigger 后进入聊天 Router，问答直接返回；需要执行时由委派工具写入 Candidate / Decision / Ticket，不经过后台 Eval。筛选档先在入口完成归一、门卫与研判，接受后直接建单。表中的阶段不表示所有消息都经过所有组件。</p>
       <p class="note">第 7–8 步有分支：通过 → 完成交付；可修复失败 → 说明原因并回原单继续 → 再验收；用户阻塞 → Attention → 原来源回答 → 原单继续；内部核验故障 → 保留结果并恢复核验。一次结果失败不直接终止工单，修正次数控制不替代恢复路径。</p>
     </section>
 
     <section class="panel">
-      <h2>三、目标与当前实现边界</h2>
+      <h2>四、目标与当前实现边界</h2>
       <div class="grid">
-        <article class="card"><h3>已接入的基础链路</h3><p>Trigger / Assessment、Ticket / Assignment、Harness Session、工具证据、Router Review 和 outbox 已有实现与既有本地测试；这不等于所有入口及失败后续均已闭环。</p></article>
-        <article class="card"><h3>尚未完整接通</h3><p>桌面持久 inbox、私聊直达 Router、失败原单续做、Router 阻塞问答、完整上下文与三角色模型仍有缺口。图中密钥池及技能直管属于待对齐目标；执行门、恢复和子代理治理须逐项验证。</p></article>
-        <article class="card"><h3>仍需真实验收</h3><p>真实供应商、渠道收发、重启后续做与投递、目标服务和图片模型需分别验收。历史测试数量不代表当前版本通过，也不能替代用户场景验收。</p></article>
+        <article class="card"><h3>当前运行组件</h3><p>聊天 Router 与 Worker 是官方 Agent；Assessment、任务验收和投递由后台服务执行，其中研判与验收调用模型。工单、结果与 outbox 已持久化，三角色模型配置已存在；没有专用 Worker 配置时继承 Router。</p></article>
+        <article class="card"><h3>待对齐目标</h3><p>官方桌面输入与持久 inbox、外部私聊直达 Router、完整上下文及任务切片仍有缺口。失败续做、Attention、恢复与治理虽有实现，完整用户路径仍需验收。密钥池与技能自动审核生效保留为目标，不冒充已完成。</p></article>
+        <article class="card"><h3>真实运行边界</h3><p>真实档案中 Router 工具拒绝的根因修复与双会话验收尚未完成；一次本地自检不能替代原条件复验。供应商、渠道收发、重启恢复、真机语音和目标服务须分别验收，测试总数不代表产品链路通过。</p></article>
       </div>
-      <div class="callout" style="margin-top:16px">说明：此页面保留已商定的目标架构；实现状态见《现状》，验收分支见《任务结果验收矩阵》，实施顺序见《全链路对齐开发清单》。本轮仅校正文字和状态说明，不改变已定路线。文件可直接双击打开，不依赖构建工具或外部 CDN。</div>
+      <div class="callout" style="margin-top:16px">维护规则：每个板块只维护一份“设计.md”，本页是唯一总架构 HTML。详细服务约束、实现边界与验收条件并入所属设计，不再另立现状、开发清单或验收报告。历史证据保留在 Git 和本地验收产物中。此页可直接打开，不依赖构建工具或外部 CDN。</div>
     </section>
 
-    <footer>目标来源：已商定的全链路路线；实现核对：plugins/superagent/src、client 与现状文档。生成日期：2026-11-03；文档校对：2026-11-04。本轮未运行应用或验证示例新闻。</footer>
+    <footer>架构依据：已商定的产品路线与五源码包约定。整理日期：2026-11-07；实现核对：plugins/ 与各板块设计。本文档整理不构成运行验收，不改变已定架构路线。</footer>
   </main>
 </body>
 </html>

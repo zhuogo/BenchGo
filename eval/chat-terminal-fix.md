@@ -15,4 +15,4 @@
 - 引擎与发布投影测试 **62/62 通过**：`chat-terminal-tests.tap`。首次仅一条旧断言仍要求隐藏正常终答，修正断言后完整重跑通过；窄范围复测见 `chat-terminal-recheck.tap`。
 - `reload:plus` 构建证据：`chat-terminal-build.log`。未做视觉校验。
 
-目标功能核对见 `docs/06-superagent/目标追踪现状.md`：已有结构化执行型目标；追踪型目标工作区、进展账、上下文简报与 Schedule 的 goalId 归属尚待实施。定时执行继续复用官方 Harness 自动化。
+目标功能核对见 `docs/06-superagent/设计.md`：已有结构化执行型目标；追踪型目标工作区、进展账、上下文简报与 Schedule 的 goalId 归属尚待实施。定时执行继续复用官方 Harness 自动化。
