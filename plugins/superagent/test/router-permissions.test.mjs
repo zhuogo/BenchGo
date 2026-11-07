@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { captureRouterTools, installRouterPermissionGate } from '../src/router-permissions.mjs';
+import { captureRouterTools, installRouterPermissionGate, toolFailureNote } from '../src/router-permissions.mjs';
 import { recordDesktopTrigger } from '../src/desktop-trigger.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 
@@ -77,8 +77,9 @@ test('Router leaves another agent’s calls to that agent’s own gate', async (
   const tools = { schemas: () => [...definitions.values()], get: name => definitions.get(name) };
   const inherited = captureRouterTools(tools, agent);
   definitions.set('assistant_delegate', { name: 'assistant_delegate' });
-  let guard, dispatched = 0;
-  installRouterPermissionGate({ tools, on: (_event, fn) => { guard = fn; } }, { agent, inherited, controlled: captureRouterTools(tools, agent) });
+  const reported = [];
+  let guard, resultListener, dispatched = 0;
+  installRouterPermissionGate({ tools, on: (event, fn) => { if (event === 'tools/result') { resultListener = fn; return () => {}; } guard = fn; } }, { agent, inherited, controlled: captureRouterTools(tools, agent), onToolFailure: failure => { reported.push(failure); } });
   const invoke = extra => guard({ agent, ...extra, signal: new AbortController().signal }, async () => ++dispatched);
   // Another router's delegate, inherited read and coordination call all pass through untouched here.
   await invoke({ agent: otherAgent, name: 'assistant_delegate' });
@@ -88,4 +89,14 @@ test('Router leaves another agent’s calls to that agent’s own gate', async (
   // Its own inherited execution tool is still denied.
   await assert.rejects(invoke({ name: 'read' }), { code: 'ROUTER_TICKET_REQUIRED' });
   assert.equal(dispatched, 3);
+  // A denied own call reports the real code and name as a system note; another agent's does not.
+  const deniedResult = { isError: true, error: { code: 'ROUTER_TICKET_REQUIRED', message: 'Router 不能直接调用 read' }, content: [{ type: 'text', text: 'Router 不能直接调用 read' }] };
+  await resultListener({ agent, name: 'read' }, deniedResult);
+  await resultListener({ agent: otherAgent, name: 'read' }, deniedResult);
+  await resultListener({ agent, name: 'assistant_config' }, { isError: false, content: [] });
+  assert.equal(reported.length, 1);
+  assert.equal(reported[0].name, 'read');
+  assert.equal(reported[0].code, 'ROUTER_TICKET_REQUIRED');
+  assert.match(reported[0].note, /Router 工具 read 未能执行（ROUTER_TICKET_REQUIRED）/);
+  assert.equal(toolFailureNote('assistant_delegate'), '系统状态：Router 工具 assistant_delegate 未能执行（ROUTER_TICKET_REQUIRED）。该操作须通过工单下发给 Worker，不能在 Router 回合里直接执行。');
 });

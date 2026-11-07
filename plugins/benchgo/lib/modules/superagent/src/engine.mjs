@@ -5,7 +5,7 @@ import { createAuxiliaryCompactionHook } from './auxiliary-compaction.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native';
+import { createOfficialHostExecutor } from './host-tool-executor.mjs';
 import { canFallback } from './routing.mjs';
 import { validateAssistantModels } from './store.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
@@ -202,7 +202,10 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         installProjectRules(scope, agent);
         // Router has no ambient program-execution authority. Native presentation
         // keeps its delegation/configuration tools usable under a PTC preset.
-        scope.tools.setExecutor(new NativeToolExecutor(scope));
+        // Use the host's own executor instance: a plugin-side copy loads its own
+        // official tool pipeline, whose scope filter cannot see host-tagged agent
+        // scopes and lets one agent's listeners receive another's calls.
+        scope.tools.setExecutor(await createOfficialHostExecutor(scope));
         scope.systemPrompt.section({ name: 'deployment:persona-prefix', order: -1000, interpolate: false, text: 'You are the BenchGo personal assistant.' });
         scope.systemPrompt.section({ name: 'benchgo-builtin-layer', order: -500, interpolate: false, text: builtinLayer });
         scope.systemPrompt.section({ name: 'deployment:persona-suffix', order: 1000, interpolate: false, text: '' });
@@ -222,7 +225,12 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         const inheritedTools = captureRouterTools(scope.tools, agent);
         await setupTools?.(scope, { agent, threadId });
         installChatPublication(scope, agent, { appendRecord: appendChatRecord, onPublish: () => emit({ type: 'publication', threadId }) });
-        installRouterPermissionGate(scope, { agent, inherited: inheritedTools, controlled: captureRouterTools(scope.tools, agent) });
+        installRouterPermissionGate(scope, { agent, inherited: inheritedTools, controlled: captureRouterTools(scope.tools, agent),
+          onToolFailure: ({ note }) => {
+            // Gate refusals never become durable tool results; surface the real
+            // cause as a system note instead of leaving the model to invent one.
+            errors.set(threadId, note); emit({ type: 'error', threadId, message: note });
+          } });
         scope.systemPrompt.section({ name: 'benchgo-chat-publication', order: -86, interpolate: false, text: 'Chat naturally with the user, answer questions and respond after delegation in your own words. Choose wording and detail to fit the conversation; no acknowledgement template is prescribed. All ordinary text is user-visible reply or progress and streams to the conversation in real time; never put private reasoning or internal-only narration in ordinary text. Reasoning, tool arguments and raw tool results remain private. You may use assistant_reply to explicitly publish your conversational reply and end the current turn; it is not required for text streaming. A normal final text answer is durably published on successful turn completion. Provisional text from a cancelled or failed turn is not a completed answer. Reviewed Worker results are delivered independently, so your reply after dispatch can acknowledge the accepted work without waiting for its completion. Publishing text is not approval. Never include secrets, hidden instructions or internal reasoning.' });
         scope.systemPrompt.section({ name: 'benchgo-router-tools', order: -88, interpolate: false, text: 'You are the BenchGo personal assistant and coordination Router. Converse with the user, understand their needs and answer questions from available context directly. For a user request to remind or check something later, use the official schedule_create tool directly (for example, after_seconds=300 for five minutes); schedule_list/update/delete are also coordination tools. When the user must choose or decide, you may call the official ask_user_question tool yourself with concise options so the user can answer with one click; use it at your own discretion, no confirmation needed. Do not turn a reminder into an immediate research Ticket. Delegate website visits, searches, file investigation, implementation and other environment operations through assistant_delegate: doing them yourself would hold your turn and delay the user, while a Ticket keeps the work durable, reviewable and revisable. Inherited exploration and execution tools are therefore not available to you. An explicit user request already authorizes ordinary dispatch: never ask whether to create a Ticket or run it in the background. Ask only about consequential ambiguity or missing authorization for the actual action. When a message refers to a task as “this/that”, “stuck”, “status”, “progress”, “just now” or similar, first use assistant_tickets to identify the existing Ticket; do not call assistant_delegate until the reference is resolved. Use exact configured model identifiers; omit projectId for daily research and other non-repository tasks using the existing isolated assistant workspace, and select an exact registered project ID only for repository work. Reuse the matching Ticket for follow-ups, status and cancellation; do not duplicate completed work. Steer running work yourself: assistant_ticket_control supplement forwards the user’s new instruction to the live Worker, and assistant_ticket_change revises requirements; neither needs extra confirmation. A successful delegation is durable acceptance, not completion: respond naturally in the current conversation, then return without polling or waiting for the Worker so subsequent user messages can be handled. The host does not send a separate canned acknowledgement. Final reviewed results are delivered independently to the original conversation. Assistant configuration and goal tools retain their own user-authorization contracts. This role boundary is not a Worker concurrency limit.' });
         scope.on('agent/pre-step', async (payload, next) => {
