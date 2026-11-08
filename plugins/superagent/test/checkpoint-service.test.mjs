@@ -23,9 +23,14 @@ async function fixture(t, { complete = true, stopped = true } = {}) {
   const file = join(directory, 'a.txt'); await writeFile(file, 'before');
   await checkpoints.protect({ runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory }, () => writeFile(file, 'after'));
   if (complete) {
-    database.updateRun(run.id, { ...ownership, state: 'verifying', evidence: { runId: run.id } });
+    const result = { runId: run.id, sessionId: run.sessionId, summary: 'Updated a.txt', selfCheck: { summary: 'Read and checked the updated file' } };
+    assert.equal(await readFile(file, 'utf8'), 'after');
+    database.updateRun(run.id, { ...ownership, state: 'verifying', evidence: result });
     if (stopped) database.confirmExecutionStopped(assignment.id, ownership);
-    database.commitResult(ticket.id, { assignment, result: { runId: run.id }, uniqueKey: 'result' });
+    database.commitResult(ticket.id, { assignment, result, uniqueKey: 'result' });
+    const [outbox] = database.claimOutbox('fixture-delivery');
+    database.finishOutbox(outbox.id, { owner: 'fixture-delivery', sent: true,
+      receipt: { status: 'accepted', messageId: 'checkpoint-result' } });
   }
   let version = 'v1', active = false;
   const service = createCheckpointService({ database, checkpoints, readPolicy: async () => ({ desktopVersion: version }), agents: { get: () => active ? {} : undefined } });

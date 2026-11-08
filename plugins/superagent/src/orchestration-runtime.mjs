@@ -11,10 +11,12 @@ import { createDirectReplyDelivery } from './direct-reply-delivery.mjs';
 import { commitWorkerResult } from './result-commit.mjs';
 import { knownNotSent } from './channels/delivery-outcome.mjs';
 import { createTaskExecutionProgress } from './task-execution-progress.mjs';
+import { archiveClosedExecutionSessions, executionSessionProjection } from './execution-session.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
 export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, execute, intervalMs = 1000, now = Date.now }) {
   const database = store.orchestration, owner = `delivery:${randomUUID()}`, shutdown = new AbortController();
+  const archived = new Set(), archiveRetry = new Map();
   const executionProgress = createTaskExecutionProgress({ ctx, database, now });
   const readPolicy = threadId => readAssessmentPolicy(store, ctx.workspaceRegistry, threadId);
   const directReplies = createDirectReplyDelivery({ database, readPolicy, signal: shutdown.signal,
@@ -97,6 +99,14 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   let timer, running, recovery;
   async function cycle() {
     const policy = await readPolicy();
+    // Archival follows confirmed closure; a failed official call remains retryable.
+    if ((ctx.get?.('workspaceRegistry') || ctx.workspaceRegistry)?.archiveSession) {
+      for (const ticket of database.listTickets({ limit: 1000 })) {
+        if (!['completed', 'failed', 'cancelled'].includes(ticket.status) || archived.has(ticket.id) || (archiveRetry.get(ticket.id) || 0) > now()) continue;
+        try { await archiveClosedExecutionSessions(ctx, database, ticket.id); archived.add(ticket.id); archiveRetry.delete(ticket.id); }
+        catch { archiveRetry.set(ticket.id, now() + 30000); }
+      }
+    }
     database.queueAnsweredAttention({ validateMandate: mandate => validateTicketMandate(mandate, { policy }) });
     for (const ticket of database.listTickets({ status: 'open', limit: 1000 })) {
       shutdown.signal.throwIfAborted();
@@ -176,7 +186,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       const progress = executionProgress.batch();
       return database.listTickets({ limit: 1000 }).map(ticket => {
         const assignments = database.assignments(ticket.id);
-        return { ...ticket, revisions: database.ticketRevisions(ticket.id), assignments, attentions: database.attentions(ticket.id), attentionResolutions: database.attentionResolutions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id), execution: progress(ticket, assignments) };
+        return { ...ticket, revisions: database.ticketRevisions(ticket.id), assignments, attentions: database.attentions(ticket.id), attentionResolutions: database.attentionResolutions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id), executionSession: executionSessionProjection(database, ticket.id), execution: progress(ticket, assignments) };
       });
     },
     start() { if (timer || shutdown.signal.aborted) return; timer = setInterval(tick, intervalMs); timer.unref?.(); void tick(); },

@@ -4,7 +4,6 @@ import { mkdir } from 'node:fs/promises';
 import { resolve, relative, isAbsolute } from 'node:path';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native';
-import { appendPluginRecord } from '@deepseek-ai/dsh-session';
 import { installWorkerPermissionGate } from './worker-permissions.mjs';
 import { installWorkerSubagents } from './worker-subagents.mjs';
 import { installWorkerVault } from './worker-vault.mjs';
@@ -20,18 +19,14 @@ import { captureArtifactCheckpoint, verifyArtifactCheckpoint } from './worker-ar
 import * as AskUserTool from '@deepseek-ai/dsh-tool-ask-user';
 import { installGoalBudgetUsage, installGoalUsageMeter } from './goal-budget-usage.mjs';
 import { isVerifiedPauseEnding } from './execution-evidence.mjs';
-import { canFallback, roleModels } from './routing.mjs';
+import { canFallback } from './routing.mjs';
+import { workerModelQueueType, selectWorkerModel as selectModel, workerModelRoute, workerRequest } from './worker-model-route.mjs';
 import { installWorkerSelfCheck, workerSelfCheckRequirement } from './worker-self-check.mjs';
+import { attachExecutionSession } from './execution-session.mjs';
 import { modelFallbackType, modelFallbackSource, fallbackCallSignature as toolSignature } from './model-fallback.mjs';
 
-const workerModelQueueType = 'plugin:benchgo-plugin/worker-model-queue';
-const sameModel = (model, selection) => model.providerId === selection?.provider && model.modelId === selection?.model
-  && model.options?.reasoningEffort === selection?.reasoningEffort;
-const selectModel = (agent, model) => agent.model?.select?.({ provider: model.providerId, model: model.modelId,
-  ...(model.options?.reasoningEffort === undefined ? {} : { reasoningEffort: model.options.reasoningEffort }) });
-
 /** Uses the host agent lifecycle and transcript; no separate model/tool loop. */
-export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readContext, readSourceContext, memory, checkpoints, captureCheckpoint = captureArtifactCheckpoint, appendRecord = appendPluginRecord }) {
+export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readContext, readSourceContext, memory, checkpoints, captureCheckpoint = captureArtifactCheckpoint }) {
   if (!ctx?.agents?.create || !ctx?.sessionQuery?.readSession) throw new Error('Harness execution services unavailable');
   if (typeof authorizeAction !== 'function') throw new Error('Worker requires a current action authorizer');
   const root = resolve(workspaceRoot);
@@ -69,13 +64,15 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       const policy = await readPolicy();
       const sourceReference = await readSourceReference({ readContext: readSourceContext, source: ticket.mandate.source, signal });
       usageMeter = installGoalUsageMeter(ctx, { database, ticketId: ticket.id, sessionId });
-      let models = roleModels(assignment.model, { models: policy.models || policy.routingConfig?.models || (policy.model ? [policy.model] : []), workerModels: policy.workerModels || policy.routingConfig?.workerModels }, 'worker');
+      let models;
       let modelIndex = 0, pendingFallback, claimedMessages = [], currentTurn, savedQueue;
       const modelFailures = [];
       const priorFallbackCalls = new Set();
       const presets = ctx.get?.('agentPresets');
       const preset = presets ? await presets.resolve(assignment.agentPreset) : undefined;
       const setup = async (scope, agent) => {
+        scope.provide?.('benchgoWorkerExecution', Object.freeze({ ticketId: ticket.id, assignmentId: assignment.id,
+          runId: run.id, sessionId, owner: assignment.owner, fence: assignment.fence }));
         // Use the host-linked official package so worker dispatch shares the
         // host's Cordis scope registry.
         scope.tools?.setExecutor?.(new NativeToolExecutor(scope));
@@ -99,29 +96,27 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
             || prefix.at(-1)?.type !== 'turn/end' || (contextContinuation ? prefix.at(-1).data?.reason?.kind !== 'completed' : !isVerifiedPauseEnding(prefix.at(-1).data?.reason, saved))) throw new Error('Execution transcript changed before continuation');
           await verifyArtifactCheckpoint(environment || directory, resumed.evidence.checkpoint, { signal });
         }
-        savedQueue = agent.session?.snapshotEvents().find(event => event.type === workerModelQueueType && event.data?.runId === run.id)?.data;
-        if (savedQueue) models = structuredClone(savedQueue.models);
-        const current = agent.model?.current?.();
-        if (resumed && current) {
-          modelIndex = models.findIndex(model => sameModel(model, current));
-          if (modelIndex < 0) {
-            // Older Runs did not freeze their queue. Preserve the exact saved
-            // selection instead of reverting a resumed Worker to the primary.
-            const saved = { providerId: current.provider, modelId: current.model,
-              options: { ...(current.reasoningEffort === undefined ? {} : { reasoningEffort: current.reasoningEffort }),
-                ...(agent.session.requestHeader()?.config.maxTokens === undefined ? {} : { maxTokens: agent.session.requestHeader().config.maxTokens }) } };
-            models = roleModels(saved, { workerModels: models }, 'worker');
-            modelIndex = 0;
-          }
-        } else {
-          if (!models.length) throw new Error('Worker model is not configured');
-          selectModel(agent, models[modelIndex]);
+        savedQueue = database.getWorkerExecutionState(run.id);
+        // Read old queue records only for additive migration; new records live in BenchGo's ledger.
+        let legacyFallback;
+        if (!savedQueue && resumed) {
+          const legacyEvents = agent.session.snapshotEvents();
+          savedQueue = legacyEvents.find(event => event.type === workerModelQueueType && event.data?.runId === run.id)?.data;
+          legacyFallback = legacyEvents.findLast(event => event.type === modelFallbackType && event.data?.runId === run.id)?.data;
         }
+        const current = agent.model?.current?.();
+        ({ models, index: modelIndex } = workerModelRoute({ policy, savedQueue, current,
+          requestConfig: agent.session?.requestHeader?.()?.config, resumed: !!resumed }));
+        const frozen = database.freezeWorkerModelRoute({ assignmentId: assignment.id, runId: run.id, ...ownership, models, index: modelIndex,
+          routeOrigin: resumed ? savedQueue ? 'legacy-queue' : 'legacy-selection' : 'work-role' });
+        modelIndex = frozen.index;
+        if (legacyFallback) database.recordWorkerFallback({ assignmentId: assignment.id, runId: run.id, ...ownership, plan: legacyFallback });
+        selectModel(agent, models[modelIndex]);
         // Official durable policy representation (user-approval setApprovalPolicy).
         agent.session?.append?.('approval/policy', { policy: 'ask' });
-        const priorFallback = agent.session?.snapshotEvents().findLast(event => event.type === modelFallbackType && event.data?.runId === run.id);
+        const priorFallback = database.getWorkerExecutionState(run.id)?.fallbackPlan;
         if (priorFallback) for (const event of agent.session.snapshotEvents()) {
-          if (event.seq >= priorFallback.seq || event.type !== 'assistant/message') continue;
+          if (event.type !== 'assistant/message') continue;
           for (const block of event.data?.message?.content || []) if (block.type === 'tool-call') priorFallbackCalls.add(toolSignature(block.name, block.arguments));
         }
         const planFallback = failure => {
@@ -135,10 +130,10 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
             source: { kind: modelFallbackSource, fallbackId: id } });
           const admitted = new Set(events.filter(event => event.type === 'user/message').map(event => event.data.id));
           const unadmitted = claimedMessages.filter(message => !admitted.has(message.id));
-          const requestId = [...claimedMessages, ...events.filter(event => event.type === 'user/message').map(event => event.data)].find(message => message.source?.kind === 'user')?.id;
+          const requestId = [...claimedMessages, ...events.filter(event => event.type === 'user/message').map(event => event.data)].find(message => message.source?.kind === 'benchgo-worker-instruction')?.id;
           const plan = { id, runId: run.id, requestId: requestId || `worker:${run.id}`, failedTurn: currentTurn,
             models: structuredClone(models), index: modelIndex + 1, failures: structuredClone(modelFailures), message, unadmitted };
-          appendRecord(agent.session, modelFallbackType, plan);
+          database.recordWorkerFallback({ assignmentId: assignment.id, runId: run.id, ...ownership, plan });
           for (const event of events) if (event.type === 'assistant/message') {
             for (const block of event.data?.message?.content || []) if (block.type === 'tool-call') priorFallbackCalls.add(toolSignature(block.name, block.arguments));
           }
@@ -158,6 +153,8 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         scope.systemPrompt.section({ name: 'deployment:persona-prefix', order: -1000, interpolate: false, text: 'You are a BenchGo task worker.' });
         scope.systemPrompt.section({ name: 'deployment:persona-suffix', order: 1000, interpolate: false, text: '' });
         const inbox = installSubscriptionInbox(scope, agent, { database, assignment, run });
+        if (inbox.inputGateInstalled) scope.provide?.('benchgoWorkerInputGate', Object.freeze({ ticketId: ticket.id,
+          assignmentId: assignment.id, runId: run.id, sessionId, owner: assignment.owner, fence: assignment.fence }));
         const currentSnapshot = () => inbox.currentSnapshot?.() || { target: ticket.target, acceptance: ticket.acceptance, mandate: ticket.mandate, context: [], instructionRevision: ticket.instructionRevision };
         let context = await readContext?.(sessionId);
         if (['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'slack', 'dingtalk', 'email', 'webhook', 'api'].includes(ticket.mandate.source?.channel) && scope.get?.('userQuestions')) await scope.plugin(AskUserTool, { mode: 'timed', timeout: 1 });
@@ -190,7 +187,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
             runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory, callId: execution.callId,
           }, dispatch) } : {}),
         });
-        installWorkerSubagents(scope, agent, { ctx, database, assignment, readPolicy, authorizeAction,
+        installWorkerSubagents(scope, agent, { ctx, database, assignment, readPolicy, authorizeAction, models, currentModel: () => models[modelIndex],
           ...(checkpoints ? { withCheckpoint: (execution, dispatch) => checkpoints.protect({
             runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory, callId: execution.callId,
           }, dispatch) } : {}),
@@ -209,8 +206,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           const inherited = await next();
           signal.throwIfAborted();
           const model = models[modelIndex];
-          const { provider: _provider, model: _model, reasoningEffort: _effort, maxTokens: _maxTokens, ...controls } = inherited;
-          const request = { ...controls, ...(model.options || {}), provider: model.providerId, model: model.modelId };
+          const request = workerRequest(inherited, model);
           try {
             await ctx.llm.prepareCall(request, requestSignal);
             signal.throwIfAborted();
@@ -238,7 +234,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       handle = resumed
         ? await ctx.agents.resume({ resumeSessionId: sessionId, signal, setup })
         : await ctx.agents.create({ sessionId, meta: { cwd: project?.path || directory, ...(preset ? { agentPreset: preset.id } : {}) }, setup });
-      if (!savedQueue && handle.agent.session) appendRecord(handle.agent.session, workerModelQueueType, { runId: run.id, models });
+      await attachExecutionSession(ctx, handle.agent, { ticket, run });
       await renew();
       signal.throwIfAborted();
       // Persist submission intent before entering the host. A crash here is ambiguous,
@@ -257,7 +253,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           if (!ctx.userQuestions.answer(handle.agent, callId, { answers })) throw new Error('Official continued question is unavailable');
         }
       } else handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: ticket.mandate?.instruction?.trim()
-        ? ticket.mandate.instruction : assignment.text?.trim() ? assignment.text : ticket.target }], source: { kind: 'user' } }));
+        ? ticket.mandate.instruction : assignment.text?.trim() ? assignment.text : ticket.target }], source: { kind: 'benchgo-worker-instruction', ticketId: ticket.id, runId: run.id } }));
       executionPhase = 'completion';
       const waitForCompletion = async () => {
         for (;;) {
@@ -268,7 +264,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           const events = handle.agent.session.snapshotEvents();
           const ending = events.findLast(event => event.type === 'turn/end')?.data?.reason;
           if (ending?.kind === 'aborted' || !executionEffects({ events }).effectsVerified) {
-            appendRecord(handle.agent.session, modelFallbackType, { kind: 'cancel', id: pendingFallback.id });
+            database.recordWorkerFallback({ assignmentId: assignment.id, runId: run.id, ...ownership, plan: { kind: 'cancel', id: pendingFallback.id } });
             throw Object.assign(new Error(ending?.kind === 'aborted' ? 'Worker was cancelled before model fallback' : 'Worker model fallback stopped because prior effects remain unknown'),
               { code: ending?.kind === 'aborted' ? 'ABORTED' : 'EXECUTION_EFFECTS_UNKNOWN' });
           }
@@ -277,6 +273,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           const plan = pendingFallback;
           pendingFallback = undefined;
           modelIndex = plan.index;
+          database.selectWorkerModelRoute({ assignmentId: assignment.id, runId: run.id, ...ownership, index: modelIndex });
           selectModel(handle.agent, models[modelIndex]);
           database.recordWorkerSelfCheck({ assignmentId: assignment.id, runId: run.id, ...ownership, value: null });
           started = false;

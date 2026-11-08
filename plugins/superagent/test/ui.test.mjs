@@ -356,7 +356,7 @@ test('resource navigation includes vault and system files last without settings 
   const h = harness(), props = { snapshot: { config: { models: [] } }, ctx: {} };
   const nodes = walk(h.render('Studio', props));
   const nav = nodes.find(node => node.type === 'nav');
-  assert.deepEqual(walk(nav).filter(node => node.type === 'b').map(node => node.children[0]), ['身份', '档案', '任务', '记忆', '产物', '多平台', '保险库', '系统文件']);
+  assert.deepEqual(walk(nav).filter(node => node.type === 'b').map(node => node.children[0]), ['身份', '档案', '任务', '记忆', '产物', '多平台', '保险库', '授权管理', '系统文件']);
   assert.equal(walk(nav).filter(node => node.props['aria-current'] === 'page')[0].children[1].children[0].children[0], '身份');
   assert.equal(nodes.some(node => node.props.className === 'ba-segment'), false);
 });

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { createAssistantEngine, readBuiltinLayer } from '../src/engine.mjs';
+import { createChannelSessionHost, registerChannelSessionProjection } from '../src/channel-session.mjs';
+import { channelSessionKey } from '../src/channel-policy.mjs';
 import { createAssistantStore } from '../src/store.mjs';
 import { createAssignmentExecutor } from '../src/assignment-executor.mjs';
 import { captureArtifactCheckpoint } from '../src/worker-artifact-checkpoint.mjs';
@@ -58,7 +60,18 @@ async function fixture(t, script, options = {}) {
   class Adapter extends LlmAdapter {
     // Official model switches check context capacity, so fixture models declare a window.
     async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: options.contextWindow ?? 131072 }, ...(options.reasoning ? { reasoning: options.reasoning } : {}) }; }
-    async *stream(request) { requests.push(request); yield* await script(request, requests.length); }
+    async *stream(request) {
+      requests.push(request);
+      const events = await script(request, requests.length);
+      const agent = ctx.agents.get(request.sessionId);
+      if (agent?.ctx.get('benchgoWorkerExecution') && events.some(event => event.type === 'finish' && event.reason?.kind === 'stop')) {
+        const result = await executeTool(ctx, { agent, name: 'assistant_task_result',
+          arguments: { selfCheck: { summary: 'Fixture verified the scripted output', checks: ['Scripted result assertions'] }, outcome: 'completed' },
+          callId: `fixture-self-check:${requests.length}`, signal: new AbortController().signal });
+        assert.equal(result.isError, false, JSON.stringify(result));
+      }
+      yield* events;
+    }
   }
   ctx.llm.registerAdapter(['test'], new Adapter());
   ctx.provide('sessionQuery', { listSessions: async () => options.persistenceRoot ? ctx.sessionPersistence.list() : ctx.sessions.list().map(session => ({ header: session.header })), readSession: async id => {
@@ -179,7 +192,7 @@ for (const mode of ['text', 'assistant_reply']) test(`Router replies naturally a
   ];
   let delegation;
   const f = await fixture(t, (_request, count) => {
-    if (count === 1) return call('assistant_delegate', { provider: 'test', model: 'first', text: requestText, requestId: 'natural-reply-task' });
+    if (count === 1) return call('assistant_delegate', { text: requestText, requestId: 'natural-reply-task' });
     if (count === 2) {
       assert.equal(database.listTickets().length, 1, 'the model responds only after durable admission');
       return mode === 'text' ? text(replyText) : call('assistant_reply', { text: replyText });
@@ -187,12 +200,12 @@ for (const mode of ['text', 'assistant_reply']) test(`Router replies naturally a
     return text('当然，我们继续聊。');
   }, { orchestration: database, setupTools(scope, { agent, threadId }) {
     scope.tools.register({ name: 'assistant_delegate', description: 'Delegate the requested work',
-      parameters: { type: 'object', properties: Object.fromEntries(['provider', 'model', 'text', 'requestId'].map(key => [key, { type: 'string' }])), required: ['provider', 'model', 'text', 'requestId'] },
+      parameters: { type: 'object', properties: Object.fromEntries(['text', 'requestId'].map(key => [key, { type: 'string' }])), required: ['text', 'requestId'] },
       output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
       execute: (args, execution) => delegation.delegate(args, execution, { ownerAgent: agent, threadId }),
     });
   } });
-  delegation = createDesktopDelegationService({ ctx: f.ctx, database, readPolicy: async () => ({ desktopVersion: 'natural-reply-policy', projects: [] }) });
+  delegation = createDesktopDelegationService({ ctx: f.ctx, database, readPolicy: async () => ({ desktopVersion: 'natural-reply-policy', projects: [], workerModels: [{ providerId: 'test', modelId: 'first' }] }) });
   const agent = await f.engine.ensureSession();
   agent.followup(createUserMessage({ content: [{ type: 'text', text: requestText }], source: { kind: 'user' } }));
   await agent.whenIdle();
@@ -318,7 +331,7 @@ test('official timed Worker question waits for Router triage and self/default an
   const ticket = database.createTicket({ threadId: 'thread', target: '完成输出', mandate: { instruction: '使用简体中文。若需选择格式，你可自行决定，采用默认列表。', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'main' } } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'Worker/opaque' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'Worker/opaque' }], models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
   const result = await executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   assert.equal(result.waitingAttention, undefined);
   assert.equal(result.summary, '简体中文列表交付完成');
@@ -342,11 +355,11 @@ test('official user question resumes the same live Worker from its exact source 
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   database.createThread({ id: 'thread', source: { type: 'feishu', id: 'thread' } });
-  const source = { channel: 'feishu', appId: 'app', chatId: 'chat', messageId: 'original' };
+  const source = { channel: 'feishu', sourceType: 'group', connectionId: 'feishu', conversationId: 'chat', appId: 'app', chatId: 'chat', messageId: 'original' };
   const ticket = database.createTicket({ threadId: 'thread', target: 'Ask where to save', mandate: { actorId: 'owner', source } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }) });
   const execution = executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   execution.catch(() => {});
   const until = Date.now() + 5000;
@@ -387,10 +400,10 @@ for (const [restart, tamper] of [[false, false], [true, false], [true, true]]) t
   let database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   database.createThread({ id: 'thread', source: { type: 'feishu', id: 'thread' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'Ask', mandate: { instruction: '使用简体中文，所需资料由用户补充。', actorId: 'owner', source: { channel: 'feishu', appId: 'app', chatId: 'chat', messageId: 'original' } } });
+  const ticket = database.createTicket({ threadId: 'thread', target: 'Ask', mandate: { instruction: '使用简体中文，所需资料由用户补充。', actorId: 'owner', source: { channel: 'feishu', sourceType: 'group', connectionId: 'feishu', conversationId: 'chat', appId: 'app', chatId: 'chat', messageId: 'original' } } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const makeExecutor = (ctx = f.ctx) => createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const makeExecutor = (ctx = f.ctx) => createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'Worker/opaque' }], models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
   const result = await makeExecutor()(assignment, { ticket, signal: AbortSignal.timeout(5000), renew: async () => {} });
   assert.equal(result.waitingAttention.callIds[0], 'timed-question');
   database.parkAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence, result });
@@ -409,7 +422,7 @@ for (const [restart, tamper] of [[false, false], [true, false], [true, true]]) t
   assert.equal(database.queueAnsweredAttention({ validateMandate: () => true }), 0);
   const [delivery] = database.claimOutbox('sender');
   database.finishOutbox(delivery.id, { owner: 'sender', sent: true, receipt: { messageId: 'delivered-question' } });
-  ingestAssistantEvent(database, { channel: 'feishu', sourceKey: 'continued-answer', threadId: 'reply-thread', source: { channel: 'feishu', appId: 'app', chatId: 'chat', messageId: 'answer', parentMessageId: 'delivered-question' }, actor: { kind: 'human', id: 'owner' }, text: '补充资料原文', kind: 'group', mentioned: false }, { version: 'p1', ownerIds: ['owner'], threadIds: ['chat'] });
+  ingestAssistantEvent(database, { channel: 'feishu', sourceKey: 'continued-answer', threadId: 'reply-thread', source: { channel: 'feishu', sourceType: 'group', connectionId: 'feishu', conversationId: 'chat', appId: 'app', chatId: 'chat', messageId: 'answer', parentMessageId: 'delivered-question' }, actor: { kind: 'human', id: 'owner' }, text: '补充资料原文', kind: 'group', mentioned: false }, { version: 'p1', ownerIds: ['owner'], threadIds: ['chat'] });
   assert.equal(database.queueAnsweredAttention({ validateMandate: () => true }), 1);
   assert.equal(database.queueAnsweredAttention({ validateMandate: () => true }), 0);
   const [continued] = database.claimAssignments('resumed-worker', { validateMandate: () => true });
@@ -473,7 +486,7 @@ for (const knownFirst of [false, true]) test(`desktop timed Attention resumes wi
   const ticket = database.createTicket({ threadId: 'thread', target: '读取事实并询问格式', mandate: { instruction: '使用简体中文，展示格式由用户选择。', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' } } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const execute = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, checkpoints, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const execute = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, checkpoints, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'Worker/opaque' }], models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
   const result = await execute(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   assert.deepEqual(result.waitingAttention.callIds, ['user-call']);
   assert.deepEqual(database.attentionResolutions(ticket.id).map(row => row.questionId), knownFirst ? ['Q-known', 'Q-user'] : ['Q-user']);
@@ -496,7 +509,7 @@ for (const knownFirst of [false, true]) test(`desktop timed Attention resumes wi
 });
 
 test('assignment executor uses the real Harness writer and current permission hook', async t => {
-  let executed = 0, receive, remembered = true;
+  let executed = 0, receive;
   const f = await fixture(t, (_request, count) => { if (count === 1) receive(); return count === 1 ? [
     { type: 'block-start', index: 0, blockType: 'tool-call' },
     { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'worker-call', name: 'worker_probe', arguments: '{}' } },
@@ -511,7 +524,6 @@ test('assignment executor uses the real Harness writer and current permission ho
   const ticket = database.createTicket({ threadId: 'thread', target: 'Check the probe', mandate: { scope: ['read'] } });
   database.subscribe(ticket.id, 'thread');
   receive = () => {
-    remembered = false;
     const { trigger } = database.ingest({ dedupeKey: 'busy-context', thread: { id: 'thread', source: { type: 'desktop', id: 'main' } }, source: { messageId: 'followup' }, actor: { id: 'other' }, content: '补充原始资料', mode: 'group', gate: { allowed: false } });
     database.deliverSubscribedMessage(trigger.id, { ticketId: ticket.id });
     assert.equal(database.pendingSubscriptionMessages(ticket.id).length, 1);
@@ -519,17 +531,14 @@ test('assignment executor uses the real Harness writer and current permission ho
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   let authorized = 0;
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ version: 'current' }),
-    readContext: async () => ({ memories: remembered ? [{ content: 'worker-forgotten-marker' }] : [] }),
-    memory: { redactForgottenContext: context => remembered ? context : { ...context, memories: [] } },
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ version: 'current', workerModels: [{ providerId: 'test', modelId: 'first' }] }),
     authorizeAction: async () => { authorized++; return { allowed: true }; } });
   const result = await executor(assignment, { ticket, signal: AbortSignal.timeout(5000), renew: async () => {} });
   assert.equal(result.summary, 'Verified host result');
-  assert.equal(executed, 1); assert.equal(authorized, 1);
+  assert.equal(executed, 1); assert.equal(authorized, 2);
   assert.equal(database.pendingSubscriptionMessages(ticket.id).length, 0);
   assert.match(JSON.stringify(f.requests[1].messages), /补充原始资料/);
   assert.match(JSON.stringify(f.requests[1].messages), /not new authorization/);
-  assert.match(JSON.stringify(f.requests[0].messages), /worker-forgotten-marker/);
   assert.doesNotMatch(JSON.stringify(f.requests[1].messages), /worker-forgotten-marker/);
   assert.equal(database.runs(assignment.id)[0].state, 'verifying');
   assert.equal(f.ctx.agents.get(result.sessionId), undefined);
@@ -556,7 +565,7 @@ test('late context after the final Worker request continues the same official se
   let saved;
   const readSession = f.ctx.sessionQuery.readSession;
   f.ctx.sessionQuery.readSession = async id => { saved = await readSession(id); return saved; };
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }) });
   const result = await executor(assignment, { ticket, signal: AbortSignal.timeout(5000), renew: async () => {} });
   assert.equal(result.summary, 'Original result\nResult includes late context');
   assert.equal(f.requests.length, 2);
@@ -564,13 +573,13 @@ test('late context after the final Worker request continues the same official se
   assert.equal(database.pendingSubscriptionMessages(ticket.id).length, 0);
   assert.match(JSON.stringify(f.requests[1].messages), /late-source-marker/);
   const messages = saved.events.filter(event => event.type === 'user/message').map(event => event.data);
-  assert.equal(messages.filter(message => message.source?.kind === 'user').length, 1);
+  assert.equal(messages.filter(message => message.source?.kind === 'benchgo-worker-instruction').length, 1);
   assert.equal(messages.filter(message => message.source?.kind === 'benchgo-context-continuation').length, 1);
   assert.equal(messages.filter(message => message.source?.kind === 'benchgo-subscription').length, 1);
 });
 
-for (const tamper of [false, true]) test(`review-time context resumes verified original session (tamper=${tamper})`, async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'worker-review-context-'));
+for (const tamper of [false, true]) test(`late context resumes verified original session (tamper=${tamper})`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'worker-late-context-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   const f = await fixture(t, (_request, count) => text(count === 1 ? 'Original evidence' : 'Context incorporated'), { persistenceRoot: join(directory, 'sessions') });
@@ -579,12 +588,12 @@ for (const tamper of [false, true]) test(`review-time context resumes verified o
   database.subscribe(ticket.id, 'thread');
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }) });
   const context = { ticket, signal: AbortSignal.timeout(30000), renew: async () => {} };
   const original = await executor(assignment, context);
-  const { trigger } = database.ingest({ dedupeKey: 'review-context', thread: { id: 'thread', source: { type: 'desktop', id: 'main' } }, source: { messageId: 'late' }, actor: { id: 'other' }, content: 'review-late-source-marker', mode: 'group', gate: { allowed: false } });
+  const { trigger } = database.ingest({ dedupeKey: 'late-context', thread: { id: 'thread', source: { type: 'desktop', id: 'main' } }, source: { messageId: 'late' }, actor: { id: 'other' }, content: 'late-source-marker', mode: 'group', gate: { allowed: false } });
   database.deliverSubscribedMessage(trigger.id, { ticketId: ticket.id });
-  assert.throws(() => database.commitResult(ticket.id, { assignment, result: original, uniqueKey: 'stale-review' }), { code: 'UNAPPLIED_CONTEXT' });
+  assert.throws(() => database.commitResult(ticket.id, { assignment, result: original, uniqueKey: 'stale-context' }), { code: 'UNAPPLIED_CONTEXT' });
   database.renewAssignment(assignment.id, { owner: assignment.owner, fence: assignment.fence, validateMandate: () => false });
   await withRecoveredEvidence({ ctx: f.ctx, run: database.runs(assignment.id)[0], signal: context.signal }, (_saved, observation) => {
     database.queueVerification(assignment.id, { fence: assignment.fence, runId: original.runId, observation, validateMandate: () => true });
@@ -603,16 +612,16 @@ for (const tamper of [false, true]) test(`review-time context resumes verified o
   assert.equal(result.runId, original.runId);
   assert.equal(database.runs(assignment.id).length, 1);
   assert.equal(f.requests.length, 2);
-  assert.match(JSON.stringify(f.requests[1].messages), /review-late-source-marker/);
+  assert.match(JSON.stringify(f.requests[1].messages), /late-source-marker/);
   assert.equal(database.pendingSubscriptionMessages(ticket.id).length, 0);
   await withRecoveredEvidence({ ctx: f.ctx, run: database.runs(assignment.id)[0], signal: context.signal }, saved => {
-    database.commitResult(ticket.id, { assignment: continued, result: saved, uniqueKey: 'fresh-review' });
+    database.commitResult(ticket.id, { assignment: continued, result: saved, uniqueKey: 'fresh-context' });
   });
   const persisted = await f.ctx.sessionQuery.readSession(result.sessionId);
   const messages = persisted.events.filter(event => event.type === 'user/message').map(event => event.data);
-  assert.equal(messages.filter(message => message.source?.kind === 'user').length, 1);
+  assert.equal(messages.filter(message => message.source?.kind === 'benchgo-worker-instruction').length, 1);
   assert.equal(messages.filter(message => message.source?.kind === 'benchgo-context-continuation').length, 1);
-  assert.equal(database.getTicket(ticket.id).status, 'completed');
+  assert.equal(database.getTicket(ticket.id).status, 'waiting');
 });
 
 test('project worker mounts official worktrees and preserves dirty source while tools run in its checkout', async t => {
@@ -675,12 +684,18 @@ test('project worker mounts official worktrees and preserves dirty source while 
   database = createAssistantOrchestrationStore({ directory: join(directory, '.agents', 'store') });
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'main' } });
   const project = { id: 'registered-project', path: directory };
-  const source = { channel: 'feishu', appId: 'app', chatId: 'chat', messageId: 'original' };
+  f.ctx.provide('workspaceRegistry', { resolveByPath: async path => {
+    assert.equal(path, directory);
+    return { id: 'registered-workspace', attachSession: async sessionId => {
+      assert.equal(f.ctx.agents.get(sessionId).session.header.cwd, directory);
+    } };
+  } });
+  const source = { channel: 'feishu', sourceType: 'group', connectionId: 'feishu', conversationId: 'chat', appId: 'app', chatId: 'chat', messageId: 'original' };
   const ticket = database.createTicket({ threadId: 'thread', target: 'Check project', mandate: { project, actorId: 'owner', source } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, '.agents', 'workers'),
-    readPolicy: async () => ({ projects: [project] }), authorizeAction: async () => ({ allowed: true }) });
+    readPolicy: async () => ({ projects: [project], workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }) });
   const paused = await executor(assignment, { ticket, signal: AbortSignal.timeout(30000), renew: async () => {} });
   database.parkAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence, result: paused });
   const [delivery] = database.claimOutbox('sender');
@@ -699,26 +714,12 @@ test('project worker mounts official worktrees and preserves dirty source while 
   assert.equal(await git('show', ':tracked.txt'), 'staged');
   assert.equal((await git('status', '--porcelain')).split('\n').filter(line => !line.includes('.agents/')).join('\n'), before);
   assert.equal(f.ctx.get('worktrees'), undefined, 'worker service must not leak into the host');
-  database.commitResult(ticket.id, { assignment: continued, status: 'waiting', uniqueKey: 'project-review-correction',
-    result: { ...result, review: { verdict: 'rework', reason: 'Clarify the existing project findings' } },
-    rework: { instruction: 'Clarify the findings using the retained project checkout; preserve existing edits.' } });
-  const [reviewContinued] = database.claimAssignments('project-review-worker', { validateMandate: () => true });
-  const clarified = await executor(reviewContinued, { ticket: database.getTicket(ticket.id), signal: AbortSignal.timeout(30000), renew: async () => {} });
-  assert.equal(reviewContinued.id, assignment.id);
-  assert.equal(clarified.runId, result.runId);
-  assert.equal(clarified.sessionId, result.sessionId);
-  assert.deepEqual(clarified.environment, result.environment);
-  assert.equal(clarified.directory, observedDirectory);
-  assert.equal(await readFile(join(observedDirectory, 'tracked.txt'), 'utf8'), 'worker output\n');
-  assert.equal(await readFile(join(directory, 'tracked.txt'), 'utf8'), 'dirty\n');
-  assert.equal(database.runs(assignment.id).length, 1);
-  assert.equal(f.requests.length, 5);
   const completedRun = database.runs(assignment.id)[0];
   await withRecoveredEvidence({ ctx: f.ctx, run: completedRun, signal: AbortSignal.timeout(30000) }, (saved, observation) => {
     assert.equal(saved.checkpoint.manifestHash, result.checkpoint.manifestHash);
-    database.renewAssignment(reviewContinued.id, { owner: reviewContinued.owner, fence: reviewContinued.fence, validateMandate: () => false });
+    database.renewAssignment(continued.id, { owner: continued.owner, fence: continued.fence, validateMandate: () => false });
     assert.equal(database.verificationCandidates().length, 1, 'project result with checkpoint is eligible for evidence recovery');
-    database.queueVerification(reviewContinued.id, { fence: reviewContinued.fence, runId: result.runId, observation, validateMandate: () => true });
+    database.queueVerification(continued.id, { fence: continued.fence, runId: result.runId, observation, validateMandate: () => true });
   });
   const [verification] = database.claimAssignments('reviewer', { validateMandate: () => true });
   assert.equal(verification.attentionContinuation, undefined, 'verification must not attempt another Attention resume');
@@ -731,17 +732,17 @@ test('reopened orchestration recovers only verification under the real persisted
   const directory = await mkdtemp(join(tmpdir(), 'worker-recovery-'));
   let store = await createAssistantStore({ dataDirectory: directory }), runtime;
   t.after(async () => { await runtime?.stop(); store.close(); await rm(directory, { recursive: true, force: true }); });
-  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }] });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }], workerModels: [{ providerId: 'test', modelId: 'exact' }] });
   store.connections.update({ enabled: true, appId: 'app', appSecretRef: 'env:SECRET', ownerOpenIds: ['owner'], chatIds: ['chat'] }, { revision: 0 });
   const f = await fixture(t, () => text('Durable evidence'), { store, persistenceRoot: join(directory, 'sessions') });
   const policy = await readAssessmentPolicy(store), db = store.orchestration;
   db.createThread({ id: 'thread', source: { type: 'feishu', id: 'chat' } });
   const ticket = db.createTicket({ threadId: 'thread', target: 'Inspect', mandate: { policyVersion: policy.version, actorId: 'owner',
-    source: { channel: 'feishu', appId: 'app', chatId: 'chat', messageId: 'original' }, controlledActions: 'require-current-policy-and-harness-approval' } });
+    source: { channel: 'feishu', sourceType: 'group', connectionId: 'feishu', conversationId: 'chat', appId: 'app', chatId: 'chat', messageId: 'original' }, controlledActions: 'require-current-policy-and-harness-approval' } });
   db.createAssignment(ticket.id, { model: policy.model });
   const [assignment] = db.claimAssignments('old-worker', { validateMandate: () => true });
   const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database: db, workspaceRoot: join(store.paths.workspace, 'workers'),
-    readPolicy: () => readAssessmentPolicy(store), authorizeAction: async ({ policy, mandate }) => ({ allowed: validateTicketMandate(mandate, { policy }) }) });
+    readPolicy: () => readAssessmentPolicy(store), authorizeAction: async () => ({ allowed: true }) });
   const result = await executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   db.renewAssignment(assignment.id, { owner: assignment.owner, fence: assignment.fence, validateMandate: () => false });
   store.close();
@@ -750,14 +751,9 @@ test('reopened orchestration recovers only verification under the real persisted
   const existingWriter = await f.ctx.sessionPersistence.open(result.sessionId, 'write');
   await assert.rejects(withRecoveredEvidence({ ctx: f.ctx, run, signal: AbortSignal.timeout(5000) }, () => assert.fail('busy writer must block recovery')));
   await existingWriter.close();
-  let executions = 0, reviews = 0, sends = 0;
+  let executions = 0, sends = 0;
   runtime = createOrchestrationRuntime({ ctx: f.ctx, store,
     execute: async () => { executions++; throw new Error('must not execute again'); },
-    review: async ({ result: recovered }) => {
-      reviews++; assert.equal(recovered.summary, 'Durable evidence');
-      await assert.rejects(f.ctx.sessionPersistence.open(result.sessionId, 'write'), 'verification retains exclusive ownership');
-      return { verdict: 'passed', reason: 'Evidence matches', delivery: { action: 'deliver', text: '已核实原会话中保存的结果。' } };
-    },
     feishu: { send: async request => { sends++; assert.equal(request.source.messageId, 'original'); return { status: 'accepted', messageId: 'reply' }; } },
   });
   for (let i = 0; i < 50; i++) {
@@ -770,7 +766,7 @@ test('reopened orchestration recovers only verification under the real persisted
   assert.equal(store.orchestration.runs(assignment.id)[0].executionFence, assignment.fence);
   assert.equal(f.requests.length, 1);
   await runtime.tick();
-  assert.deepEqual({ executions, reviews, sends }, { executions: 0, reviews: 1, sends: 1 });
+  assert.deepEqual({ executions, sends }, { executions: 0, sends: 1 });
 });
 
 test('official preset is bound to the assistant while inherited execution tools are hidden', async t => {
@@ -1006,7 +1002,7 @@ test('Router model context strips document and memory comments while retaining t
   const store = await createAssistantStore({ dataDirectory: directory });
   let f;
   t.after(async () => { await f?.engine.dispose(); await f?.ctx.fiber.dispose(); store.close(); await rm(directory, { recursive: true, force: true }); });
-  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }] });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }], workerModels: [{ providerId: 'test', modelId: 'exact' }] });
   await store.updateProfile({ identity: 'Visible identity <!-- hidden-identity-marker -->', user: 'Visible user <!-- hidden-user-marker -->' });
   await store.saveMemory({ content: 'Visible memory <!-- hidden-memory-marker -->', source: { messageId: 'source-1', excerpt: 'Visible source <!-- hidden-excerpt-marker -->' } });
   f = await fixture(t, () => text('Acknowledged'), { store });
@@ -1058,7 +1054,7 @@ for (const document of ['MEMORY.md', 'USER.md']) test(`live session rereads a pr
   const store = await createAssistantStore({ dataDirectory: directory });
   let f;
   t.after(async () => { await f?.engine.dispose(); await f?.ctx.fiber.dispose(); store.close(); await rm(directory, { recursive: true, force: true }); });
-  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }] });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }], workerModels: [{ providerId: 'test', modelId: 'exact' }] });
   const entry = await store.saveMemory({ document, content: 'private-marker-for-snapshot', source: { messageId: 'private-source' } });
   f = await fixture(t, () => text('Acknowledged'), { store });
   await f.engine.send({ text: 'Read profile' });
@@ -1074,7 +1070,7 @@ test('official JSONL disk persistence resumes the same main identity after engin
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-assistant-engine-'));
   const store = await createAssistantStore({ dataDirectory: directory });
   await store.updateProfile({ identity: 'frozen-persona-before-restart' });
-  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }] });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }], workerModels: [{ providerId: 'test', modelId: 'exact' }] });
   const options = { store, persistenceRoot: join(directory, 'sessions') };
   const first = await fixture(t, () => text('Before restart'), options);
   const sent = await first.engine.send({ text: 'Remember conversation', requestId: 'restart-identity' });
@@ -1099,7 +1095,7 @@ test('official JSONL disk persistence resumes the same main identity after engin
 test('resumed Router cleans legacy runtime memory comments from the model surface and preserves original events', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-legacy-context-'));
   const store = await createAssistantStore({ dataDirectory: directory });
-  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }] });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }], workerModels: [{ providerId: 'test', modelId: 'exact' }] });
   const options = { store, persistenceRoot: join(directory, 'sessions') };
   const first = await fixture(t, () => text('Before restart'), options);
   const sent = await first.engine.send({ text: 'Original request' });
@@ -1132,7 +1128,7 @@ test('resumed Router cleans legacy runtime memory comments from the model surfac
 test('Router watchdog restores its official session after host restart without replaying a completed request', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-router-recovery-'));
   const store = await createAssistantStore({ dataDirectory: directory });
-  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }] });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }], workerModels: [{ providerId: 'test', modelId: 'exact' }] });
   const options = { store, persistenceRoot: join(directory, 'sessions') };
   const first = await fixture(t, () => text('Completed once'), options);
   const sent = await first.engine.send({ text: 'Complete this request', requestId: 'one-effect' });
@@ -1185,7 +1181,7 @@ test('first-match replaces the official all-candidate projection in real model r
 test('Router recovery resumes disposed work from the durable transcript with one recovery notice', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-router-interrupted-'));
   const store = await createAssistantStore({ dataDirectory: directory });
-  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }] });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }], workerModels: [{ providerId: 'test', modelId: 'exact' }] });
   const options = { store, persistenceRoot: join(directory, 'sessions'), contextWindow: 131072 };
   let started;
   const ready = new Promise(resolve => { started = resolve; });
@@ -1379,7 +1375,7 @@ test('inbox selects and freezes each Router queue before official step preparati
   agent.model.select({ provider: 'test', model: 'Old Router/opaque', reasoningEffort: 'high' });
   f.setConfig({ models: [{ providerId: 'test', modelId: 'Primary Router/opaque' }],
     workerModels: [{ providerId: 'test', modelId: 'Worker/opaque' }],
-    auxiliary: { capabilities: ['review'], models: [{ providerId: 'test', modelId: 'Auxiliary/opaque' }] } });
+    auxiliary: { capabilities: ['compaction'], models: [{ providerId: 'test', modelId: 'Auxiliary/opaque' }] } });
   await f.engine.send({ text: 'Use the selected Router for the whole message' });
   await agent.whenIdle();
   assert.deepEqual(f.requests.map(request => request.model), ['Primary Router/opaque', 'Primary Router/opaque']);
@@ -1413,7 +1409,7 @@ test('request failure switches once without replaying input and every new messag
 
 test('main and side chats keep the Router fallback queue independent of Worker and auxiliary models', async t => {
   const f = await fixture(t, request => request.model.endsWith('/3') ? text('Completed') : [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'Test provider unavailable' } } }], { contextWindow: 131072 });
-  const otherRoles = { workerModels: [{ providerId: 'test', modelId: 'Worker Model/opaque' }], auxiliary: { capabilities: ['review'], models: [{ providerId: 'test', modelId: 'Auxiliary Model/opaque' }] } };
+  const otherRoles = { workerModels: [{ providerId: 'test', modelId: 'Worker Model/opaque' }], auxiliary: { capabilities: ['compaction'], models: [{ providerId: 'test', modelId: 'Auxiliary Model/opaque' }] } };
   f.setConfig({ models: ['Main/1', 'Main/2', 'Main/3'].map(modelId => ({ providerId: 'test', modelId })), ...otherRoles });
   await f.engine.send({ text: 'Main queue' });
   await (await f.engine.ensureSession()).whenIdle();
@@ -1787,7 +1783,7 @@ test('goal usage ledger records Worker requests without parking the Ticket', asy
   } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'exact' } });
   const [first] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }) });
   const result = await executor(first, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   assert.equal(result.waitingPause, undefined);
   assert.equal(result.waitingBudget, undefined);
@@ -1814,7 +1810,7 @@ for (const recover of [false, true]) for (const tamper of [false, true]) test(`e
   } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'exact' } });
   const [first] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }) });
   const paused = await executor(first, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   assert.equal(paused.waitingPause, true);
   assert.equal(effects, 1);
@@ -1852,7 +1848,7 @@ for (const recover of [false, true]) for (const tamper of [false, true]) test(`e
   assert.match(result.summary, /Continued after explicit resume/);
 });
 
-for (const denied of [false, true]) test(`Worker preserves explicit model and ${denied ? 'does not bypass permission denial' : 'tries all configured fallbacks in one run'}`, async t => {
+for (const denied of [false, true]) test(`Worker uses its work-role queue and ${denied ? 'does not bypass permission denial' : 'tries all configured fallbacks in one run'}`, async t => {
   const f = await fixture(t, request => request.model === 'third' ? text('Worker completed') : [{ type: 'finish', reason: { kind: 'error', failure: { code: denied ? 'PERMISSION_DENIED' : 'SERVER', status: denied ? 403 : 503 } } }]);
   const directory = await mkdtemp(join(tmpdir(), 'worker-routes-'));
   const database = createAssistantOrchestrationStore({ directory });
@@ -1862,10 +1858,10 @@ for (const denied of [false, true]) test(`Worker preserves explicit model and ${
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'Explicit/opaque' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
-    readPolicy: async () => ({ models: ['second', 'third'].map(modelId => ({ providerId: 'test', modelId })), routingConfig: { keyPools: [{ providerId: 'test', candidates: ['hidden'] }] } }), authorizeAction: async () => ({ allowed: true }) });
+    readPolicy: async () => ({ workerModels: ['second', 'third'].map(modelId => ({ providerId: 'test', modelId })), routingConfig: { keyPools: [{ providerId: 'test', candidates: ['hidden'] }] } }), authorizeAction: async () => ({ allowed: true }) });
   const result = executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   if (denied) await assert.rejects(result); else assert.equal((await result).summary, 'Worker completed');
-  assert.deepEqual(f.requests.map(request => request.model), denied ? ['Explicit/opaque'] : ['Explicit/opaque', 'second', 'third']);
+  assert.deepEqual(f.requests.map(request => request.model), denied ? ['second'] : ['second', 'third']);
   assert.equal(database.runs(assignment.id).length, 1);
 });
 
@@ -1879,115 +1875,6 @@ test('pet identity shares the assistant context without injecting resource paylo
   assert.match(prompt, /assistant_pet only if registered/);
   assert.match(prompt, /opaque-id/);
   assert.doesNotMatch(prompt, /DO_NOT_INJECT_IMAGE_BYTES/);
-});
-
-test('review failure resumes the official original session and preserves its existing artifact', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'worker-review-resume-'));
-  const database = createAssistantOrchestrationStore({ directory });
-  t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
-  let artifactDirectory;
-  const f = await fixture(t, async (_request, count) => {
-    if (count > 1) assert.equal(await readFile(join(artifactDirectory, 'draft.md'), 'utf8'), 'retained original draft');
-    return text(count === 1 ? '14 draft items' : '8 corrected items');
-  },
-    { persistenceRoot: join(directory, 'sessions') });
-  database.createThread({ id: 'review-thread', source: { type: 'desktop', id: 'original-chat' } });
-  const ticket = database.createTicket({ threadId: 'review-thread', target: 'Original request: summarize 6–10 news items.',
-    acceptance: '6–10 sourced items', mandate: { source: { channel: 'desktop', sessionId: 'original-chat' } } });
-  database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
-  const [assignment] = database.claimAssignments('original-worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
-    readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }),
-    captureCheckpoint: async (workspace, options) => {
-      artifactDirectory = workspace;
-      await writeFile(join(workspace, 'draft.md'), 'retained original draft');
-      return captureArtifactCheckpoint(workspace, options);
-    } });
-  const context = { ticket, signal: AbortSignal.timeout(30000), renew: async () => {} };
-  const result = await executor(assignment, context);
-  database.commitResult(ticket.id, { assignment, result: { ...result, review: { verdict: 'failed', reason: '14 items exceeds the original range' } },
-    status: 'waiting', uniqueKey: 'first-draft', rework: { instruction: 'Condense the existing draft to 8 verified items.' } });
-  const [resumed] = database.claimAssignments('continued-worker', { validateMandate: () => true });
-  assert.equal(resumed.id, assignment.id);
-  assert.equal(resumed.reviewContinuation.runId, result.runId);
-  const corrected = await executor(resumed, { ...context, ticket: database.getTicket(ticket.id) });
-  assert.equal(corrected.sessionId, result.sessionId);
-  assert.equal(corrected.runId, result.runId);
-  assert.equal(corrected.directory, result.directory);
-  assert.equal(database.runs(assignment.id).length, 1);
-  assert.equal(database.assignments(ticket.id).length, 1);
-  assert.equal(f.requests.length, 2);
-  assert.equal(corrected.finalSummary, '8 corrected items');
-  assert.match(corrected.summary, /14 draft items/);
-  const persisted = await f.ctx.sessionQuery.readSession(result.sessionId);
-  const messages = persisted.events.filter(event => event.type === 'user/message').map(event => event.data);
-  assert.equal(messages.filter(message => message.source?.kind === 'user').length, 1);
-  assert.equal(messages.filter(message => message.source?.kind === 'benchgo-review-continuation').length, 1);
-  assert.match(JSON.stringify(f.requests[1].messages), /Condense the existing draft/);
-});
-
-for (const legacy of [false, true]) test(`ordinary review preserves unknown official effects and blocks changed actions (legacy=${legacy})`, async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'worker-review-effects-'));
-  const database = createAssistantOrchestrationStore({ directory });
-  t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
-  let sends = 0, publishes = 0, lookups = 0;
-  const calls = values => [...values.flatMap(([id, name, args], index) => [
-    { type: 'block-start', index, blockType: 'tool-call' },
-    { type: 'block-end', index, block: { type: 'tool-call', id, name, arguments: JSON.stringify(args) } },
-  ]), { type: 'finish', reason: { kind: 'tool-calls' } }];
-  const f = await fixture(t, (_request, count) => count === 1
-    ? calls([['send-original', 'opaque_send', { text: 'original' }]])
-    : count === 2 ? text('The send timed out; its remote effect is unknown.')
-    : count === 3 ? calls([
-      ['send-changed', 'opaque_send', { text: 'changed' }],
-      ['publish-changed', 'opaque_publish', { text: 'changed' }],
-      ['verify', 'web_fetch', {}],
-    ]) : text('Only the read-only verification ran; the remote effect remains unknown.'), {
-    persistenceRoot: join(directory, 'sessions'),
-    async install(ctx) {
-      for (const name of ['opaque_send', 'opaque_publish', 'web_fetch']) ctx.tools.register({ name, description: name,
-        parameters: { type: 'object', properties: { text: { type: 'string' } } },
-        output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
-        execute: async () => {
-          if (name === 'opaque_send') { sends++; throw Object.assign(new Error('Remote timeout'), { code: 'TIMEOUT' }); }
-          if (name === 'opaque_publish') { publishes++; return 'published'; }
-          lookups++; return 'No authoritative remote receipt is available.';
-        } });
-    },
-  });
-  database.createThread({ id: 'effects-thread', source: { type: 'desktop', id: 'effects-chat' } });
-  const ticket = database.createTicket({ threadId: 'effects-thread', target: 'Send the requested summary once.',
-    acceptance: 'Verify delivery without repeating an uncertain send.', mandate: { source: { channel: 'desktop', sessionId: 'effects-chat' } } });
-  database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
-  const [assignment] = database.claimAssignments('effects-worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
-    readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
-  const context = { ticket, signal: AbortSignal.timeout(30000), renew: async () => {} };
-  const result = await executor(assignment, context);
-  assert.deepEqual(result.executionEffects, { effectsVerified: false, unknownCallIds: ['send-original'] });
-  if (legacy) {
-    delete result.executionEffects;
-    database.updateRun(result.runId, { owner: assignment.owner, fence: assignment.fence, state: 'completed', evidence: result });
-  }
-  database.commitResult(ticket.id, { assignment, result: { ...result, review: { verdict: 'failed', reason: 'Delivery was not verified' } },
-    status: 'waiting', uniqueKey: 'effects-review', rework: { instruction: 'Verify the remote delivery without repeating any uncertain action.' } });
-  if (!legacy) {
-    assert.equal(database.getTicket(ticket.id).continuationWait.code, 'EXECUTION_EFFECTS_UNKNOWN');
-    assert.deepEqual(database.claimAssignments('unsafe-correction', { validateMandate: () => true }), []);
-  } else {
-    const [continued] = database.claimAssignments('legacy-correction', { validateMandate: () => true });
-    assert.equal(continued.id, assignment.id);
-    const corrected = await executor(continued, { ...context, ticket: database.getTicket(ticket.id) });
-    assert.equal(corrected.sessionId, result.sessionId);
-    assert.equal(corrected.runId, result.runId);
-    assert.equal(lookups, 1);
-    assert.equal(corrected.toolEvidence.entries.filter(entry => entry.isError && ['opaque_send', 'opaque_publish'].includes(entry.name)).length, 3);
-    assert.equal(corrected.executionEffects.effectsVerified, false);
-  }
-  assert.equal(sends, 1);
-  assert.equal(publishes, 0);
-  assert.equal(database.runs(assignment.id).length, 1);
-  assert.equal(database.results(ticket.id).length, 1);
 });
 
 test('a long-running Worker is never paused by elapsed execution time', async t => {
@@ -2014,7 +1901,7 @@ test('a long-running Worker is never paused by elapsed execution time', async t 
   const [assignment] = database.claimAssignments('long-worker', { validateMandate: () => true });
   // The removed gate paused at this deadline (150ms); the option is now ignored.
   const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
-    readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 150 });
+    readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 150 });
   const started = Date.now();
   const result = await executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   assert.ok(Date.now() - started >= 800);
@@ -2026,4 +1913,89 @@ test('a long-running Worker is never paused by elapsed execution time', async t 
   assert.equal(database.getTicket(ticket.id).pauseReason ?? null, null);
   assert.equal(dispatches, 1);
   assert.equal(f.requests.length, 2);
+});
+
+
+test('execution native prompt requires the live durable Worker input gate and returns only official receipt', async t => {
+  const ticket = { id: 'execution-ticket', status: 'running' };
+  const assignment = { id: 'execution-assignment', state: 'claimed', owner: 'worker-owner', fence: 4, leaseUntil: Date.now() + 60000 };
+  const run = { id: 'execution-run', sessionId: 'execution-session', fence: 4 };
+  const orchestration = { listTickets: () => [ticket], assignments: () => [assignment], runs: () => [run] };
+  const f = await fixture(t, () => text('unused'), { orchestration });
+  const request = { sessionId: run.sessionId, requestId: 'execution-input', mode: 'steer', content: [{ type: 'text', text: 'context' }] };
+  let dispatched = 0;
+  const dispatch = async () => { dispatched++; return { accepted: true, official: true }; };
+  await assert.rejects(f.engine.nativePrompt({ request, dispatch }), error => error.details?.reason === 'TICKET_INPUT_GATE_UNAVAILABLE');
+  assert.equal(dispatched, 0);
+  const agents = f.ctx.agents;
+  const originalGet = agents.get.bind(agents);
+  const gate = { ticketId: ticket.id, assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId, owner: assignment.owner, fence: assignment.fence };
+  agents.get = id => id === run.sessionId ? { ctx: { get: name => name === 'benchgoWorkerInputGate' ? gate : undefined } } : originalGet(id);
+  t.after(() => { agents.get = originalGet; });
+  assert.deepEqual(await f.engine.nativePrompt({ request, dispatch }), { accepted: true, official: true });
+  assert.equal(dispatched, 1);
+  ticket.status = 'completed';
+  await assert.rejects(f.engine.nativePrompt({ request, dispatch }), error => error.details?.reason === 'TICKET_INPUT_GATE_UNAVAILABLE');
+  assert.equal(dispatched, 1);
+});
+
+
+test('source conversations share sidechat identity and route official owner input without a Router model request', async t => {
+  const received = [];
+  const f = await fixture(t, () => text('must not run'), { onSourceMessage: async input => received.push(input) });
+  const source = { channel: 'test-channel', connectionId: 'connection', threadId: 'remote-thread' };
+  const [a, b] = await Promise.all([
+    f.engine.ensureSourceThread({ sourceKey: 'channel:key', title: 'Channel', source }),
+    f.engine.ensureSourceThread({ sourceKey: 'channel:key', title: 'Channel', source }),
+  ]);
+  assert.equal(a.id, b.id);
+  assert.equal(a.sessionId, b.sessionId);
+  assert.equal(f.state().threads.length, 1);
+  const agent = await f.engine.ensureSession({ threadId: a.id });
+  const request = { sessionId: agent.id, requestId: 'source-owner', mode: 'queue', content: [{ type: 'text', text: 'local owner reply' }] };
+  let message;
+  const receipt = await f.engine.nativePrompt({ request, dispatch: async () => {
+    message = createUserMessage({ content: request.content, source: { kind: 'user', rpcId: request.requestId } });
+    agent.followup(message);
+    return { accepted: true };
+  } });
+  await agent.whenIdle();
+  assert.deepEqual(receipt, { accepted: true });
+  assert.equal(received.length, 1);
+  assert.equal(received[0].message.id, message.id);
+  assert.equal(received[0].message.source.kind, 'user');
+  assert.equal(received[0].thread.source.threadId, 'remote-thread');
+  assert.equal(f.requests.length, 0);
+});
+
+test('channel mirror survives official JSONL resume with summary source and zero model requests', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-channel-session-'));
+  const store = await createAssistantStore({ dataDirectory: directory });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }], workerModels: [{ providerId: 'test', modelId: 'exact' }] });
+  const options = { store, persistenceRoot: join(directory, 'sessions'), install: registerChannelSessionProjection };
+  const source = { channel: 'telegram', sourceType: 'topic', connectionId: 'bot', conversationId: 'group', chatId: 'group', topicId: 'topic' };
+  const event = { source, threadId: 'remote-thread', text: 'original channel message' }, result = { trigger: null, intakeEvent: { id: 'durable-intake', intakeStage: 'pending' } };
+  const first = await fixture(t, () => text('must not run'), options);
+  const host = createChannelSessionHost({ ctx: first.ctx, store, engine: first.engine });
+  const mirrored = await host.onInbound(event, result, { sessionKey: channelSessionKey(source) });
+  const agent = await first.engine.ensureSession({ threadId: mirrored.threadId });
+  const projection = first.ctx.sessionProjections.snapshot(agent.session, first.ctx.sessionProjections.summaryKeys());
+  assert.equal(projection.values.benchgoChannelSource.channel, 'telegram');
+  assert.equal(projection.values.benchgoChannelSource.sourceType, 'topic');
+  assert.ok((await first.ctx.sessionPersistence.list()).some(row => row.header.id === mirrored.sessionId));
+  await host.onDelivery({ id: 'direct-reply', kind: 'owner', state: 'sent', source, threadId: event.threadId, text: 'confirmed reply', receipt: { status: 'accepted', messageId: 'remote-id' } });
+  await first.engine.dispose(); await first.ctx.fiber.dispose();
+  const second = await fixture(t, () => text('must not run'), options);
+  t.after(async () => { await second.engine.dispose(); await second.ctx.fiber.dispose(); await rm(directory, { recursive: true, force: true }); });
+  const restoredHost = createChannelSessionHost({ ctx: second.ctx, store, engine: second.engine });
+  const restored = await restoredHost.onInbound(event, result);
+  assert.equal(restored.sessionId, mirrored.sessionId);
+  const resumed = await second.engine.ensureSession({ threadId: restored.threadId });
+  const snapshot = second.ctx.sessionProjections.snapshot(resumed.session, second.ctx.sessionProjections.summaryKeys());
+  assert.deepEqual(snapshot.values.benchgoChannelSource, projection.values.benchgoChannelSource);
+  const saved = await second.ctx.sessionQuery.readSession(restored.sessionId);
+  assert.equal(saved.events.filter(row => row.type === 'user/message' && row.data.source.kind === 'benchgo-channel').length, 2);
+  assert.ok(saved.events.some(row => row.data?.content?.[0]?.text === '已送达\nconfirmed reply'));
+  assert.ok((await second.ctx.sessionPersistence.list()).some(row => row.header.id === restored.sessionId));
+  assert.equal(first.requests.length + second.requests.length, 0);
 });

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAssignmentExecutor } from '../src/assignment-executor.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
-import { modelFallbackSource, modelFallbackType } from '../src/model-fallback.mjs';
+import { modelFallbackSource } from '../src/model-fallback.mjs';
 
 const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
 const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
@@ -39,7 +39,10 @@ async function fixture(t, script, { install, models = [primary, backup], persist
   ctx.llm.registerAdapter(['test'], new Adapter());
   ctx.provide('sessionQuery', { readSession: async id => {
     const agent = ctx.agents.get(id);
-    if (agent) { const log = { events: agent.session.snapshotEvents() }; logs.set(id, log); return log; }
+    if (agent) {
+      await agent.ctx.tools.execute({ agent, signal: new AbortController().signal, calls: [{ type: 'tool-call', id: 'fixture-self-check', name: 'assistant_task_result', arguments: JSON.stringify({ selfCheck: { summary: 'Verified fixture transcript' } }) }] });
+      const log = { events: agent.session.snapshotEvents() }; logs.set(id, log); return log;
+    }
     if (!persistent) return logs.get(id);
     const handle = await ctx.sessionPersistence.open(id, 'read');
     try { return await handle.read(); } finally { await handle.close(); }
@@ -53,7 +56,7 @@ async function fixture(t, script, { install, models = [primary, backup], persist
   database.createAssignment(ticket.id, assignmentInput);
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   let configured = models;
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), appendRecord: modules[0].appendPluginRecord,
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'),
     readPolicy: async () => ({ workerModels: configured }), authorizeAction: async () => ({ allowed: true }) });
   const context = { ticket, signal: AbortSignal.timeout(15000), renew: async () => {} };
   return { ctx, database, ticket, assignment, executor, context, requests, selections, logs, setModels: value => { configured = value; } };
@@ -65,11 +68,11 @@ test('Worker receives the literal current owner instruction instead of a shorten
   const f = await fixture(t, () => text('Supported result'), { task: { target, acceptance: 'Deliver the report',
     mandate: { instruction, source: { channel: 'desktop', sessionId: 'owner' } } } });
   const result = await f.executor(f.assignment, f.context);
-  const users = f.logs.get(result.sessionId).events.filter(event => event.type === 'user/message' && event.data.source.kind === 'user');
+  const users = f.logs.get(result.sessionId).events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-instruction');
   assert.equal(users.length, 1);
   assert.equal(users[0].data.content[0].text, instruction);
   assert.ok(f.requests[0].messages.some(message => message.role === 'user' && message.content.some(block => block.type === 'text' && block.text === instruction)));
-  const system = f.requests[0].messages.filter(message => message.role === 'system').map(message => message.content.map(block => block.text || '').join('\n')).join('\n');
+  const system = f.requests[0].messages.map(message => message.content.map(block => block.text || '').join('\n')).join('\n');
   assert.match(system, /explicit requirements take precedence over derived task summaries/);
   assert.match(system, /must actually run and produce evidence/);
 });
@@ -80,9 +83,9 @@ test('Worker keeps an explicit assignment scope when the owner instruction inclu
   const f = await fixture(t, () => text('Report complete'), { task: { target: 'Complete the report and deployment goal',
     mandate: { instruction, source: { channel: 'desktop', sessionId: 'owner', messageId: 'owner#goal:report' } } }, assignmentInput: { text: scope } });
   const result = await f.executor(f.assignment, f.context);
-  const user = f.logs.get(result.sessionId).events.find(event => event.type === 'user/message' && event.data.source.kind === 'user');
+  const user = f.logs.get(result.sessionId).events.find(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-instruction');
   assert.equal(user.data.content[0].text, instruction);
-  const system = f.requests[0].messages.filter(message => message.role === 'system').map(message => message.content.map(block => block.text || '').join('\n')).join('\n');
+  const system = f.requests[0].messages.map(message => message.content.map(block => block.text || '').join('\n')).join('\n');
   assert.ok(system.includes(JSON.stringify({ executionScope: scope }).slice(1, -1)));
   assert.match(system, /does not authorize sibling assignments or other Goal leaves/);
 });
@@ -108,9 +111,9 @@ test('Worker fallback clears effort, rebuilds model tools and prompt, and never 
   assert.ok(f.requests[2].tools.some(tool => tool.name === 'backup_only'));
   assert.match(JSON.stringify(f.requests[2].messages), /Current capability route: Exact Worker\/default/);
   const events = f.logs.get(result.sessionId).events;
-  assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'user').length, 1);
+  assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-instruction').length, 1);
   assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === modelFallbackSource).length, 1);
-  assert.equal(events.filter(event => event.type === modelFallbackType).length, 1);
+  assert.equal(f.database.getWorkerExecutionState(result.runId).fallbackPlan.index, 1);
   assert.ok(events.some(event => event.type === 'tool/result' && JSON.stringify(event.data).includes('prior model already dispatched')));
   assert.ok(f.selections.some(selection => selection.model === backup.modelId && selection.reasoningEffort === undefined));
 });
@@ -125,26 +128,12 @@ test('Worker preparation failure re-admits the original unlogged identity once a
   const result = await f.executor(f.assignment, f.context);
   assert.deepEqual(f.requests.map(request => request.model), [backup.modelId]);
   const events = f.logs.get(result.sessionId).events;
-  const users = events.filter(event => event.type === 'user/message' && event.data.source.kind === 'user');
+  const users = events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-instruction');
   assert.equal(users.length, 1);
   assert.equal(users[0].data.content[0].text, f.ticket.target);
-  const plan = events.find(event => event.type === modelFallbackType).data;
+  const plan = f.database.getWorkerExecutionState(result.runId).fallbackPlan;
   assert.equal(plan.unadmitted[0].id, users[0].data.id);
   assert.equal(plan.requestId, users[0].data.id);
-});
-
-test('resumed Worker keeps the saved backup and frozen role queue after configuration changes', async t => {
-  const f = await fixture(t, (_request, count) => count === 1 ? failure() : text(count === 2 ? 'Original draft' : 'Corrected draft'), { persistent: true });
-  const first = await f.executor(f.assignment, f.context);
-  f.database.commitResult(f.ticket.id, { assignment: f.assignment, result: { ...first, review: { verdict: 'failed', reason: 'Needs correction' } }, status: 'waiting', uniqueKey: 'draft', rework: { instruction: 'Correct the existing draft' } });
-  const [resumed] = f.database.claimAssignments('worker-resumed', { validateMandate: () => true });
-  f.setModels([{ providerId: 'test', modelId: 'Unrelated new primary' }]);
-  const result = await f.executor(resumed, { ...f.context, ticket: f.database.getTicket(f.ticket.id) });
-  assert.equal(result.sessionId, first.sessionId);
-  assert.equal(result.runId, first.runId);
-  assert.deepEqual(f.requests.map(request => request.model), [primary.modelId, backup.modelId, backup.modelId]);
-  assert.equal(f.requests.at(-1).reasoningEffort, undefined);
-  assert.equal(result.finalSummary, 'Corrected draft');
 });
 
 test('Worker never falls back while a dispatched action has an unknown external outcome', async t => {

@@ -1,5 +1,6 @@
 import { installWorkerPermissionGate, workerAppliedTicket } from './worker-permissions.mjs';
 import { installGoalUsageMeter } from './goal-budget-usage.mjs';
+import { installWorkerChildModelRoute } from './worker-model-route.mjs';
 
 const denied = (code, message) => Object.assign(new Error(message), { code });
 // Exact host-known task tools. New capabilities require an explicit host role declaration.
@@ -11,7 +12,7 @@ const forbidden = new Set(['assistant_vault_execute', 'assistant_vault_list', 'a
   'ask_user_question', 'subagent', 'spawn_agent', 'followup_task', 'interrupt_agent', 'schedule_create', 'schedule_update', 'schedule_delete']);
 
 /** Bind official local children to the exact Worker lease, without another agent runtime. */
-export function installWorkerSubagents(scope, worker, { ctx, database, assignment, readPolicy, authorizeAction, withCheckpoint, childToolNames = childRoleTools, leaseMs = 60000 }) {
+export function installWorkerSubagents(scope, worker, { ctx, database, assignment, readPolicy, authorizeAction, withCheckpoint, models, currentModel, childToolNames = childRoleTools, leaseMs = 60000 }) {
   const children = new Set();
   const listen = ({ agent }) => {
     const header = agent.session?.header;
@@ -28,6 +29,7 @@ export function installWorkerSubagents(scope, worker, { ctx, database, assignmen
     const allowed = new Map(childToolNames.filter(name => available.has(name) && !forbidden.has(name)).map(name => [name, parentTools.get(name, worker)]));
     const restriction = childScope.tools.restrict({ allow: [...allowed.keys()] });
     childScope.effect?.(() => restriction);
+    if (models || currentModel) installWorkerChildModelRoute(childScope, agent, { worker, models, currentModel });
     children.add(agent.id);
     installWorkerPermissionGate(childScope, { database, assignment, readPolicy, authorizeAction, withCheckpoint, leaseMs,
       priorToolEvents: agent.session.snapshotEvents?.() || [] });

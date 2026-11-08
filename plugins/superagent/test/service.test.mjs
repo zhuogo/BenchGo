@@ -126,7 +126,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.ok((await systemListing.json()).files.some(file => file.name === 'workspace' && file.kind === 'directory'));
   const systemFile = await routes.get('/api/commander/assistant/system-file').fetch(new Request('http://localhost/api/commander/assistant/system-file?file=missing'));
   assert.equal(systemFile.status, 404);
-  let response = await call({ action: 'config', patch: { models: [{ providerId: 'mounted', modelId: 'exact' }] }, revision: 0 }); assert.equal(response.status, 200);
+  let response = await call({ action: 'config', patch: { models: [{ providerId: 'mounted', modelId: 'exact' }], workerModels: [{ providerId: 'mounted', modelId: 'exact' }] }, revision: 0 }); assert.equal(response.status, 200);
   response = await call({ action: 'config', patch: { name: 'conflict' }, revision: 0 }); assert.equal(response.status, 409);
   response = await call({ action: 'config', patch: { cardHtml: '<b>Service card</b>' } }); assert.equal(response.status, 200); assert.equal((await response.json()).cardHtml, '<b>Service card</b>');
   response = await call({ action: 'ensure' }); const { sessionId } = await response.json(); assert.ok(sessionId);
@@ -184,10 +184,11 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const claimAssignments = app.store.orchestration.claimAssignments;
   app.store.orchestration.claimAssignments = () => [];
   t.after(() => { app.store.orchestration.claimAssignments = claimAssignments; });
-  const formGoal = { requestId: 'form-goal', objective: 'Resource goal', projectId: 'project', provider: 'mounted', model: 'exact', text: 'Resource task', acceptance: 'Evidence' };
+  const formGoal = { requestId: 'form-goal', objective: 'Resource goal', projectId: 'project', text: 'Resource task', acceptance: 'Evidence' };
   assert.equal((await call({ action: 'goalCreate', goal: { ...formGoal, requestId: 'budgeted-goal', budget: { requests: 1 } } })).status, 400);
   const formCreatedResponse = await call({ action: 'goalCreate', goal: formGoal });
   assert.equal(formCreatedResponse.status, 200);
+  assert.equal((await call({ action: 'goalCreate', goal: { ...formGoal, requestId: 'legacy-model-goal', provider: 'mounted', model: 'exact' } })).status, 400);
   const formCreated = await formCreatedResponse.json();
   assert.equal(formCreated.executionKind, 'ticket');
   assert.equal((await (await call({ action: 'goalCreate', goal: formGoal })).json()).id, formCreated.id);
@@ -220,7 +221,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.ok(delegateTool.parameters.properties.title);
   const goalTool = ctx.tools.get('assistant_goals', agent);
   await assert.rejects(goalTool.execute({ op: 'list' }, { agent: { id: 'child' } }), /只有总助手/);
-  const goalInput = { requestId: 'owned-goal', objective: 'Deferred work', projectId: 'project', provider: 'mounted', model: 'exact', text: 'Wait' };
+  const goalInput = { requestId: 'owned-goal', objective: 'Deferred work', projectId: 'project', text: 'Wait' };
   const ownedGoal = await goalTool.execute({ op: 'create', goal: goalInput }, { agent, authorized: true });
   assert.equal(ownedGoal.ownerSessionId, agent.id);
   assert.equal(ownedGoal.executionKind, 'ticket');
@@ -237,8 +238,9 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   if (streamFailure) throw streamFailure;
   duringStream = async () => { try {
   const delegateTool = ctx.tools.get('assistant_delegate', agent);
-  const delegation = { projectId: 'project', provider: 'mounted', model: 'exact', title: '检查项目', text: 'Inspect project', acceptance: 'Report project findings with evidence; preserve the original human requirements.', requestId: 'desktop-delegation' };
+  const delegation = { projectId: 'project', title: '检查项目', text: 'Inspect project', acceptance: 'Report project findings with evidence; preserve the original human requirements.', requestId: 'desktop-delegation' };
   await assert.rejects(delegateTool.execute(delegation, { agent: { id: 'child' }, authorized: true }), /只有总助手/);
+  await assert.rejects(delegateTool.execute({ ...delegation, provider: 'mounted', model: 'exact' }, { agent, authorized: true }));
   const ticket = await delegateTool.execute(delegation, { agent, authorized: true });
   assert.equal(ticket.mandate.instruction, 'hello');
   assert.equal((await delegateTool.execute(delegation, { agent, authorized: true })).id, ticket.id);
@@ -266,7 +268,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal((await call(answerInput)).status, 200);
   const invalidReview = await call({ action: 'ticketRetryReview', ticketId: questionTicket.id, expectedResultVersion: 1 });
   assert.equal(invalidReview.status, 400);
-  assert.match(await invalidReview.text(), /工单待验收状态已变化/);
+  assert.match(await invalidReview.text(), /未知总助手操作/);
   assert.equal((await (await call(answerInput)).json()).duplicate, true);
   const crossSite = await routes.get('/api/commander/assistant').fetch(new Request('http://localhost/api/commander/assistant', { method: 'POST', body: JSON.stringify(answerInput), headers: { origin: 'https://foreign.invalid' } }));
   assert.equal(crossSite.status, 403);
@@ -287,7 +289,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   if (streamFailure) throw streamFailure;
   const memoryTool = ctx.tools.get('assistant_memory', agent);
   await assert.rejects(memoryTool.execute({ content: '无当前用户回合' }, { agent, callId: 'outside-turn' }), /当前原始用户消息/);
-  await assert.rejects(memoryTool.execute({ content: '伪造来源' }, { agent: { id: 'child' }, callId: 'spoofed', authorized: true }), /只有总助手/);
+  await assert.rejects(memoryTool.execute({ content: '伪造来源' }, { agent: { id: 'child' }, callId: 'spoofed', authorized: true }), { code: 'WORKER_MEMORY_WRITE_DENIED' });
   duringStream = async () => { try {
     const before = app.store.orchestration.listTickets().length;
     const exec = { agent, callId: 'direct-memory', signal: new AbortController().signal };

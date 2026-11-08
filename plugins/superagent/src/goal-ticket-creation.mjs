@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { rejectModelOverride } from './work-role-policy.mjs';
 
 /** Host-only composition: approved live owner -> durable Tickets -> Goal aggregate. */
 export async function createGoalTickets({ goal, exec, ownerAgent, threadId, delegation, scheduler, ctx, database }) {
@@ -13,6 +14,7 @@ export async function createGoalTickets({ goal, exec, ownerAgent, threadId, dele
   const normalized = new Set();
   const normalize = node => {
     if (!node || typeof node !== 'object' || normalized.has(node) || normalized.size >= 100) throw new Error('目标树无效或超过100项');
+    rejectModelOverride(node);
     normalized.add(node);
     if (Array.isArray(node.children) && node.children.length) node.children.forEach(normalize);
     else if ((node.acceptance == null || (typeof node.acceptance === 'string' && !node.acceptance.trim())) && typeof node.text === 'string') node.acceptance = node.text;
@@ -36,10 +38,8 @@ export async function createGoalTickets({ goal, exec, ownerAgent, threadId, dele
       for (let index = 0; index < node.children.length; index++) await validate(node.children[index], node.children[index]?.requestId || `${requestId}:child:${index}`);
       return;
     }
-    for (const key of ['projectId', 'provider', 'model', 'text']) if (typeof node[key] !== 'string' || !node[key].trim() || node[key].length > 100000) throw new Error(`目标 ${key} 无效或超过长度限制`);
+    for (const key of ['projectId', 'text']) if (typeof node[key] !== 'string' || !node[key].trim() || node[key].length > 100000) throw new Error(`目标 ${key} 无效或超过长度限制`);
     if (!ctx.workspaceRegistry.list().some(project => project.id === node.projectId)) throw new Error('目标项目不存在');
-    const info = await ctx.llm.resolveModelInfo(node.provider, node.model, exec.signal);
-    if (info?.provider !== node.provider || info?.id !== node.model) throw new Error('目标模型解析改变了显式标识');
   };
   await validate(goal, goal.requestId);
   scheduler.reserveGoalRequest(goal);
@@ -62,7 +62,7 @@ export async function createGoalTickets({ goal, exec, ownerAgent, threadId, dele
       return { children, ...(budgetGoalId ? { budgetGoalId } : {}) };
     }
     const requestId = createHash('sha256').update(JSON.stringify(['goal-ticket', goal.requestId, path])).digest('hex');
-    const ticket = await delegation.delegate({ projectId: node.projectId, provider: node.provider, model: node.model,
+    const ticket = await delegation.delegate({ projectId: node.projectId,
       text: node.text, acceptance: node.acceptance || '', requestId }, exec, { ownerAgent, threadId, goalLeaf: path, ...(budgetGoalId ? { budgetGoalId } : {}) });
     if (budgetGoalId && database.ticketGoalBudget(ticket.id)?.goalId !== budgetGoalId) throw new Error('目标工单未原子绑定用量账本');
     return { ticketId: ticket.id, ...(budgetGoalId ? { budgetGoalId } : {}) };

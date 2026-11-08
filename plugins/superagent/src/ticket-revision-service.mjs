@@ -3,6 +3,7 @@ import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { readAssessmentPolicy, validateTicketMandate } from './assessment-policy.mjs';
 import { ownsDesktopTicket } from './desktop-ticket-owner.mjs';
 import { ticketMandateDifference, isTicketMandateNarrowing } from './ticket-revisions.mjs';
+import { configuredWorkModel, rejectModelOverride } from './work-role-policy.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = (value, label, max = 100000) => {
@@ -13,6 +14,7 @@ const text = (value, label, max = 100000) => {
 /** Host authorization for revisions. Model input cannot supply source, actor or Mandate. */
 export function createTicketRevisionService({ ctx, store, database = store.orchestration, readPolicy = () => readAssessmentPolicy(store, ctx.workspaceRegistry), requestExpansion }) {
   async function change(input, exec, options = {}, form) {
+    rejectModelOverride(input);
     input = structuredClone(input);
     const ticket = database.getTicket(input.id);
     if (!ticket) throw new Error('工单不存在');
@@ -40,15 +42,9 @@ export function createTicketRevisionService({ ctx, store, database = store.orche
     const projectId = input.projectId ?? ticket.mandate.project?.id;
     const project = projectId ? policy.projects.find(row => row.id === projectId) : undefined;
     if (projectId && !project) throw new Error('工单项目不存在，请重新选择');
-    if ((input.provider === undefined) !== (input.model === undefined)) throw new Error('供应商与模型标识必须同时提供或同时省略');
-    const priorModel = database.assignments(ticket.id).at(-1)?.model || policy.workerModels?.[0] || policy.model;
-    const providerId = input.provider ?? priorModel?.providerId, modelId = input.model ?? priorModel?.modelId;
-    text(providerId, '供应商标识'); text(modelId, '模型标识');
-    if (input.operation === 'revise' && priorModel && (providerId !== priorModel.providerId || modelId !== priorModel.modelId)) {
-      throw Object.assign(new Error('普通修订保留当前执行会话；不能在此操作更换执行模型'), { code: 'REVISION_MODEL_CHANGE_UNSUPPORTED' });
-    }
-    const info = await ctx.llm.resolveModelInfo(providerId, modelId, exec?.signal);
-    if (info?.id !== modelId || info?.provider !== providerId) throw new Error('模型解析改变了显式标识');
+    const terminal = ['completed', 'failed', 'closed', 'cancelled'].includes(ticket.status);
+    // Existing Assignment.model is historical audit data, never a new override.
+    const model = terminal ? configuredWorkModel(policy) : database.assignments(ticket.id).at(-1)?.model || configuredWorkModel(policy);
     // Ordinary changes are bound to the live human instruction. Only actual
     // structured authority expansion enters the trusted host approval flow.
     exec?.signal?.throwIfAborted();
@@ -85,7 +81,7 @@ export function createTicketRevisionService({ ctx, store, database = store.orche
     const approvedBinding = digest([ticket.id, ticket.instructionRevision, mandate, difference]);
     return database.changeTicket(ticket.id, { operation: input.operation, expectedInstructionRevision: input.expectedInstructionRevision,
       target, acceptance, reason: input.reason, requestKey, requestPayload, mandate, triggerId: trigger.id,
-      model: { providerId, modelId }, validateMandate: value => validateTicketMandate(value, { policy: finalPolicy }),
+      model, validateMandate: value => validateTicketMandate(value, { policy: finalPolicy }),
       authorizeExpansion: request => approval && approvedBinding === digest([request.ticket.id, request.ticket.instructionRevision, request.mandate, request.difference]) ? approval : null });
   }
   return {

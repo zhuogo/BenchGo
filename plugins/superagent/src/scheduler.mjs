@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createAssistantRuntimeStore } from './runtime-store.mjs';
 import { ticketGoalRecord, assertGoalTicketBinding } from './goal-ticket-record.mjs';
+import { rejectModelOverride } from './work-role-policy.mjs';
 
 const TERMINAL_GOAL = new Set(['completed', 'failed', 'cancelled']);
 
@@ -10,7 +11,7 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : value &
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const creation = input => ({ objective: input.objective, title: input.title || String(input.objective).slice(0, 120),
   acceptance: input.acceptance || null, scope: input.scope || null, budget: input.budget || null,
-  projectId: input.projectId ?? null, provider: input.provider ?? null, model: input.model ?? null, text: input.text ?? null,
+  projectId: input.projectId ?? null, text: input.text ?? null,
   threadId: input.threadId || 'main', ownerSessionId: input.ownerSessionId ?? null,
   children: (input.children || []).map(child => ({ ...creation({ ...child, threadId: child.threadId || input.threadId, ownerSessionId: input.ownerSessionId }), requestId: child.requestId ?? null })) });
 const fingerprint = input => createHash('sha256').update(JSON.stringify(canonical(creation(input)))).digest('hex');
@@ -32,9 +33,10 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
     && (task.instructionRevision === undefined || task.result.instructionRevision === task.instructionRevision);
   function validateGoal(input, seen = new Set()) {
     if (!input || typeof input !== 'object' || seen.has(input) || seen.size >= 100) throw new Error('目标树无效或超过100项');
+    rejectModelOverride(input);
     seen.add(input);
     const children = Array.isArray(input?.children) ? input.children : [];
-    if (!input?.objective || (!children.length && (!input.projectId || !input.provider || !input.text))) throw new Error('目标缺少 objective、projectId、provider 或 text');
+    if (!input?.objective || (!children.length && (!input.projectId || !input.text))) throw new Error('目标缺少 objective、projectId 或 text');
     for (const child of children) validateGoal(child, seen);
   }
   function validateRequests(input, requestId, seen = new Set()) {
@@ -45,7 +47,7 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
   async function createGoal(input = {}, ticketBinding) {
     validateGoal(input);
     const children = Array.isArray(input.children) ? input.children : [];
-    if (!input.objective || (!children.length && (!input.projectId || !input.provider || !input.text))) throw new Error('目标缺少 objective、projectId、provider 或 text');
+    if (!input.objective || (!children.length && (!input.projectId || !input.text))) throw new Error('目标缺少 objective、projectId 或 text');
     const requestId = input.requestId || randomUUID();
     validateRequests(input, requestId);
     if (!ticketBinding) throw new Error('新目标必须关联已授权工单');
@@ -73,7 +75,7 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
         if (existing.requestFingerprint !== requestFingerprint || existing.parentGoalId !== (input.parentGoalId || null)) throw Object.assign(new Error('目标请求标识已使用或旧请求内容无法核实，请读取原目标'), { code: 'IDEMPOTENCY_CONFLICT' });
         if (existing.nextStep !== 'building_children') return existing;
       }
-      const goal = existing || db.insertGoal({ id: randomUUID(), budgetGoalId: ticketBinding.budgetGoalId || null, requestId, requestFingerprint, inputFingerprint: fingerprint(input), executionKind: 'ticket', ticketIds: ticketBinding.ticketId ? [ticketBinding.ticketId] : [], ticketRevisions: ticketBinding.ticketId ? { [ticketBinding.ticketId]: store.orchestration.getTicket(ticketBinding.ticketId).instructionRevision } : {}, ownerSessionId: input.ownerSessionId || null, status: 'active', title: input.title || String(input.objective).slice(0, 120), objective: input.objective, acceptance: input.acceptance || null, scope: input.scope || null, budget: input.budget || null, projectId: input.projectId, provider: input.provider, model: input.model, text: input.text, threadId: input.threadId || 'main', parentGoalId: input.parentGoalId || null, childGoalIds: [], nextStep: children.length ? 'building_children' : 'verify', createdAt: iso(Date.now()), updatedAt: iso(Date.now()) });
+      const goal = existing || db.insertGoal({ id: randomUUID(), budgetGoalId: ticketBinding.budgetGoalId || null, requestId, requestFingerprint, inputFingerprint: fingerprint(input), executionKind: 'ticket', ticketIds: ticketBinding.ticketId ? [ticketBinding.ticketId] : [], ticketRevisions: ticketBinding.ticketId ? { [ticketBinding.ticketId]: store.orchestration.getTicket(ticketBinding.ticketId).instructionRevision } : {}, ownerSessionId: input.ownerSessionId || null, status: 'active', title: input.title || String(input.objective).slice(0, 120), objective: input.objective, acceptance: input.acceptance || null, scope: input.scope || null, budget: input.budget || null, projectId: input.projectId, workerModel: ticketBinding.ticketId ? store.orchestration.assignments(ticketBinding.ticketId).findLast(row => row.instructionRevision === store.orchestration.getTicket(ticketBinding.ticketId).instructionRevision)?.model : undefined, text: input.text, threadId: input.threadId || 'main', parentGoalId: input.parentGoalId || null, childGoalIds: [], nextStep: children.length ? 'building_children' : 'verify', createdAt: iso(Date.now()), updatedAt: iso(Date.now()) });
 
       if (children.length) {
         if (existing) db.updateGoal(goal.id, { status: 'active', error: null, waitReason: null });
@@ -209,11 +211,13 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
     },
 
     matchGoalRequest(input) {
+      validateGoal(input);
       const goal = db.goalByRequest(input.requestId);
       if (goal && (goal.inputFingerprint !== fingerprint(input) || goal.parentGoalId !== (input.parentGoalId || null))) throw Object.assign(new Error('目标请求标识已用于不同内容或历史请求无法核实'), { code: 'IDEMPOTENCY_CONFLICT' });
       return goal;
     },
     reserveGoalRequest(input) {
+      validateGoal(input);
       const key = `goal-ticket-intent:${createHash('sha256').update(input.requestId).digest('hex')}`;
       const value = fingerprint(input), prior = db.meta(key);
       if (prior && prior.fingerprint !== value) throw Object.assign(new Error('目标请求已冻结，不能改变部分派发中的目标'), { code: 'IDEMPOTENCY_CONFLICT' });

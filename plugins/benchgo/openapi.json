@@ -1000,6 +1000,45 @@
                 "type": "object",
                 "description": "Trusted same-origin authenticated owner peer only.",
                 "additionalProperties": true
+              },
+              "executionSessions": {
+                "type": "object",
+                "description": "Trusted same-origin authenticated owner peer only.",
+                "additionalProperties": true,
+                "properties": {
+                  "sessions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "sessionId",
+                        "ticketId",
+                        "title",
+                        "available"
+                      ],
+                      "properties": {
+                        "sessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "ticketId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "available": {
+                          "const": true
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "required": [
+                  "sessions"
+                ]
               }
             }
           },
@@ -2026,7 +2065,8 @@
               "outboxReconcile",
               "actionPermissions",
               "actionPermissionCreate",
-              "actionPermissionRevoke"
+              "actionPermissionRevoke",
+              "executionSessions"
             ]
           },
           "threadId": {
@@ -2669,6 +2709,25 @@
               "required": [
                 "id",
                 "requestId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "goalCreate"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "goal": {
+                  "$ref": "#/components/schemas/AssistantGoalInput"
+                }
+              },
+              "required": [
+                "goal"
               ]
             }
           }
@@ -4465,18 +4524,6 @@
           "projectId": {
             "type": "string"
           },
-          "provider": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "\\S",
-            "maxLength": 100000
-          },
-          "model": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "\\S",
-            "maxLength": 100000
-          },
           "title": {
             "type": "string"
           },
@@ -4505,15 +4552,36 @@
           }
         },
         "additionalProperties": true,
-        "dependentRequired": {
-          "provider": [
-            "model"
-          ],
-          "model": [
-            "provider"
+        "description": "assistant_delegate 工具输入；执行仅使用系统工作角色模型队列，创建会话时冻结，不接受单工单 provider/model 覆盖。duplicateOfTicketId 只关联同来源当前在办工单，不扩大授权、不重复派工。",
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "provider"
+              ]
+            },
+            {
+              "required": [
+                "model"
+              ]
+            },
+            {
+              "required": [
+                "providerId"
+              ]
+            },
+            {
+              "required": [
+                "modelId"
+              ]
+            },
+            {
+              "required": [
+                "workerModel"
+              ]
+            }
           ]
-        },
-        "description": "assistant_delegate 工具输入，不是新增 HTTP action。省略 provider/model 走 Worker；显式填写须成对。duplicateOfTicketId 只关联同来源当前在办工单，text/acceptance 必须保留原要求；宿主复核来源、项目、授权与预算，记录 attach 且不重复派工。已完成工单调整使用 assistant_ticket_change。"
+        }
       },
       "AssistantTicketChangeInput": {
         "type": "object",
@@ -4530,16 +4598,6 @@
               "revise",
               "adjustment"
             ]
-          },
-          "provider": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "\\S"
-          },
-          "model": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "\\S"
           },
           "id": {
             "type": "string",
@@ -4578,16 +4636,86 @@
             "type": "string"
           }
         },
-        "dependentRequired": {
-          "provider": [
-            "model"
-          ],
-          "model": [
-            "provider"
+        "additionalProperties": true,
+        "description": "进行中仅允许 revise，原执行会话在下一工具边界整份应用；终态使用 adjustment 创建关联新单，原结果保持不变。模型仅由系统工作角色配置决定，不接受单工单覆盖。",
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "provider"
+              ]
+            },
+            {
+              "required": [
+                "model"
+              ]
+            },
+            {
+              "required": [
+                "providerId"
+              ]
+            },
+            {
+              "required": [
+                "modelId"
+              ]
+            },
+            {
+              "required": [
+                "workerModel"
+              ]
+            }
+          ]
+        }
+      },
+      "AssistantGoalInput": {
+        "type": "object",
+        "required": [
+          "objective"
+        ],
+        "properties": {
+          "objective": {
+            "type": "string",
+            "minLength": 1
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantGoalInput"
+            }
+          }
+        },
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "provider"
+              ]
+            },
+            {
+              "required": [
+                "model"
+              ]
+            },
+            {
+              "required": [
+                "providerId"
+              ]
+            },
+            {
+              "required": [
+                "modelId"
+              ]
+            },
+            {
+              "required": [
+                "workerModel"
+              ]
+            }
           ]
         },
         "additionalProperties": true,
-        "description": "进行中仅允许revise；终态adjustment创建关联新单，原结果保持不变。"
+        "description": "持续目标及递归子目标只使用系统工作角色模型；不接受节点级 provider/model 覆盖。"
       }
     }
   }

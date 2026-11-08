@@ -17,6 +17,7 @@ import { cleanMemoryContext } from './memory.mjs';
 import { activeChatReply, installChatPublication, projectChatMessages } from './chat-publication.mjs';
 import { modelFallbackType, modelFallbackSource, modelRouteType, readModelFallbacks, fallbackCallSignature, requestExecutionEvents, dispatchedCallSignatures, isRouterQuery } from './model-fallback.mjs';
 import { executionEffects, isReadOnlyWorkerTool } from './execution-effects.mjs';
+import { findExecutionSessionOwner } from './execution-session.mjs';
 import { isChatUserMessage } from './question-reply.mjs';
 import { installRouterQuestions } from './router-questions.mjs';
 
@@ -463,7 +464,23 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       const operation = (nativeSubmissions.get(request.sessionId) || Promise.resolve()).catch(() => {}).then(async () => {
       const state = await store.getState();
       const owned = state.mainSessionId === request.sessionId || state.threads.some(item => item.sessionId === request.sessionId);
-      if (!owned) return dispatch();
+      if (!owned) {
+        const execution = store.orchestration && findExecutionSessionOwner(store.orchestration, request.sessionId);
+        if (!execution) return dispatch();
+        const { ticket, assignment, run } = execution;
+        const agent = ctx.agents.get(request.sessionId);
+        const gate = agent?.ctx?.get?.('benchgoWorkerInputGate');
+        if (!agent || !gate || gate.ticketId !== ticket.id || gate.assignmentId !== assignment.id || gate.runId !== run.id
+          || gate.sessionId !== request.sessionId || gate.owner !== assignment.owner || gate.fence !== assignment.fence
+          || assignment.state !== 'claimed' || assignment.leaseUntil <= now() || run.fence !== assignment.fence
+          || ['completed', 'failed', 'cancelled', 'paused', 'pausing', 'cancelling'].includes(ticket.status)) {
+          throw new RemoteError('session/agent-busy', 'Execution session is not accepting input; continue from its Ticket', { reason: 'TICKET_INPUT_GATE_UNAVAILABLE' });
+        }
+        signal?.throwIfAborted();
+        // Official admission owns attachments, exact message identity and receipt.
+        // The installed Worker pre-step gate owns durable input routing.
+        return dispatch();
+      }
       signal?.throwIfAborted();
       const threadId = state.mainSessionId === request.sessionId ? 'main' : state.threads.find(item => item.sessionId === request.sessionId).id;
       const agent = await ensureSession({ threadId });

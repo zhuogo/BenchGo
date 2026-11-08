@@ -143,6 +143,34 @@ test('the official pre-step inbox hook applies one snapshot for a model tool bat
   assert.deepEqual(await hooks['agent/pre-step']({}, enter), { kind: 'reject' });
 });
 
+test('native execution input is durably received once, filtered and projected through the same inbox', async t => {
+  const f = await fixture(t), [assignment] = f.db.claimAssignments('worker', { validateMandate: () => true });
+  const run = f.db.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence, sessionId: 'worker-session', directory: f.directory });
+  f.db.updateRun(run.id, { owner: assignment.owner, fence: assignment.fence, state: 'submitted' });
+  const hooks = {}, events = [], agent = { id: run.sessionId, session: { snapshotEvents: () => events } };
+  installSubscriptionInbox({ on: (name, handler) => { hooks[name] = handler; } }, agent, { database: f.db, assignment, run });
+  const raw = { id: 'native-user-input', source: { kind: 'user' }, content: [{ type: 'text', text: '补充原文链接' }] };
+  const invoke = () => hooks['agent/pre-step']({ messages: [raw] }, async () => ({ kind: 'enter', messages: [raw] }));
+  const next = await invoke();
+  assert.equal(next.messages.length, 1);
+  assert.equal(next.messages[0].source.kind, 'benchgo-subscription');
+  assert.equal(f.db.ticketInputs(f.ticket.id).length, 1);
+  const input = f.db.ticketInputs(f.ticket.id)[0];
+  assert.equal(input.source.executionSessionId, run.sessionId);
+  assert.equal(input.source.executionMessageId, raw.id);
+  assert.equal(input.state, 'pending');
+  await invoke(); assert.equal(f.db.ticketInputs(f.ticket.id).length, 1);
+  events.push({ type: 'user/message', data: next.messages[0] });
+  hooks['agent/assistant-stream']({ frame: { type: 'start' } });
+  const applied = f.db.ticketInputs(f.ticket.id)[0];
+  assert.equal(applied.state, 'applied'); assert.equal(applied.application.runId, run.id);
+  f.db.pauseTicket(f.ticket.id);
+  const pausedRaw = { ...raw, id: 'paused-input' };
+  assert.deepEqual(await hooks['agent/pre-step']({ messages: [pausedRaw] }, async () => ({ kind: 'reject' })), { kind: 'reject' });
+  assert.equal(f.db.ticketInputs(f.ticket.id).length, 2);
+  assert.equal(f.db.ticketInputs(f.ticket.id)[1].state, 'pending');
+});
+
 test('a leaf Assignment retains its original execution scope when Ticket requirements change', async t => {
   const f = await fixture(t), leaf = f.db.createAssignment(f.ticket.id, { text: 'only this leaf' });
   const [assignment] = f.db.claimAssignments('leaf-worker', { assignmentId: leaf.id, validateMandate: () => true });
@@ -287,7 +315,7 @@ test('live summary follows current goal, actual assignment progress and blocker 
   assert.doesNotMatch(summary.progress, /stale old result/);
 });
 
-test('host revision uses exact model and current root instruction without an extra approval dialog', async t => {
+test('host revision preserves its run model and rejects per-Ticket model fields without another approval', async t => {
   const f = await fixture(t);
   const events = [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'new-owner-message', source: { kind: 'user' }, content: [{ type: 'text', text: '请修改验收条件' }] } }];
   const ownerAgent = { id: 'owner', status: 'running', session: { header: {}, snapshotEvents: () => events } };
@@ -295,6 +323,9 @@ test('host revision uses exact model and current root instruction without an ext
   const ctx = { agents: { get: () => ownerAgent, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) }, sessionProjections: { stateOf: () => ({ openTurnStartSeq: 0 }) }, llm: { resolveModelInfo: async (provider, id) => ({ provider, id }) }, get: () => ({ request: async () => true }) };
   const service = createTicketRevisionService({ ctx, database: f.db, readPolicy: async () => policy });
   const input = { id: f.ticket.id, operation: 'revise', expectedInstructionRevision: 1, requestId: 'host', reason: '验收要求更新', acceptance: 'new checks' };
+  for (const field of ['provider', 'model', 'providerId', 'modelId', 'workerModel']) {
+    await assert.rejects(service.change({ ...input, [field]: 'override' }, { agent: ownerAgent }, { ownerAgent }), { code: 'MODEL_OVERRIDE_UNSUPPORTED' });
+  }
   await assert.rejects(service.change(input, { agent: { id: 'other' } }, { ownerAgent }), /当前主人会话/);
   let approvals = 0;
   ctx.get = () => ({ request: async () => { approvals++; return false; } });

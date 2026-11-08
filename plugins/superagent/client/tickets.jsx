@@ -53,7 +53,7 @@ export function TicketChange({ api, ticket, reload, onDirtyChange, startOpen = f
   </section>;
 }
 
-export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, requestedTicket }) {
+export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenExecution, requestedTicket }) {
   const [listDirty, setListDirty] = useState(false);
   const dirtyEditor = useDirtyRegistry((dirty, keys) => { setListDirty(keys.some(key => key.startsWith('rename:'))); onDirtyChange?.(dirty, keys); });
   const [rows, setRows] = useState(null), [error, setError] = useState(''), [busy, setBusy] = useState(null), [generation, setGeneration] = useState(0);
@@ -116,6 +116,11 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, requeste
       {detailOnly && <TaskDetail open title={title} dirty={detailDirty} onClose={() => { setSelectedId(null); setChangeId(null); }}><header><span className="ba-goal-status">{stateLabel}</span></header>
         <section className="ba-task-instructions"><h3>任务要求</h3><p>{row.target}</p>{row.acceptance && <><h3>验收条件</h3><p>{row.acceptance}</p></>}</section>
         <TaskExecution execution={activity.execution} ticketStatus={status} stale={!!error} />
+        {row.executionSession?.available ? <Button variant="ghost" disabled={!onOpenExecution || busy !== null} onClick={async () => {
+          setBusy(`execution:${row.id}`); setError('');
+          try { await onOpenExecution(row.executionSession); } catch (cause) { setError(`执行会话暂时无法打开：${cause.message || cause}`); }
+          finally { setBusy(null); }
+        }}>{busy === `execution:${row.id}` ? '正在打开执行会话…' : '查看执行会话'}</Button> : <p className="ba-note">执行会话尚未就绪，开始执行后可在这里查看。</p>}
         {error && <p role="alert">{error}</p>}
         <TicketWaiting key={`${row.id}:${row.instructionRevision}:${row.resultVersion}`} api={api} ticket={row} onRefresh={() => setGeneration(value => value + 1)} onOpenResources={() => setChangeId(row.id)} showQuestion={false} />
         <p className="ba-note">{row.mandate?.source?.channel === 'feishu' ? '飞书' : '桌面'} · {delivery ? deliveryStates[delivery.state] || delivery.state : '尚无交付结果'}</p>
