@@ -34,13 +34,25 @@ async function fixture(t, script, { install, models = [primary, backup], persist
   const requests = [], selections = [], logs = new Map();
   class Adapter extends LlmAdapter {
     async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: 131072 }, reasoning: { efforts: [{ id: 'high', name: 'High' }] } }; }
-    async *stream(request) { requests.push(request); yield* await script(request, requests.length); }
+    async *stream(request) {
+      requests.push(request);
+      const events = await script(request, requests.length);
+      // The scripted Worker signs its own self-check before final completion.
+      // Injecting it from readSession is too late and forces a repair turn.
+      if (events.some(event => event.type === 'finish' && event.reason?.kind === 'stop')) {
+        const agent = ctx.agents.get(request.sessionId);
+        const batch = await agent.ctx.tools.execute({ agent, signal: new AbortController().signal,
+          calls: [{ type: 'tool-call', id: `fixture-self-check:${requests.length}`, name: 'assistant_task_result',
+            arguments: JSON.stringify({ selfCheck: { summary: 'Verified fixture transcript', checks: ['Scripted output matches the saved evidence'] }, outcome: 'completed' }) }] });
+        assert.equal(batch.results[0].result.isError, false, JSON.stringify(batch.results));
+      }
+      yield* events;
+    }
   }
   ctx.llm.registerAdapter(['test'], new Adapter());
   ctx.provide('sessionQuery', { readSession: async id => {
     const agent = ctx.agents.get(id);
     if (agent) {
-      await agent.ctx.tools.execute({ agent, signal: new AbortController().signal, calls: [{ type: 'tool-call', id: 'fixture-self-check', name: 'assistant_task_result', arguments: JSON.stringify({ selfCheck: { summary: 'Verified fixture transcript' } }) }] });
       const log = { events: agent.session.snapshotEvents() }; logs.set(id, log); return log;
     }
     if (!persistent) return logs.get(id);
@@ -106,6 +118,7 @@ test('Worker fallback clears effort, rebuilds model tools and prompt, and never 
   assert.equal(f.requests[2].reasoningEffort, undefined);
   assert.equal(f.requests[2].maxTokens, undefined);
   assert.equal(effects, 1);
+  assert.ok(f.requests.every(request => request.sessionId === result.sessionId), 'all requests belong to the same Worker, never a Router expression');
   assert.equal(result.executionEffects.effectsVerified, true);
   assert.ok(!f.requests[0].tools.some(tool => tool.name === 'backup_only'));
   assert.ok(f.requests[2].tools.some(tool => tool.name === 'backup_only'));
@@ -127,6 +140,7 @@ test('Worker preparation failure re-admits the original unlogged identity once a
   };
   const result = await f.executor(f.assignment, f.context);
   assert.deepEqual(f.requests.map(request => request.model), [backup.modelId]);
+  assert.equal(f.requests[0].sessionId, result.sessionId);
   const events = f.logs.get(result.sessionId).events;
   const users = events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-instruction');
   assert.equal(users.length, 1);

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { readModelFallbacks } from './model-fallback.mjs';
 import { readQuestionReply, readBoundQuestionReply } from './question-reply.mjs';
-import { ticketStateSource, ticketStateInstruction } from './ticket-state-report.mjs';
+import { ticketReplySource, ticketReplyInstruction } from './ticket-reply.mjs';
 
 const active = new Set(['queued', 'processing', 'prepared']);
 const fingerprint = (threadId, text, context) => createHash('sha256').update(JSON.stringify(context === undefined ? [threadId, text] : [threadId, text, context])).digest('hex');
@@ -74,7 +74,7 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
         if (isStopped() || agent?.status === 'running') return;
         await reconcile(threadId, agent);
         const queued = ((await getState()).requests || []).filter(item => item.threadId === threadId && item.status === 'queued');
-        const row = queued.find(item => !item.ticketState) || queued[0];
+        const row = queued.find(item => !item.ticketState && !item.ticketReply) || queued[0];
         if (!row || isStopped()) return;
         agent ||= await ensureSession({ threadId });
         if (isStopped() || agent.status === 'running') return;
@@ -114,24 +114,29 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
     return operation;
   }
   return {
-    async enqueueTicketState({ threadId, signal }) {
-      const requestId = `ticket-state:${signal.eventKey}`, digest = fingerprint(threadId, [signal.eventKey, signal.ticketId]);
+    async enqueueTicketReply({ threadId, signal, retry = false }) {
+      const requestId = `ticket-reply:${signal.eventKey}`, digest = fingerprint(threadId, signal);
       await updateState(state => {
         const previous = (state.requests || []).find(row => row.requestId === requestId);
         if (previous) {
-          if (previous.threadId !== threadId || previous.ticketState?.ticketId !== signal.ticketId) throw new Error('工单状态通知标识冲突');
-          // The durable event is the identity. Titles and waiting/open display
-          // facts may change while ordinary user messages take queue priority.
+          const identity = value => JSON.stringify({ ...value, title: undefined, status: undefined });
+          if (previous.threadId !== threadId || identity(previous.ticketReply) !== identity(signal)) throw new Error('工单回复标识冲突');
+          if (retry && ['failed', 'processed'].includes(previous.status) && !previous.suppressed) {
+            const message = createUserMessage({ source: { kind: ticketReplySource, replyKind: signal.kind,
+              eventKey: signal.eventKey, ticketId: signal.ticketId }, content: [{ type: 'text', text: ticketReplyInstruction(signal) }] });
+            return { requests: state.requests.map(row => row.requestId === requestId ? { ...row, messageId: message.id, message,
+              sessionId: null, ticketReply: signal, fingerprint: digest, status: 'queued', error: undefined,
+              attempt: (row.attempt || 1) + 1, retryAt: undefined, updatedAt: new Date(now()).toISOString() } : row) };
+          }
           if (previous.status !== 'queued') return {};
-          return { requests: state.requests.map(row => row.requestId === requestId ? { ...row, fingerprint: digest, ticketState: signal,
-            message: { ...row.message, content: [{ type: 'text', text: `${ticketStateInstruction}\n${JSON.stringify(signal)}` }] } } : row) };
+          return { requests: state.requests.map(row => row.requestId === requestId ? { ...row, fingerprint: digest, ticketReply: signal,
+            message: { ...row.message, content: [{ type: 'text', text: ticketReplyInstruction(signal) }] } } : row) };
         }
-        const message = createUserMessage({ source: { kind: ticketStateSource, eventKey: signal.eventKey, ticketId: signal.ticketId },
-          content: [{ type: 'text', text: `${ticketStateInstruction}\n${JSON.stringify(signal)}` }] });
+        const message = createUserMessage({ source: { kind: ticketReplySource, replyKind: signal.kind, eventKey: signal.eventKey, ticketId: signal.ticketId },
+          content: [{ type: 'text', text: ticketReplyInstruction(signal) }] });
         return { requests: [...(state.requests || []), { requestId, threadId, messageId: message.id, message,
-          ticketState: signal, fingerprint: digest, status: 'queued', createdAt: new Date(now()).toISOString() }] };
+          ticketReply: signal, fingerprint: digest, attempt: 1, status: 'queued', createdAt: new Date(now()).toISOString() }] };
       });
-      // Persistence is immediate; model execution must not block the outbox cycle.
       void drain(threadId);
       return structuredClone((await getState()).requests.find(row => row.requestId === requestId));
     },
@@ -189,7 +194,7 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
     },
     async hasPending(threadId) { return ((await getState()).requests || []).some(row => row.threadId === threadId && active.has(row.status)); },
     async state(threadId) {
-      return ((await getState()).requests || []).filter(row => row.threadId === threadId && !row.ticketState).map(row => ({ ...receipt(row), createdAt: row.createdAt, updatedAt: row.updatedAt,
+      return ((await getState()).requests || []).filter(row => row.threadId === threadId && !row.ticketState && !row.ticketReply).map(row => ({ ...receipt(row), createdAt: row.createdAt, updatedAt: row.updatedAt,
         ...(row.questionReply ? { questionReply: row.questionReply, text: row.questionReply.text }
           : row.message ? { text: row.message.content?.filter(block => block.type === 'text').map(block => block.text).join('') ?? '' } : {}) }));
     },

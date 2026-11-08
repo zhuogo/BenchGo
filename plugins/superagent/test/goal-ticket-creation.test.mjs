@@ -16,6 +16,8 @@ function commitAndDeliver(database, ticket) {
   } });
   const delivery = database.claimOutbox('goal-test').find(row => row.id === saved.outbox.id);
   assert.ok(delivery);
+  database.saveOutboxReply(delivery.id, { owner: 'goal-test',
+    publication: { action: 'deliver', origin: 'router', text: '这部分工作已经完成。' } });
   database.finishOutbox(delivery.id, { owner: 'goal-test', sent: true, receipt: { status: 'accepted', messageId: `sent:${ticket.id}` } });
 }
 
@@ -106,7 +108,15 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
     outcome: 'completed', summary: '原文结果', selfCheck: { summary: '已检查当前要求和执行结果' }, evidenceRefs: [],
   } });
   assert.equal((await scheduler.advanceGoal(parent.id)).status, 'waiting', 'result persistence alone cannot complete a Goal');
-  for (const delivery of database.claimOutbox('goal-test')) database.finishOutbox(delivery.id, { owner: 'goal-test', sent: true,
+  const deliveries = database.claimOutbox('goal-test');
+  for (const delivery of deliveries) {
+    assert.equal(delivery.payload.text, undefined);
+    assert.equal(delivery.payload.publication, undefined);
+    database.saveOutboxReply(delivery.id, { owner: 'goal-test',
+      publication: { action: 'deliver', origin: 'router', text: '这部分工作已经完成。' } });
+  }
+  assert.equal((await scheduler.advanceGoal(parent.id)).status, 'waiting', 'a persisted Router draft still needs its source receipt');
+  for (const delivery of deliveries) database.finishOutbox(delivery.id, { owner: 'goal-test', sent: true,
     receipt: { status: 'accepted', messageId: `sent:${delivery.ticketId}` } });
   assert.equal((await scheduler.advanceGoal(parent.id)).status, 'completed');
   assert.equal(database.listTickets().length, 2);

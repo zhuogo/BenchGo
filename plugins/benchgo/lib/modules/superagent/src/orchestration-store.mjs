@@ -907,8 +907,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         db.prepare("UPDATE sa_tickets SET status=?,result_version=?,continuation_wait=NULL,updated_at=? WHERE id=?")
           .run(['pausing', 'paused'].includes(ticket.status) ? 'paused' : 'waiting', version, at, ticketId);
         const payload = outboxPayload ?? { type: 'ticket.result', ticketId, source: ticket.mandate.source, instructionRevision: resultRevision, resultVersion: version,
-          outcome: result.outcome || (status === 'failed' ? 'failed' : 'completed'), text: result.finalSummary ?? result.summary,
-          publication: result.delivery || { action: 'deliver', origin: 'worker', text: result.finalSummary ?? result.summary } };
+          outcome: result.outcome || (status === 'failed' ? 'failed' : 'completed'), replyState: 'pending' };
         const outboxId = uuid();
         db.prepare("INSERT INTO sa_outbox(id,unique_key,ticket_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
           .run(outboxId, uniqueKey, ticketId, json(payload), now, at, at);
@@ -920,9 +919,38 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       id(owner, 'outbox owner');
       return tx(() => {
         db.prepare("UPDATE sa_outbox SET state='uncertain',owner=NULL,lease_until=NULL,updated_at=? WHERE state='claimed' AND lease_until<=?").run(timestamp(now), now);
-        const rows = db.prepare("SELECT * FROM sa_outbox WHERE state='queued' AND next_at<=? AND (ticket_id NOT IN (SELECT id FROM sa_tickets WHERE status IN ('pausing','paused')) OR (json_extract(payload,'$.publication.origin')='system' AND json_extract(payload,'$.publication.systemState.stage')='execution')) ORDER BY created_at,id LIMIT ?").all(now, safeLimit(limit, 20, 200));
-        for (const row of rows) db.prepare("UPDATE sa_outbox SET state='claimed',owner=?,lease_until=?,attempts=attempts+1,updated_at=? WHERE id=?").run(owner, now + leaseMs, timestamp(now), row.id);
+        const rows = db.prepare("SELECT * FROM sa_outbox WHERE state='queued' AND next_at<=? AND (ticket_id NOT IN (SELECT id FROM sa_tickets WHERE status IN ('pausing','paused')) OR (json_extract(payload,'$.publication.origin')='system' AND json_extract(payload,'$.publication.systemState.stage')='execution') OR json_extract(payload,'$.stateSignal.stage')='execution') ORDER BY created_at,id LIMIT ?").all(now, safeLimit(limit, 20, 200));
+        for (const row of rows) {
+          const payload = parse(row.payload);
+          // Old, unsent Worker drafts become completion signals in the same
+          // ledger entry. Sent/uncertain history is never replayed or rewritten.
+          if (payload.type === 'ticket.result' && payload.replyState !== 'suppressed' && !['router', 'system'].includes(payload.publication?.origin)) {
+            delete payload.publication; delete payload.text; payload.replyState = 'pending';
+            db.prepare('UPDATE sa_outbox SET payload=? WHERE id=?').run(json(payload), row.id);
+          }
+          db.prepare("UPDATE sa_outbox SET state='claimed',owner=?,lease_until=?,attempts=attempts+1,updated_at=? WHERE id=?").run(owner, now + leaseMs, timestamp(now), row.id);
+        }
         return rows.map(row => parseOutbox(db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(row.id)));
+      });
+    },
+    saveOutboxReply(outboxId, { owner, publication, messageId, now = Date.now() } = {}) {
+      if (!record(publication) || publication.origin !== 'router' || publication.action !== 'deliver'
+        || typeof publication.text !== 'string' || !publication.text.trim() || publication.systemState !== undefined) throw new Error('Router reply requires natural text');
+      return tx(() => {
+        const row = db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(id(outboxId, 'outboxId'));
+        if (!row || row.state !== 'claimed' || row.owner !== owner || row.lease_until <= now) throw fail('OUTBOX_LEASE_CONFLICT', 'Outbox lease is no longer owned');
+        const payload = parse(row.payload);
+        if (payload.type !== 'ticket.result') throw new Error('Router reply requires a Ticket delivery');
+        if (payload.publication?.origin === 'router') {
+          if (payload.publication.text !== publication.text) throw fail('OUTBOX_CONFLICT', 'Saved Router reply is immutable');
+          return parseOutbox(row);
+        }
+        const stateSignal = payload.publication?.origin === 'system' ? payload.publication.systemState : payload.stateSignal;
+        const saved = { ...payload, ...(stateSignal ? { stateSignal } : {}), replyState: 'ready',
+          publication: { action: 'deliver', origin: 'router', text: publication.text }, text: publication.text,
+          ...(typeof messageId === 'string' && messageId ? { routerMessageId: messageId } : {}) };
+        db.prepare('UPDATE sa_outbox SET payload=?,updated_at=? WHERE id=?').run(json(saved), timestamp(now), outboxId);
+        return parseOutbox(db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(outboxId));
       });
     },
     finishOutbox(outboxId, { owner, sent = false, uncertain = false, receipt, error = null, retryMs = 5000, now = Date.now() } = {}) {
@@ -974,7 +1002,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   function closeDeliveredTicket(row, receipt, now) {
     const payload = parse(row.payload), ticket = api.getTicket(row.ticket_id);
     if (receipt?.status !== 'accepted' || typeof receipt.messageId !== 'string' || !receipt.messageId.trim()
-      || payload.type !== 'ticket.result' || payload.publication?.origin !== 'worker'
+      || payload.type !== 'ticket.result' || payload.publication?.origin !== 'router'
       || !['completed', 'failed'].includes(payload.outcome) || !ticket || ticket.status !== 'waiting'
       || payload.resultVersion !== ticket.resultVersion || payload.instructionRevision !== ticket.instructionRevision
       || json(payload.source) !== json(ticket.mandate.source)) return;

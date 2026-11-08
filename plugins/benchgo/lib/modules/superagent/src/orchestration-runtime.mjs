@@ -12,12 +12,12 @@ import { commitWorkerResult } from './result-commit.mjs';
 import { knownNotSent } from './channels/delivery-outcome.mjs';
 import { createTaskExecutionProgress } from './task-execution-progress.mjs';
 import { archiveClosedExecutionSessions, executionSessionProjection } from './execution-session.mjs';
-import { isTicketStateNotice } from './ticket-state-report.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
-export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, reportTicketState, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
+export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, prepareTicketReply, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
   const database = store.orchestration, owner = `delivery:${randomUUID()}`, shutdown = new AbortController();
   const archived = new Set(), archiveRetry = new Map();
+  const finishDelivery = (id, options) => database.finishOutbox(id, { now: now(), ...options });
   const mirrored = new Set(), mirrorRetry = new Map();
   async function mirrorDelivered(row) {
     if (!onDelivered || row?.state !== 'sent' || row.receipt?.status !== 'accepted' || !row.receipt.messageId) return;
@@ -137,52 +137,68 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     }).finally(() => { recovery = undefined; });
     // Do not await long executions here: source delivery must keep progressing.
     void worker.tick();
-    const pending = database.claimOutbox(owner, { limit: 1, leaseMs: 60000 });
-    for (const delivery of pending) {
+    const pending = database.claimOutbox(owner, { limit: 1, leaseMs: 60000, now: now() });
+    for (let delivery of pending) {
       if (shutdown.signal.aborted) break;
-      const payload = delivery.payload;
+      let payload = delivery.payload;
       const deliveryTicket = database.getTicket(delivery.ticketId);
       const suppressed = deliverySuppression(database, delivery)
         || (deliveryTicket && !validateTicketMandate(deliveryTicket.mandate, { policy }) ? 'authorization-changed' : null);
       if (suppressed) {
-        database.finishOutbox(delivery.id, { owner, sent: true, receipt: { status: 'suppressed', reason: suppressed } });
+        finishDelivery(delivery.id, { owner, sent: true, receipt: { status: 'suppressed', reason: suppressed } });
         continue;
       }
       if (payload.type === 'ticket.result') {
-        try { payload.publication = validateDelivery(payload.publication); payload.text = payload.publication.text; }
-        catch { database.finishOutbox(delivery.id, { owner, sent: true, receipt: { status: 'suppressed', reason: 'invalid-publication' } }); continue; }
+        if (payload.publication?.origin !== 'router') {
+          try {
+            const reply = await prepareTicketReply?.(delivery);
+            if (reply?.status === 'suppressed') {
+              finishDelivery(delivery.id, { owner, sent: true, receipt: { status: 'suppressed', reason: reply.reason || 'reply-superseded' } });
+              continue;
+            }
+            if (reply?.status !== 'ready' || typeof reply.text !== 'string' || !reply.text.trim()) {
+              finishDelivery(delivery.id, { owner, error: 'Router 自然回复待生成', retryMs: 30000 });
+              continue;
+            }
+            delivery = database.saveOutboxReply(delivery.id, { owner,
+              publication: { action: 'deliver', origin: 'router', text: reply.text }, messageId: reply.messageId, now: now() });
+            payload = delivery.payload;
+          } catch {
+            finishDelivery(delivery.id, { owner, error: 'Router 自然回复待重试', retryMs: 30000 });
+            continue;
+          }
+        }
+        try {
+          const publication = validateDelivery(payload.publication);
+          if (publication.origin !== 'router') throw new Error('Router reply required');
+          payload.text = publication.text;
+        } catch { finishDelivery(delivery.id, { owner, error: 'Router 回复格式无效', retryMs: 30000 }); continue; }
+        // Model generation may span a source/configuration change. Recheck at
+        // the actual send boundary; a saved reply never grants authorization.
+        const currentPolicy = await readPolicy(), currentTicket = database.getTicket(delivery.ticketId);
+        const changed = deliverySuppression(database, delivery)
+          || (!currentTicket || !validateTicketMandate(currentTicket.mandate, { policy: currentPolicy }) ? 'authorization-changed' : null);
+        if (changed) {
+          finishDelivery(delivery.id, { owner, sent: true, receipt: { status: 'suppressed', reason: changed } });
+          continue;
+        }
       }
       if (payload.source?.channel === 'desktop' && deliverDesktop) {
         try {
-          if (isTicketStateNotice(payload) && reportTicketState) {
-            const receipt = await reportTicketState(delivery);
-            if (receipt?.status === 'pending') database.finishOutbox(delivery.id, { owner, error: 'Router 状态说明待生成', retryMs: 5000 });
-            else if (receipt?.status === 'suppressed' || receipt?.status === 'accepted' && receipt.messageId) database.finishOutbox(delivery.id, { owner, sent: true, receipt });
-            else if (receipt?.status === 'failed') {
-              // If the conversational model cannot report, retain a compact
-              // factual notice. A reporting failure must never hide the task.
-              const fallback = await deliverDesktop(delivery);
-              if (fallback?.status !== 'accepted' || !fallback.messageId) throw new Error('State fallback was not durably accepted');
-              database.finishOutbox(delivery.id, { owner, sent: true,
-                receipt: { ...fallback, routerReport: 'unavailable', reason: receipt.reason } });
-            }
-            else throw new Error('Router state report was not accepted');
-            continue;
-          }
           // This callback must durably deduplicate by delivery.uniqueKey before
           // acknowledging. Local notification retries never rerun the Worker.
           const receipt = await deliverDesktop(delivery);
           if (receipt?.status !== 'accepted' || !receipt.messageId) throw new Error('Desktop notification was not durably accepted');
-          const saved = database.finishOutbox(delivery.id, { owner, sent: true, receipt });
+          const saved = finishDelivery(delivery.id, { owner, sent: true, receipt });
           await mirrorDelivered(saved);
         } catch {
-          database.finishOutbox(delivery.id, { owner, error: '桌面通知保存失败，稍后重试', retryMs: 30000 });
+          finishDelivery(delivery.id, { owner, error: '桌面通知保存失败，稍后重试', retryMs: 30000 });
         }
         continue;
       }
       const adapter = channels?.get(payload.source?.channel) || (payload.source?.channel === 'feishu' ? feishu : null);
       if (!adapter?.send) {
-        database.finishOutbox(delivery.id, { owner, error: '来源交付服务不可用', retryMs: 30000 });
+        finishDelivery(delivery.id, { owner, error: '来源交付服务不可用', retryMs: 30000 });
         continue;
       }
       try {
@@ -190,13 +206,13 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         const text = options?.length ? `${payload.text}\n\n可回复：\n${options.map(option => `• ${option}`).join('\n')}` : payload.text;
         const receipt = await adapter.send({ source: payload.source, text, idempotencyKey: delivery.uniqueKey });
         if (receipt?.status !== 'accepted' || !receipt.messageId) throw new Error('来源未返回确定回执');
-        const saved = database.finishOutbox(delivery.id, { owner, sent: true, receipt });
+        const saved = finishDelivery(delivery.id, { owner, sent: true, receipt });
         await mirrorDelivered(saved);
       } catch (error) {
         // A failed/expired network request may already have sent. Preserve it for
         // receipt reconciliation, never rerun the task or blindly resend.
         const notSent = knownNotSent(error);
-        database.finishOutbox(delivery.id, { owner, uncertain: !notSent, retryMs: 30000,
+        finishDelivery(delivery.id, { owner, uncertain: !notSent, retryMs: 30000,
           error: notSent ? '来源确认未发送，稍后重试' : '来源发送结果待核实',
           ...(error?.receipt && typeof error.receipt === 'object' ? { receipt: error.receipt } : {}) });
         ctx.logger?.warn?.(notSent ? 'SuperAgent 结果已保存，来源确认未发送' : 'SuperAgent 结果已保存，来源发送待核实');

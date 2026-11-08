@@ -332,7 +332,7 @@ export async function mountAssistant(ctx, commander, providers) {
   const permissionApi = createActionPermissionApi({ store: actionPermissions, resolveActor: peer => peer?.principal?.kind === 'owner'
     ? { profileId: store.profileId, id: 'desktop-owner', label: '主人' } : null });
   orchestrationRuntime = createOrchestrationRuntime({ ctx, store, feishu, channels,
-    reportTicketState: delivery => engine.reportTicketState(delivery),
+    prepareTicketReply: delivery => engine.prepareTicketReply(delivery),
     onDelivered: outbox => channelSessions.onDelivery(outbox), deliverDesktop: async delivery => {
     const ticket = store.orchestration.getTicket(delivery.ticketId);
     const event = database.notify({ id: ticket.id, threadId: ticket.mandate.source.threadId }, delivery.payload.type,

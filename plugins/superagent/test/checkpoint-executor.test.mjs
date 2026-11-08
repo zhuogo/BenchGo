@@ -11,6 +11,7 @@ test('production runtime protects dispatched Worker files and exposes authorized
   const root = await mkdtemp(join(tmpdir(), 'benchgo-checkpoint-executor-'));
   const store = await createAssistantStore({ dataDirectory: root });
   let runtime, file, active;
+  const transcript = [];
   t.after(async () => { await runtime?.stop(); await store.close(); await rm(root, { recursive: true, force: true }); });
   await store.updateConfig({ workerModels: [{ providerId: 'provider', modelId: 'opaque' }] });
   const db = store.orchestration, policy = await readAssessmentPolicy(store);
@@ -20,15 +21,22 @@ test('production runtime protects dispatched Worker files and exposes authorized
   const ctx = {
     on() { return () => {}; },
     llm: { prepareCall: async () => {} },
-    sessionQuery: { readSession: async () => ({ events: [{ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'Created artifact' }] } } }] }) },
+    sessionQuery: { readSession: async () => ({ events: structuredClone(transcript) }) },
     agents: {
       get: () => active,
       create: async input => {
         const handlers = new Map(), tools = new Map(); file = join(input.meta.cwd, 'artifact.txt');
-        const agent = { id: input.sessionId, session: { snapshotEvents: () => [] }, followup() {
+        const agent = { id: input.sessionId, session: { snapshotEvents: () => structuredClone(transcript) }, followup(message) {
+          transcript.push({ seq: transcript.length, type: 'turn/start', data: { turn: 1 } });
           handlers.get('agent/status')({ status: 'running' });
-          void handlers.get('tools/execute')({ name: 'opaque/write-tool', callId: 'call-1', agent, signal: new AbortController().signal }, () => writeFile(file, 'agent content'))
-            .then(async () => { assert.equal(await readFile(file, 'utf8'), 'agent content'); await tools.get('assistant_task_result').execute({ selfCheck: { summary: 'Verified created artifact', checks: ['Read created file'] } }, { agent, signal: new AbortController().signal, callId: 'self-check' }); }).then(() => handlers.get('agent/status')({ status: 'idle' }), error => handlers.get('agent/error')({ error }));
+          void handlers.get('agent/pre-step')({ turn: 1, messages: [message] }, async () => ({ kind: 'enter', messages: [] }))
+            .then(() => handlers.get('tools/execute')({ name: 'opaque/write-tool', callId: 'call-1', agent, signal: new AbortController().signal }, () => writeFile(file, 'agent content')))
+            .then(async () => {
+              assert.equal(await readFile(file, 'utf8'), 'agent content');
+              await tools.get('assistant_task_result').execute({ selfCheck: { summary: 'Verified created artifact', checks: ['Read created file'] } }, { agent, signal: new AbortController().signal, callId: 'self-check' });
+              transcript.push({ seq: transcript.length, type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'text', text: 'Created artifact' }] } } });
+              transcript.push({ seq: transcript.length, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } });
+            }).then(() => handlers.get('agent/status')({ status: 'idle' }), error => handlers.get('agent/error')({ error }));
         } };
         await input.setup({ tools: { register(tool) { tools.set(tool.name, tool); } }, systemPrompt: { section() {}, context() {} }, get: () => undefined, on: (name, handler) => { handlers.set(name, handler); } }, agent);
         active = agent;
@@ -36,7 +44,19 @@ test('production runtime protects dispatched Worker files and exposes authorized
       },
     },
   };
-  runtime = createOrchestrationRuntime({ ctx, store, deliverDesktop: async () => ({ status: 'accepted', messageId: 'local' }) });
+  runtime = createOrchestrationRuntime({ ctx, store,
+    prepareTicketReply: async delivery => {
+      assert.equal(db.getTicket(ticket.id).status, 'waiting');
+      assert.equal(delivery.payload.text, undefined);
+      assert.equal(delivery.payload.publication, undefined);
+      assert.equal(db.results(ticket.id).at(-1).finalSummary, 'Created artifact');
+      return { status: 'ready', text: '文件已经创建并检查完成。' };
+    },
+    deliverDesktop: async delivery => {
+      assert.equal(delivery.payload.publication.origin, 'router');
+      assert.equal(delivery.payload.text, '文件已经创建并检查完成。');
+      return { status: 'accepted', messageId: 'local' };
+    } });
   for (let count = 0; count < 100 && db.getTicket(ticket.id).status !== 'completed'; count++) { await runtime.tick(); await new Promise(resolve => setTimeout(resolve, 10)); }
   assert.equal(db.getTicket(ticket.id).status, 'completed');
   assert.equal(await readFile(file, 'utf8'), 'agent content');

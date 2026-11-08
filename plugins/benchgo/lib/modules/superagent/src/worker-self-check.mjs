@@ -1,6 +1,6 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 
-export const workerSelfCheckRequirement = '完成任务后，先按本工单要求做一次快速轻量自校验，优先运行适用的机械测试、构建和输出检查，修正明显错误和漏项，通过后才可报告执行完成；不能解决的如实报告受阻或失败。Before your final response, call assistant_task_result with your actual self-check evidence and outcome. The final response is delivered verbatim; never include secrets or internal reasoning.';
+export const workerSelfCheckRequirement = '完成任务后，先按本工单要求做一次快速轻量自校验，优先运行适用的机械测试、构建和输出检查，修正明显错误和漏项，通过后才可报告执行完成；不能解决的如实报告受阻或失败。Before your final response, call assistant_task_result with your actual self-check evidence and outcome. Your complete final response is saved as the original Ticket result; the Router receives its completion signal and chooses how to tell the user. Preserve concrete results, artifact paths, checks and limitations, without a mandatory report template. Never include secrets or internal reasoning.';
 
 const nonempty = value => typeof value === 'string' && !!value.trim();
 const fail = message => Object.assign(new Error(message), { code: 'WORKER_SELF_CHECK' });

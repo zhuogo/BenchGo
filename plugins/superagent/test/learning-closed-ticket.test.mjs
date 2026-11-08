@@ -34,10 +34,15 @@ test('confirmed close feeds background queue once; crash after saving resumes th
   await worker().runOnce();
   assert.equal(requests.length, 0);
   const [outbox] = store.orchestration.claimOutbox('sender', { now: 2 });
+  store.orchestration.saveOutboxReply(outbox.id, { owner: 'sender', now: 2,
+    publication: { action: 'deliver', origin: 'router', text: '你的任务检查好了。' } });
   store.orchestration.finishOutbox(outbox.id, { owner: 'sender', uncertain: true, now: 3 });
   assert.deepEqual(store.orchestration.learningSources().items, []);
   store.orchestration.reconcileOutbox(outbox.id, { attempts: 1, outcome: 'sent', evidence: '原来源确认', receipt: { status: 'accepted', messageId: 'delivered' }, now: 4 });
   assert.equal(store.orchestration.getTicket(ticket.id).status, 'completed');
+  const learningMaterial = store.orchestration.learningSources().items;
+  assert.equal(learningMaterial[0].result.finalSummary, '检查完成');
+  assert(!JSON.stringify(learningMaterial).includes('你的任务检查好了。'));
   store.learning.request({ scope: 'another-router', eventId: 'after-delivery' });
   const propose = store.memory.propose;
   store.memory.propose = async (...args) => { await propose(...args); throw new Error('receipt crash'); };

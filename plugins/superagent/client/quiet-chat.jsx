@@ -16,19 +16,6 @@ import { sendInteractive } from '../../interactive/client/send.mjs';
 const labels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' };
 const NO_STATUSES = new Map();
 
-export function ScheduleLifecycle({ row, onOpenResources }) {
-  const event = row.schedule;
-  const phases = { created: '已创建', triggered: '已触发执行', completed: '已完成', failed: '执行失败' };
-  const time = event.at || row.createdAt || row.time;
-  const date = time && new Date(time);
-  return <section className="ba-schedule-lifecycle" aria-label="定时任务状态" data-phase={event.phase}>
-    <strong><UIIcon name="schedules" size={18} />{event.title || '定时任务'}</strong>
-    <p><span className="ba-schedule-phase">{phases[event.phase] || '状态待同步'}</span>{date && Number.isFinite(date.getTime()) && <> · <time dateTime={date.toISOString()}>{date.toLocaleString('zh-CN')}</time></>}</p>
-    {row.text && <p>{row.text}</p>}
-    {event.ticketId && onOpenResources && <Button variant="ghost" type="button" onClick={() => onOpenResources('tasks', { ticketId: event.ticketId })}>查看关联工单</Button>}
-  </section>;
-}
-
 /** Mirrors the official answered-question bubble: muted question, the chosen answer below. */
 export function QuestionReply({ row }) {
   return <div className="ba-chat-question-reply">{row.questions.map(question => {
@@ -74,9 +61,9 @@ export function QuietChat({ home, session, chat }) {
       return <article className="ba-chat-message" data-chat-key={row.key} data-role={row.role} key={row.key}>
       <div className="ba-chat-body">
       <div className="ba-chat-content" aria-label={row.role === 'system' ? '消息状态' : row.kind === 'question-reply' ? '你的选择' : row.role === 'user' ? '你' : home.assistantName || 'BenchGo'}>
-      {row.type === 'schedule.lifecycle' && row.schedule ? <ScheduleLifecycle row={row} onOpenResources={home.onOpenResources} /> : row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : row.role === 'assistant' ? <InteractiveReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={session.running || !!row.provisional} onSubmit={async (text, request) => { await sendInteractive(home.ctx.sessions, home.sessionId, text, request); void Promise.resolve(home.onRefresh?.()).catch(() => {}); }} /> : <div className="ba-chat-status">
+      {row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : row.role === 'assistant' ? <InteractiveReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={session.running || !!row.provisional} onSubmit={async (text, request) => { await sendInteractive(home.ctx.sessions, home.sessionId, text, request); void Promise.resolve(home.onRefresh?.()).catch(() => {}); }} /> : <div className="ba-chat-status" role="alert">
         {row.title && <strong>{row.title}</strong>}<span>{row.text}</span>
-        {row.ticketId && home.onOpenResources && <Button variant="link" size="sm" className="ba-chat-status-link" type="button" disabled={busy} onClick={() => run(() => home.onOpenResources('tasks', { ticketId: row.ticketId }))}>查看工单详情</Button>}
+        {row.requestId && home.onRefresh && <Button variant="link" size="sm" className="ba-chat-status-link" type="button" disabled={busy} onClick={() => run(home.onRefresh)}>重新核实</Button>}
       </div>}
       {row.role === 'user' && (row.content || []).filter(block => ['image', 'file'].includes(block.type)).map((block, index) => <span className="ba-chat-attachment" key={index}>{block.type === 'image' ? '已附图片' : `已附文件${block.name ? `：${block.name}` : ''}`}</span>)}
       </div>

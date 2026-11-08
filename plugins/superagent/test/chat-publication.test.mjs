@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { activeChatReply, chatPublicationType, installChatPublication, projectChatMessages } from '../src/chat-publication.mjs';
 import { ticketStateSource } from '../src/ticket-state-report.mjs';
+import { ticketReplySource } from '../src/ticket-reply.mjs';
 
 const user = { type: 'user/message', seq: 0, data: { id: 'human-1', source: { kind: 'user' }, content: [{ type: 'text', text: 'question' }] } };
 const reply = (seq, data = {}, extra = {}) => ({ seq, type: chatPublicationType, ignorable: true, data: { kind: 'final', requestId: 'human-1', text: 'answer', ...data }, ...extra });
@@ -91,7 +92,7 @@ test('answered official questions become one visible choice bubble; pending, fai
   assert.doesNotMatch(JSON.stringify(replies), /options/);
 });
 
-const stateNotice = { type: 'user/message', seq: 5, data: { id: 'state-notice', source: { kind: ticketStateSource, eventKey: 'notice:1', ticketId: 'ticket' },
+const stateNotice = { type: 'user/message', seq: 5, data: { id: 'state-notice', source: { kind: ticketReplySource, replyKind: 'state', eventKey: 'notice:1', ticketId: 'ticket' },
   content: [{ type: 'text', text: 'PRIVATE HOST STATE INSTRUCTION' }] } };
 const statePermit = (text, data = {}) => ({ type: chatPublicationType, ignorable: true, seq: 7,
   data: { kind: 'state-final-permit', requestId: stateNotice.data.id, ticketStateEventKey: 'notice:1', turn: 2, text, ...data } });
@@ -102,10 +103,8 @@ test('state prompts stay private while natural reports project independently of 
     start(2), stateNotice, answer([{ type: 'reasoning', text: 'PRIVATE REASONING' }, { type: 'text', text: report }], 2), statePermit(report), end('completed', 2)];
   const rows = projectChatMessages(JSON.parse(JSON.stringify(events)));
   assert.deepEqual(rows.map(row => [row.role, row.requestId, row.text]), [
-    ['user', undefined, 'question'], ['assistant', 'human-1', '先回答用户的问题。'], ['assistant', 'state-notice', report],
+    ['user', undefined, 'question'], ['assistant', 'human-1', '先回答用户的问题。'],
   ]);
-  assert.equal(rows[2].id, 'reply:state-notice');
-  assert.equal(rows[2].ticketStateEventKey, 'notice:1');
   assert.doesNotMatch(JSON.stringify(rows), /PRIVATE/);
   assert.equal(activeChatReply(events), null);
 });
@@ -114,8 +113,8 @@ test('explicit status publications deduplicate against natural completion and re
   const rows = projectChatMessages([start(), user, reply(2), end(), start(2), stateNotice,
     answer([{ type: 'text', text: 'unpublished draft' }], 2), reply(7, { requestId: 'state-notice', ticketStateEventKey: 'notice:1', text: '状态自然报告' }),
     reply(8, { requestId: 'state-notice', ticketStateEventKey: 'notice:1', text: '重复报告' }), end('completed', 2)]);
-  assert.deepEqual(rows.map(row => row.text), ['question', 'answer', '状态自然报告']);
-  assert.deepEqual(rows.filter(row => row.role === 'assistant').map(row => row.requestId), ['human-1', 'state-notice']);
+  assert.deepEqual(rows.map(row => row.text), ['question', 'answer']);
+  assert.deepEqual(rows.filter(row => row.role === 'assistant').map(row => row.requestId), ['human-1']);
   assert.equal(projectChatMessages([start(), stateNotice, answer([{ type: 'text', text: 'partial' }]), end('error')]).length, 0);
 });
 
@@ -127,7 +126,8 @@ test('assistant_reply binds an active state report to its own request and never 
     canPublish: async () => true,
     appendRecord: (_session, type, data) => events.push({ type, data, ignorable: true, seq: events.length }),
   });
-  assert.deepEqual(activeChatReply(events), { turn: 2, requestId: 'state-notice' });
+  assert.equal(activeChatReply(events), null);
+  assert.deepEqual(activeChatReply(events, { includeInternal: true }), { turn: 2, requestId: 'state-notice' });
   const execution = { agent, concludeTurn: () => { conclusions++; } };
   assert.deepEqual(await tool.execute({ text: '已有执行记录保留，当前状态待核实。' }, execution), { published: true, requestId: 'state-notice' });
   assert.deepEqual(await tool.execute({ text: '已有执行记录保留，当前状态待核实。' }, execution), { published: true, duplicate: true, requestId: 'state-notice' });
@@ -135,7 +135,7 @@ test('assistant_reply binds an active state report to its own request and never 
   assert.throws(() => tool.execute({ text: '改写状态' }, execution), /不能重复或改写/);
   assert.equal(events.filter(event => event.type === chatPublicationType).length, 1);
   assert.equal(events.find(event => event.type === chatPublicationType).data.requestId, 'state-notice');
-  assert.deepEqual(projectChatMessages(events).map(row => row.text), ['question', '已有执行记录保留，当前状态待核实。']);
+  assert.deepEqual(projectChatMessages(events).map(row => row.text), ['question']);
 });
 
 test('unpermitted state drafts and mismatched publication identities never become reports', () => {
@@ -167,8 +167,34 @@ test('state publication rechecks permission for explicit and natural replies and
     assert.equal(checked.length, allowed ? 1 : 2);
     assert(checked.every(id => id === 'state-notice'));
     const rows = projectChatMessages([...events, end('completed', 2)]);
-    assert.equal(rows.length, allowed ? 1 : 0);
-    if (allowed) assert.equal(rows[0].ticketStateEventKey, 'notice:1');
-    else assert.equal(events.some(event => event.type === chatPublicationType), false);
+    assert.equal(rows.length, 0);
+    assert.equal(events.some(event => event.type === chatPublicationType && event.data.kind === 'ticket-reply'), allowed);
+  }
+});
+
+
+test('retired state reports never stream or project even with a historical permit or publication', () => {
+  const legacy = { ...stateNotice, data: { ...stateNotice.data, source: { ...stateNotice.data.source, kind: ticketStateSource } } };
+  const events = [start(2), legacy, answer([{ type: 'text', text: 'LEGACY REPORT' }], 2), statePermit('LEGACY REPORT'),
+    reply(8, { requestId: legacy.data.id, ticketStateEventKey: 'notice:1', text: 'LEGACY REPORT' })];
+  assert.equal(activeChatReply(events), null);
+  assert.deepEqual(projectChatMessages([...events, end('completed', 2)]), []);
+});
+
+test('retired state publication is rejected even if a callback permits it or a matching reply already exists', () => {
+  for (const existing of [false, true]) {
+    const legacy = { ...stateNotice, data: { ...stateNotice.data, source: { kind: ticketStateSource } } };
+    const events = [start(2), legacy];
+    if (existing) events.push(reply(8, { requestId: legacy.data.id, text: 'LEGACY REPORT' }));
+    let tool, checked = false;
+    const agent = { session: { snapshotEvents: () => events } };
+    installChatPublication({ tools: { register: value => { tool = value; } } }, agent, {
+      canPublish: () => { checked = true; return true; },
+      appendRecord: () => assert.fail('retired source cannot publish'),
+    });
+    assert.throws(() => tool.execute({ text: 'LEGACY REPORT' }, { agent,
+      concludeTurn: () => assert.fail('retired source cannot conclude a published reply') }), /旧工单状态发布路径已停用/);
+    assert.equal(checked, false);
+    assert.deepEqual(projectChatMessages([...events, end('completed', 2)]), []);
   }
 });

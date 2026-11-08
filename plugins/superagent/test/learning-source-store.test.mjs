@@ -18,7 +18,7 @@ function fixture(t) {
   const api = install();
   const source = { channel: 'desktop', sessionId: 'router', messageId: 'human' };
   function ticket(id, { status = 'completed', delivery = 'sent', receipt = { status: 'accepted', messageId: 'received' }, outcome = status,
-    instructionRevision = 1, publication = 'worker', actor = 'human', strength = 'explicit', resultVersion = 1 } = {}) {
+    instructionRevision = 1, publication = 'router', actor = 'human', strength = 'explicit', resultVersion = 1 } = {}) {
     db.prepare('INSERT INTO sa_tickets VALUES (?,?,?,?,?,?)').run(id, status, 1, 1, JSON.stringify({ source }), id);
     db.prepare('INSERT INTO sa_results VALUES (?,?,?)').run(id, 1, JSON.stringify({ outcome, instructionRevision: 1,
       finalSummary: '真实执行结果', toolEvidence: { entries: [{ name: 'test', text: 'output' }] },
@@ -33,7 +33,7 @@ function fixture(t) {
   return { db, api, ticket, install, tx };
 }
 
-test('only terminal Tickets with matching confirmed worker delivery can enter learning', t => {
+test('only terminal Tickets with matching confirmed Router delivery can enter learning', t => {
   const f = fixture(t);
   const cases = [{ status: 'waiting' }, { status: 'open' }, { status: 'failed', delivery: 'uncertain' },
     { delivery: 'queued' }, { receipt: null }, { receipt: { status: 'accepted' } }, { publication: 'system' },
@@ -48,6 +48,17 @@ test('only terminal Tickets with matching confirmed worker delivery can enter le
   assert.deepEqual(batch.items.map(row => row.status), ['completed', 'failed']);
   assert.equal(batch.items[0].instructions[0].source.role, 'user');
   assert.equal(batch.items[1].result.failure.cause, '断网');
+});
+
+test('previously delivered Worker records remain learning sources without using Router summaries as original evidence', t => {
+  const f = fixture(t);
+  f.ticket('legacy1', { publication: 'worker' });
+  f.ticket('natural2');
+  f.api.recordClosedTicket('legacy1');
+  f.api.recordClosedTicket('natural2');
+  const batch = f.api.learningSources();
+  assert.equal(batch.items.length, 2);
+  assert(batch.items.every(row => row.result.finalSummary === '真实执行结果'));
 });
 
 test('global range is stable across scopes, retries and reinstall; cursor commits are idempotent', t => {

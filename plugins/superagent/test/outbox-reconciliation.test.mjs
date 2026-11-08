@@ -14,6 +14,7 @@ async function fixture(t, receipt) {
   const commit = now => db.commitResult(ticket.id, { result: { summary: 'done', outcome: 'completed', selfCheck: { summary: 'checked current requirements' } }, uniqueKey: 'result', now });
   commit(10);
   const [delivery] = db.claimOutbox('sender', { now: 11 });
+  db.saveOutboxReply(delivery.id, { owner: 'sender', publication: { action: 'deliver', origin: 'router', text: '工作已完成。' }, now: 11 });
   db.finishOutbox(delivery.id, { owner: 'sender', uncertain: true, receipt, now: 12 });
   return { get db() { return db; }, delivery, ticket, commit,
     reopen() { db.close(); db = createAssistantOrchestrationStore({ directory }); } };

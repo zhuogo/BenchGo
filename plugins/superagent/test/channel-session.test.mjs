@@ -19,11 +19,13 @@ test('persisted inbound and confirmed outbox mirror to one official session with
   assert.equal(f.threads.length, 1); assert.equal(f.events.length, 1);
   assert.equal(f.threads[0].source.threadId, 'remote-thread');
   assert.equal(f.threads[0].sourceKey, channelSessionKey(source));
-  const delivery = { id: 'outbox', state: 'sent', payload: { source, publication: { text: '结果' } } };
+  const delivery = { id: 'outbox', state: 'sent', receipt: { status: 'accepted', messageId: 'remote-message' }, payload: { source, publication: { origin: 'router', text: '结果' } } };
   await f.host.onDelivery(delivery); await f.host.onDelivery(delivery);
-  assert.equal(f.events.length, 2); assert.equal(f.events[1].data.content[0].text, '已送达\n结果');
+  assert.equal(f.events.length, 2); assert.equal(f.events[1].data.content[0].text, '结果');
   assert.equal(f.counts().calls, 0); assert.equal(f.counts().flushes, 4);
   assert.equal(await f.host.onDelivery({ ...delivery, receipt: { status: 'suppressed' } }), null);
+  assert.equal(await f.host.onDelivery({ ...delivery, receipt: undefined }), null);
+  assert.equal(await f.host.onDelivery({ ...delivery, receipt: { status: 'accepted' } }), null);
   assert.equal(await f.host.onDelivery({ ...delivery, state: 'uncertain' }), null);
   assert.equal(await f.host.onDelivery({ ...delivery, payload: { source: { channel: 'desktop' }, text: 'local notification' } }), null);
   await assert.rejects(f.host.onInbound(event, result, { sessionKey: 'another-source' }), /标识不匹配/);

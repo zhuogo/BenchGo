@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { currentTicketStateSignal, isTicketStateNotice, ticketStateSignal } from '../src/ticket-state-report.mjs';
+import { isTicketStateNotice, ticketStateSignal } from '../src/ticket-state-report.mjs';
 
 function fixture(state = 'continuation_wait') {
   const ticket = { id: 'ticket', title: '整理资料', status: 'open', instructionRevision: 2, resultVersion: 3, result: 'PRIVATE WORKER BODY' };
@@ -19,15 +19,13 @@ test('Router receives only ledger facts, never Worker bodies, publication text o
   assert.deepEqual(signal, { eventKey: 'notice:1', ticketId: 'ticket', title: '整理资料', status: 'open',
     instructionRevision: 2, resultVersion: 3, state: 'continuation_wait', code: 'WORKER_TURN_INCOMPLETE', stage: 'execution', assignmentId: 'assignment', fence: 4 });
   assert.doesNotMatch(JSON.stringify(signal), /PRIVATE/);
-  assert.deepEqual(currentTicketStateSignal(database, structuredClone(signal)), signal);
 });
 
-test('only system waiting notices from the current desktop Ticket can become signals', async t => {
+test('only system waiting notices from the current Ticket can become signals', async t => {
   const changes = {
     'Worker publication': f => { f.delivery.payload.publication.origin = 'worker'; },
     'ordinary result': f => { f.delivery.payload.publication.systemState.state = 'completed'; },
     'foreign payload type': f => { f.delivery.payload.type = 'ticket.progress'; },
-    'non-desktop source': f => { f.delivery.payload.source.channel = 'feishu'; },
     'missing Ticket': f => { f.delivery.ticketId = 'missing'; },
     'old instruction': f => { f.ticket.instructionRevision++; },
     'old result': f => { f.ticket.resultVersion++; },
@@ -52,21 +50,10 @@ test('continuation notices stop being current after recovery, reassignment or fa
     'different failure stage': f => { f.assignment.lastFailure.stage = 'delivery'; },
   };
   for (const [name, change] of Object.entries(changes)) await t.test(name, () => {
-    const f = fixture(), signal = ticketStateSignal(f.database, f.delivery);
+    const f = fixture();
     change(f);
     assert.equal(ticketStateSignal(f.database, f.delivery), null);
-    assert.equal(currentTicketStateSignal(f.database, signal), null);
   });
-});
-
-test('queued signal revalidation rejects old versions, removed events and modified facts', () => {
-  const f = fixture(), signal = ticketStateSignal(f.database, f.delivery);
-  assert.equal(currentTicketStateSignal(f.database, { ...signal, title: 'changed' }), null);
-  assert.equal(currentTicketStateSignal(f.database, { ...signal, result: 'injected' }), null);
-  assert.equal(currentTicketStateSignal(f.database, { ...signal, eventKey: 'absent' }), null);
-  assert.equal(currentTicketStateSignal(f.database, null), null);
-  f.ticket.instructionRevision++;
-  assert.equal(currentTicketStateSignal(f.database, signal), null);
 });
 
 test('delivery waiting can report current Ticket facts without claiming a Worker failure', () => {
@@ -78,5 +65,5 @@ test('delivery waiting can report current Ticket facts without claiming a Worker
   assert.equal('fence' in signal, false);
   assert.doesNotMatch(JSON.stringify(signal), /PRIVATE/);
   f.ticket.status = 'completed';
-  assert.equal(currentTicketStateSignal(f.database, signal), null);
+  assert.equal(ticketStateSignal(f.database, f.delivery), null);
 });

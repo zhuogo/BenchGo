@@ -53,11 +53,11 @@ async function fixture() {
         if(surface==='tickets') content=<Tickets api={api} requestedTicket={state==='linked'?{ticketId:'original'}:state==='missing'?{ticketId:'missing'}:undefined} onCreateGoal={()=>window.calls.push(['createGoal'])} onOpenGoals={()=>resources('goals')}/>;
         if(surface==='evaluations') content=<Evaluations api={api}/>;
         if(surface==='chat') {
-          const notification={eventId:'wait',threadId:'main',ticketId:ticket.id,ticketStatus:ticket.status,currentInstructionRevision:2,currentResultVersion:3,
-            currentResult:ticket.results[0],currentAttention:ticket.attentions?.[0],continuationWait:ticket.continuationWait,text:'先前的报告',createdAt:'2026-11-05T10:01:00Z'};
+          const notification={eventId:'wait',type:'ticket.attention',threadId:'main',ticketId:ticket.id,ticketStatus:ticket.status,currentInstructionRevision:2,currentResultVersion:3,
+            currentResult:ticket.results[0],currentAttention:ticket.attentions?.[0],continuationWait:ticket.continuationWait,text:'请选择本次范围',createdAt:'2026-11-05T10:01:00Z'};
           const events=state==='schedule'?['created','triggered','completed','failed'].map((phase,index)=>({eventId:phase,threadId:'main',type:'schedule.lifecycle',origin:'system',text:'系统定时记录',createdAt:'2026-11-05T10:02:00Z',schedule:{id:'schedule',title:'每日总结',phase,at:'2026-11-05T10:02:00Z',occurrenceAt:'2026-11-05T10:00:00Z',...(index>1?{ticketId:'original'}:{})}})):[notification];
           home.history.notifications=state==='empty'?[]:events;
-          content=state==='empty'?<AssistantHome {...home} input={{draft:''}} inputActions={{setDraft(){},persistDraft(){}}}/>:<QuietChat home={home} session={{running:false}}/>;
+          content=state==='empty'||state==='home'?<AssistantHome {...home} input={{draft:''}} inputActions={{setDraft(){},persistDraft(){}}}/>:<QuietChat home={home} session={{running:false}}/>;
         }
         if(surface==='connection') {
           const ctx={sessions:{retain(){if(control.state==='error')throw Error('test connection');return {ready:control.state==='loading'?new Promise(()=>{}):Promise.resolve(),release(){window.calls.push(['release']);}}}},uiConversation:{binding(){return {activate:view=>window.calls.push(['activate',view])}}}};
@@ -128,11 +128,15 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     assert.equal(answer.ticketId, 'original'); assert.equal(answer.attentionId, 'question'); assert.equal(answer.instructionRevision, 2);
     assert.deepEqual(answer.answer, { selected: ['全部'] });
     await scenario('chat', 'schedule');
-    await page.locator('.ba-schedule-lifecycle').first().waitFor();
-    assert.deepEqual(await page.locator('.ba-schedule-phase').allTextContents(), ['已创建', '已触发执行', '已完成', '执行失败']);
-    assert.equal(await page.locator('.ba-schedule-lifecycle time').count(), 4);
-    await button('查看关联工单').first().click();
-    assert.deepEqual((await calls())[0], ['resources', 'tasks', { ticketId: 'original' }]);
+    await page.getByLabel('主助手对话', { exact: true }).waitFor();
+    assert.equal(await page.getByText('系统定时记录', { exact: true }).count(), 0);
+    assert.equal(await page.getByLabel('定时任务状态', { exact: true }).count(), 0);
+    await scenario('chat', 'home');
+    await button('管理任务').first().click();
+    assert((await calls()).some(([name, next]) => name === 'resources' && next === 'tasks'));
+    await scenario('tickets');
+    await page.locator('.ba-task-list').getByText('核验工作结果', { exact: true }).click();
+    await page.getByRole('dialog').getByRole('heading', { name: '核验工作结果', exact: true }).waitFor();
     await scenario('chat', 'empty');
     await page.locator('.ba-home').waitFor();
     for (const state of ['loading', 'error', 'data']) {

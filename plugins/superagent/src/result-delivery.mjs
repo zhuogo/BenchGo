@@ -8,7 +8,7 @@ export function systemStateDelivery({ state = 'continuation_wait', code = 'EXECU
   return { action: 'deliver', origin: 'system', systemState: { state, code, stage }, text: `系统状态：${text}` };
 }
 
-/** Protocol checks only; no second model reads or rewrites the Worker result. */
+/** Protocol checks only; Router expression does not accept or re-run Worker work. */
 export function validateDelivery(value) {
   if (!value || !['deliver', 'ask'].includes(value.action) || typeof value.text !== 'string' || !value.text.trim()) throw new Error('Delivery requires text');
   if (value.options !== undefined && (!Array.isArray(value.options) || value.options.length > 6 || value.options.some(x => typeof x !== 'string' || !x.trim() || x.length > 500))) throw new Error('Invalid delivery options');
@@ -20,20 +20,25 @@ export function validateDelivery(value) {
     provenance = { origin: 'system', systemState: { state: value.systemState.state, code: value.systemState.code, stage: value.systemState.stage } };
   } else {
     if (value.systemState !== undefined) throw new Error('System state requires a system publication');
-    if (value.origin !== undefined && value.origin !== 'worker') throw new Error('Invalid publication origin');
-    provenance = value.origin === 'worker' ? { origin: 'worker' } : {};
+    if (value.origin !== undefined && !['worker', 'router'].includes(value.origin)) throw new Error('Invalid publication origin');
+    if (value.origin === 'router' && (value.action !== 'deliver' || value.options !== undefined)) throw new Error('Router reply requires natural text');
+    provenance = value.origin ? { origin: value.origin } : {};
   }
   return { action: value.action, text: value.text, ...(value.options?.length ? { options: value.options } : {}), ...provenance };
 }
-export function resultDelivery({ ticket, result }) {
+export function resultDelivery({ result }) {
   const body = result.finalSummary ?? result.summary;
   if (typeof body !== 'string' || !body.trim()) throw new Error('Result requires its original body');
-  return { action: 'deliver', origin: 'worker', text: `【${ticket.title || ticket.target}】\n\n${body}` };
+  return { action: 'deliver', origin: 'worker', text: body };
 }
 export function resultOutbox({ ticket, result, delivery }) {
-  return { type: 'ticket.result', source: ticket.mandate.source, ticketId: ticket.id, title: ticket.title,
-    instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion + 1,
-    outcome: result.outcome || 'completed', publication: delivery, text: delivery.text, evidenceRefs: result.evidenceRefs };
+  const envelope = { type: 'ticket.result', source: ticket.mandate.source, ticketId: ticket.id, title: ticket.title,
+    instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion + 1, evidenceRefs: result.evidenceRefs };
+  // Synchronous Router actions already answer in their original tool turn.
+  // Their audit row is not another Worker completion awaiting expression.
+  if (delivery?.origin === 'system' && delivery.systemState?.state === 'action_verified')
+    return { ...envelope, replyState: 'suppressed', suppressionReason: 'router-action-already-replied' };
+  return { ...envelope, outcome: result.outcome || 'completed', replyState: 'pending' };
 }
 
 export function deliverySuppression(database, row) {
@@ -48,10 +53,19 @@ export function deliverySuppression(database, row) {
   if (!['ticket.result', 'ticket.attention'].includes(payload.type)) return null;
   const ticket = database.getTicket(row.ticketId);
   if (!ticket || ['cancelled', 'cancelling'].includes(ticket.status)) return 'ticket-inactive';
+  if (payload.ticketId !== undefined && payload.ticketId !== ticket.id) return 'ticket-mismatch';
   if (payload.type === 'ticket.attention' && ['completed', 'failed', 'closed'].includes(ticket.status)) return 'ticket-inactive';
   if (payload.instructionRevision !== undefined && payload.instructionRevision !== ticket.instructionRevision) return 'superseded-instruction';
   if (payload.resultVersion !== undefined && payload.resultVersion !== ticket.resultVersion) return 'superseded-result';
   if (JSON.stringify(payload.source) !== JSON.stringify(ticket.mandate.source)) return 'source-mismatch';
+  if (payload.replyState === 'suppressed' && payload.suppressionReason === 'router-action-already-replied') return payload.suppressionReason;
+  const state = payload.stateSignal || (payload.publication?.origin === 'system' ? payload.publication.systemState : null);
+  if (state?.state === 'continuation_wait') {
+    const current = database.assignments?.(ticket.id)?.some(row => row.state === 'uncertain'
+      && row.lastFailure?.code === state.code && row.lastFailure?.stage === state.stage
+      && (!payload.assignmentId || row.id === payload.assignmentId && row.fence === payload.fence));
+    if (!current) return 'state-superseded';
+  }
   if (payload.type === 'ticket.attention') {
     const attention = database.attentions?.(ticket.id)?.find(entry => entry.id === payload.attentionId);
     if (attention?.answerTriggerId) return 'attention-resolved';

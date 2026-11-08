@@ -47,7 +47,16 @@ for (const scenario of ['auto', 'manual', 'unknown-rule', 'ignore', 'revoked', '
     store.close(); store = await createAssistantStore({ dataDirectory: directory });
   }
   let executions = 0, sends = 0;
-  runtime = createOrchestrationRuntime({ ctx: {}, store, execute: async (_assignment, context) => { executions++; if (scenario === 'revoked-during-run') { store.connections.update({ enabledRuleIds: [] }, { revision: 1 }); await context.renew(); } return { summary: 'CI inspected', outcome: 'completed', selfCheck: { summary: 'Checked CI evidence and current requirements' }, evidenceRefs: ['test:evidence'] }; }, feishu: { send: async request => { sends++; assert.equal(request.source.messageId, 'ci-message'); return { status: 'accepted', messageId: 'reply' }; } } });
+  runtime = createOrchestrationRuntime({ ctx: {}, store,
+    execute: async (_assignment, context) => { executions++; if (scenario === 'revoked-during-run') { store.connections.update({ enabledRuleIds: [] }, { revision: 1 }); await context.renew(); } return { summary: 'CI inspected', outcome: 'completed', selfCheck: { summary: 'Checked CI evidence and current requirements' }, evidenceRefs: ['test:evidence'] }; },
+    prepareTicketReply: async delivery => {
+      assert.equal(delivery.payload.text, undefined);
+      assert.equal(delivery.payload.publication, undefined);
+      assert.equal(store.orchestration.getTicket(delivery.ticketId).status, 'waiting');
+      assert.equal(store.orchestration.results(delivery.ticketId).at(-1).summary, 'CI inspected');
+      return { status: 'ready', text: 'CI 已检查完成，相关证据已经保存。' };
+    },
+    feishu: { send: async request => { sends++; assert.equal(request.source.messageId, 'ci-message'); assert.equal(request.text, 'CI 已检查完成，相关证据已经保存。'); return { status: 'accepted', messageId: 'reply' }; } } });
   for (let i = 0; i < 40; i++) { await runtime.tick(); if (sends || scenario === 'revoked') break; await new Promise(resolve => setTimeout(resolve, 5)); }
   assert.equal(executions, scenario === 'revoked' ? 0 : 1);
   assert.equal(sends, scenario.startsWith('revoked') ? 0 : 1);

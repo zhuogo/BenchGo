@@ -29,8 +29,12 @@ async function fixture(t, { complete = true, stopped = true } = {}) {
     if (stopped) database.confirmExecutionStopped(assignment.id, ownership);
     database.commitResult(ticket.id, { assignment, result, uniqueKey: 'result' });
     const [outbox] = database.claimOutbox('fixture-delivery');
+    assert.equal(database.getTicket(ticket.id).status, 'waiting');
+    database.saveOutboxReply(outbox.id, { owner: 'fixture-delivery',
+      publication: { action: 'deliver', origin: 'router', text: '文件已经更新，可以查看本次修改。' } });
     database.finishOutbox(outbox.id, { owner: 'fixture-delivery', sent: true,
       receipt: { status: 'accepted', messageId: 'checkpoint-result' } });
+    assert.equal(database.getTicket(ticket.id).status, 'completed');
   }
   let version = 'v1', active = false;
   const service = createCheckpointService({ database, checkpoints, readPolicy: async () => ({ desktopVersion: version }), agents: { get: () => active ? {} : undefined } });

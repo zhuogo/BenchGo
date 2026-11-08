@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
+import { deliverySuppression } from '../src/result-delivery.mjs';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 async function fixture(t) {
@@ -62,16 +63,15 @@ test('verified receipt and authoritative readback settle Run, Result and Outbox 
   assert.equal(f.db.results(reserved.ticket.id).length, 1);
   assert.equal(f.db.deliveries(reserved.ticket.id).length, 1);
   const outgoing = f.db.deliveries(reserved.ticket.id)[0];
-  assert.equal(outgoing.payload.publication.action, 'deliver');
-  assert.equal(outgoing.payload.publication.origin, 'system');
-  assert.equal(outgoing.payload.publication.systemState.state, 'action_verified');
-  assert.match(outgoing.payload.text, /^系统状态：/);
-  assert.equal(outgoing.payload.text, outgoing.payload.publication.text);
-  assert.notEqual(outgoing.payload.text, '设置已更新并核实');
+  assert.equal(outgoing.payload.replyState, 'suppressed');
+  assert.equal(outgoing.payload.outcome, undefined, 'synchronous Router action is not a Worker completion');
+  assert.equal(outgoing.payload.publication, undefined);
+  assert.equal(outgoing.payload.text, undefined);
   assert.equal(outgoing.payload.instructionRevision, reserved.ticket.instructionRevision);
   assert.equal(outgoing.payload.resultVersion, 1);
   const [claimed] = f.db.claimOutbox('sender', { now: now + 3 });
-  const deliveryReceipt = { status: 'accepted', messageId: 'delivered' };
+  assert.equal(deliverySuppression(f.db, claimed), 'router-action-already-replied');
+  const deliveryReceipt = { status: 'suppressed', reason: 'router-action-already-replied' };
   f.db.finishOutbox(claimed.id, { owner: 'sender', sent: true, receipt: deliveryReceipt, now: now + 4 });
   assert.deepEqual(f.db.deliveries(reserved.ticket.id)[0].receipt, deliveryReceipt);
   assert.throws(() => f.db.settleRouterAction({ sessionId: f.sessionId, callId: f.callId, owner: f.owner, fence: 1, argsHash: f.input.argsHash,

@@ -57,13 +57,13 @@ export function createChannelSessionHost({ ctx, store, engine, receiveOwnerMessa
         key: `intake:${result.intakeEvent.id}`, text: event.text, direction: 'inbound' });
     },
     async onDelivery(outbox) {
-      if (outbox?.state !== 'sent' || outbox.receipt?.status === 'suppressed') return null;
+      if (outbox?.state !== 'sent' || outbox.receipt?.status !== 'accepted' || !outbox.receipt.messageId) return null;
       const source = outbox.payload?.source ?? outbox.source;
       if (!source?.channel || source.channel === 'desktop') return null;
       const text = outbox.payload?.publication?.text ?? outbox.payload?.text ?? outbox.text;
       if (typeof text !== 'string' || !text) return null;
       return mirror({ source, threadId: outbox.threadId || source.threadId, key: `delivery:${outbox.kind || 'ticket'}:${outbox.id}`,
-        text: `已送达\n${text}`, direction: 'delivery' });
+        text, direction: 'delivery' });
     },
     async onSourceMessage(input) {
       const { thread, sessionId, message } = input;

@@ -137,7 +137,7 @@
         <article class="card"><h3><a href="03-实时语音/设计.md">实时语音</a></h3><p>ASR → 原会话 Agent → TTS。提供输入、朗读和通话，复用原会话权限与审批，不另建语音助手。</p></article>
         <article class="card"><h3><a href="04-模型与工具/设计.md">模型与工具</a></h3><p>共享供应商、模型、工具与技能能力。显式选择优先，模型 ID 和协议值原样保存，可用性必须反映真实状态。</p></article>
         <article class="card"><h3><a href="05-更新与发布/设计.md">更新与发布</a></h3><p>官方引擎 pin、BenchGo 单包构建、品牌注入、独立插件更新与回滚；开发产物和正式发布分别验证。</p></article>
-        <article class="card"><h3><a href="06-superagent/设计.md">SuperAgent</a></h3><p>可信入口、Router 分诊、工单执行、Worker 自校验、直接交付与后台记忆；执行使用官方 Harness Agent。</p></article>
+        <article class="card"><h3><a href="06-superagent/设计.md">SuperAgent</a></h3><p>可信入口、Router 分诊、工单执行、Worker 自校验、Router 表达交付与后台记忆；执行使用官方 Harness Agent。</p></article>
       </div>
       <p class="note" style="margin-top:12px">六个文档板块是产品设计分类，不是六个安装包。源码只有基础层、Harness 聚合、SuperAgent、Voice、Link 五个包，经构建统一交付；参考仓库只供设计核对，不参与产品依赖或构建。</p>
     </section>
@@ -203,14 +203,14 @@
         <path class="flow" d="M348 0 V10 H26 V304 H253 V318"/>
         <path class="flow" d="M1012 120 V156 H1372 V246 H488 V344 H468"/>
         <text class="svg-small" x="1030" y="152">Trigger · 管线通过后登记</text>
-        <text class="svg-title" x="38" y="292">2.1 调度与执行 · 分诊 → 工单 → 执行与自校验 → 原结果直接交付</text>
+        <text class="svg-title" x="38" y="292">2.1 调度与执行 · 分诊 → 工单 → 自校验保存 → Router 表达交付</text>
 
         <rect class="node node-violet" x="38" y="318" width="430" height="322" rx="14"/>
         <text class="svg-title" x="58" y="350">Main Agent / Router · 总调度</text>
-        <text class="svg-label" x="58" y="378">· 与用户沟通的主要入口（主聊天 / 旁聊）</text>
+        <text class="svg-label" x="58" y="378">· 用户始终与 Router 对话（主聊天 / 旁聊）</text>
         <text class="svg-label" x="58" y="402">· 内部能力默认完整 · 主聊 / 旁聊无权限档位选择</text>
         <text class="svg-label" x="58" y="426">· 逐条分诊：直接答 / 开单 / 跟进 / 独立新任务</text>
-        <text class="svg-label" x="58" y="450">· 默认只收状态；用户追问时按需读已存结果答问</text>
+        <text class="svg-label" x="58" y="450">· 收到完成信号，主动自然回复；摘要 / 全文自选</text>
         <text class="svg-label" x="58" y="474">· 随身文档：人设 · 身份 · 主人档案 · 做事规矩 · 记忆</text>
         <rect class="node node-amber" x="52" y="504" width="402" height="116" rx="12"/>
         <text class="svg-title" x="68" y="530">执行中提问 → Router 先判断能否自答</text>
@@ -227,8 +227,8 @@
         <text class="svg-label" x="528" y="464">主聊 / 渠道 / 执行会话插话归原单</text>
         <text class="svg-label" x="528" y="486">下一工具边界整份切换 · 不打断在途</text>
         <text class="svg-label" x="528" y="508">扩权交 Router 确认 · 暂停只收修订</text>
-        <text class="svg-title" x="528" y="540">直接交付与后续调整 · 用户终审</text>
-        <text class="svg-label" x="528" y="562">outbox 原路投递 · 回执同账</text>
+        <text class="svg-title" x="528" y="540">Router 表达交付 · 用户终审</text>
+        <text class="svg-label" x="528" y="562">原稿留详情 · 回复原路投递</text>
         <text class="svg-label" x="528" y="584">确认送达才关单 · 成功成果不回改</text>
         <text class="svg-label" x="528" y="606">成功后新开关联单；失败可原单续</text>
         <text class="svg-small" x="528" y="628">查在办 / 刚关单，重复单可合并 · 同单一本账</text>
@@ -254,10 +254,11 @@
         <path class="flow" d="M1328 390 H1335 V598 H1328"/>
         <rect class="node node-green" x="862" y="570" width="466" height="56" rx="10"/>
         <text class="svg-title" x="878" y="594">主 Worker 汇总 → 快速轻量自校验 → 写回工单</text>
-        <text class="svg-label" x="878" y="616">优先机械检查 · 正文 / 证据 / 自检记录 · Router 只收状态</text>
+        <text class="svg-label" x="878" y="616">保存原稿 / 证据 / 自检记录 → 发完成信号给 Router</text>
         </g>
         <path class="flow" d="M468 358 H508"/><path class="flow" d="M808 358 H848"/>
         <path class="flow" d="M848 598 H808"/>
+        <path class="flow" d="M508 482 H468"/>
         <text class="svg-small" x="472" y="348">开单</text>
         <text class="svg-small" x="812" y="348">派工</text>
 
@@ -378,13 +379,13 @@
         <table>
           <thead><tr><th>情况</th><th>处理与关单条件</th></tr></thead>
           <tbody>
-            <tr><td>执行完成</td><td>Worker 轻量自检通过后，结果与 outbox 持久落单，进入待交付；Router 仅收状态。原来源确认接收后以 completed 关单，用户终审，不设内容验收层。</td></tr>
-            <tr><td>投递失败 / 送达未知</td><td>保留待交付与原结果；明确未送达才补投，效果未知先查回执，不重跑 Worker，也不盲目重发。</td></tr>
+            <tr><td>执行完成</td><td>Worker 轻量自检通过后保存原稿、证据与自检记录并向 Router 发完成信号。Router 主动自然提醒，自选摘要或完整回复后交付原来源；原稿留工单详情。回复确认送达后 completed 关单，Router 不重派或增加内容验收。</td></tr>
+            <tr><td>生成失败 / 投递失败 / 送达未知</td><td>原稿保留且工单待交付；生成失败只重试 Router 表达，明确未送达只补投已存回复，效果未知先查回执，不重跑 Worker，也不盲目重发。</td></tr>
             <tr><td>问题 / 受阻</td><td>Worker 上报 Router；有确定依据就内部答，必须用户拍板才发选项卡。答复按问题编号回原单；只停受影响部分，其余独立且已授权的部分按稳妥默认继续。缺信息或权限保留等待。</td></tr>
-            <tr><td>执行失败</td><td>偶发网络、供应商故障先退避重试；只有结构性无解才许报失败。说明必须写明试过什么、死在哪、用户改变什么条件可继续；报告送达后以 failed 关单。用户回话可续原单或开关联调整单。</td></tr>
+            <tr><td>执行失败</td><td>偶发网络、供应商故障先退避重试；只有结构性无解才报失败。保存实际尝试、原因与恢复条件，由 Router 自行组织自然说明，不套固定报告；送达后 failed 关单。用户回话可续原单或开关联调整单。</td></tr>
             <tr><td>执行超时</td><td>确认原执行状态与归属后，可在原单从检查点恢复；超时不等于未执行。付款、发送等外部效果未知，必须先查实际状态再决定是否续做，禁止盲目重跑。</td></tr>
-            <tr><td>追问 / 修改成果</td><td>用户追问时 Router 可按需读已存工单或结果直接答问，不重新派工；读取只用于答问。修改在办结果走修订；成功交付后不回改原成果，新开关联调整单并引用原单结果。</td></tr>
-            <tr><td>无关新任务</td><td>独立分诊，查重后新开工单并行执行；仅在资源冲突处串行或隔开工作区，交付带工单标题区分。</td></tr>
+            <tr><td>追问 / 修改成果</td><td>Router 表达交付或答问均可读取已存成果，不重新派工或验收。实际修改在办结果走修订；成功交付后不回改原稿，新开关联调整单并引用原单结果。</td></tr>
+            <tr><td>无关新任务</td><td>独立分诊，查重后新开工单并行执行；仅在资源冲突处串行或隔开工作区。Router 自行组织可辨的自然回复，不固定工单标题前缀。</td></tr>
           </tbody>
         </table>
       </div>
@@ -414,13 +415,13 @@
       <div class="grid">
         <article class="card"><h3>渠道复用统一会话</h3><p>渠道会话出现在工作台会话列表，带来源标记，可打开并直接回复。可以采用旁聊形态，列表、消息流、输入与存储复用工作台机制，不另建渠道会话实现。</p></article>
         <article class="card"><h3>入口不同，工单同账</h3><p>渠道会话与执行会话保留各自职责，涉及同一工单的输入、状态、投递记录和关单条件全局唯一；适配器不保存自己的对话状态，不复制第二张工单。</p></article>
-        <article class="card"><h3>能力与回执如实呈现</h3><p>文本、图片、卡片、回执按适配器声明显示能力；直接回复走统一投递路径，结果由 outbox 经来源适配器返回原会话或话题，回执回到同一本工单账。</p></article>
+        <article class="card"><h3>能力与回执如实呈现</h3><p>文本、图片、卡片、回执按适配器声明显示能力；直接回复走统一投递路径，Router 成果回复由 outbox 经来源适配器返回原会话或话题，原稿留工单详情，回执回到同一本工单账。</p></article>
         <article class="card"><h3>项目列表里的真实会话</h3><p>执行会话显式归入所属项目的工作区会话列表，带工单标记，与用户自建对话区分。从任务列表打开工单详情可进入同一 session；聊天消息不提供“查看执行会话”入口，不复制会话或创建第二份执行记录。</p></article>
-        <article class="card"><h3>直接插话，共用一本账</h3><p>用户通常在执行会话内直接写调整；主聊天里的调整也归入同一工单输入。Executor 消费范围内修订，超 Mandate 的输入交 Router 确认或分新单，不把普通会话输入当作新增执行权。</p></article>
+        <article class="card"><h3>直接插话，共用一本账</h3><p>用户始终与 Router 对话；执行会话保留直接插话入口，与主旁聊共用 Router 跟进协调及同一工单输入账。Executor 消费范围内修订，超 Mandate 的输入由 Router 确认或分新单，不把普通会话输入当作新增执行权。</p></article>
         <article class="card"><h3>无项目与防淹没</h3><p>不涉及项目的任务归入官方「未分组」，这就是本设计的“最近”：按最近活动排序、随时可翻到，不另建工作区。执行会话可收起，结束后自动沉底或归档进工单记录；工单保留同一会话的可追溯入口，收起和归档不丢失输入或结果。</p></article>
       </div>
       <p class="note" style="margin-top:12px">渠道定位与统一会话路径见<a href="06-superagent/链接与渠道.md#统一会话与原路交付">链接与渠道</a>；渠道对话不等于 Worker 执行会话，二者都复用统一会话机制。</p>
-      <p class="note" style="margin-top:12px">Router 主 / 旁聊保持结论与调度，工单受阻或等待恢复时由原 Router 根据状态事实自然说明；消息排在人类请求之后，不读取成果、不另开单，发布前复核状态与授权。聊天消息不显示通用等待或系统状态块、重复问题及刷新、停止、执行会话按钮，保留真实提问与授权卡。状态、技术原因和控制入口统一在任务列表与工单详情；旧错误记录或故障说明暂不可用时仅保留一行事实摘要与详情链接。执行会话保留真实过程并允许直接输入；空、加载、错误和有数据四态保持真实。详见<a href="06-superagent/对话交互.md">对话交互</a>与<a href="02-工作台与Agent/任务列表交互.md">任务列表交互</a>。</p>
+      <p class="note" style="margin-top:12px">Router 主 / 旁聊承担对话、调度与成果表达；工单完成后主动自然提醒，自选摘要或完整回复。状态说明由 Router 按真实情况自行判断，无固定工单报告、标题前缀、系统状态文案或硬兜底；消息排在人类请求之后，表达可读成果但不重派或验收，发布前复核状态与授权。聊天消息不显示通用等待或系统状态块、重复问题及刷新、停止、执行会话按钮，保留真实提问与授权卡。真实状态、技术原因和控制入口统一在任务列表与工单详情，Router 暂时不可用时保留待交付或异常事实。执行会话保留真实过程并允许直接输入；空、加载、错误和有数据四态保持真实。详见<a href="06-superagent/对话交互.md">对话交互</a>与<a href="02-工作台与Agent/任务列表交互.md">任务列表交互</a>。</p>
     </section>
 
     <section class="panel" id="models-memory">
@@ -444,8 +445,8 @@
             <tr><td><span class="step">3</span>派工</td><td>工单服务</td><td>保存 Mandate 五要素与真实原话，范围不超原话；固定附带轻量自检要求，创建分派和工作模型路由。</td></tr>
             <tr><td><span class="step">4</span>执行</td><td>Worker / Executor</td><td>租约＋fence 领取，创建或恢复真实执行会话并挂工作区；每工具复检权限、规则和归属，接收统一输入账中的修订。</td></tr>
             <tr><td><span class="step">5</span>自校验</td><td>原 Worker</td><td>在原上下文快速检查，优先测试、构建和命令输出；明显错误自行修复，通过才报完成；无法解决如实报受阻或失败。</td></tr>
-            <tr><td><span class="step">6</span>落单</td><td>工单服务</td><td>结果、证据、自检摘要与 outbox 幂等落库；Router 仅收到状态信号，不读、不审、不改写交付正文。</td></tr>
-            <tr><td><span class="step">7</span>投递</td><td>统一 Delivery / 来源适配器</td><td>outbox 将原结果带工单标题经来源适配器送回原会话/话题，回执回同单；失败保留待交付，未知送达先核实，禁止重跑 Worker。适配器不判关单。</td></tr>
+            <tr><td><span class="step">6</span>落单与通知</td><td>Worker / 工单服务</td><td>成果原稿、证据与自检摘要幂等落库，向所属 Router 发绑定工单与结果版本的完成信号；原稿在详情保留。</td></tr>
+            <tr><td><span class="step">7</span>表达与投递</td><td>Router / Delivery / 来源适配器</td><td>Router 主动自然提醒，自选摘要或完整回复，保存后由 outbox 原路交付，回执回同单；不重派或验收。生成失败只重试表达，投递失败只补投回复，均待交付且不重 Worker；未知送达先核实，适配器不判关单。</td></tr>
             <tr><td><span class="step">8</span>关单</td><td>工单服务 / 用户</td><td>可信送达后成功以 completed、结构性失败以 failed 关单，用户终审；执行会话自动收纳但保持可追溯。</td></tr>
             <tr><td><span class="step">9</span>沉淀</td><td>后台整理 / 辅助模型</td><td>计数触发后仅从已关工单提炼记忆与技能；不经过 Router 对话上下文，不参与本单交付放行。</td></tr>
           </tbody>
@@ -459,14 +460,14 @@
       <div class="grid">
         <article class="card"><h3>代码接线与定向验证</h3><p>官方会话与工单基础之上，本轮已接入权限动作存储与注册通道、单次审批和站点管理、逐工具/子代理硬门、原执行修订切换、暂停只收件及持久问答绑定，并通过对应定向测试。各模块的具体覆盖以所属设计为准。</p></article>
         <article class="card"><h3>适配与交互边界</h3><p>高危专用适配器仍有缺口，无通道走 handoff；完整接管导航、安全输入及浏览器代填待完善。渠道与交付、记忆及执行会话分别在所属文档维护接线和验证范围，已有基础与本轮局部通过不能推定全部链路完成。</p></article>
-        <article class="card"><h3>真实运行仍待验证</h3><p>本轮两次原生管道连接失败阻塞真实安装版桌面验证。Harness 实际审批卡点击、飞书账号收发、主旁聊并存、会话导航/插话及重启恢复仍须实测；浏览器四态、构建或定向测试不能代替真实业务闭环。</p></article>
+        <article class="card"><h3>新交付链已接线，安装版待重验</h3><p>Worker 保存原稿并通知、Router 主动自然表达与原路交付的新链已接线并有定向测试，安装版真实链路仍待重验。过去真实主路径和提问续跑通过仅证明旧直投链，不能声称新链或全部六项已通过。Harness 审批卡点击、飞书账号收发、会话导航/插话及重启恢复仍须实测；浏览器四态、构建或定向测试不能代替真实业务闭环。</p></article>
       </div>
       <p class="note" style="margin-top:12px">各模块只维护本次方案，接线范围与实现缺口在所属模块说明，不并列保留其他流程。源码、内置提示和已安装实例分别核实；文档与定向通过不替代实际运行证据。</p>
       <div class="callout" style="margin-top:16px">文档维护：六板块内按职责维护权威正文，通过链接引用；本页是唯一总架构 HTML，只汇总板块关系、机制与流程。具体实现边界与验证条件随模块维护，历史留在 Git、eval/ 或 artifacts/，不另建现状、开发清单、验收流水或备份。本页离线可读，无构建或 CDN 依赖。</div>
     </section>
 
     </div>
-    <footer>BenchGo · 目标架构 2026-11-08 · 用户指令授权、Worker 自校验、原结果直投、送达关单。</footer>
+    <footer>BenchGo · 目标架构 2026-11-08 · 用户指令授权、Worker 自校验保存、Router 表达交付、送达关单。</footer>
   </main>
   <script>
     (() => {
