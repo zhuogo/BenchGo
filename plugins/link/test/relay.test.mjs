@@ -138,9 +138,12 @@ test('real relay isolates anonymous traffic and each verified device quota, incl
   } }, store);
   const link = await listen({ identity, config: { host: '127.0.0.1', port: 0, publicUrl: '' }, store, workbench, dispatch: async () => ({ ok: true }), onError: () => {} });
   const secret = 'safe-test-relay-host-secret', relay = await createRelayServer({ host: '127.0.0.1', port: relayPort, identity, publicUrl: origin, token: secret });
+  // Quota windows advance Date.now below; isolate the host's interval so a
+  // slow test cannot mistake that jump for a lost pong.
+  t.mock.timers.enable({ apis: ['setInterval'] });
   const host = createRelayHost({ relayUrl: origin, relayCa: identity.cert, token: secret, relayHeaders: link.relayHeaders, target: { url: `https://127.0.0.1:${link.port}`, pin: identity.pin } });
   t.after(async () => {
-    await host.close(); await relay.close(); await link.close(); await store.flush();
+    await host.close(); t.mock.timers.reset(); await relay.close(); await link.close(); await store.flush();
     await rm(directory, { recursive: true, force: true });
     delete request.relayCert; delete request.relayOrigin;
   });

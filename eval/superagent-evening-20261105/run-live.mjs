@@ -56,7 +56,8 @@ try {
     { id: 'llm-pi-ai', config: { providers: prepared.providers } },
     { insert: [{ id: 'evening-observation', name: pathToFileURL(join(root, 'eval/superagent-evening-20261105/observe-runtime.mjs')).href, config: { streamPath, requestPath } }] },
   ]));
-  child = spawn(process.execPath, ['--import', pathToFileURL(join(root, 'deepseek-harness/node_modules/tsx/dist/esm/index.mjs')).href,
+  child = spawn(process.execPath, ['--import', pathToFileURL(join(root, 'scripts/source-host-loader.mjs')).href,
+    '--import', pathToFileURL(join(root, 'deepseek-harness/node_modules/tsx/dist/esm/index.mjs')).href,
     join(root, 'deepseek-harness/apps/cli/src/bin.ts'), '--profile', 'web', '--host', '127.0.0.1', '--port', '0', '--no-open'], {
     cwd: directory, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: directory, TMP: directory, HOME: isolatedUser,

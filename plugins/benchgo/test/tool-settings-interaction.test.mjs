@@ -20,7 +20,7 @@ const source = readFileSync(new URL('../client/tool-settings.jsx', import.meta.u
 
 function mount(component, initialProps, options = {}) {
   const dom = new JSDOM('<!doctype html><div id="root"></div><button id="outside">outside</button>', { pretendToBeVisual: true, url: 'http://test/' });
-  const globals = { window: dom.window, document: dom.window.document, Node: dom.window.Node, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement, requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window), IS_REACT_ACT_ENVIRONMENT: true };
+  const globals = { window: dom.window, document: dom.window.document, Node: dom.window.Node, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement, HTMLButtonElement: dom.window.HTMLButtonElement, MutationObserver: dom.window.MutationObserver, requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window), IS_REACT_ACT_ENVIRONMENT: true };
   const previous = new Map();
   for (const [key, value] of Object.entries(globals)) {
     previous.set(key, Object.getOwnPropertyDescriptor(globalThis, key));

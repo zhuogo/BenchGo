@@ -1429,19 +1429,19 @@
     },
     "/api/benchgo/efficiency": {
       "get": {
-        "summary": "??????????????????",
-        "description": "??owner??????available?????????????Agent????????",
+        "summary": "读取效率增强配置与状态",
+        "description": "返回增强配置与实际可用状态；available 表示官方宿主适配器已就绪，单个 Agent 的能力需另行诊断。",
         "responses": {
           "200": {
             "description": "revision?scope?features.ops/compaction??"
           },
           "403": {
-            "description": "???owner????"
+            "description": "请求未通过同源访问校验"
           }
         }
       },
       "post": {
-        "summary": "?????????????????",
+        "summary": "更新效率增强配置",
         "requestBody": {
           "required": true,
           "content": {
@@ -1492,33 +1492,33 @@
         },
         "responses": {
           "200": {
-            "description": "????revision?????????????GET??"
+            "description": "保存配置并更新 revision，返回与 GET 相同的状态结构"
           },
           "400": {
-            "description": "???????"
+            "description": "请求或配置格式无效"
           },
           "409": {
-            "description": "??????????"
+            "description": "配置版本已变化，请刷新后重试"
           }
         }
       }
     },
     "/api/benchgo/workbench": {
       "get": {
-        "summary": "????????????SSH????",
-        "description": "??????owner????????????????Link???",
+        "summary": "读取工作台与 SSH 状态",
+        "description": "仅限本机已认证主人访问，拒绝代理转发与 Link 请求。",
         "responses": {
           "200": {
             "description": "sidebar?ssh?trustedHosts"
           },
           "403": {
-            "description": "???????owner"
+            "description": "请求不满足本机主人访问条件"
           }
         }
       },
       "post": {
-        "summary": "?????SSH??????",
-        "description": "ssh.probe???????????????????ssh.confirm???????challenge??????fingerprint???????????pin?",
+        "summary": "探测与确认 SSH 主机指纹",
+        "description": "ssh.probe 探测主机指纹并返回两分钟内有效的 challenge；ssh.confirm 校验 challenge 与 fingerprint 后保存主机信任记录。",
         "requestBody": {
           "required": true,
           "content": {
@@ -1556,13 +1556,13 @@
         },
         "responses": {
           "200": {
-            "description": "??challenge???????"
+            "description": "返回指纹探测结果与 challenge，或主机信任确认结果"
           },
           "400": {
-            "description": "???????????????"
+            "description": "请求无效、操作不支持或指纹确认已过期"
           },
           "403": {
-            "description": "???????owner"
+            "description": "请求不满足本机主人访问条件"
           }
         }
       }

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Context } from '@deepseek-ai/cordis';
+import { Context, Service } from '@deepseek-ai/cordis';
 import LlmRuntime from '@deepseek-ai/dsh-llm';
 import { ToolRuntime } from '@deepseek-ai/dsh-tools';
 import * as Base from '../src/plugin.mjs';
@@ -43,8 +43,24 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
   const workspace = { id: 'project', path: projectPath, title: 'Project', sessionIds: ['official-session'] };
   ctx.provide('path', { baseDir: directory });
   ctx.provide('systemPrompt', { tools() {}, section() {} });
-  ctx.provide('agents', { list: () => [], get: () => undefined });
+  ctx.provide('agents', { list: () => [], get: () => undefined,
+    create: async () => { throw new Error('Lifecycle fixture must not execute agents'); } });
   ctx.provide('sessionQuery', { listSessions: async () => [], readSession: async () => ({ events: [] }) });
+  const projectionRegistrations = new Map();
+  // Preserve the official caller-scoped registration lifetime and handle shape.
+  class FixtureSessionProjections extends Service {
+    constructor(context) { super(context, 'sessionProjections'); }
+    async register(definition) {
+      const dispose = this.ctx.effect(() => {
+        assert(!projectionRegistrations.has(definition.key), `duplicate projection ${definition.key}`);
+        projectionRegistrations.set(definition.key, definition);
+        return () => projectionRegistrations.delete(definition.key);
+      });
+      const stateOf = () => definition.init();
+      return { stateOf, readerFor: session => () => stateOf(session), dispose: async () => { await dispose(); } };
+    }
+  }
+  await ctx.plugin(FixtureSessionProjections);
   ctx.provide('tokenMeter', {});
   ctx.provide('settings', { describe: () => [] });
   ctx.provide('credentials', { resolve: async () => undefined });
@@ -80,11 +96,20 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
     const response = await route.fetch(new Request('http://localhost' + path, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
     return { status: response.status, body: await response.json() };
   };
+  let moduleFibers = [];
   const availability = async expected => {
     await pauseUntil(async () => {
       const result = await request('/api/benchgo/modules');
       return Object.entries(expected).every(([name, available]) => result.body.modules[name].available === available);
-    }, 'module availability did not settle: ' + JSON.stringify(expected));
+    }, 'module availability did not settle: ' + JSON.stringify(expected)).catch(error => {
+      for (const [name, fiber] of moduleFibers) {
+        const cause = fiber._error;
+        console.error('module fixture diagnostic', name, 'state', fiber.state,
+          cause?.stack || cause || 'no fiber error',
+          'projections', [...projectionRegistrations.keys()]);
+      }
+      throw error;
+    });
     assert.deepEqual(duplicateRoutes, []);
   };
   const basePaths = ['/api/benchgo/modules', '/api/benchgo/skills', '/api/commander', '/api/commander/tooling', '/api/commander/usage', '/api/commander/updates'];
@@ -115,8 +140,10 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
     child.effect(() => () => linkSessions.close());
   } };
   let harness = ctx.plugin(Harness), assistant = ctx.plugin(SuperAgent), voice = ctx.plugin(Voice), link = ctx.plugin(Link);
+  moduleFibers = [['harness', harness], ['superagent', assistant], ['voice', voice], ['link', link]];
   await Promise.all([harness.await(), assistant.await(), voice.await(), link.await()]);
   await availability({ base: true, harness: true, superagent: true, voice: true, link: true });
+  assert(projectionRegistrations.has('benchgoChannelSource'));
   await checkBase();
   assert.equal(ctx.llm.listProviders().filter(row => row.id.startsWith('commander-')).length, 8);
   assert.equal(ctx.tools.schemas().filter(row => row.name.startsWith('commander_')).length, 14);
@@ -134,6 +161,7 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
   await officialSessions();
 
   await assistant.dispose();
+  assert(!projectionRegistrations.has('benchgoChannelSource'));
   await availability({ base: true, harness: true, superagent: false, voice: true, link: true });
   await checkBase(); await officialSessions();
   assert(!routes.has('/api/commander/assistant'));
@@ -142,6 +170,7 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
   assistant = ctx.plugin(SuperAgent); await assistant;
   await availability({ superagent: true });
   assert.notEqual(ctx.get('assistant'), oldAssistant);
+  assert(projectionRegistrations.has('benchgoChannelSource'));
 
   await voice.dispose();
   await availability({ base: true, harness: true, superagent: true, voice: false, link: true });
@@ -181,6 +210,7 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
   await officialSessions(); await checkBase();
 
   await ctx.fiber.dispose();
+  assert.equal(projectionRegistrations.size, 0);
   assert.equal(routes.size, 0); assert.equal(upgrades.size, 0); assert.equal(peers.size, 0);
   assert.deepEqual(duplicateRoutes, []);
   assert.equal(linkService.status().enabled, false);

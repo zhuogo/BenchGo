@@ -38,6 +38,6 @@ export async function preflight({ credentials = false } = {}) {
       configRevision: assistant.revision, models: assistant.models, auxiliary: assistant.auxiliary ?? null,
       workerModels: assistant.workerModels ?? [], providers: Object.entries(used).map(([id, provider]) => ({ id, api: provider.api,
         origin: new URL(provider.baseURL).origin, registeredExactModelIds: provider.models.map(model => model.id) })),
-      scopeClarification: 'gpt-6-astra/ultra/fast applies to development agents only; live acceptance inherits existing exact supplier configuration.' } };
+      scopeClarification: 'Development subagents use gpt-6.1-sol per the current user instruction; live acceptance inherits the existing exact supplier configuration.' } };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) console.log(JSON.stringify((await preflight()).evidence, null, 2));
