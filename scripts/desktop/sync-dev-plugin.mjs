@@ -80,6 +80,28 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
       semver ??= createRequire(join(anchor, 'package.json'))('semver');
       if (metadata.name !== name || !semver.satisfies(metadata.version, range, { includePrerelease: true })) throw new Error(`运行依赖版本不兼容：${name}@${metadata.version}，需要 ${range}`);
     };
+    async function browserPlatformPeer(name, range) {
+      // Official web/src/seed.ts owns this browser singleton; no Node package is shipped.
+      if (!['@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-ui-slots', '@deepseek-ai/dsh-client-ui-primitives', '@deepseek-ai/dsh-client-ui-dockkit'].includes(name)) return false;
+      anchor ??= await findPackage('@deepseek-ai/dsh-llm', target);
+      const frontend = await findPackage('@deepseek-ai/dsh-web-frontend', anchor);
+      const metadata = JSON.parse(await readFile(join(frontend, 'package.json'), 'utf8'));
+      await assertVersion({ ...metadata, name }, name, range);
+      if (metadata.name !== '@deepseek-ai/dsh-web-frontend') throw new Error('Invalid official frontend package');
+      const dist = join(frontend, 'dist');
+      const html = await readFile(join(dist, 'index.html'), 'utf8');
+      const entries = [...html.matchAll(/<script\b[^>]*\btype=["']module["'][^>]*\bsrc=["']([^"']+)["'][^>]*>/gu)];
+      for (const [, entry] of entries) {
+        if (!/^\.\/assets\/[a-zA-Z0-9._-]+\.js$/u.test(entry)) continue;
+        const script = await readFile(join(dist, entry), 'utf8');
+        // Fail closed if the official seed-table shape changes. A bare string mention is insufficient.
+        for (const [, body] of script.matchAll(/\breturn\s*\{([^{}]+)\}/gu)) {
+          const keys = new Set([...body.matchAll(/(?:^|,)\s*["']([^"']+)["']\s*:\s*[$\w]+\s*(?=,|$)/gu)].map(match => match[1]));
+          if ([name, '@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-ui-slots'].every(key => keys.has(key))) return true;
+        }
+      }
+      throw new Error(`官方前端未提供浏览器平台模块：${name}`);
+    }
     async function official(name, range, preservedFrom) {
       anchor ??= await findPackage('@deepseek-ai/dsh-llm', target);
       const packagePath = await findPackage(name, anchor);
@@ -133,7 +155,10 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
         await dependencies(dependency, output, new Set([...ancestors, dependency]));
       }
       for (const [name, range] of Object.entries(metadata.peerDependencies || {})) {
-        if (sharedPackage(name) && !metadata.peerDependenciesMeta?.[name]?.optional) await official(name, range, preserve ? packagePath : undefined);
+        if (sharedPackage(name) && !metadata.peerDependenciesMeta?.[name]?.optional) {
+          if (await browserPlatformPeer(name, range)) continue;
+          await official(name, range, preserve ? packagePath : undefined);
+        }
       }
     }
     await dependencies(source, target, new Set([source]), true);

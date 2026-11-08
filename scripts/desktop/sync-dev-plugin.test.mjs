@@ -43,6 +43,38 @@ async function fixture(t) {
   return { root, source, target, wrapper, enrollment: { managed: true, directory } };
 }
 
+for (const mode of ['valid', 'slots', 'store', 'dockkit', 'missing-seed', 'wrong-version', 'unused-asset', 'node-dependency', 'unknown-peer']) test(`browser platform peer uses the installed official seed table: ${mode}`, async t => {
+  const setup = await fixture(t);
+  const put = async (base, path, value) => {
+    await mkdir(dirname(join(base, path)), { recursive: true });
+    await writeFile(join(base, path), typeof value === 'string' ? value : JSON.stringify(value));
+  };
+  await put(setup.enrollment.directory, 'release.json', { shared: [] });
+  const name = ({ slots: '@deepseek-ai/dsh-client-ui-slots', store: '@deepseek-ai/dsh-client-store', dockkit: '@deepseek-ai/dsh-client-ui-dockkit', 'unknown-peer': '@deepseek-ai/dsh-client-unknown' })[mode] || '@deepseek-ai/dsh-client-ui-primitives';
+  const manifest = JSON.parse(await readFile(join(setup.source, 'package.json'), 'utf8'));
+  manifest.dependencies['fixture-client'] = '1.0.0';
+  await put(setup.source, 'package.json', manifest);
+  await put(setup.source, 'node_modules/fixture-client/package.json', { name: 'fixture-client', version: '1.0.0', [mode === 'node-dependency' ? 'dependencies' : 'peerDependencies']: { [name]: '^0.2.2-rc.1' } });
+  const frontend = join(setup.root, 'official/node_modules/@deepseek-ai/dsh-web-frontend');
+  await put(frontend, 'package.json', { name: '@deepseek-ai/dsh-web-frontend', version: mode === 'wrong-version' ? '0.1.0' : '0.2.2-rc.1' });
+  await put(frontend, 'dist/index.html', '<script type="module" crossorigin src="./assets/index.js"></script>');
+  const seed = 'function getStaticModules(){return {"@deepseek-ai/dsh-client-store":store,"@deepseek-ai/dsh-client-ui-slots":slots,"@deepseek-ai/dsh-client-ui-primitives":primitives,"@deepseek-ai/dsh-client-ui-dockkit":dockkit}}';
+  await put(frontend, 'dist/assets/index.js', ['missing-seed', 'unused-asset'].includes(mode) ? 'console.log("@deepseek-ai/dsh-client-ui-primitives");' : seed);
+  await put(frontend, 'dist/assets/unused.js', seed);
+  if (!['valid', 'slots', 'store', 'dockkit'].includes(mode)) {
+    await assert.rejects(syncDevelopmentPlugin(setup));
+    assert.equal(await readFile(join(setup.target, 'lib/client.js'), 'utf8'), 'old seed');
+    return;
+  }
+  for (let pass = 0; pass < 2; pass++) {
+    await syncDevelopmentPlugin(setup);
+    await assert.rejects(lstat(join(setup.target, 'node_modules', name)), { code: 'ENOENT' });
+    const release = JSON.parse(await readFile(join(setup.enrollment.directory, 'release.json'), 'utf8'));
+    assert.ok(!release.shared.some(item => item.name === name));
+    assert.equal(await readFile(join(setup.target, 'lib/client.js'), 'utf8'), 'local:client.js');
+  }
+});
+
 test('new third-party runtime SDK resolves from the installed release after synchronization', async t => {
   const setup = await fixture(t);
   await writeFile(join(setup.enrollment.directory, 'release.json'), JSON.stringify({ shared: [] }));
