@@ -20,7 +20,9 @@ export function startupWindowPlugin(mainPath) {
         code = code.replace(before, after);
       }
       transformed++;
-      return { code: `import { openStartupWindow } from ${JSON.stringify(helper)};\nimport { initializePluginProfile } from ${JSON.stringify(fileURLToPath(new URL('./plugin-bundle.mjs', import.meta.url)))};\nasync function ensureBenchgoPlugin(resourcesPath) {\n  try { await initializePluginProfile({ resources: resourcesPath }); }\n  catch (error) { console.error('BenchGo plugin enrollment failed', error); }\n}\nlet closeBenchgoStartup;\n${code}`, map: null };
+      // Both app startup and the installer execute the packaged enrollment
+      // entry. Never freeze another copy of that implementation into main.js.
+      return { code: `import { openStartupWindow } from ${JSON.stringify(helper)};\nimport { pathToFileURL as benchgoPathToFileURL } from 'node:url';\nasync function ensureBenchgoPlugin(resourcesPath) {\n  try {\n    const enrollmentModule = benchgoPathToFileURL(join(resourcesPath, 'benchgo', 'plugin-bundle.mjs')).href;\n    const { initializePluginProfile } = await import(enrollmentModule);\n    return await initializePluginProfile({ resources: resourcesPath });\n  } catch (error) {\n    console.error('BenchGo plugin enrollment failed', error);\n    throw error;\n  }\n}\nlet closeBenchgoStartup;\n${code}`, map: null };
     },
     generateBundle() {
       if (transformed !== 1) throw new Error(`Official startup changed: expected one main entry, got ${transformed}`);
@@ -34,6 +36,9 @@ export function verifyStartupBundle(source) {
   // Bundling rewrites join() and quotes, so match the surviving resource path pieces.
   if (!source.includes('resourcesPath') || !source.includes('icon.png')) missing.push('window icon');
   if (!/ensureBenchgoPlugin\(process\.resourcesPath\)/.test(source)) missing.push('plugin enrollment');
+  // Rolldown may fold the URL variable into import(), without inlining the module.
+  if (!/['"]benchgo['"],\s*['"]plugin-bundle\.mjs['"]/.test(source) || !/\{\s*initializePluginProfile\s*\}\s*=\s*await import\(/.test(source)) missing.push('packaged enrollment entry');
+  if (/function (?:initializePluginProfile|stagePluginBundle|attachOfficialPackages)\b/.test(source)) missing.push('inlined enrollment implementation');
   if (!/function reportFatal\(error, source\)\s*\{\s*closeBenchgoStartup\?\.\(\)/.test(source)) missing.push('fatal cleanup');
   if (missing.length) throw new Error(`Compiled desktop is missing the startup window lifecycle: ${missing.join(', ')}`);
 }
