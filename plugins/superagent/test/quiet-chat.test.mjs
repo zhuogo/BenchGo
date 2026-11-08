@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { quietChatRows } from '../client/quiet-chat.mjs';
 import { projectReplyStream } from '../client/reply-stream.mjs';
-import { continuationRecovery, ticketSnapshot, ticketWaiting } from '../client/ticket-state.mjs';
+import { continuationRecovery, ticketSnapshot } from '../client/ticket-state.mjs';
 import { PartialArguments } from '@deepseek-ai/dsh-util-values';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -153,36 +153,23 @@ test('option accompanies its body and uses the validated endpoint, never approva
   const recoveryEvent = { ticketId: 'original', ticketStatus: 'waiting', currentInstructionRevision: 2, currentResultVersion: 3,
     continuationWait: { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 3 }, threadId: 'side', text: '已答复，系统等待续做资源' };
   const recoveryTree = walk(module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side', api: async (...args) => recoveryCalls.push(args), history: { notifications: [{ ...recoveryEvent, eventId: 'old', createdAt: 1 }, { ...recoveryEvent, eventId: 'new', createdAt: 2 }] } } }));
-  const waitingCards = recoveryTree.filter(node => node.props?.ticket?.id === 'original' && node.props.onRefresh === undefined);
-  assert.equal(waitingCards.length, 1, 'only the latest original-ticket message owns recovery');
+  assert(!recoveryTree.some(node => node.type === 'TicketWaiting'));
+  assert(!statusAndQuestion.some(node => node.type === 'TicketWaiting'), 'question card is not followed by a duplicate waiting panel');
   assert.equal(recoveryCalls.length, 0);
-  const action = ticketWaiting(waitingCards[0].props.ticket).actions.find(action => action.kind === 'resume');
-  assert.deepEqual(action.input, { ticketId: 'original', expectedResultVersion: 3 });
-  for (const code of ['EXECUTION_EFFECTS_UNKNOWN', 'EXECUTION_NOT_VERIFIED', 'EXECUTION_STOP_UNCONFIRMED']) {
-    const safetyTree = walk(module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side', history: { notifications: [{ ...recoveryEvent, eventId: 'safety', continuationWait: { code, sourceResultVersion: 3 } }] } } }));
-    const ticket = safetyTree.find(node => node.props?.ticket?.id === 'original').props.ticket;
-    assert.equal(ticketWaiting(ticket).label, '等待核实外部效果');
-    assert(!ticketWaiting(ticket).actions.some(action => ['resume', 'review'].includes(action.kind)));
-    assert(!safetyTree.some(node => node.props?.['aria-label'] === '系统续做操作'));
+  const opened = [];
+  for (const executionSession of [undefined, { available: false }, { available: true, sessionId: 'worker' }]) {
+    const tree = walk(module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side',
+      onOpenExecution: value => opened.push(value), onRefresh: () => opened.push('refresh'),
+      history: { notifications: [{ ...recoveryEvent, eventId: 'current', executionSession }] } } }));
+    assert(!tree.some(node => node.type === 'TicketWaiting' || node.props?.['aria-label'] === '工单执行会话'));
+    for (const label of ['查看执行会话', '刷新状态', '停止工单']) assert(!tree.some(node => node.type === 'button' && node.children.includes(label)));
   }
-  const opened = [], execution = { available: true, ticketId: 'original', sessionId: 'official-worker', placement: 'ungrouped', closed: true };
-  const executionHome = { threadId: 'side', onOpenExecution: value => opened.push(value), onRefresh: async () => opened.push('refresh'),
-    history: { notifications: [{ ...recoveryEvent, eventId: 'previous', createdAt: 1 },
-      { ...recoveryEvent, eventId: 'current', ticketStatus: 'completed', executionSession: execution, createdAt: 2 }] } };
-  const executionTree = walk(module.exports.QuietChat({ session: { running: false }, home: executionHome }));
-  const direct = executionTree.filter(node => node.type === 'button' && node.children?.includes('查看执行会话'));
-  assert.equal(direct.length, 1, 'the latest Ticket message opens its one official execution session, including closed Tickets');
-  await direct[0].props.onClick();
-  assert.deepEqual(opened, [execution], 'navigation receives the persisted session identity, without a task API write');
-  for (const executionSession of [undefined, { available: false, reason: 'execution-session-unavailable' }]) {
-    const unavailable = walk(module.exports.QuietChat({ session: { running: false }, home: { ...executionHome,
-      history: { notifications: [{ ...recoveryEvent, eventId: 'missing-session', executionSession }] } } }));
-    assert(!unavailable.some(node => node.type === 'button' && node.children?.includes('查看执行会话')));
-    const refresh = unavailable.find(node => node.type === 'button' && node.children?.includes('刷新状态'));
-    assert(refresh, 'missing execution has a read-only refresh action');
-    await refresh.props.onClick();
-  }
-  assert.deepEqual(opened.slice(1), ['refresh', 'refresh']);
+  assert.deepEqual(opened, []);
+  const schedule = walk(module.exports.ScheduleLifecycle({ row: { schedule: { phase: 'completed', ticketId: 'original' }, executionSession: { available: true } },
+    onOpenResources: (...args) => opened.push(args), onOpenExecution: () => opened.push('execution') }));
+  assert(!schedule.some(node => node.children.includes('查看执行会话')));
+  await schedule.find(node => node.type === 'button' && node.children.includes('查看关联工单')).props.onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(opened)), [['tasks', { ticketId: 'original' }]]);
 });
 
 test('quiet chat keeps answered question bubbles in history order', () => {

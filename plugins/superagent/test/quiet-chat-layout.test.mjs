@@ -21,7 +21,8 @@ test('ticket state uses a compact factual fallback and a single Router reply', {
   try {
     const page = await browser.newPage({ reducedMotion:'reduce' });
     page.on('pageerror', error => errors.push(error.message));
-    await page.setContent(html);
+    await page.route('http://localhost/', route => route.fulfill({contentType:'text/html',body:html}));
+    await page.goto('http://localhost/');
     for (const dark of [false,true]) for (const width of [1440,390]) {
       await page.setViewportSize({ width,height:900 });
       await page.evaluate(dark => document.body.toggleAttribute('data-ds-dark-theme',dark),dark);
@@ -46,6 +47,18 @@ test('ticket state uses a compact factual fallback and a single Router reply', {
         }
       }
     }
+    await page.evaluate(()=>window.renderScenario('ticket-question'));
+    await page.getByText('需要你的答复',{exact:true}).waitFor();
+    assert.equal(await page.getByLabel('工单问题',{exact:true}).count(),1);
+    assert.equal(await page.getByLabel('工单等待状态',{exact:true}).count(),0);
+    for (const name of ['查看执行会话','刷新状态','停止工单']) assert.equal(await page.getByRole('button',{name,exact:true}).count(),0);
+    await page.getByRole('radio',{name:'B',exact:true}).check();
+    await page.getByRole('button',{name:'提交答复',exact:true}).click();
+    await page.getByText('答复已保存 · 原工单继续处理',{exact:true}).waitFor();
+    const answer = await page.evaluate(()=>window.apiCalls.find(([name])=>name==='ticketAnswer'));
+    assert.equal(answer[1].ticketId,'ticket');
+    assert.deepEqual(answer[1].answer,{selected:['B']});
+    if(captureDir) await page.screenshot({path:join(captureDir,'question-without-status-panel.png'),fullPage:true});
     assert.deepEqual(errors,[]);
   } finally { await browser.close(); }
 });
@@ -81,10 +94,10 @@ async function fixture() {
           assistantConfig:{cardMotion:false}, onOpenResources:(...args)=>window.resourceOpens.push(args),
           onOpenExecution:async execution=>{window.executionOpens.push(execution);if(window.failExecution)throw new Error('执行会话打开失败');if(window.holdExecution)await new Promise(resolve=>window.finishExecution=resolve);},
           onRefresh:async()=>{}, history:{ messages:state==='data'?messages:state==='state-reported'?[{id:'router-state',role:'assistant',kind:'final',ticketStateEventKey:'failure:1',text:'调研任务暂时受阻，已有记录已保留。',time:1793808005000}]:[], reactions:{'message:reply':'👍'},
-            notifications:state==='data'?[{eventId:'delivery',threadId:'main',ticketId:'ticket',ticketStatus:'completed',executionSession:{available:true,ticketId:'ticket',sessionId:'official-execution',placement:'ungrouped',closed:true},text:'布局已调整，窄容器也保持侧边操作。',createdAt:1793808004000,options:['继续检查']}]:['state-error','state-reported'].includes(state)?[{eventId:'old-notification-uuid',ticketStateEventKey:'failure:1',type:'ticket.result',threadId:'main',ticketId:'ticket',title:'AI获客调研',ticketStatus:'uncertain',executionSession:{available:true,sessionId:'worker'},publication:{action:'deliver',origin:'system',systemState:{state:'continuation_wait',code:'NETWORK',stage:'execution'},text:'系统状态：执行记录已保留，等待恢复条件。'},origin:'system',text:'系统状态：执行记录已保留，等待恢复条件。',createdAt:1793808004000}]:[] } };
+            notifications:state==='ticket-question'?[{eventId:'ask',type:'ticket.attention',threadId:'main',ticketId:'ticket',ticketStatus:'waiting',instructionRevision:1,currentInstructionRevision:1,currentResultVersion:0,text:'结果选哪个标记？',attention:{id:'attention',state:'waiting',instructionRevision:1,resultVersion:0,question:{question:'结果选哪个标记？',options:[{label:'A'},{label:'B'}]}}}]:state==='data'?[{eventId:'delivery',threadId:'main',ticketId:'ticket',ticketStatus:'completed',executionSession:{available:true,ticketId:'ticket',sessionId:'official-execution',placement:'ungrouped',closed:true},text:'布局已调整，窄容器也保持侧边操作。',createdAt:1793808004000,options:['继续检查']}]:['state-error','state-reported'].includes(state)?[{eventId:'old-notification-uuid',ticketStateEventKey:'failure:1',type:'ticket.result',threadId:'main',ticketId:'ticket',title:'AI获客调研',ticketStatus:'uncertain',executionSession:{available:true,sessionId:'worker'},publication:{action:'deliver',origin:'system',systemState:{state:'continuation_wait',code:'NETWORK',stage:'execution'},text:'系统状态：执行记录已保留，等待恢复条件。'},origin:'system',text:'系统状态：执行记录已保留，等待恢复条件。',createdAt:1793808004000}]:[] } };
         root.render(<div className="ba-root ba-official-conversation" data-assistant-chat="">
           <div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll="" tabIndex={0}>
-            {!['data','waiting','question','state-error','state-reported'].includes(state) && <AssistantHome key={'home-'+state} {...home} input={{phase:'plain',draft:''}} inputActions={{captureInsertion(){},insertText(){return true},persistDraft(){}}}/>}
+            {!['data','waiting','question','state-error','state-reported','ticket-question'].includes(state) && <AssistantHome key={'home-'+state} {...home} input={{phase:'plain',draft:''}} inputActions={{captureInsertion(){},insertText(){return true},persistDraft(){}}}/>}
             <QuietChat key={'chat-'+state} home={home} session={{running:state==='waiting'||state==='question'}} />
           </div></div>
         </div>);
@@ -209,22 +222,8 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
     }
     await page.locator('[data-chat-key="notification:delivery"]').getByRole('button',{name:'继续检查',exact:true}).click();
     assert.deepEqual(await page.evaluate(()=>window.apiCalls.filter(([name])=>name.startsWith('notification'))),[['notificationOption',{eventId:'delivery',threadId:'main',text:'继续检查'}]],'delivery options retain the validated reply endpoint without a read action');
-    const execution=page.getByRole('button',{name:'查看执行会话',exact:true});
-    await page.evaluate(()=>window.holdExecution=true);
-    await execution.click();
-    assert(await execution.isDisabled(),'navigation stays busy while the official session opens');
-    assert.equal(await page.getByLabel('工单执行会话',{exact:true}).getAttribute('aria-busy'),'true');
-    await page.evaluate(()=>{window.holdExecution=false;window.finishExecution();});
-    await execution.waitFor({state:'visible'});
-    await page.waitForFunction(()=>!document.querySelector('[aria-label="工单执行会话"] button').disabled);
-    assert.equal(await page.evaluate(()=>window.executionOpens[0].sessionId),'official-execution');
-    await page.evaluate(()=>window.failExecution=true);
-    await execution.click();
-    await page.getByRole('alert').filter({hasText:'执行会话打开失败'}).waitFor();
-    assert(await execution.isEnabled(),'navigation failure keeps a retry entry on the same message');
-    await page.evaluate(()=>window.failExecution=false);
-    await execution.click();
-    assert.equal(await page.getByRole('alert').filter({hasText:'执行会话打开失败'}).count(),0);
+    assert.equal(await page.getByRole('button',{name:'查看执行会话',exact:true}).count(),0);
+    assert.equal(await page.getByLabel('工单等待状态',{exact:true}).count(),0);
     await shot(page,'dark-delivery');
     const reply=page.locator('[data-chat-key="message:reply"]');
     await reply.getByRole('button',{name:'本条回复用量',exact:true}).focus();
