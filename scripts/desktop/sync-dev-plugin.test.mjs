@@ -63,6 +63,39 @@ test('new third-party runtime SDK resolves from the installed release after sync
   assert.equal(createRequire(join(setup.target, 'package.json'))('@example/channel-sdk').ready, true);
 });
 
+test('vendor utility versions stay private when the official host uses a different version', async t => {
+  const setup = await fixture(t);
+  const put = async (base, path, value) => {
+    await mkdir(dirname(join(base, path)), { recursive: true });
+    await writeFile(join(base, path), typeof value === 'string' ? value : JSON.stringify(value));
+  };
+  await put(setup.enrollment.directory, 'release.json', { shared: [] });
+  const manifest = JSON.parse(await readFile(join(setup.source, 'package.json'), 'utf8'));
+  manifest.dependencies['fixture-sidebar'] = '1.0.0';
+  await put(setup.source, 'package.json', manifest);
+  const vendor = join(setup.source, 'node_modules/fixture-sidebar');
+  const versions = { '@deepseek-ai/schemastery': '3.18.5', '@deepseek-ai/cosmokit': '1.9.0' };
+  await put(vendor, 'package.json', { name: 'fixture-sidebar', version: '1.0.0', dependencies: versions, peerDependencies: versions });
+  await put(vendor, 'index.js', "module.exports = [require('@deepseek-ai/schemastery'), require('@deepseek-ai/cosmokit')];");
+  for (const [name, version] of Object.entries(versions)) {
+    await put(vendor, `node_modules/${name}/package.json`, { name, version });
+    await put(vendor, `node_modules/${name}/index.js`, `module.exports = '${version}';`);
+    await put(join(setup.root, 'official'), `node_modules/${name}/package.json`, { name, version: '9.0.0' });
+    await put(join(setup.root, 'official'), `node_modules/${name}/index.js`, "module.exports = 'host';");
+  }
+  for (let pass = 0; pass < 2; pass++) {
+    await syncDevelopmentPlugin(setup);
+    assert.deepEqual(createRequire(join(setup.target, 'package.json'))('fixture-sidebar'), Object.values(versions));
+    const release = JSON.parse(await readFile(join(setup.enrollment.directory, 'release.json'), 'utf8'));
+    assert.ok(!release.shared.some(item => Object.hasOwn(versions, item.name)));
+    for (const [name, version] of Object.entries(versions)) {
+      const installed = join(setup.target, 'node_modules/fixture-sidebar/node_modules', name);
+      assert.equal((await lstat(installed)).isSymbolicLink(), false);
+      assert.equal(JSON.parse(await readFile(join(installed, 'package.json'), 'utf8')).version, version);
+    }
+  }
+});
+
 for (const legacyLink of [false, true]) test(`third-party closure shares host scope and Cordis, repairs junction=${legacyLink}, and syncs twice`, async t => {
   const setup = await fixture(t);
   const put = async (base, path, value) => {

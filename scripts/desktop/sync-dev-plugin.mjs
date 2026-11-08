@@ -15,6 +15,8 @@ const inside = (root, path) => {
   const child = relative(root, path);
   return child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 };
+// Match release packaging: these pure utility libraries may keep private versions.
+const sharedPackage = name => name.startsWith('@deepseek-ai/') && !['@deepseek-ai/schemastery', '@deepseek-ai/cosmokit'].includes(name);
 const infoAt = path => lstat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
 
 async function checkedPath(root, path, allowLeafLink = false) {
@@ -99,7 +101,7 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
       for (const [name, range] of Object.entries({ ...metadata.dependencies, ...optional })) {
         if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/iu.test(name) || name.split('/').some(part => part === '.' || part === '..')) throw new Error(`无效依赖名称：${name}`);
         if (metadata.name === 'ssh2' && name === 'cpu-features') continue;
-        if (name.startsWith('@deepseek-ai/')) { await official(name, range, preserve ? packagePath : undefined); continue; }
+        if (sharedPackage(name)) { await official(name, range, preserve ? packagePath : undefined); continue; }
         let dependency;
         try { dependency = await findPackage(name, packagePath); }
         catch (error) { if (Object.hasOwn(optional, name)) continue; throw error; }
@@ -131,7 +133,7 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
         await dependencies(dependency, output, new Set([...ancestors, dependency]));
       }
       for (const [name, range] of Object.entries(metadata.peerDependencies || {})) {
-        if (name.startsWith('@deepseek-ai/') && !metadata.peerDependenciesMeta?.[name]?.optional) await official(name, range, preserve ? packagePath : undefined);
+        if (sharedPackage(name) && !metadata.peerDependenciesMeta?.[name]?.optional) await official(name, range, preserve ? packagePath : undefined);
       }
     }
     await dependencies(source, target, new Set([source]), true);
