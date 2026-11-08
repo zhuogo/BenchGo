@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { documentHash } from './documents.mjs';
 
 const now = () => new Date().toISOString();
@@ -10,6 +10,11 @@ const copy = value => structuredClone(value);
 const normalized = value => value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/gu, ' ').trim();
 const fingerprint = value => documentHash(normalized(value));
 const sourceFingerprint = source => documentHash(JSON.stringify([source?.sessionId || '', source?.messageId || '', source?.eventId || '', source?.taskId || '', source?.callId || '']));
+const sourceAliases = source => {
+  if (!object(source)) return [];
+  return [source.messageId && ['message', source.sessionId || '', source.messageId],
+    source.eventId && ['event', source.channel || '', source.eventId]].filter(Boolean).map(value => documentHash(JSON.stringify(value)));
+};
 const hasSource = source => object(source) && Boolean(source.messageId || source.eventId || source.taskId || source.callId || source.type === 'user-edit' || source.type === 'external-edit');
 const trustedSource = source => hasSource(source) && source.role === 'user' && Boolean(source.messageId || source.eventId);
 const blockPattern = () => /<!-- benchgo-memory (\{[^\n]*\}) -->\r?\n([\s\S]*?)\r?\n<!-- \/benchgo-memory -->/gu;
@@ -88,7 +93,9 @@ export async function createAssistantMemory({ directory, documents }) {
     CREATE TABLE IF NOT EXISTS memory_index (id TEXT PRIMARY KEY, document TEXT NOT NULL, hash TEXT NOT NULL, source_hash TEXT NOT NULL, scope TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS memory_terms (term TEXT NOT NULL, entry_id TEXT NOT NULL, PRIMARY KEY(term,entry_id));
     CREATE TABLE IF NOT EXISTS memory_tombstones (entry_id TEXT NOT NULL, hash TEXT NOT NULL, source_hash TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(entry_id,hash));
+    CREATE TABLE IF NOT EXISTS memory_source_tombstones (source_hash TEXT PRIMARY KEY, reason TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS memory_candidates (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL UNIQUE, status TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS memory_learning_slots (slot TEXT PRIMARY KEY, candidate_id TEXT, memory_id TEXT);
     CREATE INDEX IF NOT EXISTS memory_terms_entry ON memory_terms(entry_id);
     CREATE INDEX IF NOT EXISTS memory_tombstone_hash ON memory_tombstones(hash);
     CREATE INDEX IF NOT EXISTS memory_tombstone_source ON memory_tombstones(source_hash);`);
@@ -101,11 +108,12 @@ export async function createAssistantMemory({ directory, documents }) {
     for (const id of new Set([entry.id, ...(entry.legacyIds || [])])) for (const hash of new Set([fingerprint(entry.content), fingerprint(cleanText(entry.content))])) {
       put.run(id, hash, hasSource(entry.source) ? sourceFingerprint(entry.source) : '', reason, now());
     }
+    for (const alias of sourceAliases(entry.source)) db.prepare("INSERT INTO memory_source_tombstones VALUES (?,?) ON CONFLICT(source_hash) DO UPDATE SET reason=CASE WHEN excluded.reason='forgotten' THEN excluded.reason ELSE memory_source_tombstones.reason END").run(alias, reason);
   }
   function denied(input) {
     const byHash = db.prepare('SELECT 1 FROM memory_tombstones WHERE hash=? LIMIT 1').get(fingerprint(input.content));
     const bySource = hasSource(input.source) && (input.source.messageId || input.source.eventId || input.source.taskId || input.source.callId) && db.prepare('SELECT 1 FROM memory_tombstones WHERE source_hash=? LIMIT 1').get(sourceFingerprint(input.source));
-    return Boolean(byHash || bySource);
+    return Boolean(byHash || bySource || sourceAliases(input.source).some(alias => db.prepare('SELECT 1 FROM memory_source_tombstones WHERE source_hash=?').get(alias)));
   }
   function redactForgottenContext(context) {
     const forgotten = db.prepare("SELECT entry_id,hash FROM memory_tombstones WHERE reason='forgotten'").all();
@@ -372,21 +380,38 @@ export async function createAssistantMemory({ directory, documents }) {
       }, { expectedHash, source: { type: 'learning-settings' } });
       return learning();
     },
-    async propose(input, { verifiedSource } = {}) {
+    async propose(input, { verifiedSource, idempotencyKey } = {}) {
       inputValue(input);
+      if (idempotencyKey !== undefined && (typeof idempotencyKey !== 'string' || !idempotencyKey || idempotencyKey.length > 500)) throw new Error('记忆学习去重标识无效');
+      const stableId = idempotencyKey && `learning-${createHash('sha256').update(idempotencyKey).digest('hex')}`;
       const current = await snapshot();
       const settings = await learning();
       const verifiedInput = { ...input, source: verifiedSource || input.source };
       const excluded = !trustedSource(verifiedSource) || !settings.enabled || denied(verifiedInput) || excludedByPolicy(input, settings);
       if (excluded) return { status: 'excluded', reason: '学习已停用，或内容/来源不符合当前学习规则' };
+      const previous = stableId && candidateRow(db.prepare('SELECT payload,status FROM memory_candidates WHERE id=?').get(stableId));
+      if (previous) return ['accepted', 'rejected', 'excluded'].includes(previous.status) ? previous : resolveCandidate(previous.id);
+      const savedSlot = stableId && db.prepare('SELECT * FROM memory_learning_slots WHERE slot=?').get(stableId);
+      if (savedSlot) {
+        const saved = savedSlot.candidate_id && candidateRow(db.prepare('SELECT payload,status FROM memory_candidates WHERE id=?').get(savedSlot.candidate_id));
+        if (saved) return ['accepted', 'rejected', 'excluded'].includes(saved.status) ? saved : resolveCandidate(saved.id);
+        return savedSlot.memory_id && current.entries.some(entry => matchesId(entry, savedSlot.memory_id))
+          ? { status: 'duplicate', memoryId: savedSlot.memory_id } : { status: 'excluded', reason: '该学习槽位已处理或遗忘' };
+      }
       const key = fingerprint(input.content);
       const known = candidateRow(db.prepare('SELECT payload,status FROM memory_candidates WHERE fingerprint=?').get(key));
-      if (known) return ['accepted', 'rejected', 'excluded'].includes(known.status) ? known : resolveCandidate(known.id);
+      if (known) {
+        if (stableId) db.prepare('INSERT OR IGNORE INTO memory_learning_slots VALUES (?,?,?)').run(stableId, known.id, null);
+        return ['accepted', 'rejected', 'excluded'].includes(known.status) ? known : resolveCandidate(known.id);
+      }
       const existing = current.entries.find(entry => fingerprint(entry.content) === key);
-      if (existing) return { status: 'duplicate', memoryId: existing.id };
-      const candidate = { id: randomUUID(), status: 'saving', input: copy(verifiedInput), evidence: copy(verifiedSource), createdAt: now() };
+      if (existing) {
+        if (stableId) db.prepare('INSERT OR IGNORE INTO memory_learning_slots VALUES (?,?,?)').run(stableId, null, existing.id);
+        return { status: 'duplicate', memoryId: existing.id };
+      }
+      const candidate = { id: stableId || randomUUID(), status: 'saving', input: copy(verifiedInput), evidence: copy(verifiedSource), createdAt: now() };
       db.prepare('INSERT OR IGNORE INTO memory_candidates VALUES (?,?,?,?,?)').run(candidate.id, key, candidate.status, JSON.stringify(candidate), candidate.createdAt);
-      const persisted = db.prepare('SELECT id FROM memory_candidates WHERE fingerprint=?').get(key);
+      const persisted = (stableId && db.prepare('SELECT id FROM memory_candidates WHERE id=?').get(stableId)) || db.prepare('SELECT id FROM memory_candidates WHERE fingerprint=?').get(key);
       return resolveCandidate(persisted.id);
     },
     candidates: async ({ status = 'pending' } = {}) => db.prepare('SELECT payload,status FROM memory_candidates WHERE status=? ORDER BY created_at DESC LIMIT 200').all(status).map(row => ({ ...JSON.parse(row.payload), status: row.status })),

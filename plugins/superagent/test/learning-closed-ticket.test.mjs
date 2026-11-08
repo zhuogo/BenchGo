@@ -1,0 +1,64 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createAssistantStore } from '../src/store.mjs';
+import { createLearningProcessor } from '../src/learning-processor.mjs';
+import { createAssistantReviewWorker } from '../src/review-worker.mjs';
+
+test('confirmed close feeds background queue once; crash after saving resumes the same global range', async t => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'benchgo-closed-learning-'));
+  const stores = [], workers = [], requests = [];
+  t.after(async () => { for (const worker of workers) await worker.stop(); for (const store of stores) store.close(); await rm(dataDirectory, { recursive: true, force: true }); });
+  const open = async () => { const store = await createAssistantStore({ dataDirectory }); stores.push(store); return store; };
+  let store = await open(), content = '偏好简洁中文';
+  await store.updateConfig({ models: [{ providerId: 'provider', modelId: 'Exact:Opaque' }] });
+  const source = { channel: 'desktop', sessionId: 'router', messageId: 'human' };
+  const accepted = store.orchestration.ingest({ dedupeKey: 'human', thread: { id: 'main-thread', source: { type: 'desktop', id: 'router' } },
+    source, actor: { kind: 'human', id: 'owner' }, content: '任务：以后解释使用简洁中文', mode: 'direct', gate: { allowed: true, strength: 'explicit' } });
+  const triggerId = accepted.trigger?.id ?? accepted.id;
+  assert.ok(triggerId);
+  const ticket = store.orchestration.createTicket({ threadId: 'main-thread', target: '中文任务', sourceTriggerIds: [triggerId], mandate: { source } });
+  store.orchestration.commitResult(ticket.id, { uniqueKey: 'worker-result', result: { outcome: 'completed', finalSummary: '检查完成',
+    selfCheck: { summary: '检查通过' }, toolEvidence: { entries: [{ name: 'test', text: 'tests passed', isError: false }] } }, now: 1 });
+  assert.equal(store.orchestration.getTicket(ticket.id).status, 'waiting');
+  const ctx = { sessionQuery: { readSession() { throw new Error('Router read forbidden'); } }, llm: { async *stream(request) {
+    requests.push(request);
+    const material = JSON.parse(request.messages[1].content[0].text);
+    yield { type: 'text-delta', text: JSON.stringify({ memories: [{ content, sourceMessageId: material[0].instructions[0].messageId }] }) };
+    yield { type: 'finish', reason: { kind: 'stop' } };
+  } } };
+  const worker = () => { const next = createAssistantReviewWorker({ review: store.review, process: createLearningProcessor({ ctx, store }) }); workers.push(next); return next; };
+  store.learning.request({ scope: 'router', eventId: 'before-delivery' });
+  await worker().runOnce();
+  assert.equal(requests.length, 0);
+  const [outbox] = store.orchestration.claimOutbox('sender', { now: 2 });
+  store.orchestration.finishOutbox(outbox.id, { owner: 'sender', uncertain: true, now: 3 });
+  assert.deepEqual(store.orchestration.learningSources().items, []);
+  store.orchestration.reconcileOutbox(outbox.id, { attempts: 1, outcome: 'sent', evidence: '原来源确认', receipt: { status: 'accepted', messageId: 'delivered' }, now: 4 });
+  assert.equal(store.orchestration.getTicket(ticket.id).status, 'completed');
+  store.learning.request({ scope: 'another-router', eventId: 'after-delivery' });
+  const propose = store.memory.propose;
+  store.memory.propose = async (...args) => { await propose(...args); throw new Error('receipt crash'); };
+  assert.equal((await worker().runOnce()).retried, 1);
+  assert.equal((await store.listMemories()).length, 1);
+  store.close();
+  store = await open();
+  content = '重试模型换一种说法';
+  assert.equal((await worker().runOnce()).completed, 1);
+  const entries = await store.listMemories();
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].content, '偏好简洁中文');
+  assert.equal(entries[0].source.ticketId, ticket.id);
+  assert.equal(entries[0].source.messageId, 'human');
+  assert.equal(entries[0].source.resultVersion, 1);
+  const receipts = store.review.list().filter(row => row.status === 'completed').map(row => row.result);
+  assert.equal(JSON.stringify(receipts).includes('偏好简洁中文'), false);
+  assert.equal(JSON.stringify(receipts).includes('任务：以后解释'), false);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(store.orchestration.learningSources().items, []);
+  store.learning.request({ scope: 'router-new-session', eventId: 'no-new-ticket' });
+  await worker().runOnce();
+  assert.equal(requests.length, 2);
+});

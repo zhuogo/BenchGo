@@ -10,7 +10,6 @@ import { installWorkerVault } from './worker-vault.mjs';
 import { installSubscriptionInbox } from './subscription-inbox.mjs';
 import { continueWorkerContext } from './worker-context-continuation.mjs';
 import { workerWorktrees } from './worker-worktree.mjs';
-import { createContextRedactor } from './context-privacy.mjs';
 import { installProjectRules } from './project-rules.mjs';
 import { executionEvidence } from './execution-evidence.mjs';
 import { executionEffects, isReadOnlyWorkerTool } from './execution-effects.mjs';
@@ -26,7 +25,7 @@ import { attachExecutionSession } from './execution-session.mjs';
 import { modelFallbackType, modelFallbackSource, fallbackCallSignature as toolSignature } from './model-fallback.mjs';
 
 /** Uses the host agent lifecycle and transcript; no separate model/tool loop. */
-export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readContext, readSourceContext, memory, checkpoints, captureCheckpoint = captureArtifactCheckpoint }) {
+export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readSourceContext, checkpoints, captureCheckpoint = captureArtifactCheckpoint }) {
   if (!ctx?.agents?.create || !ctx?.sessionQuery?.readSession) throw new Error('Harness execution services unavailable');
   if (typeof authorizeAction !== 'function') throw new Error('Worker requires a current action authorizer');
   const root = resolve(workspaceRoot);
@@ -156,24 +155,21 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         if (inbox.inputGateInstalled) scope.provide?.('benchgoWorkerInputGate', Object.freeze({ ticketId: ticket.id,
           assignmentId: assignment.id, runId: run.id, sessionId, owner: assignment.owner, fence: assignment.fence }));
         const currentSnapshot = () => inbox.currentSnapshot?.() || { target: ticket.target, acceptance: ticket.acceptance, mandate: ticket.mandate, context: [], instructionRevision: ticket.instructionRevision };
-        let context = await readContext?.(sessionId);
+        let context = currentSnapshot().context;
         if (['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'slack', 'dingtalk', 'email', 'webhook', 'api'].includes(ticket.mandate.source?.channel) && scope.get?.('userQuestions')) await scope.plugin(AskUserTool, { mode: 'timed', timeout: 1 });
         attention = installWorkerAttention(scope, agent, { database, assignment, signal,
           sessionProjections: ctx.get?.('sessionProjections'), llm: ctx.llm, readPolicy });
-        const redactContext = createContextRedactor(agent, 'benchgo-worker-memory', memory);
-        scope.systemPrompt.context?.({ name: 'benchgo-worker-memory', order: 100, interpolate: false, text: () => JSON.stringify(context || {}) });
+        scope.systemPrompt.context?.({ name: 'benchgo-worker-context', order: 100, interpolate: false, text: () => JSON.stringify(context || []) });
         if (sourceReference) scope.systemPrompt.context?.({ name: 'benchgo-worker-source-reference', order: 101, interpolate: false, text: () => JSON.stringify(sourceReference) });
         scope.on('agent/pre-step', async (_payload, next) => {
-          // Ordinary edits remain frozen by the store; explicit forgetting may
-          // redact that same snapshot between steps of an active Worker.
-          context = await readContext?.(sessionId);
+          // Worker context is only this Ticket's applied task slice.
+          context = currentSnapshot().context;
           signal.throwIfAborted();
           if (attention.waiting()) return { kind: 'reject' };
           if (database.getTicket(ticket.id).status === 'pausing') {
             waitingPause = true;
             return { kind: 'reject' };
           }
-          redactContext();
           return next();
         });
         scope.systemPrompt.context({ name: 'benchgo-assignment', order: -100, interpolate: false,

@@ -9,8 +9,8 @@ const identifier = (value, label) => {
 };
 
 /** Durable event counters and outbox; all three learning entries use kind=learning.
- * Only source identifiers are persisted here. The review processor retrieves a
- * policy-filtered digest from the ledger instead of duplicating conversation text.
+ * Event identities only schedule work. Material and consumption cursor belong
+ * exclusively to the global closed-ticket store, never these Router event ranges.
  */
 export function createLearningCounters({ directory, review, promptThreshold = 10, toolThreshold = 10 } = {}) {
   if (!review?.enqueue || !review?.get) throw new Error('learning 缺少 review 队列');
@@ -26,7 +26,24 @@ export function createLearningCounters({ directory, review, promptThreshold = 10
     CREATE TABLE IF NOT EXISTS assistant_learning_triggers (
       id TEXT PRIMARY KEY, scope TEXT NOT NULL, payload TEXT NOT NULL, source TEXT NOT NULL,
       review_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL
-    );`);
+    );
+    CREATE TABLE IF NOT EXISTS assistant_learning_meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);`);
+  // Retire the old session-message ranges while preserving counts, deduplication
+  // keys and pending review identities. There was no reusable closed-ticket cursor.
+  if (!db.prepare("SELECT 1 FROM assistant_learning_meta WHERE key='closed-ticket-material-v1'").get()) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const migrate = value => { const { eventIds, turnIds, ...rest } = JSON.parse(value); return JSON.stringify({ ...rest, material: 'closed-tickets-v1',
+        ...(rest.trigger === 'explicit' && eventIds?.[0] ? { requestEventId: eventIds[0] } : {}) }); };
+      for (const row of db.prepare('SELECT id,payload FROM assistant_learning_triggers').all()) db.prepare('UPDATE assistant_learning_triggers SET payload=? WHERE id=?').run(migrate(row.payload), row.id);
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assistant_review_queue'").get()) {
+        for (const row of db.prepare("SELECT id,payload FROM assistant_review_queue WHERE kind='learning'").all()) db.prepare('UPDATE assistant_review_queue SET payload=? WHERE id=?').run(migrate(row.payload), row.id);
+      }
+      db.prepare("INSERT INTO assistant_learning_meta VALUES ('closed-ticket-material-v1','retired-session-ranges')").run();
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); db.close(); throw error; }
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS assistant_learning_request_event ON assistant_learning_triggers(scope,json_extract(payload,'$.requestEventId')) WHERE json_extract(payload,'$.trigger')='explicit'");
   let closed = false;
   const tx = fn => {
     if (closed) throw new Error('Learning counters are closed');
@@ -71,8 +88,7 @@ export function createLearningCounters({ directory, review, promptThreshold = 10
       const threshold = kind === 'prompt' ? promptThreshold : toolThreshold;
       // Memory is periodic; a tool-heavy turn requests one joint review.
       if (kind === 'prompt' ? count % threshold !== 0 : count !== threshold) return { count };
-      const rows = db.prepare('SELECT event_id,turn_id FROM assistant_learning_events WHERE scope=? AND kind=? AND (?=\'prompt\' OR turn_id=?) ORDER BY seq DESC LIMIT ?').all(scope, kind, kind, turnId, threshold).reverse();
-      const payload = { scope, trigger: kind, eventIds: rows.map(row => row.event_id), turnIds: [...new Set(rows.map(row => row.turn_id).filter(Boolean))] };
+      const payload = { scope, trigger: kind, material: 'closed-tickets-v1', counter: { kind, count, ...(kind === 'tool' ? { turnId } : {}) } };
       return { count, triggerId: trigger(scope, payload, source) };
     });
     return { ...result, reviews: flush() };
@@ -86,8 +102,8 @@ export function createLearningCounters({ directory, review, promptThreshold = 10
       if (!source || typeof source !== 'object' || Array.isArray(source) || JSON.stringify(source).length > 10000) throw new Error('learning 来源无效');
       // entry is informational, excluded from identity: command + detected
       // natural language for the same original message are one request.
-      const payload = { scope, trigger: 'explicit', eventIds: [eventId], turnIds: turnId ? [turnId] : [] };
-      const triggerId = tx(() => trigger(scope, payload, source));
+      const payload = { scope, trigger: 'explicit', material: 'closed-tickets-v1', requestEventId: eventId };
+      const triggerId = tx(() => db.prepare("SELECT id FROM assistant_learning_triggers WHERE scope=? AND json_extract(payload,'$.trigger')='explicit' AND json_extract(payload,'$.requestEventId')=? LIMIT 1").get(scope, eventId)?.id || trigger(scope, payload, source));
       return { triggerId, entry, reviews: flush() };
     },
     flush,

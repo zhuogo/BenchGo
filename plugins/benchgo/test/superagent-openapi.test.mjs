@@ -36,9 +36,8 @@ test('P0 inbox reconciliation and quota-free continuation keep the public contra
   // Budget gates were removed on 2026-11-06: no added-time field or Goal quota actions remain in the contract.
   assert.doesNotMatch(JSON.stringify(document), /additionalExecutionMs|goalBudgetUpdate|goalBudgetResume/);
   valid(response(path, 'ticketResume'), { queued: false, code: 'EXECUTION_EFFECTS_UNKNOWN' });
-  const review = document.paths[path].post.responses['200']['x-action-schemas'].ticketRetryReview.description;
-  assert.doesNotMatch(review, /最多两轮/);
-  assert.match(review, /原 Assignment\/Run\/session/);
+  assert.equal(request({ action: 'ticketRetryReview', ticketId: 't' }), false);
+  assert.equal(document.paths[path].post.responses['200']['x-action-schemas'].ticketRetryReview, undefined);
 });
 
 test('history exposes only optional structured active reply identity', () => {
@@ -96,7 +95,7 @@ test('new documented actions exist in production and require their actual CAS fi
     assert.equal(document.paths[path].post.responses['200']['x-action-schemas'][action], undefined);
   }
   const inputs = [
-    { action: 'ticketChange', id: 'ticket', operation: 'reopen', expectedInstructionRevision: 2, requestId: 'r', reason: 'continue', provider: 'Opaque/@Provider', model: 'Exact Model:07' },
+    { action: 'ticketChange', id: 'ticket', operation: 'adjustment', expectedInstructionRevision: 2, requestId: 'r', reason: 'continue' },
     { action: 'evaluations', after: 0, limit: 50 }, { action: 'evaluationHistory', candidateId: 'candidate' },
     { action: 'evaluationDispose', candidateId: 'candidate', disposition: 'retry', expectedRevision: 0, expectedUpdatedAt: '2026-11-02T00:00:00.000Z' },
     { action: 'summarize', text: 'summarize this' }, { action: 'analyzeImage', file: 'image.png', question: 'read this image' },
@@ -279,7 +278,7 @@ test('history accepts four real schedule lifecycle facts and current ticket proj
   for (const action of ['notifications', 'notificationSync']) valid(response(path, action), { events, cursor: 4, hasMore: false, resyncRequired: false });
   const verified = systemStateDelivery({ state: 'action_verified', code: 'ACTION_VERIFIED', stage: 'action' });
   const result = { type: 'ticket.result', ticketId: 'ticket', text: verified.text, publication: verified, origin: 'system', systemState: verified.systemState,
-    currentInstructionRevision: 2, currentResultVersion: 1, currentResult: { version: 1, instructionRevision: 2, review: { verdict: 'wait', waitKind: 'continuation_wait', reason: '资源待恢复' } },
+    currentInstructionRevision: 2, currentResultVersion: 1, currentResult: { version: 1, instructionRevision: 2, selfCheck: { summary: '已按当前要求检查执行结果' } },
     currentAttention: null, currentPauseReason: { code: 'EXECUTION_EFFECTS_UNKNOWN' } };
   valid(response(path, 'history'), { notifications: [result] });
   valid(response(path, 'history'), { notifications: [{ ...result, currentResult: null, currentPauseReason: null }] });
@@ -309,10 +308,10 @@ test('attention resolution evidence belongs to ticket rows and accepts real host
   valid(response(path, 'history'), { notifications: [{ type: 'ticket.attention', text: '请确认', currentAttention: { ...attention, instructionRevision: 1 }, currentResult: null, currentPauseReason: null }] });
 });
 
-test('delegation models are optional pairs and completed changes return linked new tickets', t => {
+test('delegation rejects per-ticket model overrides and completed changes return linked new tickets', t => {
   const tool = name => compile(document.paths[path].post['x-tool-input-schemas'][name]);
   const delegate = tool('assistant_delegate'), base = { text: '检查原任务', acceptance: '保留原要求', requestId: 'request', duplicateOfTicketId: 'active-ticket' };
-  valid(delegate, base); valid(delegate, { ...base, provider: 'Opaque/@Provider', model: 'Exact Model:07' });
+  valid(delegate, base); assert.equal(delegate({ ...base, provider: 'Opaque/@Provider', model: 'Exact Model:07' }), false);
   valid(delegate, { ...base, acceptance: '' });
   for (const patch of [{ provider: 'p' }, { model: 'm' }, { duplicateOfTicketId: '' }, { duplicateOfTicketId: 'x'.repeat(513) }]) assert.equal(delegate({ ...base, ...patch }), false);
   const db = createAssistantOrchestrationStore({ filename: ':memory:' }); t.after(() => db.close());
@@ -321,11 +320,16 @@ test('delegation models are optional pairs and completed changes return linked n
   db.ingest({ dedupeKey: 'original', thread, source, actor, content: '原任务', mode: 'direct' });
   const ticket = db.createTicket({ threadId: thread.id, target: '原任务', mandate: { source, actorId: actor.id } });
   db.commitResult(ticket.id, { result: { summary: '原成果' }, uniqueKey: 'original-result' });
+  for (const delivery of db.claimOutbox('test-delivery')) db.finishOutbox(delivery.id,
+    { owner: 'test-delivery', sent: true, receipt: { status: 'accepted', messageId: `sent:${delivery.id}` } });
+  assert.equal(db.getTicket(ticket.id).status, 'completed');
   const before = db.getTicket(ticket.id), results = db.results(ticket.id);
   const nextSource = { ...source, messageId: 'adjustment' };
   const { trigger } = db.ingest({ dedupeKey: 'adjustment', thread, source: nextSource, actor, content: '调整成果', mode: 'direct' });
   const change = { id: ticket.id, operation: 'adjustment', expectedInstructionRevision: 1, requestId: 'change', reason: '补充要求' };
   valid(request, { action: 'ticketChange', ...change }); valid(tool('assistant_ticket_change'), change);
+  assert.equal(request({ action: 'ticketChange', ...change, operation: 'reopen' }), false);
+  assert.equal(request({ action: 'ticketChange', ...change, provider: 'p', model: 'm' }), false);
   assert.equal(request({ action: 'ticketChange', ...change, expectedInstructionRevision: 0 }), false);
   assert.equal(request({ action: 'ticketChange', ...change, provider: 'unpaired' }), false);
   const next = db.changeTicket(ticket.id, { ...change, target: '调整成果', acceptance: '新要求', requestKey: 'change', triggerId: trigger.id,
@@ -333,4 +337,18 @@ test('delegation models are optional pairs and completed changes return linked n
   valid(response(path, 'ticketChange'), next);
   assert.equal(next.adjustmentOfTicketId, ticket.id); assert.equal(next.instructionRevision, 1); assert.equal(next.resultVersion, 0);
   assert.deepEqual(db.getTicket(ticket.id), before); assert.deepEqual(db.results(ticket.id), results);
+});
+
+
+test('trusted execution-session and website-permission actions expose the current contract', () => {
+  for (const action of ['executionSessions', 'actionPermissions']) valid(request, { action });
+  valid(request, { action: 'actionPermissionCreate', origin: 'https://example.com', categories: ['login'], expiresAt: '2026-12-01T00:00:00Z', requestId: 'create-1' });
+  valid(request, { action: 'actionPermissionRevoke', id: 'grant-1', requestId: 'revoke-1' });
+  assert.equal(request({ action: 'actionPermissionCreate', origin: 'https://example.com' }), false);
+  assert.equal(request({ action: 'actionPermissionRevoke', id: 'grant-1' }), false);
+  valid(response(path, 'executionSessions'), { sessions: [{ sessionId: 'session', ticketId: 'ticket', title: 'Ticket', available: true }] });
+  assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', ticketId: 'ticket', title: 'Ticket', available: false }] }), false);
+  const result = compile({ $ref: '#/components/schemas/AssistantCurrentResult' });
+  assert.equal(result({ version: 1, instructionRevision: 1, review: { verdict: 'passed' } }), false);
+  valid(request, { action: 'review' }); // Background memory review remains independent.
 });

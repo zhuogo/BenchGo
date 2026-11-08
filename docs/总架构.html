@@ -238,7 +238,7 @@
         <text class="svg-title" x="868" y="344">Worker 池 · 主 Worker 与一层子代理</text>
         <rect class="node node-green" x="862" y="358" width="466" height="62" rx="10"/>
         <text class="svg-title" x="878" y="382">主 Worker（第 0 层）· 领取并负责本工单</text>
-        <text class="svg-label" x="878" y="406">租约 + fence · 逐工具复检 · 真实项目会话 · 工作模型</text>
+        <text class="svg-small" x="878" y="406">租约 + fence · 逐工具复检 · 高危提交走注册通道 / 用户接管</text>
         <path class="flow" d="M1095 420 V434"/>
         <rect class="node node-green" x="862" y="434" width="466" height="120" rx="10"/>
         <text class="svg-title" x="878" y="456">按需委派 · 第 1 层子代理可多个并行，禁再委派</text>
@@ -319,8 +319,8 @@
         <path class="flow-dashed" d="M248 1190 V1110"/><path class="flow-dashed" d="M688 1190 V1110"/><path class="flow-dashed" d="M1130 1190 V1110"/>
 
         <rect class="zone" x="18" y="1338" width="660" height="196" rx="18"/>
-        <text class="svg-title" x="38" y="1368">治理与资源边界（执行时由执行器统一安装）</text>
-        <rect class="node node-red" x="38" y="1394" width="142" height="44" rx="10"/><text class="svg-label" x="109" y="1420" text-anchor="middle">继承 / 对外审批卡</text>
+        <text class="svg-title" x="38" y="1368">治理与资源边界（类别注册 · 结构化通道 · 无通道接管）</text>
+        <rect class="node node-red" x="38" y="1394" width="142" height="44" rx="10"/><text class="svg-label" x="109" y="1420" text-anchor="middle">通道 / 审批 / 接管</text>
         <rect class="node node-red" x="198" y="1394" width="142" height="44" rx="10"/><text class="svg-label" x="269" y="1420" text-anchor="middle">保险库 / 安全输入</text>
         <rect class="node node-red" x="358" y="1394" width="142" height="44" rx="10"/><text class="svg-label" x="429" y="1420" text-anchor="middle">目标与用量</text>
         <rect class="node node-red" x="518" y="1394" width="142" height="44" rx="10"/><text class="svg-label" x="589" y="1420" text-anchor="middle">密钥池</text>
@@ -395,13 +395,18 @@
       <h2>四、权限继承与对外审批</h2>
       <div class="grid">
         <article class="card"><h3>内部继承与逐层裁剪</h3><p>用户指令是业务授权唯一源头。Router → 工单 → Worker → 一层子代理只能收窄，工具面逐层裁剪；每个主 Worker 可有多个并行子代理，子代理无凭据工具、禁止再委派。主聊和旁聊不提供 Harness 权限档位选择。</p></article>
-        <article class="card"><h3>整站许可具有明确边界</h3><p>许可绑定明确站点、动作类别和期限，持久留痕、可查看、可撤销。有效范围内的凭据代填及常规敏感动作不重复审批；未命中才出卡。站点许可与工单 Mandate 叠加，互不替代。</p></article>
-        <article class="card"><h3>凭据优先走保险库</h3><p>Agent 仅见条目与句柄，由系统安全代填。缺少凭据时提示用户安全输入或接管；秘密不进入聊天、模型和日志。凭据录入与动作批准分别处理，录入不自动扩大授权。</p></article>
+        <article class="card"><h3>整站许可具有明确边界</h3><p>许可绑定精确 origin、动作类别、期限和真实授权人，持久留痕、可查看、可撤销。自用可明确覆盖较宽的常规敏感类别；四类高危始终除外。许可与工单 Mandate 叠加，互不替代。</p></article>
+        <article class="card"><h3>凭据仅经保险库</h3><p>Agent 仅见条目与句柄，由系统安全代填。缺少凭据时提示用户安全录入保险库或接管；秘密不进入聊天、模型和日志。凭据录入与动作批准分别处理，录入不自动扩大授权。</p></article>
       </div>
-      <div class="callout" style="margin-top:16px">支付购买、改密码、删账号、另行对外发送永远逐次审批，不使用整站许可放行；另行发送包括向其他对象发邮件、转发、分享和发布。原来源正常回复、进度、问题与成果交付免审批；公开浏览、搜索和资料下载也免审批。免审批不免除 Mandate、来源归属与现行规则检查。</div>
-      <p style="margin-top:16px">动作提交顺序：检查工单范围、当前规则与执行归属 → 判断是否高风险逐次审批 → 其他敏感动作匹配单次或整站许可，未命中则出卡 → 需要凭据时走保险库 → 提交前再次复核 → 记录实际效果与回执。未知效果先核实，不能靠重试业务动作探测。</p>
+      <div class="callout" style="margin-top:16px">支付购买、改密码、删账号、另行对外发送与分享只通过已注册的结构化通道自动提交，并永远逐次审批。审批卡冻结实际对象、最终内容和影响，一次只执行此件；无通道则准备好接管点，由用户完成最后一步。原来源正常回复、进度、问题与成果交付，以及公开浏览、搜索和资料下载免审批，仍复核 Mandate、来源归属与现行规则。</div>
+      <div class="grid" style="margin-top:16px">
+        <article class="card"><h3>能力声明进入核心注册表</h3><p>连接器等能力声明自身支持的高危类别、专用操作、内容预览与回执，核心统一校验后放行。未接通类别默认 handoff，优先外发与支付；新渠道只补适配与声明，不改审批核心。</p></article>
+        <article class="card"><h3>终端与浏览器做到提交前</h3><p>保留完整能力完成其他工作及准备，抵达高危提交前停止：有通道走冻结审批卡，无通道生成用户接管点。放弃任意脚本或点击的万能提交识别，禁止脚本拼接、直接请求或拆步骤绕过。</p></article>
+      </div>
+      <p style="margin-top:16px">结构化动作顺序：复核工单与当前规则 → 匹配注册类别和可用通道 → 冻结最终对象与内容并逐次审批（常规敏感类别可匹配有效整站许可） → 凭据仅经保险库 → 提交前复核同一快照并单次执行 → 记录效果与回执。无通道转用户接管；未知效果先核实，不能靠重试业务动作探测。</p>
       <p class="note">连接器与外部服务分别授权；不同连接器仅由可信适配器映射到同一站点，禁止跨服务借用许可。详细授权规则唯一正文见<a href="06-superagent/任务与执行.md#权限与对外审批">任务与执行</a>；安全输入见<a href="06-superagent/链接与渠道.md#保险库与安全输入">链接与渠道</a>。</p>
       <p class="note">渠道接入授权逐适配器连接绑定，可独立撤销，由统一服务在读取与发送前复检；接入授权不替代 Mandate 或动作许可，适配器不据此自行做准入判断。见<a href="06-superagent/链接与渠道.md#渠道授权">渠道授权</a>。</p>
+      <p class="note">本轮动作存储、可信注册表、冻结单次审批、授权管理与逐工具硬门已接线并通过定向验证。当前内置高危通道为渠道另行发送；支付、改密、删号无适配器走 handoff，接管导航仍待完善。站点许可现支持 login/private-upload，暂无内置执行适配器。真实 Harness 卡点击、桌面及飞书账号发送未验，不以页面四态通过代替业务闭环。</p>
     </section>
 
     <section class="panel" id="sessions">
@@ -412,7 +417,7 @@
         <article class="card"><h3>能力与回执如实呈现</h3><p>文本、图片、卡片、回执按适配器声明显示能力；直接回复走统一投递路径，结果由 outbox 经来源适配器返回原会话或话题，回执回到同一本工单账。</p></article>
         <article class="card"><h3>项目列表里的真实会话</h3><p>执行会话显式归入所属项目的工作区会话列表，带工单标记，与用户自建对话区分。主聊天工单提供跳转入口，直达同一 session，不复制会话或创建第二份执行记录。</p></article>
         <article class="card"><h3>直接插话，共用一本账</h3><p>用户通常在执行会话内直接写调整；主聊天里的调整也归入同一工单输入。Executor 消费范围内修订，超 Mandate 的输入交 Router 确认或分新单，不把普通会话输入当作新增执行权。</p></article>
-        <article class="card"><h3>无项目与防淹没</h3><p>不涉及项目的任务归入“最近”工作区。执行会话可收起，结束后自动沉底或归档进工单记录；工单保留同一会话的可追溯入口，收起和归档不丢失输入或结果。</p></article>
+        <article class="card"><h3>无项目与防淹没</h3><p>不涉及项目的任务归入官方「未分组」，这就是本设计的“最近”：按最近活动排序、随时可翻到，不另建工作区。执行会话可收起，结束后自动沉底或归档进工单记录；工单保留同一会话的可追溯入口，收起和归档不丢失输入或结果。</p></article>
       </div>
       <p class="note" style="margin-top:12px">渠道定位与统一会话路径见<a href="06-superagent/链接与渠道.md#统一会话与原路交付">链接与渠道</a>；渠道对话不等于 Worker 执行会话，二者都复用统一会话机制。</p>
       <p class="note" style="margin-top:12px">Router 主 / 旁聊保持结论与调度，执行会话保留真实过程并允许直接输入。空状态提示从主聊发起任务；加载状态保留结构；错误区分等待、执行失败、投递失败与停止中；有数据时展示工单标记、状态和会话入口。详细交互见<a href="02-工作台与Agent/任务列表交互.md">任务列表交互</a>。</p>
@@ -422,7 +427,7 @@
       <h2>六、模型归属、上下文与记忆</h2>
       <div class="grid">
         <article class="card"><h3>三角色模型</h3><p>Router 使用系统对话模型；Worker 使用系统工作角色模型，项目归属不让项目默认模型覆盖实际请求；辅助模型承担生成、压缩、研判与整理，不审核任务内容或决定交付。</p></article>
-        <article class="card"><h3>续跑保持创建路由</h3><p>执行会话创建时冻结工作角色模型队列与参数，续跑不随系统或项目默认修改而重选。运行故障可在该冻结队列内切换备用，保存最近实际选择。子代理继承父 Worker 当前工作模型，不能借模型覆盖转成其他角色。</p></article>
+        <article class="card"><h3>续跑保持创建路由</h3><p>执行会话创建时冻结工作角色模型队列与参数，委派、修订和目标节点不接受模型覆盖；续跑不随系统或项目默认修改而重选。运行故障可在该冻结队列内切换备用，保存最近实际选择。子代理继承父 Worker 当前工作模型，不能借模型覆盖转成其他角色。</p></article>
         <article class="card"><h3>当面记忆与闭单整理</h3><p>记住、纠正、遗忘由 Router 当场直写，不开工单。Worker 不直接写长期记忆；后台按计数器从已关工单提炼，不经 Router 上下文，整理结果可纠正、可回滚。</p></article>
       </div>
       <p class="note" style="margin-top:12px">任务包和子代理上下文仅含所需切片及原文指针，不复制父完整历史。模型 ID 保持不透明，不猜别名；未配置工作队列时的继承与允许的显式选择由系统角色配置明确约束。权威规则见<a href="06-superagent/模型与上下文.md">模型与上下文</a>、<a href="06-superagent/记忆与技能.md">记忆与技能</a>。</p>
@@ -452,11 +457,11 @@
     <section class="panel" id="implementation">
       <h2>八、实现边界与验证</h2>
       <div class="grid">
-        <article class="card"><h3>已有基础</h3><p>官方 Router / Worker 会话、工单与结果持久化、租约与 fence、逐工具身份 / 策略 / 归属复检、一层子代理限制、Attention、outbox 回执、三角色路由及 Router 记忆直写已有源码实现。</p></article>
-        <article class="card"><h3>待完成闭环</h3><p>无任务内容验收的直接交付、自检与送达关单、普通修订原执行切换、暂停仅收件、整站许可与高风险审批、工具裁剪、执行会话路径及闭单提炼仍待补齐。本次渠道事实/规则拆分、来源枚举与停单门、统一渠道会话及逐适配器授权同样待实施，已有收发不代表闭环完成。</p></article>
-        <article class="card"><h3>真实验证</h3><p>本页描述目标，不改变运行行为。需分别验证真实渠道身份与收发、模型请求归属、停止与撤权、外部效果未知、重启恢复、会话导航 / 插话与空、加载、错误、有数据四态；构建或静态检查通过不代表完整链路通过。</p></article>
+        <article class="card"><h3>代码接线与定向验证</h3><p>官方会话与工单基础之上，本轮已接入权限动作存储与注册通道、单次审批和站点管理、逐工具/子代理硬门、原执行修订切换、暂停只收件及持久问答绑定，并通过对应定向测试。各模块的具体覆盖以所属设计为准。</p></article>
+        <article class="card"><h3>适配与交互边界</h3><p>高危专用适配器仍有缺口，无通道走 handoff；完整接管导航、安全输入及浏览器代填待完善。渠道与交付、记忆及执行会话分别在所属文档维护接线和验证范围，已有基础与本轮局部通过不能推定全部链路完成。</p></article>
+        <article class="card"><h3>真实运行仍待验证</h3><p>本轮两次原生管道连接失败阻塞真实安装版桌面验证。Harness 实际审批卡点击、飞书账号收发、主旁聊并存、会话导航/插话及重启恢复仍须实测；浏览器四态、构建或定向测试不能代替真实业务闭环。</p></article>
       </div>
-      <p class="note" style="margin-top:12px">各模块只维护本次方案，实现缺口在所属模块说明，不并列保留其他流程。代码、内置提示和已安装实例需按同一规则接线与验证；本文更新不表示代码或运行实例已同步。</p>
+      <p class="note" style="margin-top:12px">各模块只维护本次方案，接线范围与实现缺口在所属模块说明，不并列保留其他流程。源码、内置提示和已安装实例分别核实；文档与定向通过不替代实际运行证据。</p>
       <div class="callout" style="margin-top:16px">文档维护：六板块内按职责维护权威正文，通过链接引用；本页是唯一总架构 HTML，只汇总板块关系、机制与流程。具体实现边界与验证条件随模块维护，历史留在 Git、eval/ 或 artifacts/，不另建现状、开发清单、验收流水或备份。本页离线可读，无构建或 CDN 依赖。</div>
     </section>
 

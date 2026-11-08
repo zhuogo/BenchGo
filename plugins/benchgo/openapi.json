@@ -1022,21 +1022,6 @@
                 "$ref": "#/components/schemas/AssistantOutboxDelivery",
                 "description": "仅 owner；返回原工单投递。核实历史位于顶层 reconciliations，确认回执位于 receipt；原 payload 保持不变，工单执行与结果不重复。"
               },
-              "actionPermissions": {
-                "type": "object",
-                "description": "Trusted same-origin authenticated owner peer only.",
-                "additionalProperties": true
-              },
-              "actionPermissionCreate": {
-                "type": "object",
-                "description": "Trusted same-origin authenticated owner peer only.",
-                "additionalProperties": true
-              },
-              "actionPermissionRevoke": {
-                "type": "object",
-                "description": "Trusted same-origin authenticated owner peer only.",
-                "additionalProperties": true
-              },
               "executionSessions": {
                 "type": "object",
                 "description": "Trusted same-origin authenticated owner peer only.",
@@ -1075,6 +1060,21 @@
                 "required": [
                   "sessions"
                 ]
+              },
+              "actionPermissions": {
+                "type": "object",
+                "description": "Trusted same-origin authenticated owner peer only.",
+                "additionalProperties": true
+              },
+              "actionPermissionCreate": {
+                "type": "object",
+                "description": "Trusted same-origin authenticated owner peer only.",
+                "additionalProperties": true
+              },
+              "actionPermissionRevoke": {
+                "type": "object",
+                "description": "Trusted same-origin authenticated owner peer only.",
+                "additionalProperties": true
               }
             }
           },
@@ -2099,10 +2099,10 @@
               "connectionReplies",
               "directReplyReconcile",
               "outboxReconcile",
+              "executionSessions",
               "actionPermissions",
               "actionPermissionCreate",
-              "actionPermissionRevoke",
-              "executionSessions"
+              "actionPermissionRevoke"
             ]
           },
           "threadId": {

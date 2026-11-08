@@ -49,4 +49,5 @@ test('suppressed or unconfirmed receipt never closes a result', async t => {
   const [delivery] = db.claimOutbox('source', { now: 10 ** 13 });
   db.finishOutbox(delivery.id, { owner: 'source', sent: true, receipt: { status: 'suppressed', reason: 'source revoked' }, now: 10 ** 13 + 1 });
   assert.equal(db.getTicket(ticket.id).status, 'waiting');
+  assert.equal(db.learningSources({ limit: 10 }).items.length, 0);
 });

@@ -12,6 +12,7 @@ import { installDirectReplyStore } from './direct-reply-store.mjs';
 import { enqueueTicketAck } from './ticket-ack.mjs';
 import { systemStateDelivery } from './result-delivery.mjs';
 import { retireContentReview } from './retire-content-review.mjs';
+import { installLearningSourceStore } from './learning-source-store.mjs';
 import { installWorkerExecutionStore } from './worker-execution-store.mjs';
 import { installRouterQuestionStore } from './router-question-store.mjs';
 import { normalizeTicketTitle } from './ticket-title.mjs';
@@ -981,6 +982,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     if (result?.outcome !== payload.outcome || result.version !== payload.resultVersion) return;
     db.prepare('UPDATE sa_tickets SET status=?,updated_at=? WHERE id=?').run(payload.outcome, timestamp(now), ticket.id);
     db.prepare("UPDATE sa_subscriptions SET state='closed',updated_at=? WHERE ticket_id=?").run(timestamp(now), ticket.id);
+    api.recordClosedTicket?.(ticket.id, { closedAt: timestamp(now), inTransaction: true });
   }
 
   function thisFinishEval(row) {
@@ -1109,5 +1111,6 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   Object.assign(api, installWorkerExecutionStore({ db, tx, api }));
   Object.assign(api, installRouterQuestionStore({ db, tx, api }));
   retireContentReview({ db, tx });
+  Object.assign(api, installLearningSourceStore({ db, tx, api }));
   return api;
 }

@@ -31,6 +31,7 @@ import { createFeishuAdapter } from './feishu.mjs';
 import { createUnifiedChannelIngress } from './channel-ingress.mjs';
 import { createWorkbenchChannelIngress } from './workbench-channel-ingress.mjs';
 import { createChannelSessionHost, registerChannelSessionProjection } from './channel-session.mjs';
+import { assertRouterMemoryTool } from './memory-tool-policy.mjs';
 import { executionSessionProjection } from './execution-session.mjs';
 import { createActionPermissionStore } from './action-permissions.mjs';
 import { createExternalActionRegistry, createExternalActionHost, registerChannelExternalActions, createActionPermissionApi } from './external-actions.mjs';
@@ -404,17 +405,10 @@ export async function mountAssistant(ctx, commander, providers) {
     process: async (item, { signal }) => {
       signal.throwIfAborted();
       if (item.kind === 'learning') return processLearning(item, { signal });
-      if (item.kind === 'memory') {
-        const input = item.payload?.input && typeof item.payload.input === 'object' ? item.payload.input : item.payload;
-        if (!input || typeof input.content !== 'string' || !input.content.trim()) return { status: 'rejected', reason: '缺少可复盘的记忆内容' };
-        const evidence = item.payload?.evidence || (item.source?.role ? item.source : undefined);
-        const candidate = await store.memory.propose({ ...input, source: input.source || item.source || { type: 'review' } }, { verifiedSource: evidence });
-        return { candidate, evidence: evidence || null };
-      }
       // Skill review is deliberately advisory. Installing or changing a
       // skill remains an explicit user action through the host skill service.
       if (item.kind === 'skill') return { status: 'rejected', reason: '技能复盘只生成建议，必须通过技能管理入口应用' };
-      return { status: 'rejected', reason: `不支持的复盘类型：${item.kind}` };
+      return { status: 'rejected', reason: `旧会话提炼入口已作废，请使用闭单整理或直接管理记忆：${item.kind}` };
     },
   });
   // Delivery is deliberately injected by Link/host integrations. Polling and
@@ -454,7 +448,7 @@ export async function mountAssistant(ctx, commander, providers) {
   const setupTools = (scope, { threadId, agent: ownerAgent }) => {
     const register = (name, description, properties, required, execute) => scope.tools.register({
       name, description, parameters: { type: 'object', properties, required, additionalProperties: false }, output,
-      async execute(args, exec) { exec.signal?.throwIfAborted(); return execute(args, exec); },
+      async execute(args, exec) { exec.signal?.throwIfAborted(); assertRouterMemoryTool({ name, args, agent: exec.agent, ownerAgent }); return execute(args, exec); },
     });
     register('assistant_tickets', 'Read durable task tickets owned by this desktop conversation. list returns summaries filtered by status/projectId; follow nextOffset for more. get requires id and returns saved execution results, lightweight self-check records and pending questions. Default delivery does not read or review result content; read it only to answer an explicit user follow-up. For a Ticket question card, use the exact Attention.id as the ask_user_question question id and preserve its question and option labels. Other conversations and channels are excluded. Read only; never starts or changes work.', {
       op: { type: 'string', enum: ['list', 'get'] }, id: string, status: string, projectId: string,
@@ -543,12 +537,11 @@ export async function mountAssistant(ctx, commander, providers) {
     register('assistant_review', 'Inspect or enqueue bounded background review work. Eligible memories with verified user evidence save automatically under the current learning policy; skills remain candidates. Never changes permissions or starts execution work.', { op: { type: 'string', enum: ['list', 'enqueue', 'budget'] }, kind: string, payload: object, source: object, priority: { type: 'integer' } }, [], async ({ op = 'list', ...args }, exec) => {
       if (op === 'enqueue') {
         if (exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可提交复盘');
+        if (args.kind !== 'learning') throw new Error('后台整理只接受闭单材料调度，不接受会话记忆或技能正文');
         const instruction = currentHumanInstruction(ctx, ownerAgent);
         if (!instruction?.message?.id) throw new Error('复盘缺少当前原始用户消息');
-        const excerpt = (instruction.message.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
-        const evidence = { role: 'user', sessionId: String(ownerAgent.id), messageId: instruction.message.id, threadId,
-          excerpt: excerpt.slice(0, 6000), excerptTruncated: excerpt.length > 6000 };
-        return store.review.enqueue({ ...args, source: evidence, payload: args.kind === 'memory' ? { ...args.payload, evidence } : args.payload });
+        const source = { role: 'user', sessionId: String(ownerAgent.id), messageId: instruction.message.id, threadId };
+        return store.review.enqueue({ kind: 'learning', priority: args.priority, source, payload: {} });
       }
       if (op === 'budget') return store.review.budget();
       return store.review.list(args);
@@ -854,7 +847,13 @@ export async function mountAssistant(ctx, commander, providers) {
       case 'memoryCandidateReject': return store.memory.reject(input.id);
       case 'memoryForget': return { removed: await store.memory.forget(input.id, { revision: input.revision }) };
       case 'memoryLearning': return input.patch ? store.memory.configureLearning(input.patch, { expectedHash: input.expectedHash }) : store.memory.learning();
-      case 'review': return input.op === 'enqueue' ? store.review.enqueue(input) : input.op === 'budget' ? store.review.budget() : store.review.list(input);
+      case 'review': {
+        if (input.op === 'enqueue') {
+          if (input.kind !== 'learning') throw new Error('后台整理只接受闭单材料调度');
+          return store.review.enqueue({ kind: 'learning', payload: {} });
+        }
+        return input.op === 'budget' ? store.review.budget() : store.review.list(input);
+      }
       case 'reviewClaim': return store.review.claim(input);
       case 'reviewComplete': return store.review.complete(input.id, input);
       case 'reviewFail': return store.review.fail(input.id, input);
