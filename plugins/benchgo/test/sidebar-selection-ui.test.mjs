@@ -9,7 +9,7 @@ import * as helpers from '../client/sidebar-state.mjs';
 const require = createRequire(import.meta.url);
 const { transformSync } = require('esbuild');
 const source = readFileSync(new URL('../client/index.jsx', import.meta.url), 'utf8');
-const code = transformSync(source + '\nexport { Projects }; export function setSidebarSnapshot(snapshot, defaultId) { data = snapshot; defaultWorkspaceId = defaultId; }', { loader: 'jsx', format: 'cjs' }).code;
+const code = transformSync(source + '\nexport { Projects, mountSidebarProjects }; export function setSidebarSnapshot(snapshot, defaultId) { data = snapshot; defaultWorkspaceId = defaultId; }', { loader: 'jsx', format: 'cjs' }).code;
 
 function render(activeSessionId, options = {}) {
   const state = [], effects = [], events = new Map(); let cursor = 0;
@@ -24,7 +24,7 @@ function render(activeSessionId, options = {}) {
   runInNewContext(code, { module, exports: module.exports, localStorage: { getItem: () => null }, document: { addEventListener: (name, handler) => events.set(name, handler), removeEventListener() {} }, window: { matchMedia: () => ({ matches: true }) }, require: id => id.endsWith('modules.mjs') ? { moduleSource } : id === 'react' ? react : id.endsWith('sidebar-state.mjs') ? helpers : id.includes('superagent/client') ? { AssistantSidebarEntry: 'AssistantSidebarEntry' } : id.includes('device-launcher') ? { DeviceLauncher: 'DeviceLauncher' } : id.includes('device-switch') ? { DeviceSwitch: 'DeviceSwitch' } : {} });
   const sessions = ['first', 'second', 'third'];
   module.exports.setSidebarSnapshot(options.commander ?? { loaded: true, projects: [{ id: 'recent', isDefault: true, sessionIds: sessions }], sessions: [] }, options.defaultId);
-  const snapshot = { byId: Object.fromEntries(sessions.map(id => [id, { id, title: id, retainedBy: id === activeSessionId ? { mainView: 1 } : {}, blank: false, running: false }])) };
+  const snapshot = options.sessionSnapshot ?? { ids: sessions, byId: Object.fromEntries(sessions.map(id => [id, { id, title: id, retainedBy: id === activeSessionId ? { mainView: 1 } : {}, blank: false, running: false }])) };
   const host = {
     layout: { panelInfo: { subscribe: () => () => {}, getSnapshot: () => ({ activePanelId: options.activePanelId ?? null }) } },
     sessions: { list: { getSnapshot: () => snapshot } },
@@ -33,7 +33,12 @@ function render(activeSessionId, options = {}) {
     uiSession: { sessionStatus: { getSnapshot: () => options.statuses ?? new Map() } },
     uiWorkspace: { openSession: id => options.onOpenSession?.(id) },
   };
-  const props = { host, open() {}, newSession: options.newSession ?? (() => {}), wide: options.wide ?? true, expandSidebar() {} };
+  const renderSlot = (name, owner) => {
+    assert.equal(name, 'benchgo.sidebar.session.row.trailing');
+    options.onRenderSlot?.(name, owner);
+    return options.ticketSessionIds?.includes(owner.sessionId) ? react.createElement('span', { 'aria-label': '工单：真实任务' }, '工单') : null;
+  };
+  const props = { host, open() {}, newSession: options.newSession ?? (() => {}), wide: options.wide ?? true, expandSidebar() {}, renderSlot };
   let tree = module.exports.Projects(props);
   if (options.showArchived) {
     effects.forEach(effect => effect());
@@ -116,9 +121,91 @@ test('official workspaces render projects and conversations before Commander sta
 });
 
 test('ready empty official workspaces clear stale projects and rows', () => {
-  const nodes=render(undefined,{workspaces:{phase:'ready',items:[],archivedSessionIds:[]}});
+  const nodes=render(undefined,{workspaces:{phase:'ready',items:[],archivedSessionIds:[]},sessionSnapshot:{ids:[],byId:{}}});
   assert.equal(nodes.filter(node=>node.props.className?.split(' ').includes('cmd-session')).length,0);
   assert.equal(nodes.some(node=>node.children.includes('暂无项目')),true);
+});
+
+const sessionRows = nodes => nodes.filter(node => node.props.className?.split(' ').includes('cmd-session'));
+const rowTitles = nodes => sessionRows(nodes).map(row => row.children.find(child => child.type === 'span')?.children[0]);
+
+test('official ungrouped sessions join Recent without attaching a Workspace or duplicating its members', () => {
+  const opened = [], nodes = render('second', {
+    defaultId: 'recent', onOpenSession: id => opened.push(id),
+    workspaces: { phase: 'ready', items: [{ workspaceId: 'recent', sessionIds: ['first'] }, { workspaceId: 'project', title: 'Project', sessionIds: ['third'] }], archivedSessionIds: [] },
+  });
+  assert.deepEqual(rowTitles(nodes), ['first', 'second']);
+  const second = sessionRows(nodes).find(row => row.children.some(child => child.children?.includes('second')));
+  assert.equal(second.props['aria-current'], 'page'); second.props.onClick();
+  assert.deepEqual(opened, ['second']);
+});
+
+test('Recent keeps ungrouped sessions when the ready official Workspace catalog is empty', () => {
+  const nodes = render(undefined, { workspaces: { phase: 'ready', items: [], archivedSessionIds: [] } });
+  assert.deepEqual(rowTitles(nodes), ['first', 'second', 'third']);
+});
+
+test('ungrouped discovery follows list.ids and excludes missing, blank and dismissed catalog rows', () => {
+  const records = ['worker', 'blank', 'dismissed', 'not-listed'].map(id => [id, { id, title: id, blank: id === 'blank', retainedBy: {} }]);
+  const nodes = render(undefined, {
+    commander: { loaded: true, sessions: [], projects: [], deletedHarnessIds: ['dismissed'] },
+    workspaces: { phase: 'ready', items: [], archivedSessionIds: [] },
+    sessionSnapshot: { ids: ['worker', 'missing', 'blank', 'dismissed'], byId: Object.fromEntries(records) },
+  });
+  assert.deepEqual(rowTitles(nodes), ['worker']);
+});
+
+test('ungrouped and default Workspace rows share official pin and recent activity ordering', () => {
+  const nodes = render(undefined, {
+    defaultId: 'recent', workspaces: { phase: 'ready', items: [{ workspaceId: 'recent', sessionIds: ['default'] }, { workspaceId: 'project', sessionIds: ['project'] }], archivedSessionIds: [], pinnedSessionIds: ['pinned'] },
+    sessionSnapshot: { ids: ['old', 'default', 'pinned', 'new', 'project'], byId: Object.fromEntries([
+      ['old', 10], ['default', 30], ['pinned', 1], ['new', '2026-11-08T00:00:00Z'], ['project', 100],
+    ].map(([id, updatedAt]) => [id, { id, title: id, updatedAt, blank: false, retainedBy: {} }])) },
+  });
+  assert.deepEqual(rowTitles(nodes), ['pinned', 'new', 'default', 'old']);
+});
+
+test('ungrouped rows follow the official archive set and retain their own navigation identity after restore', () => {
+  const base = { defaultId: 'recent', workspaces: { phase: 'ready', items: [{ workspaceId: 'recent', sessionIds: ['first'] }], archivedSessionIds: ['second'] } };
+  assert.deepEqual(rowTitles(render(undefined, base)), ['first', 'third']);
+  const archived = render(undefined, { ...base, showArchived: true });
+  assert.deepEqual(rowTitles(archived), ['second']);
+  assert(archived.some(node => node.props['aria-label'] === '取消归档对话'));
+  assert.deepEqual(rowTitles(render('second', { ...base, workspaces: { ...base.workspaces, archivedSessionIds: [] } })), ['first', 'second', 'third']);
+});
+
+test('an archived project never captures ungrouped rows through two absent cwd fields', () => {
+  const nodes = render(undefined, { showArchived: true, defaultId: 'recent',
+    workspaces: { phase: 'ready', items: [{ workspaceId: 'recent', sessionIds: ['first'] }, { workspaceId: 'project', title: 'Project', sessionIds: ['third'] }], archivedSessionIds: ['second', 'third'] },
+  });
+  assert.deepEqual(rowTitles(nodes), ['third', 'second']);
+});
+
+test('custom sidebar renders its own trailing slot for default and ungrouped sessions', () => {
+  const calls = [], nodes = render(undefined, { ticketSessionIds: ['second'], onRenderSlot: (name, owner) => calls.push([name, owner.sessionId]),
+    defaultId: 'recent', workspaces: { phase: 'ready', items: [{ workspaceId: 'recent', sessionIds: ['first'] }], archivedSessionIds: [] },
+  });
+  assert.deepEqual(calls, ['first', 'second', 'third'].map(id => ['benchgo.sidebar.session.row.trailing', id]));
+  assert.equal(nodes.filter(node => node.props['aria-label'] === '工单：真实任务').length, 1);
+});
+
+test('custom sidebar registers its own extension ownership without reading or replacing official components', () => {
+  const module = { exports: {} };
+  runInNewContext(code, { module, exports: module.exports, require: id => id === 'react' ? { createElement: (type, props) => ({ type, props }) } : {} });
+  const open = () => {}, newSession = () => {};
+  let registration, component, removed = false;
+  const host = { slots: {
+    entries: () => assert.fail('must not inspect or mutate official components'),
+    inject: (name, setup) => { assert.equal(name, 'sidebar.workspaces'); return setup(); },
+    register: (options, view) => { registration = options; component = view; return () => { removed = true; }; },
+  } };
+  const dispose = module.exports.mountSidebarProjects(host, open, newSession);
+  assert.equal(component, module.exports.Projects); assert.equal(registration.priority, -10);
+  assert.deepEqual(Object.keys(registration.children), ['benchgo.sidebar.session.row.trailing']);
+  assert.deepEqual({ ...registration.children['benchgo.sidebar.session.row.trailing'] }, { kind: 'list', scope: 'root', inline: true });
+  const injected = registration.inject();
+  assert.equal(injected.host, host); assert.equal(injected.open, open); assert.equal(injected.newSession, newSession);
+  dispose(); assert.equal(removed, true);
 });
 
 test('live official sessions light their workspace without adding a global toolbar indicator', () => {

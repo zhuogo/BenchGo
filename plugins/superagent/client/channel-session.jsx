@@ -9,7 +9,8 @@ export function registerChannelSessionRows(ctx) {
     const label = `${source.channel} · ${source.sourceType}`;
     return <span title={`渠道来源：${label}`} aria-label={`渠道来源：${label}`}>{source.channel}</span>;
   }
-  return ctx.slots.inject('sidebar.session.row.trailing', () => ctx.slots.register({
-    name: 'sidebar.session.row.trailing', id: 'benchgo-channel-source', order: 90,
-  }, ChannelSource));
+  const dispose = ['sidebar.session.row.trailing', 'benchgo.sidebar.session.row.trailing'].map(name => ctx.slots.inject(name, () => ctx.slots.register({
+    name, id: 'benchgo-channel-source', order: 90,
+  }, ChannelSource)));
+  return () => { for (const cleanup of dispose) cleanup(); };
 }

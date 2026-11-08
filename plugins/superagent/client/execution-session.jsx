@@ -1,7 +1,7 @@
 import React, { useEffect, useSyncExternalStore } from 'react';
 export { openExecutionSession } from './execution-session-navigation.mjs';
 
-/** Uses the official row extension and navigation service, not another list. */
+/** Both sidebar views share this projection and component, never another list. */
 export function registerExecutionSessionRows(ctx, loadSessions) {
   let state = { phase: 'loading', entries: [] }, controller, interval, pending;
   const listeners = new Set();
@@ -27,7 +27,8 @@ export function registerExecutionSessionRows(ctx, loadSessions) {
   }
   interval = setInterval(refresh, 10000);
   ctx.effect(() => () => { clearInterval(interval); controller?.abort(); listeners.clear(); });
-  return ctx.slots.inject('sidebar.session.row.trailing', () => ctx.slots.register({
-    name: 'sidebar.session.row.trailing', id: 'benchgo-execution-ticket', order: 100,
-  }, TicketMark));
+  const dispose = ['sidebar.session.row.trailing', 'benchgo.sidebar.session.row.trailing'].map(name => ctx.slots.inject(name, () => ctx.slots.register({
+    name, id: 'benchgo-execution-ticket', order: 100,
+  }, TicketMark)));
+  return () => { for (const cleanup of dispose) cleanup(); };
 }
