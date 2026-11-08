@@ -74,7 +74,7 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
         if (isStopped() || agent?.status === 'running') return;
         await reconcile(threadId, agent);
         const queued = ((await getState()).requests || []).filter(item => item.threadId === threadId && item.status === 'queued');
-        const row = queued.find(item => !item.ticketState && !item.ticketReply) || queued[0];
+        const row = queued.find(item => !item.ticketState && !item.ticketReply && !item.executionInput) || queued[0];
         if (!row || isStopped()) return;
         agent ||= await ensureSession({ threadId });
         if (isStopped() || agent.status === 'running') return;
@@ -161,9 +161,9 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
       onChange({ type: 'inbox', threadId, requestId, status: row.status });
       return { ...receipt(row), ...(duplicate ? { duplicate: true } : {}) };
     },
-    async enqueue({ threadId = 'main', text, requestId = randomUUID(), replyContext }) {
+    async enqueue({ threadId = 'main', text, requestId = randomUUID(), replyContext, hostExecutionInput }) {
       const context = replySnapshot(replyContext);
-      const digest = fingerprint(threadId, text, context);
+      const digest = fingerprint(threadId, text, hostExecutionInput ? { executionInput: hostExecutionInput } : context);
       let duplicate = false;
       await updateState(state => {
         const previous = (state.requests || []).find(row => row.requestId === requestId);
@@ -172,9 +172,12 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
           duplicate = true;
           return {};
         }
-        const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user', requestId, rpcId: requestId,
+        const message = createUserMessage({ content: [{ type: 'text', text }], source: hostExecutionInput
+          ? { kind: 'benchgo-execution-input', ...hostExecutionInput }
+          : { kind: 'user', requestId, rpcId: requestId,
           ...(context ? { replyContext: context } : {}) } });
-        const row = { requestId, threadId, sessionId: getAgent?.(threadId)?.id ?? null, messageId: message.id, message, fingerprint: digest, status: 'queued', createdAt: new Date(now()).toISOString() };
+        const row = { requestId, threadId, sessionId: getAgent?.(threadId)?.id ?? null, messageId: message.id, message,
+          ...(hostExecutionInput ? { executionInput: hostExecutionInput } : {}), fingerprint: digest, status: 'queued', createdAt: new Date(now()).toISOString() };
         return { requests: [...(state.requests || []), row] };
       });
       await drain(threadId);
@@ -194,7 +197,7 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
     },
     async hasPending(threadId) { return ((await getState()).requests || []).some(row => row.threadId === threadId && active.has(row.status)); },
     async state(threadId) {
-      return ((await getState()).requests || []).filter(row => row.threadId === threadId && !row.ticketState && !row.ticketReply).map(row => ({ ...receipt(row), createdAt: row.createdAt, updatedAt: row.updatedAt,
+      return ((await getState()).requests || []).filter(row => row.threadId === threadId && !row.ticketState && !row.ticketReply && !row.executionInput).map(row => ({ ...receipt(row), createdAt: row.createdAt, updatedAt: row.updatedAt,
         ...(row.questionReply ? { questionReply: row.questionReply, text: row.questionReply.text }
           : row.message ? { text: row.message.content?.filter(block => block.type === 'text').map(block => block.text).join('') ?? '' } : {}) }));
     },

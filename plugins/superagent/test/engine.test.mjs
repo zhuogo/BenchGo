@@ -1949,9 +1949,54 @@ test('execution native prompt requires the live durable Worker input gate and re
   t.after(() => { agents.get = originalGet; });
   assert.deepEqual(await f.engine.nativePrompt({ request, dispatch }), { accepted: true, official: true });
   assert.equal(dispatched, 1);
+  ticket.status = 'pausing';
+  assert.deepEqual(await f.engine.nativePrompt({ request, dispatch }), { accepted: true, official: true });
+  assert.equal(dispatched, 2);
   ticket.status = 'completed';
   await assert.rejects(f.engine.nativePrompt({ request, dispatch }), error => error.details?.reason === 'TICKET_INPUT_GATE_UNAVAILABLE');
-  assert.equal(dispatched, 1);
+  assert.equal(dispatched, 2);
+});
+
+test('execution input Router notification publishes one natural reply and survives official session restart without becoming user authority', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'execution-router-notice-'));
+  const store = await createAssistantStore({ dataDirectory: directory });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }], workerModels: [{ providerId: 'test', modelId: 'exact' }] });
+  const options = { store, persistenceRoot: join(directory, 'sessions') };
+  const first = await fixture(t, () => text('新增网站和发送对象超出原范围，请在这里确认具体新增范围。'), options);
+  const router = await first.engine.ensureSession(), policy = await readAssessmentPolicy(store);
+  const source = { channel: 'desktop', sessionId: router.id, messageId: 'owner-original', threadId: 'main' };
+  const db = store.orchestration;
+  const original = db.ingest({ dedupeKey: 'owner-original', thread: { id: `desktop:${router.id}`, source: { type: 'desktop', id: router.id } },
+    source, actor: { kind: 'human', id: 'desktop-owner' }, content: '只读本地目录', mode: 'direct' }).trigger;
+  const ticket = db.createTicket({ threadId: original.threadId, target: '只读本地目录', acceptance: '不联网',
+    mandate: { actorId: 'desktop-owner', source, instruction: '只读本地目录', policyVersion: policy.desktopVersion,
+      admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval' } });
+  db.createAssignment(ticket.id, { text: ticket.target, model: { providerId: 'test', modelId: 'exact' } });
+  const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
+  const run = db.prepareRun(assignment.id, { ...assignment, sessionId: 'worker-session', directory });
+  const nativeSource = { channel: 'desktop', sessionId: run.sessionId, messageId: 'native', executionSessionId: run.sessionId, executionMessageId: 'native' };
+  const trigger = db.ingest({ dedupeKey: 'native', thread: { id: 'desktop:worker-session', source: { type: 'desktop', id: 'worker-session' } },
+    source: nativeSource, actor: { kind: 'human', id: 'desktop-owner' }, content: 'RAW_EXPANSION_COMMAND', mode: 'direct' }).trigger;
+  db.subscribe(ticket.id, trigger.threadId, { beforeTriggerId: trigger.id }); db.deliverSubscribedMessage(trigger.id, { ticketId: ticket.id });
+  db.saveExecutionInputDisposition(trigger.id, { ...assignment, assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId,
+    disposition: { outcome: 'router', reason: '新增网站和发送对象' } });
+  const notice = { ticket, trigger, reason: '新增网站和发送对象' };
+  await first.engine.notifyExecutionInput(notice); await router.whenIdle();
+  const saved = (await store.getState()).requests.find(row => row.executionInput);
+  assert.equal(router.session.snapshotEvents().find(event => event.type === 'user/message' && event.data.id === saved.messageId).data.source.kind, 'benchgo-execution-input');
+  assert.equal((await first.engine.requestState()).length, 0);
+  const before = (await first.engine.history()).messages;
+  assert.equal(before.length, 1); assert.equal(before[0].role, 'assistant'); assert.match(before[0].text, /请在这里确认/);
+  assert.doesNotMatch(JSON.stringify(before), /RAW_EXPANSION_COMMAND/);
+  assert.equal(db.getTicket(ticket.id).instructionRevision, 1);
+  assert.ok(router.session.snapshotEvents().some(event => event.type === 'plugin:benchgo-plugin/chat-publication' && event.data.requestId === saved.messageId));
+  await first.engine.dispose(); await first.ctx.fiber.dispose();
+  const second = await fixture(t, () => text('must not replay'), options);
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await second.engine.ensureSession();
+  await second.engine.notifyExecutionInput(notice);
+  assert.deepEqual((await second.engine.history()).messages, before);
+  assert.equal(second.requests.length, 0);
 });
 
 

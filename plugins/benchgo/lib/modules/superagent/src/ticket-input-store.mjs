@@ -46,9 +46,9 @@ export function installTicketInputStore({ db, tx, api }) {
     if (old) {
       // A stable source message is one input even when it reaches another entry.
       if (old.ticket_id === input.ticketId && old.trigger_id === input.triggerId && input.kind === 'context') return value(old);
-      if (old.ticket_id === input.ticketId && old.trigger_id === input.triggerId && old.kind === 'context' && input.kind === 'revision' && old.state === 'pending') {
+      if (old.ticket_id === input.ticketId && old.trigger_id === input.triggerId && old.kind === 'context' && ['revision', 'stop'].includes(input.kind) && old.state === 'pending') {
         db.prepare('UPDATE sa_ticket_inputs SET kind=?,fingerprint=?,instruction_revision=?,authorization_version=?,snapshot=? WHERE id=?')
-          .run(input.kind, fingerprint, revision, authorizationVersion, JSON.stringify(input.snapshot), old.id);
+          .run(input.kind, fingerprint, revision, authorizationVersion, input.snapshot ? JSON.stringify(input.snapshot) : null, old.id);
         return value(db.prepare('SELECT * FROM sa_ticket_inputs WHERE id=?').get(old.id));
       }
       if (old.ticket_id !== input.ticketId || old.trigger_id !== input.triggerId || old.kind !== input.kind
@@ -117,6 +117,19 @@ export function installTicketInputStore({ db, tx, api }) {
     applyTicketInput: (triggerId, application) => tx(() => applyInput(triggerId, application)),
     applyTicketStopInputInTransaction: controlApplied,
     applyTicketStopInput: (ticketId, triggerId) => tx(() => controlApplied(ticketId, triggerId)),
+    saveExecutionInputDisposition(triggerId, { assignmentId, owner, fence, runId, sessionId, disposition }) {
+      return tx(() => {
+        const assignment = api.getAssignment(assignmentId), run = assignment && api.runs(assignmentId).find(row => row.id === runId);
+        const input = assignment && db.prepare('SELECT * FROM sa_ticket_inputs WHERE ticket_id=? AND trigger_id=?').get(assignment.ticketId, triggerId);
+        if (!assignment || assignment.state !== 'claimed' || assignment.owner !== owner || assignment.fence !== fence || assignment.leaseUntil <= Date.now()
+          || !run || run.owner !== owner || run.fence !== fence || run.sessionId !== sessionId || !input) throw fail('FENCING_CONFLICT', '执行输入分诊不属于当前真实执行');
+        if (input.kind !== 'context') return value(input);
+        // A context receipt has no requirement snapshot. Reuse that existing JSON
+        // slot for its host disposition; no parallel input or lifecycle ledger.
+        db.prepare('UPDATE sa_ticket_inputs SET snapshot=? WHERE id=?').run(JSON.stringify({ executionInput: disposition }), input.id);
+        return value(db.prepare('SELECT * FROM sa_ticket_inputs WHERE id=?').get(input.id));
+      });
+    },
     appliedTicketSnapshot(assignmentId) {
       const assignment = api.getAssignment(assignmentId);
       if (!assignment) throw fail('ASSIGNMENT_NOT_FOUND', '执行安排不存在');

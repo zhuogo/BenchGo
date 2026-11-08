@@ -41,6 +41,20 @@ test('duplicate pending IDs are acknowledged and mismatched content is rejected'
   await assert.rejects(f.inbox.enqueue({ text: 'B', requestId: 'same' }), /请求标识/);
 });
 
+test('a durable execution notice retains internal source identity, hides from the human queue and reconciles without replay', async () => {
+  const f = fixture();
+  const args = { text: 'PRIVATE HOST INPUT', requestId: 'execution-input:native', hostExecutionInput: { ticketId: 'ticket', triggerId: 'native' } };
+  await f.inbox.enqueue(args);
+  assert.equal(f.sent[0].source.kind, 'benchgo-execution-input');
+  assert.deepEqual(await f.inbox.state(), []);
+  assert.equal((await f.inbox.enqueue(args)).duplicate, true);
+  await f.finish({ kind: 'completed' });
+  const restored = fixture(JSON.parse(JSON.stringify(f.state())), { events: f.events });
+  await restored.inbox.recover(); await restored.inbox.enqueue(args);
+  assert.equal(restored.sent.length, 0);
+  assert.equal(restored.state().requests[0].status, 'processed');
+});
+
 test('notification replies persist the authoritative question and reject changed associations under the same request id', async () => {
   const f = fixture();
   const replyContext = { eventId: 'delivery', ticketId: 'ticket', instructionRevision: 1, resultVersion: 2, question: '应采用哪个范围？' };

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { activeChatReply, chatPublicationType, installChatPublication, projectChatMessages } from '../src/chat-publication.mjs';
+import { activeChatReply, chatPublicationType, executionInputSource, installChatPublication, projectChatMessages } from '../src/chat-publication.mjs';
 import { ticketStateSource } from '../src/ticket-state-report.mjs';
 import { ticketReplySource } from '../src/ticket-reply.mjs';
 
@@ -9,6 +9,26 @@ const reply = (seq, data = {}, extra = {}) => ({ seq, type: chatPublicationType,
 const start = (turn = 1) => ({ type: 'turn/start', seq: 0, data: { turn } });
 const answer = (content, turn = 1) => ({ type: 'assistant/message', seq: 2, data: { turn, message: { source: { kind: 'model' }, content } } });
 const end = (kind = 'completed', turn = 1) => ({ type: 'turn/end', seq: 3, data: { turn, reason: { kind } } });
+
+test('execution scope notices hide their source, publish only after current host validation, and restore one natural reply', async () => {
+  for (const allowed of [true, false]) {
+    const notice = { ...user, data: { ...user.data, id: 'execution-notice', source: { kind: executionInputSource, triggerId: 'native', ticketId: 'same-ticket' },
+      content: [{ type: 'text', text: 'PRIVATE_EXPANSION_ORIGINAL' }] } };
+    const events = [start(), notice, answer([{ type: 'text', text: '新增范围需要你确认。' }])];
+    assert.equal(activeChatReply(events).requestId, 'execution-notice');
+    assert.deepEqual(projectChatMessages([...events, end()]), []);
+    let stopping;
+    const agent = { session: { snapshotEvents: () => events } };
+    installChatPublication({ on: (_name, handler) => { stopping = handler; }, tools: { register() {} } }, agent,
+      { canPublish: async request => { assert.equal(request.source.triggerId, 'native'); return allowed; },
+        appendRecord: (_session, type, data) => events.push({ type, data, ignorable: true, seq: events.length }) });
+    await stopping({ agent, turn: 1 }); await stopping({ agent, turn: 1 });
+    const restored = projectChatMessages(JSON.parse(JSON.stringify([...events, end()])));
+    assert.equal(restored.length, allowed ? 1 : 0);
+    if (allowed) assert.equal(restored[0].text, '新增范围需要你确认。');
+    assert.doesNotMatch(JSON.stringify(restored), /PRIVATE_EXPANSION_ORIGINAL/);
+  }
+});
 
 test('usage comes only from final model request and exposes numeric allowlist', () => {
   const first = answer([{ type: 'tool-call', name: 'read' }]);

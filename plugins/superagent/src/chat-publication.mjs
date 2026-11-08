@@ -5,16 +5,18 @@ import { ticketStateSource } from './ticket-state-report.mjs';
 import { ticketReplySource } from './ticket-reply.mjs';
 
 export const chatPublicationType = 'plugin:benchgo-plugin/chat-publication';
+export const executionInputSource = 'benchgo-execution-input';
 const fail = message => Object.assign(new Error(message), { code: 'CHAT_PUBLICATION_REJECTED' });
 const userEvent = (event, events) => event.type === 'user/message' && (event.data?.source?.kind === 'user' || readQuestionReply(event.data, events));
 const internalReply = request => request?.source?.kind === ticketReplySource;
 const legacyReply = request => request?.source?.kind === ticketStateSource;
-const replyEvent = (event, events) => userEvent(event, events) || event.type === 'user/message' && [ticketStateSource, ticketReplySource].includes(event.data?.source?.kind);
+const executionReply = request => request?.source?.kind === executionInputSource;
+const replyEvent = (event, events) => userEvent(event, events) || event.type === 'user/message' && [ticketStateSource, ticketReplySource, executionInputSource].includes(event.data?.source?.kind);
 // Resolve internal and retired notices to their original identity so neither
 // can accidentally become a reply to the preceding human message.
 const replyContinuations = events => {
   const result = fallbackRequestIds(events);
-  const states = new Set(events.filter(event => event.type === 'user/message' && (legacyReply(event.data) || internalReply(event.data))).map(event => event.data.id));
+  const states = new Set(events.filter(event => event.type === 'user/message' && (legacyReply(event.data) || internalReply(event.data) || executionReply(event.data))).map(event => event.data.id));
   for (const plan of readModelFallbacks(events).values()) {
     if (!plan.cancelled && states.has(plan.requestId)
       && events.some(event => event.type === 'user/message' && event.data?.id === plan.message.id
@@ -63,7 +65,7 @@ export function projectChatMessages(events) {
     if (replyEvent(event, events)) {
       users.add(event.data.id);
       request = event.data;
-      if (legacyReply(request) || internalReply(request)) continue;
+      if (legacyReply(request) || internalReply(request) || executionReply(request)) continue;
       const question = readQuestionReply(event.data, events);
       if (question) {
         const row = { seq: event.seq, id: event.data.id, role: 'user', kind: 'question-reply', ...question,
@@ -99,7 +101,7 @@ export function projectChatMessages(events) {
     } else if (event.type === 'turn/end') {
       const message = lastAssistant?.data?.message;
       if (turn !== undefined && event.data?.turn === turn && event.data?.reason?.kind === 'completed'
-        && request?.id && !internalReply(request) && !legacyReply(request) && !explicit.has(request.id) && !published.has(request.id)
+        && request?.id && !internalReply(request) && !legacyReply(request) && !executionReply(request) && !explicit.has(request.id) && !published.has(request.id)
         && message?.source?.kind === 'model' && !message.content?.some(block => block.type === 'tool-call')) {
         const text = textBlocks(message.content).map(block => block.text).join('\n');
         if (text.trim()) {
@@ -116,11 +118,22 @@ export function projectChatMessages(events) {
 
 /** Only the owner Router can publish; Worker/tool output has no publication authority. */
 export function installChatPublication(scope, agent, { onPublish, canPublish, appendRecord = appendPluginRecord } = {}) {
-  const permitted = request => !legacyReply(request) && (!internalReply(request) || (canPublish ? canPublish(request) : false));
+  const permitted = request => !legacyReply(request) && (!(internalReply(request) || executionReply(request)) || (canPublish ? canPublish(request) : false));
   scope.on?.('agent/turn-stopping', async ({ agent: subject, turn, signal }) => {
     if (subject !== agent) return;
     const events = agent.session.snapshotEvents(), active = activeChatReply(events, { includeInternal: true });
     const request = events.find(event => event.type === 'user/message' && event.data?.id === active?.requestId)?.data;
+    if (executionReply(request)) {
+      if (active.turn !== turn || events.some(event => event.type === chatPublicationType && event.data?.kind === 'final' && event.data.requestId === request.id)) return;
+      const last = events.findLast(event => event.type === 'assistant/message' && event.data?.turn === turn)?.data?.message;
+      if (last?.source?.kind !== 'model' || last.content?.some(block => block.type === 'tool-call')) return;
+      const text = textBlocks(last.content).map(block => block.text).join('\n');
+      if (!text.trim() || text.length > 16000 || !await permitted(request)) return;
+      signal?.throwIfAborted();
+      appendRecord(agent.session, chatPublicationType, { kind: 'final', requestId: request.id, text });
+      onPublish?.({ requestId: request.id });
+      return;
+    }
     if (internalReply(request)) {
       if (active.turn !== turn || events.some(event => event.type === chatPublicationType && event.data?.kind === 'ticket-reply' && event.data.requestId === request.id)) return;
       const last = events.findLast(event => event.type === 'assistant/message' && event.data?.turn === turn)?.data?.message;

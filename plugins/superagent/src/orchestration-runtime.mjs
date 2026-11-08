@@ -14,7 +14,7 @@ import { createTaskExecutionProgress } from './task-execution-progress.mjs';
 import { archiveClosedExecutionSessions, executionSessionProjection } from './execution-session.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
-export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, prepareTicketReply, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
+export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, prepareTicketReply, notifyExecutionInput, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
   const database = store.orchestration, owner = `delivery:${randomUUID()}`, shutdown = new AbortController();
   const archived = new Set(), archiveRetry = new Map();
   const finishDelivery = (id, options) => database.finishOutbox(id, { now: now(), ...options });
@@ -41,6 +41,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       uniqueKey: `assignment-result:${assignment.id}:${result.runId || 'execution'}:${assignment.fence}` });
   }
   const executeTask = execute || createAssignmentExecutor({ ctx, database, workspaceRoot: join(store.paths.workspace, 'workers'), readPolicy,
+    notifyExecutionInput,
     authorizeAction: async ({ policy, mandate }) => ({ allowed: validateTicketMandate(mandate, { policy }) }),
     readContext: sessionId => store.getSessionContext(sessionId), memory: store.memory, checkpoints: checkpointStore,
     readSourceContext: input => input.source?.channel === 'feishu' ? feishu?.readContext?.(input) : undefined,
@@ -239,7 +240,10 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       const progress = executionProgress.batch();
       return database.listTickets({ limit: 1000, newestFirst }).map(ticket => {
         const assignments = database.assignments(ticket.id);
-        return { ...ticket, revisions: database.ticketRevisions(ticket.id), assignments, attentions: database.attentions(ticket.id), attentionResolutions: database.attentionResolutions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id), executionSession: executionSessionProjection(database, ticket.id), execution: progress(ticket, assignments) };
+        const inputDiagnostics = (database.ticketInputs?.(ticket.id) || []).filter(input => input.snapshot?.executionInput?.outcome === 'failed')
+          .map(input => ({ id: input.id, triggerId: input.triggerId, state: input.state, receivedAt: input.receivedAt,
+            code: input.snapshot.executionInput.code, reason: input.snapshot.executionInput.reason }));
+        return { ...ticket, inputDiagnostics, revisions: database.ticketRevisions(ticket.id), assignments, attentions: database.attentions(ticket.id), attentionResolutions: database.attentionResolutions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id), executionSession: executionSessionProjection(database, ticket.id), execution: progress(ticket, assignments) };
       });
     },
     start() { if (timer || shutdown.signal.aborted) return; timer = setInterval(tick, intervalMs); timer.unref?.(); void tick(); },

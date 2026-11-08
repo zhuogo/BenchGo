@@ -8,6 +8,7 @@ import { installWorkerPermissionGate } from './worker-permissions.mjs';
 import { installWorkerSubagents } from './worker-subagents.mjs';
 import { installWorkerVault } from './worker-vault.mjs';
 import { installSubscriptionInbox } from './subscription-inbox.mjs';
+import { createExecutionTicketInputService } from './execution-ticket-input.mjs';
 import { continueWorkerContext } from './worker-context-continuation.mjs';
 import { workerWorktrees } from './worker-worktree.mjs';
 import { installProjectRules } from './project-rules.mjs';
@@ -25,10 +26,11 @@ import { attachExecutionSession } from './execution-session.mjs';
 import { modelFallbackType, modelFallbackSource, fallbackCallSignature as toolSignature } from './model-fallback.mjs';
 
 /** Uses the host agent lifecycle and transcript; no separate model/tool loop. */
-export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readSourceContext, checkpoints, captureCheckpoint = captureArtifactCheckpoint }) {
+export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readSourceContext, notifyExecutionInput, checkpoints, captureCheckpoint = captureArtifactCheckpoint }) {
   if (!ctx?.agents?.create || !ctx?.sessionQuery?.readSession) throw new Error('Harness execution services unavailable');
   if (typeof authorizeAction !== 'function') throw new Error('Worker requires a current action authorizer');
   const root = resolve(workspaceRoot);
+  const processExecutionInput = createExecutionTicketInputService({ ctx, database, readPolicy, notifyRouter: notifyExecutionInput });
   return async (assignment, { ticket, signal, renew }) => {
     signal.throwIfAborted();
     if (assignment.reviewRepair || assignment.reviewContinuation) throw new Error('Legacy content-review continuation is unsupported');
@@ -151,7 +153,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         }
         scope.systemPrompt.section({ name: 'deployment:persona-prefix', order: -1000, interpolate: false, text: 'You are a BenchGo task worker.' });
         scope.systemPrompt.section({ name: 'deployment:persona-suffix', order: 1000, interpolate: false, text: '' });
-        const inbox = installSubscriptionInbox(scope, agent, { database, assignment, run });
+        const inbox = installSubscriptionInbox(scope, agent, { database, assignment, run, processExecutionInput, signal });
         if (inbox.inputGateInstalled) scope.provide?.('benchgoWorkerInputGate', Object.freeze({ ticketId: ticket.id,
           assignmentId: assignment.id, runId: run.id, sessionId, owner: assignment.owner, fence: assignment.fence }));
         const currentSnapshot = () => inbox.currentSnapshot?.() || { target: ticket.target, acceptance: ticket.acceptance, mandate: ticket.mandate, context: [], instructionRevision: ticket.instructionRevision };
