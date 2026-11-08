@@ -26,9 +26,9 @@ export function TicketChange({ api, ticket, reload, onDirtyChange, startOpen = f
   const request = useRef(null);
   useEffect(() => { onDirtyChange?.(!!draft); return () => onDirtyChange?.(false); }, [!!draft, onDirtyChange]);
   const terminal = terminalStates.includes(ticket.status);
-  const pending = ticketSnapshot(ticket).safetyWait || ['pausing', 'cancelling', 'uncertain'].includes(ticket.status) || ticket.assignments?.some(row => ['claimed', 'uncertain'].includes(row.state));
+  const pending = ticketSnapshot(ticket).safetyWait || ['pausing', 'cancelling', 'uncertain'].includes(ticket.status) || ticket.assignments?.some(row => row.state === 'uncertain');
   const open = () => {
-    setDraft({ operation: terminal ? 'reopen' : 'revise', expectedInstructionRevision: ticket.instructionRevision, target: ticket.target, acceptance: ticket.acceptance || '', reason: '' });
+    setDraft({ operation: terminal ? 'adjustment' : 'revise', expectedInstructionRevision: ticket.instructionRevision, target: ticket.target, acceptance: ticket.acceptance || '', reason: '' });
     request.current = null; setError('');
   };
   useEffect(() => { if (startOpen) open(); }, [startOpen]);
@@ -41,15 +41,15 @@ export function TicketChange({ api, ticket, reload, onDirtyChange, startOpen = f
     finally { setBusy(false); }
   };
   return <section className="ba-stack" aria-label="工单要求管理">
-    {draft ? <form className="ba-stack" onSubmit={submit}><h3>{draft.operation === 'reopen' ? '重开工单' : '修订工单'} · 要求版本 {draft.expectedInstructionRevision}</h3>
-      <p className="ba-note">使用本机授权重新执行，结果投递到桌面。旧结果与来源保留在原版本。</p>
+    {draft ? <form className="ba-stack" onSubmit={submit}><h3>{draft.operation === 'adjustment' ? '创建关联调整单' : '修订工单'} · 要求版本 {draft.expectedInstructionRevision}</h3>
+      <p className="ba-note">{terminal ? '保留原工单成果与记录，按当前授权创建关联调整单。' : '补充会在下一工具边界应用，在途操作继续按已提交要求执行。'}</p>
       <fieldset disabled={busy}><label className="ba-connection-field"><span>任务要求</span><textarea required rows={4} value={draft.target} onChange={event => update({ target: event.target.value })} /></label>
         <label className="ba-connection-field"><span>验收条件</span><textarea rows={3} value={draft.acceptance} onChange={event => update({ acceptance: event.target.value })} /></label>
         <label className="ba-connection-field"><span>变更原因</span><textarea required maxLength={10000} rows={2} value={draft.reason} onChange={event => update({ reason: event.target.value })} /></label></fieldset>
       {ticket.instructionRevision !== draft.expectedInstructionRevision && <p role="status" className="ba-note">工单已有新版本。请保留所需内容，关闭表单后重新打开。</p>}
       {error && <p role="alert">{error}</p>}<div className="ba-row-actions"><Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={() => setDraft(null)}>取消</Button><Button type="submit" className="ba-primary" disabled={busy || pending || ticket.instructionRevision !== draft.expectedInstructionRevision || !draft.target.trim() || !draft.reason.trim()}>{busy ? '提交中…' : '保存并排队'}</Button></div>
-    </form> : <div><TaskIconButton icon={terminal ? 'refresh' : 'edit'} label={terminal ? '重开工单' : '修订要求'} disabled={pending} onClick={open} />{pending && <p className="ba-note">先暂停或停止，并确认执行已结束后，才能变更要求。</p>}</div>}
-    {!!ticket.revisions?.length && <Disclosure title={<>要求修订历史</>}><ol>{ticket.revisions.map(row => <li key={row.instructionRevision}><strong>版本 {row.instructionRevision} · {({ original: '原始要求', revise: '修订', reopen: '重开' })[row.operation] || row.operation}</strong><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.target}</p>{row.acceptance && <p>验收条件：{row.acceptance}</p>}{row.reason && <p>原因：{row.reason}</p>}<small>{row.createdAt}</small></li>)}</ol></Disclosure>}
+    </form> : <div><TaskIconButton icon={terminal ? 'refresh' : 'edit'} label={terminal ? '创建关联调整单' : '修订要求'} disabled={pending} onClick={open} />{pending && <p className="ba-note">正在核实停止或外部效果，请先确认当前状态。</p>}</div>}
+    {!!ticket.revisions?.length && <Disclosure title={<>要求修订历史</>}><ol>{ticket.revisions.map(row => <li key={row.instructionRevision}><strong>版本 {row.instructionRevision} · {({ original: '原始要求', revise: '修订', adjustment: '关联调整' })[row.operation] || row.operation}</strong><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.target}</p>{row.acceptance && <p>验收条件：{row.acceptance}</p>}{row.reason && <p>原因：{row.reason}</p>}<small>{row.createdAt}</small></li>)}</ol></Disclosure>}
   </section>;
 }
 
@@ -111,7 +111,7 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, requeste
         else if (row.status === 'paused' && !safetyWait) actions.push({ icon: 'play', label: '继续工单', onClick: () => lifecycle(row, 'ticketResume'), disabled: busy !== null });
         else if (!['pausing', 'cancelling', 'uncertain', 'blocked'].includes(status)) actions.push({ icon: 'pause', label: '暂停工单', onClick: () => lifecycle(row, 'ticketPause'), disabled: busy !== null });
         actions.push({ icon: 'stop', label: '停止工单', onClick: () => stop(row), disabled: busy !== null });
-      } else actions.push({ icon: 'refresh', label: '重开工单', onClick: () => { setChangeId(row.id); setSelectedId(row.id); }, disabled: busy !== null });
+      } else actions.push({ icon: 'refresh', label: '创建关联调整单', onClick: () => { setChangeId(row.id); setSelectedId(row.id); }, disabled: busy !== null });
       return <React.Fragment key={row.id}>{!detailOnly && <TaskListRow api={api} kind="ticket" row={row} title={title} summary={<><span className="ba-task-state" data-state={status}>{stateLabel}</span><span className="ba-task-summary">{activity.progressSummary || result?.delivery?.text || result?.summary || row.acceptance || (row.mandate?.source?.channel === 'feishu' ? '来自飞书' : '来自桌面')}</span>{updatedLabel && <time className="ba-task-updated" dateTime={row.updatedAt}>更新 {updatedLabel}</time>}</>} completed={row.status === 'completed'} completionLocked={row.status === 'completed' && !row.taskMeta?.completed} onChanged={() => setGeneration(value => value + 1)} onOpen={() => { setChangeId(null); setSelectedId(row.id); }} actions={actions} onDirtyChange={dirtyEditor(`rename:${row.id}`)} />}
       {detailOnly && <TaskDetail open title={title} dirty={detailDirty} onClose={() => { setSelectedId(null); setChangeId(null); }}><header><span className="ba-goal-status">{stateLabel}</span></header>
         <section className="ba-task-instructions"><h3>任务要求</h3><p>{row.target}</p>{row.acceptance && <><h3>验收条件</h3><p>{row.acceptance}</p></>}</section>

@@ -19,6 +19,10 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
     answer_trigger_id TEXT REFERENCES sa_triggers(id), created_at TEXT NOT NULL);
     CREATE UNIQUE INDEX IF NOT EXISTS sa_attention_answer ON sa_attentions(answer_trigger_id) WHERE answer_trigger_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS sa_receipt_message ON sa_delivery_receipts(json_extract(payload,'$.messageId'));`);
+  if (!db.prepare('PRAGMA table_info(sa_attentions)').all().some(row => row.name === 'instruction_revision')) {
+    db.exec(`ALTER TABLE sa_attentions ADD COLUMN instruction_revision INTEGER NOT NULL DEFAULT 1;
+      UPDATE sa_attentions SET instruction_revision=COALESCE((SELECT json_extract(payload,'$.instructionRevision') FROM sa_assignments WHERE id=sa_attentions.assignment_id),1)`);
+  }
   db.exec(`CREATE TABLE IF NOT EXISTS sa_attention_resolutions(
     question_key TEXT PRIMARY KEY, assignment_id TEXT NOT NULL REFERENCES sa_assignments(id),
     ticket_id TEXT NOT NULL REFERENCES sa_tickets(id), session_id TEXT NOT NULL, call_id TEXT NOT NULL,
@@ -32,10 +36,11 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
     return { id: row.id, assignmentId: row.assignment_id, ticketId: row.ticket_id,
       sessionId: row.session_id, callId: JSON.parse(row.question_key)[1], question: JSON.parse(row.question), outboxId: row.outbox_id,
       answerTriggerId: row.answer_trigger_id, state: row.answer_trigger_id ? 'answered' : 'waiting', createdAt: row.created_at,
-      origin: 'worker' };
+      origin: 'worker', instructionRevision: row.instruction_revision };
   };
-  const currentRevision = (row, ticket) => !retiredQuestion(row) && !!ticket
-    && (api.getAssignment(row.assignment_id)?.instructionRevision ?? 1) === ticket.instructionRevision;
+  const currentRevision = (row, ticket) => !retiredQuestion(row) && !!ticket && api.getAssignment(row.assignment_id)?.ticketId === ticket.id
+    && row.instruction_revision === (api.getAssignment(row.assignment_id)?.appliedSnapshot?.instructionRevision ?? api.getAssignment(row.assignment_id)?.instructionRevision ?? 1)
+    && api.runs(row.assignment_id).some(run => run.sessionId === row.session_id && !['cancelled', 'failed', 'completed'].includes(run.state));
   return {
     attentionResolutions(ticketId, { sessionId, callId } = {}) {
       return db.prepare('SELECT * FROM sa_attention_resolutions WHERE ticket_id=? ORDER BY created_at,rowid').all(ticketId)
@@ -140,8 +145,8 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
             ...(question.options?.length ? { options: question.options.map(option => option.label) } : {}) };
           db.prepare("INSERT INTO sa_outbox(id,unique_key,ticket_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
             .run(outboxId, `attention:${attentionId}`, ticket.id, JSON.stringify(payload), now, at, at);
-          db.prepare('INSERT INTO sa_attentions VALUES (?,?,?,?,?,?,?,?,?)')
-            .run(attentionId, assignmentId, ticket.id, sessionId, key, JSON.stringify(question), outboxId, null, at);
+          db.prepare('INSERT INTO sa_attentions(id,assignment_id,ticket_id,session_id,question_key,question,outbox_id,answer_trigger_id,created_at,instruction_revision) VALUES (?,?,?,?,?,?,?,?,?,?)')
+            .run(attentionId, assignmentId, ticket.id, sessionId, key, JSON.stringify(question), outboxId, null, at, JSON.parse(assignment.payload).instructionRevision ?? 1);
           return value(db.prepare('SELECT * FROM sa_attentions WHERE id=?').get(attentionId));
         });
       });
@@ -155,7 +160,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         if (!row) throw new Error('Attention not found');
         const ticket = api.getTicket(ticketId), origin = ticket.mandate.source;
         if (origin?.channel !== 'desktop' || ticket.mandate.actorId !== 'desktop-owner' || !origin.sessionId) throw new Error('Attention desktop owner mismatch');
-        if (instructionRevision !== ticket.instructionRevision || !currentRevision(row, ticket)) throw new Error('Attention requirements changed');
+        if (instructionRevision !== value(row).instructionRevision || !currentRevision(row, ticket)) throw new Error('Attention requirements changed');
         const question = JSON.parse(row.question), labels = (question.options || []).map(option => option.label);
         if (!answer || !Array.isArray(answer.selected) || answer.selected.some(label => typeof label !== 'string' || !labels.includes(label))
           || new Set(answer.selected).size !== answer.selected.length || (!question.multiSelect && answer.selected.length > 1)
@@ -178,6 +183,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
             createHash('sha256').update(content).digest('hex'), new Date().toISOString());
         db.prepare('UPDATE sa_attentions SET answer_trigger_id=? WHERE id=?').run(triggerId, attentionId);
         db.prepare('INSERT INTO sa_ticket_triggers VALUES (?,?)').run(ticketId, triggerId);
+        api.recordTicketInputInTransaction?.({ ticketId, triggerId, kind: 'answer', idempotencyKey: `trigger:${triggerId}` });
         return { ...value({ ...row, answer_trigger_id: triggerId }), duplicate: false };
       });
     },
@@ -209,6 +215,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         db.prepare('UPDATE sa_attentions SET answer_trigger_id=? WHERE id=?').run(triggerId, row.id);
         db.prepare("UPDATE sa_candidates SET status='held',updated_at=? WHERE trigger_id=? AND status='queued'").run(new Date().toISOString(), triggerId);
         db.prepare('INSERT OR IGNORE INTO sa_ticket_triggers VALUES (?,?)').run(row.ticket_id, triggerId);
+        api.recordTicketInputInTransaction?.({ ticketId: row.ticket_id, triggerId, kind: 'answer', idempotencyKey: `trigger:${triggerId}` });
         return { ...value({ ...row, answer_trigger_id: triggerId }), duplicate: row.answer_trigger_id === triggerId };
       });
     },

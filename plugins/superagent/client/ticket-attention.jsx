@@ -21,7 +21,7 @@ export function TicketAttention({ api, ticket, attention, onAnswered, showQuesti
     setBusy(true); setError('');
     request.current ||= crypto.randomUUID();
     try {
-      await api('ticketAnswer', { ticketId: ticket.id, attentionId: attention.id, instructionRevision: ticket.instructionRevision,
+      await api('ticketAnswer', { ticketId: ticket.id, attentionId: attention.id, instructionRevision: attention.instructionRevision ?? ticket.instructionRevision,
         requestId: request.current, answer: { selected, ...(custom.trim() ? { custom: custom.trim() } : {}) } });
       setSubmitted(true); await onAnswered?.();
     } catch (cause) { setError(cause.message || String(cause)); }

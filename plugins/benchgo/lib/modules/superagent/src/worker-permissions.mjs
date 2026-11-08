@@ -6,11 +6,25 @@ const signature = (name, args) => {
   return JSON.stringify([name, canonical(args)]);
 };
 
+const fail = (code, message) => Object.assign(new Error(message), { code });
+/** Applied requirements are batch-frozen; stop state remains live. */
+export function workerAppliedTicket(database, assignment, execution) {
+  const current = database.getTicket(assignment.ticketId);
+  if (!current) throw new Error('Worker 工单不存在');
+  if (current.status && !['open', 'waiting'].includes(current.status)) throw fail('WORKER_TICKET_INACTIVE', '工单已暂停、停止或结束');
+  const snapshot = database.appliedTicketSnapshot?.(assignment.id);
+  const ticket = snapshot ? { ...current, ...snapshot, status: current.status } : current;
+  return ticket;
+}
+
 /** Install on a single Harness worker scope; never use frozen prompt context as authority. */
 export function installWorkerPermissionGate(scope, { database, assignment, readPolicy, authorizeAction, withCheckpoint, priorToolEvents = [], leaseMs = 60000 }) {
   const previousCalls = new Set(priorToolEvents.flatMap(event => event.type === 'assistant/message'
     ? (event.data?.message?.content || []).filter(block => block.type === 'tool-call').map(block => signature(block.name, block.arguments)) : []));
   const previousEffects = executionEffects({ events: priorToolEvents });
+  scope.on('tools/pre-execute', (execution, next) => {
+    execution.signal.throwIfAborted(); workerAppliedTicket(database, assignment, execution); return next();
+  });
   return scope.on('tools/execute', async (execution, next) => {
     execution.signal.throwIfAborted();
     if (previousEffects.effectsVerified === false && !isReadOnlyWorkerTool(execution.name)) {
@@ -27,6 +41,8 @@ export function installWorkerPermissionGate(scope, { database, assignment, readP
     execution.signal.throwIfAborted();
     const dispatch = async () => {
     const current = await readPolicy();
+    const latest = workerAppliedTicket(database, assignment, execution);
+    if (latest.authorizationVersion !== ticket.authorizationVersion) throw fail('WORKER_AUTHORIZATION_CHANGED', '??????????');
     execution.signal.throwIfAborted();
     const versionKey = ticket.mandate?.source?.channel === 'desktop' ? 'desktopVersion' : 'version';
     const renewal = database.renewAssignment(assignment.id, {

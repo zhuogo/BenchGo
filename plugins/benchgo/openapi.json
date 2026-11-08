@@ -4459,7 +4459,6 @@
           "operation": {
             "enum": [
               "revise",
-              "reopen",
               "adjustment"
             ]
           },
@@ -4519,7 +4518,7 @@
           ]
         },
         "additionalProperties": true,
-        "description": "终态工单的 revise/reopen/adjustment 均创建关联新单；adjustmentOfTicketId 指向原单，新单 instructionRevision=1/resultVersion=0。原 completed 状态与结果保留；进行中仅允许 revise。"
+        "description": "进行中仅允许revise；终态adjustment创建关联新单，原结果保持不变。"
       }
     }
   }

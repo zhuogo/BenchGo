@@ -28,11 +28,18 @@ test('ticket revision submits the opened version and preserves failed draft and 
   ticket.instructionRevision = 5;
   assert.equal(h.render().find(node => node.type === 'button' && node.props.type === 'submit').props.disabled, true);
 });
-test('active or uncertain execution prevents revision while terminal tickets offer reopen', () => {
-  for (const patch of [{ status: 'uncertain' }, { status: 'open', assignments: [{ state: 'claimed' }] }]) {
+test('running work accepts queued revisions while unsafe states wait and terminal tickets create linked adjustments', async () => {
+  for (const patch of [{ status: 'uncertain' }, { status: 'pausing' }, { status: 'cancelling' },
+    { status: 'open', assignments: [{ state: 'uncertain' }] },
+    { status: 'waiting', resultVersion: 1, continuationWait: { sourceResultVersion: 1, code: 'EXECUTION_EFFECTS_UNKNOWN' } }]) {
     assert.equal(harness('tickets.jsx', 'TicketChange', { ticket: { id: 't', target: 'x', instructionRevision: 1, ...patch } }).render().find(node => node.props.label === '修订要求').props.disabled, true);
   }
-  assert(harness('tickets.jsx', 'TicketChange', { ticket: { status: 'completed' } }).render().some(node => node.props.label === '重开工单'));
+  assert.equal(harness('tickets.jsx', 'TicketChange', { ticket: { id: 't', target: 'x', instructionRevision: 1, status: 'open', assignments: [{ state: 'claimed' }] } }).render().find(node => node.props.label === '修订要求').props.disabled, false);
+  const h = harness('tickets.jsx', 'TicketChange', { ticket: { id: 't', target: 'x', instructionRevision: 1, status: 'completed' } });
+  h.render().find(node => node.props.label === '创建关联调整单').props.onClick();
+  h.render().filter(node => node.type === 'textarea').at(-1).props.onChange({ target: { value: 'follow-up adjustment' } });
+  await h.render().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0])), { action: 'ticketChange', input: { id: 't', operation: 'adjustment', expectedInstructionRevision: 1, target: 'x', acceptance: '', reason: 'follow-up adjustment', requestId: 'request-id' } });
 });
 test('manual Eval retry is bound to both versions and keeps failed reason visible', async () => {
   const row = { id: 'candidate', dispositionRevision: 8, updatedAt: 'then', trigger: { content: 'raw message' } };

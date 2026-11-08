@@ -2,10 +2,12 @@
 export async function continueWorkerContext({ database, assignment, signal, runTurn, isWaiting = () => false, maxTurns = 8 }) {
   if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) throw new Error('Invalid context continuation limit');
   let turns = 0;
+  const pendingInputs = () => [...database.pendingSubscriptionMessages(assignment.ticketId),
+    ...(database.pendingTicketInputs?.(assignment.ticketId) || []).filter(row => ['revision', 'authorization'].includes(row.kind))];
   for (;;) {
     signal?.throwIfAborted();
-    if (isWaiting()) return { turns, waiting: true };
-    const pending = database.pendingSubscriptionMessages(assignment.ticketId);
+    if (isWaiting() || ['paused', 'pausing', 'cancelling', 'cancelled', 'closed', 'completed', 'failed'].includes(database.getTicket?.(assignment.ticketId)?.status)) return { turns, waiting: true };
+    const pending = pendingInputs();
     if (!pending.length) return { turns, waiting: false };
     if (turns >= maxTurns) throw new Error('Worker source context continuation limit exceeded; reconciliation required');
     const ids = new Set(pending.map(message => message.id));
@@ -15,7 +17,7 @@ export async function continueWorkerContext({ database, assignment, signal, runT
     turns++;
     signal?.throwIfAborted();
     if (isWaiting()) return { turns, waiting: true };
-    const remaining = database.pendingSubscriptionMessages(assignment.ticketId);
+    const remaining = pendingInputs();
     if (remaining.some(message => ids.has(message.id))) throw new Error('Worker did not consume pending source context; reconciliation required');
   }
 }

@@ -305,7 +305,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     getEval(evalId) { return evalValue(db.prepare('SELECT * FROM sa_evals WHERE id=?').get(id(evalId, 'evalId'))); },
     decide(candidateId, input) {
       id(candidateId, 'candidateId');
-      const outcomes = new Set(['accept', 'attach', 'stop', 'ignore', 'notExplicit', 'revise', 'reopen', 'answer', 'ask']);
+      const outcomes = new Set(['accept', 'attach', 'stop', 'ignore', 'notExplicit', 'revise', 'adjustment', 'answer', 'ask']);
       if (!record(input) || !outcomes.has(input.outcome) || !record(input.assessment)) throw new Error('Invalid Decision');
       id(input.policyVersion, 'policyVersion');
       id(input.evalId, 'evalId'); id(input.owner, 'eval owner');
@@ -318,7 +318,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (candidate.eval_id !== input.evalId || activeEval?.owner !== input.owner) throw fail('EVAL_FENCING_CONFLICT', 'Decision belongs to a superseded evaluation or another owner');
         if (!activeEval || activeEval.status !== 'running' || activeEval.deadline <= (input.now ?? Date.now())) throw fail('EVAL_EXPIRED', 'Evaluation is no longer active');
         const gate = parse(candidate.gate);
-        if (['attach', 'stop', 'revise', 'reopen'].includes(input.outcome) && gate.strength !== 'explicit') throw fail('NOT_EXPLICIT', 'Controlling an existing Ticket requires an explicit owner instruction');
+        if (['attach', 'stop', 'revise', 'adjustment'].includes(input.outcome) && gate.strength !== 'explicit') throw fail('NOT_EXPLICIT', 'Controlling an existing Ticket requires an explicit owner instruction');
         if (input.outcome === 'accept' && gate.strength !== 'explicit' && (input.mode !== 'auto' || !Array.isArray(input.enabledRuleIds) || !Array.isArray(input.assessment.ruleIds) || !input.assessment.ruleIds.length || !input.assessment.ruleIds.every(rule => input.enabledRuleIds.includes(rule)))) throw fail('NOT_EXPLICIT', 'Inferred acceptance requires enabled rules in auto mode');
         if (db.prepare('SELECT id FROM sa_decisions WHERE candidate_id=?').get(candidateId)) throw fail('DECISION_EXISTS', 'Candidate already has a Decision');
         let ticket = null;
@@ -336,7 +336,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           return { decision: decisionValue(db.prepare('SELECT * FROM sa_decisions WHERE id=?').get(decisionId)), ticket, candidate: candidateValue(db.prepare('SELECT * FROM sa_candidates WHERE id=?').get(candidateId)) };
         }
         let ticketId = null;
-        if (['attach', 'stop', 'revise', 'reopen'].includes(input.outcome)) {
+        if (['attach', 'stop', 'revise', 'adjustment'].includes(input.outcome)) {
           ticketId = id(input.ticketId, 'ticketId');
           const existingTicket = db.prepare('SELECT * FROM sa_tickets WHERE id=?').get(ticketId);
           if (!existingTicket) throw fail('TICKET_NOT_FOUND', 'Attached Ticket does not exist');
@@ -344,9 +344,11 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           const triggerOwner = db.prepare('SELECT ticket_id FROM sa_ticket_triggers WHERE trigger_id=? AND ticket_id<>? LIMIT 1').get(candidate.trigger_id, ticketId);
           if (triggerOwner) throw fail('TRIGGER_ALREADY_ASSIGNED', 'Decision cannot reassign another Ticket source Trigger');
           if (input.outcome === 'stop') {
+            api.recordTicketInputInTransaction?.({ ticketId, triggerId: candidate.trigger_id, kind: 'stop', idempotencyKey: `trigger:${candidate.trigger_id}` });
             cancelTicketInternal(ticketId);
+            api.applyTicketStopInputInTransaction?.(ticketId, candidate.trigger_id);
           }
-          if (['revise', 'reopen'].includes(input.outcome)) {
+          if (['revise', 'adjustment'].includes(input.outcome)) {
             const original = api.getTicket(ticketId), change = input.change;
             if (!record(change) || !record(change.mandate) || change.mandate.policyVersion !== input.policyVersion) throw fail('MANDATE_REVOKED', 'Changed Ticket requires current authorization');
             const mandate = { ...change.mandate, ...(change.mandate.project ? {} : original.mandate.project ? { project: original.mandate.project } : {}) };
@@ -411,7 +413,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     parkPause(assignmentId, { owner, fence, result, now = Date.now() }) {
       return tx(() => {
         const assignment = ownedAssignment(assignmentId, owner, fence, now), ticket = api.getTicket(assignment.ticket_id);
-        if (ticket.status !== 'pausing' || (parse(assignment.payload).instructionRevision ?? 1) !== ticket.instructionRevision) throw fail('PAUSE_CONFLICT', 'Ticket is not awaiting this pause');
+        if (ticket.status !== 'pausing') throw fail('PAUSE_CONFLICT', 'Ticket is not awaiting this pause');
         const run = api.runs(assignmentId).find(item => item.id === result.runId && item.fence === fence);
         if (!run || run.state !== 'verifying' || !result.waitingPause || !result.checkpoint || !result.transcript || JSON.stringify(run.evidence) !== JSON.stringify(result)) throw fail('RUN_CONFLICT', 'Pause requires saved execution evidence');
         const stopped = parse(assignment.payload).executionStopped;
@@ -536,7 +538,9 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (assignmentId !== undefined) { filters.push('a.id=?'); queryArgs.push(id(assignmentId, 'assignmentId')); }
         const rows = db.prepare(`SELECT a.*,t.mandate FROM sa_assignments a JOIN sa_tickets t ON t.id=a.ticket_id WHERE ${filters.join(' AND ')} ORDER BY a.priority DESC,a.created_at,a.id LIMIT ?`).all(...queryArgs, safeLimit(limit, 1, 100));
         const claimed = [];
-        for (const row of rows) {
+        for (let row of rows) {
+          api.applyQueuedTicketRevisionInTransaction?.(row.id, { now });
+          row = { ...row, ...db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(row.id) };
           if (parse(row.payload).retiredExecution) continue;
           const mandate = api.getTicket(row.ticket_id).mandate;
           if ((parse(row.payload).instructionRevision ?? 1) !== api.getTicket(row.ticket_id).instructionRevision || validateMandate(copy(mandate), { ticketId: row.ticket_id, assignmentId: row.id }) !== true) {
@@ -617,7 +621,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (!row || row.fence !== fence || !['claimed', 'uncertain'].includes(row.state) || (row.state === 'claimed' && row.lease_until > now)) throw fail('FENCING_CONFLICT', 'Pause ownership is not expired');
         const ticket = api.getTicket(row.ticket_id), payload = parse(row.payload);
         const run = api.runs(row.id).find(item => item.id === runId && item.fence === fence);
-        if (ticket.status !== 'pausing' || (payload.instructionRevision ?? 1) !== ticket.instructionRevision || !run?.evidence?.waitingPause
+        if (ticket.status !== 'pausing' || !run?.evidence?.waitingPause
           || !['verifying', 'uncertain'].includes(run.state) || observation?.paused !== true || observation.sessionId !== run.sessionId
           || observation.hash !== run.evidence.transcript?.hash || observation.lastSeq !== run.evidence.transcript?.lastSeq) throw fail('PAUSE_CONFLICT', 'Saved pause evidence changed');
         const at = timestamp(now);
@@ -711,7 +715,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       return tx(() => {
         const row = db.prepare('SELECT a.*,t.mandate,t.status AS ticket_status FROM sa_assignments a JOIN sa_tickets t ON t.id=a.ticket_id WHERE a.id=?').get(id(assignmentId, 'assignmentId'));
         if (!row || row.state !== 'claimed' || row.owner !== owner || row.fence !== fence || row.lease_until <= now) throw fail('FENCING_CONFLICT', 'Assignment lease is no longer owned');
-        const permitted = (parse(row.payload).instructionRevision ?? 1) === api.getTicket(row.ticket_id).instructionRevision && !['closed', 'cancelling', 'cancelled', 'completed', 'failed'].includes(row.ticket_status) && validateMandate(api.getTicket(row.ticket_id).mandate, { ticketId: row.ticket_id, assignmentId }) === true;
+        const permitted = !['closed', 'cancelling', 'cancelled', 'completed', 'failed'].includes(row.ticket_status) && validateMandate(api.getTicket(row.ticket_id).mandate, { ticketId: row.ticket_id, assignmentId }) === true;
         if (!permitted) {
           const payload = { ...parse(row.payload), revokedOwner: owner };
           db.prepare("UPDATE sa_assignments SET state='uncertain',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?").run(json(payload), timestamp(now), assignmentId);
@@ -805,6 +809,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (trigger.seq <= subscription.cursor_seq) throw fail('SUBSCRIPTION_CURSOR', 'Trigger is not newer than the subscription cursor');
         const now = new Date().toISOString();
         db.prepare('INSERT INTO sa_message_ownership VALUES (?,?,?,?,?)').run(triggerId, subscription.id, subscription.ticket_id, trigger.seq, now);
+        api.recordTicketInputInTransaction?.({ ticketId: subscription.ticket_id, triggerId, kind: 'context', idempotencyKey: `trigger:${triggerId}` });
         db.prepare('UPDATE sa_subscriptions SET cursor_seq=?,updated_at=? WHERE id=?').run(trigger.seq, now, subscription.id);
         db.prepare('INSERT OR IGNORE INTO sa_ticket_triggers VALUES (?,?)').run(subscription.ticket_id, triggerId);
         return { triggerId, ticketId: subscription.ticket_id, subscriptionId: subscription.id, cursor: trigger.seq, deliveredAt: now, duplicate: false, contextOnly: true };
@@ -835,6 +840,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const old = db.prepare('SELECT * FROM sa_subscription_applied WHERE trigger_id=?').get(triggerId);
         if (old && (old.session_id !== sessionId || old.message_id !== messageId)) throw fail('MESSAGE_RECEIPT_CONFLICT', 'Message already has another application receipt');
         db.prepare('INSERT OR IGNORE INTO sa_subscription_applied VALUES (?,?,?,?,?)').run(triggerId, assignmentId, sessionId, messageId, timestamp(now));
+        api.applyTicketInputInTransaction?.(triggerId, { assignmentId, owner, fence, runId: run.id, boundaryId: `message:${messageId}`, sessionId, messageId });
         return { triggerId, applied: true, sessionId, messageId };
       });
     },
@@ -1077,6 +1083,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       ORDER BY t.seq`).all(threadId, cursor);
     for (const message of messages) {
       db.prepare('INSERT INTO sa_message_ownership VALUES (?,?,?,?,?)').run(message.id, subscriptionId, subscription.ticket_id, message.seq, now);
+      api.recordTicketInputInTransaction?.({ ticketId: subscription.ticket_id, triggerId: message.id, kind: 'context', idempotencyKey: `trigger:${message.id}` });
       db.prepare('INSERT INTO sa_ticket_triggers VALUES (?,?)').run(subscription.ticket_id, message.id);
     }
     if (messages.length) db.prepare('UPDATE sa_subscriptions SET cursor_seq=MAX(cursor_seq,?),updated_at=? WHERE id=?').run(messages.at(-1).seq, now, subscriptionId);
