@@ -227,8 +227,8 @@
         <text class="svg-label" x="528" y="464">主聊 / 渠道 / 执行会话插话归原单</text>
         <text class="svg-label" x="528" y="486">下一工具边界整份切换 · 不打断在途</text>
         <text class="svg-label" x="528" y="508">扩权交 Router 确认 · 暂停只收修订</text>
-        <text class="svg-title" x="528" y="540">Router 表达交付 · 用户终审</text>
-        <text class="svg-label" x="528" y="562">原稿留详情 · 回复原路投递</text>
+        <text class="svg-title" x="528" y="540">Router 表达交付 · 无内容验收</text>
+        <text class="svg-label" x="528" y="562">原稿留详情 · 正式稿经 outbox</text>
         <text class="svg-label" x="528" y="584">确认送达才关单 · 成功成果不回改</text>
         <text class="svg-label" x="528" y="606">成功后新开关联单；失败可原单续</text>
         <text class="svg-small" x="528" y="628">查在办 / 刚关单，重复单可合并 · 同单一本账</text>
@@ -379,7 +379,7 @@
         <table>
           <thead><tr><th>情况</th><th>处理与关单条件</th></tr></thead>
           <tbody>
-            <tr><td>执行完成</td><td>Worker 轻量自检通过后保存原稿、证据与自检记录并向 Router 发完成信号。Router 主动自然提醒，自选摘要或完整回复后交付原来源；原稿留工单详情。回复确认送达后 completed 关单，Router 不重派或增加内容验收。</td></tr>
+            <tr><td>执行完成</td><td>Worker 轻量自检通过后保存原稿、证据与自检记录并向 Router 发完成信号。Router 主动自然提醒，自选摘要或完整回复，保存正式稿后由 outbox 交付原来源；原稿留工单详情。回复确认送达后 completed 关单，Router 不重派或增加内容验收。</td></tr>
             <tr><td>生成失败 / 投递失败 / 送达未知</td><td>原稿保留且工单待交付；生成失败只重试 Router 表达，明确未送达只补投已存回复，效果未知先查回执，不重跑 Worker，也不盲目重发。</td></tr>
             <tr><td>问题 / 受阻</td><td>Worker 上报 Router；有确定依据就内部答，必须用户拍板才发选项卡。答复按问题编号回原单；只停受影响部分，其余独立且已授权的部分按稳妥默认继续。缺信息或权限保留等待。</td></tr>
             <tr><td>执行失败</td><td>偶发网络、供应商故障先退避重试；只有结构性无解才报失败。保存实际尝试、原因与恢复条件，由 Router 自行组织自然说明，不套固定报告；送达后 failed 关单。用户回话可续原单或开关联调整单。</td></tr>
@@ -447,7 +447,7 @@
             <tr><td><span class="step">5</span>自校验</td><td>原 Worker</td><td>在原上下文快速检查，优先测试、构建和命令输出；明显错误自行修复，通过才报完成；无法解决如实报受阻或失败。</td></tr>
             <tr><td><span class="step">6</span>落单与通知</td><td>Worker / 工单服务</td><td>成果原稿、证据与自检摘要幂等落库，向所属 Router 发绑定工单与结果版本的完成信号；原稿在详情保留。</td></tr>
             <tr><td><span class="step">7</span>表达与投递</td><td>Router / Delivery / 来源适配器</td><td>Router 主动自然提醒，自选摘要或完整回复，保存后由 outbox 原路交付，回执回同单；不重派或验收。生成失败只重试表达，投递失败只补投回复，均待交付且不重 Worker；未知送达先核实，适配器不判关单。</td></tr>
-            <tr><td><span class="step">8</span>关单</td><td>工单服务 / 用户</td><td>可信送达后成功以 completed、结构性失败以 failed 关单，用户终审；执行会话自动收纳但保持可追溯。</td></tr>
+            <tr><td><span class="step">8</span>关单</td><td>工单服务</td><td>可信送达后成功以 completed、结构性失败以 failed 关单；用户可继续追问或调整，执行会话自动收纳但保持可追溯。</td></tr>
             <tr><td><span class="step">9</span>沉淀</td><td>后台整理 / 辅助模型</td><td>计数触发后仅从已关工单提炼记忆与技能；不经过 Router 对话上下文，不参与本单交付放行。</td></tr>
           </tbody>
         </table>
@@ -460,7 +460,7 @@
       <div class="grid">
         <article class="card"><h3>代码接线与定向验证</h3><p>官方会话与工单基础之上，本轮已接入权限动作存储与注册通道、单次审批和站点管理、逐工具/子代理硬门、原执行修订切换、暂停只收件及持久问答绑定，并通过对应定向测试。各模块的具体覆盖以所属设计为准。</p></article>
         <article class="card"><h3>适配与交互边界</h3><p>高危专用适配器仍有缺口，无通道走 handoff；完整接管导航、安全输入及浏览器代填待完善。渠道与交付、记忆及执行会话分别在所属文档维护接线和验证范围，已有基础与本轮局部通过不能推定全部链路完成。</p></article>
-        <article class="card"><h3>新交付链主路径已实测，其余逐项验证</h3><p>安装版真实档案已通过新链的本地文件任务与全新 GitHub 调研：自检、Router 主动自然回复、原来源回执、送达关单，并验证已存正式稿只补投不重跑 Worker。具体边界见交付正文，不能声称全部六项已通过；旧链的提问续跑证据不计入新链验收。Harness 审批卡点击、飞书账号收发、会话导航/插话及重启恢复仍须实测；浏览器四态、构建或定向测试不能代替真实业务闭环。</p></article>
+        <article class="card"><h3>新交付链部分场景已实测，其余逐项验证</h3><p>安装版真实档案已通过新链的本地文件任务与全新 GitHub 调研：自检、Router 主动自然回复、原来源回执、送达关单，并验证已存正式稿只补投不重跑 Worker。新版联网主路径、提问续跑及叫停已通过；插话正在验证，真人批准/拒绝、飞书账号收发、会话导航及重启恢复仍未验。具体证据与边界见<a href="06-superagent/自校验与交付.md#实现与验收边界">交付正文</a>，不能声称全部场景通过；浏览器四态、构建或定向测试不能代替真实业务闭环。</p></article>
       </div>
       <p class="note" style="margin-top:12px">各模块只维护本次方案，接线范围与实现缺口在所属模块说明，不并列保留其他流程。源码、内置提示和已安装实例分别核实；文档与定向通过不替代实际运行证据。</p>
       <div class="callout" style="margin-top:16px">文档维护：六板块内按职责维护权威正文，通过链接引用；本页是唯一总架构 HTML，只汇总板块关系、机制与流程。具体实现边界与验证条件随模块维护，历史留在 Git、eval/ 或 artifacts/，不另建现状、开发清单、验收流水或备份。本页离线可读，无构建或 CDN 依赖。</div>
