@@ -91,7 +91,7 @@ test('option accompanies its body and uses the validated endpoint, never approva
   assert(!waiting.some(node => node.children?.includes('加载中')));
   const questionApi = async () => {};
   const statusAndQuestion = walk(module.exports.QuietChat({ session: { running: true }, home: { api: questionApi, threadId: 'side', history: { notifications: [
-    { eventId: 'system', threadId: 'side', text: '核验模型暂不可用', publication: { origin: 'system', systemState: { state: 'review_wait', code: 'MODEL_UNAVAILABLE', stage: 'review' } } },
+    { eventId: 'system', threadId: 'side', text: '执行模型暂不可用', publication: { origin: 'system', systemState: { state: 'continuation_wait', code: 'MODEL_UNAVAILABLE', stage: 'execution' } } },
     { eventId: 'ask', type: 'ticket.attention', threadId: 'side', ticketId: 'original', instructionRevision: 1, currentInstructionRevision: 2, currentResultVersion: 3, ticketStatus: 'waiting', text: '采用哪个范围？', options: ['国内外'], attention: { id: 'a', question: { question: '采用哪个范围？' }, state: 'waiting' } },
   ] } } }));
   const system = statusAndQuestion.find(node => node.type === 'article' && node.props['data-role'] === 'system');
@@ -121,6 +121,24 @@ test('option accompanies its body and uses the validated endpoint, never approva
     assert(!ticketWaiting(ticket).actions.some(action => ['resume', 'review'].includes(action.kind)));
     assert(!safetyTree.some(node => node.props?.['aria-label'] === '系统续做操作'));
   }
+  const opened = [], execution = { available: true, ticketId: 'original', sessionId: 'official-worker', placement: 'ungrouped', closed: true };
+  const executionHome = { threadId: 'side', onOpenExecution: value => opened.push(value), onRefresh: async () => opened.push('refresh'),
+    history: { notifications: [{ ...recoveryEvent, eventId: 'previous', createdAt: 1 },
+      { ...recoveryEvent, eventId: 'current', ticketStatus: 'completed', executionSession: execution, createdAt: 2 }] } };
+  const executionTree = walk(module.exports.QuietChat({ session: { running: false }, home: executionHome }));
+  const direct = executionTree.filter(node => node.type === 'button' && node.children?.includes('查看执行会话'));
+  assert.equal(direct.length, 1, 'the latest Ticket message opens its one official execution session, including closed Tickets');
+  await direct[0].props.onClick();
+  assert.deepEqual(opened, [execution], 'navigation receives the persisted session identity, without a task API write');
+  for (const executionSession of [undefined, { available: false, reason: 'execution-session-unavailable' }]) {
+    const unavailable = walk(module.exports.QuietChat({ session: { running: false }, home: { ...executionHome,
+      history: { notifications: [{ ...recoveryEvent, eventId: 'missing-session', executionSession }] } } }));
+    assert(!unavailable.some(node => node.type === 'button' && node.children?.includes('查看执行会话')));
+    const refresh = unavailable.find(node => node.type === 'button' && node.children?.includes('刷新状态'));
+    assert(refresh, 'missing execution has a read-only refresh action');
+    await refresh.props.onClick();
+  }
+  assert.deepEqual(opened.slice(1), ['refresh', 'refresh']);
 });
 
 test('quiet chat keeps answered question bubbles in history order', () => {

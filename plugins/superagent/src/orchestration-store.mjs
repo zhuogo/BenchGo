@@ -13,6 +13,7 @@ import { enqueueTicketAck } from './ticket-ack.mjs';
 import { systemStateDelivery } from './result-delivery.mjs';
 import { retireContentReview } from './retire-content-review.mjs';
 import { installWorkerExecutionStore } from './worker-execution-store.mjs';
+import { installRouterQuestionStore } from './router-question-store.mjs';
 import { normalizeTicketTitle } from './ticket-title.mjs';
 
 const json = value => JSON.stringify(value);
@@ -1099,6 +1100,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   const directReplyStore = installDirectReplyStore({ db, tx });
   Object.assign(api, directReplyStore.api);
   Object.assign(api, installWorkerExecutionStore({ db, tx, api }));
+  Object.assign(api, installRouterQuestionStore({ db, tx, api }));
   retireContentReview({ db, tx });
   return api;
 }

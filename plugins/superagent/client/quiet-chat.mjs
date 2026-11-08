@@ -1,3 +1,5 @@
+import { isChatUserMessage, readAdmittedQuestionReply } from '../src/question-reply.mjs';
+
 /** Defence in depth: only the server publication projection can supply assistant rows. */
 export function quietChatRows(history = {}, threadId = 'main', session = {}, chat) {
   const rows = (history.messages || []).filter(row => !row.streaming &&
@@ -8,9 +10,21 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
   const seenSeq = new Set(rows.filter(row => row.role === 'user').map(row => row.seq).filter(Number.isFinite));
   const admittedRequests = new Set(rows.filter(row => row.role === 'user').map(row => row.requestId || row.rpcId || row.source?.requestId || row.source?.rpcId).filter(Boolean));
   const admittedMessages = new Set(rows.filter(row => row.role === 'user').map(row => row.id).filter(Boolean));
+  const answeredCalls = new Set(rows.filter(row => row.kind === 'question-reply').map(row => row.callId).filter(Boolean));
   const historyEnd = Math.max(-1, ...rows.map(row => row.seq).filter(Number.isFinite));
   for (const node of chat?.legacy?.nodes || []) {
-    if (!['user', 'steering'].includes(node.kind) || node.source?.kind !== 'user') continue;
+    if (!['user', 'steering'].includes(node.kind) || !isChatUserMessage(node)) continue;
+    if (node.source.kind === 'user-question-reply') {
+      const question = readAdmittedQuestionReply(node);
+      if (!question || answeredCalls.has(question.callId) || seenSeq.has(node.seq) || node.seq <= historyEnd) continue;
+      const receipt = (history.requests || []).find(row => row.questionReply?.callId === question.callId);
+      const id = receipt?.messageId || `question:${question.callId}`;
+      rows.push({ key: `message:${id}`, id, seq: node.seq, role: 'user', kind: 'question-reply', ...question,
+        content: [{ type: 'text', text: question.text }], time: node.time, provisional: true });
+      answeredCalls.add(question.callId);
+      if (receipt) admittedRequests.add(receipt.requestId);
+      continue;
+    }
     const requestId = node.source.requestId || node.source.rpcId;
     const alreadyKnown = requestId && admittedRequests.has(requestId);
     if (requestId) admittedRequests.add(requestId);
@@ -26,8 +40,12 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
     if (['queued', 'processing', 'prepared', 'failed', 'uncertain'].includes(request.status)
       && typeof request.text === 'string' && request.text.trim()
       && !admittedRequests.has(request.requestId) && !admittedMessages.has(request.messageId)) {
-      rows.push({ key: `request:${request.requestId}`, id: request.messageId, rpcId: request.requestId, role: 'user',
-        text: request.text, time: request.createdAt, provisional: true });
+      if (!request.questionReply || !answeredCalls.has(request.questionReply.callId)) rows.push({
+        key: request.questionReply ? `message:${request.messageId}` : `request:${request.requestId}`,
+        id: request.messageId, rpcId: request.requestId, role: 'user',
+        ...(request.questionReply ? { kind: 'question-reply', ...request.questionReply } : { text: request.text }),
+        time: request.createdAt, provisional: true });
+      if (request.questionReply) answeredCalls.add(request.questionReply.callId);
       admittedRequests.add(request.requestId);
       if (request.messageId) admittedMessages.add(request.messageId);
     }

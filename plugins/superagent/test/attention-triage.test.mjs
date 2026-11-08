@@ -147,6 +147,9 @@ test('Attention stores host resolutions separately and assembles mixed batches w
   database.answerDesktopAttention({ ticketId: ticket.id, attentionId: entry.id, instructionRevision: 1, requestId: 'human-answer', answer: { selected: [], custom: '列表' } });
   const answers = attentionBatchAnswers(database, ticket.id, { sessionId: run.sessionId, callId: 'call' });
   assert.deepEqual(answers, [{ id: 'known', selected: [], custom: '简体中文' }, { id: 'format', selected: [], custom: '列表' }]);
+  const receipt = database.ticketInputs(ticket.id).find(row => row.kind === 'answer');
+  assert.equal(receipt.state, 'applied'); assert.equal(receipt.application.runId, run.id);
+  assert.equal(receipt.application.attentionId, entry.id);
   assert.ok(database.attentionResolutions(ticket.id).every(row => !row.answerTriggerId));
 });
 

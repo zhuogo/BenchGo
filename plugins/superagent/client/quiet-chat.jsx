@@ -2,6 +2,7 @@ import { Button } from '../../shared/client/ui/button.jsx';
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives';
 import { quietChatRows } from './quiet-chat.mjs';
+import { isChatUserMessage } from '../src/question-reply.mjs';
 import css from './quiet-chat.css';
 import { MessageActions } from './message-actions.jsx';
 import { projectReplyStream } from './reply-stream.mjs';
@@ -47,11 +48,11 @@ export function QuietChat({ home, session, chat }) {
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [chosen, setChosen] = useState({});
   const refresh = useRef(home.onRefresh);
   refresh.current = home.onRefresh;
-  const latestUserSeq = chat?.legacy?.nodes?.findLast(node => ['user', 'steering'].includes(node.kind) && node.source?.kind === 'user')?.seq;
+  const latestUserSeq = chat?.legacy?.nodes?.findLast(node => ['user', 'steering'].includes(node.kind) && isChatUserMessage(node))?.seq;
   const statusSource = home.sessionStatus;
   const statuses = useSyncExternalStore(listener => statusSource?.subscribe(listener) || (() => {}), () => statusSource?.getSnapshot() || NO_STATUSES);
   const awaitingChoice = statuses.get(home.sessionId)?.pendingInteraction?.kind === 'question';
-  // Answering a question card adds no user message; refresh when the card closes so the choice bubble appears.
+  // Foreground answers settle the tool; continued answers admit an official user message. Refresh both paths.
   useEffect(() => {
     if (latestUserSeq === undefined) return;
     void Promise.resolve(refresh.current?.()).catch(() => { /* Existing history retry owns connection notices. */ });
@@ -83,6 +84,7 @@ export function QuietChat({ home, session, chat }) {
       {row.type === 'schedule.lifecycle' && row.schedule ? <ScheduleLifecycle row={row} onOpenResources={home.onOpenResources} /> : row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : row.role === 'assistant' ? <InteractiveReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={session.running || !!row.provisional} onSubmit={async (text, request) => { await sendInteractive(home.ctx.sessions, home.sessionId, text, request); void Promise.resolve(home.onRefresh?.()).catch(() => {}); }} /> : <MarkdownText text={row.text || ''} labels={labels} />}
       {row.role === 'user' && (row.content || []).filter(block => ['image', 'file'].includes(block.type)).map((block, index) => <span className="ba-chat-attachment" key={index}>{block.type === 'image' ? '已附图片' : `已附文件${block.name ? `：${block.name}` : ''}`}</span>)}
       </div>
+      </div><div className="ba-chat-followup">
       {row.type === 'ticket.attention' && row.attention && !verificationOnly && <TicketAttention key={row.attention.id} api={api} attention={row.attention} showQuestion={false} ticket={{ id: row.ticketId, status: row.ticketStatus, instructionRevision: row.currentInstructionRevision ?? row.instructionRevision, resultVersion: row.currentResultVersion ?? row.resultVersion, mandate: { source: { channel: 'desktop' } } }} onAnswered={home.onRefresh} />}
       {currentTicket && <TicketWaiting key={`${currentTicket.id}:${currentTicket.instructionRevision}:${currentTicket.resultVersion}`} api={api} ticket={currentTicket} onRefresh={home.onRefresh} onOpenResources={home.onOpenResources} showQuestion={!rows.some(item => item.attention && item.attention.id === (row.currentAttention || row.attention)?.id)} />}
       {row.notification && !row.attention && row.eventId && row.options?.length > 0 && <div className="ba-chat-options" aria-label="回复选项（不代表审批）">{row.options.map(option => <Button variant="ghost" type="button" className="ba-quiet" key={option} disabled={busy || session.running || !!chosen[row.eventId]} onClick={() => run(async () => { await api('notificationOption', { eventId: row.eventId, threadId, text: option }); setChosen(value => ({ ...value, [row.eventId]: option })); await home.onRefresh?.(); })}>{option}{chosen[row.eventId] === option ? ' · 已发送' : ''}</Button>)}</div>}

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { readModelFallbacks } from './model-fallback.mjs';
+import { readQuestionReply, readBoundQuestionReply } from './question-reply.mjs';
 
 const active = new Set(['queued', 'processing', 'prepared']);
 const fingerprint = (threadId, text, context) => createHash('sha256').update(JSON.stringify(context === undefined ? [threadId, text] : [threadId, text, context])).digest('hex');
@@ -108,6 +109,27 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
     return operation;
   }
   return {
+    // Called at the official inbox claim seam. The Host already owns dispatch:
+    // retain the exact message ID for receipts, never enqueue or followup again.
+    async admit({ threadId = 'main', sessionId, message, events, questionReply: trustedReply }) {
+      const questionReply = trustedReply ? readBoundQuestionReply(message, trustedReply.questions) : readQuestionReply(message, events || []);
+      if (!sessionId || typeof message?.id !== 'string' || !message.id || !questionReply) throw new Error('无效官方问题答复');
+      const requestId = `question-reply:${message.id}`, digest = fingerprint(threadId, message.content, questionReply);
+      let duplicate = false;
+      await updateState(state => {
+        const previous = (state.requests || []).find(row => row.requestId === requestId || row.messageId === message.id);
+        if (previous) {
+          if (previous.threadId !== threadId || previous.sessionId !== sessionId || previous.fingerprint !== digest) throw new Error('问题答复标识冲突');
+          duplicate = true;
+          return {};
+        }
+        return { requests: [...(state.requests || []), { requestId, threadId, sessionId, messageId: message.id, message,
+          fingerprint: digest, questionReply, status: 'processing', createdAt: new Date(now()).toISOString() }] };
+      });
+      const row = (await getState()).requests.find(item => item.requestId === requestId);
+      onChange({ type: 'inbox', threadId, requestId, status: row.status });
+      return { ...receipt(row), ...(duplicate ? { duplicate: true } : {}) };
+    },
     async enqueue({ threadId = 'main', text, requestId = randomUUID(), replyContext }) {
       const context = replySnapshot(replyContext);
       const digest = fingerprint(threadId, text, context);
@@ -142,7 +164,8 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
     async hasPending(threadId) { return ((await getState()).requests || []).some(row => row.threadId === threadId && active.has(row.status)); },
     async state(threadId) {
       return ((await getState()).requests || []).filter(row => row.threadId === threadId).map(row => ({ ...receipt(row), createdAt: row.createdAt, updatedAt: row.updatedAt,
-        ...(row.message ? { text: row.message.content?.filter(block => block.type === 'text').map(block => block.text).join('') ?? '' } : {}) }));
+        ...(row.questionReply ? { questionReply: row.questionReply, text: row.questionReply.text }
+          : row.message ? { text: row.message.content?.filter(block => block.type === 'text').map(block => block.text).join('') ?? '' } : {}) }));
     },
     async dispose() { await Promise.allSettled([...drains.values()]); },
   };

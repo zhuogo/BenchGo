@@ -46,7 +46,7 @@ for (const machine of [false, true]) test(`Attention replies require authenticat
   let db = createAssistantOrchestrationStore({ directory });
   t.after(async () => { db.close(); await rm(directory, { recursive: true, force: true }); });
   db.createThread({ id: 'origin', source: { type: 'feishu', id: 'origin' } });
-  const source = { channel: 'feishu', appId: 'app', chatId: 'chat', messageId: 'original' };
+  const source = { channel: 'feishu', sourceType: 'group', connectionId: 'feishu', conversationId: 'chat', appId: 'app', chatId: 'chat', messageId: 'original' };
   const ticket = db.createTicket({ threadId: 'origin', target: 'work', mandate: { actorId: machine ? 'ci' : 'owner', source, ...(machine ? { admission: 'enabled-rules', actorKind: 'machine', strength: 'inferred' } : {}) } });
   db.createAssignment(ticket.id, {});
   const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
@@ -66,7 +66,7 @@ for (const machine of [false, true]) test(`Attention replies require authenticat
   for (const [key, patch] of [
     ['foreign-owner', { actor: { kind: 'human', id: 'other-owner' } }],
     ['machine', { actor: { kind: 'machine', id: 'owner' } }],
-    ['foreign-chat', { source: { ...event.source, chatId: 'other-chat' } }],
+    ['foreign-chat', { source: { ...event.source, chatId: 'other-chat', conversationId: 'other-chat' } }],
     ['foreign-app', { source: { ...event.source, appId: 'other-app' } }],
     ['wrong-parent', { source: { ...event.source, parentMessageId: 'other-message' } }],
   ]) assert.equal(ingestAssistantEvent(db, { ...event, ...patch, sourceKey: key }, policy).attention, undefined);
