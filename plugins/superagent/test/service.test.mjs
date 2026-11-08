@@ -198,19 +198,27 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     mandate: { source: { channel: 'desktop', sessionId: agent.id, threadId: 'main', messageId: sourceMessage.id },
       actorId: 'desktop-owner', admission: 'desktop-approved-delegation', policyVersion: deliveryPolicy.desktopVersion,
       controlledActions: 'require-current-policy-and-harness-approval' } });
-  const committed = commitWorkerResult({ database: app.store.orchestration, ticket: resultTicket, uniqueKey: 'scoped-worker-result',
-    result: { outcome: 'completed', finalSummary: '原始成果已保存', selfCheck: { summary: '已核对成果' } } });
-  assert.equal(app.store.orchestration.getTicket(resultTicket.id).status, 'waiting');
-  let prepared;
-  for (let attempt = 0; attempt < 120; attempt++) {
-    prepared = await app.engine.prepareTicketReply(committed.outbox);
-    if (prepared.status === 'ready') break;
-    assert.equal(prepared.status, 'pending', JSON.stringify(prepared));
-    await new Promise(resolve => setTimeout(resolve, 25));
+  // Reserve outbox claims only while this test prepares the draft itself.
+  // Leave native timers running for the later attention and lifecycle checks.
+  const outboxClaims = t.mock.method(app.store.orchestration, 'claimOutbox', () => []);
+  let committed, prepared;
+  try {
+    committed = commitWorkerResult({ database: app.store.orchestration, ticket: resultTicket, uniqueKey: 'scoped-worker-result',
+      result: { outcome: 'completed', finalSummary: '原始成果已保存', selfCheck: { summary: '已核对成果' } } });
+    assert.equal(app.store.orchestration.getTicket(resultTicket.id).status, 'waiting');
+    for (let attempt = 0; attempt < 120; attempt++) {
+      prepared = await app.engine.prepareTicketReply(committed.outbox);
+      if (prepared.status === 'ready') break;
+      assert.equal(prepared.status, 'pending', JSON.stringify(prepared));
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    assert.equal(prepared.status, 'ready');
+    assert.equal(prepared.text, 'Mounted reply');
+    assert.deepEqual(await app.engine.prepareTicketReply(committed.outbox), prepared, 'saved Router draft is reused across outbox attempts');
+    assert.equal(app.store.orchestration.deliveries(resultTicket.id)[0].state, 'queued');
+  } finally {
+    outboxClaims.mock.restore();
   }
-  assert.equal(prepared.status, 'ready');
-  assert.equal(prepared.text, 'Mounted reply');
-  assert.deepEqual(await app.engine.prepareTicketReply(committed.outbox), prepared, 'saved Router draft is reused across outbox attempts');
   for (let attempt = 0; attempt < 100 && app.store.orchestration.getTicket(resultTicket.id).status !== 'completed'; attempt++) await new Promise(resolve => setTimeout(resolve, 25));
   const delivered = app.store.orchestration.deliveries(resultTicket.id);
   assert.equal(delivered.length, 1);
@@ -478,7 +486,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   await ctx.plugin(skillModule.default);
   let skillFiber;
   const withSkills = await new Promise((resolve, reject) => {
-    skillFiber = ctx.inject(['connection', 'credentials', 'llm', 'agents', 'sessionQuery', 'sessionProjections', 'workspaceRegistry', 'tokenMeter'], child => {
+    skillFiber = ctx.inject(assistantInject.filter(name => !['benchgo', 'commander', 'settings'].includes(name)), child => {
       mountAssistant(child, commander, providers).then(resolve, reject);
     });
   });
