@@ -198,8 +198,8 @@ export async function initializePluginProfile({ runtime, resources, profile, see
     const now = await getInstallState(profile);
     if (now.managed && compareVersions(now.version, seedMetadata.version) >= 0) {
       const refreshed = await prepareRelease({ directory: seed, root: now.root, version: now.version, runtime });
-      const state = await activateRelease({ profile, release: refreshed, appVersion: seedMetadata.version, migrateLegacy: true });
-      return { profile, enrolled: false, reason: 'already-enrolled', ...state };
+      const state = await activateRelease({ profile, runtime, release: refreshed, appVersion: seedMetadata.version, migrateLegacy: true });
+      return { profile, runtime, enrolled: false, reason: 'already-enrolled', ...state };
     }
     if (!existsSync(manifestPath)) {
       const { PROFILE_TEMPLATES } = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-official-bundles/lib/index.js')).href);
@@ -211,9 +211,9 @@ export async function initializePluginProfile({ runtime, resources, profile, see
     const previouslyEnabled = bundles.some(name => [PLUS, ...LEGACY_NAMES, COMPOSITION].includes(name) || name.startsWith('@benchgo/desktop-'));
     const enabled = now.managed ? now.enabled : enrolled ? previouslyEnabled : true;
     const release = await prepareRelease({ directory: seed, root: join(profile, '.benchgo', 'releases'), version: seedMetadata.version, runtime });
-    const state = await activateRelease({ profile, release, enabled, appVersion: seedMetadata.version, migrateLegacy: true });
+    const state = await activateRelease({ profile, runtime, release, enabled, appVersion: seedMetadata.version, migrateLegacy: true });
     writeJson(marker, { schemaVersion: 2, package: PLUS, bundle: state.bundleName, version: state.version });
-    return { profile, enrolled: !enrolled, reason: enrolled ? 'migrated' : 'enabled', ...state };
+    return { profile, runtime, enrolled: !enrolled, reason: enrolled ? 'migrated' : 'enabled', ...state };
   } finally {
     closeSync(descriptor);
     unlinkSync(lock);

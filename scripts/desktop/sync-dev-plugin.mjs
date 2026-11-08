@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, readdir, stat, writeFile, realpath, lstat, rm, symlink } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, stat, writeFile, realpath, lstat, rm, unlink } from 'node:fs/promises';
 import { isAbsolute, join, dirname, relative, resolve, sep } from 'node:path';
 import { releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
 import { createRequire } from 'node:module';
@@ -75,15 +75,21 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
     const planned = [], copies = [], copyJobs = [];
     let anchor, semver;
     const shared = new Map();
+    const runtimeAnchor = async () => {
+      if (anchor) return anchor;
+      if (typeof enrollment.runtime !== 'string' || !isAbsolute(enrollment.runtime)) throw new Error('登记结果缺少官方运行时目录');
+      anchor = await findPackage('@deepseek-ai/dsh-llm', await realpath(enrollment.runtime));
+      return anchor;
+    };
     const assertVersion = async (metadata, name, range) => {
-      anchor ??= await findPackage('@deepseek-ai/dsh-llm', target);
+      await runtimeAnchor();
       semver ??= createRequire(join(anchor, 'package.json'))('semver');
       if (metadata.name !== name || !semver.satisfies(metadata.version, range, { includePrerelease: true })) throw new Error(`运行依赖版本不兼容：${name}@${metadata.version}，需要 ${range}`);
     };
     async function browserPlatformPeer(name, range) {
       // Official web/src/seed.ts owns this browser singleton; no Node package is shipped.
       if (!['@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-ui-slots', '@deepseek-ai/dsh-client-ui-primitives', '@deepseek-ai/dsh-client-ui-dockkit'].includes(name)) return false;
-      anchor ??= await findPackage('@deepseek-ai/dsh-llm', target);
+      await runtimeAnchor();
       const frontend = await findPackage('@deepseek-ai/dsh-web-frontend', anchor);
       const metadata = JSON.parse(await readFile(join(frontend, 'package.json'), 'utf8'));
       await assertVersion({ ...metadata, name }, name, range);
@@ -103,16 +109,35 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
       throw new Error(`官方前端未提供浏览器平台模块：${name}`);
     }
     async function official(name, range, preservedFrom) {
-      anchor ??= await findPackage('@deepseek-ai/dsh-llm', target);
+      await runtimeAnchor();
       const packagePath = await findPackage(name, anchor);
       const metadata = JSON.parse(await readFile(join(packagePath, 'package.json'), 'utf8'));
       await assertVersion(metadata, name, range);
-      if (preservedFrom && await findPackage(name, preservedFrom) !== packagePath) throw new Error(`用户依赖的官方服务身份与宿主不一致：${name}，位置 ${preservedFrom}`);
+      if (preservedFrom) {
+        // Only the two managed legacy links can be retired below. A private
+        // service copy inside a preserved user dependency would still shadow
+        // the official profile resolver, even if its bytes/version match.
+        for (let current = preservedFrom; inside(releaseRoot, current); current = dirname(current)) {
+          const candidate = join(current, 'node_modules', name);
+          if (await infoAt(candidate)) {
+            if (![target, releaseRoot].includes(current) || await realpath(candidate) !== packagePath) throw new Error(`用户依赖的官方服务身份与宿主不一致：${name}，位置 ${preservedFrom}`);
+            break;
+          }
+        }
+      }
       if (shared.has(name)) return;
-      const destination = join(target, 'node_modules', name);
-      const existing = await checkedPath(target, destination, true);
-      if (existing && !existing.isSymbolicLink()) throw new Error(`共享依赖目标不是链接，不覆盖用户文件：${name}`);
-      const item = { name, version: metadata.version, packagePath, destination, existing };
+      const links = [];
+      for (const base of [target, releaseRoot]) {
+        const destination = join(base, 'node_modules', name);
+        const existing = await checkedPath(base, destination, true);
+        if (existing && !existing.isSymbolicLink()) throw new Error(`共享依赖目标不是链接，不覆盖用户文件：${name}`);
+        if (existing) {
+          const linked = JSON.parse(await readFile(join(destination, 'package.json'), 'utf8'));
+          if (linked.name !== name) throw new Error(`共享依赖链接无法验证，不覆盖用户文件：${name}`);
+          links.push({ destination, base });
+        }
+      }
+      const item = { name, version: metadata.version, links };
       shared.set(name, item); planned.push(item);
     }
     // Match release staging: copy third-party closures without their private
@@ -162,6 +187,11 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
       }
     }
     await dependencies(source, target, new Set([source]), true);
+    for (const item of release?.shared || []) {
+      const name = typeof item === 'string' ? item : item.name;
+      if (typeof name !== 'string' || !sharedPackage(name) || !/^@deepseek-ai\/[a-z0-9][a-z0-9-]*$/u.test(name)) throw new Error('无效共享服务声明');
+      await official(name, typeof item === 'string' ? '*' : item.version);
+    }
     if (copies.length && !release) throw new Error('缺少受管 release.json，无法记录第三方依赖所有权');
     manifest.dependencies = { ...manifest.dependencies, ...localManifest.dependencies };
     manifest.exports = { ...manifest.exports, ...localManifest.exports };
@@ -193,7 +223,8 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
     for (const path of ['package.json', 'cordis.patch.yml', 'assets/icon.svg']) await checkedPath(target, join(target, path));
     for (const path of ['package.json', 'cordis.patch.yml', 'icon.svg']) await checkedPath(releaseRoot, join(wrapper, path));
     await checkedPath(releaseRoot, join(releaseRoot, 'release.json'));
-    for (const { destination } of [...planned, ...copies]) await checkedPath(target, destination, true);
+    for (const { destination } of copies) await checkedPath(target, destination, true);
+    for (const { links } of planned) for (const { base, destination } of links) await checkedPath(base, destination, true);
 
     for (const { destination, existing } of copies) {
       if (existing) await rm(destination, { recursive: !existing.isSymbolicLink(), force: true });
@@ -206,11 +237,9 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
       } });
     }
 
-    for (const { packagePath, destination, existing } of planned) {
-      if (existing) { const current = await realpath(destination).catch(() => ''); if (current === packagePath) continue; await rm(destination, { force: true }); }
-      await mkdir(dirname(destination), { recursive: true });
-      await symlink(packagePath, destination, 'junction');
-    }
+    // Official PluginPackages owns runtime identity. Physical unpacked links
+    // bypass its installation fallback and create a second Session/Service.
+    for (const { links } of planned) for (const { destination } of links) await unlink(destination);
     for (const name of obsolete) {
       const path = join(target, name), info = await checkedPath(target, path, true);
       if (info) await rm(path, { recursive: !info.isSymbolicLink() && info.isDirectory(), force: true });

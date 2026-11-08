@@ -110,7 +110,7 @@ export async function createUpdates({ directory, profile, runtime, version, engi
               const prepared = await install.prepareRelease({ archive, root: state.root, version: selected.plugin.version, runtime });
               if (closed) throw new Error('更新已取消');
               if (await isBusy()) throw conflict('下载期间有新任务开始，结束后再点更新');
-              await install.activateRelease({ profile, release: prepared });
+              await install.activateRelease({ profile, runtime, release: prepared });
               phase = 'ready';
             } finally { await rm(archive, { force: true }); }
           });

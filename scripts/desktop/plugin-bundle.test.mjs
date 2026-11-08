@@ -357,7 +357,9 @@ test('a new plugin version migrates the profile when an official shared package 
   assert.equal(current.previous.version, '0.1.0');
   assert.equal(JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies['kept-plugin'], '1.2.3');
   assert.equal(existsSync(join(options.profile, '.benchgo/releases/0.1.0/release.json')), true);
-  assert.equal(JSON.parse(readFileSync(join(current.directory, 'node_modules/@deepseek-ai/cordis/package.json'))).version, newCordis.version);
+  assert.equal(existsSync(join(current.directory, 'node_modules/@deepseek-ai/cordis')), false);
+  assert.equal(current.runtime, join(root, 'runtime-next'));
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(manifestPath)).dsh.plusInstall, 'runtime'), false);
 });
 
 test('reinstall refreshes app version and moved shared-runtime links without downgrading or enabling a disabled plugin', enrollmentOptions, async t => {
@@ -382,7 +384,8 @@ test('reinstall refreshes app version and moved shared-runtime links without dow
   assert.equal(result.version, '0.1.0');
   assert.equal(result.appVersion, '0.1.0');
   assert.equal(result.enabled, false);
-  assert.equal(JSON.parse(readFileSync(join(result.directory, 'node_modules/@deepseek-ai/dsh-llm/package.json'))).version, service.version);
+  assert.equal(existsSync(join(result.directory, 'node_modules/@deepseek-ai/dsh-llm')), false);
+  assert.equal(result.runtime, join(root, 'moved-runtime'));
 });
 
 test('an active profile lock blocks installation before configuration changes', enrollmentOptions, async t => {

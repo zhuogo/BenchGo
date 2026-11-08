@@ -72,7 +72,7 @@ try {
         await ownerAdmin(installed, { action: 'revoke', id: active.deviceId });
         if (state.sessions?.some(session => session.running)) throw new Error('服务器有任务运行中，请结束后再升级');
       }
-      await helper.activateRelease({ profile, release, enabled: true, appVersion: null, migrateLegacy: true });
+      await helper.activateRelease({ profile, runtime, release, enabled: true, appVersion: null, migrateLegacy: true });
       installed = { schemaVersion: 1, harnessVersion: manifest.harnessVersion, pluginVersion: manifest.pluginVersion, runtime, profile, dataDir, webPort, port };
       await atomic(stateFile, JSON.stringify(installed));
       const launcher = '(' + launchServer.toString() + ')(' + [process.execPath, runtime, ownerFile, base, webPort].map(value => JSON.stringify(value)).join(',') + ');';

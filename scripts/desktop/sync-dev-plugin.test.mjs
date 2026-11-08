@@ -37,10 +37,9 @@ async function fixture(t) {
   await mkdir(join(root, 'official/node_modules/@deepseek-ai/dsh-compaction-basic'), { recursive: true });
   await writeFile(join(root, 'official/node_modules/@deepseek-ai/dsh-compaction-basic/package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-compaction-basic', version: '0.2.1-alpha.3' }));
   await mkdir(join(target, 'node_modules/@deepseek-ai'), { recursive: true });
-  await symlink(official, join(target, 'node_modules/@deepseek-ai/dsh-llm'), 'junction');
   const require = createRequire(new URL('../../deepseek-harness/package.json', import.meta.url));
   await symlink(dirname(require.resolve('semver/package.json')), join(root, 'official/node_modules/semver'), 'junction');
-  return { root, source, target, wrapper, enrollment: { managed: true, directory } };
+  return { root, source, target, wrapper, enrollment: { managed: true, directory, runtime: join(root, 'official') } };
 }
 
 for (const mode of ['valid', 'slots', 'store', 'dockkit', 'missing-seed', 'wrong-version', 'unused-asset', 'node-dependency', 'unknown-peer']) test(`browser platform peer uses the installed official seed table: ${mode}`, async t => {
@@ -166,7 +165,10 @@ for (const legacyLink of [false, true]) test(`third-party closure shares host sc
     await syncDevelopmentPlugin(setup);
     assert.equal((await lstat(destination)).isSymbolicLink(), false);
     assert.equal(await readFile(join(destination, 'revision.txt'), 'utf8'), String(pass));
-    assert.equal(createRequire(join(setup.target, 'package.json'))('fixture-ops'), host);
+    // Runtime imports are intentionally supplied by official PluginPackages,
+    // not Node's native lookup through physical unpacked links.
+    await assert.rejects(lstat(join(setup.target, 'node_modules/@deepseek-ai/dsh-scope')), { code: 'ENOENT' });
+    await assert.rejects(lstat(join(setup.enrollment.directory, 'node_modules/@deepseek-ai/dsh-scope')), { code: 'ENOENT' });
     await assert.rejects(lstat(join(destination, 'node_modules/fixture-adapter/node_modules/@deepseek-ai/dsh-scope')), { code: 'ENOENT' });
     const release = JSON.parse(await readFile(join(setup.enrollment.directory, 'release.json'), 'utf8'));
     assert.ok(release.shared.some(item => item.name === '@deepseek-ai/dsh-scope'));
@@ -211,7 +213,7 @@ test('no dependencies does not require an official runtime anchor', async t => {
   const manifest = JSON.parse(await readFile(file, 'utf8'));
   delete manifest.dependencies;
   await writeFile(file, JSON.stringify(manifest));
-  await rm(join(setup.target, 'node_modules/@deepseek-ai/dsh-llm'));
+  delete setup.enrollment.runtime;
   await syncDevelopmentPlugin(setup);
 });
 
@@ -249,9 +251,7 @@ for (const declaration of ['dependencies', 'peerDependencies']) for (const priva
       await writeFile(join(copy, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-compaction-basic', version: '0.2.1-alpha.3' }));
     }
   }
-  // A valid user package already resolves the same host service through this link.
-  const host = join(setup.root, 'official/node_modules/@deepseek-ai/dsh-compaction-basic');
-  await symlink(host, join(setup.target, 'node_modules/@deepseek-ai/dsh-compaction-basic'), 'junction');
+  // With no local copy the official profile resolver supplies the service.
   if (privateScope) {
     await assert.rejects(syncDevelopmentPlugin(setup), /官方服务身份与宿主不一致/);
     assert.equal(await readFile(join(setup.target, 'lib/client.js'), 'utf8'), 'old seed');
@@ -277,7 +277,7 @@ test('copies local plugin sources and outputs to the enrolled release while pres
   assert.equal(await readFile(join(setup.target, 'cordis.patch.yml'), 'utf8'), patch);
   assert.equal(await readFile(join(setup.wrapper, 'cordis.patch.yml'), 'utf8'), patch);
   assert.deepEqual(JSON.parse(await readFile(join(setup.wrapper, 'package.json'), 'utf8')).exports, { './package.json': './package.json', './icon': './icon.svg' });
-  assert.equal(await realpath(join(setup.target, 'node_modules/@deepseek-ai/dsh-compaction-basic')), await realpath(join(setup.root, 'official/node_modules/@deepseek-ai/dsh-compaction-basic')));
+  await assert.rejects(lstat(join(setup.target, 'node_modules/@deepseek-ai/dsh-compaction-basic')), { code: 'ENOENT' });
 });
 
 test('updates migrated runtime exports while preserving installed metadata and custom exports', async t => {
@@ -345,6 +345,42 @@ test('shared version mismatch blocks copying and preserves user dependencies', a
   const setup = await fixture(t);
   await writeFile(join(setup.root, 'official/node_modules/@deepseek-ai/dsh-compaction-basic/package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-compaction-basic', version: '9.0.0' }));
   await assert.rejects(syncDevelopmentPlugin(setup), /版本不兼容/);
+  assert.equal(await readFile(join(setup.target, 'lib/client.js'), 'utf8'), 'old seed');
+});
+
+test('retires both legacy shared junctions without deleting the official service, including repeat sync', async t => {
+  const setup = await fixture(t);
+  const name = '@deepseek-ai/dsh-compaction-basic';
+  const host = join(setup.enrollment.runtime, 'node_modules', name);
+  await writeFile(join(host, 'keep.txt'), 'official');
+  await writeFile(join(setup.enrollment.directory, 'release.json'), JSON.stringify({ shared: [{ name, version: '0.2.1-alpha.3' }] }));
+  for (const base of [setup.target, setup.enrollment.directory]) {
+    await mkdir(join(base, 'node_modules/@deepseek-ai'), { recursive: true });
+    await symlink(host, join(base, 'node_modules', name), 'junction');
+  }
+  for (let pass = 0; pass < 2; pass++) {
+    await syncDevelopmentPlugin(setup);
+    for (const base of [setup.target, setup.enrollment.directory]) await assert.rejects(lstat(join(base, 'node_modules', name)), { code: 'ENOENT' });
+    assert.equal(await readFile(join(host, 'keep.txt'), 'utf8'), 'official');
+  }
+});
+
+for (const side of ['target', 'release']) test(`ordinary shared directory at ${side} blocks sync before any writes`, async t => {
+  const setup = await fixture(t);
+  const base = side === 'target' ? setup.target : setup.enrollment.directory;
+  const copy = join(base, 'node_modules/@deepseek-ai/dsh-compaction-basic');
+  await mkdir(copy, { recursive: true });
+  await writeFile(join(copy, 'user.txt'), 'preserve');
+  await assert.rejects(syncDevelopmentPlugin(setup), /共享依赖目标不是链接/);
+  assert.equal(await readFile(join(copy, 'user.txt'), 'utf8'), 'preserve');
+  assert.equal(await readFile(join(setup.target, 'lib/client.js'), 'utf8'), 'old seed');
+});
+
+test('missing explicit runtime rejects before mirror writes even if a legacy service link exists', async t => {
+  const setup = await fixture(t);
+  await symlink(join(setup.enrollment.runtime, 'node_modules/@deepseek-ai/dsh-llm'), join(setup.target, 'node_modules/@deepseek-ai/dsh-llm'), 'junction');
+  delete setup.enrollment.runtime;
+  await assert.rejects(syncDevelopmentPlugin(setup), /缺少官方运行时目录/);
   assert.equal(await readFile(join(setup.target, 'lib/client.js'), 'utf8'), 'old seed');
 });
 
