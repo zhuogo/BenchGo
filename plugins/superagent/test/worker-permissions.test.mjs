@@ -25,7 +25,7 @@ test('each worker action checks live authorization; narrowing during approval pr
   database.createAssignment(ticket.id, { executor: 'harness' });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   let wrapper, version = 'p1', revoke = false, dispatched = 0, checks = 0;
-  installWorkerPermissionGate({ on(name, fn) { assert.equal(name, 'tools/execute'); wrapper = fn; } }, {
+  installWorkerPermissionGate({ on(name, fn) { if (name === 'tools/execute') wrapper = fn; } }, {
     database, assignment, readPolicy: async () => ({ version }),
     authorizeAction: async () => { checks++; if (revoke) version = 'p2'; return { allowed: true }; },
   });
@@ -67,27 +67,6 @@ test('checkpoint IO precedes final authorization and revoked tools never dispatc
   assert.equal(backup, 1); assert.equal(dispatched, 0);
 });
 
-test('review continuation blocks repeated dispatched effects but permits a distinct authorized correction', async () => {
-  let wrapper, dispatches = 0;
-  const scope = { on(_name, fn) { wrapper = fn; } };
-  installWorkerPermissionGate(scope, {
-    database: { getTicket: () => ({ mandate: {} }), renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }) },
-    assignment: { id: 'same-assignment', ticketId: 'same-ticket', reviewContinuation: { runId: 'same-run' } },
-    priorToolEvents: [{ type: 'assistant/message', data: { message: { content: [
-      { type: 'tool-call', id: 'published', name: 'publish', arguments: '{"recipient":"owner","body":"original"}' },
-      { type: 'tool-call', id: 'read', name: 'web_fetch', arguments: '{"url":"https://source.invalid"}' },
-    ] } } }, { type: 'tool/result', data: { message: { toolCallId: 'published', content: [] } } }],
-    readPolicy: async () => ({ version: 'current' }), authorizeAction: async () => ({ allowed: true }),
-  });
-  const execution = (name, args) => ({ name, arguments: args, signal: new AbortController().signal });
-  const dispatch = () => { dispatches++; return 'allowed'; };
-  await assert.rejects(wrapper(execution('publish', { body: 'original', recipient: 'owner' }), dispatch), { code: 'ACTION_REPLAY_BLOCKED' });
-  assert.equal(dispatches, 0);
-  assert.equal(await wrapper(execution('web_fetch', { url: 'https://source.invalid' }), dispatch), 'allowed');
-  assert.equal(await wrapper(execution('edit', { path: 'existing.md', replacement: 'corrected' }), dispatch), 'allowed');
-  assert.equal(dispatches, 2);
-});
-
 test('budget continuation blocks replay of a completed action while permitting fresh authorized correction', async () => {
   let wrapper, dispatches = 0;
   installWorkerPermissionGate({ on(_name, fn) { wrapper = fn; } }, {
@@ -104,7 +83,7 @@ test('budget continuation blocks replay of a completed action while permitting f
   assert.equal(dispatches, 1);
 });
 
-for (const failed of [false, true]) test(`unknown previous effects block changed parameters and different actions during review (failed=${failed})`, async () => {
+for (const failed of [false, true]) test(`unknown previous effects block changed parameters and different actions during continuation (failed=${failed})`, async () => {
   let wrapper, dispatches = 0;
   const events = [{ type: 'assistant/message', data: { message: { content: [
     { type: 'tool-call', id: 'old-send', name: 'opaque_send', arguments: '{"recipient":"owner","body":"first"}' },
@@ -112,7 +91,7 @@ for (const failed of [false, true]) test(`unknown previous effects block changed
   if (failed) events.push({ type: 'tool/result', data: { message: { toolCallId: 'old-send', isError: true, content: [] }, error: { code: 'TIMEOUT' } } });
   installWorkerPermissionGate({ on(_name, fn) { wrapper = fn; } }, {
     database: { getTicket: () => ({ mandate: {} }), renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }) },
-    assignment: { id: 'original', ticketId: 'ticket', reviewContinuation: { runId: 'original-run' } },
+    assignment: { id: 'original', ticketId: 'ticket', pauseContinuation: { kind: 'execution-budget', runId: 'original-run' } },
     priorToolEvents: events, readPolicy: async () => ({ version: 'current' }), authorizeAction: async () => ({ allowed: true }),
   });
   const signal = new AbortController().signal, dispatch = () => { dispatches++; };
@@ -120,4 +99,25 @@ for (const failed of [false, true]) test(`unknown previous effects block changed
   await assert.rejects(wrapper({ name: 'different_publish', arguments: { body: 'changed again' }, signal }, dispatch), { code: 'EXECUTION_EFFECTS_UNKNOWN' });
   await wrapper({ name: 'web_fetch', arguments: { url: 'https://source.invalid' }, signal }, dispatch);
   assert.equal(dispatches, 1);
+});
+
+test('batch snapshot keeps ordinary edits stable while live tool narrowing and stop block submission', async () => {
+  const hooks = new Map(); let stopped = false, narrowed = false, applied = 1, dispatched = 0;
+  const database = {
+    getTicket: () => ({ id: 'ticket', status: stopped ? 'pausing' : 'open', instructionRevision: 2, target: 'new target', mandate: { scope: { toolNames: narrowed ? ['read'] : ['read', 'write'] } } }),
+    appliedTicketSnapshot: () => ({ instructionRevision: applied, target: applied === 1 ? 'old target' : 'new target', authorizationVersion: 1, mandate: {}, toolScope: ['read', 'write'] }),
+    renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }),
+  };
+  const observed = [];
+  installWorkerPermissionGate({ on: (event, fn) => hooks.set(event, fn) }, { database, assignment: { id: 'assignment', ticketId: 'ticket' }, readPolicy: async () => ({ version: 1 }), authorizeAction: async ({ ticket }) => { observed.push([ticket.instructionRevision, ticket.target]); return { allowed: true }; } });
+  const execution = { name: 'write', signal: new AbortController().signal };
+  await hooks.get('tools/execute')(execution, () => dispatched++);
+  assert.deepEqual(observed, [[1, 'old target']]);
+  applied = 2; await hooks.get('tools/execute')(execution, () => dispatched++);
+  assert.deepEqual(observed[1], [2, 'new target']);
+  narrowed = true;
+  assert.throws(() => hooks.get('tools/pre-execute')(execution, () => assert.fail('narrowed dispatch')), { code: 'WORKER_TOOL_SCOPE' });
+  stopped = true;
+  await assert.rejects(hooks.get('tools/execute')({ ...execution, name: 'read' }, () => assert.fail('stopped dispatch')), { code: 'WORKER_TICKET_INACTIVE' });
+  assert.equal(dispatched, 2);
 });

@@ -985,6 +985,21 @@
               "outboxReconcile": {
                 "$ref": "#/components/schemas/AssistantOutboxDelivery",
                 "description": "仅 owner；返回原工单投递。核实历史位于顶层 reconciliations，确认回执位于 receipt；原 payload 保持不变，工单执行与结果不重复。"
+              },
+              "actionPermissions": {
+                "type": "object",
+                "description": "Trusted same-origin authenticated owner peer only.",
+                "additionalProperties": true
+              },
+              "actionPermissionCreate": {
+                "type": "object",
+                "description": "Trusted same-origin authenticated owner peer only.",
+                "additionalProperties": true
+              },
+              "actionPermissionRevoke": {
+                "type": "object",
+                "description": "Trusted same-origin authenticated owner peer only.",
+                "additionalProperties": true
               }
             }
           },
@@ -2008,7 +2023,10 @@
               "messageReaction",
               "connectionReplies",
               "directReplyReconcile",
-              "outboxReconcile"
+              "outboxReconcile",
+              "actionPermissions",
+              "actionPermissionCreate",
+              "actionPermissionRevoke"
             ]
           },
           "threadId": {
@@ -2223,6 +2241,25 @@
             },
             "additionalProperties": true,
             "description": "memorySave 的记忆正文。缺少 source 时由管理入口补充用户来源；更新已有 id 时可配合顶层 revision 保护并发。"
+          },
+          "origin": {
+            "type": "string",
+            "minLength": 1
+          },
+          "categories": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "login",
+                "private-upload"
+              ]
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": true,
@@ -2601,6 +2638,38 @@
             },
             "then": {
               "$ref": "#/components/schemas/AssistantDeliveryReconciliationInput"
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "actionPermissionCreate"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "origin",
+                "categories",
+                "expiresAt",
+                "requestId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "actionPermissionRevoke"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "id",
+                "requestId"
+              ]
             }
           }
         ],

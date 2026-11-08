@@ -117,6 +117,8 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           if (!models.length) throw new Error('Worker model is not configured');
           selectModel(agent, models[modelIndex]);
         }
+        // Official durable policy representation (user-approval setApprovalPolicy).
+        agent.session?.append?.('approval/policy', { policy: 'ask' });
         const priorFallback = agent.session?.snapshotEvents().findLast(event => event.type === modelFallbackType && event.data?.runId === run.id);
         if (priorFallback) for (const event of agent.session.snapshotEvents()) {
           if (event.seq >= priorFallback.seq || event.type !== 'assistant/message') continue;
@@ -194,6 +196,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           }, dispatch) } : {}),
         });
         selfCheck = installWorkerSelfCheck(scope, agent, { database, assignment, run });
+        ctx.get?.('benchgoExternalActions')?.installWorker(scope, agent, { database, assignment, run, readPolicy, authorizeAction });
         installWorkerVault(scope, agent, { ctx, database, assignment, run, readPolicy, authorizeAction });
         scope.on('tools/pre-execute', (execution, next) => {
           if (execution.name !== 'assistant_task_result' && !isReadOnlyWorkerTool(execution.name) && priorFallbackCalls.has(toolSignature(execution.name, execution.arguments))) {

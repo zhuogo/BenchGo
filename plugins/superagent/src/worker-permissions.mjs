@@ -7,13 +7,17 @@ const signature = (name, args) => {
 };
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
-/** Applied requirements are batch-frozen; stop state remains live. */
+/** Applied requirements are batch-frozen; stop and capability narrowing remain live. */
 export function workerAppliedTicket(database, assignment, execution) {
   const current = database.getTicket(assignment.ticketId);
   if (!current) throw new Error('Worker 工单不存在');
   if (current.status && !['open', 'waiting'].includes(current.status)) throw fail('WORKER_TICKET_INACTIVE', '工单已暂停、停止或结束');
   const snapshot = database.appliedTicketSnapshot?.(assignment.id);
   const ticket = snapshot ? { ...current, ...snapshot, status: current.status } : current;
+  for (const names of [ticket.toolScope, current.mandate?.toolScope, current.mandate?.scope?.toolNames]) {
+    if (names == null) continue;
+    if (!Array.isArray(names) || !names.every(name => typeof name === 'string') || !names.includes(execution.name)) throw fail('WORKER_TOOL_SCOPE', '当前工单工具范围不允许此动作');
+  }
   return ticket;
 }
 
@@ -22,6 +26,8 @@ export function installWorkerPermissionGate(scope, { database, assignment, readP
   const previousCalls = new Set(priorToolEvents.flatMap(event => event.type === 'assistant/message'
     ? (event.data?.message?.content || []).filter(block => block.type === 'tool-call').map(block => signature(block.name, block.arguments)) : []));
   const previousEffects = executionEffects({ events: priorToolEvents });
+  scope.systemPrompt?.section({ name: 'benchgo-external-action-boundary', order: -109, interpolate: false,
+    text: 'Open terminal, scripts and browser tools remain available for normal work and preparation. Never submit payment/purchase, password changes, account deletion or additional external sending through these open tools, scripts or aliases. Submit these four categories only through a registered assistant_external_action adapter with exact frozen recipient/object/content and a fresh one-time approval. If no adapter is registered, prepare up to the final step and return a clear human handoff; never claim submission or approval. Public reading and normal authenticated replies/progress/questions/results to the original source use their existing owned paths. Tool-level checks cannot prove arbitrary commands or natural-language browser actions free of high-risk effects.' });
   scope.on('tools/pre-execute', (execution, next) => {
     execution.signal.throwIfAborted(); workerAppliedTicket(database, assignment, execution); return next();
   });
@@ -35,14 +41,13 @@ export function installWorkerPermissionGate(scope, { database, assignment, readP
       throw Object.assign(new Error('A previously dispatched action cannot be replayed during correction; inspect its saved outcome before proceeding'), { code: 'ACTION_REPLAY_BLOCKED' });
     }
     const policy = await readPolicy();
-    const ticket = database.getTicket(assignment.ticketId);
-    if (!ticket) throw new Error('Worker 工单不存在');
+    const ticket = workerAppliedTicket(database, assignment, execution);
     const permission = await authorizeAction({ policy, mandate: ticket.mandate, ticket, execution });
     execution.signal.throwIfAborted();
     const dispatch = async () => {
     const current = await readPolicy();
     const latest = workerAppliedTicket(database, assignment, execution);
-    if (latest.authorizationVersion !== ticket.authorizationVersion) throw fail('WORKER_AUTHORIZATION_CHANGED', '??????????');
+    if (latest.authorizationVersion !== ticket.authorizationVersion) throw fail('WORKER_AUTHORIZATION_CHANGED', '提交前授权版本已变化');
     execution.signal.throwIfAborted();
     const versionKey = ticket.mandate?.source?.channel === 'desktop' ? 'desktopVersion' : 'version';
     const renewal = database.renewAssignment(assignment.id, {

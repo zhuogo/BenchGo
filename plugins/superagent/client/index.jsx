@@ -25,6 +25,7 @@ import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
 import { MemoryPage } from './memory.jsx';
 import { Goals } from './goals.jsx';
 import { Tickets } from './tickets.jsx';
+import { ActionPermissions } from './action-permissions.jsx';
 import { ActivityPanel, ActivityProvider } from './activity-panel.jsx';
 import { Evaluations } from './evaluations.jsx';
 import { useDirtyRegistry } from './dirty-registry.mjs';
@@ -201,7 +202,7 @@ function Studio({ snapshot, ctx, execute, refresh, threadId, initialSection = 'i
   const groups = [
     { id: 'configuration', label: '配置', items: [['identity', '身份', 'userlib'], ['documents', '档案', 'document']] },
     { id: 'workspace', label: '工作区', items: [['tasks', '任务', 'experiment'], ['memory', '记忆', 'bulb'], ['artifacts', '产物', 'picture']] },
-    { id: 'integrations', label: '接入', items: [['connections', '多平台', 'category'], ['vault', '保险库', 'lock']] },
+    { id: 'integrations', label: '接入', items: [['connections', '多平台', 'category'], ['vault', '保险库', 'lock'], ['permissions', '授权管理', 'lock']] },
     { id: 'system', label: '系统', items: [['system-files', '系统文件', 'code']] },
   ];
   const items = groups.flatMap(group => group.items);
@@ -214,6 +215,7 @@ function Studio({ snapshot, ctx, execute, refresh, threadId, initialSection = 'i
     artifacts: '查看、预览和管理助手交付的文件。',
     connections: '把助手接入常用平台，在熟悉的地方继续对话。',
     vault: '集中保管凭据，按需提供给指定工具。',
+    permissions: '查看网站许可与动作记录，按需撤销授权。',
     'system-files': '浏览助手的运行文件与目录，查看原始记录。',
   };
   const choose = next => {
@@ -235,6 +237,7 @@ function Studio({ snapshot, ctx, execute, refresh, threadId, initialSection = 'i
     <div hidden={section !== 'memory'} style={section !== 'memory' ? { display: 'none' } : undefined}>{(section === 'memory' || dirtySections.includes('memory')) && <MemoryPage api={api} refresh={refresh} onDirtyChange={dirtyEditor('memory')} entries={snapshot.memories || []} threadId={threadId} />}</div>
     <div hidden={section !== 'artifacts'} style={section !== 'artifacts' ? { display: 'none' } : undefined}>{(section === 'artifacts' || dirtySections.includes('artifacts')) && <Artifacts api={api} />}</div>
     <div hidden={section !== 'connections'} style={section !== 'connections' ? { display: 'none' } : undefined}>{(section === 'connections' || dirtySections.includes('connections')) && <Connections api={api} onDirtyChange={dirtyEditor('connections')} />}</div>
+    {section === 'permissions' && <ActionPermissions api={api} />}
     <div hidden={section !== 'vault'} style={section !== 'vault' ? { display: 'none' } : undefined}>{(section === 'vault' || dirtySections.includes('vault')) && <VaultSettingsSection onDirtyChange={dirtyEditor('vault')} />}</div>
     <div hidden={section !== 'system-files'} style={section !== 'system-files' ? { display: 'none' } : undefined}>{(section === 'system-files' || dirtySections.includes('system-files')) && <SystemFiles api={api} />}</div>
   </div></div>;
