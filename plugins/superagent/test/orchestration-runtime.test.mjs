@@ -136,6 +136,19 @@ test('transport retry uses durable Router text and never generates another reply
   assert.deepEqual(app.counts(), { executions: 1, sends: 2 });
 });
 
+test('reply preparation exceptions retain bounded diagnostic identity without leaking content or rerunning Worker', async t => {
+  const warnings = [];
+  const app = await fixture(t, { ctx: { logger: { warn: text => warnings.push(text) } },
+    prepareTicketReply() { throw Object.assign(new Error('PRIVATE PROVIDER CONTENT'), { code: 'SESSION_DEPENDENCY_MISSING' }); } });
+  await app.advance();
+  const row = app.db.deliveries(app.ticket.id)[0];
+  assert.equal(row.state, 'queued');
+  assert.match(row.lastError, /Router 回复准备失败.*SESSION_DEPENDENCY_MISSING/);
+  assert.doesNotMatch(JSON.stringify({ row, warnings }), /PRIVATE PROVIDER CONTENT/);
+  assert.deepEqual(warnings, ['SuperAgent ticket reply prepare failed: SESSION_DEPENDENCY_MISSING']);
+  assert.deepEqual(app.counts(), { executions: 1, sends: 0 });
+});
+
 test('natural reply returns through authenticated source channel instead of desktop', async t => {
   const app = await fixture(t, { channel: 'feishu', send(delivery) {
     assert.deepEqual(delivery.payload.source, app.source);

@@ -18,6 +18,9 @@ const hook = registerHooks({ resolve(specifier, context, next) {
   return url ? { url, shortCircuit: true } : next(specifier, context);
 } });
 const { mountAssistant } = await import('../src/service.mjs');
+const { inject: assistantInject } = await import('../src/plugin.mjs');
+const { readAssessmentPolicy } = await import('../src/assessment-policy.mjs');
+const { commitWorkerResult } = await import('../src/result-commit.mjs');
 const { Context } = await load('@deepseek-ai/cordis');
 const { default: LlmRuntime, LlmAdapter } = await load('@deepseek-ai/dsh-llm');
 const modules = await Promise.all(['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-agent-loop'].map(load));
@@ -80,9 +83,18 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   };
   // A scoped plugin context enforces Cordis injections, unlike the root
   // context. The skills service is intentionally absent in this composition.
+  let missingSessionsFiber;
+  const missingSessionsContext = await new Promise(resolve => {
+    missingSessionsFiber = ctx.inject(['agents'], resolve);
+  });
+  assert.throws(() => missingSessionsContext.sessions.get('saved-router-session'), { message: 'cannot get property "sessions" without inject' });
+  await missingSessionsFiber.dispose();
+  assert.ok(assistantInject.includes('sessions'), 'the real plugin must retain the session flush dependency');
   let appFiber;
   const app = await new Promise((resolve, reject) => {
-    appFiber = ctx.inject(['connection', 'credentials', 'llm', 'agents', 'sessionQuery', 'sessionProjections', 'workspaceRegistry', 'tokenMeter'], child => {
+    // BenchGo/Commander/settings are supplied directly by this fixture; all
+    // actual service access uses the production plugin dependency declaration.
+    appFiber = ctx.inject(assistantInject.filter(name => !['benchgo', 'commander', 'settings'].includes(name)), child => {
       mountAssistant(child, commander, providers).then(resolve, reject);
     });
   });
@@ -178,6 +190,39 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal((await ctx.tools.get('schedule_delete', agent).execute({ id: scheduled.id }, scheduleExec)).deleted, true);
   response = await call({ action: 'send', text: 'hello', requestId: 'mounted-request' }); assert.equal(response.status, 200); await agent.whenIdle();
   response = await call({ action: 'send', text: 'hello', requestId: 'mounted-request' }); assert.equal((await response.json()).duplicate, true);
+  // A committed Worker result must pass through this injected Router context,
+  // durably flush its natural draft, then receive the original desktop receipt.
+  const deliveryPolicy = await readAssessmentPolicy(app.store, ctx.workspaceRegistry);
+  const sourceMessage = agent.session.snapshotEvents().find(event => event.type === 'user/message' && event.data?.source?.requestId === 'mounted-request').data;
+  const resultTicket = app.store.orchestration.createTicket({ threadId: `desktop:${agent.id}`, title: '完整交付验证', target: '保存并交付成果',
+    mandate: { source: { channel: 'desktop', sessionId: agent.id, threadId: 'main', messageId: sourceMessage.id },
+      actorId: 'desktop-owner', admission: 'desktop-approved-delegation', policyVersion: deliveryPolicy.desktopVersion,
+      controlledActions: 'require-current-policy-and-harness-approval' } });
+  const committed = commitWorkerResult({ database: app.store.orchestration, ticket: resultTicket, uniqueKey: 'scoped-worker-result',
+    result: { outcome: 'completed', finalSummary: '原始成果已保存', selfCheck: { summary: '已核对成果' } } });
+  assert.equal(app.store.orchestration.getTicket(resultTicket.id).status, 'waiting');
+  let prepared;
+  for (let attempt = 0; attempt < 120; attempt++) {
+    prepared = await app.engine.prepareTicketReply(committed.outbox);
+    if (prepared.status === 'ready') break;
+    assert.equal(prepared.status, 'pending', JSON.stringify(prepared));
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.equal(prepared.status, 'ready');
+  assert.equal(prepared.text, 'Mounted reply');
+  assert.deepEqual(await app.engine.prepareTicketReply(committed.outbox), prepared, 'saved Router draft is reused across outbox attempts');
+  for (let attempt = 0; attempt < 100 && app.store.orchestration.getTicket(resultTicket.id).status !== 'completed'; attempt++) await new Promise(resolve => setTimeout(resolve, 25));
+  const delivered = app.store.orchestration.deliveries(resultTicket.id);
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].state, 'sent');
+  assert.equal(delivered[0].receipt.status, 'accepted');
+  assert.ok(delivered[0].receipt.messageId);
+  assert.equal(delivered[0].payload.publication.origin, 'router');
+  assert.equal(delivered[0].payload.publication.text, 'Mounted reply');
+  assert.equal(app.store.orchestration.getTicket(resultTicket.id).status, 'completed');
+  assert.equal(agent.session.snapshotEvents().filter(event => event.type === 'plugin:benchgo-plugin/chat-publication'
+    && event.data?.kind === 'ticket-reply' && event.data.ticketReplyEventKey === committed.outbox.uniqueKey).length, 1);
+  assert.equal(app.database.notifications().events.filter(event => event.taskId === resultTicket.id).length, 1);
   // This section validates Goal usage HTTP contracts against a mounted runtime.
   // Its empty project is not an executable Git/worktree fixture: reserve claims
   // while exercising queued pause/resume so a timer cannot start unrelated work.

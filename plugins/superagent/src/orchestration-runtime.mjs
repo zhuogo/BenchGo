@@ -150,6 +150,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       }
       if (payload.type === 'ticket.result') {
         if (payload.publication?.origin !== 'router') {
+          let stage = 'prepare';
           try {
             const reply = await prepareTicketReply?.(delivery);
             if (reply?.status === 'suppressed') {
@@ -160,11 +161,17 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
               finishDelivery(delivery.id, { owner, error: 'Router 自然回复待生成', retryMs: 30000 });
               continue;
             }
+            stage = 'persist';
             delivery = database.saveOutboxReply(delivery.id, { owner,
               publication: { action: 'deliver', origin: 'router', text: reply.text }, messageId: reply.messageId, now: now() });
             payload = delivery.payload;
-          } catch {
-            finishDelivery(delivery.id, { owner, error: 'Router 自然回复待重试', retryMs: 30000 });
+          } catch (cause) {
+            // Keep only bounded error identity, never provider text, prompts or credentials.
+            const identity = String(cause?.code || cause?.name || 'UNKNOWN');
+            const code = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(identity) ? identity : 'UNKNOWN';
+            const reason = stage === 'persist' ? 'Router 回复投递记录保存失败' : 'Router 回复准备失败';
+            ctx.logger?.warn?.(`SuperAgent ticket reply ${stage} failed: ${code}`);
+            finishDelivery(delivery.id, { owner, error: `${reason}（${code}），等待重试`, retryMs: 30000 });
             continue;
           }
         }
