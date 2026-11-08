@@ -5,6 +5,8 @@ import { createAuxiliaryCompactionHook } from './auxiliary-compaction.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { appendPluginRecord } from '@deepseek-ai/dsh-session';
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol';
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native';
 import { canFallback } from './routing.mjs';
 import { validateAssistantModels } from './store.mjs';
@@ -13,6 +15,8 @@ import { captureRouterTools, installRouterPermissionGate } from './router-permis
 import { createMessageInbox } from './message-inbox.mjs';
 import { cleanMemoryContext } from './memory.mjs';
 import { activeChatReply, installChatPublication, projectChatMessages } from './chat-publication.mjs';
+import { modelFallbackType, modelFallbackSource, modelRouteType, readModelFallbacks, fallbackCallSignature, requestExecutionEvents, dispatchedCallSignatures, isRouterQuery } from './model-fallback.mjs';
+import { executionEffects, isReadOnlyWorkerTool } from './execution-effects.mjs';
 
 const routeKey = model => JSON.stringify([model.providerId, model.modelId]);
 const copy = value => structuredClone(value);
@@ -37,7 +41,9 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
   const builtinLayer = await readBuiltinLayer();
   const Compaction = compactionPlugin ?? (await import('@deepseek-ai/dsh-compaction-basic')).default;
   const handles = new Map(), pending = new Map(), listeners = new Set(), cooldowns = new Map(), models = new Map(), errors = new Map(), failures = new Map(), queries = new Map(), sending = new Map();
-  const pendingRoutes = new WeakMap();
+  const appendRecord = appendChatRecord ?? appendPluginRecord;
+  const nativeSubmissions = new Map();
+  const activeRoutes = new WeakMap();
   const agentCompaction = new Map();
   const routeCompaction = createAuxiliaryCompactionHook({ getConfig: () => store.getConfig(), dispatch: options => ctx.llm.stream(options),
     onRoute: routing => {
@@ -93,9 +99,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     if (!primary) throw Object.assign(new Error('请先配置总助手文本模型'), { code: 'ASSISTANT_MODELS_UNAVAILABLE' });
     // The official loop captures its route before pre-step, so selection must
     // finish before this message enters followup. The queue belongs to that message.
-    agent.model.select({ provider: primary.providerId, model: primary.modelId,
-      ...(primary.options?.reasoningEffort === undefined ? {} : { reasoningEffort: primary.options.reasoningEffort }) });
-    pendingRoutes.set(agent, { messageId: message.id, models: candidates });
+    appendRecord(agent.session, modelRouteType, { messageId: message.id, models: candidates });
   }
   const inbox = createMessageInbox({
     getState: () => store.getState(), updateState, ensureSession,
@@ -164,7 +168,8 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         if (!handles.has(threadId)) handles.set(threadId, { agent: existing, dispose: async () => {} });
         return existing;
       }
-      let contextText = '', selection, activeSelection, frozenContext, learningTurn, learningIteration;
+      let contextText = '', selection, frozenContext, learningTurn, learningIteration, failedPlan, claimedMessages = [], currentTurn, resumeFallback;
+      let replayCalls = new Set();
       const advanceModel = () => {
         if (!selection) return false;
         const nextIndex = selection.models.findIndex((model, index) => index > selection.index && (cooldowns.get(routeKey(model)) ?? 0) <= now());
@@ -178,10 +183,103 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       const presets = ctx.get?.('agentPresets');
       const preset = presets ? await presets.resolve(savedSession?.header?.agentPreset) : undefined;
       const setup = async (scope, agent) => {
-        // Harness now resolves the model before `agent/pre-step`; seed a fresh
-        // Router with the first configured candidate so the request hook can
-        // perform its normal fallback selection. Resumed sessions already
-        // carry their persisted selection and must keep it.
+        const select = model => agent.model.select({ provider: model.providerId, model: model.modelId,
+          ...(model.options?.reasoningEffort === undefined ? {} : { reasoningEffort: model.options.reasoningEffort }) });
+        const routes = () => agent.session.snapshotEvents().filter(event => event.type === modelRouteType && event.ignorable === true);
+        scope.on('agent/inbox/claimed', ({ message, turn }) => {
+          if (currentTurn !== turn) { currentTurn = turn; claimedMessages = []; }
+          claimedMessages.push(message);
+          if (message.source?.kind === modelFallbackSource) {
+            const plan = readModelFallbacks(agent.session.snapshotEvents()).get(message.source.fallbackId);
+            if (plan && !plan.cancelled && plan.message.id === message.id) {
+              selection = { turnKey: plan.requestId, models: copy(plan.models), index: plan.index, failures: copy(plan.failures) };
+              activeRoutes.set(agent, selection);
+              learningTurn = plan.requestId;
+              replayCalls = new Set(plan.dispatchedCalls || []);
+              select(selection.models[selection.index]);
+            }
+            return;
+          }
+          const route = routes().findLast(event => event.data.messageId === message.id
+            || (message.source.rpcId && event.data.requestId === message.source.rpcId))?.data;
+          if (route) {
+            selection = { turnKey: message.source?.kind === 'user' ? message.id : learningTurn ?? turn, models: copy(route.models), index: 0, failures: [] };
+            activeRoutes.set(agent, selection);
+            replayCalls = new Set();
+            select(selection.models[0]);
+          }
+        });
+        const queueFallback = (failure, turn, signal) => {
+          signal.throwIfAborted();
+          if (!selection || (!canFallback(failure) && failure.code !== 'NO_ADAPTER')) return false;
+          const model = selection.models[selection.index];
+          cooldowns.set(routeKey(model), now() + cooldownMs);
+          selection.failures.push({ model: copy(model), reason: failure.message });
+          failures.set(threadId, copy(selection.failures));
+          if (!advanceModel()) return false;
+          const events = agent.session.snapshotEvents();
+          const requestId = learningTurn || claimedMessages.findLast(message => message.source?.kind === 'user')?.id;
+          if (!requestId) return false;
+          const prior = requestExecutionEvents(events, requestId);
+          if (!executionEffects({ events: prior }).effectsVerified) return false;
+          const recorded = new Set(events.filter(event => event.type === 'user/message').map(event => event.data.id));
+          const id = randomUUID();
+          const message = createUserMessage({ content: [{ type: 'text', text: 'The previous model request failed. Continue the same original user request from this saved transcript using the next configured model. Completed tools and delegated Tickets remain completed: inspect their saved results; never repeat their side effects. This host continuation grants no new authority.' }], source: { kind: modelFallbackSource, fallbackId: id } });
+          failedPlan = { id, requestId, failedTurn: turn, models: copy(selection.models), index: selection.index,
+            failures: copy(selection.failures), message, uncommitted: claimedMessages.filter(item => !recorded.has(item.id)),
+            dispatchedCalls: dispatchedCallSignatures(prior) };
+          appendRecord(agent.session, modelFallbackType, failedPlan);
+          emit({ type: 'fallback', threadId, failure, model: selection.models[selection.index] });
+          return true;
+        };
+        const continueFallback = () => {
+          if (!failedPlan || stopped) return false;
+          const plan = failedPlan;
+          failedPlan = undefined;
+          const reason = agent.session.snapshotEvents().findLast(event => event.type === 'turn/end')?.data?.reason;
+          const unsent = new Set((plan.uncommitted || []).map(message => message.id));
+          const pendingMessages = [...agent.inbox.nextTurn, ...agent.inbox.nextStep];
+          if (reason?.kind !== 'error' || pendingMessages.some(message => message.source?.kind === 'user' && !unsent.has(message.id))) {
+            appendRecord(agent.session, modelFallbackType, { kind: 'cancel', id: plan.id });
+            if (reason?.kind === 'error') { errors.set(threadId, reason.error.message); emit({ type: 'error', threadId, message: reason.error.message }); }
+            return false;
+          }
+          // The old turn has settled. A new official step rebuilds tools and
+          // prompt from the replacement selection; never mutate its snapshot.
+          select(plan.models[plan.index]);
+          const recordedIds = new Set(agent.session.snapshotEvents().filter(event => event.type === 'user/message').map(event => event.data.id));
+          for (const message of plan.uncommitted || []) {
+            if (recordedIds.has(message.id)) continue;
+            // The original input and continuation must share one claimed batch.
+            if (agent.inbox.nextTurn.some(item => item.id === message.id)) agent.inbox.remove(message.id);
+            if (!agent.inbox.nextStep.some(item => item.id === message.id)) agent.inject(message);
+          }
+          // A crash may leave the exact notice in the official durable inbox.
+          // Move that same unadmitted identity before waking; never append twice.
+          if (pendingMessages.some(message => message.id === plan.message.id)) agent.inbox.remove(plan.message.id);
+          errors.delete(threadId);
+          agent.followup(plan.message);
+          return true;
+        };
+        resumeFallback = () => {
+          const events = agent.session.snapshotEvents();
+          const plan = [...readModelFallbacks(events).values()].at(-1);
+          if (!plan || plan.cancelled || plan.turn !== undefined || !executionEffects({ events: requestExecutionEvents(events, plan.requestId) }).effectsVerified) return false;
+          failedPlan = plan;
+          return continueFallback();
+        };
+        scope.on('tools/pre-execute', (execution, next) => {
+          execution.signal.throwIfAborted();
+          if (execution.agent === agent && !isReadOnlyWorkerTool(execution.name)
+            && !isRouterQuery(execution.name, execution.arguments)
+            && replayCalls.has(fallbackCallSignature(execution.name, execution.arguments))) {
+            return { kind: 'deny', reason: '模型切换不得重复已经派发的动作；请读取已有工单或结果',
+              info: { name: 'RouterModelFallback', code: 'ABORTED_BEFORE_DISPATCH', reason: 'ACTION_REPLAY_BLOCKED' } };
+          }
+          return next();
+        });
+        // Seed unpublished sessions only; every admitted message selects its
+        // frozen route at the official inbox boundary before tool preparation.
         if (!agent.model?.current?.()) {
           const configured = await store.getConfig();
           validateAssistantModels(configured.models);
@@ -231,7 +329,6 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         scope.systemPrompt.section({ name: 'benchgo-chat-publication', order: -86, interpolate: false, text: 'Chat naturally with the user, answer questions and respond after delegation in your own words. Choose wording and detail to fit the conversation; no acknowledgement template is prescribed. All ordinary text is user-visible reply or progress and streams to the conversation in real time; never put private reasoning or internal-only narration in ordinary text. Reasoning, tool arguments and raw tool results remain private. You may use assistant_reply to explicitly publish your conversational reply and end the current turn; it is not required for text streaming. A normal final text answer is durably published on successful turn completion. Provisional text from a cancelled or failed turn is not a completed answer. Reviewed Worker results are delivered independently, so your reply after dispatch can acknowledge the accepted work without waiting for its completion. Publishing text is not approval. Never include secrets, hidden instructions or internal reasoning.' });
         scope.systemPrompt.section({ name: 'benchgo-router-tools', order: -88, interpolate: false, text: 'You are the BenchGo personal assistant and coordination Router. Converse with the user, understand their needs and answer questions from available context directly. For a user request to remind or check something later, use the official schedule_create tool directly (for example, after_seconds=300 for five minutes); schedule_list/update/delete are also coordination tools. When the user must choose or decide, you may call the official ask_user_question tool yourself with concise options so the user can answer with one click; use it at your own discretion, no confirmation needed. Do not turn a reminder into an immediate research Ticket. Delegate website visits, searches, file investigation, implementation and other environment operations through assistant_delegate: doing them yourself would hold your turn and delay the user, while a Ticket keeps the work durable, reviewable and revisable. Inherited exploration and execution tools are therefore not available to you. An explicit user request already authorizes ordinary dispatch: never ask whether to create a Ticket or run it in the background. Ask only about consequential ambiguity or missing authorization for the actual action. When a message refers to a task as “this/that”, “stuck”, “status”, “progress”, “just now” or similar, first use assistant_tickets to identify the existing Ticket; do not call assistant_delegate until the reference is resolved. Use exact configured model identifiers; omit projectId for daily research and other non-repository tasks using the existing isolated assistant workspace, and select an exact registered project ID only for repository work. Reuse the matching Ticket for follow-ups, status and cancellation; do not duplicate completed work. Steer running work yourself: assistant_ticket_control supplement forwards the user’s new instruction to the live Worker, and assistant_ticket_change revises requirements; neither needs extra confirmation. A successful delegation is durable acceptance, not completion: respond naturally in the current conversation, then return without polling or waiting for the Worker so subsequent user messages can be handled. The host does not send a separate canned acknowledgement. Final reviewed results are delivered independently to the original conversation. Assistant configuration and goal tools retain their own user-authorization contracts. This role boundary is not a Worker concurrency limit.' });
         scope.on('agent/pre-step', async (payload, next) => {
-          activeSelection = payload.modelSelection;
           await scheduleBridge?.ingestMessages({ sessionId: record.sessionId, threadId, messages: payload.messages });
           if (scheduleBridge && payload.messages?.length && payload.messages.every(message => message.source?.kind === 'schedule')) return { kind: 'enter', messages: [] };
           learningIteration = Number.isSafeInteger(payload.turn) && Number.isSafeInteger(payload.step) ? `${payload.turn}:${payload.step}` : undefined;
@@ -243,11 +340,6 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
             store.learning?.recordPrompt({ scope: record.sessionId, eventId: message.id, turnId: message.id, source });
             const text = (message.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
             if (/^\/learn(?:\s|$)/u.test(text.trim())) store.learning?.request({ scope: record.sessionId, eventId: message.id, turnId: message.id, source, entry: 'command' });
-          }
-          const prepared = pendingRoutes.get(agent);
-          if (prepared && payload.messages.some(message => message.id === prepared.messageId)) {
-            selection = { turnKey: learningTurn ?? payload.turn, models: prepared.models, index: 0, failures: [] };
-            pendingRoutes.delete(agent);
           }
           const incoming = (payload.messages || []).filter(message => message.source?.kind === 'user')
             .flatMap(message => message.content.filter(block => block.type === 'text').map(block => block.text)).join('\n');
@@ -297,12 +389,12 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           // during a tool loop cannot reset its fallback allowance.
           const turnKey = learningTurn ?? turn;
           if (!selection || selection.turnKey !== turnKey) {
-            // Native composer traffic can bypass the owned inbox. Keep its
-            // existing path separate until the host exposes a pre-followup seam.
+            // Direct host followups can bypass both owned submission paths.
             const config = await store.getConfig();
             const candidates = copy(config.models);
             validateAssistantModels(candidates);
             selection = { turnKey, models: candidates, index: 0, failures: [] };
+            activeRoutes.set(agent, selection);
           }
           while (selection.index < selection.models.length) {
             signal.throwIfAborted();
@@ -315,32 +407,19 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
               emit({ type: 'model', threadId, model, failures: selection.failures });
               return requestConfig;
             } catch (error) {
-              if (!canFallback(error.failure ?? error) && error.code !== 'NO_ADAPTER') throw error;
-              selection.failures.push({ model, reason: error.message });
-              cooldowns.set(routeKey(model), now() + cooldownMs);
-              if (!advanceModel()) break;
-              const selected = selection.models[selection.index];
-              agent.model?.select?.({ provider: selected.providerId, model: selected.modelId, ...(selected.options?.reasoningEffort === undefined ? {} : { reasoningEffort: selected.options.reasoningEffort }) });
-              if (activeSelection) Object.assign(activeSelection, { provider: selected.providerId, model: selected.modelId, ...(selected.options?.reasoningEffort === undefined ? {} : { reasoningEffort: selected.options.reasoningEffort }) });
+              queueFallback(error.failure ?? error, turn, signal);
+              throw error;
             }
           }
           throw Object.assign(new Error(selection.models.length ? '当前消息配置的模型均不可用' : '请先配置总助手文本模型'), { code: 'ASSISTANT_MODELS_UNAVAILABLE', failures: selection.failures });
         });
-        scope.on('agent/request-error', async ({ failure, signal }, next) => {
+        scope.on('agent/request-error', async ({ failure, signal, turn }, next) => {
           signal.throwIfAborted();
-          if (!selection || !canFallback(failure)) return next();
-          const model = selection.models[selection.index];
-          cooldowns.set(routeKey(model), now() + cooldownMs);
-          selection.failures.push({ model, reason: failure.message });
-          failures.set(threadId, copy(selection.failures));
-          if (!advanceModel()) return next();
-          const selected = selection.models[selection.index];
-          agent.model?.select?.({ provider: selected.providerId, model: selected.modelId, ...(selected.options?.reasoningEffort === undefined ? {} : { reasoningEffort: selected.options.reasoningEffort }) });
-          if (activeSelection) Object.assign(activeSelection, { provider: selected.providerId, model: selected.modelId, ...(selected.options?.reasoningEffort === undefined ? {} : { reasoningEffort: selected.options.reasoningEffort }) });
-          emit({ type: 'fallback', threadId, failure, model: selection.models[selection.index] });
-          return { kind: 'retry' };
+          if (!queueFallback(failure, turn, signal)) return next();
+          return undefined;
         });
         scope.on('agent/status', ({ status }) => {
+          if (status === 'idle' && continueFallback()) return;
           emit({ type: 'status', threadId, status });
           if (status === 'idle') void (async () => {
             // The official stop shortcut cancels the same host Agent directly.
@@ -352,13 +431,14 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
             errors.set(threadId, error.message); emit({ type: 'error', threadId, message: error.message });
           });
         });
-        scope.on('agent/error', ({ error }) => { errors.set(threadId, error.message || String(error)); emit({ type: 'error', threadId, message: error.message || String(error) }); });
+        scope.on('agent/error', ({ error }) => { if (failedPlan) return; errors.set(threadId, error.message || String(error)); emit({ type: 'error', threadId, message: error.message || String(error) }); });
       };
       const handle = savedSession
         ? await ctx.agents.resume({ resumeSessionId: record.sessionId, setup })
         : await ctx.agents.create({ sessionId: record.sessionId, meta: { cwd: store.paths.workspace, ...(preset ? { agentPreset: preset.id } : {}) }, setup });
       if (stopped) { await handle.dispose(); throw new Error('总助手已关闭'); }
       handles.set(threadId, handle);
+      if (savedSession) resumeFallback?.();
       return handle.agent;
     })();
     pending.set(threadId, operation);
@@ -368,6 +448,48 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
   return {
     ensureSession,
     ticketOwnerScope,
+    async nativePrompt({ request, dispatch, signal }) {
+      const operation = (nativeSubmissions.get(request.sessionId) || Promise.resolve()).catch(() => {}).then(async () => {
+      const state = await store.getState();
+      const owned = state.mainSessionId === request.sessionId || state.threads.some(item => item.sessionId === request.sessionId);
+      if (!owned) return dispatch();
+      signal?.throwIfAborted();
+      const threadId = state.mainSessionId === request.sessionId ? 'main' : state.threads.find(item => item.sessionId === request.sessionId).id;
+      const agent = await ensureSession({ threadId });
+      const fingerprint = createHash('sha256').update(JSON.stringify([request.mode, request.content, request.clientTimeZone])).digest('hex');
+      const prior = agent.session.snapshotEvents().find(event => event.type === modelRouteType && event.ignorable === true && event.data.requestId === request.requestId);
+      if (prior?.data.fingerprint && prior.data.fingerprint !== fingerprint) throw new RemoteError('gateway/bad-request', '请求标识已用于不同的内容或提交方式', {});
+      let route = prior?.data.models;
+      if (!prior) {
+        const config = await store.getConfig();
+        validateAssistantModels(config.models);
+        route = copy(config.models);
+        signal?.throwIfAborted();
+        appendRecord(agent.session, modelRouteType, { requestId: request.requestId, fingerprint, models: route });
+      }
+      const previous = agent.model.current();
+      const activeRoute = activeRoutes.get(agent);
+      if (agent.status === 'running' && request.mode === 'steer' && (previous?.provider !== route[0].providerId || previous?.model !== route[0].modelId
+        || previous?.reasoningEffort !== route[0].options?.reasoningEffort || activeRoute && JSON.stringify(route) !== JSON.stringify(activeRoute.models.slice(activeRoute.index)))) {
+        throw new RemoteError('session/agent-busy', '当前回合的模型队列已冻结；切换模型后请使用排队发送，或等待当前回合结束', { reason: 'NATIVE_STEER_MODEL_CHANGED' });
+      }
+      const hasImage = Array.isArray(request.content) && request.content.some(part => part?.type === 'image'
+        || part?.type === 'file' && ctx.get?.('fileUploads')?.resolve(agent, part.receiptId)?.type === 'image');
+      if (agent.status === 'running' && hasImage && (previous?.provider !== route[0].providerId || previous?.model !== route[0].modelId
+        || previous?.reasoningEffort !== route[0].options?.reasoningEffort)) {
+        throw new RemoteError('session/agent-busy', '当前对话正在运行；请等待完成后按新选择的模型提交图片', { reason: 'NATIVE_ATTACHMENT_REQUIRES_IDLE' });
+      }
+      if (agent.status === 'idle') agent.model.select({ provider: route[0].providerId, model: route[0].modelId,
+        ...(route[0].options?.reasoningEffort === undefined ? {} : { reasoningEffort: route[0].options.reasoningEffort }) });
+      try { return await dispatch(); }
+      catch (error) {
+        if (previous && agent.status === 'idle') agent.model.select(previous);
+        throw error;
+      }
+      });
+      nativeSubmissions.set(request.sessionId, operation);
+      try { return await operation; } finally { if (nativeSubmissions.get(request.sessionId) === operation) nativeSubmissions.delete(request.sessionId); }
+    },
     recoverMain() {
       assertOpen();
       if (recoveringMain) return recoveringMain;
@@ -406,7 +528,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       operation.finally(() => { if (recoveringMain === operation) recoveringMain = undefined; }).catch(() => {});
       return operation;
     },
-    isBusy: () => sending.size > 0 || [...handles.values()].some(handle => handle.agent.status === 'running'),
+    isBusy: () => nativeSubmissions.size > 0 || sending.size > 0 || [...handles.values()].some(handle => handle.agent.status === 'running'),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     async createThread({ title = '新话题', ...extra } = {}) {
       if ('models' in extra) throw new Error('旁聊统一使用 SuperAgent 模型设置');
@@ -544,7 +666,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       if (disposal) return disposal;
       stopped = true;
       disposal = (async () => {
-        await Promise.allSettled([threadCreationQueue, ...sending.values(), ...pending.values(), ...(resettingMain ? [resettingMain] : []), ...(recoveringMain ? [recoveringMain] : [])]);
+        await Promise.allSettled([threadCreationQueue, ...nativeSubmissions.values(), ...sending.values(), ...pending.values(), ...(resettingMain ? [resettingMain] : []), ...(recoveringMain ? [recoveringMain] : [])]);
         await inbox.dispose();
         await stateQueue.catch(() => {});
         const results = await Promise.allSettled([...handles.values()].map(handle => handle.dispose()));

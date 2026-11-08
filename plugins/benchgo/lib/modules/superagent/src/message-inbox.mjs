@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { readModelFallbacks } from './model-fallback.mjs';
 
 const active = new Set(['queued', 'processing', 'prepared']);
 const fingerprint = (threadId, text, context) => createHash('sha256').update(JSON.stringify(context === undefined ? [threadId, text] : [threadId, text, context])).digest('hex');
@@ -19,11 +20,23 @@ function replySnapshot(value) {
 
 /** Receipt state is reconciled against the host transcript, never an LLM guess. */
 export function messageReceiptFromEvents(request, events) {
+  const plans = [...readModelFallbacks(events).values()].filter(plan => plan.requestId === request.messageId);
+  if (plans.length) {
+    const latest = plans.at(-1);
+    if (latest.cancelled) return { status: 'cancelled' };
+    if (latest.end) {
+      return receiptEnding(latest.end);
+    }
+    return { status: 'uncertain', error: '正在核实原请求的备用模型续行；未重放用户消息。' };
+  }
   const index = events.findIndex(event => event.type === 'user/message' && event.data?.id === request.messageId);
   if (index < 0) return { status: 'uncertain', error: '消息提交状态待核实；未自动重放，请检查会话记录。' };
   const end = events.slice(index + 1).find(event => event.type === 'turn/end');
   if (!end) return { status: 'uncertain', error: '原消息已记录，但 Router 回合尚未完成；等待会话恢复。' };
-  const reason = end.data?.reason;
+  return receiptEnding(end.data?.reason);
+}
+
+function receiptEnding(reason) {
   if (reason?.kind === 'error') return { status: 'failed', error: String(reason.error?.message || 'Router 处理失败') };
   if (reason?.kind === 'aborted' && reason.reason?.kind === 'user') return { status: 'cancelled' };
   if (reason?.kind === 'interrupted' || reason?.kind === 'aborted') return { status: 'uncertain', error: 'Router 回合中断，未重放原请求。' };

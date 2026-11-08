@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { validateDelivery } from './result-delivery.mjs';
 import { validateAttentionDecisions } from './attention-triage.mjs';
 
-const attentionChannels = new Set(['desktop', 'feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'email', 'webhook', 'api']);
+const attentionChannels = new Set(['desktop', 'feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'webhook', 'api']);
 const attentionText = (source, attentionId, text) => source.channel === 'desktop' ? text
   : `${text}\n\n问题编号：${attentionId}\n可引用这条消息回答，或发送 /answer ${attentionId} 你的回答`;
 

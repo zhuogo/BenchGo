@@ -144,14 +144,17 @@ test('save retry uses the current form validation and keeps the unsaved draft', 
   assert.equal(h.state[3].ownerIds, 'Owner:Unsaved');
   assert.equal(h.state[2].revision, 7);
 });
-test('saved enabled channels retain brand color independently of selection and connection health', () => {
+test('channel brand color follows verified availability rather than selection or enabled configuration', () => {
   const h = harness();
+  h.state[4].authentication = 'verified';
   const options = h.render().find(node => node.type === 'Tabs').props.options;
   assert.equal(options[0].icon.props.available, true);
   assert.equal(options[1].icon.props.available, false);
   h.state[4] = { enabled: true, connection: { state: 'failed' } };
-  assert.equal(h.render().find(node => node.type === 'Tabs').props.options[0].icon.props.available, true);
+  assert.equal(h.render().find(node => node.type === 'Tabs').props.options[0].icon.props.available, false);
   h.state[0][1].status = { enabled: true, connection: { state: 'connecting' } };
+  assert.equal(h.render().find(node => node.type === 'Tabs').props.options[1].icon.props.available, false);
+  h.state[0][1].status = { enabled: true, authentication: 'verified', connection: { state: 'connected' } };
   assert.equal(h.render().find(node => node.type === 'Tabs').props.options[1].icon.props.available, true);
   h.state[4] = { enabled: false };
   const selected = h.render().find(node => node.type === 'Tabs').props.options[0].icon.props;

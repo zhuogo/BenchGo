@@ -42,5 +42,19 @@
     "mime": "image/webp",
     "sha256": "48e94afeffb29c66f5e84dc8df4ee247f838c287f87cb8960cbf67f4e8d3dd37",
     "responseMime": "image/png"
+  },
+  "slack": {
+    "officialPage": "https://slack.com",
+    "asset": "https://a.slack-edge.com/9cc0056/img/icons/favicon-32.png",
+    "mime": "image/png",
+    "sha256": "ca3872d0fb85ff9858bcbdc529d6e1db32c029c681c6e723e4f2ecb1c7defea6",
+    "retrieved": "2026-11-07"
+  },
+  "dingtalk": {
+    "officialPage": "https://www.dingtalk.com",
+    "asset": "https://gw.alicdn.com/imgextra/i3/O1CN014ZbI6ZTEhdC0ttN2_!!6000000003783-2-tps-444-444.png",
+    "mime": "image/png",
+    "sha256": "b3fb0715857df5d23213b5265166fabcb7f7b4b290890d7b5682a027cf39c85d",
+    "retrieved": "2026-11-07"
   }
 }

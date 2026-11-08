@@ -20,7 +20,8 @@ for (const selection of ['worker', 'inherit', 'explicit']) test(`Worker requests
   const expected = selection === 'explicit' ? [explicit, worker, backup] : selection === 'inherit' ? [router] : workers;
   database.createAssignment(ticket.id, selection === 'explicit' ? { model: explicit } : {});
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const hooks = new Map(), seen = [], selected = [];
+  const hooks = new Map(), seen = [], selected = [], transcript = [], injected = [];
+  const appendRecord = (_session, type, data) => transcript.push({ seq: transcript.length, type, data: structuredClone(data), ignorable: true });
   const signal = new AbortController().signal;
   const ctx = {
     on() { return () => {}; },
@@ -30,20 +31,23 @@ for (const selection of ['worker', 'inherit', 'explicit']) test(`Worker requests
     } },
     sessionQuery: { readSession: async () => ({ events: [{ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'done' }] } } }] }) },
     agents: { create: async input => {
-      const agent = { model: { current: () => undefined, select: value => selected.push(value) }, followup() {
+      let turn = 0;
+      const agent = { session: { snapshotEvents: () => structuredClone(transcript) }, model: { current: () => selected.at(-1), select: value => selected.push(value) }, inject: message => injected.push(message), followup(message) {
+        transcript.push({ seq: transcript.length, type: 'turn/start', data: { turn: ++turn } });
         hooks.get('agent/status')({ status: 'running' });
         queueMicrotask(async () => {
           try {
+            await hooks.get('agent/pre-step')({ turn, messages: [...injected.splice(0), message] }, async () => ({ kind: 'enter', messages: [] }));
             await hooks.get('agent/request')({ signal }, async () => ({ provider: 'host-default', model: 'host-default' }));
-            hooks.get('agent/status')({ status: 'idle' });
           } catch (error) { hooks.get('agent/error')({ error }); }
+          finally { transcript.push({ seq: transcript.length, type: 'turn/end', data: { turn, reason: { kind: 'completed' } } }); hooks.get('agent/status')({ status: 'idle' }); }
         });
       } };
       await input.setup({ effect: fn => fn(), get: () => undefined, systemPrompt: { section() {}, context() {} }, on: (name, handler) => hooks.set(name, handler) }, agent);
       return { agent, dispose: async () => {} };
     } },
   };
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: router, models: [router], workerModels: workers }), authorizeAction: async () => ({ allowed: true }), captureCheckpoint: async () => ({ version: 1, manifestHash: 'checkpoint' }) });
+  const executor = createAssignmentExecutor({ ctx, database, appendRecord, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: router, models: [router], workerModels: workers }), authorizeAction: async () => ({ allowed: true }), captureCheckpoint: async () => ({ version: 1, manifestHash: 'checkpoint' }) });
   await executor(assignment, { ticket, signal, renew: async () => {} });
   assert.deepEqual(seen, expected.map(model => [model.providerId, model.modelId, model.options.maxTokens]));
   assert.equal(selected[0].provider, expected[0].providerId);

@@ -11,6 +11,8 @@ import { useChatScroll } from './use-chat-scroll.jsx';
 import { TicketAttention } from './ticket-attention.jsx';
 import { TicketWaiting } from './ticket-waiting.jsx';
 import { ticketSnapshot } from './ticket-state.mjs';
+import { InteractiveReply } from '../../interactive/client/reply.jsx';
+import { sendInteractive } from '../../interactive/client/send.mjs';
 
 const labels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' };
 const NO_STATUSES = new Map();
@@ -78,7 +80,7 @@ export function QuietChat({ home, session, chat }) {
       <div className="ba-chat-body">
       <div className="ba-chat-content" aria-label={row.role === 'system' ? '系统状态' : row.kind === 'question-reply' ? '你的选择' : row.role === 'user' ? '你' : home.assistantName || 'BenchGo'}>
       {row.role === 'system' && <div className="ba-chat-system-label">系统状态</div>}
-      {row.type === 'schedule.lifecycle' && row.schedule ? <ScheduleLifecycle row={row} onOpenResources={home.onOpenResources} /> : row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : <MarkdownText text={row.text || ''} labels={labels} />}
+      {row.type === 'schedule.lifecycle' && row.schedule ? <ScheduleLifecycle row={row} onOpenResources={home.onOpenResources} /> : row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : row.role === 'assistant' ? <InteractiveReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={session.running || !!row.provisional} onSubmit={async (text, request) => { await sendInteractive(home.ctx.sessions, home.sessionId, text, request); void Promise.resolve(home.onRefresh?.()).catch(() => {}); }} /> : <MarkdownText text={row.text || ''} labels={labels} />}
       {row.role === 'user' && (row.content || []).filter(block => ['image', 'file'].includes(block.type)).map((block, index) => <span className="ba-chat-attachment" key={index}>{block.type === 'image' ? '已附图片' : `已附文件${block.name ? `：${block.name}` : ''}`}</span>)}
       </div>
       {row.type === 'ticket.attention' && row.attention && !verificationOnly && <TicketAttention key={row.attention.id} api={api} attention={row.attention} showQuestion={false} ticket={{ id: row.ticketId, status: row.ticketStatus, instructionRevision: row.currentInstructionRevision ?? row.instructionRevision, resultVersion: row.currentResultVersion ?? row.resultVersion, mandate: { source: { channel: 'desktop' } } }} onAnswered={home.onRefresh} />}

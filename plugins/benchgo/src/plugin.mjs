@@ -9,6 +9,9 @@ import { assertSameOrigin } from '../shared/http.mjs';
 import { mountPreviewAssets } from './preview-assets.mjs';
 import { mountVault } from './vault.mjs';
 import { mountSkills } from './skills.mjs';
+import { mountEfficiency } from '../lib/modules/efficiency/src/plugin.mjs';
+import { mountInteractivePrompt } from '../lib/modules/interactive/src/prompt.mjs';
+import { mountWorkbench } from '../lib/modules/workbench/src/plugin.mjs';
 
 export const name = 'benchgo';
 
@@ -25,6 +28,9 @@ export async function apply(ctx, config = {}) {
   const directory = config.dataDir ?? await prepareDefaultDataDirectory();
   await mkdir(directory, { recursive: true, mode: 0o700 });
   ctx.provide('benchgo', { config, directory });
+  mountInteractivePrompt(ctx);
+  ctx.inject(['connection', 'webServer'], async child => { await mountWorkbench(child, { directory }); });
+  ctx.inject(['connection'], async child => { await mountEfficiency(child, { directory }); });
   ctx.inject(['connection'], async child => {
     mountSkills(child);
     await mountPreviewAssets(child);

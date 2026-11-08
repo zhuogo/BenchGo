@@ -32,7 +32,34 @@ function findPackage(name, from) {
   }
 }
 
-function sharedPackage(name) { return name.startsWith('@deepseek-ai/'); }
+// Schemastery is a pure validator using Symbol.for('schemastery') across copies,
+// not a Cordis service. Vendors retain their compatible schema library.
+function sharedPackage(name) { return name.startsWith('@deepseek-ai/') && !['@deepseek-ai/schemastery', '@deepseek-ai/cosmokit'].includes(name); }
+
+/** Resolve source builds against the pinned official CLI dependency graph. */
+export function officialSourcePackages(cli = resolve(import.meta.dirname, '../../deepseek-harness/apps/cli')) {
+  const packages = new Map(), visited = new Set();
+  const visit = directory => {
+    directory = realpathSync(directory);
+    if (visited.has(directory)) return;
+    visited.add(directory);
+    const manifest = readJson(join(directory, 'package.json'));
+    if (sharedPackage(manifest.name)) packages.set(manifest.name, directory);
+    for (const name of Object.keys({ ...manifest.devDependencies, ...manifest.dependencies, ...manifest.peerDependencies, ...manifest.optionalDependencies })) {
+      if (!sharedPackage(name)) continue;
+      let dependency;
+      try { dependency = findPackage(name, directory); }
+      catch (error) {
+        const developmentOnly = Object.hasOwn(manifest.devDependencies ?? {}, name) && !Object.hasOwn(manifest.dependencies ?? {}, name) && !Object.hasOwn(manifest.peerDependencies ?? {}, name);
+        if (developmentOnly || manifest.peerDependenciesMeta?.[name]?.optional || Object.hasOwn(manifest.optionalDependencies ?? {}, name)) continue;
+        throw error;
+      }
+      visit(dependency);
+    }
+  };
+  visit(cli);
+  return packages;
+}
 
 /** Copy published plugin files and required JS dependencies without duplicating Cordis or official services. */
 export function stagePluginBundle({ runtime, output, plugin = resolve(import.meta.dirname, '../../plugins/benchgo'), platform = process.platform, arch = process.arch }) {
@@ -52,15 +79,17 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
   const packed = spawnSync(npm, ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: plugin, encoding: 'utf8', shell: process.platform === 'win32' });
   if (packed.status !== 0) throw new Error(`Plus bundle: npm pack failed: ${packed.stderr}`);
   const files = JSON.parse(packed.stdout)[0].files.map(file => file.path);
-  for (const required of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'cordis.patch.yml']) {
+  for (const required of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) {
     if (!files.includes(required) || !existsSync(join(plugin, required))) throw new Error(`Plus bundle: missing built file ${required}; run build:plus first`);
   }
   const shared = new Map();
   const copied = new Set();
   const omitted = new Set();
+  let sourcePackages;
   const assertShared = (name, spec) => {
-    const directory = runtime ? join(runtime, 'node_modules', name) : findPackage(name, plugin);
-    if (!existsSync(join(directory, 'package.json'))) throw new Error(`Plus bundle: official runtime omits ${name}`);
+    if (!runtime) sourcePackages ??= officialSourcePackages();
+    const directory = runtime ? join(runtime, 'node_modules', name) : sourcePackages.get(name);
+    if (!directory || !existsSync(join(directory, 'package.json'))) throw new Error(`Plus bundle: official runtime omits ${name}`);
     const version = readJson(join(directory, 'package.json')).version;
     const anchor = runtime ? realpathSync(join(runtime, 'node_modules/@deepseek-ai/dsh-app-boot/package.json')) : fileURLToPath(new URL('../../deepseek-harness/package.json', import.meta.url));
     const semver = createRequire(anchor)('semver');

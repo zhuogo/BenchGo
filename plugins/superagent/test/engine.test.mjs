@@ -57,7 +57,7 @@ async function fixture(t, script, options = {}) {
   const requests = [];
   class Adapter extends LlmAdapter {
     // Official model switches check context capacity, so fixture models declare a window.
-    async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: options.contextWindow ?? 131072 } }; }
+    async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: options.contextWindow ?? 131072 }, ...(options.reasoning ? { reasoning: options.reasoning } : {}) }; }
     async *stream(request) { requests.push(request); yield* await script(request, requests.length); }
   }
   ctx.llm.registerAdapter(['test'], new Adapter());
@@ -318,7 +318,7 @@ test('official timed Worker question waits for Router triage and self/default an
   const ticket = database.createTicket({ threadId: 'thread', target: '完成输出', mandate: { instruction: '使用简体中文。若需选择格式，你可自行决定，采用默认列表。', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'main' } } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'Worker/opaque' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
   const result = await executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   assert.equal(result.waitingAttention, undefined);
   assert.equal(result.summary, '简体中文列表交付完成');
@@ -346,7 +346,7 @@ test('official user question resumes the same live Worker from its exact source 
   const ticket = database.createTicket({ threadId: 'thread', target: 'Ask where to save', mandate: { actorId: 'owner', source } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
   const execution = executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   execution.catch(() => {});
   const until = Date.now() + 5000;
@@ -390,7 +390,7 @@ for (const [restart, tamper] of [[false, false], [true, false], [true, true]]) t
   const ticket = database.createTicket({ threadId: 'thread', target: 'Ask', mandate: { instruction: '使用简体中文，所需资料由用户补充。', actorId: 'owner', source: { channel: 'feishu', appId: 'app', chatId: 'chat', messageId: 'original' } } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const makeExecutor = (ctx = f.ctx) => createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const makeExecutor = (ctx = f.ctx) => createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
   const result = await makeExecutor()(assignment, { ticket, signal: AbortSignal.timeout(5000), renew: async () => {} });
   assert.equal(result.waitingAttention.callIds[0], 'timed-question');
   database.parkAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence, result });
@@ -473,7 +473,7 @@ for (const knownFirst of [false, true]) test(`desktop timed Attention resumes wi
   const ticket = database.createTicket({ threadId: 'thread', target: '读取事实并询问格式', mandate: { instruction: '使用简体中文，展示格式由用户选择。', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' } } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const execute = createAssignmentExecutor({ ctx: f.ctx, database, checkpoints, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const execute = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, checkpoints, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
   const result = await execute(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   assert.deepEqual(result.waitingAttention.callIds, ['user-call']);
   assert.deepEqual(database.attentionResolutions(ticket.id).map(row => row.questionId), knownFirst ? ['Q-known', 'Q-user'] : ['Q-user']);
@@ -519,7 +519,7 @@ test('assignment executor uses the real Harness writer and current permission ho
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   let authorized = 0;
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ version: 'current' }),
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ version: 'current' }),
     readContext: async () => ({ memories: remembered ? [{ content: 'worker-forgotten-marker' }] : [] }),
     memory: { redactForgottenContext: context => remembered ? context : { ...context, memories: [] } },
     authorizeAction: async () => { authorized++; return { allowed: true }; } });
@@ -556,7 +556,7 @@ test('late context after the final Worker request continues the same official se
   let saved;
   const readSession = f.ctx.sessionQuery.readSession;
   f.ctx.sessionQuery.readSession = async id => { saved = await readSession(id); return saved; };
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
   const result = await executor(assignment, { ticket, signal: AbortSignal.timeout(5000), renew: async () => {} });
   assert.equal(result.summary, 'Original result\nResult includes late context');
   assert.equal(f.requests.length, 2);
@@ -579,7 +579,7 @@ for (const tamper of [false, true]) test(`review-time context resumes verified o
   database.subscribe(ticket.id, 'thread');
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
   const context = { ticket, signal: AbortSignal.timeout(30000), renew: async () => {} };
   const original = await executor(assignment, context);
   const { trigger } = database.ingest({ dedupeKey: 'review-context', thread: { id: 'thread', source: { type: 'desktop', id: 'main' } }, source: { messageId: 'late' }, actor: { id: 'other' }, content: 'review-late-source-marker', mode: 'group', gate: { allowed: false } });
@@ -679,7 +679,7 @@ test('project worker mounts official worktrees and preserves dirty source while 
   const ticket = database.createTicket({ threadId: 'thread', target: 'Check project', mandate: { project, actorId: 'owner', source } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, '.agents', 'workers'),
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, '.agents', 'workers'),
     readPolicy: async () => ({ projects: [project] }), authorizeAction: async () => ({ allowed: true }) });
   const paused = await executor(assignment, { ticket, signal: AbortSignal.timeout(30000), renew: async () => {} });
   database.parkAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence, result: paused });
@@ -740,7 +740,7 @@ test('reopened orchestration recovers only verification under the real persisted
     source: { channel: 'feishu', appId: 'app', chatId: 'chat', messageId: 'original' }, controlledActions: 'require-current-policy-and-harness-approval' } });
   db.createAssignment(ticket.id, { model: policy.model });
   const [assignment] = db.claimAssignments('old-worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database: db, workspaceRoot: join(store.paths.workspace, 'workers'),
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database: db, workspaceRoot: join(store.paths.workspace, 'workers'),
     readPolicy: () => readAssessmentPolicy(store), authorizeAction: async ({ policy, mandate }) => ({ allowed: validateTicketMandate(mandate, { policy }) }) });
   const result = await executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   db.renewAssignment(assignment.id, { owner: assignment.owner, fence: assignment.fence, validateMandate: () => false });
@@ -1400,7 +1400,8 @@ test('request failure switches once without replaying input and every new messag
   const history = { events: agent.session.snapshotEvents() };
   assert.equal(history.events.filter(event => event.type === 'user/message' && event.data.source.kind === 'user').length, 1);
   assert.equal(history.events.filter(event => event.type === 'assistant/attempt').length, 1);
-  assert.equal(history.events.filter(event => event.type === 'turn/end').length, 1);
+  assert.deepEqual(history.events.filter(event => event.type === 'turn/end').map(event => event.data.reason.kind), ['error', 'completed']);
+  assert.deepEqual((await f.engine.history()).messages.map(message => message.text), ['Run once', 'Done']);
   await f.engine.send({ text: 'During cooldown' });
   await agent.whenIdle();
   assert.equal(f.requests.at(-1).model, 'first');
@@ -1422,6 +1423,51 @@ test('main and side chats keep the Router fallback queue independent of Worker a
   await f.engine.send({ threadId: thread.id, text: 'Side queue' });
   await (await f.engine.ensureSession({ threadId: thread.id })).whenIdle();
   assert.deepEqual(f.requests.slice(3).map(request => request.model), ['New/1', 'New/2', 'New/3']);
+});
+
+test('Router fallback replaces explicit effort and rebuilds frozen tool capabilities at a new official step', async t => {
+  const prepared = [], enabled = [];
+  const f = await fixture(t, (_request, count) => count === 1
+    ? [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'unavailable' } } }]
+    : text('Fallback finished'), { reasoning: { efforts: [{ id: 'high', name: 'High' }] }, setupTools(scope) {
+      scope.on('agent/pre-step', (payload, next) => { prepared.push({ ...payload.modelSelection }); Object.freeze(payload.modelSelection); return next(); });
+      for (const model of ['First/opaque', 'Backup/opaque']) scope.tools.register({ name: `only_${model.startsWith('First') ? 'first' : 'backup'}`,
+        description: model, parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: () => 'read' },
+      { when: ({ modelSelection }) => { enabled.push(modelSelection.model); return modelSelection.model === model; } });
+    } });
+  f.setConfig({ models: [{ providerId: 'test', modelId: 'First/opaque', options: { reasoningEffort: 'high' } }, { providerId: 'test', modelId: 'Backup/opaque' }] });
+  await f.engine.send({ text: 'Use the configured queue', requestId: 'effort-fallback' });
+  const agent = await f.engine.ensureSession(); await agent.whenIdle();
+  assert.deepEqual(f.requests.map(request => [request.model, request.reasoningEffort]), [['First/opaque', 'high'], ['Backup/opaque', undefined]]);
+  assert.deepEqual(prepared.map(model => [model.model, model.reasoningEffort]), [['First/opaque', 'high'], ['Backup/opaque', undefined]]);
+  assert.ok(enabled.includes('Backup/opaque'));
+  assert.match(JSON.stringify(f.requests[0].tools), /only_first/);
+  assert.doesNotMatch(JSON.stringify(f.requests[0].tools), /only_backup/);
+  assert.match(JSON.stringify(f.requests[1].tools), /only_backup/);
+  assert.doesNotMatch(JSON.stringify(f.requests[1].tools), /only_first/);
+  assert.equal(agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data.source.kind === 'user').length, 1);
+  assert.deepEqual((await f.engine.history()).messages.map(message => message.text), ['Use the configured queue', 'Fallback finished']);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await f.engine.requestState())[0].status, 'processed');
+});
+
+test('native prompt keeps exact messages and freezes each queued model before official preparation', async t => {
+  const f = await fixture(t, request => text(request.model));
+  const agent = await f.engine.ensureSession();
+  const request = { sessionId: agent.id, requestId: 'native-exact', mode: 'queue', content: [{ type: 'text', text: 'Native input' }] };
+  f.setConfig({ models: [{ providerId: 'test', modelId: 'Native/opaque' }] });
+  let message;
+  const result = await f.engine.nativePrompt({ request, signal: new AbortController().signal, dispatch: async () => {
+    message = createUserMessage({ content: request.content, source: { kind: 'user', rpcId: request.requestId } });
+    agent.followup(message); return { accepted: true };
+  } });
+  await agent.whenIdle();
+  assert.deepEqual(result, { accepted: true });
+  assert.deepEqual(f.requests.map(item => item.model), ['Native/opaque']);
+  const actual = agent.session.snapshotEvents().find(event => event.type === 'user/message' && event.data.source.kind === 'user').data;
+  assert.equal(actual.id, message.id);
+  assert.deepEqual(actual.content, request.content);
+  assert.equal(actual.source.rpcId, request.requestId);
 });
 
 test('permission denial remains terminal and configuration changes apply to next turn', async t => {
@@ -1471,6 +1517,114 @@ test('model preparation failures exhaust the complete ordered queue', async t =>
   await (await f.engine.ensureSession()).whenIdle();
   assert.deepEqual(prepared, ['first', 'second', 'third']);
   assert.equal(f.requests.length, 0);
+});
+
+test('Router fallback blocks repeated dispatched effects and still permits repeated configuration reads', async t => {
+  let effects = 0, reads = 0;
+  const tool = (id, name) => [{ type: 'block-start', index: 0, blockType: 'tool-call' },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: '{}' } }, { type: 'finish', reason: { kind: 'tool-calls' } }];
+  const f = await fixture(t, (_request, count) => {
+    if (count === 1 || count === 4) return tool(`effect-${count}`, 'fallback_effect');
+    if (count === 2 || count === 5) return tool(`read-${count}`, 'assistant_config');
+    if (count === 3) return [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'unavailable' } } }];
+    return text('Finished without repeating the action');
+  }, { setupTools(scope) {
+    for (const name of ['fallback_effect', 'assistant_config']) scope.tools.register({ name, description: name,
+      parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      execute: () => name === 'assistant_config' ? `${++reads} reads` : `${++effects} effects` });
+  } });
+  await f.engine.send({ text: 'Perform the action once' });
+  const agent = await f.engine.ensureSession(); await agent.whenIdle();
+  assert.equal(effects, 1); assert.equal(reads, 2);
+  assert.ok(agent.session.snapshotEvents().some(event => event.type === 'tool/result' && event.data.error?.code === 'ABORTED_BEFORE_DISPATCH'));
+  assert.equal((await f.engine.history()).messages.at(-1).text, 'Finished without repeating the action');
+});
+
+test('Router does not switch models after an action with an unknown outcome', async t => {
+  const f = await fixture(t, (_request, count) => count === 1 ? [
+    { type: 'block-start', index: 0, blockType: 'tool-call' },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'uncertain', name: 'uncertain_effect', arguments: '{}' } },
+    { type: 'finish', reason: { kind: 'tool-calls' } },
+  ] : [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'unavailable' } } }], { setupTools(scope) {
+    scope.tools.register({ name: 'uncertain_effect', description: 'Unknown result', parameters: { type: 'object', properties: {} },
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: () => { throw new Error('The action may have been sent'); } });
+  } });
+  await f.engine.send({ text: 'Execute the controlled action' });
+  await (await f.engine.ensureSession()).whenIdle();
+  assert.deepEqual(f.requests.map(request => request.model), ['first', 'first']);
+  assert.match((await f.engine.history()).error, /unavailable/);
+});
+
+test('Router user cancellation after a fallback plan prevents the continuation', async t => {
+  const f = await fixture(t, () => [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'unavailable' } } }]);
+  const agent = await f.engine.ensureSession();
+  f.engine.subscribe(event => { if (event.type === 'fallback') agent.cancel({ kind: 'user' }); });
+  await f.engine.send({ text: 'Cancel before the fallback' });
+  await agent.whenIdle();
+  assert.equal(f.requests.length, 1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await f.engine.requestState())[0].status, 'cancelled');
+});
+
+test('native prompt serializes admission and rejects changed request IDs without storing content', async t => {
+  const f = await fixture(t, () => text('Unused'));
+  const agent = await f.engine.ensureSession();
+  let release, entered;
+  const ready = new Promise(resolve => { entered = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  const request = { sessionId: agent.id, requestId: 'native-bound', mode: 'queue', content: [{ type: 'text', text: 'PRIVATE-native-content' }], clientTimeZone: 'Asia/Shanghai' };
+  const first = f.engine.nativePrompt({ request, dispatch: async () => { entered(); await gate; return { accepted: true }; } });
+  await ready;
+  let reached = false;
+  const conflicting = f.engine.nativePrompt({ request: { ...request, mode: 'steer' }, dispatch: () => { reached = true; } });
+  const rejected = assert.rejects(conflicting, /请求标识/);
+  release(); await first; await rejected;
+  assert.equal(reached, false);
+  const routes = agent.session.snapshotEvents().filter(event => event.type === 'plugin:benchgo-plugin/model-route');
+  assert.equal(routes.length, 1); assert.doesNotMatch(JSON.stringify(routes), /PRIVATE-native-content/);
+});
+
+test('native steering cannot mix a changed model queue into an active claimed batch', async t => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, async (_request, count) => { if (count === 1) { entered(); await gate; } return text('Done'); });
+  await f.engine.send({ text: 'Original task' });
+  const agent = await f.engine.ensureSession(); await started;
+  f.setConfig({ models: [{ providerId: 'test', modelId: 'new/opaque' }] });
+  let dispatched = false;
+  await assert.rejects(f.engine.nativePrompt({ request: { sessionId: agent.id, requestId: 'changed-steer', mode: 'steer', content: [{ type: 'text', text: 'Changed instruction' }] }, dispatch: () => { dispatched = true; } }), /模型队列已冻结/);
+  assert.equal(dispatched, false);
+  assert.equal(agent.model.current().model, 'first');
+  release(); await agent.whenIdle();
+});
+
+for (const pendingOriginal of [null, 'next-step', 'next-turn']) test(`Router restart reuses persisted fallback and original inbox IDs exactly once (original=${pendingOriginal})`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-fallback-pending-'));
+  const store = await createAssistantStore({ dataDirectory: directory });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'first' }] });
+  const options = { store, persistenceRoot: join(directory, 'sessions') };
+  const first = await fixture(t, () => [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'unavailable' } } }], options);
+  if (pendingOriginal) first.ctx.llm.prepareCall = async () => { throw Object.assign(new Error('No adapter'), { code: 'NO_ADAPTER' }); };
+  const receipt = await first.engine.send({ text: 'Continue only this request', requestId: 'pending-fallback-original' });
+  const original = await first.engine.ensureSession(); await original.whenIdle();
+  const uncommitted = pendingOriginal ? [(await store.getState()).requests.find(row => row.requestId === 'pending-fallback-original').message] : [];
+  const notice = createUserMessage({ content: [{ type: 'text', text: 'Host fallback continuation, no new authority.' }], source: { kind: 'benchgo-model-fallback', fallbackId: 'persisted-plan' } });
+  modules[0].appendPluginRecord(original.session, 'plugin:benchgo-plugin/model-fallback', {
+    id: 'persisted-plan', requestId: receipt.messageId, failedTurn: 1,
+    models: [{ providerId: 'test', modelId: 'first' }, { providerId: 'test', modelId: 'second' }], index: 1,
+    failures: [{ model: { providerId: 'test', modelId: 'first' }, reason: 'unavailable' }], message: notice, uncommitted, dispatchedCalls: [],
+  });
+  for (const message of uncommitted) original.inbox.append(pendingOriginal, message);
+  original.inject(notice);
+  await first.engine.dispose(); await first.ctx.fiber.dispose();
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'changed-primary' }] });
+  const second = await fixture(t, () => text('Recovered fallback answer'), options);
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const restored = await second.engine.ensureSession(); await restored.whenIdle();
+  assert.deepEqual(second.requests.map(request => request.model), ['second']);
+  const events = restored.session.snapshotEvents();
+  assert.equal(events.filter(event => event.type === 'user/message' && event.data.id === notice.id).length, 1);
+  assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'user').length, 1);
+  assert.deepEqual((await second.engine.history()).messages.map(row => row.text), ['Continue only this request', 'Recovered fallback answer']);
 });
 
 test('parallel tools in one Harness step count as one learning iteration', async t => {
@@ -1633,7 +1787,7 @@ test('goal usage ledger records Worker requests without parking the Ticket', asy
   } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'exact' } });
   const [first] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
   const result = await executor(first, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   assert.equal(result.waitingPause, undefined);
   assert.equal(result.waitingBudget, undefined);
@@ -1660,7 +1814,7 @@ for (const recover of [false, true]) for (const tamper of [false, true]) test(`e
   } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'exact' } });
   const [first] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
   const paused = await executor(first, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   assert.equal(paused.waitingPause, true);
   assert.equal(effects, 1);
@@ -1707,7 +1861,7 @@ for (const denied of [false, true]) test(`Worker preserves explicit model and ${
   const ticket = database.createTicket({ threadId: 'thread', target: 'Inspect', mandate: { actorId: 'owner' } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'Explicit/opaque' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
     readPolicy: async () => ({ models: ['second', 'third'].map(modelId => ({ providerId: 'test', modelId })), routingConfig: { keyPools: [{ providerId: 'test', candidates: ['hidden'] }] } }), authorizeAction: async () => ({ allowed: true }) });
   const result = executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });
   if (denied) await assert.rejects(result); else assert.equal((await result).summary, 'Worker completed');
@@ -1742,7 +1896,7 @@ test('review failure resumes the official original session and preserves its exi
     acceptance: '6–10 sourced items', mandate: { source: { channel: 'desktop', sessionId: 'original-chat' } } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('original-worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
     readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }),
     captureCheckpoint: async (workspace, options) => {
       artifactDirectory = workspace;
@@ -1806,7 +1960,7 @@ for (const legacy of [false, true]) test(`ordinary review preserves unknown offi
     acceptance: 'Verify delivery without repeating an uncertain send.', mandate: { source: { channel: 'desktop', sessionId: 'effects-chat' } } });
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('effects-worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
     readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
   const context = { ticket, signal: AbortSignal.timeout(30000), renew: async () => {} };
   const result = await executor(assignment, context);
@@ -1859,7 +2013,7 @@ test('a long-running Worker is never paused by elapsed execution time', async t 
   database.createAssignment(ticket.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('long-worker', { validateMandate: () => true });
   // The removed gate paused at this deadline (150ms); the option is now ignored.
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
+  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
     readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 150 });
   const started = Date.now();
   const result = await executor(assignment, { ticket, signal: AbortSignal.timeout(10000), renew: async () => {} });

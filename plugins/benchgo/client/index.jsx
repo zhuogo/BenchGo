@@ -24,6 +24,9 @@ import { UpdateLauncher, mountUpdatesStyle } from './updates.jsx';
 import { mountBrand } from '../../link/client/brand.jsx';
 import { DeviceLauncher } from '../../link/client/device-launcher.jsx';
 import { DeviceSwitch } from '../../link/client/device-switch.jsx';
+import { mountEfficiencySettings } from './efficiency-settings.jsx';
+import { mountInteractiveClient } from '../../interactive/client/official.jsx';
+import { mountWorkbenchClient } from '../../workbench/client/index.jsx';
 
 const names = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi', opencode: 'OpenCode', gemini: 'Gemini CLI', hermes: 'Hermes', grok: 'Grok Build', mcode: 'MiniMax Code', deepseek: 'DeepSeek' };
 const liveStates = new Set(['running', 'connecting', 'waiting']);
@@ -92,6 +95,9 @@ function mountBaseUi(ctx) {
   mountModelPicker(ctx);
   mountProviderSettings(ctx);
   mountMediaSettings(ctx);
+  mountEfficiencySettings(ctx);
+  mountInteractiveClient(ctx);
+  mountWorkbenchClient(ctx);
   const lifetime = new AbortController();
   const style = document.createElement('style'); style.textContent = fontCss + css; document.head.append(style); ctx.effect(() => () => style.remove());
   let ensuringRecent;

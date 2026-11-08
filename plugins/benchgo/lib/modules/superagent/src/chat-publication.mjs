@@ -1,4 +1,5 @@
 import { appendPluginRecord } from '@deepseek-ai/dsh-session';
+import { fallbackRequestIds } from './model-fallback.mjs';
 
 export const chatPublicationType = 'plugin:benchgo-plugin/chat-publication';
 const fail = message => Object.assign(new Error(message), { code: 'CHAT_PUBLICATION_REJECTED' });
@@ -12,10 +13,12 @@ const publicUsage = value => {
 
 /** Identity only: raw execution content is never returned as a reply draft. */
 export function activeChatReply(events) {
+  const continuations = fallbackRequestIds(events);
   let turn, requestId;
   for (const event of events) {
     if (event.type === 'turn/start') { turn = event.data?.turn; requestId = undefined; }
     else if (turn !== undefined && userEvent(event)) requestId = event.data.id;
+    else if (turn !== undefined && event.type === 'user/message' && continuations.has(event.data?.id)) requestId = continuations.get(event.data.id);
     else if (event.type === 'turn/end' && event.data?.turn === turn) { turn = undefined; requestId = undefined; }
   }
   return turn !== undefined && requestId ? { turn, requestId } : null;
@@ -56,6 +59,8 @@ const answerText = (questions, answers) => questions.map(row => {
 
 /** A projection, never a replacement for the private execution transcript. */
 export function projectChatMessages(events) {
+  const continuations = fallbackRequestIds(events);
+  const requests = new Map(events.filter(userEvent).map(event => [event.data.id, event.data]));
   const users = new Set(), published = new Set(), rows = [];
   const explicit = new Set();
   for (const event of events) {
@@ -73,6 +78,8 @@ export function projectChatMessages(events) {
       request = event.data;
       const content = (event.data.content || []).filter(block => ['text', 'image', 'file'].includes(block?.type));
       rows.push({ seq: event.seq, id: event.data.id, role: 'user', ...(typeof event.data.source.rpcId === 'string' ? { rpcId: event.data.source.rpcId } : {}), text: textBlocks(content).map(block => block.text).join('\n'), content, time: event.time });
+    } else if (event.type === 'user/message' && continuations.has(event.data?.id)) {
+      request = requests.get(continuations.get(event.data.id));
     } else if (event.type === chatPublicationType && event.ignorable === true) {
       const row = event.data;
       if (row?.kind !== 'final' || !users.has(row.requestId) || published.has(row.requestId) || typeof row.text !== 'string' || !row.text.trim() || row.text.length > 16000) continue;

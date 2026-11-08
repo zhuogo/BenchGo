@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { randomUUID } from 'node:crypto';
 import * as modelSettings from '../client/model-settings.mjs';
+import { petActionForSession, petExpressionForAction } from '../client/pet-state.mjs';
 import { createConfigSync, saveConfigPatch } from '../client/config-sync.mjs';
 const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
 const code = transformSync(readFileSync(new URL('../client/index.jsx', import.meta.url), 'utf8') + '\nexport { mergeHistory, Images, loadCatalog, messageText, HistoryNotice, retainSession, PendingCard, PendingInteractions, UIIcon, Identity, Studio, ResourceTabs, RetainedPane };', { loader: 'jsx', format: 'cjs' }).code;
@@ -21,7 +22,7 @@ function harness(options = {}) {
   const listeners = new Map(), documentListeners = new Map(), intervals = [];
   const module = { exports: {} };
   const assistantConfigSync = createConfigSync();
-  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, localStorage: options.storage, queueMicrotask, setTimeout: fn => fn(), setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { calls.push(JSON.parse(options.body)); return {}; }, require: id => id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('session-retain.mjs') ? { retainAssistantSession } : id === 'react' ? react : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async () => typeof options.response === 'function' ? options.response(calls.at(-1)) : options.response || ({ providers: [], models: [] }) } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
+  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, localStorage: options.storage, queueMicrotask, setTimeout: fn => fn(), setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { calls.push(JSON.parse(options.body)); return {}; }, require: id => id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('session-retain.mjs') ? { retainAssistantSession } : id === 'react' ? react : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async () => typeof options.response === 'function' ? options.response(calls.at(-1)) : options.response || ({ providers: [], models: [] }) } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
   return { listeners, documentListeners, intervals, exports: module.exports, render(name, props) { cursor = 0; refCursor = 0; effects.length = 0; return module.exports[name](props); }, calls, effects };
 }
 const walk = node => node && typeof node === 'object' ? [node, ...node.children.flatMap(walk)] : [];
@@ -108,15 +109,15 @@ test('archived side chats expose only unarchive and delete with the distinct res
   assert(!walk(row).some(node => node.props.className === 'cmd-session-more'));
 });
 
-test('assistant conversations use the shared sidebar section with pinned icon-free main chat', () => {
+test('sidebar name card opens main chat and resources sit beside collapse without a navigation row', () => {
   const h = harness();
   const nodes = walk(h.render('AssistantSidebarEntry', { ctx: { layout: { panelInfo: { getSnapshot: () => ({ activePanelId: 'benchgo-assistant' }), subscribe: () => () => {} } } } }));
   assert.ok(nodes.some(node => node.props.className === 'ba-card-row'));
-  const chatAction = nodes.find(node => node.props.className === 'ba-assistant-action ba-action-chat');
+  const chatAction = nodes.find(node => node.props.ariaLabel === '打开主聊天');
   assert.ok(chatAction);
-  assert.equal(chatAction.props['aria-label'], '打开主聊天');
-  assert.ok(walk(chatAction).some(node => node.children?.includes('主聊天')));
-  assert.ok(nodes.some(node => node.props.className === 'ba-assistant-action ba-action-resources' && node.props['aria-label'] === '打开资源'));
+  assert.equal(typeof chatAction.props.onOpen, 'function');
+  assert.ok(!nodes.some(node => node.props.className === 'ba-card-actions'));
+  assert.ok(nodes.some(node => node.props.className === 'ba-assistant-resources' && node.props['aria-label'] === '打开资源'));
   assert.ok(!nodes.some(node => node.props.className === 'ba-assistant-action ba-action-settings'));
   assert.ok(!nodes.some(node => node.props.className?.includes('cmd-session') && node.children.includes('\u4e3b\u804a')));
   assert.ok(nodes.some(node => node.props['aria-label'] === '新建旁聊'));
@@ -125,12 +126,16 @@ test('main chat activity follows its official session even when another panel is
   let statuses = new Map([['main-session', { running: true }], ['side-session', { running: true }]]);
   const h = harness({ state: [[], true, 'side', '', false, null, null, false, 'main-session'] });
   const ctx = { layout: { panelInfo: { getSnapshot: () => ({ activePanelId: 'another-panel' }), subscribe: () => () => {} } }, uiSession: { sessionStatus: { getSnapshot: () => statuses, subscribe: () => () => {} } } };
-  const action = () => walk(h.render('AssistantSidebarEntry', { ctx })).find(node => node.props.className === 'ba-assistant-action ba-action-chat');
-  assert.equal(action().props['data-running'], true);
-  assert.match(action().props['aria-label'], /正在进行中/);
+  const action = () => walk(h.render('AssistantSidebarEntry', { ctx })).find(node => node.props.ariaLabel?.startsWith('打开主聊天'));
+  assert.equal(action().props.action, 'focus');
+  assert.equal(action().props.expression, 'think');
+  assert.match(action().props.ariaLabel, /正在进行中/);
   statuses = new Map([['main-session', { running: false }], ['side-session', { running: true }]]);
-  assert.equal(action().props['data-running'], false);
-  assert.equal(action().props['aria-label'], '打开主聊天');
+  assert.equal(action().props.action, 'idle');
+  assert.equal(action().props.ariaLabel, '打开主聊天');
+  statuses = new Map([['main-session', { running: true, pendingInteraction: { kind: 'approval' } }]]);
+  assert.equal(action().props.action, 'waiting');
+  assert.equal(action().props.expression, 'stare');
 });
 
 test('sidebar initial load is distinct from empty, failure retries, and refresh keeps existing chats', async () => {
@@ -149,7 +154,8 @@ test('sidebar initial load is distinct from empty, failure retries, and refresh 
   await nodes.find(node => node.type === 'button' && node.children.includes('重试加载')).props.onClick();
   nodes = walk(h.render('AssistantSidebarEntry', props));
   assert(nodes.some(node => node.props['data-kind'] === 'empty'));
-  assert(nodes.some(node => node.type === 'button' && node.children.includes('新建旁聊')));
+  assert(nodes.some(node => node.props.className === 'ba-sidebar-quote' && node.children.includes('“或许你不需要我”')));
+  assert(nodes.some(node => node.type === 'button' && node.props['aria-label'] === '新建旁聊'));
   response = { state: { threads: [{ id: 'side', sessionId: 'sid', title: '已有旁聊', createdAt: '2026-11-04T10:00:00Z' }] } };
   await h.intervals[0]();
   nodes = walk(h.render('AssistantSidebarEntry', props));
@@ -211,13 +217,18 @@ test('sidebar collapse state and chevron structure follow shared rotation styles
   assert.match(readFileSync(new URL('../../benchgo/client/style.css', import.meta.url), 'utf8'), /\.cmd-section-toggle\[aria-expanded="false"\] > \.cmd-ui-icon \{ transform: rotate\(-90deg\);/);
 });
 
-test('assistant collapse keeps the name card, hides all navigation and restores its local preference', () => {
+test('assistant collapse keeps main chat and resources accessible and restores its local preference', () => {
   const values = new Map();
   const storage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
   const props = { ctx: { layout: { panelInfo: { getSnapshot: () => ({ activePanelId: 'benchgo-assistant' }), subscribe: () => () => {} } } } };
   const h = harness({ storage });
   let nodes = walk(h.render('AssistantSidebarEntry', props));
   let toggle = nodes.find(node => node.props.className === 'ba-assistant-toggle');
+  assert.equal(toggle.props['aria-expanded'], false);
+  assert.equal(nodes.find(node => node.props.className === 'ba-assistant-body').props.hidden, true);
+  toggle.props.onClick();
+  nodes = walk(h.render('AssistantSidebarEntry', props));
+  toggle = nodes.find(node => node.props.className === 'ba-assistant-toggle');
   assert.equal(toggle.props['aria-label'], '收起助手');
   assert.equal(toggle.props['aria-expanded'], true);
   assert.equal(nodes.find(node => node.props.id === toggle.props['aria-controls']).props.hidden, false);
@@ -229,8 +240,10 @@ test('assistant collapse keeps the name card, hides all navigation and restores 
   assert.equal(toggle.props['aria-expanded'], false);
   assert.equal(body.props.hidden, true);
   assert(nodes.some(node => node.props.className === 'ba-assistant-heading'));
-  assert(walk(body).some(node => node.props['aria-label'] === '打开主聊天'));
-  assert(walk(body).some(node => node.props['aria-label'] === '打开资源'));
+  const heading = nodes.find(node => node.props.className === 'ba-assistant-heading');
+  assert(walk(heading).some(node => node.props.ariaLabel === '打开主聊天'));
+  assert(walk(heading).some(node => node.props['aria-label'] === '打开资源'));
+  assert(!walk(body).some(node => node.props['aria-label'] === '打开资源'));
   assert(walk(body).some(node => node.props['aria-label'] === '新建旁聊'));
   assert.equal(values.get('benchgo.assistant.sidebarExpanded'), 'false');
 
@@ -248,9 +261,9 @@ test('assistant collapse keeps the name card, hides all navigation and restores 
 
   const unavailable = harness({ storage: { getItem() { throw new Error('storage unavailable'); }, setItem() { throw new Error('storage unavailable'); } } });
   const fallback = walk(unavailable.render('AssistantSidebarEntry', props));
-  assert.equal(fallback.find(node => node.props.className === 'ba-assistant-toggle').props['aria-expanded'], true);
+  assert.equal(fallback.find(node => node.props.className === 'ba-assistant-toggle').props['aria-expanded'], false);
   assert.doesNotThrow(() => fallback.find(node => node.props.className === 'ba-assistant-toggle').props.onClick());
-  assert.equal(walk(unavailable.render('AssistantSidebarEntry', props)).find(node => node.props.className === 'ba-assistant-body').props.hidden, true);
+  assert.equal(walk(unavailable.render('AssistantSidebarEntry', props)).find(node => node.props.className === 'ba-assistant-body').props.hidden, false);
 });
 
 test('sidebar selection follows chat and resource events without waiting for a panel change or refresh', async () => {
@@ -267,9 +280,9 @@ test('sidebar selection follows chat and resource events without waiting for a p
   nodes = walk(h.render('AssistantSidebarEntry', props));
   assert.equal(nodes.find(node => node.props['aria-label'] === '打开资源').props['aria-current'], 'page');
   assert.equal(nodes.find(node => node.props.className?.startsWith('cmd-session ')).props['aria-current'], undefined);
-  nodes.find(node => node.props['aria-label'] === '打开主聊天').props.onClick();
+  nodes.find(node => node.props.ariaLabel === '打开主聊天').props.onOpen();
   nodes = walk(h.render('AssistantSidebarEntry', props));
-  assert.equal(nodes.find(node => node.props['aria-label'] === '打开主聊天').props['aria-current'], 'page');
+  assert.equal(nodes.find(node => node.props.ariaLabel === '打开主聊天').props.current, true);
   assert.equal(nodes.find(node => node.props['aria-label'] === '打开资源').props['aria-current'], undefined);
   cleanups.forEach(dispose => dispose());
   assert.equal(h.documentListeners.has('benchgo:assistant-tab'), false);

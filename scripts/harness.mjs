@@ -14,7 +14,12 @@ if (existsSync(localNode)) process.env.PATH = `${toolchainBin}${delimiter}${proc
 
 async function run(command, args, cwd, capture = false) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: capture ? ['ignore', 'pipe', 'inherit'] : 'inherit' })
+    const env = { ...process.env }
+    if (['dev:web', 'start:web'].includes(action)) {
+      const loader = new URL('./source-host-loader.mjs', import.meta.url).href
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --import=${loader}`.trim()
+    }
+    const child = spawn(command, args, { cwd, env, stdio: capture ? ['ignore', 'pipe', 'inherit'] : 'inherit' })
     let output = ''
     if (capture) child.stdout.setEncoding('utf8').on('data', chunk => { output += chunk })
     child.once('error', reject)

@@ -13,6 +13,13 @@ SuperAgent 主聊天与旁聊复用输入框中的语音输入、自动朗读和
 | `plugins/superagent` | 总助手对话、任务、目标、记忆与产物 | `./superagent-plugin` |
 | `plugins/voice` | 听写、朗读、实时通话与协议适配 | `./voice-plugin` |
 | `plugins/link` | 设备配对、连接、远程会话与移动端 | `./link-plugin` |
+| `plugins/interactive` | 表单、选项、表格、图表交互回复 | 基础层内部装配 |
+| `plugins/efficiency` | 原生执行工具与主动上下文压缩 | 基础层内部装配 |
+| `plugins/workbench` | 本机文件/Git/终端与已验证指纹的 SSH 运维 | 基础层内部装配 |
+
+内部源码包不新增安装包或 Cordis 入口。执行增强在“设置 → 执行增强”启停；工程技能从“工具 → 技能 → 浏览工程技能”按需安装；SuperAgent 工单可切换列表/看板并进入官方自动化任务。Slack、钉钉从“资源 → 接入 → 多平台”配置，仍经过统一准入与交付。新工作台仅本机 owner 可用，Link 保留原远端权限边界。
+
+包含 SSH 工作台的完整插件要求 Node.js 24.9 或更新版本，与锁定的 `@linxin666/dsh-ssh@0.4.15` 运行要求一致；本轮开发验证使用 Node.js 24.19。
 
 基础层提供 `benchgo`；Harness 聚合提供 `commander`，SuperAgent 依赖它并提供 `assistant`。Voice 与 Link 不硬依赖 Harness 聚合或 SuperAgent，可选业务不可用时明确提示。公共服务复用本包 `src/`、`shared/`，组件复用 `plugins/shared/client/`。业务测试位于各源码包的 `test/`，通用集成测试留在本包。
 

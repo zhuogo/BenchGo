@@ -1184,8 +1184,8 @@
     },
     "/api/benchgo/skills": {
       "post": {
-        "summary": "Read the unified skill catalog and instruction bodies",
-        "description": "Owner-only same-origin JSON endpoint. Reads the default Agent preset through a standing scope lease without creating an Agent. Omitted projectId selects global skills; projectId must identify a registered workspace. Uses official registry winners, without enumerating shadowed copies or scanning arbitrary paths. Owned skill management remains on the assistant API; no new MCP tools.",
+        "summary": "Read unified skills and install reviewed engineering skills on demand",
+        "description": "Owner-only same-origin JSON endpoint. Reads the default Agent preset through a standing scope lease without creating an Agent. Omitted projectId selects global skills; projectId must identify a registered workspace. Uses official registry winners, without enumerating shadowed copies or scanning arbitrary paths. Owned skill management remains on the assistant API; no new MCP tools. Engineering catalog uses mattpocock/skills v1.3.2 at d1478fcb140db0b93c0c8df17bcfd311844749d0. Preview and installation download immutable hash-verified files; installs retain dependencies, license and original invocation policy under the official DSH skills directory, never overwrite existing skills or execute scripts. Installation and actual availability are separate states.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1227,6 +1227,35 @@
                         "type": "string"
                       }
                     }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "deckList"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "name"
+                    ],
+                    "properties": {
+                      "action": {
+                        "enum": [
+                          "deckGet",
+                          "deckInstall"
+                        ]
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    }
                   }
                 ]
               }
@@ -1235,7 +1264,7 @@
         },
         "responses": {
           "200": {
-            "description": "list returns available, skills, projects and scope; get returns skill including content. Missing registry returns available:false for list. Responses use no-store.",
+            "description": "list returns available, skills, projects and scope; get returns skill including content. Missing registry returns available:false for list. Responses use no-store. deckList returns source/version/destination and installation status; deckGet returns skill content, files, dependency plan and licenseText; deckInstall returns installed names and alreadyInstalled. A write does not imply the official watcher has discovered the skill.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1304,8 +1333,151 @@
           "415": {
             "description": "application/json required"
           },
+          "502": {
+            "description": "Fixed-version download failed or content hash/size did not match; retry is supported."
+          },
           "503": {
             "description": "Skill service unavailable or lookup failed"
+          }
+        }
+      }
+    },
+    "/api/benchgo/efficiency": {
+      "get": {
+        "summary": "??????????????????",
+        "description": "??owner??????available?????????????Agent????????",
+        "responses": {
+          "200": {
+            "description": "revision?scope?features.ops/compaction??"
+          },
+          "403": {
+            "description": "???owner????"
+          }
+        }
+      },
+      "post": {
+        "summary": "?????????????????",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "revision",
+                  "features"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "features": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "ops": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "shell": {
+                            "type": "boolean"
+                          }
+                        }
+                      },
+                      "compaction": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "????revision?????????????GET??"
+          },
+          "400": {
+            "description": "???????"
+          },
+          "409": {
+            "description": "??????????"
+          }
+        }
+      }
+    },
+    "/api/benchgo/workbench": {
+      "get": {
+        "summary": "????????????SSH????",
+        "description": "??????owner????????????????Link???",
+        "responses": {
+          "200": {
+            "description": "sidebar?ssh?trustedHosts"
+          },
+          "403": {
+            "description": "???????owner"
+          }
+        }
+      },
+      "post": {
+        "summary": "?????SSH??????",
+        "description": "ssh.probe???????????????????ssh.confirm???????challenge??????fingerprint???????????pin?",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "enum": [
+                      "ssh.probe",
+                      "ssh.confirm"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  },
+                  "port": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "challenge": {
+                    "type": "string"
+                  },
+                  "fingerprint": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "??challenge???????"
+          },
+          "400": {
+            "description": "???????????????"
+          },
+          "403": {
+            "description": "???????owner"
           }
         }
       }

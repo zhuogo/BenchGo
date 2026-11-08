@@ -63,6 +63,138 @@ test('new third-party runtime SDK resolves from the installed release after sync
   assert.equal(createRequire(join(setup.target, 'package.json'))('@example/channel-sdk').ready, true);
 });
 
+for (const legacyLink of [false, true]) test(`third-party closure shares host scope and Cordis, repairs junction=${legacyLink}, and syncs twice`, async t => {
+  const setup = await fixture(t);
+  const put = async (base, path, value) => {
+    await mkdir(dirname(join(base, path)), { recursive: true });
+    await writeFile(join(base, path), typeof value === 'string' ? value : JSON.stringify(value));
+  };
+  await put(setup.enrollment.directory, 'release.json', { shared: [] });
+  const manifest = JSON.parse(await readFile(join(setup.source, 'package.json'), 'utf8'));
+  manifest.dependencies['fixture-ops'] = '1.0.0';
+  await put(setup.source, 'package.json', manifest);
+  const ops = join(setup.source, 'node_modules/fixture-ops');
+  await put(ops, 'package.json', { name: 'fixture-ops', version: '1.0.0', dependencies: { 'fixture-adapter': '1.0.0' }, optionalDependencies: { 'fixture-missing': '1.0.0' } });
+  await put(ops, 'index.js', "module.exports = require('fixture-adapter');");
+  const adapter = join(ops, 'node_modules/fixture-adapter');
+  await put(adapter, 'package.json', { name: 'fixture-adapter', version: '1.0.0', dependencies: { '@deepseek-ai/dsh-scope': '1.0.0' }, peerDependencies: { '@deepseek-ai/dsh-peer': '1.0.0', '@deepseek-ai/dsh-optional-peer': '1.0.0' }, peerDependenciesMeta: { '@deepseek-ai/dsh-optional-peer': { optional: true } } });
+  await put(adapter, 'index.js', "module.exports = require('@deepseek-ai/dsh-scope');");
+  for (const base of [join(setup.root, 'official'), adapter]) {
+    await put(base, 'node_modules/@deepseek-ai/dsh-scope/package.json', { name: '@deepseek-ai/dsh-scope', version: '1.0.0' });
+    await put(base, 'node_modules/@deepseek-ai/dsh-scope/index.js', "module.exports = { scope: Symbol('scope'), cordis: require('cordis') };");
+    await put(base, 'node_modules/cordis/package.json', { name: 'cordis', version: '1.0.0' });
+    await put(base, 'node_modules/cordis/index.js', "module.exports = { context: Symbol('context') };");
+  }
+  await put(join(setup.root, 'official'), 'node_modules/@deepseek-ai/dsh-peer/package.json', { name: '@deepseek-ai/dsh-peer', version: '1.0.0' });
+  const destination = join(setup.target, 'node_modules/fixture-ops');
+  if (legacyLink) await symlink(ops, destination, 'junction');
+  const host = createRequire(join(setup.root, 'official/package.json'))('@deepseek-ai/dsh-scope');
+  assert.notEqual(createRequire(join(setup.source, 'package.json'))('fixture-ops'), host);
+  const scopeManifest = 'node_modules/@deepseek-ai/dsh-scope/package.json';
+  await put(join(setup.root, 'official'), scopeManifest, { name: '@deepseek-ai/dsh-scope', version: '9.0.0' });
+  await assert.rejects(syncDevelopmentPlugin(setup), /版本不兼容/);
+  assert.equal(await readFile(join(setup.target, 'lib/client.js'), 'utf8'), 'old seed');
+  if (legacyLink) assert.equal((await lstat(destination)).isSymbolicLink(), true);
+  await put(join(setup.root, 'official'), scopeManifest, { name: '@deepseek-ai/dsh-scope', version: '1.0.0' });
+  for (let pass = 0; pass < 2; pass++) {
+    await put(ops, 'revision.txt', String(pass));
+    await syncDevelopmentPlugin(setup);
+    assert.equal((await lstat(destination)).isSymbolicLink(), false);
+    assert.equal(await readFile(join(destination, 'revision.txt'), 'utf8'), String(pass));
+    assert.equal(createRequire(join(setup.target, 'package.json'))('fixture-ops'), host);
+    await assert.rejects(lstat(join(destination, 'node_modules/fixture-adapter/node_modules/@deepseek-ai/dsh-scope')), { code: 'ENOENT' });
+    const release = JSON.parse(await readFile(join(setup.enrollment.directory, 'release.json'), 'utf8'));
+    assert.ok(release.shared.some(item => item.name === '@deepseek-ai/dsh-scope'));
+    assert.ok(release.shared.some(item => item.name === '@deepseek-ai/dsh-peer'));
+    assert.ok(!release.shared.some(item => item.name === '@deepseek-ai/dsh-optional-peer'));
+  }
+  assert.equal((await lstat(join(adapter, 'node_modules/@deepseek-ai/dsh-scope'))).isDirectory(), true);
+});
+
+test('third-party mismatch and unsafe destination reject before copying; ordinary dependencies survive', async t => {
+  const setup = await fixture(t);
+  const file = join(setup.source, 'package.json');
+  const manifest = JSON.parse(await readFile(file, 'utf8'));
+  manifest.dependencies['fixture-sdk'] = '1.0.0';
+  await writeFile(file, JSON.stringify(manifest));
+  const sdk = join(setup.source, 'node_modules/fixture-sdk');
+  await mkdir(sdk, { recursive: true });
+  await writeFile(join(sdk, 'package.json'), JSON.stringify({ name: 'fixture-sdk', version: '2.0.0' }));
+  await assert.rejects(syncDevelopmentPlugin(setup), /版本不兼容/);
+  assert.equal(await readFile(join(setup.target, 'lib/client.js'), 'utf8'), 'old seed');
+  await writeFile(join(sdk, 'package.json'), JSON.stringify({ name: 'fixture-sdk', version: '1.0.0' }));
+  const installed = join(setup.target, 'node_modules/fixture-sdk');
+  await mkdir(installed);
+  await writeFile(join(installed, 'package.json'), JSON.stringify({ name: 'fixture-sdk', version: '1.0.0' }));
+  await writeFile(join(installed, 'user.txt'), 'keep');
+  await syncDevelopmentPlugin(setup);
+  assert.equal(await readFile(join(installed, 'user.txt'), 'utf8'), 'keep');
+  const external = join(setup.root, 'external-sdk');
+  await mkdir(external);
+  await symlink(external, join(setup.target, 'node_modules/@example'), 'junction');
+  manifest.dependencies['@example/sdk'] = '1.0.0';
+  await writeFile(file, JSON.stringify(manifest));
+  await mkdir(join(setup.source, 'node_modules/@example/sdk'), { recursive: true });
+  await writeFile(join(setup.source, 'node_modules/@example/sdk/package.json'), JSON.stringify({ name: '@example/sdk', version: '1.0.0' }));
+  await assert.rejects(syncDevelopmentPlugin(setup), /符号链接/);
+  await assert.rejects(lstat(join(external, 'sdk')), { code: 'ENOENT' });
+});
+
+test('no dependencies does not require an official runtime anchor', async t => {
+  const setup = await fixture(t);
+  const file = join(setup.source, 'package.json');
+  const manifest = JSON.parse(await readFile(file, 'utf8'));
+  delete manifest.dependencies;
+  await writeFile(file, JSON.stringify(manifest));
+  await rm(join(setup.target, 'node_modules/@deepseek-ai/dsh-llm'));
+  await syncDevelopmentPlugin(setup);
+});
+
+test('missing release metadata rejects third-party copies before any writes', async t => {
+  const setup = await fixture(t);
+  const file = join(setup.source, 'package.json');
+  const manifest = JSON.parse(await readFile(file, 'utf8'));
+  manifest.dependencies['fixture-sdk'] = '1.0.0';
+  await writeFile(file, JSON.stringify(manifest));
+  const sdk = join(setup.source, 'node_modules/fixture-sdk');
+  await mkdir(sdk, { recursive: true });
+  await writeFile(join(sdk, 'package.json'), JSON.stringify({ name: 'fixture-sdk', version: '1.0.0' }));
+  await assert.rejects(syncDevelopmentPlugin(setup), /缺少受管 release.json/);
+  assert.equal(await readFile(join(setup.target, 'lib/client.js'), 'utf8'), 'old seed');
+  await assert.rejects(lstat(join(setup.target, 'node_modules/fixture-sdk')), { code: 'ENOENT' });
+  await assert.rejects(lstat(join(setup.target, 'node_modules/@deepseek-ai/dsh-compaction-basic')), { code: 'ENOENT' });
+});
+
+for (const declaration of ['dependencies', 'peerDependencies']) for (const privateScope of [false, true]) test(`preserved user ${declaration} must resolve host singleton, private scope=${privateScope}`, async t => {
+  const setup = await fixture(t);
+  const manifest = JSON.parse(await readFile(join(setup.source, 'package.json'), 'utf8'));
+  manifest.dependencies['fixture-user'] = '1.0.0';
+  await writeFile(join(setup.source, 'package.json'), JSON.stringify(manifest));
+  const packageManifest = { name: 'fixture-user', version: '1.0.0', dependencies: { 'fixture-adapter': '1.0.0' } };
+  for (const base of [setup.source, setup.target]) {
+    const sdk = join(base, 'node_modules/fixture-user');
+    const adapter = join(sdk, 'node_modules/fixture-adapter');
+    await mkdir(adapter, { recursive: true });
+    await writeFile(join(sdk, 'package.json'), JSON.stringify(packageManifest));
+    await writeFile(join(sdk, 'user.txt'), 'preserve');
+    await writeFile(join(adapter, 'package.json'), JSON.stringify({ name: 'fixture-adapter', version: '1.0.0', [declaration]: { '@deepseek-ai/dsh-compaction-basic': '0.2.1-alpha.3' } }));
+    if (base === setup.target && privateScope) {
+      const copy = join(adapter, 'node_modules/@deepseek-ai/dsh-compaction-basic');
+      await mkdir(copy, { recursive: true });
+      await writeFile(join(copy, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-compaction-basic', version: '0.2.1-alpha.3' }));
+    }
+  }
+  // A valid user package already resolves the same host service through this link.
+  const host = join(setup.root, 'official/node_modules/@deepseek-ai/dsh-compaction-basic');
+  await symlink(host, join(setup.target, 'node_modules/@deepseek-ai/dsh-compaction-basic'), 'junction');
+  if (privateScope) {
+    await assert.rejects(syncDevelopmentPlugin(setup), /官方服务身份与宿主不一致/);
+    assert.equal(await readFile(join(setup.target, 'lib/client.js'), 'utf8'), 'old seed');
+  } else await syncDevelopmentPlugin(setup);
+  assert.equal(await readFile(join(setup.target, 'node_modules/fixture-user/user.txt'), 'utf8'), 'preserve');
+  assert.equal((await lstat(join(setup.target, 'node_modules/fixture-user'))).isSymbolicLink(), false);
+});
+
 test('copies local plugin sources and outputs to the enrolled release while preserving settings', async t => {
   const setup = await fixture(t);
   await writeFile(join(setup.target, 'settings.json'), 'preserved');

@@ -12,7 +12,11 @@ const requireHarness = createRequire(new URL('../../../deepseek-harness/packages
 const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
 const compactionRequire = createRequire(new URL('../../../deepseek-harness/packages/compaction/compaction-basic/package.json', import.meta.url));
 const compactionUrl = pathToFileURL(compactionRequire.resolve('@deepseek-ai/dsh-compaction-basic')).href;
-const hook = registerHooks({ resolve(specifier, context, next) { return specifier === '@deepseek-ai/dsh-compaction-basic' ? { url: compactionUrl, shortCircuit: true } : next(specifier, context); } });
+const sessionUrl = pathToFileURL(requireHarness.resolve('@deepseek-ai/dsh-session')).href;
+const hook = registerHooks({ resolve(specifier, context, next) {
+  const url = specifier === '@deepseek-ai/dsh-compaction-basic' ? compactionUrl : specifier === '@deepseek-ai/dsh-session' ? sessionUrl : undefined;
+  return url ? { url, shortCircuit: true } : next(specifier, context);
+} });
 const { mountAssistant } = await import('../src/service.mjs');
 const { Context } = await load('@deepseek-ai/cordis');
 const { default: LlmRuntime, LlmAdapter } = await load('@deepseek-ai/dsh-llm');

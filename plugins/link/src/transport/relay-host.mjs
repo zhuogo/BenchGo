@@ -1,5 +1,6 @@
 import { request } from 'node:https';
 import { WebSocket } from 'ws';
+import { isIP } from 'node:net';
 import { remoteAgent } from '../devices/remote.mjs';
 import { RELAY_CONTROL_PATH as CONTROL, RELAY_DATA_PATH as DATA, RELAY_CHUNK_BYTES as CHUNK, RELAY_VOICE_PATH as VOICE, relayPathAllowed } from './relay-protocol.mjs';
 
@@ -38,6 +39,10 @@ export function createRelayHost(options) {
   const { relay, target } = validate(options);
   const agent = remoteAgent(target), sockets = new Set(), work = new Set();
   let closed = false, connected = false, lastError = null, control, retryTimer, retryResolve, heartbeat;
+  // Only the authenticated relay control channel supplies this socket address.
+  // The local listener signs it so direct clients cannot forge forwarded IPs.
+  const sourceHeaders = input => options.relayHeaders && isIP(input.clientAddress ?? '')
+    ? options.relayHeaders(relay + '\0' + input.clientAddress) : {};
   const failRequest = (ws, error) => {
     if (ws.readyState === WebSocket.OPEN) void send(ws, JSON.stringify({ type: 'error', error: '目标 Link 请求失败' })).catch(() => {});
     ws.close(1011, 'upstream failed'); lastError = error?.message || '目标 Link 请求失败'; options.onError?.(new Error(lastError));
@@ -47,7 +52,7 @@ export function createRelayHost(options) {
     const endpoint = new URL(input.path, target.url);
     if (endpoint.origin !== target.url || !['GET', 'HEAD', 'POST'].includes(input.method)) { ws.close(1008); return; }
     let ended = false;
-    const upstream = request(endpoint, { agent, method: input.method, headers: headersFor(input, target), timeout: 120_000 }, response => {
+    const upstream = request(endpoint, { agent, method: input.method, headers: { ...headersFor(input, target), ...sourceHeaders(input) }, timeout: 120_000 }, response => {
       void send(ws, JSON.stringify({ type: 'response', status: response.statusCode, headers: response.headers })).catch(error => upstream.destroy(error));
       response.on('data', chunk => {
         response.pause();
@@ -74,7 +79,7 @@ export function createRelayHost(options) {
   const voiceTransaction = (ws, input) => {
     if (input.path !== VOICE || typeof input.cookie !== 'string' || input.cookie.length > 4096) { ws.close(1008); return; }
     const endpoint = new URL(input.path, target.url); endpoint.protocol = 'wss:';
-    const upstream = new WebSocket(endpoint, { agent, origin: targetOrigin(target), headers: { ...(input.cookie ? { cookie: input.cookie } : {}) }, handshakeTimeout: 10_000, maxPayload: 64 * 1024, perMessageDeflate: false });
+    const upstream = new WebSocket(endpoint, { agent, origin: targetOrigin(target), headers: { ...(input.cookie ? { cookie: input.cookie } : {}), ...sourceHeaders(input) }, handshakeTimeout: 10_000, maxPayload: 64 * 1024, perMessageDeflate: false });
     sockets.add(upstream); upstream.once('close', () => sockets.delete(upstream));
     let ended = false;
     const finish = error => {

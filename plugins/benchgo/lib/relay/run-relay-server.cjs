@@ -3723,6 +3723,17 @@ async function createRelayServer({ host = "0.0.0.0", port, identity, publicUrl, 
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("\u4E2D\u7EE7\u76D1\u542C\u7AEF\u53E3\u65E0\u6548");
   let closed = false, activeHost;
   const tickets = /* @__PURE__ */ new Map(), transactions = /* @__PURE__ */ new Set(), sockets = /* @__PURE__ */ new Set();
+  const anonymousRates = /* @__PURE__ */ new Map();
+  const limitAnonymous = (req) => {
+    const key = req.socket.remoteAddress ?? "unknown", tick = Math.floor(Date.now() / 6e4);
+    if (anonymousRates.size >= 1024) {
+      for (const [key2, rate2] of anonymousRates) if (rate2.tick !== tick) anonymousRates.delete(key2);
+    }
+    if (anonymousRates.size >= 1024 && !anonymousRates.has(key)) throw fail("\u8BF7\u6C42\u8FC7\u591A", 429);
+    const rate = anonymousRates.get(key)?.tick === tick ? anonymousRates.get(key) : { tick, count: 0 };
+    anonymousRates.set(key, rate);
+    if (++rate.count > 600) throw fail("\u8BF7\u6C42\u8FC7\u591A\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5", 429);
+  };
   const controls = new import_websocket_server.default({ noServer: true, maxPayload: 16 * 1024, perMessageDeflate: false });
   const data = new import_websocket_server.default({ noServer: true, maxPayload: 128 * 1024, perMessageDeflate: false });
   const voice = new import_websocket_server.default({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
@@ -3778,7 +3789,7 @@ async function createRelayServer({ host = "0.0.0.0", port, identity, publicUrl, 
     if (!relayPathAllowed(req.method, path + query)) throw fail("Link \u8DEF\u5F84\u672A\u6388\u6743", 404);
     if (req.headers.origin && req.headers.origin !== publicOrigin.origin) throw fail("\u6765\u6E90\u672A\u6388\u6743", 403);
     const transaction = makeTransaction(req, res, req.method, path + query, requestHeaders(req.headers, path));
-    json(activeHost, { type: "http", ticket: transaction.ticket, method: transaction.method, path: transaction.path, headers: transaction.headers });
+    json(activeHost, { type: "http", ticket: transaction.ticket, method: transaction.method, path: transaction.path, headers: transaction.headers, clientAddress: req.socket.remoteAddress });
     let timer = setTimeout(() => transaction.socket?.close(1011, "relay timeout"), 12e4);
     timer.unref?.();
     const touch = () => {
@@ -3878,6 +3889,7 @@ async function createRelayServer({ host = "0.0.0.0", port, identity, publicUrl, 
       if (!relayPathAllowed(req.method, raw)) throw fail("Link \u8DEF\u5F84\u672A\u6388\u6743", 404);
       const url = new URL(raw, publicOrigin);
       if (url.origin !== publicOrigin.origin || !(url.pathname === "/link" || url.pathname.startsWith("/link/"))) throw fail("Link \u8DEF\u5F84\u672A\u6388\u6743", 404);
+      if (!url.pathname.startsWith(RELAY_WORKBENCH_PATH) && !["/link/api/rpc", "/link/api/workbench"].includes(url.pathname)) limitAnonymous(req);
       void relayHttp(req, res, url.pathname).catch((error) => {
         if (!res.headersSent) {
           res.writeHead(error.status ?? 502, { ...securityHeaders, ...headers });
@@ -3934,7 +3946,7 @@ Content-Length: 0\r
         return reject(error.status ?? 502);
       }
       transaction.rawSocket = socket;
-      json(activeHost, { type: "voice", ticket: transaction.ticket, path: RELAY_VOICE_PATH, cookie: workbenchCookie(req.headers.cookie).slice(0, 4096) });
+      json(activeHost, { type: "voice", ticket: transaction.ticket, path: RELAY_VOICE_PATH, cookie: workbenchCookie(req.headers.cookie).slice(0, 4096), clientAddress: req.socket.remoteAddress });
       transaction.attachVoice = (dataSocket) => {
         clearTimeout(transaction.attachTimer);
         transaction.data = dataSocket;
@@ -4064,6 +4076,7 @@ Content-Length: 0\r
         remove(transaction);
       }
       tickets.clear();
+      anonymousRates.clear();
       const done = new Promise((resolve2) => server.close(resolve2));
       for (const socket of sockets) socket.destroy();
       controls.close();

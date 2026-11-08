@@ -5,6 +5,7 @@ import { readJsonResponse } from './http-response.mjs';
 import { UIIcon } from './iconsax.jsx';
 import { CustomSelect } from '../../shared/client/custom-select.jsx';
 import css from './skills-library.css';
+import { SkillDeck } from './skill-deck.jsx';
 
 const sources = [['all', '全部来源'], ['user', '用户安装'], ['project', '项目技能'], ['owned', '自建技能'], ['bundled', '内置技能'], ['plugin', '插件技能']];
 const statusNames = { candidate: '待审核', active: '可用', stale: '待整理', archived: '已归档', unavailable: '未生效' };
@@ -20,6 +21,7 @@ async function catalogApi(action, args = {}, signal) {
 }
 
 export function SkillsLibrary({ ownedApi, api = catalogApi }) {
+  const [showDeck, setShowDeck] = useState(false);
   const [catalog, setCatalog] = useState(null), [owned, setOwned] = useState(null), [projectId, setProjectId] = useState('');
   const [projects, setProjects] = useState([]);
   const [query, setQuery] = useState(''), [source, setSource] = useState('all'), [state, setState] = useState('all');
@@ -81,8 +83,9 @@ export function SkillsLibrary({ ownedApi, api = catalogApi }) {
     catch { if (alive.current && request === detailsRequest.current) setDetailError('无法复制，请选中下方路径手动复制。'); }
   }
   const refresh = () => setRevision(value => value + 1);
+  if (showDeck) return <><style>{css}</style><SkillDeck api={api} onBack={() => { setShowDeck(false); refresh(); }} /></>;
   return <section className={`bg-skill-library${current ? ' has-detail' : ''}`}><style>{css}</style>
-    <header className="bg-skill-heading"><div><h2>技能库</h2></div><Button variant="ghost" onClick={refresh} disabled={loading || busy}><UIIcon name="refresh" size={16} />刷新</Button></header>
+    <header className="bg-skill-heading"><div><h2>技能库</h2></div><div className="bg-skill-heading-actions"><Button variant="ghost" disabled={busy} onClick={() => setShowDeck(true)}>浏览工程技能</Button><Button variant="ghost" onClick={refresh} disabled={loading || busy}><UIIcon name="refresh" size={16} />刷新</Button></div></header>
     <div className="bg-skill-sheet">
       <div className="bg-skill-toolbar"><CustomSelect id="bg-skill-project" aria-label="技能查询范围" value={projectId} options={[{ value: '', label: '全局技能' }, ...projects.map(project => ({ value: project.id, label: project.title === 'default-workspace' ? '最近' : project.title || project.path || project.id }))]} onChange={value => { setCatalog(null); setProjectId(value); }} disabled={busy} searchable /><label className="bg-skill-search"><UIIcon name="search" size={17} /><input type="search" aria-label="搜索技能名称、描述或路径" placeholder="搜索技能" value={query} onChange={event => changeFilter(() => setQuery(event.target.value))} /></label><CustomSelect aria-label="按来源筛选" value={source} onChange={value => changeFilter(() => setSource(value))} options={sources.map(([value, label]) => ({ value, label }))} /></div>
       <div className="bg-skill-views" role="group" aria-label="按状态筛选">{[['all', '全部技能'], ['available', '可用'], ['candidate', '待审核'], ['inactive', '未启用']].map(([key, title]) => <button type="button" key={key} aria-pressed={state === key} onClick={() => changeFilter(() => setState(key))}>{title}{key === 'candidate' && candidateCount > 0 && <span>{candidateCount}</span>}</button>)}<small>{loading ? '读取中' : `${visible.length} 项技能`}</small></div>

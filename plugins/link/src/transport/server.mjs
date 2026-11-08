@@ -2,6 +2,7 @@ import { createSecureServer } from 'node:http2';
 import { readFile } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
 import { isIP } from 'node:net';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const localAddresses = () => [...new Set(Object.values(networkInterfaces()).flatMap(items => (items ?? []).filter(x => !x.internal && !x.address.includes('%')).map(x => x.address)))];
 
@@ -72,7 +73,13 @@ async function body(request) {
 
 /** Separate encrypted carrier: it exposes only Link's allowlist, never the Host admin API. */
 export async function listen({ identity, config, webRoot, store, dispatch, workbench, onError, routes }) {
-  const rates = new Map();
+  const rates = new Map(), deviceRates = new Map();
+  const relayKey = randomBytes(32);
+  const signRelaySource = source => createHmac('sha256', relayKey).update(source).digest('hex');
+  const relayHeaders = source => {
+    const key = createHash('sha256').update(source).digest('hex');
+    return { 'x-benchgo-relay-source': key, 'x-benchgo-relay-proof': signRelaySource(key) };
+  };
   const sockets = new Set(), sessions = new Set();
   let active = true;
   const send = (response, status, value, type = 'application/json; charset=utf-8') => {
@@ -90,21 +97,33 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
     if (!host || !allowed.has(host)) throw fail('主机地址未授权', 403);
     if ((requireOrigin || req.headers.origin) && req.headers.origin !== `https://${host}`) throw fail('来源未授权', 403);
     const url = new URL(req.url, `https://${host}`);
-    const ip = req.socket.remoteAddress ?? 'unknown';
+    const device = url.pathname.startsWith('/link/workbench/')
+      ? workbench?.authenticate?.(req)
+      : ['/link/api/rpc', '/link/api/workbench'].includes(url.pathname)
+        ? store.authenticate(req.headers.authorization?.replace(/^Bearer\s+/i, '')) : undefined;
+    // Relay traffic shares one loopback socket address. Only verified device
+    // identities may use the independent authenticated quota.
+    const buckets = device ? deviceRates : rates;
+    const source = req.headers['x-benchgo-relay-source'], proof = req.headers['x-benchgo-relay-proof'];
+    const trustedRelay = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)
+      && typeof source === 'string' && /^[a-f0-9]{64}$/.test(source)
+      && typeof proof === 'string' && /^[a-f0-9]{64}$/.test(proof)
+      && timingSafeEqual(Buffer.from(proof), Buffer.from(signRelaySource(source)));
+    const key = device?.id ?? (trustedRelay ? 'relay:' + source : req.socket.remoteAddress ?? 'unknown');
     const tick = Math.floor(Date.now() / 60_000);
-    if (rates.size > 1024) for (const [key, entry] of rates) if (entry.tick !== tick) rates.delete(key);
-    if (rates.size > 1024 && !rates.has(ip)) throw fail('请求过多', 429);
-    const rate = rates.get(ip)?.tick === tick ? rates.get(ip) : { tick, count: 0, pairs: 0 };
-    rates.set(ip, rate);
+    if (buckets.size >= 1024) for (const [key, entry] of buckets) if (entry.tick !== tick) buckets.delete(key);
+    if (buckets.size >= 1024 && !buckets.has(key)) throw fail('请求过多', 429);
+    const rate = buckets.get(key)?.tick === tick ? buckets.get(key) : { tick, count: 0, pairs: 0 };
+    buckets.set(key, rate);
     if (++rate.count > 600) throw fail('请求过多，请稍后重试', 429);
-    return { url, rate };
+    return { url, rate, device };
   };
   // Harness opens several persistent subscriptions. Multiplex them over HTTP/2
   // so session navigation and uplink calls cannot exhaust a browser's H1 pool.
   // Keep HTTP/1.1 for existing native clients and reverse proxies.
   const server = createSecureServer({ key: identity.key, cert: identity.cert, minVersion: 'TLSv1.2', allowHTTP1: true }, async (req, res) => {
     try {
-      const { url, rate } = authorize(req);
+      const { url, rate, device } = authorize(req);
       if (url.pathname.startsWith('/link/workbench/')) {
         if (!workbench) throw fail('网页工作台尚未就绪', 503);
         return await workbench.handle(req, res, url, headers);
@@ -132,7 +151,6 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
         return send(res, 200, { ...result, ...(result.status === 'approved' && routes ? { routes: routes() } : {}) });
       }
       if (!['/link/api/rpc', '/link/api/workbench'].includes(url.pathname)) throw fail('未找到', 404);
-      const device = store.authenticate(req.headers.authorization?.replace(/^Bearer\s+/i, ''));
       if (!device) throw fail('设备授权已失效，请重新配对', 401);
       if (url.pathname === '/link/api/workbench') {
         if (!workbench) throw fail('网页工作台尚未就绪', 503);
@@ -169,7 +187,9 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
   server.on('error', onError);
   return {
     port: server.address().port,
+    // In-process signer only; never expose the key through management status.
+    relayHeaders,
     timeouts: { request: server.requestTimeout, headers: server.headersTimeout, keepAlive: server.keepAliveTimeout },
-    close: async () => { active = false; await workbench?.close(); const ended = new Promise(resolve => server.close(resolve)); for (const session of sessions) session.destroy(); for (const socket of sockets) socket.destroy(); await ended; rates.clear(); },
+    close: async () => { active = false; await workbench?.close(); const ended = new Promise(resolve => server.close(resolve)); for (const session of sessions) session.destroy(); for (const socket of sockets) socket.destroy(); await ended; rates.clear(); deviceRates.clear(); },
   };
 }

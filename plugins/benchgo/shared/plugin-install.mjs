@@ -1,6 +1,6 @@
 /** Immutable profile-local plugin releases. The profile manifest is the only activation pointer. */
 import { createHash, randomUUID } from 'node:crypto';
-import { cp, lstat, mkdir, readFile, rename, rm, symlink, realpath } from 'node:fs/promises';
+import { cp, lstat, mkdir, readFile, rename, rm, symlink, realpath, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { compareVersions } from './update-feed.mjs';
@@ -60,7 +60,7 @@ async function attachOfficialPackages(release, runtime) {
     }
   };
   if (await findPackage(PLUS_PACKAGE) || await findPackage(LEGACY_PLUGIN_PACKAGE)) throw new Error('此桌面版本仍内置锁定插件，请先安装支持独立插件更新的新版应用');
-  const unlinkTargets = [];
+  const refreshLinks = [];
   for (const item of release.shared) {
     const name = typeof item === 'string' ? item : item.name;
     if (typeof name !== 'string' || !/^@deepseek-ai\/[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error('插件声明了不受支持的共享服务');
@@ -73,16 +73,18 @@ async function attachOfficialPackages(release, runtime) {
       try { current = await realpath(target); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       if (current === await realpath(source)) continue;
       if (!(await lstat(target)).isSymbolicLink()) throw new Error('插件包不得覆盖官方共享服务');
-      unlinkTargets.push(target);
+      refreshLinks.push({ source, target });
       continue;
     }
     await mkdir(dirname(target), { recursive: true });
     await symlink(source, target, process.platform === 'win32' ? 'junction' : 'dir');
   }
-  // Shared services are resolved through the official runtime itself, so the
-  // process holds one copy of each official module. A physical link here can
-  // shadow that copy with a distinct instance, which breaks scope identity.
-  for (const target of unlinkTargets) await rm(target, { recursive: true, force: true });
+  // A moved runtime needs a fresh release-root link. Node resolves its real
+  // path to the official copy; remove only the validated link, never its target.
+  for (const { source, target } of refreshLinks) {
+    await unlink(target);
+    await symlink(source, target, process.platform === 'win32' ? 'junction' : 'dir');
+  }
 }
 
 /** Prepare and validate without changing the running profile. No lifecycle scripts are executed. */

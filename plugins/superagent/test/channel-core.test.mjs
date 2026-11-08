@@ -26,7 +26,7 @@ test('channel CAS configuration isolates providers, retains opaque identifiers a
     assert.deepEqual(connections.read('telegram').config.ownerIds, ['Owner:Case/X']);
     assert.equal(connections.read('wecom').revision, 1);
     assert.equal(connections.read('discord').revision, 0);
-    assert.equal(connections.list().length, 10);
+    assert.equal(connections.list().length, channelIds.length);
   } finally { connections.close(); await rm(directory, { recursive: true, force: true }); }
 });
 

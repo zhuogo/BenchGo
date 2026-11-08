@@ -11,7 +11,7 @@ import QRCode from 'qrcode';
 
 const textConfig = config => Object.fromEntries(Object.entries(config || {}).map(([key, value]) => [key, Array.isArray(value) && key !== 'groups' ? value.join('\n') : value]));
 const listField = field => ['list', 'array', 'string[]', 'textarea'].includes(field.type) || Array.isArray(field.default);
-const available = status => status?.enabled === true;
+const available = status => status?.enabled === true && !status?.error && ['verified', 'host-authenticated'].includes(status?.authentication) && ['connected', 'listening'].includes(status?.connection?.state);
 const stateLabel = status => !status?.enabled ? '' : ({ connected: '已连接', connecting: '连接中', reconnecting: '重连中', failed: '连接失败', stopped: '已停止', listening: '监听中', idle: '待连接', error: '连接失败', unavailable: '不可用', disabled: '' })[status?.connection?.state] || '未连接';
 const connectionTone = status => !status?.enabled ? 'neutral' : ['connected', 'listening'].includes(status?.connection?.state) ? 'success' : ['failed', 'error', 'unavailable'].includes(status?.connection?.state) ? 'error' : 'pending';
 function ConnectionState({ icon = 'link', title, description, loading = false, children }) {

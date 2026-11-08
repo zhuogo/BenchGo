@@ -15,3 +15,8 @@ Harness tool marks: Gemini, Grok, OpenClaw, MiniMax and Hermes adapted from CC S
 Supplier brand marks: vendored from CC Switch src/icons/extracted (MIT, Copyright (c) 2025 Jason Young); full notice retained in client/tool-brand-icon.jsx. Source details in client/assets/provider-brands/SOURCE.md. Marks remain property of their respective owners.
 
 Link bundles selfsigned/node-forge, React/ReactDOM, qrcode and their runtime dependencies. See lib/LINK-THIRD-PARTY-LICENSES.txt for license texts. The Android source uses AndroidX, OkHttp and ZXing via Maven dependencies and retains Gradle wrapper license notices. No reference/ds-harness-remote source was copied for Link.
+
+Workbench composes @linxin666/dsh-ssh 0.4.15 (Apache-2.0, https://github.com/zhu1090093659/dsh-web) and dsh-better-sidebar 0.30.1 (MIT, https://github.com/omdsh-dev/DSH-better-sidebar). Original licenses and adaptation notice are included in lib/modules/workbench/lib/.
+Execution enhancements compose dsh-ops 0.5.0 (https://github.com/T-Auto/dsh-ops) and smart-compaction 0.3.15 (https://github.com/JoblessJoe/smart-compaction); their packages retain their original licenses and third-party notices.
+The optional engineering skills catalog references mattpocock/skills v1.3.2, commit d1478fcb140db0b93c0c8df17bcfd311844749d0 (MIT, Copyright (c) 2026 Matt Pocock), https://github.com/mattpocock/skills. Original skills, LICENSE and applicable CREDITS are downloaded together only when requested.
+BenchGo UI v1 is an independent React implementation informed by dsh-genui 0.3.3 (https://github.com/lhuans/dsh-genui); it does not bundle OpenTiny or claim full schema compatibility.

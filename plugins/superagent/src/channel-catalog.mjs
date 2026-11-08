@@ -1,8 +1,8 @@
 import { feishuConfig } from './feishu.mjs';
 
-export const channelIds = ['feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'email', 'webhook', 'api'];
+export const channelIds = ['feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'webhook', 'api'];
 const field = (key, label, type = 'text', extra = {}) => ({ key, label, type, ...extra });
-const setupUrls = { wecom: 'https://work.weixin.qq.com/', qq: 'https://q.qq.com/', telegram: 'https://t.me/BotFather', discord: 'https://discord.com/developers/applications', whatsapp: 'https://developers.facebook.com/apps/' };
+const setupUrls = { slack: 'https://api.slack.com/apps', dingtalk: 'https://open-dev.dingtalk.com/', wecom: 'https://work.weixin.qq.com/', qq: 'https://q.qq.com/', telegram: 'https://t.me/BotFather', discord: 'https://discord.com/developers/applications', whatsapp: 'https://developers.facebook.com/apps/' };
 const feishu = { id: 'feishu', label: '飞书', setupUrl: 'https://open.feishu.cn/app', help: '启用飞书应用的机器人与接收消息事件，选择长连接，无需公网地址。保存凭据并验证后，选择机器人所在群；@ 时按需读取相关讨论，读取范围取决于飞书权限。', defaults: feishuConfig(), capabilities: { text: true, groups: true, direct: true, history: true }, fields: [
   field('appId', 'App ID', 'text', { required: true }), field('appSecretRef', 'App Secret 凭据', 'secretRef', { required: true }),
   field('accessMode', '谁能发起任务', 'select', { hidden: true, options: ['owners', 'platform'] }),

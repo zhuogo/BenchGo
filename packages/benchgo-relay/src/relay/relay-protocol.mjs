@@ -1,4 +1,7 @@
 export const RELAY_CONTROL_PATH = '/__link/relay/control';
+export const RELAY_PROBE_PATH = '/__link/relay/probe';
+export const RELAY_PROTOCOL = 'benchgo-link-relay';
+export const RELAY_PROTOCOL_VERSION = 1;
 export const RELAY_DATA_PATH = '/__link/relay/data';
 export const RELAY_WORKBENCH_PATH = '/link/workbench/';
 export const RELAY_VOICE_PATH = '/link/workbench/api/voice/realtime';

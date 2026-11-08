@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { triageWorkerQuestions, validateAttentionDecisions } from '../src/attention-triage.mjs';
+import { triageWorkerQuestions, validateAttentionDecisions, buildAttentionExcerpts, parseAttentionDecisions, requiresHumanDecision } from '../src/attention-triage.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { attentionBatchAnswers } from '../src/worker-attention.mjs';
 
@@ -10,6 +10,23 @@ const decisions = [{ questionId: 'known', route: 'self', basis: '原指令明确
   { questionId: 'format', route: 'default', basis: '原指令明确允许默认列表', evidence: '列表', authorization: '你可自行决定，采用默认列表', nonBlocking: true }];
 const policy = { models: [{ providerId: 'p', modelId: 'Opaque Router/1' }], workerModels: [{ providerId: 'p', modelId: 'Worker' }] };
 
+test('Attention distinguishes narrow historical authorization from a current approval request', () => {
+  const historical = { id: 'language', question: '交付语言使用简体中文还是英文？（原请求已授权简体中文，本项可由总助手按原请求答复）' };
+  assert.equal(requiresHumanDecision(historical), false);
+  for (const source of ['原请求', '原指令', '原始指令']) {
+    for (const past of ['已', '已经']) {
+      assert.equal(requiresHumanDecision({ question: `${source}${past}授权简体中文，交付语言？` }), false);
+    }
+  }
+  for (const question of ['原请求已授权旧操作，请授权新操作', '已授权简体中文，交付语言？', '无需授权，直接执行',
+    '原请求已授权吗？', '原请求已授权？', '原请求已授权是否有效', '原请求是否已授权', '是否原请求已授权', '原请求已授权简体中文，请批准执行']) {
+    assert.equal(requiresHumanDecision({ question }), true, question);
+  }
+  assert.equal(requiresHumanDecision({ ...historical, intent: { kind: 'approval' } }), true);
+  assert.throws(() => validateAttentionDecisions({ decisions: [{ questionId: historical.id, route: 'self', basis: 'Question claims authorization', evidence: '简体中文' }] },
+    { questions: [historical], instruction: '请整理三条事实。' }), /ATTENTION_UNSUPPORTED_ANSWER/);
+});
+
 test('Attention automatic decisions require verbatim mandate evidence and explicit nonblocking default permission', () => {
   assert.deepEqual(validateAttentionDecisions({ decisions }, { questions, instruction }).map(row => row.answer.custom), ['简体中文', '列表']);
   assert.throws(() => validateAttentionDecisions({ decisions: [{ ...decisions[0], evidence: 'English' }, decisions[1]] }, { questions, instruction }), /ATTENTION_UNSUPPORTED_ANSWER/);
@@ -17,6 +34,58 @@ test('Attention automatic decisions require verbatim mandate evidence and explic
   assert.throws(() => validateAttentionDecisions({ decisions: [decisions[0]] }, { questions, instruction }), /ATTENTION_INVALID_DECISION/);
   const approval = [{ id: 'known', question: '继续？', intent: { kind: 'approval', approve: '是', reject: '否' } }];
   assert.equal(validateAttentionDecisions({ decisions: [decisions[0]] }, { questions: approval, instruction })[0].route, 'user');
+});
+
+test('Attention excerpt IDs preserve original text and retain strict answer/default validation', () => {
+  const original = '  使用简体中文。\r\n若需选择格式，你可自行决定，采用默认列表。\n' + '长'.repeat(6001) + '🙂';
+  const excerpts = buildAttentionExcerpts(original);
+  assert.equal(excerpts.map(row => row.text).join(''), original);
+  assert.ok(excerpts.every(row => row.text.length <= 6000));
+  assert.deepEqual(buildAttentionExcerpts(original), excerpts);
+  assert.deepEqual(buildAttentionExcerpts('使用简体中文，保留任务；English, next; done: A、B').map(row => row.text),
+    ['使用简体中文，', '保留任务；', 'English,', ' next;', ' done: A、B']);
+  assert.equal(excerpts[0].text, '  使用简体中文。');
+  const evidence = excerpts.find(row => row.text.includes('简体中文'));
+  const authorization = excerpts.find(row => row.text.includes('采用默认列表'));
+  const rows = [{ questionId: 'known', route: 'self', basis: 'Language is explicit', evidenceId: evidence.id },
+    { questionId: 'format', route: 'default', basis: 'Exact default is authorized', evidenceId: authorization.id, authorizationId: authorization.id, nonBlocking: true }];
+  const parse = decisions => parseAttentionDecisions(JSON.stringify({ decisions }), { questions, instruction: original });
+  const result = parse(rows);
+  assert.equal(result[0].answer.custom, evidence.text);
+  assert.equal(result[1].authorization, authorization.text);
+  assert.throws(() => parse([{ ...rows[0], evidenceId: 'missing' }, rows[1]]), /ATTENTION_UNSUPPORTED_ANSWER/);
+  assert.throws(() => parse([{ ...rows[0], evidenceId: null }, rows[1]]), /ATTENTION_UNSUPPORTED_ANSWER/);
+  assert.throws(() => parse([{ ...rows[0], evidence: '简体中文' }, rows[1]]), /ATTENTION_UNSUPPORTED_ANSWER/);
+  assert.throws(() => parse([rows[0], { ...rows[1], authorizationId: 'missing' }]), /ATTENTION_DEFAULT_NOT_AUTHORIZED/);
+  assert.throws(() => parse([rows[0], { ...rows[1], authorization: '自行决定' }]), /ATTENTION_DEFAULT_NOT_AUTHORIZED/);
+  assert.throws(() => parse([rows[0], { ...rows[1], authorizationId: evidence.id }]), /ATTENTION_DEFAULT_NOT_AUTHORIZED/);
+  assert.throws(() => parse([rows[0], { ...rows[1], nonBlocking: false }]), /ATTENTION_DEFAULT_NOT_AUTHORIZED/);
+  assert.throws(() => parse([rows[0], { ...rows[1], authorizationId: undefined }]), /ATTENTION_DEFAULT_NOT_AUTHORIZED/);
+  assert.deepEqual(parseAttentionDecisions(JSON.stringify({ decisions }), { questions, instruction }).map(row => row.answer.custom), ['简体中文', '列表']);
+  assert.equal(parseAttentionDecisions(JSON.stringify({ decisions: [{ ...rows[0], evidenceId: 'missing' }] }), {
+    questions: [{ id: 'known', question: '批准执行？' }], instruction: original,
+  })[0].route, 'user', 'approval remains human-owned even with invalid model evidence');
+  assert.equal(parse([{ questionId: 'known', route: 'user', basis: 'Instruction does not answer this question' }, rows[1]])[0].route, 'user');
+});
+
+test('Attention Router requests excerpt IDs and resolves them in one request without invented answers', async () => {
+  let calls = 0;
+  const llm = { async *stream(options) {
+    calls++;
+    const input = JSON.parse(options.messages[1].content[0].text);
+    assert.equal(input.excerpts.map(row => row.text).join(''), instruction);
+    assert.match(options.messages[0].content[0].text, /evidenceId/);
+    assert.match(options.messages[0].content[0].text, /If no provided excerpt adequately answers/);
+    yield { type: 'text-delta', text: JSON.stringify({ decisions: [
+      { questionId: 'known', route: 'self', basis: 'Language is explicit', evidenceId: 'e0' },
+      { questionId: 'format', route: 'user', basis: 'User decides' },
+    ] }) };
+    yield { type: 'finish', reason: { kind: 'stop' } };
+  } };
+  const result = await triageWorkerQuestions({ llm, database: { ticketGoalBudget: () => false }, ticket: { id: 't', mandate: { instruction } }, questions, policy });
+  assert.equal(calls, 1);
+  assert.equal(result[0].answer.custom, '使用简体中文。');
+  assert.equal(result[1].route, 'user');
 });
 
 test('Attention uses a single budgeted Router request and times out a stalled adapter without retry', async () => {
@@ -31,6 +100,31 @@ test('Attention uses a single budgeted Router request and times out a stalled ad
   const stalled = { async *stream() { attempts++; await new Promise(() => {}); } };
   const timed = await triageWorkerQuestions({ llm: stalled, database, ticket: { id: 't', mandate: { instruction } }, questions, policy, timeoutMs: 10 });
   assert.equal(attempts, 1); assert.ok(timed.every(row => row.route === 'user' && row.systemState === 'timeout'));
+});
+
+for (const kind of ['error', 'blocked', 'aborted', 'max-tokens', 'tool-calls']) test(`Attention stops at terminal ${kind} without waiting for a stalled stream tail`, async () => {
+  let attempts = 0, pulledAfterFinish = false, closed = false, requestSignal;
+  const charged = [], settled = [];
+  const database = { ticketGoalBudget: () => true, reserveGoalRequest: input => { charged.push(input); },
+    recordGoalRequestUsage: input => settled.push(input) };
+  const llm = { async *stream({ signal }) {
+    attempts++; requestSignal = signal;
+    try {
+      yield { type: 'usage', usage: { totalTokens: 7 } };
+      yield { type: 'finish', reason: { kind, ...(kind === 'error' ? { failure: { code: 'SERVER', message: 'fixture failure' } } : {}) } };
+      pulledAfterFinish = true;
+      await new Promise(() => {});
+    } finally { closed = true; }
+  } };
+  const result = await triageWorkerQuestions({ llm, database, ticket: { id: 't', mandate: { instruction } }, questions, policy, timeoutMs: 30 });
+  assert.ok(result.every(row => row.route === 'user' && row.systemState === 'triage-unavailable'));
+  assert.equal(attempts, 1); assert.equal(charged.length, 1);
+  assert.equal(pulledAfterFinish, false, 'a terminal failure must not request another stream chunk');
+  assert.equal(requestSignal.aborted, true, 'finished triage cancels the underlying request');
+  // Closing the accounting wrapper runs on the cleanup microtask.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(closed, true);
+  assert.deepEqual(settled.map(row => row.tokens), [7]);
 });
 
 test('Attention stores host resolutions separately and assembles mixed batches without forged human triggers', t => {

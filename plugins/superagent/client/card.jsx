@@ -56,7 +56,7 @@ export function cardDocument(html, color, motion = true) {
   return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><style>body{display:flex;align-items:center;font:600 12px/1.4 system-ui,sans-serif;color:${textColor};background:transparent;overflow-wrap:anywhere}*{box-sizing:border-box;max-width:100%}p{margin:0}</style></head><body>${safe.html}<style>html,body{margin:0!important;padding:0!important;width:160px!important;height:40px!important;min-width:0!important;min-height:0!important;overflow:hidden!important;position:static!important}html{display:block!important}body{display:flex!important}${motion ? '' : '*,*::before,*::after{animation-play-state:paused!important;transition:none!important}'}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}</style></body></html>`;
 }
 
-export function AssistantCard({ name, pet, html, motion = true, onOpen }) {
+export function AssistantCard({ name, pet, html, motion = true, onOpen, action = 'idle', expression, ariaLabel, current, status, avatarSize = 40 }) {
   const inspection = useMemo(() => inspectCardHtml(html), [html]);
   const custom = inspection.hasContent;
   const [active, setActive] = React.useState(false);
@@ -78,8 +78,9 @@ export function AssistantCard({ name, pet, html, motion = true, onOpen }) {
   }, []);
   const source = useMemo(() => custom ? cardDocument(inspection.html, color, motion && active) : '', [inspection.html, color, custom, motion, active]);
   const Tag = onOpen ? 'button' : 'span';
-  return <Tag ref={host} className={`ba-card${custom ? ' ba-card-custom' : ' ba-card-brand'}`} {...(onOpen ? { type: 'button', onClick: onOpen, 'aria-label': `编辑${name}的名片` } : { role: 'img', 'aria-label': `${name}的名片` })} data-motion={motion && active ? 'on' : 'off'}>
+  return <Tag ref={host} className={`ba-card${custom ? ' ba-card-custom' : ' ba-card-brand'}`} {...(onOpen ? { type: 'button', onClick: onOpen, 'aria-label': ariaLabel || `编辑${name}的名片`, 'aria-current': current ? 'page' : undefined } : { role: 'img', 'aria-label': `${name}的名片` })} data-motion={motion && active ? 'on' : 'off'} data-status={status}>
     <style>{css}</style>
-    {custom ? <iframe title={`${name}的名片`} sandbox="" referrerPolicy="no-referrer" srcDoc={source} tabIndex={-1} aria-hidden="true" /> : <><PetAvatar pet={pet} src={petImageUrl(pet, document.baseURI)} size={40} motion={false} /><span className="ba-card-name">{name}</span></>}
+    {custom ? <iframe title={`${name}的名片`} sandbox="" referrerPolicy="no-referrer" srcDoc={source} tabIndex={-1} aria-hidden="true" /> : <><PetAvatar pet={pet} src={petImageUrl(pet, document.baseURI, expression)} expression={expression} action={action} size={avatarSize} motion={motion} /><span className="ba-card-name">{name}</span></>}
+    {status && status !== 'idle' && <span className="ba-card-status" aria-hidden="true">{status === 'waiting' ? '?' : status === 'error' ? '!' : '·'}</span>}
   </Tag>;
 }

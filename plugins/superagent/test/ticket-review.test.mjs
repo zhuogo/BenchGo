@@ -119,6 +119,32 @@ test('a text-only task is reviewed against its persisted concrete criteria, neve
   assert.equal(review.verdict, 'passed'); assert.equal(review.delivery.text, passed.delivery.text);
 });
 
+test('review preserves current owner process requirements when Router summaries omit them', async () => {
+  const originalInstruction = '读取甲、乙两份记录，分别核对来源，再交付总数。即使总数已知也要完成两次来源核对；不要联网。';
+  const target = '读取甲记录并交付总数。';
+  const acceptance = '总数正确即可。';
+  const args = input([passed], request => {
+    const prompt = request.messages[0].content[0].text;
+    const payload = JSON.parse(request.messages[1].content[0].text);
+    assert.equal(payload.taskContract.instructionRevision, 3);
+    assert.equal(payload.taskContract.originalInstruction, originalInstruction);
+    assert.equal(payload.mandate.instruction, originalInstruction);
+    assert.equal(payload.taskContract.objective, target);
+    assert.equal(payload.taskContract.acceptance, acceptance);
+    assert.match(prompt, /originalInstruction first:.*takes precedence over Router-written objective and acceptance summaries/);
+    assert.match(prompt, /cannot waive, contradict or omit an explicit owner requirement applicable to this Ticket/);
+    assert.match(prompt, /required outcomes and explicitly required process steps, order and verification paths against actual evidence/);
+    assert.match(prompt, /Read relevant indexed evidence before concluding a step is absent/);
+    assert.match(prompt, /bounded rework for this same Worker session/);
+  });
+  args.ticket = { ...args.ticket, target, acceptance, instructionRevision: 3,
+    mandate: { instruction: originalInstruction, acceptance: '原始要求中的来源核对和总数。' } };
+  const before = structuredClone(args.ticket);
+  // The fixture checks the request contract, not whether a model obeys it.
+  await reviewTicketResult(args);
+  assert.deepEqual(args.ticket, before);
+});
+
 test('review accepts a fenced or single enveloped JSON decision and rejects ambiguous output', async () => {
   const decision = { ...passed, reason: 'source {verified}' };
   const fenced = input([decision]);

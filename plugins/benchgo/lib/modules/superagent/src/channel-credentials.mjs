@@ -2,7 +2,7 @@ import { randomBytes, randomUUID, createCipheriv, createDecipheriv } from 'node:
 
 const prefix = 'benchgo-channel:', keyRecord = 'benchgo-plugin/channel-key';
 const storageKey = ref => `benchgo-plugin/channel-${ref.slice(prefix.length).replaceAll(':', '-')}`;
-const channels = new Set(['feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'email', 'webhook', 'api']);
+const channels = new Set(['feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'webhook', 'api']);
 const failure = () => Object.assign(new Error('渠道凭据不可用，请重新录入'), { status: 503 });
 
 /** Owner writes secrets; adapters resolve opaque references. Public configuration contains no secrets. */

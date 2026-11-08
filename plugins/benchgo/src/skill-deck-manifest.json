@@ -1,0 +1,846 @@
+{
+  "repository": "https://github.com/mattpocock/skills",
+  "version": "1.3.2",
+  "commit": "d1478fcb140db0b93c0c8df17bcfd311844749d0",
+  "license": {
+    "path": "LICENSE",
+    "sha": "f1dd2c09108dde1a5f56097cee8461b3ea834499",
+    "size": 1068
+  },
+  "skills": [
+    {
+      "name": "ask-matt",
+      "description": "???????????????????",
+      "originalDescription": "Ask which skill or flow fits your situation. A router over the skills in this repo.",
+      "category": "engineering",
+      "directory": "skills/engineering/ask-matt",
+      "dependencies": [
+        "code-review",
+        "codebase-design",
+        "diagnosing-bugs",
+        "domain-modeling",
+        "grill-with-docs",
+        "implement-spec",
+        "implement",
+        "improve-codebase-architecture",
+        "pr",
+        "prototype",
+        "research",
+        "retro",
+        "setup-matt-pocock-skills",
+        "tdd",
+        "to-spec",
+        "to-tickets",
+        "triage",
+        "wayfinder",
+        "wizard",
+        "grill-me",
+        "grilling",
+        "handoff",
+        "teach",
+        "to-questionnaire",
+        "wait-what",
+        "writing-for-agents"
+      ],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "PHASE-BOUNDARIES.md",
+          "sha": "fb58ef9febcfd558cdb4517e370f19034869ba26",
+          "size": 4249,
+          "mode": "100644"
+        },
+        {
+          "path": "SKILL.md",
+          "sha": "4bfeeb61dae548b8b7754c4fba7bd40ab3926099",
+          "size": 12594,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "5c60d51b5b1248d7210bff8c6b42a5a06524b8a4",
+          "size": 137,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "code-review",
+      "description": "??????????????????",
+      "originalDescription": "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to \"review since X\".",
+      "category": "engineering",
+      "directory": "skills/engineering/code-review",
+      "dependencies": [
+        "setup-matt-pocock-skills"
+      ],
+      "modelInvocable": true,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "83183e0ad36fd0eef25d37c7e483284b7e34c1f0",
+          "size": 6721,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "9076774ba327f49068db9273feceda03bfe940fa",
+          "size": 100,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "codebase-design",
+      "description": "???????????????????",
+      "originalDescription": "Shared vocabulary for designing deep modules. Use when the user wants to design or improve a module's interface, find deepening opportunities, decide where a seam goes, make code more testable or AI-navigable, or when another skill needs the deep-module vocabulary.",
+      "category": "engineering",
+      "directory": "skills/engineering/codebase-design",
+      "dependencies": [],
+      "modelInvocable": true,
+      "files": [
+        {
+          "path": "DEEPENING.md",
+          "sha": "cd94075cfd754d147555c5d747a16431ed4c7dd8",
+          "size": 2553,
+          "mode": "100644"
+        },
+        {
+          "path": "DESIGN-IT-TWICE.md",
+          "sha": "aebdc9f8c05b40d7832de38e2fd8380e1e5507ac",
+          "size": 2699,
+          "mode": "100644"
+        },
+        {
+          "path": "SKILL.md",
+          "sha": "3f63c8146dd2604b419c929e9876b90c30d410e9",
+          "size": 6446,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "3180715edb37f6e96bec42f92f00169faa8886ef",
+          "size": 102,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "diagnosing-bugs",
+      "description": "?????????????????",
+      "originalDescription": "Diagnosis loop for hard bugs and performance regressions. Use when the user says \"diagnose\"/\"debug this\", or reports something broken/throwing/failing/slow.",
+      "category": "engineering",
+      "directory": "skills/engineering/diagnosing-bugs",
+      "dependencies": [],
+      "modelInvocable": true,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "d039541ddd1c46e6ddbd662fe99d49b686fc5e12",
+          "size": 8664,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "a13a755a77634ce61a649a3a0d905a66d3865b35",
+          "size": 103,
+          "mode": "100644"
+        },
+        {
+          "path": "scripts/hitl-loop.template.sh",
+          "sha": "243198464a8401a7ba1d63b3708fa43c3d067665",
+          "size": 1316,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "domain-modeling",
+      "description": "???????????????????",
+      "originalDescription": "Build and sharpen a project's domain model. Use when discussing codebase terminology, writing or editing a GLOSSARY.md, or recording or editing an ADR.",
+      "category": "engineering",
+      "directory": "skills/engineering/domain-modeling",
+      "dependencies": [],
+      "modelInvocable": true,
+      "files": [
+        {
+          "path": "ADR-FORMAT.md",
+          "sha": "d7e61f30a9fd8ca70d9ee68f019c2a9ebf2d13f7",
+          "size": 2733,
+          "mode": "100644"
+        },
+        {
+          "path": "GLOSSARY-FORMAT.md",
+          "sha": "9c0b4c7a2e8507c23cbb5e0baa66d81699321cc6",
+          "size": 2300,
+          "mode": "100644"
+        },
+        {
+          "path": "SKILL.md",
+          "sha": "a4438c6879c517d1a08e2b5fbca049b632688dfe",
+          "size": 3346,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "7f1522d2f11506ee205275ab7c282aa52366ecf6",
+          "size": 101,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "grill-with-docs",
+      "description": "????????????????????",
+      "originalDescription": "A relentless interview to sharpen a plan or design, which also creates docs (ADR's and glossary) as we go.",
+      "category": "engineering",
+      "directory": "skills/engineering/grill-with-docs",
+      "dependencies": [
+        "grilling",
+        "domain-modeling"
+      ],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "62b9efb6f991d1b229adee7506962f13ced0c499",
+          "size": 247,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "5dbe2780a51be3e9b118bd7758a73e54a9384e11",
+          "size": 145,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "implement-spec",
+      "description": "?????????????????",
+      "originalDescription": "Implement the result of /to-spec and /to-tickets in code.",
+      "category": "engineering",
+      "directory": "skills/engineering/implement-spec",
+      "dependencies": [
+        "tdd",
+        "code-review",
+        "setup-matt-pocock-skills"
+      ],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "77bf59b02e7d3a43afbd7035ad77879cf3ebe783",
+          "size": 2831,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "f5e91af21e38eb1a167ea5aa93dfc7da3c4637b4",
+          "size": 168,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "implement",
+      "description": "????????????????????",
+      "originalDescription": "Implement a piece of work based on a spec or set of tickets.",
+      "category": "engineering",
+      "directory": "skills/engineering/implement",
+      "dependencies": [
+        "tdd",
+        "code-review"
+      ],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "bd49e472984c7b99aac40286fdae749bb955a842",
+          "size": 622,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "f8794dc153b409052a9167baf10858cf01b36175",
+          "size": 139,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "improve-codebase-architecture",
+      "description": "?????????????????????",
+      "originalDescription": "Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick.",
+      "category": "engineering",
+      "directory": "skills/engineering/improve-codebase-architecture",
+      "dependencies": [
+        "codebase-design",
+        "grilling",
+        "domain-modeling"
+      ],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "HTML-REPORT.md",
+          "sha": "e39e8255b8797cf8257d014fb6658fb533f3a399",
+          "size": 6641,
+          "mode": "100644"
+        },
+        {
+          "path": "SKILL.md",
+          "sha": "f1eabb568464f03ae79a3346fc1918fdde6d8285",
+          "size": 6028,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "706fdca096da5937fe57875a9154017d50668c42",
+          "size": 166,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "pr",
+      "description": "??????????????????",
+      "originalDescription": "Use when writing a PR body.",
+      "category": "engineering",
+      "directory": "skills/engineering/pr",
+      "dependencies": [],
+      "modelInvocable": true,
+      "files": [
+        {
+          "path": "CREDITS.md",
+          "sha": "5314bda2fa6005e264c9b5c1de7c425e719dc91f",
+          "size": 604,
+          "mode": "100644"
+        },
+        {
+          "path": "SKILL.md",
+          "sha": "84dd4fb2f068e9f6282690235d20dd505b418119",
+          "size": 4169,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "48286f48f53b937cc19c0e39899b5f956271a98d",
+          "size": 93,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "prototype",
+      "description": "?????????????????",
+      "originalDescription": "Build a throwaway prototype to answer a design question. Use when the user wants to sanity-check whether a state model or logic feels right, or explore what a UI should look like.",
+      "category": "engineering",
+      "directory": "skills/engineering/prototype",
+      "dependencies": [],
+      "modelInvocable": true,
+      "files": [
+        {
+          "path": "LOGIC.md",
+          "sha": "32be86a0a5d9928db84b3988e55f9debe476ab40",
+          "size": 6036,
+          "mode": "100644"
+        },
+        {
+          "path": "SKILL.md",
+          "sha": "a0044501fe0d385b4d8575b610188ede9b236ccf",
+          "size": 2931,
+          "mode": "100644"
+        },
+        {
+          "path": "UI.md",
+          "sha": "3977951663490882c2632b40695d9f59a2fe2408",
+          "size": 6913,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "1618b147965bc729b7bf3e8da5f130132067aadc",
+          "size": 100,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "research",
+      "description": "??????????????????",
+      "originalDescription": "Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo. Use when the user wants a topic researched, docs or API facts gathered, or reading legwork delegated to a background agent.",
+      "category": "engineering",
+      "directory": "skills/engineering/research",
+      "dependencies": [],
+      "modelInvocable": true,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "ffc9eb89849cc4cf74962ce93d786ffd17c6a5dc",
+          "size": 832,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "e18b96ca0ccc1003889d5d6991386207c2454bc2",
+          "size": 94,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "retro",
+      "description": "???????????????????",
+      "originalDescription": "Conduct a retrospective on a coding session.",
+      "category": "engineering",
+      "directory": "skills/engineering/retro",
+      "dependencies": [
+        "writing-for-agents"
+      ],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "12149acf2dd23b4514dec57b04a6293eaa1352fa",
+          "size": 4369,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "a2f0bac3f9cebf29beee2e79960cb876e0adc65d",
+          "size": 146,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "setup-matt-pocock-skills",
+      "description": "?????????????????????",
+      "originalDescription": "Configure this repo for the engineering skills: set up its issue tracker, triage label vocabulary, and domain doc layout. Run once before first use of the other engineering skills.",
+      "category": "engineering",
+      "directory": "skills/engineering/setup-matt-pocock-skills",
+      "dependencies": [],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "2df0b07981718fa5d9a51526dfbcaee87e3a543d",
+          "size": 7526,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "65a0da8128c98051183235e490767a8065310868",
+          "size": 152,
+          "mode": "100644"
+        },
+        {
+          "path": "domain.md",
+          "sha": "4032de016c1e91119d33d477633e2b8f265f4195",
+          "size": 2042,
+          "mode": "100644"
+        },
+        {
+          "path": "issue-tracker-github.md",
+          "sha": "dc806f5655ae34c1701170f98208e5fb5dba7045",
+          "size": 5082,
+          "mode": "100644"
+        },
+        {
+          "path": "issue-tracker-gitlab.md",
+          "sha": "1aeb5d04fadd9b7240e3f70dff20a758a1c729ea",
+          "size": 3979,
+          "mode": "100644"
+        },
+        {
+          "path": "issue-tracker-local.md",
+          "sha": "0209a19af92c9c485cf3acc3d9e253171517ea17",
+          "size": 1810,
+          "mode": "100644"
+        },
+        {
+          "path": "triage-labels.md",
+          "sha": "5276464244857a3cc29890ff4a978a197b21f3fc",
+          "size": 1057,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "tdd",
+      "description": "???????????????????",
+      "originalDescription": "Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions \"red-green-refactor\", or wants integration tests.",
+      "category": "engineering",
+      "directory": "skills/engineering/tdd",
+      "dependencies": [
+        "codebase-design"
+      ],
+      "modelInvocable": true,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "01eadaa34e7c9a63a67d6dc3cce1cc81b0e49985",
+          "size": 3629,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "651b838a7663e027b1b8884491e867f26bb9a021",
+          "size": 87,
+          "mode": "100644"
+        },
+        {
+          "path": "mocking.md",
+          "sha": "71cbfee674d93244ce81d1830b930ca9a69200bd",
+          "size": 1481,
+          "mode": "100644"
+        },
+        {
+          "path": "tests.md",
+          "sha": "7ab86479f925a1f9e8ba680af33cb3b12e015381",
+          "size": 2214,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "to-spec",
+      "description": "?????????????????",
+      "originalDescription": "Turn the current conversation into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already discussed.",
+      "category": "engineering",
+      "directory": "skills/engineering/to-spec",
+      "dependencies": [
+        "setup-matt-pocock-skills"
+      ],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "3f52599ae2a4347aee5a07432c2707518e691a7f",
+          "size": 3043,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "549e6f76f020a1b9ba65f52ccda336566ee6222a",
+          "size": 135,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "to-tickets",
+      "description": "???????????????????",
+      "originalDescription": "Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker (edges as text in one file per ticket locally, or native blocking links on a real tracker).",
+      "category": "engineering",
+      "directory": "skills/engineering/to-tickets",
+      "dependencies": [
+        "setup-matt-pocock-skills"
+      ],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "9b77a01db9460c99c22d03c910c349f890f12c0e",
+          "size": 5812,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "24605a5db64e4fc750b999aa94aea126bee814ee",
+          "size": 146,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "triage",
+      "description": "???????????????",
+      "originalDescription": "Move issues and external PRs through a state machine of triage roles, categorise, verify, grill if needed, and write agent-ready briefs.",
+      "category": "engineering",
+      "directory": "skills/engineering/triage",
+      "dependencies": [
+        "grilling",
+        "domain-modeling",
+        "setup-matt-pocock-skills"
+      ],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "AGENT-BRIEF.md",
+          "sha": "1462fcd9e8cc21921158c296149dc05d9be39d20",
+          "size": 7942,
+          "mode": "100644"
+        },
+        {
+          "path": "OUT-OF-SCOPE.md",
+          "sha": "c9fba2f77ee0619975ec8488c0d4861a0c7e3151",
+          "size": 4667,
+          "mode": "100644"
+        },
+        {
+          "path": "SKILL.md",
+          "sha": "3fd5617e906cf9b71a6b17424791adb905fc248b",
+          "size": 6558,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "acb366cf0f2527e8925ff1223b77610ac0b1be4c",
+          "size": 135,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "wayfinder",
+      "description": "??????????????????????",
+      "originalDescription": "Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on your issue tracker, and resolve them one at a time until the way to the destination is clear.",
+      "category": "engineering",
+      "directory": "skills/engineering/wayfinder",
+      "dependencies": [
+        "research",
+        "prototype",
+        "grilling",
+        "domain-modeling",
+        "setup-matt-pocock-skills"
+      ],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "975d6bf9c0a49d18a651f3335e0b4dcf8650fe31",
+          "size": 12408,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "b37544751e0570f9df8de6c02aef238de8c3e1e0",
+          "size": 144,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "wizard",
+      "description": "????????????????",
+      "originalDescription": "Generate an interactive bash wizard that walks a human through steps only they can perform. Use when provisioning infrastructure, setting up credentials or CI secrets, walking an unfamiliar third-party dashboard, or running a one-off migration or cutover. Don't invoke this for steps the agent can perform itself.",
+      "category": "engineering",
+      "directory": "skills/engineering/wizard",
+      "dependencies": [],
+      "modelInvocable": true,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "c4294ad8298b9b95fc727496b1b802b1f7363fba",
+          "size": 4123,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "b601bdf3a321e7d32d5714681540b811287d3988",
+          "size": 96,
+          "mode": "100644"
+        },
+        {
+          "path": "template.sh",
+          "sha": "081ed3da860729c5e6fb1e7126c86b07b0ed56f0",
+          "size": 9498,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "grill-me",
+      "description": "???????????",
+      "originalDescription": "A relentless interview to sharpen a plan or design.",
+      "category": "productivity",
+      "directory": "skills/productivity/grill-me",
+      "dependencies": [
+        "grilling"
+      ],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "3947ff9c4ad980d14fc07fccbf659d47c114e81d",
+          "size": 157,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "4d6fb0c746c5d21364dce5d0cf8c51eab9712e7b",
+          "size": 137,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "grilling",
+      "description": "???????????????????",
+      "originalDescription": "Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any 'grill' trigger phrases.",
+      "category": "productivity",
+      "directory": "skills/productivity/grilling",
+      "dependencies": [],
+      "modelInvocable": true,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "d2f09a18e6a6c65c55f1271ba08dfeaf06f0bed3",
+          "size": 2077,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "ddbdb96139c0c1dfe6bca698f39d0465674b8a39",
+          "size": 113,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "handoff",
+      "description": "???????????????????",
+      "originalDescription": "Compact the current conversation into a handoff document for another agent to pick up.",
+      "category": "productivity",
+      "directory": "skills/productivity/handoff",
+      "dependencies": [],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "a224edc643a20ddb989f9bca1547440169159810",
+          "size": 940,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "6e1d8da121beceddc2f9ec7fa8714c1d914dd11a",
+          "size": 141,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "teach",
+      "description": "?????????????????",
+      "originalDescription": "Teach the user a new skill or concept, within this workspace.",
+      "category": "productivity",
+      "directory": "skills/productivity/teach",
+      "dependencies": [],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "GLOSSARY-FORMAT.md",
+          "sha": "fdd7e366ad9760588b28981e42b3d3b561e56aca",
+          "size": 2122,
+          "mode": "100644"
+        },
+        {
+          "path": "LEARNING-RECORD-FORMAT.md",
+          "sha": "953c61422776b47612c3c945920358ad7b5daee7",
+          "size": 2747,
+          "mode": "100644"
+        },
+        {
+          "path": "MISSION-FORMAT.md",
+          "sha": "45250bb1bad70988bf381625931df64645e10246",
+          "size": 1540,
+          "mode": "100644"
+        },
+        {
+          "path": "RESOURCES-FORMAT.md",
+          "sha": "18b588c8b6f96a50ae2352f264928c643d2782e4",
+          "size": 1924,
+          "mode": "100644"
+        },
+        {
+          "path": "SKILL.md",
+          "sha": "493fa3bae0dada971c4dfb965790e56920b1dced",
+          "size": 9733,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "3452a850e3b0c1f0a3d41b2bfd45164d2d38d7f6",
+          "size": 139,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "to-questionnaire",
+      "description": "??????????????????",
+      "originalDescription": "Turn a decision you can't fully answer into a questionnaire for someone else to fill in.",
+      "category": "productivity",
+      "directory": "skills/productivity/to-questionnaire",
+      "dependencies": [],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "dadd0c00d6a350acaa15bb9ca1b96b20ead684ca",
+          "size": 2904,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "a58d14765beb4acb4c9708b516310558e1308a22",
+          "size": 166,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "wait-what",
+      "description": "???????????????",
+      "originalDescription": "Stop. That last message did not land: re-pitch it.",
+      "category": "productivity",
+      "directory": "skills/productivity/wait-what",
+      "dependencies": [],
+      "modelInvocable": false,
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha": "9b15cd1a7dda0854ca093e29e3e0de57e241b2ac",
+          "size": 396,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "6f7a9c33f99ec4ba70d986d6fc0de06c8b811bc3",
+          "size": 158,
+          "mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "writing-for-agents",
+      "description": "?????????? Agent ????????",
+      "originalDescription": "Writing documents for agents. Use when creating or editing skills, or modifying AGENTS.md or CLAUDE.md.",
+      "category": "productivity",
+      "directory": "skills/productivity/writing-for-agents",
+      "dependencies": [],
+      "modelInvocable": true,
+      "files": [
+        {
+          "path": "SKILL-MECHANICS.md",
+          "sha": "9cdbdb22aadc438755392216e75ad9a14cc9832e",
+          "size": 2629,
+          "mode": "100644"
+        },
+        {
+          "path": "SKILL.md",
+          "sha": "a37608daf6e835e767deecfb498facecaaba82ba",
+          "size": 10886,
+          "mode": "100644"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha": "079c933b75743dec18b5d0c01006def20b6aad26",
+          "size": 102,
+          "mode": "100644"
+        }
+      ]
+    }
+  ]
+}

@@ -159,6 +159,21 @@ test('shared services link to matching official runtime and conflicting old seal
   assert.equal((await getInstallState(profile)).managed, false);
 });
 
+test('shared runtime refresh preserves occupied physical directories', async t => {
+  const { root, seed, put } = await fixture(t);
+  const service = { name: '@deepseek-ai/dsh-llm', version: '0.2.1-alpha.3' };
+  await put('runtime/node_modules/@deepseek-ai/dsh-llm/package.json', service);
+  const options = await seed('0.1.0', [service]);
+  const release = await prepareRelease({ ...options, runtime: join(root, 'runtime') });
+  const target = join(release.directory, 'node_modules', service.name);
+  await rm(target);
+  await mkdir(target);
+  await writeFile(join(target, 'user.txt'), 'keep');
+  await assert.rejects(prepareRelease({ ...options, runtime: join(root, 'runtime') }), /不得覆盖官方共享服务/u);
+  assert.equal(await readFile(join(target, 'user.txt'), 'utf8'), 'keep');
+  assert.deepEqual(JSON.parse(await readFile(join(root, 'runtime/node_modules', service.name, 'package.json'), 'utf8')), service);
+});
+
 test('shared services already linked beside the plugin are removed so the official runtime copy is used', async t => {
   const { root, profile, seed, put } = await fixture(t);
   const runtime = join(root, 'runtime');

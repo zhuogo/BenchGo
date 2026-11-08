@@ -26,7 +26,7 @@ export function sharedUiStyles() {
               }
             }
           }
-          for (const folder of ['benchgo/client', 'harness/client', 'superagent/client', 'voice/client', 'link/client', 'shared/client']) {
+          for (const folder of ['benchgo/client', 'harness/client', 'superagent/client', 'voice/client', 'link/client', 'interactive/client', 'efficiency/client', 'workbench/client', 'shared/client']) {
             try { await scan(join(pluginsRoot, folder)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
           }
           const compiler = await compile(await readFile(join(uiRoot, '../theme.css'), 'utf8'), { base: uiRoot, onDependency() {} });
