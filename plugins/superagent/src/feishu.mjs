@@ -1,5 +1,6 @@
 import { createHash, createDecipheriv, timingSafeEqual } from 'node:crypto';
 import { beforeDelivery, deliveryFailure, httpRejected } from './channels/delivery-outcome.mjs';
+import { authorizeChannel } from './channels/connection-authorization.mjs';
 
 const origin = 'https://open.feishu.cn/open-apis';
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -29,34 +30,40 @@ export function feishuConfig(input = {}) {
   return result;
 }
 
-/** A single scope check shared by event transport, reads and delivery. */
-export function feishuGroupMode(config, chatId) {
-  if (config.groups == null) return !config.chatIds?.length || config.chatIds.includes(chatId) ? 'all' : 'disabled';
-  return config.groups.find(group => group.chatId === chatId)?.mode || config.otherGroups || 'disabled';
-}
-
-export function feishuSourceAllowed(config, source) {
-  if (source?.appId !== config.appId || !id(source?.chatId)) return false;
-  const direct = source.chatType ? source.chatType === 'p2p' : source.threadId === `feishu:${config.appId}:${source.chatId}:direct`;
-  if (direct && config.directMessages === false) return false;
-  if (config.groups == null) return !config.chatIds?.length || config.chatIds.includes(source.chatId);
-  if (direct) return true;
-  return feishuGroupMode(config, source.chatId) !== 'disabled';
-}
-
-/** Called only after the transport authenticates the envelope. Gate remains a domain concern. */
-export function normalizeFeishuEvent(envelope, config) {
+/** Metadata extraction never reads message.content or applies admission rules. */
+export function extractFeishuSource(envelope, config) {
   if (envelope?.header?.event_type !== 'im.message.receive_v1') return null;
   const { header, event } = envelope;
   const message = event?.message, sender = event?.sender;
   if (!id(header.event_id) || !id(message?.message_id) || !id(message.chat_id) || !['group', 'p2p'].includes(message.chat_type) || !['user', 'app'].includes(sender?.sender_type)) throw fail('飞书消息元数据无效');
   const actorId = sender.sender_id?.open_id;
-  if (!id(actorId) || !id(message.message_type) || typeof message.content !== 'string') throw fail('飞书消息内容或发送人无效');
-  if (actorId === config.botOpenId || actorId === config.appId) return null;
+  if (!id(actorId) || !id(message.message_type)) throw fail('飞书消息类型或发送人无效');
   const time = Number(message.create_time);
   if (!Number.isSafeInteger(time) || time <= 0 || Number.isNaN(new Date(time).getTime())) throw fail('飞书消息时间无效');
   const mentions = message.mentions || [];
   if (!Array.isArray(mentions)) throw fail('飞书 mention 元数据无效');
+  for (const key of ['thread_id', 'root_id', 'parent_id']) if (message[key] && !id(message[key])) throw fail('飞书回复关联标识无效');
+  const sourceType = message.chat_type === 'p2p' ? 'direct' : message.thread_id ? 'topic' : 'group';
+  const nativeThreadId = sourceType === 'direct' ? 'direct' : message.thread_id || message.root_id || message.message_id;
+  const threadId = `feishu:${config.appId}:${message.chat_id}:${nativeThreadId}`;
+  const source = { channel: 'feishu', appId: config.appId, sourceType, conversationId: message.chat_id, chatId: message.chat_id, messageId: message.message_id, threadId, selfOrigin: actorId === config.botOpenId || actorId === config.appId, replyInThread: sourceType === 'topic', ...(sourceType === 'topic' ? { topicId: message.thread_id } : {}) };
+  if (message.parent_id) source.parentMessageId = message.parent_id;
+  if (message.root_id) source.rootMessageId = message.root_id;
+  return { sourceKey: `feishu:${config.appId}:${message.message_id}`, channel: 'feishu', threadId, messageId: message.message_id,
+    sourceType, kind: sourceType === 'direct' ? 'direct' : 'group', actor: { id: actorId, kind: sender.sender_type === 'user' ? 'human' : 'machine' },
+    occurredAt: new Date(time).toISOString(), mentioned: Boolean(config.botOpenId) && mentions.some(mention => mention?.id?.open_id === config.botOpenId), source };
+}
+
+export function feishuIncomingEvent(envelope, config) {
+  const metadata = extractFeishuSource(envelope, config);
+  return metadata && { ...metadata, normalize: () => normalizeFeishuEvent(envelope, config) };
+}
+
+/** Called only after the unified pipeline has checked the extracted source. */
+export function normalizeFeishuEvent(envelope, config) {
+  const metadata = extractFeishuSource(envelope, config);
+  if (!metadata) return null;
+  const { header, event } = envelope, message = event.message;
   let content;
   try { content = JSON.parse(message.content); } catch { throw fail('飞书消息正文不是合法 JSON'); }
   let text;
@@ -66,31 +73,18 @@ export function normalizeFeishuEvent(envelope, config) {
     const lines = Array.isArray(post?.content) ? post.content.map(row => Array.isArray(row) ? row.map(part => part.tag === 'text' ? part.text || '' : part.tag === 'a' ? `${part.text || ''} (${part.href || ''})` : part.tag === 'at' ? `@${part.user_name || part.user_id || ''}` : '[附件暂不支持读取]').join('') : '').join('\n') : '';
     text = [post?.title, lines].filter(Boolean).join('\n') || '[飞书富文本消息暂不支持读取，请发送文字描述]';
   } else text = `[飞书 ${message.message_type} 消息暂不支持读取正文，请发送文字描述或使用 BenchGo 工作台]`;
-  for (const key of ['thread_id', 'root_id', 'parent_id']) {
-    if (message[key] !== undefined && message[key] !== '' && !id(message[key])) throw fail('飞书回复关联标识无效');
-  }
-  const nativeThreadId = message.chat_type === 'p2p' ? 'direct' : message.thread_id || message.root_id || message.message_id;
-  if (!id(nativeThreadId)) throw fail('飞书线程标识无效');
-  const threadId = `feishu:${config.appId}:${message.chat_id}:${nativeThreadId}`;
-  const source = { channel: 'feishu', appId: config.appId, chatId: message.chat_id, chatType: message.chat_type, messageId: message.message_id, threadId, replyInThread: Boolean(message.thread_id) };
-  if (message.parent_id) source.parentMessageId = message.parent_id;
-  if (message.root_id) source.rootMessageId = message.root_id;
   return {
-    sourceKey: `feishu:${config.appId}:${message.message_id}`,
-    channel: 'feishu', threadId, messageId: message.message_id,
-    actor: { id: actorId, kind: sender.sender_type === 'user' ? 'human' : 'machine', owner: sender.sender_type === 'user' && config.ownerOpenIds.includes(actorId) },
-    kind: message.chat_type === 'p2p' ? 'direct' : 'group', occurredAt: new Date(time).toISOString(), text,
-    mentioned: Boolean(config.botOpenId) && mentions.some(mention => mention?.id?.open_id === config.botOpenId),
-    source,
+    ...metadata, text,
     // Authentication tokens never enter the durable event ledger.
     raw: { eventId: header.event_id, eventType: header.event_type, appId: header.app_id, event: structuredClone(event) },
   };
 }
 
 /** Official HTTP callback + REST transport. No queue or policy authority is duplicated here. */
-export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalContext, fetcher = fetch, now = Date.now, requestTimeoutMs = 15_000 } = {}) {
+export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalContext, authorizeConnection, allowUnboundAuthorization, fetcher = fetch, now = Date.now, requestTimeoutMs = 15_000 } = {}) {
   if (typeof getConfig !== 'function' || typeof ingest !== 'function') throw fail('飞书适配器缺少配置或统一入口');
   const shutdown = new AbortController();
+  const authority = { authorizeConnection, allowUnboundAuthorization };
   let token, tokenPromise, configKey, identityKey;
   let state = { authentication: 'unverified', events: 'unverified', sending: 'unverified', lastEventAt: null, lastSendAt: null, error: null };
   const readConfig = async () => {
@@ -142,11 +136,12 @@ export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalC
     const current = await readConfig(); if (requireEnabled) enabled(current);
     if (JSON.stringify(current) !== JSON.stringify(config)) throw fail('飞书连接配置已变更，请重试', 409);
   };
-  const api = async (config, path, options = {}, requireEnabled = true) => {
+  const api = async (config, path, options = {}, requireEnabled = true, authorization = { operation: 'history' }) => {
     const bearer = await beforeDelivery(async () => {
       const token = await accessToken(config);
       // Token acquisition may await the network; revocation takes effect before sending.
       await stillCurrent(config, requireEnabled);
+      if (requireEnabled) await authorizeChannel(authority, authorization.operation, authorization.source);
       return token;
     });
     return request(path, { ...options, headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` } });
@@ -182,9 +177,10 @@ export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalC
     },
     async readContext({ source, signal } = {}) {
       const config = await readConfig(); enabled(config);
-      if (source?.channel !== 'feishu' || !id(source.messageId) || !feishuSourceAllowed(config, source)) throw fail('飞书上下文来源不在当前连接范围', 403);
+      if (source?.channel !== 'feishu' || source.appId !== config.appId || !id(source.messageId) || !id(source.chatId)) throw fail('飞书上下文来源不属于当前连接', 403);
+      await authorizeChannel(authority, 'history', source);
       const rows = new Map();
-      const check = async () => { signal?.throwIfAborted(); await stillCurrent(config); };
+      const check = async () => { signal?.throwIfAborted(); await stillCurrent(config); await authorizeChannel(authority, 'history', source); };
       const add = row => {
         if (!id(row?.message_id) || row.chat_id !== source.chatId || row.deleted) return;
         let content;
@@ -234,6 +230,7 @@ export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalC
     async handle(request) {
       try {
         const config = await readConfig(); enabled(config);
+        await authorizeChannel(authority, 'history');
         if (request.method !== 'POST') throw fail('Method not allowed', 405);
         const reader = request.body?.getReader();
         if (!reader) throw fail('飞书请求体为空');
@@ -261,11 +258,10 @@ export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalC
           return Response.json({ challenge: body.challenge });
         }
         if (body.schema !== '2.0' || body.header?.app_id !== config.appId) throw fail('飞书应用或事件版本不匹配', 401);
-        const input = normalizeFeishuEvent(body, config);
-        if (input && !feishuSourceAllowed(config, input.source)) return Response.json({ code: 0, ignored: 'chat-scope' });
+        const input = feishuIncomingEvent(body, config);
         // Await durable admission before acknowledging. Downstream does not wait for inference.
         await stillCurrent(config);
-        if (input) await ingest(input);
+        if (input) { await authorizeChannel(authority, 'receive', input.source, input.actor); await ingest(input); }
         state.events = 'verified'; state.lastEventAt = now(); state.error = null;
         return Response.json({ code: 0 });
       } catch (error) {
@@ -277,13 +273,14 @@ export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalC
     async send({ source, text, idempotencyKey }) {
       const config = await beforeDelivery(async () => {
         const current = await readConfig(); enabled(current);
-        if (source?.channel !== 'feishu' || !id(source.messageId) || !feishuSourceAllowed(current, source)) throw fail('飞书交付来源不在当前连接范围', 403);
+        if (source?.channel !== 'feishu' || source.appId !== current.appId || !id(source.messageId) || !id(source.chatId)) throw fail('飞书交付来源不属于当前连接', 403);
+        await authorizeChannel(authority, 'send', source);
         if (typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > 20_000 || !id(idempotencyKey)) throw fail('飞书交付内容或幂等键无效');
         return current;
       });
       const uuid = createHash('sha256').update(config.appId + '\0' + idempotencyKey).digest('hex').slice(0, 32);
       try {
-        const body = await api(config, `/im/v1/messages/${encodeURIComponent(source.messageId)}/reply`, { method: 'POST', body: JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }), uuid, reply_in_thread: source.replyInThread === true }) });
+        const body = await api(config, `/im/v1/messages/${encodeURIComponent(source.messageId)}/reply`, { method: 'POST', body: JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }), uuid, reply_in_thread: source.replyInThread === true }) }, true, { operation: 'send', source });
         if (!id(body.data?.message_id)) throw deliveryFailure('飞书发送回执缺少消息标识', 'unknown', 502);
         state.sending = 'verified'; state.lastSendAt = now(); state.error = null;
         return { status: 'accepted', messageId: body.data.message_id, idempotencyKey, uuid };

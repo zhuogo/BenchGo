@@ -8,16 +8,16 @@ export const channelDefinition = {
     { key: 'appSecretRef', label: 'Client Secret 凭据', type: 'secretRef', required: true },
     { key: 'robotCode', label: 'Robot Code', required: true },
   ],
-  capabilities: { text: true, direct: true, groups: true, attachments: false, transport: 'websocket', notes: '企业内部应用机器人使用 Stream 模式，无需公网回调。开启机器人接收消息及发送消息权限，群聊需 @；允许使用的人员填写 senderStaffId。附件暂不读取。' },
+  capabilities: { externalActions: ['external-send'], text: true, direct: true, groups: true, attachments: false, transport: 'websocket', notes: '企业内部应用机器人使用 Stream 模式，无需公网回调。开启机器人接收消息及发送消息权限，群聊需 @；允许使用的人员填写 senderStaffId。附件暂不读取。' },
 };
 export const dingtalkConfig = input => configFor(channelDefinition, input);
 
-export function normalizeDingtalkEvent(message, config) {
+export function normalizeDingtalkEvent(message, config, metadataOnly = false) {
   if (!['1', '2'].includes(message?.conversationType) || message.robotCode !== config.robotCode || !validId(message.senderStaffId)) return null;
   const group = message.conversationType === '2';
-  const text = message.msgtype === 'text' ? message.text?.content?.trim() : '[钉钉附件暂不支持读取，请发送文字描述或使用 BenchGo 工作台]';
-  if (!text) return null;
-  return eventFor('dingtalk', config, { messageId: message.msgId, actorId: message.senderStaffId, chatId: message.conversationId, text,
+  const text = metadataOnly ? '' : message.msgtype === 'text' ? message.text?.content?.trim() : '[钉钉附件暂不支持读取，请发送文字描述或使用 BenchGo 工作台]';
+  if (!metadataOnly && !text) return null;
+  return eventFor('dingtalk', config, { messageId: message.msgId, actorId: message.senderStaffId, chatId: message.conversationId, text, metadataOnly,
     group, mentioned: message.isInAtList === true, occurredAt: message.createAt,
     extra: { targetType: group ? 'group' : 'direct', recipientId: message.senderStaffId },
   });
@@ -57,7 +57,8 @@ export function createDingtalkAdapter(options) {
       }
       if (frame.type !== 'CALLBACK' || frame.headers?.topic !== '/v1.0/im/bot/messages/get') return;
       if (typeof frame.data !== 'string' || !validId(frame.headers?.messageId)) throw fail('钉钉消息格式无效');
-      await b.receive(config, normalizeDingtalkEvent(JSON.parse(frame.data), config));
+      const message = JSON.parse(frame.data);
+      await b.receive(config, normalizeDingtalkEvent(message, config, true), () => normalizeDingtalkEvent(message, config));
       // Stream messageId is an ACK token; business msgId is the durable dedupe key.
       await send({ code: 200, headers: { contentType: 'application/json', messageId: frame.headers.messageId }, message: 'OK', data: JSON.stringify({ response: { success: true } }) });
     },
@@ -78,7 +79,7 @@ export function createDingtalkAdapter(options) {
       const body = await b.request(config, `https://api.dingtalk.com/v1.0/robot/${group ? 'groupMessages/send' : 'oToMessages/batchSend'}`, {
         method: 'POST', headers: { 'content-type': 'application/json', 'x-acs-dingtalk-access-token': bearer },
         body: JSON.stringify({ robotCode: config.robotCode, msgKey: 'sampleText', msgParam: JSON.stringify({ content: text }), ...(group ? { openConversationId: source.chatId } : { userIds: [source.recipientId] }) }),
-      });
+      }, 15_000, { operation: 'send', source });
       if ((body.code && body.code !== 'OK' && body.code !== '0') || (body.errcode !== undefined && body.errcode !== 0)) throw deliveryFailure('钉钉接口拒绝发送', 'not_sent');
       if (!validId(body.processQueryKey)) throw deliveryFailure('钉钉缺少确定发送回执');
       b.state.sending = 'verified'; return { status: 'accepted', messageId: body.processQueryKey };

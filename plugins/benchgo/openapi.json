@@ -373,6 +373,42 @@
               },
               "evaluations": {
                 "type": "object",
+                "description": "Unavailable intake assessments. Original pending or rejected source records are exposed as intakeEvent audit data, never as an admitted domain Trigger.",
+                "properties": {
+                  "candidates": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "intakeEvent": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "content": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "type": "object",
+                              "additionalProperties": true
+                            },
+                            "intakeStage": {
+                              "type": "string",
+                              "enum": [
+                                "pending",
+                                "admitted",
+                                "rejected"
+                              ]
+                            }
+                          },
+                          "additionalProperties": true
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                },
                 "additionalProperties": true
               },
               "goalAdvance": {

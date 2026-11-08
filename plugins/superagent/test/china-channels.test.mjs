@@ -22,13 +22,13 @@ test('中国渠道配置严格校验且来源身份由可信配置决定', () =>
   assert.throws(() => weixinConfig({ ownerIds: [''] }), /无效/);
   const c = wecomConfig({ botId: 'bot', ownerIds: ['owner'], chatIds: ['group'] });
   const event = normalizeWecomEvent({ cmd: 'aibot_msg_callback', headers: { req_id: 'req' }, body: { msgid: 'm', chattype: 'group', chatid: 'group', from: { userid: 'owner' }, text: { content: 'hello' } } }, c);
-  assert.equal(event.actor.owner, true); assert.equal(event.source.replyRequestId, 'req'); assert.equal(event.mentioned, true);
-  assert.equal(normalizeWecomEvent({ cmd: 'aibot_msg_callback', body: { msgid: 'm', chatid: 'denied', from: { userid: 'owner' }, text: { content: 'x' } } }, c), null);
+  assert.equal(event.actor.owner, false); assert.equal(event.source.replyRequestId, 'req'); assert.equal(event.mentioned, true);
+  assert.equal(normalizeWecomEvent({ cmd: 'aibot_msg_callback', body: { msgid: 'm', chatid: 'denied', from: { userid: 'owner' }, text: { content: 'x' } } }, c).source.conversationId, 'denied');
   assert.ok(!JSON.stringify(event).includes('secret'));
 });
 test('企业微信订阅认证、真实回执与停用释放', async () => {
   let config = wecomConfig({ enabled: true, botId: 'b', secretRef: 'ref' }); const received = [];
-  const adapter = createWecomAdapter({ getConfig: () => config, credentials, ingest: async e => received.push(e), WebSocketImpl: Socket, ackTimeoutMs: 20 });
+  const adapter = createWecomAdapter({ allowUnboundAuthorization: true, getConfig: () => config, credentials, ingest: async e => received.push(e), WebSocketImpl: Socket, ackTimeoutMs: 20 });
   await adapter.start(); const socket = Socket.all.at(-1); socket.open(); await tick();
   const subscription = socket.frames[0]; assert.equal(subscription.cmd, 'aibot_subscribe');
   socket.frame({ headers: subscription.headers, errcode: 0 }); await tick();
@@ -46,14 +46,14 @@ test('企业微信订阅认证、真实回执与停用释放', async () => {
 test('QQ 按事件目标类型归一化，发送前复验凭据等待期间的撤销', async () => {
   let config = qqConfig({ enabled: true, appId: 'app', appSecretRef: 'ref', ownerIds: ['u'] });
   const event = normalizeQqEvent({ t: 'GROUP_AT_MESSAGE_CREATE', d: { id: 'm', group_openid: 'g', author: { member_openid: 'u' }, content: 'hi' } }, config);
-  assert.equal(event.source.targetType, 'groups'); assert.equal(event.actor.owner, true);
+  assert.equal(event.source.targetType, 'groups'); assert.equal(event.actor.owner, false);
   const calls = [];
-  const adapter = createQqAdapter({ getConfig: () => config, credentials: { resolve: async () => { config = { ...config, enabled: false }; return { value: 'secret' }; } }, ingest: async () => {}, fetcher: async (...args) => { calls.push(args); return Response.json({}); } });
+  const adapter = createQqAdapter({ allowUnboundAuthorization: true, getConfig: () => config, credentials: { resolve: async () => { config = { ...config, enabled: false }; return { value: 'secret' }; } }, ingest: async () => {}, fetcher: async (...args) => { calls.push(args); return Response.json({}); } });
   await assert.rejects(adapter.send({ source: event.source, text: 'hi', idempotencyKey: 'k' }), /停用/); assert.equal(calls.length, 0); await adapter.dispose();
 });
 test('QQ 网关认证、消息受理及发送使用官方 API', async () => {
   const config = qqConfig({ enabled: true, appId: 'app', appSecretRef: 'ref' }), received = [], calls = [];
-  const adapter = createQqAdapter({ getConfig: () => config, credentials, ingest: async e => received.push(e), WebSocketImpl: Socket,
+  const adapter = createQqAdapter({ allowUnboundAuthorization: true, getConfig: () => config, credentials, ingest: async e => received.push(e), WebSocketImpl: Socket,
     fetcher: async (url, init) => { calls.push([url, init]); return Response.json(url.includes('getAppAccessToken') ? { access_token: 'token', expires_in: 7200 } : url.endsWith('/gateway') ? { url: 'wss://api.sgroup.qq.com/websocket' } : { id: 'sent' }); } });
   await adapter.start(); const socket = Socket.all.at(-1); socket.frame({ op: 10, d: { heartbeat_interval: 30000 } }); await tick(); assert.equal(socket.frames[0].op, 2);
   socket.frame({ op: 0, t: 'READY', s: 1, d: { session_id: 'session' } });
@@ -67,7 +67,7 @@ test('微信私聊长轮询保留回复上下文且不泄露进事件，取消�
   let delivery = { ret: 0 };
   assert.equal(normalizeWeixinEvent({ message_type: 1, group_id: 'g' }, config), null);
   assert.equal(normalizeWeixinEvent({ message_type: 1, chat_room_id: 'g' }, config), null);
-  const adapter = createWeixinAdapter({ getConfig: () => config, credentials, ingest: async e => received.push(e), pollDelayMs: 50000,
+  const adapter = createWeixinAdapter({ allowUnboundAuthorization: true, getConfig: () => config, credentials, ingest: async e => received.push(e), pollDelayMs: 50000,
     fetcher: async (url, init) => { calls.push([url, init]); return Response.json(url.endsWith('getupdates') ? { ret: 0, msgs: [{ message_type: 1, message_id: 'm', from_user_id: 'u', context_token: 'private-context', item_list: [{ type: 1, text_item: { text: 'hi' } }] }], get_updates_buf: 'next' } : delivery); } });
   await adapter.start(); await tick(); assert.equal(received.length, 1); assert.ok(!JSON.stringify(received).includes('private-context'));
   await adapter.send({ source: received[0].source, text: 'reply', idempotencyKey: 'k' });
@@ -79,7 +79,7 @@ test('微信私聊长轮询保留回复上下文且不泄露进事件，取消�
 
 test('微信扫码仅主人可用，确认凭据安全保存并只返回引用', async () => {
   const saved = [], requests = [];
-  const adapter = createWeixinAdapter({ getConfig: () => ({}), credentials, ingest: async () => {},
+  const adapter = createWeixinAdapter({ allowUnboundAuthorization: true, getConfig: () => ({}), credentials, ingest: async () => {},
     saveCredential: async entry => { saved.push(entry); return { ref: 'benchgo-channel:weixin:reference' }; },
     fetcher: async url => { requests.push(url); return Response.json(url.includes('get_bot_qrcode')
       ? { qrcode: 'private-session-code', qrcode_img_content: 'https://liteapp.weixin.qq.com/q/example' }
@@ -97,7 +97,7 @@ test('微信扫码仅主人可用，确认凭据安全保存并只返回引用',
 test('微信扫码过期清理，拒绝外部服务地址与恶意跳转', async () => {
   assert.throws(() => weixinConfig({ baseUrl: 'https://attacker.example' }), /官方/);
   let clock = 0, mode = 'redirect'; const calls = [];
-  const adapter = createWeixinAdapter({ getConfig: () => ({}), credentials, ingest: async () => {}, now: () => clock,
+  const adapter = createWeixinAdapter({ allowUnboundAuthorization: true, getConfig: () => ({}), credentials, ingest: async () => {}, now: () => clock,
     saveCredential: async () => ({ ref: 'saved' }),
     fetcher: async url => { calls.push(url); return Response.json(url.includes('get_bot_qrcode')
       ? { qrcode: 'code', qrcode_img_content: 'https://liteapp.weixin.qq.com/q/example' }
@@ -108,4 +108,20 @@ test('微信扫码过期清理，拒绝外部服务地址与恶意跳转', async
   mode = 'safe'; const second = await adapter.action({ operation: 'startLogin', ownerAuthenticated: true }); clock = 480001;
   await assert.rejects(adapter.action({ operation: 'pollLogin', loginId: second.loginId, ownerAuthenticated: true }), /已失效/);
   assert.equal(calls.length, 3); await adapter.dispose();
+});
+
+
+test('source extraction precedes body reads and missing or revoked authorization blocks network', async () => {
+  const config = wecomConfig({ enabled: true, botId: 'bot', secretRef: 'ref', chatIds: ['other'], ownerIds: ['u'] });
+  const body = { msgid: 'm', chattype: 'group', chatid: 'g', from: { userid: 'u' }, get text() { throw Error('body read'); } };
+  const facts = normalizeWecomEvent({ cmd: 'aibot_msg_callback', body }, config, true);
+  assert.equal(facts.source.sourceType, 'group'); assert.equal(facts.source.conversationId, 'g');
+  assert.equal(facts.actor.owner, false); assert.equal('text' in facts, false);
+  const calls = [];
+  for (const authorizeConnection of [undefined, async () => false, async () => ({ allowed: false })]) {
+    const adapter = createWecomAdapter({ getConfig: () => config, ingest: async () => {}, credentials, authorizeConnection, WebSocketImpl: Socket });
+    await assert.rejects(adapter.send({ source: facts.source, text: 'hi', idempotencyKey: 'k' }), { status: 403 });
+    await adapter.dispose();
+  }
+  assert.equal(calls.length, 0);
 });

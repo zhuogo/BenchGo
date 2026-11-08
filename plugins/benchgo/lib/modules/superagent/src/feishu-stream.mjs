@@ -1,7 +1,9 @@
-import { feishuConfig, normalizeFeishuEvent, feishuSourceAllowed } from './feishu.mjs';
+import { feishuConfig, feishuIncomingEvent } from './feishu.mjs';
+import { authorizeChannel } from './channels/connection-authorization.mjs';
 
 /** Official SDK owns framing, heartbeat and reconnect; this service owns lifecycle and intake. */
-export function createFeishuStream({ getConfig, credentials, ingest, loadSDK = () => import('@larksuiteoapi/node-sdk') }) {
+export function createFeishuStream({ getConfig, credentials, ingest, authorizeConnection, allowUnboundAuthorization, loadSDK = () => import('@larksuiteoapi/node-sdk') }) {
+  const authority = { authorizeConnection, allowUnboundAuthorization };
   let client, generation = 0, state = 'stopped';
   let lastEventAt = null;
   const pending = new Set();
@@ -17,6 +19,7 @@ export function createFeishuStream({ getConfig, credentials, ingest, loadSDK = (
       const config = feishuConfig(await getConfig());
       if (generation !== currentGeneration) return { state };
       if (!config.enabled) return { state };
+      await authorizeChannel(authority, 'history');
       state = 'connecting';
       try {
         const secret = (await credentials.resolve(config.appSecretRef))?.value;
@@ -31,8 +34,9 @@ export function createFeishuStream({ getConfig, credentials, ingest, loadSDK = (
             if (generation !== currentGeneration) throw new Error('连接已停用');
             if (!latest.enabled || latest.appId !== config.appId || latest.appSecretRef !== config.appSecretRef) throw new Error('连接配置已更改');
             const envelope = { header: { event_id: data.event_id || data.message?.message_id, event_type: 'im.message.receive_v1', app_id: config.appId }, event: data };
-            const event = normalizeFeishuEvent(envelope, latest);
-            if (event && feishuSourceAllowed(latest, event.source)) {
+            const event = feishuIncomingEvent(envelope, latest);
+            if (event) {
+              await authorizeChannel(authority, 'receive', event.source, event.actor);
               await ingest(event);
               if (generation === currentGeneration) lastEventAt = new Date().toISOString();
             }
@@ -48,6 +52,7 @@ export function createFeishuStream({ getConfig, credentials, ingest, loadSDK = (
           onReconnected: () => { if (generation === currentGeneration) state = 'connected'; },
         });
         client = active;
+        await authorizeChannel(authority, 'history');
         await active.start({ eventDispatcher: dispatcher });
         if (generation !== currentGeneration) active.close({ force: true });
         return { state };

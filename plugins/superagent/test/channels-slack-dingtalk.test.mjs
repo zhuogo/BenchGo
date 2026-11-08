@@ -48,14 +48,16 @@ test('new channel config preserves opaque identifiers, isolated updates and encr
   } finally { connections.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('Slack ignores other teams and bots, preserves thread and requires mentions for new group requests', () => {
+test('Slack validates team identity and preserves bot, thread and mention facts', () => {
   const c = slackConfig(slackInput), bot = { userId: 'Bot:U' };
   const result = normalizeSlackEvent(slackPayload, bot, c);
-  assert.equal(result.text, 'inspect'); assert.equal(result.actor.owner, true);
-  assert.equal(result.source.topicId, slackPayload.event.ts);
+  assert.equal(result.text, 'inspect'); assert.equal(result.actor.owner, undefined);
+  assert.equal(result.source.sourceType, 'group');
+  assert.equal(result.source.replyThreadId, slackPayload.event.ts);
+  assert.equal(result.source.topicId, '');
   assert.equal(normalizeSlackEvent({ ...slackPayload, team_id: 'Other' }, bot, c), null);
-  assert.equal(normalizeSlackEvent({ ...slackPayload, event: { ...slackPayload.event, bot_id: 'Bot' } }, bot, c), null);
-  assert.equal(normalizeSlackEvent({ ...slackPayload, event: { ...slackPayload.event, type: 'message', channel_type: 'channel', text: 'hello' } }, bot, c), null);
+  assert.equal(normalizeSlackEvent({ ...slackPayload, event: { ...slackPayload.event, bot_id: 'Bot' } }, bot, c).actor.kind, 'machine');
+  assert.equal(normalizeSlackEvent({ ...slackPayload, event: { ...slackPayload.event, type: 'message', channel_type: 'channel', text: 'hello' } }, bot, c).mentioned, false);
   const answer = normalizeSlackEvent({ ...slackPayload, event: { ...slackPayload.event, type: 'message', channel_type: 'channel', text: 'answer', thread_ts: '1730999999.000222' } }, bot, c);
   assert.equal(answer.mentioned, false); assert.equal(answer.source.parentMessageId, 'Room:X:1730999999.000222');
 });
@@ -63,7 +65,7 @@ test('Slack ignores other teams and bots, preserves thread and requires mentions
 test('Slack socket ACK follows durable ingestion; sends require a real receipt and never retry uncertain delivery', async () => {
   let config = slackConfig(slackInput), release, result = { ok: true, channel: 'Room:X', ts: '1731000010.000100' };
   const received = [], calls = [];
-  const adapter = createSlackAdapter({ getConfig: () => config, credentials, WebSocketImpl: Socket,
+  const adapter = createSlackAdapter({ allowUnboundAuthorization: true, getConfig: () => config, credentials, WebSocketImpl: Socket,
     ingest: async event => { received.push(event); await new Promise(resolve => { release = resolve; }); },
     fetcher: async (url, init) => { calls.push([url, init]); return Response.json(url.endsWith('auth.test') ? { ok: true, bot_id: 'Bot', user_id: 'Bot:U', team_id: 'Team:Opaque' } : url.endsWith('apps.connections.open') ? { ok: true, url: 'wss://wss-primary.slack.com/link' } : result); },
   });
@@ -90,7 +92,7 @@ test('DingTalk validates the robot and explicit group mention, never persists te
   const config = dingtalkConfig(dingInput), event = normalizeDingtalkEvent(dingPayload, config);
   assert.equal(event.actor.id, 'Staff:Owner'); assert.equal(event.source.messageId, 'Message:1');
   assert.ok(!JSON.stringify(event).includes('never-persist-secret'));
-  assert.equal(normalizeDingtalkEvent({ ...dingPayload, isInAtList: false }, config), null);
+  assert.equal(normalizeDingtalkEvent({ ...dingPayload, isInAtList: false }, config).mentioned, false);
   assert.equal(normalizeDingtalkEvent({ ...dingPayload, robotCode: 'Other' }, config), null);
   assert.equal(normalizeDingtalkEvent({ ...dingPayload, senderStaffId: undefined, senderId: 'untrusted-fallback' }, config), null);
 });
@@ -98,7 +100,7 @@ test('DingTalk validates the robot and explicit group mention, never persists te
 test('DingTalk Stream heartbeat/ACK and group/direct REST use official endpoints and confirmed receipts', async () => {
   const config = dingtalkConfig(dingInput), received = [], calls = [];
   let result = { processQueryKey: 'Receipt:Q' };
-  const adapter = createDingtalkAdapter({ getConfig: () => config, credentials, WebSocketImpl: Socket, ingest: async event => received.push(event), fetcher: async (url, init) => {
+  const adapter = createDingtalkAdapter({ allowUnboundAuthorization: true, getConfig: () => config, credentials, WebSocketImpl: Socket, ingest: async event => received.push(event), fetcher: async (url, init) => {
     calls.push([url, init]); return Response.json(url.endsWith('connections/open') ? { endpoint: 'wss://wss-open-connection.dingtalk.com/connect', ticket: 'secret-ticket' } : url.endsWith('accessToken') ? { accessToken: 'private-token', expireIn: 7200 } : result);
   } });
   try {
@@ -134,7 +136,8 @@ test('new channel messages enter the existing Router queue, dedupe and reject re
     socket.frame({ type: 'events_api', envelope_id: 'Envelope:1', payload: slackPayload }); await tick();
     socket.frame({ type: 'events_api', envelope_id: 'Envelope:2', payload: slackPayload }); await tick();
     assert.equal(orchestration.candidates().length, 1);
-    const source = orchestration.getTrigger(orchestration.candidates()[0].triggerId).source;
+    assert.equal(orchestration.getTrigger(orchestration.candidates()[0].triggerId), undefined);
+    const source = orchestration.readIntakeEvent(orchestration.candidates()[0].triggerId).source;
     assert.equal(source.connectionRevision, 1);
     connections.update({ enabled: false }, { channel: 'slack', revision: 1 });
     await assert.rejects(runtime.get('slack').send({ source, text: 'done', idempotencyKey: 'd' }), { deliveryOutcome: 'not_sent' });
@@ -144,7 +147,7 @@ test('new channel messages enter the existing Router queue, dedupe and reject re
 test('both channels reject reconfiguration during credential resolution before network requests', async () => {
   for (const [factory, input, normalize] of [[createSlackAdapter, slackInput, c => normalizeSlackEvent(slackPayload, { userId: 'Bot:U' }, c)], [createDingtalkAdapter, dingInput, c => normalizeDingtalkEvent(dingPayload, c)]]) {
     let config = { ownerIds: [], chatIds: [], ...input }; const source = normalize(config).source, calls = [];
-    const adapter = factory({ getConfig: () => config, ingest: async () => {}, credentials: { resolve: async () => { config = { ...config, enabled: false }; return { value: 'secret' }; } }, fetcher: async (...args) => { calls.push(args); return Response.json({}); } });
+    const adapter = factory({ allowUnboundAuthorization: true, getConfig: () => config, ingest: async () => {}, credentials: { resolve: async () => { config = { ...config, enabled: false }; return { value: 'secret' }; } }, fetcher: async (...args) => { calls.push(args); return Response.json({}); } });
     await assert.rejects(adapter.send({ source, text: 'done', idempotencyKey: 'd' }), { deliveryOutcome: 'not_sent' });
     assert.equal(calls.length, 0); await adapter.dispose();
   }

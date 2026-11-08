@@ -12,7 +12,7 @@ export function installEvalDispositionStore({ db, tx, api }) {
   const revision = candidateId => db.prepare('SELECT COALESCE(MAX(seq),0) AS version FROM sa_eval_dispositions WHERE candidate_id=?').get(candidateId).version;
   const value = row => row && ({ id: row.id, triggerId: row.trigger_id, threadId: row.thread_id,
     status: row.status, retryCount: row.retry_count, policyVersion: row.policy_version,
-    updatedAt: row.updated_at, dispositionRevision: revision(row.id), trigger: api.getTrigger(row.trigger_id) });
+    updatedAt: row.updated_at, dispositionRevision: revision(row.id), intakeEvent: api.readIntakeEvent(row.trigger_id) });
   return {
     getEvaluation(candidateId) { return value(db.prepare('SELECT * FROM sa_candidates WHERE id=?').get(candidateId)); },
     unavailableEvaluations({ after = 0, limit = 50 } = {}) {

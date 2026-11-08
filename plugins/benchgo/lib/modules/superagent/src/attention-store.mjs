@@ -190,7 +190,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
     answerAttention(triggerId, { ownerAllowed = false } = {}) {
       if (!ownerAllowed) return null;
       return tx(() => {
-        const trigger = api.getTrigger(triggerId), source = trigger?.source;
+        const trigger = api.readIntakeEvent(triggerId), source = trigger?.source;
         if (!source || trigger.actor.kind !== 'human') return null;
         const explicitId = /^\/answer ([0-9a-f-]{36})\s+\S[\s\S]*$/iu.exec(trigger.content.trim())?.[1]?.toLowerCase();
         if (!source.parentMessageId && !explicitId) return null;
@@ -212,6 +212,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         if (matches.length !== 1) return null;
         const row = matches[0];
         if (row.answer_trigger_id && row.answer_trigger_id !== triggerId) return null;
+        db.prepare("UPDATE sa_triggers SET intake_stage='admitted' WHERE id=?").run(triggerId);
         db.prepare('UPDATE sa_attentions SET answer_trigger_id=? WHERE id=?').run(triggerId, row.id);
         db.prepare("UPDATE sa_candidates SET status='held',updated_at=? WHERE trigger_id=? AND status='queued'").run(new Date().toISOString(), triggerId);
         db.prepare('INSERT OR IGNORE INTO sa_ticket_triggers VALUES (?,?)').run(row.ticket_id, triggerId);

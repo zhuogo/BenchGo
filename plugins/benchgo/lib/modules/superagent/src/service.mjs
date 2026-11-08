@@ -27,7 +27,10 @@ import { createVoiceHandlers } from '../../voice/src/web.mjs';
 import { assertSameOrigin } from '../../../../shared/http.mjs';
 import { DataOwner } from '../../../../shared/data-owner.mjs';
 import { readAdmissionRules } from './admission-rules.mjs';
-import { createFeishuAdapter, feishuSourceAllowed, feishuGroupMode } from './feishu.mjs';
+import { createFeishuAdapter } from './feishu.mjs';
+import { createUnifiedChannelIngress } from './channel-ingress.mjs';
+import { createWorkbenchChannelIngress } from './workbench-channel-ingress.mjs';
+import { createChannelSessionHost, registerChannelSessionProjection } from './channel-session.mjs';
 import { executionSessionProjection } from './execution-session.mjs';
 import { createActionPermissionStore } from './action-permissions.mjs';
 import { createExternalActionRegistry, createExternalActionHost, registerChannelExternalActions, createActionPermissionApi } from './external-actions.mjs';
@@ -35,7 +38,6 @@ import { createChannelCredentials } from './channel-credentials.mjs';
 import { connectionConfig, channelDefinition, channelIds, loadChannelModules } from './channel-catalog.mjs';
 import { createChannelRuntime, mountChannelCallbacks } from './channel-runtime.mjs';
 import { createFeishuStream } from './feishu-stream.mjs';
-import { ingestAssistantEvent } from './intake.mjs';
 import { createAssessmentRunner } from './assessment-runner.mjs';
 import { createEvaluationDisposition } from './eval-disposition.mjs';
 import { readAssessmentPolicy, authorizeAssessment } from './assessment-policy.mjs';
@@ -263,7 +265,7 @@ export async function mountAssistant(ctx, commander, providers) {
   const shutdown = new AbortController();
   const channelCredentials = createChannelCredentials({ credentials: ctx.credentials });
   let database, scheduler, reviewWorker, deliveryWorker, engine, schedulerTimer, disposal, feishu, feishuStream, channels, assessmentRunner, assessmentTimer, orchestrationRuntime, scheduleBridge, routerWatchdog;
-  let notificationQueue = Promise.resolve(), skillProvider, unsubscribeSkills, curatorTimer, scheduleLifecycle, actionPermissions, unregisterExternalActions;
+  let notificationQueue = Promise.resolve(), skillProvider, unsubscribeSkills, curatorTimer, scheduleLifecycle, actionPermissions, unregisterExternalActions, channelSessions;
   const projectSchedules = async () => {
     try { await scheduleLifecycle?.sync(); }
     catch (error) { ctx.logger?.warn?.(`SuperAgent Schedule projection: ${error.code || error.name}`); }
@@ -292,29 +294,17 @@ export async function mountAssistant(ctx, commander, providers) {
     skillProvider = registerOwnedSkillProvider({ ctx, skills: hostSkills, database: store.ownedSkills.providerDatabase });
     unsubscribeSkills = store.ownedSkills.onChange(() => skillProvider.invalidate());
   }
+  await registerChannelSessionProjection(ctx);
+  const onInbound = (...args) => channelSessions.onInbound(...args);
+  const ingress = createUnifiedChannelIngress({ store, onInbound });
   const feishuOptions = {
     getConfig: () => store.connections.read().config,
     credentials: channelCredentials,
-    readLocalContext: source => store.orchestration.feishuContext(source),
-    ingest: async event => {
-      const current = store.connections.read();
-      if (!current.config.enabled) throw new Error('飞书连接已停用');
-      if (event.kind === 'group' && !event.mentioned && event.actor.kind !== 'machine'
-        && feishuGroupMode(current.config, event.source.chatId) === 'mentions'
-        && !event.source.parentMessageId
-        && !store.orchestration.subscriptions({ threadId: event.threadId }).some(row => !['completed', 'failed', 'closed', 'cancelled'].includes(store.orchestration.getTicket(row.ticketId)?.status))) return { ignored: 'not-mentioned' };
-      return ingestAssistantEvent(store.orchestration, event, {
-        routeDirect: true,
-        version: `feishu:${current.revision}`,
-        ownerIds: current.config.ownerOpenIds,
-        actorIds: current.config.ownerOpenIds,
-        machineIds: current.config.machineOpenIds || [],
-        allowHumanRequests: current.config.accessMode === 'platform',
-        sourceAllowed: feishuSourceAllowed(current.config, event.source),
-      });
-    },
+    authorizeConnection: input => ingress.authorize('feishu', input),
+    ingest: event => ingress.receive('feishu', event),
   };
   feishu = createFeishuAdapter(feishuOptions);
+  feishu.prepareExternalSend = (input, context) => ingress.prepareExternalSend('feishu', input, context);
   feishuStream = createFeishuStream(feishuOptions);
   const pet = createAssistantPet({ store });
   const media = createAssistantMedia({ store, providers, credentials: ctx.credentials, shutdown: shutdown.signal });
@@ -326,7 +316,7 @@ export async function mountAssistant(ctx, commander, providers) {
     return voiceHandlers;
   };
   ctx.effect(() => () => voiceHandlers?.dispose());
-  channels = createChannelRuntime({ ctx, store, adapterOptions: { credentials: channelCredentials, voiceAvailability: async () => {
+  channels = createChannelRuntime({ ctx, store, onInbound, adapterOptions: { credentials: channelCredentials, voiceAvailability: async () => {
     const voice = ctx.get?.('voice'), availability = await voiceAvailability(voice, providers);
     if (voice && !['transcriptions', 'transcriptions-sse'].includes(voice.value?.asr?.protocol || 'transcriptions')) return { ...availability, available: { ...availability.available, voiceInput: false } };
     return availability;
@@ -334,14 +324,14 @@ export async function mountAssistant(ctx, commander, providers) {
     transcribe: request => channelVoice().transcribe(request),
     synthesize: request => channelVoice().speech(request),
   } });
-  await channels.start();
   mountChannelCallbacks(ctx, channels, feishu);
   actionPermissions = createActionPermissionStore({ directory: store.paths.directory, profileId: store.profileId });
   const externalRegistry = createExternalActionRegistry();
   ctx.provide('benchgoExternalActions', createExternalActionHost({ ctx, store: actionPermissions, registry: externalRegistry }));
   const permissionApi = createActionPermissionApi({ store: actionPermissions, resolveActor: peer => peer?.principal?.kind === 'owner'
     ? { profileId: store.profileId, id: 'desktop-owner', label: '主人' } : null });
-  orchestrationRuntime = createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop: async delivery => {
+  orchestrationRuntime = createOrchestrationRuntime({ ctx, store, feishu, channels,
+    onDelivered: outbox => channelSessions.onDelivery(outbox), deliverDesktop: async delivery => {
     const ticket = store.orchestration.getTicket(delivery.ticketId);
     const event = database.notify({ id: ticket.id, threadId: ticket.mandate.source.threadId }, delivery.payload.type,
       { ...delivery.payload, title: ticket.title, status: ticket.status }, `ticket-delivery:${delivery.uniqueKey}`);
@@ -350,16 +340,12 @@ export async function mountAssistant(ctx, commander, providers) {
     return { status: 'accepted', messageId: event.id };
   } });
   const restartFeishu = () => { void feishuStream.start().catch(() => ctx.logger?.warn?.('飞书长连接启动失败，请检查连接设置')); };
-  restartFeishu();
   assessmentRunner = createAssessmentRunner({ database: store.orchestration, llm: ctx.llm, readPolicy: threadId => readAssessmentPolicy(store, ctx.workspaceRegistry, threadId), authorize: authorizeAssessment, readContext: input => input.source?.channel === 'feishu' ? feishu.readContext(input) : undefined });
   scheduleBridge = createScheduleBridge({ ctx, store, readPolicy: () => readAssessmentPolicy(store, ctx.workspaceRegistry),
     onOccurrence: occurrence => scheduleLifecycle?.occurrence(occurrence) });
   const assessIntake = () => { void assessmentRunner.tick().catch(() => { if (!shutdown.signal.aborted) ctx.logger?.warn?.('SuperAgent 研判未完成，候选保留供重试'); })
     .finally(() => { if (!shutdown.signal.aborted) store.orchestration.enqueueUnavailableReplies(); }).catch(error => ctx.logger?.warn?.(`SuperAgent 分诊状态通知未完成：${error.code || error.name}`)); };
   const evaluations = createEvaluationDisposition({ database: store.orchestration, readPolicy: () => readAssessmentPolicy(store, ctx.workspaceRegistry), wake: assessIntake });
-  assessmentTimer = setInterval(assessIntake, 1000);
-  assessmentTimer.unref?.();
-  assessIntake();
   database = createAssistantRuntimeStore({ filename: store.paths.database });
   scheduleLifecycle = createScheduleLifecycle({ ctx, store, database });
   const desktopDelegation = createDesktopDelegationService({ ctx, store });
@@ -373,7 +359,6 @@ export async function mountAssistant(ctx, commander, providers) {
   } });
   const desktopTickets = createDesktopTicketAccess(store.orchestration);
   const ticketControl = createDesktopTicketControl({ ctx, database: store.orchestration });
-  orchestrationRuntime.start();
   scheduler = createAssistantScheduler({ store, database });
   const taskManagement = createTaskManagement({ database, orchestration: store.orchestration, scheduler });
   const modelActions = createModelActionTicketExecutor({
@@ -648,11 +633,23 @@ export async function mountAssistant(ctx, commander, providers) {
       });
     }
   };
-  engine = await createAssistantEngine({ ctx, store, setupTools, scheduleBridge, onClearMain: () => database.clearMainChatNotifications() });
+  engine = await createAssistantEngine({ ctx, store, setupTools, scheduleBridge,
+    onSourceMessage: input => channelSessions.onSourceMessage(input),
+    onClearMain: () => database.clearMainChatNotifications() });
+  const receiveOwnerMessage = createWorkbenchChannelIngress({ store,
+    readPolicy: threadId => readAssessmentPolicy(store, ctx.workspaceRegistry, threadId), wake: () => { void orchestrationRuntime.tick(); } });
+  channelSessions = createChannelSessionHost({ ctx, store, engine,
+    receiveOwnerMessage });
+  await channels.start();
   unregisterExternalActions = registerChannelExternalActions(externalRegistry, {
     channelIds, getAdapter: id => id === 'feishu' ? feishu : channels.get(id),
     getCapabilities: id => channelDefinition(id).capabilities,
   });
+  restartFeishu();
+  orchestrationRuntime.start();
+  assessmentTimer = setInterval(assessIntake, 1000);
+  assessmentTimer.unref?.();
+  assessIntake();
   ctx.inject(['typertGateway'], scope => {
     scope.effect(() => registerNativePromptIngress(scope, engine));
   });
@@ -744,14 +741,16 @@ export async function mountAssistant(ctx, commander, providers) {
         return channelCredentials.save({ channel, field: input.field, secret: input.secret });
       }
       case 'connectionAction': {
+        const principal = peer?.principal?.kind === 'owner'
+          ? { ...peer.principal, id: 'desktop-owner' } : peer?.principal;
         if (input.channel === 'feishu') {
           if (input.operation === 'listChats') return feishu.listChats({ pageToken: input.pageToken });
           throw new Error('飞书不支持此操作');
         }
         const channel = input.channel, adapter = channels.get(channel);
         if (!adapter) throw new Error('链接渠道不可用');
-        if (typeof adapter.action === 'function') return adapter.action({ ...input, ownerAuthenticated: peer?.principal?.kind === 'owner' }, { principal: peer?.principal });
-        if (typeof adapter.operation === 'function') return adapter.operation(input, { principal: peer?.principal });
+        if (typeof adapter.action === 'function') return adapter.action({ ...input, ownerAuthenticated: principal?.kind === 'owner' }, { principal });
+        if (typeof adapter.operation === 'function') return adapter.operation(input, { principal });
         throw new Error('此链接不支持该操作');
       }
       case 'capabilities': return capabilities();

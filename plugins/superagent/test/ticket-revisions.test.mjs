@@ -358,3 +358,39 @@ test('a linked adjustment Ticket executes and directly delivers the fresh adjust
   assert.deepEqual(f.db.results(adjustment.id).map(row => [row.summary, row.instructionRevision]), [['fresh', 1]]);
   assert.equal(f.db.getTicket(f.ticket.id).status, 'completed');
 });
+
+test('Feishu owner adjusts a completed subscribed Ticket through fresh Eval and preserves its original channel', async t => {
+  const f = await fixture(t), db = f.db;
+  const policy = { version: 'feishu-current', model: f.input.model, projects: [], connection: { enabled: true, appId: 'app', chatIds: ['chat'], ownerOpenIds: ['human'] } };
+  const sourcePolicy = { version: policy.version, ownerIds: ['human'], threadIds: ['chat'] };
+  const event = (key, text) => ({ sourceKey: key, threadId: 'feishu-thread', channel: 'feishu', kind: 'group', mentioned: true, actor: { kind: 'human', id: 'human' }, source: { channel: 'feishu', sourceType: 'group', connectionId: 'feishu', conversationId: 'chat', appId: 'app', chatId: 'chat', messageId: key }, text });
+  const original = ingestAssistantEvent(db, event('initial', 'execute original'), sourcePolicy);
+  let targetTicket;
+  const runner = createAssessmentRunner({ database: db, readPolicy: async () => policy, authorize: authorizeAssessment,
+    assess: async ({ candidates }) => candidates.map(row => targetTicket ? { candidateId: row.candidateId, outcome: 'adjustment', ticketId: targetTicket.id, expectedInstructionRevision: 1, reason: '主人要求重新执行' } : { candidateId: row.candidateId, outcome: 'accept', target: 'original task', acceptance: 'original check', reason: '主人明确要求' }) });
+  t.after(() => runner.stop());
+  await runner.tick();
+  targetTicket = db.listTickets({ threadId: original.trigger.threadId })[0];
+  db.commitResult(targetTicket.id, { uniqueKey: 'feishu-old', instructionRevision: 1, result: { summary: 'finished', outcome: 'completed' } });
+  deliverCommitted(db);
+  const reopened = ingestAssistantEvent(db, event('reopen-message', '重新执行刚才的工单'), sourcePolicy);
+  assert.equal(reopened.requiresEval, true);
+  assert.equal(reopened.delivery, null);
+  await runner.tick();
+  const current = db.listTickets().find(row => row.adjustmentOfTicketId === targetTicket.id);
+  assert.equal(db.getTicket(targetTicket.id).status, 'completed');
+  assert.equal(current.status, 'open');
+  assert.equal(current.instructionRevision, 1);
+  assert.equal(current.mandate.source.channel, 'feishu');
+  assert.equal(current.mandate.source.messageId, 'reopen-message');
+  assert.equal(db.getDecision(reopened.candidate.id).outcome, 'adjustment');
+  assert.equal(db.results(targetTicket.id).length, 1);
+  const repeated = ingestAssistantEvent(db, event('reopen-message', '重新执行刚才的工单'), sourcePolicy);
+  await runner.tick();
+  assert.equal(repeated.duplicate, true);
+  assert.equal(repeated.delivery, null);
+  assert.equal(db.assignments(targetTicket.id).length, 0);
+  assert.equal(db.assignments(current.id).length, 1);
+  assert.equal(db.ticketRevisions(targetTicket.id).length, 0);
+  assert.equal(db.ticketRevisions(current.id).length, 1);
+});

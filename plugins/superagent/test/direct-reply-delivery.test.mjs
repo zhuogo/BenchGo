@@ -20,7 +20,7 @@ async function fixture(t, { kind = 'answer', send, actorKind = 'human', availabl
   await store.updateConfig({ models: [{ providerId: 'provider', modelId: 'exact-model' }] });
   store.connections.update({ enabled: true, appId: 'app', appSecretRef: 'ref', ownerOpenIds: ['owner'], chatIds: ['chat'] }, { revision: 0 });
   const readPolicy = threadId => readAssessmentPolicy(store, { list: () => [] }, threadId);
-  const source = { channel: 'feishu', appId: 'app', chatId: 'chat', messageId: 'message' };
+  const source = { channel: 'feishu', sourceType: 'group', connectionId: 'feishu', conversationId: 'chat', mentioned: true, appId: 'app', chatId: 'chat', messageId: 'message' };
   const event = { channel: 'feishu', kind: 'group', text: '你好', sourceKey: 'message', threadId: 'thread', mentioned: true,
     actor: { id: 'owner', kind: actorKind }, source };
   const policy = await readPolicy();

@@ -107,6 +107,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   // Additive migration preserves existing Tickets and their original work version.
   const triggerColumns = new Set(db.prepare('PRAGMA table_info(sa_triggers)').all().map(row => row.name));
   if (!triggerColumns.has('subscription_eligible')) db.exec('ALTER TABLE sa_triggers ADD COLUMN subscription_eligible INTEGER NOT NULL DEFAULT 0');
+  if (!triggerColumns.has('intake_stage')) db.exec("ALTER TABLE sa_triggers ADD COLUMN intake_stage TEXT NOT NULL DEFAULT 'admitted'");
   const ticketColumns = new Set(db.prepare('PRAGMA table_info(sa_tickets)').all().map(row => row.name));
   if (!ticketColumns.has('pause_reason')) db.exec('ALTER TABLE sa_tickets ADD COLUMN pause_reason TEXT');
   // Legacy review state is removed; historical result payloads remain immutable.
@@ -125,7 +126,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   const threadRow = threadId => db.prepare('SELECT * FROM sa_threads WHERE id=?').get(threadId);
   const triggerRow = triggerId => db.prepare('SELECT * FROM sa_triggers WHERE id=?').get(triggerId);
   const threadValue = row => row && ({ id: row.id, source: { type: row.source_type, id: row.source_id }, metadata: parse(row.metadata), createdAt: row.created_at });
-  const triggerValue = row => row && ({ id: row.id, seq: row.seq, dedupeKey: row.dedupe_key, threadId: row.thread_id, source: parse(row.source), actor: parse(row.actor), content: row.content, contentHash: row.content_hash, createdAt: row.created_at });
+  const triggerValue = row => row && ({ id: row.id, seq: row.seq, dedupeKey: row.dedupe_key, threadId: row.thread_id, source: parse(row.source), actor: parse(row.actor), content: row.content, contentHash: row.content_hash, intakeStage: row.intake_stage, createdAt: row.created_at });
   const candidateValue = row => row && ({ id: row.id, triggerId: row.trigger_id, threadId: row.thread_id, policyVersion: row.policy_version, gate: parse(row.gate), status: row.status, evalId: row.eval_id, retryCount: row.retry_count, handbackTicketId: row.handback_ticket_id, createdAt: row.created_at, updatedAt: row.updated_at });
   const evalValue = row => row && ({ id: row.id, threadId: row.thread_id, policyVersion: row.policy_version, candidateIds: parse(row.candidate_ids), owner: row.owner, attempt: row.attempt, status: row.status, deadline: row.deadline, createdAt: row.created_at, updatedAt: row.updated_at });
   const decisionValue = row => row && ({ id: row.id, candidateId: row.candidate_id, threadId: row.thread_id, outcome: row.outcome, assessment: parse(row.assessment), policyVersion: row.policy_version, ticketId: row.ticket_id, createdAt: row.created_at });
@@ -213,6 +214,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const triggerId = input.id || uuid(), createdAt = input.createdAt || new Date().toISOString();
         db.prepare('INSERT INTO sa_triggers(id,dedupe_key,thread_id,source,actor,content,content_hash,created_at) VALUES (?,?,?,?,?,?,?,?)')
           .run(triggerId, input.dedupeKey, thread.id, source, actor, input.content, contentHash, createdAt);
+        if (input.intakeStage !== undefined && !['pending', 'admitted', 'rejected'].includes(input.intakeStage)) throw new Error('Invalid intake stage');
+        if (input.intakeStage) db.prepare('UPDATE sa_triggers SET intake_stage=? WHERE id=?').run(input.intakeStage === 'pending' && input.gate?.allowed === false ? 'rejected' : input.intakeStage, triggerId);
         if (input.subscriptionEligible === true) db.prepare('UPDATE sa_triggers SET subscription_eligible=1 WHERE id=?').run(triggerId);
         db.prepare('INSERT INTO sa_trigger_admissions VALUES (?,?,?)').run(triggerId, input.policyVersion || null, json(input.gate || { allowed: false, strength: 'ignore' }));
         const trigger = triggerValue(triggerRow(triggerId));
@@ -230,7 +233,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         return { trigger, candidate, duplicate: false, requiresEval: Boolean(candidate), direct: mode === 'direct' };
       });
     },
-    getTrigger(triggerId) { return triggerValue(triggerRow(id(triggerId, 'triggerId'))); },
+    getTrigger(triggerId) { const row = triggerRow(id(triggerId, 'triggerId')); return row?.intake_stage === 'admitted' ? triggerValue(row) : undefined; },
+    readIntakeEvent(eventId) { return triggerValue(triggerRow(id(eventId, 'eventId'))); },
     sourceMessageSuperseded({ source, actor, createdAt }) {
       if (source?.channel !== 'feishu' || !source.appId || !source.chatId || actor?.kind !== 'human' || !actor.id) return false;
       const time = Date.parse(createdAt);
@@ -322,6 +326,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (['attach', 'stop', 'revise', 'adjustment'].includes(input.outcome) && gate.strength !== 'explicit') throw fail('NOT_EXPLICIT', 'Controlling an existing Ticket requires an explicit owner instruction');
         if (input.outcome === 'accept' && gate.strength !== 'explicit' && (input.mode !== 'auto' || !Array.isArray(input.enabledRuleIds) || !Array.isArray(input.assessment.ruleIds) || !input.assessment.ruleIds.length || !input.assessment.ruleIds.every(rule => input.enabledRuleIds.includes(rule)))) throw fail('NOT_EXPLICIT', 'Inferred acceptance requires enabled rules in auto mode');
         if (db.prepare('SELECT id FROM sa_decisions WHERE candidate_id=?').get(candidateId)) throw fail('DECISION_EXISTS', 'Candidate already has a Decision');
+        db.prepare('UPDATE sa_triggers SET intake_stage=? WHERE id=?').run(['ignore', 'notExplicit'].includes(input.outcome) ? 'rejected' : 'admitted', candidate.trigger_id);
         let ticket = null;
         if (input.outcome === 'accept') {
           if (!record(input.ticket) || !record(input.ticket.mandate)) throw new Error('Accepted Decision must atomically create a Ticket with Mandate');
@@ -808,6 +813,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (rows.length !== 1) throw fail('AMBIGUOUS_SUBSCRIPTION', 'Select the Ticket that owns this thread message');
         const subscription = rows[0];
         if (trigger.seq <= subscription.cursor_seq) throw fail('SUBSCRIPTION_CURSOR', 'Trigger is not newer than the subscription cursor');
+        db.prepare("UPDATE sa_triggers SET intake_stage='admitted' WHERE id=?").run(triggerId);
         const now = new Date().toISOString();
         db.prepare('INSERT INTO sa_message_ownership VALUES (?,?,?,?,?)').run(triggerId, subscription.id, subscription.ticket_id, trigger.seq, now);
         api.recordTicketInputInTransaction?.({ ticketId: subscription.ticket_id, triggerId, kind: 'context', idempotencyKey: `trigger:${triggerId}` });
@@ -1083,6 +1089,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       AND NOT EXISTS (SELECT 1 FROM sa_message_ownership o WHERE o.trigger_id=t.id)
       ORDER BY t.seq`).all(threadId, cursor);
     for (const message of messages) {
+      db.prepare("UPDATE sa_triggers SET intake_stage='admitted' WHERE id=?").run(message.id);
       db.prepare('INSERT INTO sa_message_ownership VALUES (?,?,?,?,?)').run(message.id, subscriptionId, subscription.ticket_id, message.seq, now);
       api.recordTicketInputInTransaction?.({ ticketId: subscription.ticket_id, triggerId: message.id, kind: 'context', idempotencyKey: `trigger:${message.id}` });
       db.prepare('INSERT INTO sa_ticket_triggers VALUES (?,?)').run(subscription.ticket_id, message.id);

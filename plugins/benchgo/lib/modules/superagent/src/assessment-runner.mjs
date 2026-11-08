@@ -32,7 +32,7 @@ export function createAssessmentRunner({ database, llm, readPolicy, authorize, r
       context.recentReplies = (database.directReplies?.({ threadId, limit: 6 }) || []).filter(reply => reply.state === 'sent')
         .map(({ triggerId, kind, text, createdAt }) => ({ triggerId, kind, text: text.slice(0, 2000), createdAt })).reverse();
       const target = context.messages.find(message => message.triggerId === row.triggerId);
-      const original = database.getTrigger(row.triggerId);
+      const original = database.readIntakeEvent(row.triggerId);
       context.freshness = { assessedAt: new Date().toISOString(), sourceCreatedAt: original.createdAt,
         newerSourceMessageExists: database.sourceMessageSuperseded?.(original) === true };
       const externalReference = await readSourceReference({ readContext, source: target?.pointer?.source, signal, maxCharacters: Math.floor(12000 / candidates.length) });
@@ -46,21 +46,21 @@ export function createAssessmentRunner({ database, llm, readPolicy, authorize, r
       if (current.version !== lease.policyVersion) break;
       const candidate = candidates.find(row => row.id === decision.candidateId);
       if (!candidate) throw new Error('Assessment returned an unknown candidate');
-      const originalProject = ['revise', 'reopen'].includes(decision.outcome) && decision.ticketId ? database.getTicket(decision.ticketId)?.mandate.project : undefined;
+      const originalProject = ['revise', 'adjustment'].includes(decision.outcome) && decision.ticketId ? database.getTicket(decision.ticketId)?.mandate.project : undefined;
       const authorityDecision = originalProject && decision.projectId === undefined ? { ...decision, projectId: originalProject.id } : decision;
-      const trigger = database.getTrigger(candidate.triggerId);
+      const trigger = database.readIntakeEvent(candidate.triggerId);
       const permission = await authorize({ policy: current, candidate, trigger, decision: authorityDecision, ticket: decision.ticketId ? database.getTicket(decision.ticketId) : undefined });
       signal.throwIfAborted();
       // Recheck after asynchronous authorization; an old authorization cannot commit.
       if ((await readPolicy(threadId)).version !== lease.policyVersion) break;
       database.decide(candidate.id, {
         evalId: lease.id, owner, policyVersion: current.version,
-        outcome: permission?.allowed === true ? decision.outcome : 'notExplicit',
-        assessment: { reason: decision.reason, ruleIds: decision.ruleIds || [], authorizationReason: permission?.reason },
+        outcome: permission?.allowed === true ? permission.outcome || decision.outcome : 'notExplicit',
+        assessment: { ...(permission?.routerAttention ? { requestedOutcome: decision.outcome, routerAttention: true } : {}), reason: decision.reason, ruleIds: decision.ruleIds || [], authorizationReason: permission?.reason },
         mode: current.mode, enabledRuleIds: current.enabledRuleIds || [], ticketId: decision.ticketId,
         ...(['answer', 'ask'].includes(decision.outcome) && permission?.allowed === true ? { reply: { text: decision.replyText, source: trigger.source, actor: trigger.actor, gate: candidate.gate, policyVersion: current.version } } : {}),
         ...(decision.outcome === 'accept' && permission?.allowed === true ? { replyText: decision.replyText, ticket: { title: decision.title, target: decision.target, mandate: { ...permission.mandate, acceptance: decision.acceptance, policyVersion: current.version, triggerId: candidate.triggerId } } } : {}),
-        ...(['revise', 'reopen'].includes(decision.outcome) && permission?.allowed === true ? { change: { expectedInstructionRevision: decision.expectedInstructionRevision,
+        ...(['revise', 'adjustment'].includes(decision.outcome) && permission?.allowed === true ? { change: { expectedInstructionRevision: decision.expectedInstructionRevision,
           target: decision.target, acceptance: decision.acceptance, model: database.assignments(decision.ticketId).at(-1)?.model || current.workerModels?.[0] || current.model,
           mandate: { ...permission.mandate, policyVersion: current.version, triggerId: candidate.triggerId } } } : {}),
       });

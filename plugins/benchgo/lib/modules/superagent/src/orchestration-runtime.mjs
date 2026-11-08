@@ -14,12 +14,20 @@ import { createTaskExecutionProgress } from './task-execution-progress.mjs';
 import { archiveClosedExecutionSessions, executionSessionProjection } from './execution-session.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
-export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, execute, intervalMs = 1000, now = Date.now }) {
+export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
   const database = store.orchestration, owner = `delivery:${randomUUID()}`, shutdown = new AbortController();
   const archived = new Set(), archiveRetry = new Map();
+  const mirrored = new Set(), mirrorRetry = new Map();
+  async function mirrorDelivered(row) {
+    if (!onDelivered || row?.state !== 'sent' || row.receipt?.status !== 'accepted' || !row.receipt.messageId) return;
+    const key = `${row.uniqueKey || row.kind || 'direct'}:${row.id}`;
+    if (mirrored.has(key) || (mirrorRetry.get(key) || 0) > now()) return;
+    try { await onDelivered(row); mirrored.add(key); mirrorRetry.delete(key); }
+    catch { mirrorRetry.set(key, now() + 30000); }
+  }
   const executionProgress = createTaskExecutionProgress({ ctx, database, now });
   const readPolicy = threadId => readAssessmentPolicy(store, ctx.workspaceRegistry, threadId);
-  const directReplies = createDirectReplyDelivery({ database, readPolicy, signal: shutdown.signal,
+  const directReplies = createDirectReplyDelivery({ database, readPolicy, signal: shutdown.signal, onDelivered: mirrorDelivered,
     getAdapter: channel => channels?.get(channel) || (channel === 'feishu' ? feishu : null) });
   const checkpointStore = createWorkerCheckpointStore({ directory: join(store.paths.workspace, 'checkpoints') });
   const checkpoints = createCheckpointService({ database, checkpoints: checkpointStore, readPolicy, agents: ctx.agents });
@@ -99,6 +107,10 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   let timer, running, recovery;
   async function cycle() {
     const policy = await readPolicy();
+    if (onDelivered) {
+      for (const ticket of database.listTickets({ limit: 1000 })) for (const row of database.deliveries(ticket.id)) await mirrorDelivered(row);
+      for (const row of database.directReplies?.({ state: 'sent', limit: 1000 }) || []) await mirrorDelivered(row);
+    }
     // Archival follows confirmed closure; a failed official call remains retryable.
     if ((ctx.get?.('workspaceRegistry') || ctx.workspaceRegistry)?.archiveSession) {
       for (const ticket of database.listTickets({ limit: 1000 })) {
@@ -145,7 +157,8 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
           // acknowledging. Local notification retries never rerun the Worker.
           const receipt = await deliverDesktop(delivery);
           if (receipt?.status !== 'accepted' || !receipt.messageId) throw new Error('Desktop notification was not durably accepted');
-          database.finishOutbox(delivery.id, { owner, sent: true, receipt });
+          const saved = database.finishOutbox(delivery.id, { owner, sent: true, receipt });
+          await mirrorDelivered(saved);
         } catch {
           database.finishOutbox(delivery.id, { owner, error: '桌面通知保存失败，稍后重试', retryMs: 30000 });
         }
@@ -161,7 +174,8 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         const text = options?.length ? `${payload.text}\n\n可回复：\n${options.map(option => `• ${option}`).join('\n')}` : payload.text;
         const receipt = await adapter.send({ source: payload.source, text, idempotencyKey: delivery.uniqueKey });
         if (receipt?.status !== 'accepted' || !receipt.messageId) throw new Error('来源未返回确定回执');
-        database.finishOutbox(delivery.id, { owner, sent: true, receipt });
+        const saved = database.finishOutbox(delivery.id, { owner, sent: true, receipt });
+        await mirrorDelivered(saved);
       } catch (error) {
         // A failed/expired network request may already have sent. Preserve it for
         // receipt reconciliation, never rerun the task or blindly resend.

@@ -41,14 +41,15 @@ test('authenticated API direct messages enter durable Router queue and revoked s
     await runtime.restart('api');
     const adapter = runtime.get('api'), input = { operation: 'submit', requestId: 'req-1', conversationId: 'conversation', text: 'Inspect project' };
     await assert.rejects(adapter.operation(input, { principal: { kind: 'visitor' } }));
-    const accepted = await adapter.operation(input, { principal: { kind: 'owner' } });
+    const accepted = await adapter.operation(input, { principal: { kind: 'owner', id: 'owner' } });
     assert.equal(accepted.result.requiresEval, true);
     assert.equal(orchestration.candidates().length, 1);
-    assert.equal(accepted.result.trigger.source.connectionRevision, 1);
-    const replay = await adapter.operation(input, { principal: { kind: 'owner' } });
+    assert.equal(accepted.result.trigger, null);
+    assert.equal(accepted.result.intakeEvent.source.connectionRevision, 1);
+    const replay = await adapter.operation(input, { principal: { kind: 'owner', id: 'owner' } });
     assert.equal(replay.result.duplicate, true);
     connections.update({ enabled: false }, { channel: 'api', revision: 1 });
-    await assert.rejects(adapter.send({ source: accepted.result.trigger.source, text: 'result', idempotencyKey: 'delivery-1' }));
+    await assert.rejects(adapter.send({ source: accepted.result.intakeEvent.source, text: 'result', idempotencyKey: 'delivery-1' }));
   } finally { await runtime.dispose(); orchestration.close(); connections.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -84,7 +85,7 @@ test('late HTTP carrier mounts signed callbacks and revokes routes on disposal',
   const runtime = createChannelRuntime({ ctx: {}, store: { connections, orchestration }, adapterOptions: { credentials: { resolve: async () => ({ value: secret }) } } });
   const server = createServer((req, res) => { const route = routes.get(req.url); if (route) void route.handler(req, res); else { res.writeHead(404); res.end(); } });
   try {
-    connections.update({ enabled: true, ownerIds: ['trusted'], signingSecretRef: 'REF' }, { channel: 'webhook', revision: 0 });
+    connections.update({ enabled: true, machineIds: ['benchgo-webhook'], signingSecretRef: 'REF' }, { channel: 'webhook', revision: 0 });
     await runtime.restart('webhook');
     mountChannelCallbacks({ inject: (_services, callback) => { inject = callback; } }, runtime, {});
     assert.equal(runtime.callbackStatus('webhook').available, false);

@@ -2,7 +2,7 @@ import { roleModels } from './routing.mjs';
 import { readAdmissionRules } from './admission-rules.mjs';
 import { createHash } from 'node:crypto';
 import { isScheduledTrigger } from './schedule-bridge.mjs';
-import { feishuSourceAllowed } from './feishu.mjs';
+import { channelSourceAllowed, connectionPolicy } from './channel-policy.mjs';
 
 export async function readAssessmentPolicy(store, workspaceRegistry, threadId) {
   const connection = store.connections.read();
@@ -18,7 +18,7 @@ export async function readAssessmentPolicy(store, workspaceRegistry, threadId) {
   const selected = connections.find(row => row.channel === channel) || connection;
   const enabled = new Set(selected.config.enabledRuleIds || []);
   const writtenRules = readAdmissionRules(document.content).filter(rule => enabled.has(rule.id));
-  return { version, desktopVersion, connections: Object.fromEntries(connections.map(row => [row.channel, { ...row, enabledRuleIds: readAdmissionRules(document.content).filter(rule => (row.config.enabledRuleIds || []).includes(rule.id)).map(rule => rule.id) }])), projects, model: config.models[0], models: config.models, workerModels: roleModels(undefined, config, 'worker'), routingConfig: { revision: config.revision, auxiliary: config.auxiliary, models: config.models, workerModels: config.workerModels }, rules: document.content + '\nEnabled admission rules (exact IDs):\n' + JSON.stringify(writtenRules), connection: connection.config, mode: selected.config.admissionMode || 'manual', enabledRuleIds: writtenRules.map(rule => rule.id) };
+  return { version, desktopVersion, connections: Object.fromEntries(connections.map(row => [row.channel, { ...row, enabledRuleIds: readAdmissionRules(document.content).filter(rule => (row.config.enabledRuleIds || []).includes(rule.id)).map(rule => rule.id) }])), projects, model: roleModels(undefined, config, 'router')[0], models: roleModels(undefined, config, 'router'), workerModels: roleModels(undefined, config, 'worker'), routingConfig: { revision: config.revision, auxiliary: config.auxiliary, models: config.models, workerModels: config.workerModels }, rules: document.content + '\nEnabled admission rules (exact IDs):\n' + JSON.stringify(writtenRules), connection: connection.config, mode: selected.config.admissionMode || 'manual', enabledRuleIds: writtenRules.map(rule => rule.id) };
 }
 
 /** Admission records an owner's instruction; it does not preapprove controlled actions. */
@@ -40,25 +40,31 @@ export function authorizeAssessment({ policy, candidate, trigger, decision, tick
       ...(project ? { project: { id: project.id, path: project.path } } : {}),
     } };
   }
+  if (!['direct', 'group', 'topic', 'system'].includes(trigger.source?.sourceType)) return { allowed: false, reason: 'source-evidence-expired-recollect-required' };
+  if (decision.outcome === 'accept' && trigger.source.sourceType === 'group' && trigger.source.mentioned !== true) return { allowed: false, reason: 'group-new-task-requires-mention' };
   const channelAllowed = channelScope(config, trigger.source, policy.connections?.[channel]);
-  const platformHuman = channel === 'feishu' && config.accessMode === 'platform' && trigger.actor.kind === 'human';
+  const platformHuman = connectionPolicy({ config }).allowHumanRequests && trigger.actor.kind === 'human';
   const explicit = trigger.actor.kind === 'human' && (platformHuman || (config.ownerOpenIds || config.ownerIds || []).includes(trigger.actor.id)) && candidate.gate.strength === 'explicit';
   const inferred = trigger.actor.kind === 'machine' && (config.machineOpenIds || config.machineIds || []).includes(trigger.actor.id)
     && candidate.gate.strength === 'inferred' && decision.outcome === 'accept' && (channel === 'feishu' ? policy.mode : config.admissionMode) === 'auto'
     && validRuleReferences(decision.ruleIds, channel === 'feishu' ? policy.enabledRuleIds : policy.connections?.[channel]?.enabledRuleIds);
-  if (!channelAllowed || candidate.gate.allowed === false || (!explicit && !inferred)) return { allowed: false, reason: 'current-channel-actor-or-rule-denied' };
+  const machineAttention = decision.outcome === 'stop' && trigger.source.sourceType !== 'direct'
+    && trigger.actor.kind === 'machine' && (config.machineOpenIds || config.machineIds || []).includes(trigger.actor.id)
+    && candidate.gate.allowed === true && candidate.gate.strength === 'inferred' && candidate.gate.evidence?.sourceVerified === true;
+  if (!channelAllowed || candidate.gate.allowed === false || (!explicit && !inferred && !machineAttention)) return { allowed: false, reason: 'current-channel-actor-or-rule-denied' };
   if (['answer', 'ask'].includes(decision.outcome)) {
     if (!explicit || decision.ticketId !== undefined) return { allowed: false, reason: 'direct-reply-requires-explicit-human-source' };
     return { allowed: true, reason: 'authenticated-direct-reply' };
   }
   const project = decision.projectId === undefined ? undefined : policy.projects?.find(item => item.id === decision.projectId);
   if (decision.projectId !== undefined && !project) return { allowed: false, reason: 'unknown-project' };
-  if (['attach', 'stop', 'revise', 'reopen'].includes(decision.outcome) && !decision.ticketId) return { allowed: false, reason: 'missing-ticket' };
-  if (platformHuman && ['attach', 'stop', 'revise', 'reopen'].includes(decision.outcome)
-    && (!ticket || ticket.mandate?.actorId !== trigger.actor.id || ticket.mandate.source?.channel !== 'feishu'
-      || ticket.mandate.source.appId !== trigger.source.appId || ticket.mandate.source.chatId !== trigger.source.chatId)) {
-    return { allowed: false, reason: 'platform-requester-cannot-control-other-tickets' };
-  }
+  if (['attach', 'stop', 'revise', 'adjustment'].includes(decision.outcome) && !decision.ticketId) return { allowed: false, reason: 'missing-ticket' };
+  const evidence = candidate.gate.evidence;
+  const owner = evidence?.sourceVerified === true && evidence.ownerVerified === true && ['sourceType', 'connectionId', 'conversationId'].every(key => evidence[key] === trigger.source[key]) && trigger.actor.kind === 'human' && (config.ownerOpenIds || config.ownerIds || []).includes(trigger.actor.id);
+  if (decision.outcome === 'stop' && trigger.source.sourceType !== 'direct') return { allowed: true, outcome: 'attach', routerAttention: true, reason: 'non-direct-stop-router-attention' };
+  if (decision.outcome === 'stop' && !owner) return { allowed: false, reason: 'stop-requires-verified-direct-owner' };
+  if (['attach', 'stop', 'revise', 'adjustment'].includes(decision.outcome)
+    && (!ticket || ticket.mandate?.actorId !== trigger.actor.id || !['channel', 'connectionId', 'conversationId'].every(key => typeof trigger.source[key] === 'string' && !!trigger.source[key] && ticket.mandate.source?.[key] === trigger.source[key]))) return { allowed: false, reason: 'ticket-source-ownership-mismatch' };
   return { allowed: true, reason: inferred ? 'enabled-written-rules' : platformHuman ? 'authenticated-platform-request' : 'authenticated-owner-instruction', mandate: {
     ...(inferred ? { admission: 'enabled-rules', strength: 'inferred', actorKind: 'machine', ruleIds: [...decision.ruleIds] } : {}),
     ...(platformHuman ? { admission: 'platform-request', actorKind: 'human' } : {}),
@@ -88,7 +94,7 @@ export function validateTicketMandate(mandate, { policy }) {
       ? mandate.actorKind === 'machine' && mandate.strength === 'inferred' && (channel === 'feishu' ? policy.mode : config.admissionMode) === 'auto'
         && (config.machineOpenIds || config.machineIds || []).includes(mandate.actorId) && validRuleReferences(mandate.ruleIds, channel === 'feishu' ? policy.enabledRuleIds : policy.connections?.[channel]?.enabledRuleIds)
       : mandate.admission === 'platform-request'
-        ? channel === 'feishu' && config.accessMode === 'platform' && mandate.actorKind === 'human'
+        ? connectionPolicy({ config }).allowHumanRequests && mandate.actorKind === 'human'
         : (config.ownerOpenIds || config.ownerIds || []).includes(mandate.actorId))
     && mandate.controlledActions === 'require-current-policy-and-harness-approval';
 }
@@ -99,9 +105,5 @@ function validRuleReferences(ruleIds, enabledRuleIds) {
 }
 
 function channelScope(config, source, row) {
-  if (!config?.enabled || !source) return false;
-  if ((!source.channel || source.channel === 'feishu') && source.appId !== config.appId) return false;
-  if (source.connectionRevision !== undefined && source.connectionRevision !== row?.revision) return false;
-  if (!source.channel || source.channel === 'feishu') return feishuSourceAllowed(config, source);
-  return Array.isArray(config.chatIds) && (config.chatIds.length === 0 || config.chatIds.includes(source.chatId));
+  return !!config?.enabled && channelSourceAllowed(config, source, row);
 }

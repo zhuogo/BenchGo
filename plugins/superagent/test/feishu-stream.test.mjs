@@ -6,7 +6,7 @@ test('long connection persists authenticated events and stops old callbacks afte
   let handler, closed = 0;
   const config = { enabled: true, appId: 'app', appSecretRef: 'SECRET', botOpenId: 'bot', ownerOpenIds: ['owner'], chatIds: ['chat'] };
   const events = [];
-  const stream = createFeishuStream({ getConfig: () => config, credentials: { resolve: async () => ({ value: 'private' }) }, ingest: async e => events.push(e), loadSDK: async () => ({
+  const stream = createFeishuStream({ allowUnboundAuthorization: true, getConfig: () => config, credentials: { resolve: async () => ({ value: 'private' }) }, ingest: async e => events.push(e), loadSDK: async () => ({
     EventDispatcher: class { register(callbacks) { handler = callbacks['im.message.receive_v1']; return this; } },
     WSClient: class { constructor(options) { this.options = options; } async start() { this.options.onReady(); } close() { closed++; } },
   }) });
@@ -24,10 +24,10 @@ test('long connection persists authenticated events and stops old callbacks afte
 test('official dispatcher payload is normalized and disposal drains accepted ingestion', async () => {
   const { EventDispatcher } = await import('../../benchgo/node_modules/@larksuiteoapi/node-sdk/lib/index.js');
   let dispatcher, release, ingested;
-  const stream = createFeishuStream({
+  const stream = createFeishuStream({ allowUnboundAuthorization: true,
     getConfig: () => ({ enabled: true, appId: 'app', appSecretRef: 'SECRET', chatIds: ['chat'] }),
     credentials: { resolve: async () => ({ value: 'private' }) },
-    ingest: event => { ingested = event; return new Promise(resolve => { release = resolve; }); },
+    ingest: event => { ingested = event.normalize(); return new Promise(resolve => { release = resolve; }); },
     loadSDK: async () => ({ EventDispatcher, WSClient: class {
       async start(options) { dispatcher = options.eventDispatcher; }
       close() {}
@@ -51,7 +51,7 @@ test('official dispatcher payload is normalized and disposal drains accepted ing
 
 test('stop during credential resolution cannot resurrect connection', async () => {
   let release, constructed = 0;
-  const stream = createFeishuStream({ getConfig: () => ({ enabled: true, appId: 'app', appSecretRef: 'SECRET' }), credentials: { resolve: () => new Promise(resolve => { release = resolve; }) }, ingest: async () => {}, loadSDK: async () => ({ WSClient: class { constructor() { constructed++; } } }) });
+  const stream = createFeishuStream({ allowUnboundAuthorization: true, getConfig: () => ({ enabled: true, appId: 'app', appSecretRef: 'SECRET' }), credentials: { resolve: () => new Promise(resolve => { release = resolve; }) }, ingest: async () => {}, loadSDK: async () => ({ WSClient: class { constructor() { constructed++; } } }) });
   const starting = stream.start();
   await new Promise(resolve => setImmediate(resolve));
   stream.stop(); release({ value: 'private' }); await starting;

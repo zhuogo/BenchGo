@@ -8,7 +8,7 @@ const event = () => ({ object: 'whatsapp_business_account', entry: [{ changes: [
 const request = (body, signature = true) => { const raw = JSON.stringify(body); return new Request('https://benchgo.test/whatsapp', { method: 'POST', body: raw, headers: { 'x-hub-signature-256': signature ? 'sha256=' + createHmac('sha256', 'app-secret').update(raw).digest('hex') : 'bad' } }); };
 function fixture() {
   const current = config(), inputs = [], calls = [];
-  const adapter = createWhatsAppAdapter({ getConfig: () => current, credentials: { resolve: async ref => ({ value: `${ref}-secret` }) }, ingest: async input => inputs.push(input), fetcher: async (url, options) => { calls.push({ url, options }); return Response.json(options.method === 'GET' ? { id: 'phone' } : { messages: [{ id: 'reply' }] }); } });
+  const adapter = createWhatsAppAdapter({ allowUnboundAuthorization: true, getConfig: () => current, credentials: { resolve: async ref => ({ value: `${ref}-secret` }) }, ingest: async input => inputs.push(input), fetcher: async (url, options) => { calls.push({ url, options }); return Response.json(options.method === 'GET' ? { id: 'phone' } : { messages: [{ id: 'reply' }] }); } });
   return { current, inputs, calls, adapter };
 }
 test('configuration rejects inline secrets and deduplicates permitted identities', () => {
@@ -16,16 +16,16 @@ test('configuration rejects inline secrets and deduplicates permitted identities
   assert.throws(() => whatsappConfig({ enabled: true }), /凭据/);
   assert.deepEqual(whatsappConfig({ ownerIds: ['a', 'a'] }).ownerIds, ['a']);
 });
-test('normalization scopes phone identity, preserves thread, and derives ownership from configuration', () => {
+test('normalization scopes phone identity and preserves thread without granting owner', () => {
   const body = event(), c = config();
   body.entry[0].changes[0].value.messages[0].context = { id: 'opaque-parent' };
   assert.equal(normalizeWhatsAppEvents(body, c)[0].source.parentMessageId, 'opaque-parent');
   const [input] = normalizeWhatsAppEvents(body, c);
-  assert.equal(input.actor.owner, true);
+  assert.equal(input.actor.owner, false);
   assert.equal(input.sourceKey, 'whatsapp:phone:message');
   assert.equal(input.threadId, 'whatsapp:phone:owner:direct');
   c.phoneNumberId = 'other'; assert.deepEqual(normalizeWhatsAppEvents(body, c), []);
-  c.phoneNumberId = 'phone'; c.chatIds = ['other']; assert.deepEqual(normalizeWhatsAppEvents(body, c), []);
+  c.phoneNumberId = 'phone'; c.chatIds = ['other']; assert.equal(normalizeWhatsAppEvents(body, c).length, 1);
 });
 test('webhook authenticates exact bytes before durable intake and retries intake failures', async () => {
   const f = fixture();
@@ -33,7 +33,7 @@ test('webhook authenticates exact bytes before durable intake and retries intake
   assert.equal(f.inputs.length, 0);
   assert.equal((await f.adapter.handle(request(event()))).status, 200);
   assert.equal(f.inputs.length, 1);
-  const broken = createWhatsAppAdapter({ getConfig: config, credentials: { resolve: async () => ({ value: 'app-secret' }) }, ingest: async () => { throw new Error('private body'); } });
+  const broken = createWhatsAppAdapter({ allowUnboundAuthorization: true, getConfig: config, credentials: { resolve: async () => ({ value: 'app-secret' }) }, ingest: async () => { throw new Error('private body'); } });
   const response = await broken.handle(request(event())); assert.equal(response.status, 503); assert.doesNotMatch(await response.text(), /private/);
 });
 test('verification challenge and Graph verification check credentials and account identity', async () => {
@@ -43,17 +43,29 @@ test('verification challenge and Graph verification check credentials and accoun
   assert.equal(await response.text(), 'challenge');
   assert.equal((await f.adapter.verify()).authentication, 'verified');
 });
-test('reply uses original message and chat; disallowed and revoked sources cannot send', async () => {
+test('reply uses original message and chat; invalid and revoked sources cannot send', async () => {
   const f = fixture(), source = normalizeWhatsAppEvents(event(), f.current)[0].source;
   assert.equal((await f.adapter.send({ source, text: '完成', idempotencyKey: 'key' })).messageId, 'reply');
   const payload = JSON.parse(f.calls[0].options.body);
   assert.equal(payload.to, 'owner'); assert.equal(payload.context.message_id, 'message');
   f.current.chatIds = ['other'];
-  await assert.rejects(f.adapter.send({ source, text: '完成', idempotencyKey: 'key' }), /范围/);
+  assert.equal((await f.adapter.send({ source, text: 'done', idempotencyKey: 'key' })).status, 'accepted');
   f.current.enabled = false;
   await assert.rejects(f.adapter.send({ source, text: '完成', idempotencyKey: 'key' }), /未启用/);
 });
 test('media explicitly reports unavailable body instead of pretending a transcription', () => {
   const body = event(); body.entry[0].changes[0].value.messages[0] = { id: 'audio', from: 'owner', timestamp: '1780000000', type: 'audio', audio: { id: 'asset' } };
   assert.match(normalizeWhatsAppEvents(body, config())[0].text, /不支持读取媒体正文/);
+});
+
+
+test('WhatsApp source facts do not inspect body and connection authorization is required', async () => {
+  const body = event(), message = body.entry[0].changes[0].value.messages[0];
+  Object.defineProperty(message, 'text', { get() { throw Error('body read'); } });
+  const facts = normalizeWhatsAppEvents(body, config(), true)[0];
+  assert.equal(facts.source.conversationId, 'owner'); assert.equal(facts.actor.owner, false);
+  let calls = 0;
+  const adapter = createWhatsAppAdapter({ getConfig: config, ingest: async () => {}, credentials: { resolve: async () => ({ value: 's' }) }, fetcher: async () => { calls++; return Response.json({}); } });
+  await assert.rejects(adapter.send({ source: facts.source, text: 'hi', idempotencyKey: 'k' }), { status: 403 });
+  assert.equal(calls, 0); adapter.dispose();
 });

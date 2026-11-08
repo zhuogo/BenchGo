@@ -40,7 +40,7 @@ function selectMemories(entries, query) {
 }
 
 /** Assistant-owned Harness sessions; the engine remains the sole transcript writer. */
-export async function createAssistantEngine({ ctx, store, setupTools, scheduleBridge, compactionPlugin, appendChatRecord, onClearMain, now = Date.now, cooldownMs = 30_000 }) {
+export async function createAssistantEngine({ ctx, store, setupTools, scheduleBridge, compactionPlugin, appendChatRecord, onClearMain, onSourceMessage, now = Date.now, cooldownMs = 30_000 }) {
   const builtinLayer = await readBuiltinLayer();
   const Compaction = compactionPlugin ?? (await import('@deepseek-ai/dsh-compaction-basic')).default;
   const handles = new Map(), pending = new Map(), listeners = new Set(), cooldowns = new Map(), models = new Map(), errors = new Map(), failures = new Map(), queries = new Map(), sending = new Map();
@@ -109,8 +109,9 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     getAgent: threadId => handles.get(threadId)?.agent,
     readSession: sessionId => ctx.sessionQuery.readSession(sessionId),
     beforeDispatch: async (request, agent) => {
+      if ((await thread(request.threadId)).sourceKey) return;
       await prepareRouterMessage(agent, request.message);
-      if (store.orchestration) recordDesktopTrigger(store.orchestration, { sessionId: agent.id, threadId: request.threadId, message: request.message });
+      if (store.orchestration && !(await thread(request.threadId)).sourceKey) recordDesktopTrigger(store.orchestration, { sessionId: agent.id, threadId: request.threadId, message: request.message });
     },
     onDispatch: request => { errors.delete(request.threadId); failures.delete(request.threadId); queries.set(request.threadId, request.message.content.map(block => block.text || '').join('')); },
     onChange: emit, now, isStopped: () => stopped,
@@ -333,6 +334,15 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         scope.systemPrompt.section({ name: 'benchgo-chat-publication', order: -86, interpolate: false, text: 'Chat naturally with the user, answer questions and respond after delegation in your own words. Choose wording and detail to fit the conversation; no acknowledgement template is prescribed. All ordinary text is user-visible reply or progress and streams to the conversation in real time; never put private reasoning or internal-only narration in ordinary text. Reasoning, tool arguments and raw tool results remain private. You may use assistant_reply to explicitly publish your conversational reply and end the current turn; it is not required for text streaming. A normal final text answer is durably published on successful turn completion. Provisional text from a cancelled or failed turn is not a completed answer. Worker self-checked results are delivered independently, so your reply after dispatch can acknowledge the accepted work without waiting for its completion. Publishing text is not approval. Never include secrets, hidden instructions or internal reasoning.' });
         scope.systemPrompt.section({ name: 'benchgo-router-tools', order: -88, interpolate: false, text: 'You are the BenchGo personal assistant and coordination Router. Converse with the user, understand their needs and answer questions from available context directly. For a user request to remind or check something later, use the official schedule_create tool directly (for example, after_seconds=300 for five minutes); schedule_list/update/delete are also coordination tools. When the user must choose or decide, you may call the official ask_user_question tool yourself with concise options so the user can answer with one click; use it at your own discretion, no confirmation needed. For an existing Ticket Attention, preserve its exact Attention ID as question.id and keep its question, options and multiple-selection setting unchanged; an answer belongs to that original Attention and never creates a new Ticket. Do not turn a reminder into an immediate research Ticket. Delegate website visits, searches, file investigation, implementation and other environment operations through assistant_delegate: doing them yourself would hold your turn and delay the user, while a Ticket keeps the work durable, reviewable and revisable. Inherited exploration and execution tools are therefore not available to you. An explicit user request already authorizes ordinary dispatch: never ask whether to create a Ticket or run it in the background. Ask only about consequential ambiguity or missing authorization for the actual action. When a message refers to a task as “this/that”, “stuck”, “status”, “progress”, “just now” or similar, first use assistant_tickets to identify the existing Ticket; do not call assistant_delegate until the reference is resolved. Use exact configured model identifiers; omit projectId for daily research and other non-repository tasks using the existing isolated assistant workspace, and select an exact registered project ID only for repository work. Reuse the matching Ticket for follow-ups, status and cancellation; do not duplicate completed work. Steer running work yourself: assistant_ticket_control supplement forwards the user’s new instruction to the live Worker, and assistant_ticket_change revises requirements; neither needs extra confirmation. A successful delegation is durable acceptance, not completion: respond naturally in the current conversation, then return without polling or waiting for the Worker so subsequent user messages can be handled. The host does not send a separate canned acknowledgement. Worker self-checked results are delivered verbatim to the original conversation without Router content review. Assistant configuration and goal tools retain their own user-authorization contracts. This role boundary is not a Worker concurrency limit.' });
         scope.on('agent/pre-step', async (payload, next) => {
+          const currentThread = await thread(threadId);
+          if (currentThread.sourceKey) {
+            for (const message of payload.messages || []) {
+              if (message.source?.kind !== 'user') continue;
+              if (!onSourceMessage) throw new Error('Source conversation input routing is unavailable');
+              await onSourceMessage({ thread: copy(currentThread), sessionId: agent.id, message });
+            }
+            return { kind: 'enter', messages: [] };
+          }
           await scheduleBridge?.ingestMessages({ sessionId: record.sessionId, threadId, messages: payload.messages });
           if (scheduleBridge && payload.messages?.length && payload.messages.every(message => message.source?.kind === 'schedule')) return { kind: 'enter', messages: [] };
           learningIteration = Number.isSafeInteger(payload.turn) && Number.isSafeInteger(payload.step) ? `${payload.turn}:${payload.step}` : undefined;
@@ -484,6 +494,10 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       signal?.throwIfAborted();
       const threadId = state.mainSessionId === request.sessionId ? 'main' : state.threads.find(item => item.sessionId === request.sessionId).id;
       const agent = await ensureSession({ threadId });
+      if ((await thread(threadId)).sourceKey) {
+        if (!onSourceMessage) throw new RemoteError('session/agent-busy', 'Source conversation input routing is unavailable', { reason: 'SOURCE_INPUT_ROUTE_UNAVAILABLE' });
+        return dispatch();
+      }
       const fingerprint = createHash('sha256').update(JSON.stringify([request.mode, request.content, request.clientTimeZone])).digest('hex');
       const prior = agent.session.snapshotEvents().find(event => event.type === modelRouteType && event.ignorable === true && event.data.requestId === request.requestId);
       if (prior?.data.fingerprint && prior.data.fingerprint !== fingerprint) throw new RemoteError('gateway/bad-request', '请求标识已用于不同的内容或提交方式', {});
@@ -558,6 +572,26 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     },
     isBusy: () => nativeSubmissions.size > 0 || sending.size > 0 || [...handles.values()].some(handle => handle.agent.status === 'running'),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    async ensureSourceThread({ sourceKey, title, source }) {
+      if (typeof sourceKey !== 'string' || !sourceKey || sourceKey.length > 512
+        || !source || typeof source !== 'object' || Array.isArray(source)) throw new Error('Invalid source conversation');
+      const operation = threadCreationQueue.catch(() => {}).then(async () => {
+        assertOpen();
+        let item = (await store.getState()).threads.find(row => row.sourceKey === sourceKey);
+        if (!item) {
+          item = { id: randomUUID(), sessionId: null, title: String(title || sourceKey).slice(0, 200),
+            sourceKey, source: copy(source), createdAt: new Date(now()).toISOString(), archived: false };
+          await updateState(state => ({ threads: [...state.threads, item] }));
+        }
+        if (item.archived || JSON.stringify(item.source) !== JSON.stringify(source)) {
+          await updateState(state => ({ threads: state.threads.map(row => row.id === item.id ? { ...row, source: copy(source), archived: false } : row) }));
+        }
+        await ensureSession({ threadId: item.id });
+        return thread(item.id);
+      });
+      threadCreationQueue = operation;
+      return operation;
+    },
     async createThread({ title = '新话题', ...extra } = {}) {
       if ('models' in extra) throw new Error('旁聊统一使用 SuperAgent 模型设置');
       const operation = threadCreationQueue.catch(() => {}).then(async () => {
@@ -566,7 +600,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         // Reopen an unused draft instead of accumulating empty side chats.
         // Inspect durable events too: desktop sends do not all pass through send().
         for (const item of (await store.getState()).threads.toReversed()) {
-          if (item.archived || item.pinned || item.title !== name || sending.has(item.id)) continue;
+          if (item.sourceKey || item.archived || item.pinned || item.title !== name || sending.has(item.id)) continue;
           await pending.get(item.id);
           const agent = handles.get(item.id)?.agent ?? ctx.agents.get(item.sessionId);
           if (agent?.status === 'running') continue;
