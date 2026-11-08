@@ -19,6 +19,7 @@ async function fixture() {
       import React from 'react';
       import {createRoot} from 'react-dom/client';
       import {Tickets} from './plugins/superagent/client/tickets.jsx';
+      import {createTaskManagement} from './plugins/superagent/src/task-management.mjs';
       import css from './plugins/superagent/client/style.css';
       import hostCss from './plugins/benchgo/client/style.css';
       const root=createRoot(document.getElementById('root'));let serial=0;
@@ -26,13 +27,14 @@ async function fixture() {
         window.calls=[];window.control={state};
         const sample=(id,title,status,extra={})=>({id,title,target:title+'：按要求完成并提供证据',status,instructionRevision:1,resultVersion:0,
           createdAt:'2026-11-07T08:00:00Z',updatedAt:'2026-11-07T08:05:00Z',taskCanOrganize:false,...extra});
-        const rows=[sample('queued','准备周报','open'),sample('running','运行兼容测试','open',{assignments:[{state:'claimed'}],executionSession:{available:true,sessionId:'real-execution',ticketId:'running'}}),
-          sample('paused','确认发布范围','paused'),sample('done','交付设计稿','completed',{taskCanOrganize:true})];
+        const tasks=createTaskManagement({database:{meta:()=>undefined}});
+        const rows=[sample('queued','准备周报','open',{updatedAt:'2026-11-01T08:00:00Z'}),sample('running','运行兼容测试','open',{updatedAt:'2026-11-09T08:00:00Z',assignments:[{state:'claimed'}],executionSession:{available:true,sessionId:'real-execution',ticketId:'running'}}),
+          sample('paused','确认发布范围','paused',{updatedAt:'2026-11-08T08:00:00Z'}),sample('done','交付设计稿','completed',{updatedAt:null,taskCanOrganize:true})];
         const api=async(action,input)=>{
           window.calls.push([action,input]);
           if(window.control.state==='loading')return new Promise(()=>{});
           if(window.control.state==='error')throw Error('连接暂不可用');
-          if(action==='tickets')return {tickets:window.control.state==='empty'?[]:rows};
+          if(action==='tickets')return {tickets:window.control.state==='empty'?[]:tasks.project('ticket',rows)};
           if(action==='checkpointList')return {checkpoints:[]};
           if(action==='state')return {config:{revision:1,workerConcurrency:2}};
           return {queued:true};
@@ -69,7 +71,11 @@ test('ticket board renders four states, filters, retains details and routes real
     for (const [state, title] of [['loading', '正在读取工单'], ['error', '工单暂时无法读取'], ['empty', '暂无工单']]) {
       await render(state); await page.getByText(title, { exact: true }).waitFor(); await shot(state);
     }
-    await render('data'); await page.getByRole('tab', { name: '看板', exact: true }).click();
+    await render('data');
+    const list = page.locator('.ba-task-list > .ba-task-list-row');
+    await list.first().waitFor();
+    assert.deepEqual(await list.locator('.ba-task-open > strong').allTextContents(), ['运行兼容测试', '确认发布范围', '交付设计稿', '准备周报']);
+    await page.getByRole('tab', { name: '看板', exact: true }).click();
     const board = page.getByLabel('工单看板', { exact: true }); await board.waitFor();
     assert.equal(await board.locator('.ba-ticket-lane').count(), 4);
     for (const title of ['待执行', '执行中', '待处理', '已结束']) assert.equal(await board.getByRole('region', { name: `${title}，1 项`, exact: true }).count(), 1);

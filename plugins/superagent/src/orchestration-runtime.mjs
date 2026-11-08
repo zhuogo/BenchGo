@@ -235,9 +235,9 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   return {
     checkpoints,
     tick,
-    state() {
+    state({ newestFirst = false } = {}) {
       const progress = executionProgress.batch();
-      return database.listTickets({ limit: 1000 }).map(ticket => {
+      return database.listTickets({ limit: 1000, newestFirst }).map(ticket => {
         const assignments = database.assignments(ticket.id);
         return { ...ticket, revisions: database.ticketRevisions(ticket.id), assignments, attentions: database.attentions(ticket.id), attentionResolutions: database.attentionResolutions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id), executionSession: executionSessionProjection(database, ticket.id), execution: progress(ticket, assignments) };
       });

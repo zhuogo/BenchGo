@@ -6,6 +6,29 @@ import { join } from 'node:path';
 import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
 import { createTaskManagement } from '../src/task-management.mjs';
 
+test('task lists show recent activity first with creation fallback and stable ties', () => {
+  const tasks = createTaskManagement({ database: { meta: () => undefined } });
+  const rows = [
+    { id: 'old', updatedAt: '2026-11-01T00:00:00Z', createdAt: '2026-11-08T00:00:00Z' },
+    { id: 'recent', updatedAt: '2026-11-09T00:00:00Z', createdAt: '2026-10-01T00:00:00Z' },
+    { id: 'created', createdAt: '2026-11-08T00:00:00Z' },
+    { id: 'invalid-update', updatedAt: 'invalid', createdAt: '2026-11-08T00:00:00Z' },
+    { id: 'numeric', updatedAt: Date.parse('2026-11-07T00:00:00Z') },
+    { id: 'epoch', updatedAt: 0, createdAt: '2026-11-09T00:00:00Z' },
+    { id: 'unknown', updatedAt: 'invalid' },
+    { id: 'also-unknown' },
+  ];
+  const before = structuredClone(rows);
+  for (const kind of ['ticket', 'goal', 'evaluation']) {
+    const projected = tasks.project(kind, rows);
+    assert.deepEqual(projected.map(row => row.id), ['recent', 'created', 'invalid-update', 'numeric', 'old', 'epoch', 'unknown', 'also-unknown']);
+    assert.deepEqual(tasks.project(kind, rows).map(row => row.id), projected.map(row => row.id));
+  }
+  assert.deepEqual(rows, before);
+  rows[0].updatedAt = '2026-11-10T00:00:00Z';
+  assert.equal(tasks.project('ticket', rows)[0].id, 'old', 'an older ticket moves to the top after new activity');
+});
+
 test('task organization persists without rewriting execution state and detects stale writes', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-task-management-'));
   let database = createAssistantRuntimeStore({ directory });

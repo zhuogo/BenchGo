@@ -748,7 +748,7 @@ export async function mountAssistant(ctx, commander, providers) {
         throw new Error('此链接不支持该操作');
       }
       case 'capabilities': return capabilities();
-      case 'tickets': return { tickets: taskManagement.project('ticket', orchestrationRuntime.state()) };
+      case 'tickets': return { tickets: taskManagement.project('ticket', orchestrationRuntime.state({ newestFirst: true })) };
       case 'taskUpdate': return taskManagement.update(input);
       case 'connectionReplies': return { replies: store.orchestration.directReplies({ channel: input.channel, threadId: input.threadId, limit: 100 })
         .map(({ id, triggerId, threadId, kind, text, state, attempts, lastError, receipt }) => ({ id, triggerId, threadId, kind, text, state, attempts, lastError, receipt })) };

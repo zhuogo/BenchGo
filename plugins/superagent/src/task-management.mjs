@@ -1,5 +1,13 @@
 import { normalizeTicketTitle } from './ticket-title.mjs';
 
+function activityTime(row) {
+  for (const value of [row.updatedAt, row.createdAt]) {
+    const time = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Date.parse(value) : NaN;
+    if (Number.isFinite(time)) return time;
+  }
+  return -Infinity;
+}
+
 /** Human list organization is separate from execution and acceptance state. */
 export function createTaskManagement({ database, orchestration, scheduler }) {
   const key = (kind, id) => `task-presentation:${kind}:${id}`;
@@ -13,7 +21,10 @@ export function createTaskManagement({ database, orchestration, scheduler }) {
     return (value.completed || value.deleted) && (!settled(kind, row) || value.executionRevision !== executionRevision(kind, row))
       ? { ...value, completed: false, deleted: false } : value;
   };
-  const project = (kind, rows) => rows.map(row => ({ ...row, taskMeta: meta(kind, row), taskCanOrganize: settled(kind, row) })).filter(row => !row.taskMeta.deleted);
+  const project = (kind, rows) => rows.map(row => ({ ...row, taskMeta: meta(kind, row), taskCanOrganize: settled(kind, row) }))
+    .filter(row => !row.taskMeta.deleted)
+    // Stable sort retains the source order when activity timestamps are equal.
+    .sort((a, b) => activityTime(b) - activityTime(a));
   function update({ kind, id, operation, title, version }) {
     if (!['ticket', 'goal', 'evaluation'].includes(kind) || typeof id !== 'string' || !id) throw new Error('无效任务标识');
     if (!['rename', 'complete', 'reopen', 'delete'].includes(operation)) throw new Error('无效任务操作');
