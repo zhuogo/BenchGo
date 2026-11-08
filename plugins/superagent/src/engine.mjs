@@ -20,6 +20,8 @@ import { executionEffects, isReadOnlyWorkerTool } from './execution-effects.mjs'
 import { findExecutionSessionOwner } from './execution-session.mjs';
 import { isChatUserMessage } from './question-reply.mjs';
 import { installRouterQuestions } from './router-questions.mjs';
+import { currentTicketStateSignal, ticketStateSignal, ticketStateSource } from './ticket-state-report.mjs';
+import { readAssessmentPolicy, validateTicketMandate } from './assessment-policy.mjs';
 
 const routeKey = model => JSON.stringify([model.providerId, model.modelId]);
 const copy = value => structuredClone(value);
@@ -84,6 +86,17 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     const state = await store.getState();
     return { threadId, sessionIds: [...new Set([...(state.sessionLineage?.[threadId] || []), record.sessionId].filter(Boolean))] };
   }
+  async function mayReportTicketState(threadId, messageId) {
+    const [state, policy, ownerScope, currentThread] = await Promise.all([
+      store.getState(), readAssessmentPolicy(store, ctx.workspaceRegistry, threadId), ticketOwnerScope(threadId), thread(threadId),
+    ]);
+    const request = (state.requests || []).find(row => row.messageId === messageId && row.threadId === threadId);
+    if (!request?.ticketState || request.suppressed || request.status === 'cancelled' || currentThread.archived || currentThread.sourceKey) return false;
+    const signal = currentTicketStateSignal(store.orchestration, request.ticketState);
+    const ticket = signal && store.orchestration.getTicket(signal.ticketId);
+    return !!ticket && ownerScope.sessionIds.includes(ticket.mandate.source?.sessionId)
+      && (ticket.mandate.source.threadId || 'main') === threadId && validateTicketMandate(ticket.mandate, { policy });
+  }
   async function prepareRouterMessage(agent, message, { recovery = false } = {}) {
     const config = await store.getConfig();
     let candidates = copy(config.models);
@@ -109,6 +122,9 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     getAgent: threadId => handles.get(threadId)?.agent,
     readSession: sessionId => ctx.sessionQuery.readSession(sessionId),
     beforeDispatch: async (request, agent) => {
+      if (request.ticketState) {
+        if (!await mayReportTicketState(request.threadId, request.messageId)) return false;
+      }
       if ((await thread(request.threadId)).sourceKey) return;
       await prepareRouterMessage(agent, request.message);
       if (store.orchestration && !(await thread(request.threadId)).sourceKey) recordDesktopTrigger(store.orchestration, { sessionId: agent.id, threadId: request.threadId, message: request.message });
@@ -172,7 +188,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         if (!handles.has(threadId)) handles.set(threadId, { agent: existing, dispose: async () => {} });
         return existing;
       }
-      let contextText = '', selection, frozenContext, learningTurn, learningIteration, failedPlan, claimedMessages = [], currentTurn, resumeFallback;
+      let contextText = '', selection, frozenContext, learningTurn, replyTurn, learningIteration, failedPlan, claimedMessages = [], currentTurn, resumeFallback;
       let replayCalls = new Set();
       const advanceModel = () => {
         if (!selection) return false;
@@ -191,23 +207,27 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           ...(model.options?.reasoningEffort === undefined ? {} : { reasoningEffort: model.options.reasoningEffort }) });
         const routes = () => agent.session.snapshotEvents().filter(event => event.type === modelRouteType && event.ignorable === true);
         scope.on('agent/inbox/claimed', ({ message, turn }) => {
-          if (currentTurn !== turn) { currentTurn = turn; claimedMessages = []; }
+          if (currentTurn !== turn) { currentTurn = turn; claimedMessages = []; replyTurn = undefined; learningTurn = undefined; }
           claimedMessages.push(message);
           if (message.source?.kind === modelFallbackSource) {
             const plan = readModelFallbacks(agent.session.snapshotEvents()).get(message.source.fallbackId);
             if (plan && !plan.cancelled && plan.message.id === message.id) {
               selection = { turnKey: plan.requestId, models: copy(plan.models), index: plan.index, failures: copy(plan.failures) };
               activeRoutes.set(agent, selection);
-              learningTurn = plan.requestId;
+              replyTurn = plan.requestId;
+              const original = agent.session.snapshotEvents().find(event => event.type === 'user/message' && event.data?.id === plan.requestId)?.data
+                || plan.uncommitted?.find(message => message.id === plan.requestId);
+              learningTurn = original?.source?.kind === ticketStateSource ? undefined : plan.requestId;
               replayCalls = new Set(plan.dispatchedCalls || []);
               select(selection.models[selection.index]);
             }
             return;
           }
+          if (isChatUserMessage(message) || message.source?.kind === ticketStateSource) replyTurn = message.id;
           const route = routes().findLast(event => event.data.messageId === message.id
             || (message.source.rpcId && event.data.requestId === message.source.rpcId))?.data;
           if (route) {
-            selection = { turnKey: isChatUserMessage(message) ? message.id : learningTurn ?? turn, models: copy(route.models), index: 0, failures: [] };
+            selection = { turnKey: replyTurn ?? turn, models: copy(route.models), index: 0, failures: [] };
             activeRoutes.set(agent, selection);
             replayCalls = new Set();
             select(selection.models[0]);
@@ -222,7 +242,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           failures.set(threadId, copy(selection.failures));
           if (!advanceModel()) return false;
           const events = agent.session.snapshotEvents();
-          const requestId = learningTurn || claimedMessages.findLast(isChatUserMessage)?.id;
+          const requestId = replyTurn || claimedMessages.findLast(message => isChatUserMessage(message) || message.source?.kind === ticketStateSource)?.id;
           if (!requestId) return false;
           const prior = requestExecutionEvents(events, requestId);
           if (!executionEffects({ events: prior }).effectsVerified) return false;
@@ -324,7 +344,8 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         const inheritedTools = captureRouterTools(scope.tools, agent);
         await setupTools?.(scope, { agent, threadId });
         const routerQuestions = installRouterQuestions(scope, agent, { database: store.orchestration, threadId, getOwnerScope: () => ticketOwnerScope(threadId), appendRecord });
-        installChatPublication(scope, agent, { appendRecord: appendChatRecord, onPublish: () => emit({ type: 'publication', threadId }) });
+        installChatPublication(scope, agent, { appendRecord: appendChatRecord,
+          canPublish: request => mayReportTicketState(threadId, request.id), onPublish: () => emit({ type: 'publication', threadId }) });
         installRouterPermissionGate(scope, { agent, inherited: inheritedTools, controlled: captureRouterTools(scope.tools, agent),
           onToolFailure: ({ note }) => {
             // Gate refusals never become durable tool results; surface the real
@@ -345,6 +366,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           }
           await scheduleBridge?.ingestMessages({ sessionId: record.sessionId, threadId, messages: payload.messages });
           if (scheduleBridge && payload.messages?.length && payload.messages.every(message => message.source?.kind === 'schedule')) return { kind: 'enter', messages: [] };
+          if (payload.messages?.some(message => message.source?.kind === ticketStateSource)) learningTurn = undefined;
           learningIteration = Number.isSafeInteger(payload.turn) && Number.isSafeInteger(payload.step) ? `${payload.turn}:${payload.step}` : undefined;
           for (const message of payload.messages || []) {
             if (!isChatUserMessage(message) || !message.id) continue;
@@ -401,6 +423,11 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
             : decision;
         });
         scope.on('tools/execute', async (execution, next) => {
+          const active = activeChatReply(agent.session.snapshotEvents());
+          const request = agent.session.snapshotEvents().find(event => event.type === 'user/message' && event.data?.id === active?.requestId)?.data;
+          if (execution.agent === agent && request?.source?.kind === ticketStateSource && execution.name !== 'assistant_reply') {
+            throw Object.assign(new Error('工单状态通知只用于报告现有状态，不能执行动作或读取成果。'), { code: 'ROUTER_STATE_REPORT_ONLY' });
+          }
           const result = await next();
           if (learningTurn && learningIteration && execution.callId) store.learning?.recordToolIteration({ scope: record.sessionId, eventId: `${learningTurn}:${learningIteration}`, turnId: learningTurn, source: { sessionId: record.sessionId, threadId, callId: execution.callId, iteration: learningIteration } });
           return result;
@@ -409,7 +436,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           await next();
           // Freeze routing for one original user message. Editing configuration
           // during a tool loop cannot reset its fallback allowance.
-          const turnKey = learningTurn ?? turn;
+          const turnKey = replyTurn ?? turn;
           if (!selection || selection.turnKey !== turnKey) {
             // Direct host followups can bypass both owned submission paths.
             const config = await store.getConfig();
@@ -470,6 +497,27 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
   return {
     ensureSession,
     ticketOwnerScope,
+    async reportTicketState(delivery) {
+      const signal = ticketStateSignal(store.orchestration, delivery);
+      if (!signal) return { status: 'suppressed', reason: 'state-superseded' };
+      const threadId = delivery.payload.source.threadId || 'main';
+      let scope, currentThread;
+      try { [scope, currentThread] = await Promise.all([ticketOwnerScope(threadId), thread(threadId)]); }
+      catch { return { status: 'suppressed', reason: 'conversation-unavailable' }; }
+      if (!scope.sessionIds.includes(delivery.payload.source.sessionId) || currentThread.archived || currentThread.sourceKey) return { status: 'suppressed', reason: 'conversation-unavailable' };
+      const row = await inbox.enqueueTicketState({ threadId, signal });
+      if (row.suppressed) return { status: 'suppressed', reason: 'state-superseded' };
+      if (row.sessionId) {
+        let snapshot;
+        try { snapshot = await ctx.sessionQuery.readSession(row.sessionId); }
+        catch { return { status: 'failed', reason: 'Router 原会话暂时无法核实，状态说明尚未确认发布' }; }
+        const report = projectChatMessages(snapshot.events).find(item => item.role === 'assistant' && item.requestId === row.messageId);
+        if (report) return { status: 'accepted', messageId: report.id };
+      }
+      if (['failed', 'cancelled', 'uncertain'].includes(row.status)) return { status: 'failed', reason: row.error || `Router 状态说明${row.status === 'cancelled' ? '已取消' : '未完成，需核实原会话'}` };
+      if (!row.sessionId) return { status: 'pending' };
+      return row.status === 'processed' ? { status: 'failed', reason: 'Router 回合已结束，未生成有效状态说明' } : { status: 'pending' };
+    },
     async nativePrompt({ request, dispatch, signal }) {
       const operation = (nativeSubmissions.get(request.sessionId) || Promise.resolve()).catch(() => {}).then(async () => {
       const state = await store.getState();
@@ -550,17 +598,38 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         const agent = await ensureSession({ threadId: 'main', recovery: true, recoveredEvidence: evidence });
         assertOpen();
         const uncertain = evidence.unknownEffects.length > 0;
+        let recoveryBlocked = false;
         if (uncertain) {
           const message = `Router 已恢复；${evidence.unknownEffects.length} 个工具动作的外部结果待核实，未自动重放。`;
           errors.set('main', message);
           emit({ type: 'error', threadId: 'main', message });
         } else if (evidence.needsContinuation) {
-          const message = createUserMessage({ content: [{ type: 'text', text: 'The host confirmed the previous Router writer is inactive and restored this same durable session. Read the existing conversation, Tickets and ledger, then continue only the original user mandate. Do not re-dispatch completed work or repeat completed external effects. This recovery notice grants no new authority.' }], source: { kind: 'benchgo-router-recovery', sessionId: record.sessionId, transcriptHash: evidence.hash } });
-          await prepareRouterMessage(agent, message, { recovery: true });
-          assertOpen();
-          agent.followup(message);
+          const events = agent.session.snapshotEvents();
+          const original = events.findLast(event => event.type === 'user/message'
+            && (isChatUserMessage(event.data) || event.data?.source?.kind === ticketStateSource))?.data;
+          if (original?.source?.kind === ticketStateSource) {
+            const published = projectChatMessages(events).some(row => row.requestId === original.id && row.role === 'assistant');
+            const prior = [...readModelFallbacks(events).values()].findLast(plan => plan.requestId === original.id && !plan.cancelled);
+            const models = events.findLast(event => event.type === modelRouteType && event.ignorable === true && event.data?.messageId === original.id)?.data.models;
+            if (!published && (!models?.length || !await mayReportTicketState('main', original.id))) {
+              recoveryBlocked = true;
+              errors.set('main', 'Router 已恢复；原状态说明的状态、授权或模型路由已失效，未续行。');
+            } else if (!published && !(prior && !prior.end)) {
+              const id = randomUUID();
+              const message = createUserMessage({ source: { kind: modelFallbackSource, fallbackId: id }, content: [{ type: 'text', text: 'The host restored this same durable Router session. Continue only the original Ticket state report from its recorded facts. This notice grants no user, tool or Worker authority.' }] });
+              appendRecord(agent.session, modelFallbackType, { id, requestId: original.id, models: copy(models), index: prior?.index ?? 0,
+                failures: copy(prior?.failures || []), message, uncommitted: [], dispatchedCalls: [] });
+              assertOpen();
+              agent.followup(message);
+            }
+          } else {
+            const message = createUserMessage({ content: [{ type: 'text', text: 'The host confirmed the previous Router writer is inactive and restored this same durable session. Read the existing conversation, Tickets and ledger, then continue only the original user mandate. Do not re-dispatch completed work or repeat completed external effects. This recovery notice grants no new authority.' }], source: { kind: 'benchgo-router-recovery', sessionId: record.sessionId, transcriptHash: evidence.hash } });
+            await prepareRouterMessage(agent, message, { recovery: true });
+            assertOpen();
+            agent.followup(message);
+          }
         }
-        const status = uncertain ? 'awaiting-reconciliation' : 'recovered';
+        const status = uncertain || recoveryBlocked ? 'awaiting-reconciliation' : 'recovered';
         const auditId = `router-recovery:${record.sessionId}:${evidence.hash}`;
         store.ledger?.append({ id: auditId, sourceKey: auditId, kind: 'router-recovery', content: uncertain ? 'Router 存续已恢复；未知外部效果待核实，未重放' : 'Router 存续已恢复', metadata: { sessionId: record.sessionId, ...evidence, status } });
         emit({ type: 'recovery', threadId: 'main', status, sessionId: agent.id });

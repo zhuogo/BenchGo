@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto';
 import { notificationPublication } from './notification-publication.mjs';
 
 const encode = value => JSON.stringify(value);
-const decode = row => row ? JSON.parse(row.payload) : null;
+const decode = row => row ? { ...JSON.parse(row.payload), ...(row.unique_key?.startsWith('ticket-delivery:')
+  ? { ticketStateEventKey: row.unique_key.slice('ticket-delivery:'.length) } : {}) } : null;
 
 /** Durable notification and Goal storage for the current SuperAgent baseline. */
 export function createAssistantRuntimeStore({ directory, filename } = {}) {

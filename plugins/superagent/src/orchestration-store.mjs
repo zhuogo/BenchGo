@@ -683,7 +683,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           code: payload.lastFailure.code, stage: payload.lastFailure.stage });
         db.prepare("INSERT OR IGNORE INTO sa_outbox(id,unique_key,ticket_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
           .run(uuid(), uniqueKey, ticket.id, json({ type: 'ticket.result', ticketId: ticket.id, source: ticket.mandate.source,
-            instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion,
+            instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion, assignmentId, fence,
             publication, text: publication.text }), now, timestamp(now), timestamp(now));
         return true;
       });

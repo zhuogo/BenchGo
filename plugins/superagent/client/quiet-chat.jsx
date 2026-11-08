@@ -1,6 +1,5 @@
 import { Button } from '../../shared/client/ui/button.jsx';
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives';
 import { quietChatRows } from './quiet-chat.mjs';
 import { isChatUserMessage } from '../src/question-reply.mjs';
 import css from './quiet-chat.css';
@@ -81,20 +80,22 @@ export function QuietChat({ home, session, chat }) {
           mandate: { source: { channel: 'desktop' } } } : null;
       return <article className="ba-chat-message" data-chat-key={row.key} data-role={row.role} key={row.key}>
       <div className="ba-chat-body">
-      <div className="ba-chat-content" aria-label={row.role === 'system' ? '系统状态' : row.kind === 'question-reply' ? '你的选择' : row.role === 'user' ? '你' : home.assistantName || 'BenchGo'}>
-      {row.role === 'system' && <div className="ba-chat-system-label">系统状态</div>}
-      {row.type === 'schedule.lifecycle' && row.schedule ? <ScheduleLifecycle row={row} onOpenResources={home.onOpenResources} onOpenExecution={home.onOpenExecution} /> : row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : row.role === 'assistant' ? <InteractiveReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={session.running || !!row.provisional} onSubmit={async (text, request) => { await sendInteractive(home.ctx.sessions, home.sessionId, text, request); void Promise.resolve(home.onRefresh?.()).catch(() => {}); }} /> : <MarkdownText text={row.text || ''} labels={labels} />}
+      <div className="ba-chat-content" aria-label={row.role === 'system' ? '消息状态' : row.kind === 'question-reply' ? '你的选择' : row.role === 'user' ? '你' : home.assistantName || 'BenchGo'}>
+      {row.type === 'schedule.lifecycle' && row.schedule ? <ScheduleLifecycle row={row} onOpenResources={home.onOpenResources} onOpenExecution={home.onOpenExecution} /> : row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : row.role === 'assistant' ? <InteractiveReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={session.running || !!row.provisional} onSubmit={async (text, request) => { await sendInteractive(home.ctx.sessions, home.sessionId, text, request); void Promise.resolve(home.onRefresh?.()).catch(() => {}); }} /> : <div className="ba-chat-status">
+        {row.title && <strong>{row.title}</strong>}<span>{row.text}</span>
+        {row.ticketId && home.onOpenResources && <Button variant="link" size="sm" className="ba-chat-status-link" type="button" disabled={busy} onClick={() => run(() => home.onOpenResources('tasks', { ticketId: row.ticketId }))}>查看工单详情</Button>}
+      </div>}
       {row.role === 'user' && (row.content || []).filter(block => ['image', 'file'].includes(block.type)).map((block, index) => <span className="ba-chat-attachment" key={index}>{block.type === 'image' ? '已附图片' : `已附文件${block.name ? `：${block.name}` : ''}`}</span>)}
       </div>
       </div><div className="ba-chat-followup">
       {row.type === 'ticket.attention' && row.attention && !verificationOnly && <TicketAttention key={row.attention.id} api={api} attention={row.attention} showQuestion={false} ticket={{ id: row.ticketId, status: row.ticketStatus, instructionRevision: row.currentInstructionRevision ?? row.instructionRevision, resultVersion: row.currentResultVersion ?? row.resultVersion, mandate: { source: { channel: 'desktop' } } }} onAnswered={home.onRefresh} />}
-      {currentTicket && <TicketWaiting key={`${currentTicket.id}:${currentTicket.instructionRevision}:${currentTicket.resultVersion}`} api={api} ticket={currentTicket} onRefresh={home.onRefresh} onOpenResources={home.onOpenResources} showQuestion={!rows.some(item => item.attention && item.attention.id === (row.currentAttention || row.attention)?.id)} />}
-      {currentTicket && home.onOpenExecution && <div className="ba-chat-options" aria-label="工单执行会话" aria-busy={busy || undefined}>
+      {currentTicket && row.role !== 'system' && <TicketWaiting key={`${currentTicket.id}:${currentTicket.instructionRevision}:${currentTicket.resultVersion}`} api={api} ticket={currentTicket} onRefresh={home.onRefresh} onOpenResources={home.onOpenResources} showQuestion={!rows.some(item => item.attention && item.attention.id === (row.currentAttention || row.attention)?.id)} />}
+      {currentTicket && row.role !== 'system' && home.onOpenExecution && <div className="ba-chat-options" aria-label="工单执行会话" aria-busy={busy || undefined}>
         {row.executionSession?.available && row.executionSession.sessionId
           ? <Button variant="ghost" type="button" disabled={busy} onClick={() => run(() => home.onOpenExecution(row.executionSession))}>查看执行会话</Button>
           : <><span>{row.executionSession ? '执行会话暂不可用' : '执行会话状态待同步'}</span><Button variant="ghost" type="button" disabled={busy || !home.onRefresh} onClick={() => run(home.onRefresh)}>刷新状态</Button></>}
       </div>}
-      {row.notification && !row.attention && row.eventId && row.options?.length > 0 && <div className="ba-chat-options" aria-label="回复选项（不代表审批）">{row.options.map(option => <Button variant="ghost" type="button" className="ba-quiet" key={option} disabled={busy || session.running || !!chosen[row.eventId]} onClick={() => run(async () => { await api('notificationOption', { eventId: row.eventId, threadId, text: option }); setChosen(value => ({ ...value, [row.eventId]: option })); await home.onRefresh?.(); })}>{option}{chosen[row.eventId] === option ? ' · 已发送' : ''}</Button>)}</div>}
+      {row.notification && row.role !== 'system' && !row.attention && row.eventId && row.options?.length > 0 && <div className="ba-chat-options" aria-label="回复选项（不代表审批）">{row.options.map(option => <Button variant="ghost" type="button" className="ba-quiet" key={option} disabled={busy || session.running || !!chosen[row.eventId]} onClick={() => run(async () => { await api('notificationOption', { eventId: row.eventId, threadId, text: option }); setChosen(value => ({ ...value, [row.eventId]: option })); await home.onRefresh?.(); })}>{option}{chosen[row.eventId] === option ? ' · 已发送' : ''}</Button>)}</div>}
       </div>
       {!row.streaming && row.role !== 'system' && <MessageActions row={row} home={home} />}
     </article>; })}

@@ -1,10 +1,25 @@
 import { appendPluginRecord } from '@deepseek-ai/dsh-session';
-import { fallbackRequestIds } from './model-fallback.mjs';
+import { fallbackRequestIds, readModelFallbacks } from './model-fallback.mjs';
 import { questionBatch, questionAnswers, questionReplyText, readQuestionReply } from './question-reply.mjs';
+import { ticketStateSource } from './ticket-state-report.mjs';
 
 export const chatPublicationType = 'plugin:benchgo-plugin/chat-publication';
 const fail = message => Object.assign(new Error(message), { code: 'CHAT_PUBLICATION_REJECTED' });
 const userEvent = (event, events) => event.type === 'user/message' && (event.data?.source?.kind === 'user' || readQuestionReply(event.data, events));
+const replyEvent = (event, events) => userEvent(event, events) || event.type === 'user/message' && event.data?.source?.kind === ticketStateSource;
+const stateKey = request => request?.source?.kind === ticketStateSource ? request.source.eventKey : undefined;
+// State reports share the existing durable continuation protocol, without
+// broadening the set of messages that carry user or learning authority.
+const replyContinuations = events => {
+  const result = fallbackRequestIds(events);
+  const states = new Set(events.filter(event => event.type === 'user/message' && stateKey(event.data)).map(event => event.data.id));
+  for (const plan of readModelFallbacks(events).values()) {
+    if (!plan.cancelled && states.has(plan.requestId)
+      && events.some(event => event.type === 'user/message' && event.data?.id === plan.message.id
+        && event.data.source?.fallbackId === plan.id)) result.set(plan.message.id, plan.requestId);
+  }
+  return result;
+};
 const textBlocks = content => (content || []).filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => ({ type: 'text', text: block.text }));
 const publicUsage = value => {
   const entries = ['inputTokens', 'outputTokens', 'totalTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens']
@@ -14,11 +29,11 @@ const publicUsage = value => {
 
 /** Identity only: raw execution content is never returned as a reply draft. */
 export function activeChatReply(events) {
-  const continuations = fallbackRequestIds(events);
+  const continuations = replyContinuations(events);
   let turn, requestId;
   for (const event of events) {
     if (event.type === 'turn/start') { turn = event.data?.turn; requestId = undefined; }
-    else if (turn !== undefined && userEvent(event, events)) requestId = event.data.id;
+    else if (turn !== undefined && replyEvent(event, events)) requestId = event.data.id;
     else if (turn !== undefined && event.type === 'user/message' && continuations.has(event.data?.id)) requestId = continuations.get(event.data.id);
     else if (event.type === 'turn/end' && event.data?.turn === turn) { turn = undefined; requestId = undefined; }
   }
@@ -27,23 +42,25 @@ export function activeChatReply(events) {
 
 /** A projection, never a replacement for the private execution transcript. */
 export function projectChatMessages(events) {
-  const continuations = fallbackRequestIds(events);
-  const requests = new Map(events.filter(event => userEvent(event, events)).map(event => [event.data.id, event.data]));
+  const continuations = replyContinuations(events);
+  const requests = new Map(events.filter(event => replyEvent(event, events)).map(event => [event.data.id, event.data]));
   const users = new Set(), published = new Set(), rows = [];
   const explicit = new Set();
   for (const event of events) {
-    if (userEvent(event, events)) users.add(event.data.id);
+    if (replyEvent(event, events)) users.add(event.data.id);
     else if (event.type === chatPublicationType && event.ignorable === true && event.data?.kind === 'final'
-      && users.has(event.data.requestId) && typeof event.data.text === 'string' && event.data.text.trim() && event.data.text.length <= 16000) explicit.add(event.data.requestId);
+      && users.has(event.data.requestId) && (!stateKey(requests.get(event.data.requestId)) || event.data.ticketStateEventKey === stateKey(requests.get(event.data.requestId)))
+      && typeof event.data.text === 'string' && event.data.text.trim() && event.data.text.length <= 16000) explicit.add(event.data.requestId);
   }
   users.clear();
-  let turn, request, lastAssistant;
+  let turn, request, lastAssistant, statePermit;
   const asked = new Map(), answered = new Set();
   for (const event of events) {
-    if (event.type === 'turn/start') { turn = event.data?.turn; request = undefined; lastAssistant = undefined; }
-    if (userEvent(event, events)) {
+    if (event.type === 'turn/start') { turn = event.data?.turn; request = undefined; lastAssistant = undefined; statePermit = undefined; }
+    if (replyEvent(event, events)) {
       users.add(event.data.id);
       request = event.data;
+      if (request.source?.kind === ticketStateSource) continue;
       const question = readQuestionReply(event.data, events);
       if (question) {
         const row = { seq: event.seq, id: event.data.id, role: 'user', kind: 'question-reply', ...question,
@@ -60,10 +77,13 @@ export function projectChatMessages(events) {
       request = requests.get(continuations.get(event.data.id));
     } else if (event.type === chatPublicationType && event.ignorable === true) {
       const row = event.data;
+      if (row?.kind === 'state-final-permit') { statePermit = row; continue; }
       if (row?.kind !== 'final' || !users.has(row.requestId) || published.has(row.requestId) || typeof row.text !== 'string' || !row.text.trim() || row.text.length > 16000) continue;
+      const eventKey = stateKey(requests.get(row.requestId));
+      if (eventKey && row.ticketStateEventKey !== eventKey) continue;
       published.add(row.requestId);
       const usage = request?.id === row.requestId ? publicUsage(lastAssistant?.data?.usage) : undefined;
-      rows.push({ seq: event.seq, id: `reply:${row.requestId}`, role: 'assistant', kind: 'final', requestId: row.requestId, text: row.text, content: [{ type: 'text', text: row.text }], time: event.time, ...(usage ? { usage } : {}) });
+      rows.push({ seq: event.seq, id: `reply:${row.requestId}`, role: 'assistant', kind: 'final', requestId: row.requestId, text: row.text, content: [{ type: 'text', text: row.text }], time: event.time, ...(eventKey ? { ticketStateEventKey: eventKey } : {}), ...(usage ? { usage } : {}) });
     } else if (event.type === 'tool/call' && event.data?.name === 'ask_user_question' && !event.data.parentCallId) {
       const questions = questionBatch(event.data.arguments);
       if (questions) asked.set(String(event.data.callId), questions);
@@ -81,10 +101,16 @@ export function projectChatMessages(events) {
         && request?.id && !explicit.has(request.id) && !published.has(request.id)
         && message?.source?.kind === 'model' && !message.content?.some(block => block.type === 'tool-call')) {
         const text = textBlocks(message.content).map(block => block.text).join('\n');
+        const eventKey = stateKey(request);
+        if (eventKey && !(statePermit?.requestId === request.id && statePermit.turn === turn
+          && statePermit.ticketStateEventKey === eventKey && statePermit.text === text)) {
+          turn = undefined; request = undefined; lastAssistant = undefined; statePermit = undefined;
+          continue;
+        }
         if (text.trim()) {
           published.add(request.id);
           rows.push({ seq: event.seq, id: `reply:${request.id}`, role: 'assistant', kind: 'final', requestId: request.id,
-            text, content: [{ type: 'text', text }], time: event.time, ...(publicUsage(lastAssistant.data.usage) ? { usage: publicUsage(lastAssistant.data.usage) } : {}) });
+            text, content: [{ type: 'text', text }], time: event.time, ...(eventKey ? { ticketStateEventKey: eventKey } : {}), ...(publicUsage(lastAssistant.data.usage) ? { usage: publicUsage(lastAssistant.data.usage) } : {}) });
         }
       }
       turn = undefined; request = undefined; lastAssistant = undefined;
@@ -94,7 +120,20 @@ export function projectChatMessages(events) {
 }
 
 /** Only the owner Router can publish; Worker/tool output has no publication authority. */
-export function installChatPublication(scope, agent, { onPublish, appendRecord = appendPluginRecord } = {}) {
+export function installChatPublication(scope, agent, { onPublish, canPublish, appendRecord = appendPluginRecord } = {}) {
+  const permitted = request => !stateKey(request) || (canPublish ? canPublish(request) : false);
+  scope.on?.('agent/turn-stopping', async ({ agent: subject, turn, signal }) => {
+    if (subject !== agent) return;
+    const events = agent.session.snapshotEvents(), active = activeChatReply(events);
+    const request = events.find(event => event.type === 'user/message' && event.data?.id === active?.requestId)?.data;
+    if (!stateKey(request) || active.turn !== turn || events.some(event => event.type === chatPublicationType && event.data?.kind === 'final' && event.data.requestId === request.id)) return;
+    const last = events.findLast(event => event.type === 'assistant/message' && event.data?.turn === turn)?.data?.message;
+    if (last?.source?.kind !== 'model' || last.content?.some(block => block.type === 'tool-call')) return;
+    const text = textBlocks(last.content).map(block => block.text).join('\n');
+    if (!text.trim() || text.length > 16000 || !await permitted(request)) return;
+    signal?.throwIfAborted();
+    appendRecord(agent.session, chatPublicationType, { kind: 'state-final-permit', requestId: request.id, turn, text, ticketStateEventKey: stateKey(request) });
+  });
   scope.tools.register({
     name: 'assistant_reply',
     description: 'Publish your conversational reply to the user and end the current turn. Use for chatting, answering, clarifying or responding naturally after successful delegation. Choose your own wording to fit the conversation. A normal completed text answer is also delivered automatically. Worker results are delivered separately after the Worker completes its own quick checks. Do not repeat an already published reply. This does not grant approval or perform external actions.',
@@ -104,18 +143,26 @@ export function installChatPublication(scope, agent, { onPublish, appendRecord =
       execution.signal?.throwIfAborted();
       if (execution.agent !== agent || typeof text !== 'string' || !text.trim() || text.length > 16000) throw fail('正式回复身份或正文无效');
       const events = agent.session.snapshotEvents();
-      const request = events.findLast(event => userEvent(event, events))?.data;
+      const active = activeChatReply(events);
+      const request = events.findLast(event => replyEvent(event, events) && (!active || event.data.id === active.requestId))?.data;
       if (!request?.id) throw fail('没有可回复的用户请求');
-      const existing = events.find(event => event.type === chatPublicationType && event.data?.requestId === request.id);
+      const existing = events.find(event => event.type === chatPublicationType && event.data?.kind === 'final' && event.data.requestId === request.id);
       if (existing) {
         if (existing.data.text !== text) throw fail('本次请求已发布正式回复；不能重复或改写已发送内容');
         execution.concludeTurn();
         return { published: true, duplicate: true, requestId: request.id };
       }
-      appendRecord(agent.session, chatPublicationType, { kind: 'final', requestId: request.id, text });
-      execution.concludeTurn();
-      onPublish?.({ requestId: request.id });
-      return { published: true, requestId: request.id };
+      const publish = allowed => {
+        execution.signal?.throwIfAborted();
+        if (!allowed) throw fail('工单状态或授权已变化，本次状态说明不再发布');
+        appendRecord(agent.session, chatPublicationType, { kind: 'final', requestId: request.id, text,
+          ...(stateKey(request) ? { ticketStateEventKey: stateKey(request) } : {}) });
+        execution.concludeTurn();
+        onPublish?.({ requestId: request.id });
+        return { published: true, requestId: request.id };
+      };
+      const allowed = permitted(request);
+      return allowed?.then ? allowed.then(publish) : publish(allowed);
     },
   });
 }

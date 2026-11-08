@@ -1999,3 +1999,124 @@ test('channel mirror survives official JSONL resume with summary source and zero
   assert.ok((await second.ctx.sessionPersistence.list()).some(row => row.header.id === restored.sessionId));
   assert.equal(first.requests.length + second.requests.length, 0);
 });
+
+async function stateReportFixture(t, script, options = {}) {
+  const { deferCleanup = false, ...fixtureOptions } = options;
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-state-report-'));
+  const store = await createAssistantStore({ dataDirectory: directory });
+  await store.updateConfig({ models: ['first', 'second'].map(modelId => ({ providerId: 'test', modelId })) });
+  const f = await fixture(t, script, { store, ...fixtureOptions });
+  if (!deferCleanup) t.after(() => rm(directory, { recursive: true, force: true }));
+  const agent = await f.engine.ensureSession(), policy = await readAssessmentPolicy(store);
+  const source = { channel: 'desktop', sessionId: agent.id, threadId: 'main', messageId: 'original-request' };
+  const ticket = { id: 'state-ticket', title: '整理资料', status: 'open', instructionRevision: 1, resultVersion: 0,
+    mandate: { source, actorId: 'desktop-owner', admission: 'desktop-approved-delegation', policyVersion: policy.desktopVersion,
+      controlledActions: 'require-current-policy-and-harness-approval' }, result: 'PRIVATE WORKER BODY' };
+  const assignment = { id: 'state-assignment', fence: 1, state: 'uncertain', lastFailure: { code: 'NETWORK', stage: 'execution' } };
+  const delivery = { uniqueKey: 'state-event', ticketId: ticket.id, payload: { type: 'ticket.result', source,
+    instructionRevision: 1, resultVersion: 0, assignmentId: assignment.id, fence: assignment.fence,
+    publication: { origin: 'system', systemState: { state: 'continuation_wait', code: 'NETWORK', stage: 'execution' } } } };
+  store.orchestration = { ...store.orchestration, getTicket: () => ticket, assignments: () => [assignment], deliveries: () => [delivery] };
+  let learningWrites = 0;
+  store.learning = { ...store.learning, recordPrompt: () => { learningWrites++; }, recordToolIteration: () => { learningWrites++; } };
+  async function settle() {
+    for (let i = 0; i < 100; i++) {
+      const receipt = await f.engine.reportTicketState(delivery);
+      if (receipt.status !== 'pending') return receipt;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.fail('state report did not reach a terminal receipt');
+  }
+  return { ...f, store, directory, agent, ticket, delivery, settle, learningWrites: () => learningWrites };
+}
+
+test('Ticket state reports use the saved Router fallback route without learning or Worker bodies', async t => {
+  const f = await stateReportFixture(t, (_request, count) => count === 1
+    ? [{ type: 'finish', reason: { kind: 'error', failure: { code: 'RATE_LIMIT', status: 429, message: 'busy' } } }]
+    : text('整理资料的执行状态仍在核实，已有记录已保留。'));
+  const receipt = await f.settle();
+  assert.equal(receipt.status, 'accepted');
+  assert.deepEqual(f.requests.map(request => request.model), ['first', 'second']);
+  const history = await f.engine.history();
+  assert.equal(history.messages.length, 1);
+  assert.equal(history.messages[0].ticketStateEventKey, f.delivery.uniqueKey);
+  assert.equal(f.learningWrites(), 0);
+  assert.doesNotMatch(JSON.stringify(f.requests), /PRIVATE WORKER BODY/);
+  assert.equal((await f.engine.reportTicketState(f.delivery)).messageId, receipt.messageId);
+  assert.equal(f.requests.length, 2);
+});
+
+test('Ticket state reporting returns a failed receipt when every Router model fails', async t => {
+  const f = await stateReportFixture(t, () => [{ type: 'finish', reason: { kind: 'error', failure: { code: 'RATE_LIMIT', status: 429, message: 'busy' } } }]);
+  const receipt = await f.settle();
+  assert.equal(receipt.status, 'failed');
+  assert.ok(receipt.reason);
+  assert.equal(f.requests.length, 2);
+  assert.deepEqual((await f.engine.history()).messages, []);
+  assert.equal((await f.engine.reportTicketState(f.delivery)).status, 'failed');
+  assert.equal(f.requests.length, 2, 'outbox retries do not replay a failed Router turn or a Worker');
+});
+
+for (const revoke of ['state', 'authorization']) test(`Ticket state natural completion does not publish after ${revoke} changes during generation`, async t => {
+  let f;
+  f = await stateReportFixture(t, async () => {
+    if (revoke === 'state') f.ticket.resultVersion++;
+    else f.ticket.mandate.policyVersion = 'revoked';
+    return text('STALE STATE REPORT');
+  });
+  await f.engine.reportTicketState(f.delivery);
+  for (let i = 0; i < 100 && !f.requests.length; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  await f.agent.whenIdle();
+  assert.deepEqual((await f.engine.history()).messages, []);
+  assert.equal(f.agent.session.snapshotEvents().some(event => event.data?.kind === 'state-final-permit'), false);
+});
+
+test('Ticket state assistant_reply rechecks authorization immediately before publication', async t => {
+  let f;
+  f = await stateReportFixture(t, async (_request, count) => {
+    if (count !== 1) return text('UNAUTHORIZED NATURAL REPORT');
+    f.ticket.mandate.policyVersion = 'revoked';
+    return [{ type: 'block-start', index: 0, blockType: 'tool-call' },
+      { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'state-publication', name: 'assistant_reply', arguments: JSON.stringify({ text: 'UNAUTHORIZED TOOL REPORT' }) } },
+      { type: 'finish', reason: { kind: 'tool-calls' } }];
+  });
+  await f.engine.reportTicketState(f.delivery);
+  for (let i = 0; i < 100 && !f.requests.length; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  await f.agent.whenIdle();
+  assert.deepEqual((await f.engine.history()).messages, []);
+  const events = f.agent.session.snapshotEvents();
+  assert.ok(events.some(event => event.type === 'tool/call' && event.data.name === 'assistant_reply'));
+  assert.equal(events.some(event => event.type === 'plugin:benchgo-plugin/chat-publication'), false);
+});
+
+test('Ticket state recovery preserves its original route and report-only tool boundary', async t => {
+  const persistenceRoot = await mkdtemp(join(tmpdir(), 'benchgo-state-recovery-'));
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const first = await stateReportFixture(t, async () => {
+    entered(); await new Promise(resolve => setTimeout(resolve, 40)); return text('INTERRUPTED REPORT');
+  }, { persistenceRoot, deferCleanup: true });
+  await first.engine.reportTicketState(first.delivery);
+  await started;
+  await first.engine.dispose(); await first.ctx.fiber.dispose();
+  await first.store.updateConfig({ models: [{ providerId: 'test', modelId: 'new-primary' }] });
+  let forbiddenReads = 0;
+  const second = await fixture(t, (_request, count) => count === 1
+    ? [{ type: 'block-start', index: 0, blockType: 'tool-call' },
+      { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'forbidden-worker-read', name: 'assistant_tickets', arguments: '{}' } },
+      { type: 'finish', reason: { kind: 'tool-calls' } }]
+    : text('整理资料的执行状态仍在核实，记录已保留。'), { store: first.store, persistenceRoot,
+    setupTools: scope => scope.tools.register({ name: 'assistant_tickets', description: 'Read worker data', parameters: { type: 'object' },
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      execute: () => { forbiddenReads++; return 'PRIVATE WORKER BODY'; } }) });
+  t.after(async () => { await rm(first.directory, { recursive: true, force: true }); await rm(persistenceRoot, { recursive: true, force: true }); });
+  assert.equal((await second.engine.recoverMain()).status, 'recovered');
+  const agent = await second.engine.ensureSession(); await agent.whenIdle();
+  assert.deepEqual(second.requests.map(request => request.model), ['first', 'first']);
+  assert.equal(forbiddenReads, 0);
+  const history = await second.engine.history();
+  assert.equal(history.messages.length, 1);
+  assert.equal(history.messages[0].ticketStateEventKey, first.delivery.uniqueKey);
+  assert.doesNotMatch(JSON.stringify(second.requests), /PRIVATE WORKER BODY/);
+  assert.equal(agent.session.snapshotEvents().some(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-router-recovery'), false);
+});

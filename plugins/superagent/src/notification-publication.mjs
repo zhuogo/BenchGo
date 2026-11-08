@@ -12,7 +12,7 @@ export function notificationPublication(event) {
     try { publication = validateDelivery(event.publication); } catch { return null; }
   } else if (typeof event.text !== 'string' || !event.text.trim()) return null;
   const value = {};
-  for (const key of ['id', 'eventId', 'taskId', 'ticketId', 'requestId', 'sourceEventId', 'threadId', 'createdAt', 'title', 'status', 'attentionId', 'instructionRevision', 'resultVersion', 'seq', 'readAt']) {
+  for (const key of ['id', 'eventId', 'taskId', 'ticketId', 'requestId', 'sourceEventId', 'ticketStateEventKey', 'threadId', 'createdAt', 'title', 'status', 'attentionId', 'instructionRevision', 'resultVersion', 'seq', 'readAt']) {
     if (typeof event[key] === 'string' || typeof event[key] === 'number' || event[key] === null) value[key] = event[key];
   }
   return { ...value, type: event.type, threadRefs: [value.threadId || 'main'],

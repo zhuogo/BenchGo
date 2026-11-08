@@ -12,9 +12,10 @@ import { commitWorkerResult } from './result-commit.mjs';
 import { knownNotSent } from './channels/delivery-outcome.mjs';
 import { createTaskExecutionProgress } from './task-execution-progress.mjs';
 import { archiveClosedExecutionSessions, executionSessionProjection } from './execution-session.mjs';
+import { isTicketStateNotice } from './ticket-state-report.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
-export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
+export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, reportTicketState, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
   const database = store.orchestration, owner = `delivery:${randomUUID()}`, shutdown = new AbortController();
   const archived = new Set(), archiveRetry = new Map();
   const mirrored = new Set(), mirrorRetry = new Map();
@@ -153,6 +154,21 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       }
       if (payload.source?.channel === 'desktop' && deliverDesktop) {
         try {
+          if (isTicketStateNotice(payload) && reportTicketState) {
+            const receipt = await reportTicketState(delivery);
+            if (receipt?.status === 'pending') database.finishOutbox(delivery.id, { owner, error: 'Router 状态说明待生成', retryMs: 5000 });
+            else if (receipt?.status === 'suppressed' || receipt?.status === 'accepted' && receipt.messageId) database.finishOutbox(delivery.id, { owner, sent: true, receipt });
+            else if (receipt?.status === 'failed') {
+              // If the conversational model cannot report, retain a compact
+              // factual notice. A reporting failure must never hide the task.
+              const fallback = await deliverDesktop(delivery);
+              if (fallback?.status !== 'accepted' || !fallback.messageId) throw new Error('State fallback was not durably accepted');
+              database.finishOutbox(delivery.id, { owner, sent: true,
+                receipt: { ...fallback, routerReport: 'unavailable', reason: receipt.reason } });
+            }
+            else throw new Error('Router state report was not accepted');
+            continue;
+          }
           // This callback must durably deduplicate by delivery.uniqueKey before
           // acknowledging. Local notification retries never rerun the Worker.
           const receipt = await deliverDesktop(delivery);

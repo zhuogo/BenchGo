@@ -1,10 +1,20 @@
 import { isChatUserMessage, readAdmittedQuestionReply } from '../src/question-reply.mjs';
+import { isTicketStateNotice } from '../src/ticket-state-report.mjs';
+
+function ticketStateSummary(row) {
+  const text = row.text.replace(/^\s*【[^】]+】\s*/u, '').replace(/^(?:\s*(?:#{1,6}\s*)?系统状态\s*[:：]?\s*)+/u, '').replace(/\s+/gu, ' ').trim();
+  const title = (typeof row.title === 'string' && row.title.trim()) || row.text.match(/^\s*【([^】]+)】/u)?.[1];
+  return { ...(title ? { title } : {}), text: text || (row.publication?.systemState?.state === 'delivery_wait'
+    ? '结果已保存，等待原来源交付。' : '执行记录已保留，等待恢复条件。') };
+}
 
 /** Defence in depth: only the server publication projection can supply assistant rows. */
 export function quietChatRows(history = {}, threadId = 'main', session = {}, chat) {
   const rows = (history.messages || []).filter(row => !row.streaming &&
     (row.role === 'user' || (row.role === 'assistant' && row.kind === 'final')))
     .map(row => ({ ...row, key: `message:${row.id}` }));
+  const reportedStates = new Set(rows.filter(row => row.role === 'assistant' && typeof row.ticketStateEventKey === 'string'
+    && row.ticketStateEventKey && typeof row.text === 'string' && row.text.trim()).map(row => row.ticketStateEventKey));
   // Use the host's synchronous submission echo, then its admitted user events.
   // Never project assistant/tool/context nodes from this unrestricted view.
   const seenSeq = new Set(rows.filter(row => row.role === 'user').map(row => row.seq).filter(Number.isFinite));
@@ -51,6 +61,7 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
     }
     if (['failed', 'uncertain'].includes(request.status)) {
       rows.push({ key: `request-state:${request.requestId}`, requestId: request.requestId, origin: 'system', role: 'system', kind: 'system_state',
+        title: request.status === 'failed' ? '消息处理失败' : '消息处理结果待核实',
         text: request.error || (request.status === 'failed' ? '消息处理失败' : '消息处理结果待核实'), time: request.updatedAt || request.createdAt });
     }
   }
@@ -61,8 +72,10 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
   }
   for (const row of history.notifications || []) {
     if (row.threadId !== threadId || typeof row.text !== 'string' || !row.text.trim()) continue;
+    const ticketState = isTicketStateNotice(row);
+    if (ticketState && reportedStates.has(row.ticketStateEventKey || row.eventKey || row.eventId || row.id)) continue;
     const system = row.origin === 'system' || row.publication?.origin === 'system';
-    rows.push({ ...row, role: system ? 'system' : 'assistant', kind: system ? 'system_state' : 'delivery', key: `notification:${row.eventId || row.id}`,
+    rows.push({ ...row, ...(system ? ticketStateSummary(row) : {}), role: system ? 'system' : 'assistant', kind: system ? 'system_state' : 'delivery', key: `notification:${row.eventId || row.id}`,
       time: row.createdAt || row.time, notification: true });
   }
   return [...new Map(rows.map(row => [row.key, row])).values()]

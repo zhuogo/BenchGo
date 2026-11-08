@@ -7,7 +7,7 @@ import { createAssistantStore } from '../src/store.mjs';
 import { readAssessmentPolicy } from '../src/assessment-policy.mjs';
 import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
 
-async function fixture(t, { send, execute, onDelivered, ctx = {}, now, result: patch = {} } = {}) {
+async function fixture(t, { send, execute, onDelivered, reportTicketState, ctx = {}, now, result: patch = {} } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-direct-delivery-'));
   const store = await createAssistantStore({ dataDirectory: directory });
   const policy = await readAssessmentPolicy(store);
@@ -18,7 +18,7 @@ async function fixture(t, { send, execute, onDelivered, ctx = {}, now, result: p
   db.createAssignment(ticket.id, { id: 'work', executor: 'harness', model: { providerId: 'opaque provider', modelId: 'opaque/model' } });
   let executions = 0, sends = 0;
   const original = '  完整原文\n\n纯文本不要求产物文件。\n';
-  const runtime = createOrchestrationRuntime({ ctx: { llm: { stream() { throw new Error('No content review model may be called'); } }, ...ctx }, store, onDelivered, ...(now ? { now } : {}),
+  const runtime = createOrchestrationRuntime({ ctx: { llm: { stream() { throw new Error('No content review model may be called'); } }, ...ctx }, store, onDelivered, reportTicketState, ...(now ? { now } : {}),
     execute: async (assignment, context) => { executions++; return execute ? execute(assignment, context, db) : { summary: original, selfCheck: { summary: '已检查数量、格式与明确要求' }, evidenceRefs: [], ...patch }; },
     deliverDesktop: async delivery => { sends++; return send ? send(delivery, db) : { status: 'accepted', messageId: 'durable-message' }; },
   });
@@ -26,6 +26,38 @@ async function fixture(t, { send, execute, onDelivered, ctx = {}, now, result: p
   const advance = async () => { for (let i = 0; i < 30; i++) { await runtime.tick(); await new Promise(resolve => setTimeout(resolve, 2)); if (sends || db.getAssignment('work').state === 'uncertain') break; } };
   return { runtime, db, ticket, source, original, advance, counts: () => ({ executions, sends }) };
 }
+
+test('Router state reporting leaves the outbox pending without emitting a fixed error block or rerunning work', async t => {
+  let reports = 0;
+  const app = await fixture(t, { execute() { throw Object.assign(new Error('not public'), { code: 'NETWORK' }); },
+    reportTicketState: async () => { reports++; return { status: 'pending' }; } });
+  await app.advance(); await app.runtime.tick();
+  assert.equal(reports, 1);
+  assert.deepEqual(app.counts(), { executions: 1, sends: 0 });
+  assert.equal(app.db.deliveries(app.ticket.id)[0].state, 'queued');
+  assert.equal(app.db.getTicket(app.ticket.id).status, 'open');
+});
+
+test('failed Router report retains a factual notice once while the original task stays recoverable', async t => {
+  const app = await fixture(t, { execute() { throw Object.assign(new Error('not public'), { code: 'NETWORK' }); },
+    reportTicketState: async () => ({ status: 'failed', reason: 'router-unavailable' }) });
+  await app.advance(); await app.runtime.tick(); await app.runtime.tick();
+  assert.deepEqual(app.counts(), { executions: 1, sends: 1 });
+  const delivered = app.db.deliveries(app.ticket.id)[0];
+  assert.equal(delivered.state, 'sent');
+  assert.equal(delivered.receipt.routerReport, 'unavailable');
+  assert.equal(app.db.getTicket(app.ticket.id).status, 'open');
+  assert.equal(app.db.results(app.ticket.id).length, 0);
+});
+
+test('persisted Router report completes only its state delivery, never closes the task', async t => {
+  const app = await fixture(t, { execute() { throw Object.assign(new Error('not public'), { code: 'NETWORK' }); },
+    reportTicketState: async () => ({ status: 'accepted', messageId: 'router-report:state' }) });
+  await app.advance(); await app.runtime.tick();
+  assert.deepEqual(app.counts(), { executions: 1, sends: 0 });
+  assert.equal(app.db.deliveries(app.ticket.id)[0].state, 'sent');
+  assert.equal(app.db.getTicket(app.ticket.id).status, 'open');
+});
 
 test('zero-file result goes directly to original conversation and closes only after durable receipt', async t => {
   const app = await fixture(t, { send(delivery, db) {

@@ -7,6 +7,19 @@ import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { systemStateDelivery } from '../src/result-delivery.mjs';
 
+test('legacy delivery keys expose the same stable state identity without rewriting history', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-legacy-state-key-'));
+  const db = createAssistantRuntimeStore({ directory });
+  t.after(async () => { db.close(); await rm(directory, { recursive: true, force: true }); });
+  const event = db.notify({ id: 'ticket', threadId: 'main' }, 'ticket.result', {
+    publication: systemStateDelivery(), ticketId: 'ticket',
+  }, 'ticket-delivery:assignment-system-state:work:1:execution');
+  assert.equal(event.ticketStateEventKey, undefined);
+  const restored = db.chatNotifications('main').events[0];
+  assert.equal(restored.ticketStateEventKey, 'assignment-system-state:work:1:execution');
+  assert.equal(restored.id, event.id);
+});
+
 test('system-state provenance survives persistence, history and every delivery projection', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-system-publication-'));
   let db = createAssistantRuntimeStore({ directory });

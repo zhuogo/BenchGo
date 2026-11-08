@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { readModelFallbacks } from './model-fallback.mjs';
 import { readQuestionReply, readBoundQuestionReply } from './question-reply.mjs';
+import { ticketStateSource, ticketStateInstruction } from './ticket-state-report.mjs';
 
 const active = new Set(['queued', 'processing', 'prepared']);
 const fingerprint = (threadId, text, context) => createHash('sha256').update(JSON.stringify(context === undefined ? [threadId, text] : [threadId, text, context])).digest('hex');
@@ -72,7 +73,8 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
         agent = getAgent?.(threadId);
         if (isStopped() || agent?.status === 'running') return;
         await reconcile(threadId, agent);
-        const row = ((await getState()).requests || []).find(item => item.threadId === threadId && item.status === 'queued');
+        const queued = ((await getState()).requests || []).filter(item => item.threadId === threadId && item.status === 'queued');
+        const row = queued.find(item => !item.ticketState) || queued[0];
         if (!row || isStopped()) return;
         agent ||= await ensureSession({ threadId });
         if (isStopped() || agent.status === 'running') return;
@@ -84,7 +86,10 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
         // Cancellation/clear may have committed while the writer was prepared.
         if (!((await getState()).requests || []).some(item => item.requestId === row.requestId && item.status === 'processing')) return;
         try {
-          await beforeDispatch?.({ ...row, sessionId: agent.id }, agent);
+          if (await beforeDispatch?.({ ...row, sessionId: agent.id }, agent) === false) {
+            await patch(row.requestId, { status: 'processed', suppressed: true });
+            return;
+          }
           if (isStopped()) { await patch(row.requestId, { status: 'queued' }); return; }
           if (!((await getState()).requests || []).some(item => item.requestId === row.requestId && item.status === 'processing')) return;
           onDispatch?.(row, agent);
@@ -109,6 +114,27 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
     return operation;
   }
   return {
+    async enqueueTicketState({ threadId, signal }) {
+      const requestId = `ticket-state:${signal.eventKey}`, digest = fingerprint(threadId, [signal.eventKey, signal.ticketId]);
+      await updateState(state => {
+        const previous = (state.requests || []).find(row => row.requestId === requestId);
+        if (previous) {
+          if (previous.threadId !== threadId || previous.ticketState?.ticketId !== signal.ticketId) throw new Error('工单状态通知标识冲突');
+          // The durable event is the identity. Titles and waiting/open display
+          // facts may change while ordinary user messages take queue priority.
+          if (previous.status !== 'queued') return {};
+          return { requests: state.requests.map(row => row.requestId === requestId ? { ...row, fingerprint: digest, ticketState: signal,
+            message: { ...row.message, content: [{ type: 'text', text: `${ticketStateInstruction}\n${JSON.stringify(signal)}` }] } } : row) };
+        }
+        const message = createUserMessage({ source: { kind: ticketStateSource, eventKey: signal.eventKey, ticketId: signal.ticketId },
+          content: [{ type: 'text', text: `${ticketStateInstruction}\n${JSON.stringify(signal)}` }] });
+        return { requests: [...(state.requests || []), { requestId, threadId, messageId: message.id, message,
+          ticketState: signal, fingerprint: digest, status: 'queued', createdAt: new Date(now()).toISOString() }] };
+      });
+      // Persistence is immediate; model execution must not block the outbox cycle.
+      void drain(threadId);
+      return structuredClone((await getState()).requests.find(row => row.requestId === requestId));
+    },
     // Called at the official inbox claim seam. The Host already owns dispatch:
     // retain the exact message ID for receipts, never enqueue or followup again.
     async admit({ threadId = 'main', sessionId, message, events, questionReply: trustedReply }) {
@@ -163,7 +189,7 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
     },
     async hasPending(threadId) { return ((await getState()).requests || []).some(row => row.threadId === threadId && active.has(row.status)); },
     async state(threadId) {
-      return ((await getState()).requests || []).filter(row => row.threadId === threadId).map(row => ({ ...receipt(row), createdAt: row.createdAt, updatedAt: row.updatedAt,
+      return ((await getState()).requests || []).filter(row => row.threadId === threadId && !row.ticketState).map(row => ({ ...receipt(row), createdAt: row.createdAt, updatedAt: row.updatedAt,
         ...(row.questionReply ? { questionReply: row.questionReply, text: row.questionReply.text }
           : row.message ? { text: row.message.content?.filter(block => block.type === 'text').map(block => block.text).join('') ?? '' } : {}) }));
     },

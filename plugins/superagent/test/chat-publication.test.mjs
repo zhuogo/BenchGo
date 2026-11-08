@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chatPublicationType, projectChatMessages } from '../src/chat-publication.mjs';
+import { activeChatReply, chatPublicationType, installChatPublication, projectChatMessages } from '../src/chat-publication.mjs';
+import { ticketStateSource } from '../src/ticket-state-report.mjs';
 
 const user = { type: 'user/message', seq: 0, data: { id: 'human-1', source: { kind: 'user' }, content: [{ type: 'text', text: 'question' }] } };
 const reply = (seq, data = {}, extra = {}) => ({ seq, type: chatPublicationType, ignorable: true, data: { kind: 'final', requestId: 'human-1', text: 'answer', ...data }, ...extra });
@@ -88,4 +89,86 @@ test('answered official questions become one visible choice bubble; pending, fai
   assert.deepEqual(replies[0].questions, [{ id: 'use', question: '主要用途？', header: '用途' }, { id: 'budget', question: '预算？' }]);
   assert.equal(replies[0].text, '用途：网站、文件共享\n预算？：100 元内');
   assert.doesNotMatch(JSON.stringify(replies), /options/);
+});
+
+const stateNotice = { type: 'user/message', seq: 5, data: { id: 'state-notice', source: { kind: ticketStateSource, eventKey: 'notice:1', ticketId: 'ticket' },
+  content: [{ type: 'text', text: 'PRIVATE HOST STATE INSTRUCTION' }] } };
+const statePermit = (text, data = {}) => ({ type: chatPublicationType, ignorable: true, seq: 7,
+  data: { kind: 'state-final-permit', requestId: stateNotice.data.id, ticketStateEventKey: 'notice:1', turn: 2, text, ...data } });
+
+test('state prompts stay private while natural reports project independently of the preceding human reply', () => {
+  const report = '“整理资料”的执行状态还在核实，已有记录已保留。';
+  const events = [start(), user, answer([{ type: 'text', text: '先回答用户的问题。' }]), end(),
+    start(2), stateNotice, answer([{ type: 'reasoning', text: 'PRIVATE REASONING' }, { type: 'text', text: report }], 2), statePermit(report), end('completed', 2)];
+  const rows = projectChatMessages(JSON.parse(JSON.stringify(events)));
+  assert.deepEqual(rows.map(row => [row.role, row.requestId, row.text]), [
+    ['user', undefined, 'question'], ['assistant', 'human-1', '先回答用户的问题。'], ['assistant', 'state-notice', report],
+  ]);
+  assert.equal(rows[2].id, 'reply:state-notice');
+  assert.equal(rows[2].ticketStateEventKey, 'notice:1');
+  assert.doesNotMatch(JSON.stringify(rows), /PRIVATE/);
+  assert.equal(activeChatReply(events), null);
+});
+
+test('explicit status publications deduplicate against natural completion and retain the human reply', () => {
+  const rows = projectChatMessages([start(), user, reply(2), end(), start(2), stateNotice,
+    answer([{ type: 'text', text: 'unpublished draft' }], 2), reply(7, { requestId: 'state-notice', ticketStateEventKey: 'notice:1', text: '状态自然报告' }),
+    reply(8, { requestId: 'state-notice', ticketStateEventKey: 'notice:1', text: '重复报告' }), end('completed', 2)]);
+  assert.deepEqual(rows.map(row => row.text), ['question', 'answer', '状态自然报告']);
+  assert.deepEqual(rows.filter(row => row.role === 'assistant').map(row => row.requestId), ['human-1', 'state-notice']);
+  assert.equal(projectChatMessages([start(), stateNotice, answer([{ type: 'text', text: 'partial' }]), end('error')]).length, 0);
+});
+
+test('assistant_reply binds an active state report to its own request and never consumes the previous human reply', async () => {
+  const events = [start(), user, end(), start(2), stateNotice];
+  let tool, conclusions = 0;
+  const agent = { session: { snapshotEvents: () => events } };
+  installChatPublication({ tools: { register: value => { tool = value; } } }, agent, {
+    canPublish: async () => true,
+    appendRecord: (_session, type, data) => events.push({ type, data, ignorable: true, seq: events.length }),
+  });
+  assert.deepEqual(activeChatReply(events), { turn: 2, requestId: 'state-notice' });
+  const execution = { agent, concludeTurn: () => { conclusions++; } };
+  assert.deepEqual(await tool.execute({ text: '已有执行记录保留，当前状态待核实。' }, execution), { published: true, requestId: 'state-notice' });
+  assert.deepEqual(await tool.execute({ text: '已有执行记录保留，当前状态待核实。' }, execution), { published: true, duplicate: true, requestId: 'state-notice' });
+  assert.equal(conclusions, 2);
+  assert.throws(() => tool.execute({ text: '改写状态' }, execution), /不能重复或改写/);
+  assert.equal(events.filter(event => event.type === chatPublicationType).length, 1);
+  assert.equal(events.find(event => event.type === chatPublicationType).data.requestId, 'state-notice');
+  assert.deepEqual(projectChatMessages(events).map(row => row.text), ['question', '已有执行记录保留，当前状态待核实。']);
+});
+
+test('unpermitted state drafts and mismatched publication identities never become reports', () => {
+  const prefix = [start(2), stateNotice, answer([{ type: 'text', text: '状态报告' }], 2)];
+  assert.deepEqual(projectChatMessages([...prefix, end('completed', 2)]), []);
+  for (const data of [{ text: '不同正文' }, { turn: 1 }, { requestId: 'human-1' }, { ticketStateEventKey: 'other' }]) {
+    assert.deepEqual(projectChatMessages([...prefix, statePermit('状态报告', data), end('completed', 2)]), []);
+  }
+  for (const ticketStateEventKey of [undefined, 'other']) {
+    assert.deepEqual(projectChatMessages([...prefix, reply(7, { requestId: 'state-notice', ticketStateEventKey }), end('completed', 2)]), []);
+  }
+});
+
+test('state publication rechecks permission for explicit and natural replies and preserves denied drafts privately', async () => {
+  for (const allowed of [false, true]) {
+    const events = [start(2), stateNotice, answer([{ type: 'text', text: '状态报告' }], 2)];
+    let tool, stopping, concluded = false;
+    const checked = [], agent = { session: { snapshotEvents: () => events } };
+    installChatPublication({ on: (name, hook) => { assert.equal(name, 'agent/turn-stopping'); stopping = hook; },
+      tools: { register: value => { tool = value; } } }, agent, {
+      canPublish: async request => { checked.push(request.id); return allowed; },
+      appendRecord: (_session, type, data) => events.push({ type, data, ignorable: true, seq: events.length }),
+    });
+    if (!allowed) {
+      await assert.rejects(tool.execute({ text: '状态报告' }, { agent, concludeTurn: () => { concluded = true; } }), /状态或授权已变化/);
+      assert.equal(concluded, false);
+    }
+    await stopping({ agent, turn: 2 });
+    assert.equal(checked.length, allowed ? 1 : 2);
+    assert(checked.every(id => id === 'state-notice'));
+    const rows = projectChatMessages([...events, end('completed', 2)]);
+    assert.equal(rows.length, allowed ? 1 : 0);
+    if (allowed) assert.equal(rows[0].ticketStateEventKey, 'notice:1');
+    else assert.equal(events.some(event => event.type === chatPublicationType), false);
+  }
 });

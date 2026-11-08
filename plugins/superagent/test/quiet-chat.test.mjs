@@ -67,6 +67,39 @@ test('failed and uncertain inbox requests expose their real system error without
   }
 });
 
+const stateNotification = { type: 'ticket.result', eventId: 'notice:1', threadId: 'main', ticketId: 'ticket', title: '资料整理',
+  text: '【资料整理】\n\n系统状态：系统状态：执行记录已保留，等待恢复条件。', createdAt: 1,
+  publication: { origin: 'system', systemState: { state: 'continuation_wait', code: 'MODEL_UNAVAILABLE', stage: 'execution' } } };
+
+test('legacy state remains a natural titled summary until the same event has a persisted Router report', () => {
+  const summary = quietChatRows({ notifications: [stateNotification] });
+  assert.equal(summary.length, 1);
+  assert.equal(summary[0].role, 'system');
+  assert.equal(summary[0].title, '资料整理');
+  assert.equal(summary[0].text, '执行记录已保留，等待恢复条件。');
+  const report = { id: 'reply:state', role: 'assistant', kind: 'final', text: '资料整理暂时在等待恢复，执行记录已保留。', time: 2, ticketStateEventKey: 'notice:1' };
+  assert.deepEqual(quietChatRows({ notifications: [stateNotification], messages: [report] }).map(row => row.id), [report.id]);
+  for (const change of [{ ticketStateEventKey: 'other' }, { ticketStateEventKey: undefined }, { streaming: true }, { kind: 'draft' }, { text: '' }]) {
+    assert(quietChatRows({ notifications: [stateNotification], messages: [{ ...report, ...change }] }).some(row => row.notification), 'unrelated, unfinished or empty reports cannot hide the state');
+  }
+  const explicitKey = { ...stateNotification, eventKey: 'event-key', eventId: 'different-notification-id' };
+  assert.equal(quietChatRows({ notifications: [explicitKey], messages: [{ ...report, ticketStateEventKey: 'event-key' }] }).length, 1);
+  assert(quietChatRows({ notifications: [explicitKey], messages: [report] }).some(row => row.notification));
+  const persistedKey = { ...stateNotification, ticketStateEventKey: 'assignment-system-state:worker:4:execution', eventId: 'notification-uuid', id: 'other-uuid', eventKey: 'other-key' };
+  assert.equal(quietChatRows({ notifications: [persistedKey], messages: [{ ...report, ticketStateEventKey: persistedKey.ticketStateEventKey }] }).length, 1, 'persisted outbox key matches despite independent notification UUIDs');
+  assert(quietChatRows({ notifications: [persistedKey], messages: [{ ...report, ticketStateEventKey: 'notification-uuid' }] }).some(row => row.notification), 'notification UUID cannot replace the persisted outbox identity');
+});
+
+test('only the matching state event is replaced and ordinary send errors remain visible', () => {
+  const history = { messages: [{ id: 'report', role: 'assistant', kind: 'final', text: '状态报告', ticketStateEventKey: 'notice:1' }],
+    notifications: [stateNotification, { ...stateNotification, eventId: 'notice:2' }],
+    requests: [{ threadId: 'main', requestId: 'send', status: 'failed', text: '用户消息', error: '连接中断，消息发送失败', createdAt: 2 }] };
+  const rows = quietChatRows(history);
+  assert.deepEqual(rows.filter(row => row.notification).map(row => row.eventId), ['notice:2']);
+  assert(rows.some(row => row.role === 'user' && row.text === '用户消息'));
+  assert(rows.some(row => row.role === 'system' && row.text === '连接中断，消息发送失败'));
+});
+
 test('option accompanies its body and uses the validated endpoint, never approval or raw send', async () => {
   const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
   const code = transformSync(readFileSync(new URL('../client/quiet-chat.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
@@ -96,8 +129,19 @@ test('option accompanies its body and uses the validated endpoint, never approva
   ] } } }));
   const system = statusAndQuestion.find(node => node.type === 'article' && node.props['data-role'] === 'system');
   assert(system);
-  assert(walk(system).some(node => node.children?.includes('系统状态')));
+  assert(!walk(system).some(node => node.children?.includes('系统状态')));
   assert(!walk(system).some(node => node.type === 'MessageActions'));
+  const detailCalls = [];
+  const fallbackTree = walk(module.exports.QuietChat({ session: { running: false }, home: { onOpenResources: (...args) => detailCalls.push(args),
+    history: { notifications: [stateNotification] } } }));
+  assert(fallbackTree.some(node => node.type === 'strong' && node.children.includes('资料整理')));
+  assert(fallbackTree.some(node => node.type === 'span' && node.children.includes('执行记录已保留，等待恢复条件。')));
+  const detail = fallbackTree.find(node => node.type === 'button' && node.children.includes('查看工单详情'));
+  assert.equal(detail.props.variant, 'link');
+  assert.equal(detail.props.size, 'sm');
+  await detail.props.onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(detailCalls)), [['tasks', { ticketId: 'ticket' }]]);
+  assert(!fallbackTree.some(node => node.type === 'TicketWaiting' || node.props?.['aria-label'] === '工单执行会话'));
   const question = statusAndQuestion.find(node => node.type === 'TicketAttention');
   assert.equal(question.props.ticket.id, 'original');
   assert.equal(question.props.ticket.instructionRevision, 2);

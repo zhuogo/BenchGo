@@ -33,7 +33,9 @@
 .ba-chat-attachment{display:block;font-size:13px;margin-top:8px;color:var(--dsw-alias-label-secondary,#666)}
 .ba-chat-options{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .ba-chat-message[data-role=system]{color:var(--dsw-alias-label-secondary,#666);font-size:13px}
-.ba-chat-system-label{font-size:12px;font-weight:500;margin-bottom:6px}
+.ba-chat-status{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;line-height:1.65}
+.ba-chat-status strong{font-size:inherit;font-weight:550;color:var(--dsw-alias-label-primary,#222)}
+.ba-chat-status .ba-chat-status-link{min-height:30px;padding:0 2px;font-size:12px}
 
 /* A fixed side column reserves horizontal space; hover never changes layout. */
 .ba-message-actions{display:contents}
