@@ -320,8 +320,12 @@ test('delegation rejects per-ticket model overrides and completed changes return
   db.ingest({ dedupeKey: 'original', thread, source, actor, content: '原任务', mode: 'direct' });
   const ticket = db.createTicket({ threadId: thread.id, target: '原任务', mandate: { source, actorId: actor.id } });
   db.commitResult(ticket.id, { result: { summary: '原成果' }, uniqueKey: 'original-result' });
-  for (const delivery of db.claimOutbox('test-delivery')) db.finishOutbox(delivery.id,
-    { owner: 'test-delivery', sent: true, receipt: { status: 'accepted', messageId: `sent:${delivery.id}` } });
+  assert.equal(db.getTicket(ticket.id).status, 'waiting');
+  for (const delivery of db.claimOutbox('test-delivery')) {
+    db.saveOutboxReply(delivery.id, { owner: 'test-delivery', publication: { action: 'deliver', origin: 'router', text: '原任务已完成，成果已整理。' } });
+    assert.equal(db.getTicket(ticket.id).status, 'waiting');
+    db.finishOutbox(delivery.id, { owner: 'test-delivery', sent: true, receipt: { status: 'accepted', messageId: `sent:${delivery.id}` } });
+  }
   assert.equal(db.getTicket(ticket.id).status, 'completed');
   const before = db.getTicket(ticket.id), results = db.results(ticket.id);
   const nextSource = { ...source, messageId: 'adjustment' };

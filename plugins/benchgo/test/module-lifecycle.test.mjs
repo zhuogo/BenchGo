@@ -45,6 +45,8 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
   ctx.provide('systemPrompt', { tools() {}, section() {} });
   ctx.provide('agents', { list: () => [], get: () => undefined,
     create: async () => { throw new Error('Lifecycle fixture must not execute agents'); } });
+  ctx.provide('sessions', { get: () => undefined,
+    flush: async () => { throw new Error('Lifecycle fixture must not write sessions'); } });
   ctx.provide('sessionQuery', { listSessions: async () => [], readSession: async () => ({ events: [] }) });
   const projectionRegistrations = new Map();
   // Preserve the official caller-scoped registration lifetime and handle shape.
