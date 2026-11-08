@@ -188,7 +188,8 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
             runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory, callId: execution.callId,
           }, dispatch) } : {}),
         });
-        selfCheck = installWorkerSelfCheck(scope, agent, { database, assignment, run });
+        selfCheck = installWorkerSelfCheck(scope, agent, { database, assignment, run, renew,
+          isWaiting: () => !!attention?.waiting() || waitingPause });
         ctx.get?.('benchgoExternalActions')?.installWorker(scope, agent, { database, assignment, run, readPolicy, authorizeAction });
         installWorkerVault(scope, agent, { ctx, database, assignment, run, readPolicy, authorizeAction });
         scope.on('tools/pre-execute', (execution, next) => {
@@ -299,6 +300,10 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       await renew();
       executionPhase = 'evidence';
       const log = await ctx.sessionQuery.readSession(sessionId);
+      const ending = log.events?.findLast(event => event.type === 'turn/end')?.data?.reason;
+      if (!waitingAttention && !waitingPause && ending?.kind !== 'completed') {
+        throw Object.assign(new Error(`Worker did not complete its final turn (${ending?.kind || 'missing turn/end'})`), { code: 'WORKER_TURN_INCOMPLETE' });
+      }
       const { summary: text, finalSummary, transcript, toolEvidence } = executionEvidence(log);
       if (!waitingAttention && !waitingPause && !text.trim()) throw new Error('Worker stopped without a readable result');
       const checkpoint = await captureCheckpoint(environment || directory, { signal });

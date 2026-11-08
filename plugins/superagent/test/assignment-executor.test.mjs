@@ -56,7 +56,7 @@ for (const selection of ['worker', 'explicit']) test(`Worker ignores ${selection
   assert.equal(selected[0].reasoningEffort, expected[0].options.reasoningEffort);
 });
 
-for (const projectMode of [false, true]) test(`host execution is persisted, isolated and permission-gated (project=${projectMode})`, async t => {
+for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], [false, 'max-tokens'], [false, 'paused']]) test(`host execution is persisted, isolated and permission-gated (project=${projectMode}, ending=${ending})`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-executor-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
@@ -79,7 +79,7 @@ for (const projectMode of [false, true]) test(`host execution is persisted, isol
     workspaceRegistry: { resolveByPath: async () => ({ attachSession: async id => assert.equal(id, database.runs(assignment.id)[0].sessionId) }) },
     on() { return () => {}; },
     llm: { prepareCall: async request => assert.equal(request.model, 'opaque/model') },
-    sessionQuery: { readSession: async () => ({ events: [...transcript, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'Evidence found' }] } } }] }) },
+    sessionQuery: { readSession: async () => ({ events: [...transcript, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'Evidence found' }] } } }, { type: 'turn/end', data: { turn: 1, reason: { kind: ending === 'paused' ? 'blocked' : ending } } }] }) },
     agents: { create: async input => {
       meta = input.meta;
       assert.equal(database.runs(assignment.id)[0].state, 'prepared');
@@ -87,6 +87,10 @@ for (const projectMode of [false, true]) test(`host execution is persisted, isol
         assert.equal(database.runs(assignment.id)[0].state, 'submitted');
         submitted = true;
         await tools.get('assistant_task_result').execute({ selfCheck: { summary: 'Verified evidence' } }, { agent, signal: new AbortController().signal, callId: 'self-check' });
+        if (ending === 'paused') {
+          database.pauseTicket(ticket.id);
+          await events.get('agent/pre-step')({ messages: [] }, async () => ({ kind: 'enter', messages: [] }));
+        }
         events.get('agent/status')({ status: 'running' });
         queueMicrotask(() => events.get('agent/status')({ status: 'idle' }));
       } };
@@ -96,7 +100,15 @@ for (const projectMode of [false, true]) test(`host execution is persisted, isol
   };
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readSourceContext: async () => ({ status: 'available', messages: [{ text: 'Earlier discussion' }] }), readPolicy: async () => ({ version: 'p1', projects: [project], workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }), captureCheckpoint: async input => { assert.deepEqual(input, projectMode ? environment : meta.cwd); return { version: 1, manifestHash: 'mock-checkpoint' }; } });
   const signal = new AbortController().signal;
+  if (ending === 'max-tokens') {
+    await assert.rejects(executor(assignment, { ticket, signal, renew: async () => {} }), error => error.code === 'WORKER_TURN_INCOMPLETE' && error.executionPhase === 'evidence');
+    const run = database.runs(assignment.id)[0];
+    assert.equal(database.getWorkerExecutionState(run.id).selfCheck.selfCheck.summary, 'Verified evidence');
+    assert.equal(run.state, 'uncertain'); assert.equal(disposed, true);
+    return;
+  }
   const result = await executor(assignment, { ticket, signal, renew: async () => {} });
+  if (ending === 'paused') { assert.equal(result.waitingPause, true); assert.equal(database.runs(assignment.id)[0].state, 'verifying'); return; }
   assert.equal(submitted, true); assert.equal(disposed, true);
   assert.equal(sourceReference.kind, 'untrusted-source-reference');
   assert.equal(sourceReference.messages[0].content, 'Earlier discussion');

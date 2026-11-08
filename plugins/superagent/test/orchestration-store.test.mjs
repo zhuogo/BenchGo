@@ -14,6 +14,29 @@ async function fixture(t) {
 }
 const input = key => ({ dedupeKey: key, thread: { id: 'thread', source: { type: 'feishu', id: 'chat' } }, source: { eventId: key }, actor: { id: 'owner' }, content: '原始指令', gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p1' });
 
+for (const code of ['WORKER_SELF_CHECK', 'WORKER_TURN_INCOMPLETE']) test(`${code} retains its controlled cause in the waiting publication`, async t => {
+  const db = await fixture(t);
+  db.createThread({ id: 'self-check-thread', source: { type: 'desktop', id: 'owner' } });
+  const ticket = db.createTicket({ threadId: 'self-check-thread', target: 'finish existing work', mandate: { source: { channel: 'desktop', sessionId: 'owner' } } });
+  db.createAssignment(ticket.id, { id: 'self-check-work' });
+  const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
+  const ownership = { owner: assignment.owner, fence: assignment.fence };
+  const run = db.prepareRun(assignment.id, { ...ownership, sessionId: 'self-check-session', directory: 'directory' });
+  db.updateRun(run.id, { ...ownership, state: 'submitted' });
+  db.recordAssignmentFailure(assignment.id, { ...ownership, stage: 'execution', phase: 'evidence', code });
+  const saved = db.getAssignment(assignment.id);
+  assert.equal(saved.lastFailure.code, code);
+  const raw = new DatabaseSync(db.path, { readOnly: true });
+  try {
+    const row = raw.prepare('SELECT payload FROM sa_outbox WHERE ticket_id=?').get(ticket.id);
+    const publication = JSON.parse(row.payload).publication;
+    assert.equal(publication.origin, 'system');
+    assert.equal(publication.systemState.code, code);
+  } finally { raw.close(); }
+  assert.equal(db.getTicket(ticket.id).resultVersion, 0);
+  assert.equal(db.getTicket(ticket.id).status, 'open');
+});
+
 test('pause blocks queued work and resumes the exact checkpoint without replay', async t => {
   const db = await fixture(t);
   db.ingest({ ...input('pause'), mode: 'direct' });

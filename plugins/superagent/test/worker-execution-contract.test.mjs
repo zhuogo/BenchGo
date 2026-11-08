@@ -7,6 +7,8 @@ import { createAssistantOrchestrationStore } from '../src/orchestration-store.mj
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 
 const primary = { providerId: 'Opaque/@', modelId: 'Work:1', options: { reasoningEffort: 'high', maxTokens: 700, temperature: 0.3 } };
 const backup = { providerId: 'Other/@', modelId: 'Work:2', options: { maxTokens: 200 } };
@@ -75,6 +77,122 @@ test('self-check records only the owning live Worker and validates structural fa
   await tool.execute({ selfCheck: { summary: 'Tests and output checked', checks: ['test command passed'] } }, execution);
   assert.deepEqual(record.read({ events: entries }), { selfCheck: { summary: 'Tests and output checked', checks: ['test command passed'] }, outcome: 'completed', selfCheckRevision: 3 });
   assert.equal(validateWorkerSelfCheck({ selfCheck: { summary: 'Unsupported file' }, outcome: 'failed', failure: { attempted: 'Read file', cause: 'Format unsupported', resumeConditions: 'Provide supported format' } }).outcome, 'failed');
+});
+
+function selfCheckStopFixture(options = {}) {
+  const hooks = new Map(), steered = [], assignment = { id: 'a', ticketId: 't', owner: 'o', fence: 2, state: 'claimed', leaseUntil: Date.now() + 60000 };
+  const run = { id: 'r', sessionId: 's', owner: 'o', fence: 2, state: 'running' }, ticket = { id: 't', status: 'open', instructionRevision: 3 };
+  const state = { selfCheck: null }, snapshot = { instructionRevision: 3 }, controller = new AbortController();
+  const agent = { id: 's', steer: message => steered.push(message) };
+  let waiting = false, renewed = 0;
+  const database = { getAssignment: () => assignment, getTicket: () => ticket, runs: () => [run],
+    appliedTicketSnapshot: () => snapshot, getWorkerExecutionState: () => state };
+  installWorkerSelfCheck({ on: (name, fn) => hooks.set(name, fn) }, agent, { database, assignment: { ...assignment }, run: { ...run },
+    isWaiting: () => waiting, renew: async () => { renewed++; await options.onRenew?.({ assignment, ticket, run, state, controller, snapshot, wait: () => { waiting = true; } }); } });
+  return { assignment, ticket, run, state, snapshot, controller, agent, steered, wait: () => { waiting = true; }, renewed: () => renewed,
+    stop: subject => hooks.get('agent/turn-stopping')({ agent: subject || agent, signal: controller.signal }) };
+}
+
+test('self-check stop boundary steers the same Worker once and leaves missing evidence to the hard check', async () => {
+  const f = selfCheckStopFixture();
+  await f.stop({}); assert.equal(f.renewed(), 0);
+  await f.stop(); await f.stop();
+  assert.equal(f.renewed(), 1); assert.equal(f.steered.length, 1);
+  assert.deepEqual(f.steered[0].source, { kind: 'benchgo-worker-self-check', ticketId: 't', runId: 'r' });
+  assert.match(f.steered[0].content[0].text, /do not restart or repeat completed actions/);
+});
+
+test('self-check stop boundary accepts valid current evidence and supplements stale revision', async () => {
+  const f = selfCheckStopFixture();
+  f.state.selfCheck = { selfCheck: { summary: 'checked' }, instructionRevision: 3 };
+  await f.stop(); assert.equal(f.steered.length, 0);
+  f.state.selfCheck.instructionRevision = 2;
+  await f.stop(); assert.equal(f.steered.length, 1);
+});
+
+test('self-check stop boundary does not wake waiting, paused, cancelled, aborted or stale execution', async () => {
+  for (const mutate of [f => f.wait(), f => { f.ticket.status = 'pausing'; }, f => { f.ticket.status = 'paused'; },
+    f => { f.ticket.status = 'cancelled'; }, f => f.controller.abort(), f => { f.assignment.fence++; },
+    f => { f.assignment.leaseUntil = 0; }, f => { f.run.sessionId = 'other'; }, f => { f.snapshot.instructionRevision = 2; }]) {
+    const f = selfCheckStopFixture(); mutate(f); await f.stop();
+    assert.equal(f.steered.length, 0); assert.equal(f.renewed(), 0);
+  }
+});
+
+test('self-check stop boundary revalidates ownership, signal, revision and evidence after renewal', async () => {
+  for (const onRenew of [f => { f.assignment.fence++; }, f => f.controller.abort(), f => f.wait(), f => { f.ticket.status = 'pausing'; },
+    f => { f.assignment.leaseUntil = 0; }, f => { f.snapshot.instructionRevision = 2; },
+    f => { f.state.selfCheck = { selfCheck: { summary: 'checked during renewal' }, instructionRevision: 3 }; }]) {
+    const f = selfCheckStopFixture({ onRenew }); await f.stop();
+    assert.equal(f.renewed(), 1); assert.equal(f.steered.length, 0);
+  }
+});
+
+for (const truncated of [false, true]) test(`official AgentLoop ${truncated ? 'preserves max-tokens without completion steering' : 'continues the original turn to record self-check through the real tool executor'}`, { timeout: 15000 }, async t => {
+  const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
+  const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
+  const { Context } = await load('@deepseek-ai/cordis');
+  const { default: LlmRuntime, LlmAdapter, createUserMessage } = await load('@deepseek-ai/dsh-llm');
+  const ctx = new Context(); t.after(() => ctx.fiber.dispose());
+  await ctx.plugin(LlmRuntime);
+  for (const name of ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-agent-loop']) {
+    await ctx.plugin((await load(name)).default, name === '@deepseek-ai/dsh-agent-loop' ? { agents: [] } : undefined);
+  }
+  const requireNative = createRequire(new URL('../../../deepseek-harness/packages/core/tool-executor-native/package.json', import.meta.url));
+  await ctx.plugin(await import(pathToFileURL(requireNative.resolve('@deepseek-ai/dsh-tool-executor-native')).href));
+  const requests = [], state = { selfCheck: null };
+  class Adapter extends LlmAdapter {
+    async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: 131072 } }; }
+    async *stream(request) {
+      requests.push(request);
+      if (requests.length === 2) {
+        yield { type: 'block-start', index: 0, blockType: 'tool-call' };
+        yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'actual-self-check', name: 'assistant_task_result', arguments: JSON.stringify({ selfCheck: { summary: 'Verified original task evidence' } }) } };
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }; return;
+      }
+      assert.ok(requests.length <= 3, 'no unbounded completion loop');
+      const text = requests.length === 1 ? 'Now preparing the final report' : 'Complete final report';
+      yield { type: 'block-start', index: 0, blockType: 'text' };
+      yield { type: 'text-delta', index: 0, text };
+      yield { type: 'block-end', index: 0, block: { type: 'text', text } };
+      yield { type: 'finish', reason: { kind: truncated ? 'max-tokens' : 'stop' } };
+    }
+  }
+  ctx.llm.registerAdapter(['self-check-test'], new Adapter());
+  const assignment = { id: 'a', ticketId: 't', owner: 'o', fence: 1, state: 'claimed', leaseUntil: Date.now() + 60000 };
+  const run = { id: 'r', sessionId: 'self-check-same-session', owner: 'o', fence: 1, state: 'running' };
+  const ticket = { id: 't', status: 'open', instructionRevision: 1 };
+  const database = { getAssignment: () => assignment, getTicket: () => ticket, runs: () => [run],
+    appliedTicketSnapshot: () => ({ instructionRevision: 1 }), getWorkerExecutionState: () => state,
+    recordWorkerSelfCheck: ({ value }) => { state.selfCheck = value; } };
+  let created = 0, record;
+  ctx.on('agent/created', () => { created++; });
+  const handle = await ctx.agents.create({ sessionId: run.sessionId, setup: async (scope, agent) => {
+    record = installWorkerSelfCheck(scope, agent, { database, assignment, run });
+  } });
+  t.after(() => handle.dispose());
+  handle.agent.model.select({ provider: 'self-check-test', model: 'opaque-model' });
+  handle.agent.followup(createUserMessage({ source: { kind: 'benchgo-worker-instruction' }, content: [{ type: 'text', text: 'Finish the assigned task' }] }));
+  await handle.agent.whenIdle();
+  const events = handle.agent.session.snapshotEvents();
+  assert.equal(created, 1); assert.equal(handle.agent.id, run.sessionId);
+  if (truncated) {
+    assert.equal(requests.length, 1);
+    assert.equal(events.filter(event => event.type === 'turn/start').length, 1);
+    assert.equal(events.filter(event => event.type === 'step/start').length, 1);
+    assert.equal(events.findLast(event => event.type === 'turn/end').data.reason.kind, 'max-tokens');
+    assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-self-check').length, 0);
+    assert.throws(() => record.read(), /without recording/);
+    return;
+  }
+  assert.equal(requests.length, 3);
+  assert.equal(events.filter(event => event.type === 'turn/start').length, 1);
+  assert.equal(events.filter(event => event.type === 'turn/end').length, 1);
+  assert.equal(events.filter(event => event.type === 'step/start').length, 3);
+  assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-self-check').length, 1);
+  assert.equal(record.read().selfCheck.summary, 'Verified original task evidence');
+  assert.equal(events.findLast(event => event.type === 'assistant/message').data.message.content.find(block => block.type === 'text').text, 'Complete final report');
+  assert.equal(events.findLast(event => event.type === 'turn/end').data.reason.kind, 'completed');
 });
 
 test('project membership attaches the same official session; no-project remains in the official ungrouped bucket', async () => {
