@@ -34,10 +34,10 @@ test('activity from a different requirement or assignment cannot overwrite the c
   assert.equal(goal.execution, undefined, 'goals do not adopt a ticket worker tree');
 });
 
-test('review is distinct from execution, while user waits and terminal outcomes override runtime activity', () => {
+test('result persistence is distinct from execution, while user waits and terminal outcomes override runtime activity', () => {
   const row = ticket(); row.execution.phase = 'verifying';
   assert.equal(activityTask(row, 'ticket').status, 'verifying');
-  assert.equal(activityTask(row, 'ticket').progressSummary, 'Worker 已交回结果，正在核对要求与证据');
+  assert.equal(activityTask(row, 'ticket').progressSummary, 'Worker 已交回结果，正在保存');
   for (const status of ['completed', 'cancelled', 'failed', 'paused', 'pausing', 'cancelling', 'uncertain']) {
     const task = activityTask({ ...row, status }, 'ticket');
     assert.equal(task.status, status);

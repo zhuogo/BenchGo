@@ -13,15 +13,10 @@ export function installWorkerPermissionGate(scope, { database, assignment, readP
   const previousEffects = executionEffects({ events: priorToolEvents });
   return scope.on('tools/execute', async (execution, next) => {
     execution.signal.throwIfAborted();
-    // Automatic evidence repair must not replay a previously completed side effect.
-    // These are the official read-only tool identities, not model-selected aliases.
-    if (assignment.reviewRepair && !isReadOnlyWorkerTool(execution.name)) {
-      throw new Error('Internal evidence repair permits read-only lookup tools only');
-    }
     if (previousEffects.effectsVerified === false && !isReadOnlyWorkerTool(execution.name)) {
       throw Object.assign(new Error('Previous external effects remain unverified; only read-only verification is permitted'), { code: 'EXECUTION_EFFECTS_UNKNOWN' });
     }
-    if ((assignment.reviewContinuation || assignment.pauseContinuation?.kind === 'execution-budget') && !isReadOnlyWorkerTool(execution.name)
+    if ((assignment.pauseContinuation?.kind === 'execution-budget') && !isReadOnlyWorkerTool(execution.name)
       && previousCalls.has(signature(execution.name, execution.arguments))) {
       throw Object.assign(new Error('A previously dispatched action cannot be replayed during correction; inspect its saved outcome before proceeding'), { code: 'ACTION_REPLAY_BLOCKED' });
     }

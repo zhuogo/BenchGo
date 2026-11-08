@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { ticketWaiting } from '../client/ticket-state.mjs';
 
 const ticket = { id: 'original', status: 'waiting', instructionRevision: 2, resultVersion: 3,
-  results: [{ instructionRevision: 2, version: 3, review: { verdict: 'wait', waitKind: 'review_wait', reason: '核验服务暂不可用' } }] };
-test('only the current result can explain or retry a review wait', () => {
+  results: [{ instructionRevision: 2, version: 3, outcome: 'completed', summary: '原文结果', selfCheck: { summary: '已自检' } }] };
+test('saved current result is pending delivery without any content review action', () => {
   const waiting = ticketWaiting(ticket);
-  assert.equal(waiting.reason, '核验服务暂不可用');
-  assert.deepEqual(waiting.actions.find(action => action.kind === 'review').input, { ticketId: 'original', expectedResultVersion: 3 });
+  assert.equal(waiting.status, 'delivery_pending');
+  assert.match(waiting.reason, /正在交付/);
+  assert(!waiting.actions.some(action => action.kind === 'review'));
   for (const patch of [{ resultVersion: 4 }, { instructionRevision: 3 }, { results: [] }]) {
     const state = ticketWaiting({ ...ticket, ...patch, waitReason: '旧通知不能当成当前原因' });
     assert(!state.actions.some(action => action.kind === 'review'));
@@ -38,10 +39,10 @@ test('a pre-result Ticket parked by the removed execution-time gate resumes with
   assert.notEqual(waiting.label, '等待续做资源');
 });
 test('current unanswered attention leads while stale attention never supplies a question', () => {
-  const attention = { id: 'question', state: 'waiting', origin: 'review', instructionRevision: 2, resultVersion: 3,
+  const attention = { id: 'question', state: 'waiting', origin: 'worker', instructionRevision: 2, resultVersion: 3,
     question: { question: '请确认范围' } };
   assert.equal(ticketWaiting({ ...ticket, attentions: [attention] }).reason, '请确认范围');
-  assert.equal(ticketWaiting({ ...ticket, attentions: [{ ...attention, resultVersion: 2 }] }).attention, undefined);
+  assert.equal(ticketWaiting({ ...ticket, attentions: [{ ...attention, instructionRevision: 1 }] }).attention, undefined);
   assert.equal(ticketWaiting({ ...ticket, attentions: [attention], continuationWait: { code: 'EXECUTION_EFFECTS_UNKNOWN', sourceResultVersion: 3 } }).attention, null);
   assert.equal(ticketWaiting({ ...ticket, status: 'cancelled' }), null);
 });

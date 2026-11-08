@@ -35,7 +35,7 @@ export function TaskExecution({ execution, ticketStatus, stale = false }) {
   const titleId = useId();
   const children = execution?.children || [];
   const counts = execution?.childCounts;
-  const recentOnly = stale || execution?.observed === false || (ticketStatus && !['open', 'claimed', 'reworking', 'verifying', 'resuming'].includes(ticketStatus));
+  const recentOnly = stale || execution?.observed === false || (ticketStatus && !['open', 'claimed', 'verifying', 'resuming'].includes(ticketStatus));
   return <section className="ba-task-execution" aria-labelledby={titleId}>
     <style>{css}</style>
     <div className="ba-execution-heading"><h3 id={titleId}>{recentOnly ? '最近执行记录' : '执行动态'}</h3>{execution && <span className="ba-execution-updated">最近更新 <UpdatedAt value={execution.updatedAt} /></span>}</div>

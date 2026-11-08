@@ -60,7 +60,7 @@
 .ba-board-iconbox[data-status=completed],.ba-board-chip[data-status=completed]{color:var(--board-good)}
 .ba-board-iconbox:is([data-status=failed],[data-status=blocked]),.ba-board-chip:is([data-status=failed],[data-status=blocked]){color:var(--board-danger)}
 .ba-board-iconbox:is([data-status=waiting],[data-status=awaiting_user],[data-status=continuation_wait],[data-status=uncertain]),.ba-board-chip:is([data-status=waiting],[data-status=awaiting_user],[data-status=continuation_wait],[data-status=uncertain]){color:var(--board-warning)}
-.ba-board-iconbox:is([data-status=claimed],[data-status=active],[data-status=queued],[data-status=open],[data-status=resuming],[data-status=review_wait],[data-status=reworking]),.ba-board-chip:is([data-status=claimed],[data-status=active],[data-status=queued],[data-status=open],[data-status=resuming],[data-status=review_wait],[data-status=reworking]){color:var(--board-running)}
+.ba-board-iconbox:is([data-status=claimed],[data-status=active],[data-status=queued],[data-status=open],[data-status=resuming]),.ba-board-chip:is([data-status=claimed],[data-status=active],[data-status=queued],[data-status=open],[data-status=resuming]){color:var(--board-running)}
 .ba-board-glyph-text{font-size:16px;font-weight:600;line-height:1}
 .ba-board-dot{width:9px;height:9px;border:1.5px solid currentColor;border-radius:50%}
 .ba-board-pulse{width:9px;height:9px;border-radius:50%;background:currentColor}

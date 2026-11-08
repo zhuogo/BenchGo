@@ -196,7 +196,7 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now }) {
       let status = terminal.has(run.state) ? run.state : worker?.status || (live?.status === 'running' ? 'running' : 'unknown');
       if (run.state === 'verifying') status = 'waiting';
       if (run.state === 'uncertain') status = 'unknown';
-      const activity = phase === 'verifying' ? '执行结果正在核验'
+      const activity = phase === 'verifying' ? '正在保存执行结果'
         : phase === 'preparing' ? '正在准备执行环境'
         : run.state === 'completed' ? '执行已结束'
         : run.state === 'failed' ? '执行失败'

@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { validateDelivery } from './result-delivery.mjs';
 import { validateAttentionDecisions } from './attention-triage.mjs';
 
 const attentionChannels = new Set(['desktop', 'feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'webhook', 'api']);
@@ -27,50 +26,16 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
   const resolutionValue = row => ({ assignmentId: row.assignment_id, ticketId: row.ticket_id, sessionId: row.session_id,
     callId: row.call_id, instructionRevision: row.instruction_revision, question: JSON.parse(row.question),
     ...JSON.parse(row.resolution), createdAt: row.created_at });
-  // Extra key components are host-owned metadata; an official question's arbitrary
-  // JSON fields never decide whether it is a Router review or an executing tool.
-  const reviewKey = row => {
-    const key = JSON.parse(row.question_key);
-    return key[3] === 'review' ? { instructionRevision: key[4], resultVersion: key[5], runId: key[6], kind: key[7] } : null;
-  };
+  const retiredQuestion = row => JSON.parse(row.question_key)[3] === 'review';
   const value = row => {
     if (!row) return row;
-    const review = reviewKey(row);
     return { id: row.id, assignmentId: row.assignment_id, ticketId: row.ticket_id,
       sessionId: row.session_id, callId: JSON.parse(row.question_key)[1], question: JSON.parse(row.question), outboxId: row.outbox_id,
       answerTriggerId: row.answer_trigger_id, state: row.answer_trigger_id ? 'answered' : 'waiting', createdAt: row.created_at,
-      origin: review ? 'review' : 'worker', ...(review || {}) };
+      origin: 'worker' };
   };
-  const currentRevision = (row, ticket) => {
-    if (!ticket || (api.getAssignment(row.assignment_id)?.instructionRevision ?? 1) !== ticket.instructionRevision) return false;
-    const review = reviewKey(row);
-    if (!review) return true;
-    const result = api.results(ticket.id).at(-1);
-    return review.instructionRevision === ticket.instructionRevision && review.resultVersion === ticket.resultVersion
-      && result?.version === review.resultVersion && result.runId === review.runId && result.sessionId === row.session_id;
-  };
-  const queueAnsweredReviewContinuation = (ticketId, { sourceResultVersion, validateMandate, ownerRetry = false, now = Date.now() } = {}) => {
-    if (typeof validateMandate !== 'function') throw new Error('Attention requires current authorization');
-    const ticket = api.getTicket(ticketId);
-    if (!ticket) throw new Error('Attention ticket not found');
-    if (!Number.isSafeInteger(sourceResultVersion) || sourceResultVersion < 1 || sourceResultVersion !== ticket.resultVersion) {
-      throw Object.assign(new Error('Continuation result version changed'), { code: 'REVIEW_CONFLICT' });
-    }
-    const rows = db.prepare('SELECT * FROM sa_attentions WHERE ticket_id=? AND answer_trigger_id IS NOT NULL').all(ticket.id);
-    const answered = rows.find(row => reviewKey(row) && currentRevision(row, ticket));
-    if (!answered) return { queued: false, code: 'USER_ANSWER_REQUIRED', ticket };
-    const entry = value(answered), trigger = api.getTrigger(entry.answerTriggerId);
-    if (!trigger || !db.prepare('SELECT 1 FROM sa_ticket_triggers WHERE ticket_id=? AND trigger_id=?').get(ticket.id, trigger.id)) {
-      return { queued: false, code: 'USER_ANSWER_REQUIRED', ticket };
-    }
-    const answer = trigger.source?.channel === 'desktop' && trigger.source.answer
-      ? trigger.source.answer : { selected: [], custom: attentionReplyText(entry.id, trigger.content) };
-    return api.queueReviewContinuation(ticket.id, { assignmentId: entry.assignmentId, runId: entry.runId,
-      sourceResultVersion, instruction: entry.question.question, reason: api.results(ticket.id).at(-1)?.review?.reason,
-      reviewAnswer: { attentionId: entry.id, question: entry.question, kind: entry.kind,
-        triggerId: entry.answerTriggerId, source: trigger.source, actor: trigger.actor, text: trigger.content, answer },
-      validateMandate, ownerRetry: ownerRetry === true, now, inTransaction: true });
-  };
+  const currentRevision = (row, ticket) => !retiredQuestion(row) && !!ticket
+    && (api.getAssignment(row.assignment_id)?.instructionRevision ?? 1) === ticket.instructionRevision;
   return {
     attentionResolutions(ticketId, { sessionId, callId } = {}) {
       return db.prepare('SELECT * FROM sa_attention_resolutions WHERE ticket_id=? ORDER BY created_at,rowid').all(ticketId)
@@ -99,9 +64,6 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
           return resolutionValue(db.prepare('SELECT * FROM sa_attention_resolutions WHERE question_key=?').get(key));
         });
       });
-    },
-    queueAnsweredReviewContinuation(ticketId, options) {
-      return tx(() => queueAnsweredReviewContinuation(ticketId, options));
     },
     parkAttention(assignmentId, { owner, fence, result, now = Date.now() }) {
       return tx(() => {
@@ -144,56 +106,8 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
           db.prepare("UPDATE sa_tickets SET status='open',updated_at=? WHERE id=?").run(at, ticket.id);
           queued++;
         }
-        // Router review questions have no pending official ask-user call. Resume
-        // the saved result's session with the real question and answer instead.
-        if (typeof api.queueReviewContinuation === 'function') {
-          for (const ticket of api.listTickets({ status: 'waiting', limit: 1000 })) {
-            if (!validateMandate(ticket.mandate)) continue;
-            if (ticket.resultVersion < 1) continue;
-            const continuation = queueAnsweredReviewContinuation(ticket.id, { sourceResultVersion: ticket.resultVersion, validateMandate, now });
-            if (continuation.queued) queued++;
-          }
-        }
         return queued;
       });
-    },
-    openReviewAttention(ticketId, { assignmentId, runId, sessionId, instructionRevision, resultVersion, userDecision, delivery, now = Date.now(), inTransaction = false } = {}) {
-      if (!['permission', 'information', 'scope'].includes(userDecision?.kind)
-        || typeof userDecision.question !== 'string' || !userDecision.question.trim() || userDecision.question.length > 2000) throw new Error('Review Attention requires a real user decision');
-      const publication = validateDelivery(delivery);
-      if (publication.action !== 'ask' || !Number.isSafeInteger(resultVersion) || resultVersion < 1) throw new Error('Review Attention requires an ask publication and result version');
-      const open = () => {
-        const ticket = api.getTicket(ticketId), assignment = api.getAssignment(assignmentId);
-        const result = api.results(ticketId).at(-1);
-        const run = api.runs(assignmentId).find(item => item.id === runId);
-        if (!ticket || !assignment || assignment.ticketId !== ticketId || !['open', 'waiting'].includes(ticket.status)
-          || instructionRevision !== ticket.instructionRevision || (assignment.instructionRevision ?? 1) !== instructionRevision
-          || ticket.resultVersion !== resultVersion || result?.version !== resultVersion
-          || result.instructionRevision !== instructionRevision || result.runId !== runId || result.sessionId !== sessionId
-          || !run || run.sessionId !== sessionId || !['verifying', 'waiting', 'completed'].includes(run.state)) throw new Error('Review Attention result changed');
-        if (result.review?.verdict !== 'wait' || result.review?.waitKind !== 'blocked'
-          || JSON.stringify(result.review.userDecision) !== JSON.stringify(userDecision)) throw new Error('Review Attention does not match the saved user decision');
-        if (!attentionChannels.has(ticket.mandate.source?.channel) || !ticket.mandate.actorId) throw new Error('Review Attention source unavailable');
-        const question = { id: `review:${ticketId}:${resultVersion}`, question: userDecision.question.trim(),
-          ...(publication.options?.length ? { options: publication.options.map(label => ({ label })) } : {}) };
-        const key = JSON.stringify([sessionId, `review:${resultVersion}`, question.id, 'review', instructionRevision, resultVersion, runId, userDecision.kind]);
-        const previous = db.prepare('SELECT * FROM sa_attentions WHERE question_key=?').get(key);
-        if (previous) {
-          if (previous.assignment_id !== assignmentId || previous.question !== JSON.stringify(question)) throw new Error('Review Attention identity conflict');
-          return value(previous);
-        }
-        const attentionId = randomUUID(), outboxId = randomUUID(), at = new Date(now).toISOString();
-        const body = publication.text.includes(question.question) ? publication.text : `${publication.text}\n${question.question}`;
-        const text = attentionText(ticket.mandate.source, attentionId, [body, ...(publication.options || [])].join('\n'));
-        const payload = { type: 'ticket.attention', attentionId, ticketId, source: ticket.mandate.source,
-          instructionRevision, resultVersion, text, ...(publication.options ? { options: publication.options } : {}) };
-        db.prepare("INSERT INTO sa_outbox(id,unique_key,ticket_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
-          .run(outboxId, `attention:${attentionId}`, ticketId, JSON.stringify(payload), now, at, at);
-        db.prepare('INSERT INTO sa_attentions VALUES (?,?,?,?,?,?,?,?,?)')
-          .run(attentionId, assignmentId, ticketId, sessionId, key, JSON.stringify(question), outboxId, null, at);
-        return value(db.prepare('SELECT * FROM sa_attentions WHERE id=?').get(attentionId));
-      };
-      return inTransaction ? open() : tx(open);
     },
     openAttention(assignmentId, { owner, fence, sessionId, callId, questions, now = Date.now() }) {
       if (typeof callId !== 'string' || !callId || !Array.isArray(questions) || !questions.length
@@ -232,25 +146,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         });
       });
     },
-    attentions(ticketId) { return db.prepare('SELECT * FROM sa_attentions WHERE ticket_id=? ORDER BY created_at,rowid').all(ticketId).map(value); },
-    answeredAttentionForReview(ticketId, { instructionRevision, runId, sessionId } = {}) {
-      const ticket = api.getTicket(ticketId);
-      if (!ticket || ticket.instructionRevision !== instructionRevision || !runId || !sessionId) return [];
-      const rows = db.prepare(`SELECT a.* FROM sa_attentions a
-        JOIN sa_ticket_triggers tt ON tt.ticket_id=a.ticket_id AND tt.trigger_id=a.answer_trigger_id
-        WHERE a.ticket_id=? AND a.session_id=? AND a.answer_trigger_id IS NOT NULL ORDER BY a.created_at,a.rowid`).all(ticketId, sessionId);
-      return rows.flatMap(row => {
-        const entry = value(row), assignment = api.getAssignment(entry.assignmentId);
-        const run = assignment && api.runs(entry.assignmentId).find(item => item.id === runId && item.sessionId === sessionId);
-        const trigger = api.getTrigger(entry.answerTriggerId);
-        if (!assignment || assignment.ticketId !== ticketId || (assignment.instructionRevision ?? 1) !== instructionRevision
-          || !run || (entry.origin === 'review' && (entry.instructionRevision !== instructionRevision || entry.runId !== runId))
-          || !trigger || trigger.actor?.kind !== 'human') return [];
-        const answer = trigger.source?.channel === 'desktop' && trigger.source.answer
-          ? trigger.source.answer : { selected: [], custom: attentionReplyText(entry.id, trigger.content) };
-        return [{ attentionId: entry.id, question: entry.question, answer }];
-      });
-    },
+    attentions(ticketId) { return db.prepare('SELECT * FROM sa_attentions WHERE ticket_id=? ORDER BY created_at,rowid').all(ticketId).filter(row => !retiredQuestion(row)).map(value); },
     // Only the authenticated local desktop dispatcher may call this method.
     answerDesktopAttention({ ticketId, attentionId, instructionRevision, requestId, answer }) {
       if (typeof requestId !== 'string' || !requestId.trim() || requestId.length > 512) throw new Error('Invalid Attention request id');

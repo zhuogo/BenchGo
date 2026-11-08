@@ -39,22 +39,22 @@ async function fixture() {
         const now=new Date(), at=minutes=>new Date(+now-minutes*60000).toISOString();
         const tickets=[
           {id:'running',title:'检查主聊天右侧面板的响应式布局与操作路径',target:'检查主聊天右侧面板的响应式布局与操作路径',acceptance:'检查桌面与窄屏的任务入口、键盘导航及四种状态。',status:'claimed',createdAt:at(12),updatedAt:at(1),assignments:[{state:'claimed'}]},
-          {id:'waiting',title:'补充模型配置的必要信息',status:'waiting',instructionRevision:1,resultVersion:1,createdAt:at(20),updatedAt:at(2),results:[{instructionRevision:1,version:1,summary:'保留供应商原始模型 ID，等待补充必要信息。',review:{verdict:'wait',waitKind:'blocked'}}],attentions:[{id:'model-question',origin:'review',state:'waiting',instructionRevision:1,resultVersion:1,question:{question:'请提供要使用的供应商模型ID。'}}]},
+          {id:'waiting',title:'补充模型配置的必要信息',status:'waiting',instructionRevision:1,resultVersion:0,createdAt:at(20),updatedAt:at(2),results:[],attentions:[{id:'model-question',origin:'worker',state:'waiting',instructionRevision:1,question:{question:'请提供要使用的供应商模型ID。'}}]},
           {id:'failed',title:'重新验证离线恢复',status:'failed',createdAt:at(30),updatedAt:at(3),results:[{summary:'连接中断，恢复后可以重新验证。'}]},
           {id:'blocked',title:'补充项目访问权限',status:'blocked',createdAt:at(40),updatedAt:at(4)},
           {id:'uncertain',title:'核实交付文件的版本',status:'uncertain',createdAt:at(50),updatedAt:at(5)},
-          {id:'done',title:'整理今天的工作记录',status:'completed',createdAt:at(60),updatedAt:at(6),results:[{version:1,summary:'内部工作摘要',review:{verdict:'passed',reason:'核验通过'},delivery:{action:'deliver',text:'已归档工作记录，保留了相关文件与说明。'}}],deliveries:[{state:'sent',payload:{type:'ticket.result',instructionRevision:1,resultVersion:1}}]},
+          {id:'done',title:'整理今天的工作记录',status:'completed',createdAt:at(60),updatedAt:at(6),results:[{version:1,summary:'内部工作摘要',selfCheck:{summary:'已检查要求与执行结果'},outcome:'completed',delivery:{action:'deliver',text:'已归档工作记录，保留了相关文件与说明。'}}],deliveries:[{state:'sent',payload:{type:'ticket.result',instructionRevision:1,resultVersion:1}}]},
         ];
         const goals=[{id:'goal',target:'持续维护 BenchGo 的一致体验',status:'active',rowVersion:7,createdAt:at(120),updatedAt:at(7),ticketIds:['running']}];
         window.updateExecution = step => {
           const row=tickets[0], finished=step==='delivered', verifying=step==='verifying';
-          const worker={id:'worker-main',label:'主 Worker',status:finished||verifying?'completed':step==='unknown'?'waiting':'running',activity:finished||verifying?'已提交结果核验':step==='unknown'?'等待后续事件':'正在搜索网页',updatedAt:at(0)};
+          const worker={id:'worker-main',label:'主 Worker',status:finished||verifying?'completed':step==='unknown'?'waiting':'running',activity:finished||verifying?'正在保存结果':step==='unknown'?'等待后续事件':'正在搜索网页',updatedAt:at(0)};
           const children=[
             {id:'child-search',label:'查找候选项目',status:step==='running'?'running':'completed',activity:step==='running'?'正在搜索网页':'已返回父 Worker',updatedAt:at(0)},
             {id:'child-check',label:'核对项目页面',status:step==='child-completed'?'failed':step==='unknown'?'unknown':finished||verifying?'completed':'running',activity:step==='child-completed'?'执行失败':step==='unknown'?'未读取到结束记录':finished||verifying?'已返回父 Worker':'正在读取网页',updatedAt:at(0)},
           ];
           Object.assign(row,{status:finished?'completed':step==='paused'?'paused':'open',instructionRevision:1,resultVersion:finished?1:0,updatedAt:at(0),
-            assignments:[{id:'assignment-main',instructionRevision:1,state:finished?'completed':'claimed'}],results:finished?[{instructionRevision:1,version:1,summary:'内部结果',review:{verdict:'passed'},delivery:{text:'已完成调研，来源与限制随结果交付。'}}]:[],
+            assignments:[{id:'assignment-main',instructionRevision:1,state:finished?'completed':'claimed'}],results:finished?[{instructionRevision:1,version:1,summary:'内部结果',selfCheck:{summary:'已检查要求与执行结果'},outcome:'completed',delivery:{text:'已完成调研，来源与限制随结果交付。'}}]:[],
             deliveries:finished?[{state:'sent',payload:{type:'ticket.result',instructionRevision:1,resultVersion:1}}]:[],
             execution:{assignmentId:'assignment-main',runId:'run-main',sessionId:'worker-main',instructionRevision:1,phase:verifying?'verifying':'executing',updatedAt:at(0),observed:step!=='unknown',worker,children,
               childCounts:{total:children.length,running:children.filter(c=>c.status==='running').length,completed:children.filter(c=>c.status==='completed').length,failed:children.filter(c=>c.status==='failed').length},
@@ -294,9 +294,9 @@ test('activity board updates Worker and child execution in place without declari
     assert.equal(await detail.locator('[data-worker-id]').count(),3,'refresh errors keep observed children with a stale-state notice');
     await page.evaluate(()=>{window.scenarioControl.fail=false;window.updateExecution('verifying');});
     await detail.getByText('动态更新暂不可用，以下保留上次记录。',{exact:true}).waitFor({state:'hidden'});
-    await row.getByText('正在核验',{exact:true}).waitFor();
+    await row.getByText('正在保存结果',{exact:true}).waitFor();
     assert.equal(await detail.locator('[data-worker-status="completed"]').count(),3);
-    assert.equal(await detail.getByText('已完成',{exact:true}).count(),0,'Worker completion still waits for ticket verification and delivery');
+    assert.equal(await detail.getByText('已完成',{exact:true}).count(),0,'Worker completion still waits for ticket result persistence and delivery');
     if(captureDir)await page.screenshot({path:join(captureDir,'verifying-detail.png')});
     await page.evaluate(()=>window.updateExecution('delivered'));
     await detail.getByText('已完成 · 结果已交付',{exact:true}).waitFor();

@@ -1,23 +1,19 @@
-import { deliverySuppression, validateDelivery, systemStateDelivery } from './result-delivery.mjs';
+import { deliverySuppression, validateDelivery } from './result-delivery.mjs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createAssignmentExecutor } from './assignment-executor.mjs';
 import { createAssistantAssignmentWorker } from './assignment-worker.mjs';
 import { readAssessmentPolicy, validateTicketMandate } from './assessment-policy.mjs';
-import { reviewTicketResult, recoverableReview } from './ticket-review.mjs';
-import { TICKET_REVIEW_TIMEOUT_MS } from './review-policy.mjs';
-import { createReviewContinuation } from './review-continuation.mjs';
-import { recoveryStorage, withRecoveredEvidence, withRecoveredPause, verifyExecutionArtifacts } from './execution-evidence.mjs';
+import { recoveryStorage, withRecoveredEvidence, withRecoveredPause } from './execution-evidence.mjs';
 import { createWorkerCheckpointStore } from './worker-checkpoint-store.mjs';
 import { createCheckpointService } from './checkpoint-service.mjs';
 import { createDirectReplyDelivery } from './direct-reply-delivery.mjs';
-import { createReviewEvidenceReader } from './review-evidence-reader.mjs';
-import { commitReviewedResult } from './review-result-commit.mjs';
+import { commitWorkerResult } from './result-commit.mjs';
 import { knownNotSent } from './channels/delivery-outcome.mjs';
 import { createTaskExecutionProgress } from './task-execution-progress.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
-export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, execute, review = reviewTicketResult, intervalMs = 1000, now = Date.now }) {
+export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, execute, intervalMs = 1000, now = Date.now }) {
   const database = store.orchestration, owner = `delivery:${randomUUID()}`, shutdown = new AbortController();
   const executionProgress = createTaskExecutionProgress({ ctx, database, now });
   const readPolicy = threadId => readAssessmentPolicy(store, ctx.workspaceRegistry, threadId);
@@ -25,35 +21,13 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     getAdapter: channel => channels?.get(channel) || (channel === 'feishu' ? feishu : null) });
   const checkpointStore = createWorkerCheckpointStore({ directory: join(store.paths.workspace, 'checkpoints') });
   const checkpoints = createCheckpointService({ database, checkpoints: checkpointStore, readPolicy, agents: ctx.agents });
-  async function reviewAndCommit(result, { assignment, ticket, signal, beforeCommit }) {
-      const policy = await readPolicy();
-      if (!validateTicketMandate(ticket.mandate, { policy })) throw new Error('Ticket authorization changed before review');
-      const reviewSignal = AbortSignal.any([signal, shutdown.signal, AbortSignal.timeout(TICKET_REVIEW_TIMEOUT_MS)]);
-      const verifyArtifacts = async () => {
-        if (!ticket.mandate.project) return;
-        const run = database.runs(assignment.id).find(item => item.id === result.runId && item.fence === assignment.fence);
-        await verifyExecutionArtifacts(run, result, signal);
-      };
-      await verifyArtifacts();
-      let readEvidence;
-      if (ctx.sessionQuery?.readSession && result.runId) {
-        const run = database.runs(assignment.id).find(item => item.id === result.runId && item.fence === assignment.fence);
-        if (!run || run.sessionId !== result.sessionId) throw new Error('Review evidence belongs to another execution');
-        readEvidence = createReviewEvidenceReader({ ctx, result });
-      }
-      const answeredAttentions = database.answeredAttentionForReview(ticket.id, { instructionRevision: ticket.instructionRevision,
-        runId: result.runId, sessionId: result.sessionId });
-      const verdict = await recoverableReview(review, { llm: ctx.llm, database, model: policy.model || assignment.model, ticket, result, rules: policy.rules, signal: reviewSignal, routingConfig: policy.routingConfig, readEvidence, answeredAttentions }, signal);
-      signal.throwIfAborted();
-      shutdown.signal.throwIfAborted();
-      await verifyArtifacts();
-      await beforeCommit();
-      const current = await readPolicy();
-      const versionKey = ticket.mandate.source?.channel === 'desktop' ? 'desktopVersion' : 'version';
-      if (current[versionKey] !== policy[versionKey] || !validateTicketMandate(ticket.mandate, { policy: current })) throw new Error('Ticket authorization changed during review');
-      // Result, execution completion and the single delivery record are one transaction.
-      return commitReviewedResult({ database, ticket, result, verdict, assignment, model: assignment.model || policy.model,
-        uniqueKey: `assignment-result:${assignment.id}:${result.runId || 'execution'}:${assignment.fence}` });
+  async function commitResult(result, { assignment, ticket, signal, beforeCommit }) {
+    const policy = await readPolicy();
+    if (!validateTicketMandate(ticket.mandate, { policy })) throw new Error('Ticket authorization changed');
+    signal.throwIfAborted(); shutdown.signal.throwIfAborted();
+    await beforeCommit();
+    return commitWorkerResult({ database, ticket: database.getTicket(ticket.id), result, assignment,
+      uniqueKey: `assignment-result:${assignment.id}:${result.runId || 'execution'}:${assignment.fence}` });
   }
   const executeTask = execute || createAssignmentExecutor({ ctx, database, workspaceRoot: join(store.paths.workspace, 'workers'), readPolicy,
     authorizeAction: async ({ policy, mandate }) => ({ allowed: validateTicketMandate(mandate, { policy }) }),
@@ -79,10 +53,10 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         await context.beforeCommit();
         return database.parkAttention(context.assignment.id, { owner: context.assignment.owner, fence: context.assignment.fence, result });
       }
-      if (!context.assignment.verificationOnly) return reviewAndCommit(result, context);
+      if (!context.assignment.verificationOnly) return commitResult(result, context);
       const run = database.runs(context.assignment.id).find(row => row.id === result.runId && row.fence === context.assignment.fence);
       if (!run) throw new Error('Recovery execution identity changed');
-      return withRecoveredEvidence({ ctx, run, signal: context.signal }, saved => reviewAndCommit(saved, context));
+      return withRecoveredEvidence({ ctx, run, signal: context.signal }, saved => commitResult(saved, context));
     },
   });
   async function recoverPending() {
@@ -120,124 +94,10 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     }
   }
 
-  const reviews = new Set(), activeReviews = new Map();
-  const continueReview = createReviewContinuation({ ctx, database, readPolicy, review, signal: shutdown.signal });
-  const isReviewWait = result => result?.review?.verdict === 'wait'
-    && (result.review.waitKind === 'review_wait' || (!result.review.waitKind && result.review.retryable === true))
-    && result.review.retryable !== false && !result.review.userDecision;
-  function deferReview(ticket, diagnostic) {
-    if (!ticket || ticket.status !== 'waiting') return;
-    const previous = database.results(ticket.id).at(-1);
-    if (!isReviewWait(previous)) return;
-    const attempts = Math.max(ticket.reviewRetry?.attempts || 0, previous.review.retryAttempts || 0);
-    return database.deferReview(ticket.id, { expectedResultVersion: ticket.resultVersion,
-      nextAttemptAt: now() + Math.min(900000, 30000 * 2 ** Math.min(attempts, 5)),
-      diagnostic: diagnostic || previous.review.diagnostic, now: now() });
-  }
-  async function performReview(ticketId, options) {
-    shutdown.signal.throwIfAborted();
-    for (const assignment of database.assignments(ticketId)) for (const run of database.runs(assignment.id)) await checkpointStore.assertRunnable(run.id);
-    const ticket = database.getTicket(ticketId);
-    if (ticket?.status === 'open' && ticket.resultVersion === 0 && options?.expectedResultVersion === 0) {
-      const candidates = database.assignments(ticketId).filter(item => item.state === 'uncertain');
-      if (candidates.length !== 1) throw new Error('原执行恢复状态不唯一，请刷新工单');
-      const assignment = candidates[0];
-      const run = database.runs(assignment.id).find(item => item.fence === assignment.fence && item.evidence);
-      if (!run) throw new Error('原执行证据不可用');
-      const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(60000)]);
-      const pending = withRecoveredEvidence({ ctx, run, signal }, async (_saved, observation) => {
-        const policy = await readPolicy();
-        signal.throwIfAborted();
-        const queued = database.queueVerification(assignment.id, { fence: assignment.fence, runId: run.id, observation,
-          ownerRetry: true, validateMandate: mandate => validateTicketMandate(mandate, { policy }) });
-        return { ticket: database.getTicket(ticketId), assignment: queued, queued: true };
-      });
-      reviews.add(pending);
-      try { return await pending; } finally { reviews.delete(pending); }
-    }
-    const pending = continueReview(ticketId, options);
-    reviews.add(pending);
-    try { return await pending; }
-    finally { reviews.delete(pending); }
-  }
-  function retryReview(ticketId, options) {
-    if (shutdown.signal.aborted) return Promise.reject(shutdown.signal.reason);
-    const current = activeReviews.get(ticketId);
-    if (current) {
-      if (current.expectedResultVersion !== options?.expectedResultVersion) return Promise.reject(Object.assign(new Error('工单正在核验，请等待当前核验完成'), { code: 'REVIEW_IN_PROGRESS' }));
-      return current.promise;
-    }
-    const ticket = database.getTicket(ticketId);
-    if (ticket?.resultVersion === options?.expectedResultVersion) deferReview(ticket);
-    const promise = performReview(ticketId, options).finally(() => {
-      activeReviews.delete(ticketId);
-      const latest = database.getTicket(ticketId);
-      if (latest?.resultVersion !== ticket?.resultVersion) deferReview(latest);
-    });
-    activeReviews.set(ticketId, { expectedResultVersion: options?.expectedResultVersion, promise });
-    return promise;
-  }
-  async function performResumeReviewWork(ticketId, expectedResultVersion) {
-    shutdown.signal.throwIfAborted();
-    const ticket = database.getTicket(ticketId), result = database.results(ticketId).at(-1);
-    if (!Number.isSafeInteger(expectedResultVersion) || ticket?.status !== 'waiting'
-      || ticket.resultVersion !== expectedResultVersion || (result?.review?.waitKind !== 'continuation_wait'
-        && ticket.continuationWait?.sourceResultVersion !== expectedResultVersion)) throw new Error('工单续做状态已变化，请刷新');
-    const wait = ticket.continuationWait;
-    if (wait?.code === 'EXECUTION_EFFECTS_UNKNOWN') return { queued: false, code: wait.code, ticket };
-    // Tickets parked by the execution-time gate before its 2026-11-06 removal resume without added time.
-    if (wait?.code === 'EXECUTION_BUDGET_EXHAUSTED' && wait.assignmentId && wait.runId) {
-      const run = database.runs(wait.assignmentId).find(item => item.id === wait.runId && item.sessionId === wait.sessionId);
-      if (!run?.evidence?.waitingExecutionBudget) throw new Error('原执行额度等待记录不可用');
-      await checkpointStore.assertRunnable(run.id);
-      const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(60000)]);
-      return withRecoveredPause({ ctx, run, signal }, async () => {
-        const policy = await readPolicy();
-        signal.throwIfAborted();
-        return database.queueBudgetContinuation(ticketId, { expectedResultVersion,
-          validateMandate: mandate => validateTicketMandate(mandate, { policy }), now: now() });
-      });
-    }
-    const assignment = database.assignments(ticketId).find(item => database.runs(item.id).some(run => run.id === result.runId));
-    const run = assignment && database.runs(assignment.id).find(item => item.id === result.runId);
-    if (!run) throw new Error('原执行记录不可用');
-    await checkpointStore.assertRunnable(run.id);
-    const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(60000)]);
-    return withRecoveredEvidence({ ctx, run, signal }, async () => {
-      const policy = await readPolicy();
-      signal.throwIfAborted();
-      const validateMandate = mandate => validateTicketMandate(mandate, { policy });
-      if (result.review?.waitKind === 'blocked') return database.queueAnsweredReviewContinuation(ticketId, {
-        sourceResultVersion: expectedResultVersion, validateMandate, ownerRetry: true, now: now() });
-      return database.queueReviewContinuation(ticketId, { assignmentId: assignment.id, runId: run.id,
-        sourceResultVersion: expectedResultVersion, resetProgress: true,
-        validateMandate, now: now() });
-    });
-  }
-  async function resumeReviewWork(ticketId, expectedResultVersion, options) {
-    const pending = performResumeReviewWork(ticketId, expectedResultVersion, options);
-    reviews.add(pending);
-    try { return await pending; } finally { reviews.delete(pending); }
-  }
   let timer, running, recovery;
   async function cycle() {
     const policy = await readPolicy();
     database.queueAnsweredAttention({ validateMandate: mandate => validateTicketMandate(mandate, { policy }) });
-    const waitingTickets = database.listTickets({ status: 'waiting', limit: 1000 });
-    for (const ticket of waitingTickets) {
-      const previous = database.results(ticket.id).at(-1);
-      if (!isReviewWait(previous) || activeReviews.has(ticket.id)
-        || !validateTicketMandate(ticket.mandate, { policy })) continue;
-      const retry = ticket.reviewRetry?.resultVersion === ticket.resultVersion ? ticket.reviewRetry : null;
-      const reportedAt = Date.parse(previous.review.diagnostic?.at || previous.committedAt);
-      const nextAttemptAt = retry?.nextAttemptAt ?? (Number.isFinite(reportedAt) ? reportedAt + 30000 : now() + 30000);
-      if (nextAttemptAt > now()) {
-        if (!retry) database.deferReview(ticket.id, { expectedResultVersion: ticket.resultVersion, nextAttemptAt, now: now(), diagnostic: previous.review.diagnostic });
-        continue;
-      }
-      void retryReview(ticket.id, { expectedResultVersion: ticket.resultVersion })
-        .catch(() => { /* Evidence, authorization and result fences stay authoritative. */ });
-    }
     for (const ticket of database.listTickets({ status: 'open', limit: 1000 })) {
       shutdown.signal.throwIfAborted();
       if (!validateTicketMandate(ticket.mandate, { policy }) || !policy.model) continue;
@@ -265,20 +125,9 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         database.finishOutbox(delivery.id, { owner, sent: true, receipt: { status: 'suppressed', reason: suppressed } });
         continue;
       }
-      // Existing queued records may predate the publication contract. Never replay
-      // their embedded Worker prose into a newly protected human channel.
-      if (payload.type === 'ticket.result' && !payload.publication) {
-        payload.publication = systemStateDelivery({ state: 'delivery_wait', code: 'LEGACY_PUBLICATION_MISSING', stage: 'publication' });
-        payload.text = payload.publication.text;
-      }
       if (payload.type === 'ticket.result') {
-        try {
-          payload.publication = validateDelivery(payload.publication);
-          payload.text = payload.publication.text;
-        } catch {
-          database.finishOutbox(delivery.id, { owner, sent: true, receipt: { status: 'suppressed', reason: 'invalid-publication' } });
-          continue;
-        }
+        try { payload.publication = validateDelivery(payload.publication); payload.text = payload.publication.text; }
+        catch { database.finishOutbox(delivery.id, { owner, sent: true, receipt: { status: 'suppressed', reason: 'invalid-publication' } }); continue; }
       }
       if (payload.source?.channel === 'desktop' && deliverDesktop) {
         try {
@@ -322,8 +171,6 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   }
   return {
     checkpoints,
-    retryReview,
-    resumeReviewWork,
     tick,
     state() {
       const progress = executionProgress.batch();
@@ -338,7 +185,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       executionProgress.dispose();
       const stopped = worker.stop();
       await running;
-      await Promise.allSettled([recovery, stopped, directReplies.stop(), ...reviews, ...[...activeReviews.values()].map(item => item.promise)]);
+      await Promise.allSettled([recovery, stopped, directReplies.stop()]);
     },
   };
 }

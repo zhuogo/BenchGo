@@ -70,7 +70,7 @@ test('pause survives reopening and never replays an expired execution', async t 
   } finally { reopened.close(); }
 });
 
-test('requirement edits fence stale results and leases without status updates changing requirements', async t => {
+test('requirement edits fence stale results while preserving leases and queued Assignment identities', async t => {
   const db = await fixture(t);
   db.ingest({ ...input('revision'), mode: 'direct' });
   const ticket = db.createTicket({ threadId: 'thread', target: 'original', acceptance: 'first check', mandate: {} });
@@ -84,22 +84,19 @@ test('requirement edits fence stale results and leases without status updates ch
   const changed = db.updateTicket(ticket.id, { acceptance: 'new check' }, { expectedInstructionRevision: 1 });
   assert.equal(changed.instructionRevision, 2);
   assert.throws(() => db.updateTicket(ticket.id, { target: 'lost update' }, { expectedInstructionRevision: 1 }), { code: 'INSTRUCTION_REVISION_CONFLICT' });
-  assert.throws(() => db.commitResult(ticket.id, { assignment: { ...active, instructionRevision: 2 }, result: { summary: 'stale' }, uniqueKey: 'stale', now: 1 }), { code: 'INSTRUCTION_REVISION_CONFLICT' });
+  assert.throws(() => db.commitResult(ticket.id, { assignment: { ...active, instructionRevision: 2 }, result: { summary: 'stale' }, uniqueKey: 'stale', now: 1 }), { code: 'ASSIGNMENT_CONFLICT' });
   assert.throws(() => db.commitResult(ticket.id, { result: { summary: 'unversioned' }, uniqueKey: 'unversioned', now: 1 }), { code: 'INSTRUCTION_REVISION_CONFLICT' });
   assert.equal(db.results(ticket.id).length, 0);
   assert.equal(db.deliveries(ticket.id).length, 0);
   assert.equal(db.getTicket(ticket.id).status, 'open');
-  assert.deepEqual(db.claimAssignments('next', { validateMandate: () => true, now: 2 }), []);
-  assert.equal(db.getAssignment('queued').state, 'blocked');
-  assert.equal(db.renewAssignment(active.id, { owner: active.owner, fence: active.fence, validateMandate: () => true, now: 3 }).allowed, false);
+  const [queued] = db.claimAssignments('next', { validateMandate: () => true, now: 2 });
+  assert.equal(queued.id, 'queued'); assert.equal(queued.instructionRevision, 2);
+  assert.equal(db.renewAssignment(active.id, { owner: active.owner, fence: active.fence, validateMandate: () => true, now: 3 }).allowed, true);
   assert.throws(() => db.createAssignment(ticket.id, { instructionRevision: 1 }), { code: 'INSTRUCTION_REVISION_CONFLICT' });
-  const next = db.createAssignment(ticket.id, { id: 'new' });
-  assert.equal(next.instructionRevision, 2);
-  const [claimed] = db.claimAssignments('new-worker', { validateMandate: () => true, now: 4 });
-  db.commitResult(ticket.id, { assignment: claimed, result: { summary: 'new requirement met' }, uniqueKey: 'new', now: 5 });
-  assert.equal(db.getTicket(ticket.id).status, 'completed');
+  db.commitResult(ticket.id, { assignment: queued, result: { summary: 'new requirement met' }, uniqueKey: 'new', now: 5 });
+  assert.equal(db.getTicket(ticket.id).status, 'waiting');
   assert.equal(db.results(ticket.id)[0].instructionRevision, 2);
-  assert.equal(db.commitResult(ticket.id, { assignment: claimed, result: { summary: 'new requirement met' }, uniqueKey: 'new', now: 6 }).duplicate, true);
+  assert.equal(db.commitResult(ticket.id, { assignment: queued, result: { summary: 'new requirement met' }, uniqueKey: 'new', now: 6 }).duplicate, true);
 });
 
 test('existing database migrates Ticket requirements without rewriting legacy Assignments', async t => {
@@ -121,7 +118,7 @@ test('existing database migrates Ticket requirements without rewriting legacy As
     assert.equal(reopened.getTicket(ticket.id).acceptance, 'preserved acceptance');
     const [assignment] = reopened.claimAssignments('worker', { validateMandate: () => true, now: 0 });
     reopened.commitResult(ticket.id, { assignment, result: { summary: 'legacy complete' }, uniqueKey: 'legacy-result', now: 1 });
-    assert.equal(reopened.getTicket(ticket.id).status, 'completed');
+    assert.equal(reopened.getTicket(ticket.id).status, 'waiting');
   } finally { reopened.close(); }
 });
 
@@ -153,7 +150,7 @@ test('cancelling verification uses the original executor release and fences the 
   assert.equal(db.cancelTicket(ticket.id).status, 'cancelled');
   assert.equal(db.getAssignment(assignment.id).state, 'cancelled');
   assert.equal(db.runs(assignment.id)[0].state, 'cancelled');
-  assert.throws(() => db.commitResult(ticket.id, { assignment: next, result: evidence, uniqueKey: 'late', now: 30008 }), { code: 'FENCING_CONFLICT' });
+  assert.throws(() => db.commitResult(ticket.id, { assignment: next, result: evidence, uniqueKey: 'late', now: 30008 }), { code: 'TICKET_CLOSED' });
   assert.equal(db.results(ticket.id).length, 0);
 });
 
@@ -181,7 +178,7 @@ test('verification-only recovery transfers a fenced lease without creating a sec
   assert.throws(() => db.updateRun(run.id, { owner: assignment.owner, fence: assignment.fence, state: 'uncertain', now: 7 }), { code: 'FENCING_CONFLICT' });
   db.commitResult(ticket.id, { assignment: recovered, result: evidence, status: 'waiting', uniqueKey: 'recovered', now: 8 });
   assert.equal(db.runs(assignment.id).length, 1);
-  assert.equal(db.runs(assignment.id)[0].state, 'waiting');
+  assert.equal(db.runs(assignment.id)[0].state, 'completed');
   assert.equal(db.getAssignment(assignment.id).state, 'completed');
   assert.equal(db.getTicket(ticket.id).status, 'waiting');
   assert.deepEqual(db.verificationCandidates({ now: 100000 }), []);
@@ -244,7 +241,7 @@ test('subscribed context needs a matching execution receipt before result commit
   assert.equal(db.acknowledgeSubscriptionMessage(assignment.id, receipt).applied, true);
   assert.equal(db.pendingSubscriptionMessages(ticket.id).length, 0);
   db.commitResult(ticket.id, { assignment, result: { summary: 'current result' }, uniqueKey: 'result' });
-  assert.equal(db.getTicket(ticket.id).status, 'completed');
+  assert.equal(db.getTicket(ticket.id).status, 'waiting');
 });
 test('immutable trigger, single eval, atomic decision ticket and subscribed handback', async t => {
   const db = await fixture(t);

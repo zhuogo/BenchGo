@@ -17,8 +17,8 @@ import { activityLabels as labels, terminalActivityStates as terminal, liveActiv
 import { useAssistantActivity } from './use-activity.jsx';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
 
-const executionPhases = { preparing: '准备执行', executing: '正在执行', verifying: '正在核验' };
-const detailPhase = row => row.execution?.observed !== false && ['open', 'claimed', 'reworking', 'verifying', 'resuming'].includes(row.status) && executionPhases[row.execution?.phase]
+const executionPhases = { preparing: '准备执行', executing: '正在执行', verifying: '正在保存结果' };
+const detailPhase = row => row.execution?.observed !== false && ['open', 'claimed', 'verifying', 'resuming'].includes(row.status) && executionPhases[row.execution?.phase]
   ? executionPhases[row.execution.phase] : `${labels[row.status] || row.status} · ${row.phase}`;
 
 const taskTitle = row => row?.kind === 'ticket' ? normalizeTicketTitle(row.taskMeta?.title || row.title, row.target) : row?.taskMeta?.title || row?.title || '任务详情';

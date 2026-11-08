@@ -12,7 +12,7 @@ export function ticketLane(ticket) {
   if (terminalTicketStates.has(ticket.status)) return 'finished';
   const { status, safetyWait } = ticketSnapshot(ticket);
   if (safetyWait) return 'attention';
-  if (['claimed', 'running', 'reworking', 'reviewing', 'review_wait', 'pausing', 'cancelling'].includes(status)) return 'running';
+  if (['claimed', 'running', 'pausing', 'cancelling'].includes(status)) return 'running';
   if (['open', 'queued'].includes(status)) return 'queued';
   // Unknown states stay visible for inspection, rather than looking completed.
   return 'attention';

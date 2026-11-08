@@ -26,7 +26,7 @@ async function fixture() {
         window.calls=[];window.control={state};
         const sample=(id,title,status,extra={})=>({id,title,target:title+'：按要求完成并提供证据',status,instructionRevision:1,resultVersion:0,
           createdAt:'2026-11-07T08:00:00Z',updatedAt:'2026-11-07T08:05:00Z',taskCanOrganize:false,...extra});
-        const rows=[sample('queued','准备周报','open'),sample('running','运行兼容测试','open',{assignments:[{state:'claimed'}]}),
+        const rows=[sample('queued','准备周报','open'),sample('running','运行兼容测试','open',{assignments:[{state:'claimed'}],executionSession:{available:true,sessionId:'real-execution',ticketId:'running'}}),
           sample('paused','确认发布范围','paused'),sample('done','交付设计稿','completed',{taskCanOrganize:true})];
         const api=async(action,input)=>{
           window.calls.push([action,input]);
@@ -38,7 +38,7 @@ async function fixture() {
           return {queued:true};
         };
         root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main className='ba-studio-body' style={{padding:24,width:'100%',boxSizing:'border-box'}}>
-          <Tickets api={api} onCreateGoal={()=>window.calls.push(['createGoal'])} onSchedule={()=>window.calls.push(['openSchedule'])}/>
+          <Tickets api={api} onCreateGoal={()=>window.calls.push(['createGoal'])} onSchedule={()=>window.calls.push(['openSchedule'])} onOpenExecution={async value=>{window.calls.push(['openExecution',value]);if(window.control.openError)throw Error('原会话尚未连接');}}/>
         </main></div>);
       };
     ` },
@@ -86,6 +86,17 @@ test('ticket board renders four states, filters, retains details and routes real
     await board.getByRole('button', { name: /确认发布范围.*已暂停/ }).click();
     await page.getByRole('dialog').waitFor();
     assert(await page.getByRole('dialog').getByText('确认发布范围：按要求完成并提供证据', { exact: true }).isVisible());
+    assert.equal(await page.getByRole('button', { name: '查看执行会话', exact: true }).count(), 0);
+    await page.keyboard.press('Escape');
+    await board.getByRole('button', { name: /运行兼容测试.*执行中/ }).click();
+    await page.getByRole('dialog').waitFor();
+    assert(await page.getByRole('button', { name: '修订要求', exact: true }).isEnabled(), 'ordinary follow-up must remain available while Worker runs');
+    await page.evaluate(() => window.control.openError = true);
+    await page.getByRole('button', { name: '查看执行会话', exact: true }).click();
+    await page.getByRole('alert').getByText(/执行会话暂时无法打开/).waitFor();
+    await page.evaluate(() => window.control.openError = false);
+    await page.getByRole('button', { name: '查看执行会话', exact: true }).click();
+    assert((await page.evaluate(() => window.calls)).some(([name, value]) => name === 'openExecution' && value.sessionId === 'real-execution'));
     await page.keyboard.press('Escape');
     await page.getByRole('tab', { name: '列表', exact: true }).click();
     assert.equal(await page.locator('.ba-task-list > .ba-task-list-row').count(), 4);

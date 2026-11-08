@@ -12,9 +12,9 @@ BenchGo 总助手源码包 `@benchgo/superagent`，统一构建进 `benchgo-plug
 
 公共模型管理和界面组件直接复用 BenchGo；语音适配直接复用 Voice。`assistant` 工具名、HTTP 路径及存储标识保留原协议，已有会话与记忆按当前存储继续使用。
 
-主聊与旁聊共用 SuperAgent 模型设置和受控聊天发布：Router 可直接正常结束文本回答，由官方 completed 回合确认后展示，也可通过 `assistant_reply` 显式发布；工具过程留在后台。Worker 结果经过验收生成交付正文，持久去重后只回原来源；活动记录按日期查询与停止。完整边界见 [对话交互](../../docs/06-superagent/对话交互.md)与[验收交付](../../docs/06-superagent/验收与交付.md)。自由主动机会推送与通知偏好尚未开放，显式定时委派仍按工单交付。
+主聊与旁聊共用 SuperAgent 模型设置和受控聊天发布：Router 可直接正常结束文本回答，由官方 completed 回合确认后展示，也可通过 `assistant_reply` 显式发布；工具过程留在后台。Worker 在原上下文轻量自检，原正文带工单标题持久登记 outbox 后直投原来源；Router 默认仅收到状态，用户追问时可读取已存结果。完整边界见 [对话交互](../../docs/06-superagent/对话交互.md)与[自校验与交付](../../docs/06-superagent/自校验与交付.md)。自由主动机会推送与通知偏好尚未开放，显式定时委派仍按工单交付。
 
-Router 同时负责聊天与总调度。桌面派工成功后，由当前 Router 根据对话自然回复，沿用普通文本终答或 `assistant_reply`，不再发送固定接单句，也不等待 Worker。渠道显式人类请求的接单回复复用同次 Router 研判 `replyText`，经准入复核后随工单持久入队并去重；没有正文时不补模板，旧固定待发回执不再投递。工单持久化、授权检查与结果验收继续保留。
+Router 同时负责聊天与总调度。桌面派工成功后，由当前 Router 根据对话自然回复，沿用普通文本终答或 `assistant_reply`，不再发送固定接单句，也不等待 Worker。渠道显式人类请求的接单回复复用同次 Router 研判 `replyText`，经准入复核后随工单持久入队并去重；没有正文时不补模板，旧固定待发回执不再投递。工单持久化、授权检查与实际执行证据继续保留。
 
 ## 宠物身份与形象
 
@@ -24,13 +24,13 @@ SuperAgent 本身就是宠物助手与 Router，默认无名，不增加陪伴 A
 
 运行及待确认状态可切换基准表情；形象页可预览短动作，但聊天名片固定静态，尚未接入计算出的 action 与原创角色短表情。图像生成需配置可用供应商，不支持参考图局部换装；桌面悬浮尚未实现。边界见[身份与形象](../../docs/06-superagent/身份与形象.md)。
 
-工单执行统一由 `orchestration-store.mjs` 落册、`assignment-worker.mjs` 调度和 `assignment-executor.mjs` 接入官方 Harness。`desktop-delegation-service.mjs` 处理桌面来源；`goal-ticket-creation.mjs` 将持续目标绑定到工单，`goal-ticket-record.mjs` 只读取验收结果，不创建第二套执行队列。
+工单执行统一由 `orchestration-store.mjs` 落册、`assignment-worker.mjs` 调度和 `assignment-executor.mjs` 接入官方 Harness。`desktop-delegation-service.mjs` 处理桌面来源；`goal-ticket-creation.mjs` 将持续目标绑定到工单，`goal-ticket-record.mjs` 读取当前结果与送达关单状态，不创建第二套执行队列。
 
-Ticket、Assignment、Run、Result 与 Delivery 共同承载状态、验收和通知；新工作统一创建 Ticket，持续目标只聚合当前工单结果。
+Ticket、Assignment、Run、Result 与 Delivery 共同承载执行、自检、证据和通知；新工作统一创建 Ticket，持续目标只聚合当前工单结果。成果确认送达后 completed，结构性失败报告送达后 failed；发送失败仅重投保存结果，发送未知先核实，不重跑 Worker。
 
 聊天看板与工单详情共用执行动态投影，以简约任务线展示主 Worker、直接子 Worker 与真实活动；历史不完整、暂停旧记录和核验/交付阶段明确区分，交互边界见[任务列表设计](../../docs/02-工作台与Agent/任务列表交互.md#聊天任务线与执行动态)。
 
-Router 通过只读工具 `assistant_tickets` 查询当前桌面对话所属工单：`list` 支持 `status`、`projectId` 和 `limit`/`offset` 分页，按返回的 `nextOffset` 继续；`get` 按 `id` 读取执行结果、验收结论及待处理问题。查询直接复用工单数据库，不触发执行或审批，不读取其他会话或渠道的工单。
+Router 通过只读工具 `assistant_tickets` 查询当前桌面对话所属工单：`list` 支持 `status`、`projectId` 和 `limit`/`offset` 分页，按返回的 `nextOffset` 继续；`get` 按 `id` 读取执行结果、自检记录及待处理问题。查询直接复用工单数据库，不触发执行或审批，不读取其他会话或渠道的工单。
 
 ## 书面规则准入
 
@@ -45,11 +45,13 @@ Router 通过只读工具 `assistant_tickets` 查询当前桌面对话所属工�
 
 此能力已通过本地配置/UI/Router/Worker 回归；真实飞书端到端验收仍未完成。
 
-## 重新验收
+## 自检与直接交付
 
 接单研判按线程独立推进，慢线程不阻塞其他线程；同线程仍保持单批次和租约。辅助模型的“研判与复盘”用途覆盖接单研判，保留只读原文工具，未勾选时跟随主模型。Router 兼顾正常聊天、直接回答与总调度，所有网页、文件和命令等环境操作从第一次即自动委派 Worker；普通派工不额外询问建单许可，实际受控动作仍复验授权。官方 Schedule 四工具已接入助手作用域，定时协调不创建即时执行工单。
 
-资源页工单的当前结果为“待确认”、验收结论为 `wait` 时，可点击“重新验收”。它锁定并核验原执行日志和产物，补入已有真实工具证据，只重做验收，不重新执行任务；结果版本、授权或证据变化时明确拒绝。验收输入完全未变化时保留原结论并提示补证，不重复消耗模型或投递；预算等待可在调整预算后重试。停用插件会等待在途验收释放会话写锁后再关闭存储。
+原 Worker 使用 `assistant_task_result` 保存自检摘要及完成/结构性失败记录，不新增自检 Agent 或内容评分模型。原结果、证据与 outbox 原子登记，执行结束与送达关单分别记账。工单详情展示原结果、自检、失败原因及投递状态，不提供内容核验按钮。宿主仅检查归属、有效执行身份、当前要求编号和记录结构；不评价正文质量。
+
+旧内容 Review 的待发消息及续做任务一次性作废，历史结果、证据和已送达记录保留。未送达的旧结论保持等待并说明旧流程已停用，不自动补审、重发或重跑；用户明确继续后按当前授权与要求处理。后台记忆/技能整理队列与此不同，仍保留，且只消费已关工单。
 
 ## 自建技能
 

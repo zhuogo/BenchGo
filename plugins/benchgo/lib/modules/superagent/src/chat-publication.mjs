@@ -119,7 +119,7 @@ export function projectChatMessages(events) {
 export function installChatPublication(scope, agent, { onPublish, appendRecord = appendPluginRecord } = {}) {
   scope.tools.register({
     name: 'assistant_reply',
-    description: 'Publish your conversational reply to the user and end the current turn. Use for chatting, answering, clarifying or responding naturally after successful delegation. Choose your own wording to fit the conversation. A normal completed text answer is also delivered automatically. Delegated task results are delivered separately after review. Do not repeat an already published reply. This does not grant approval or perform external actions.',
+    description: 'Publish your conversational reply to the user and end the current turn. Use for chatting, answering, clarifying or responding naturally after successful delegation. Choose your own wording to fit the conversation. A normal completed text answer is also delivered automatically. Worker results are delivered separately after the Worker completes its own quick checks. Do not repeat an already published reply. This does not grant approval or perform external actions.',
     parameters: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 16000 } }, required: ['text'], additionalProperties: false },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute({ text }, execution) {

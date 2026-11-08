@@ -455,7 +455,7 @@ export async function mountAssistant(ctx, commander, providers) {
       name, description, parameters: { type: 'object', properties, required, additionalProperties: false }, output,
       async execute(args, exec) { exec.signal?.throwIfAborted(); return execute(args, exec); },
     });
-    register('assistant_tickets', 'Read durable task tickets owned by this desktop conversation. list returns summaries filtered by status/projectId; follow nextOffset for more. get requires id and returns execution results, review verdicts (passed/failed/wait/rework) and pending questions. rework is internal correction, not completion or extra authorization. Other conversations and channels are excluded. Read only; never starts or changes work.', {
+    register('assistant_tickets', 'Read durable task tickets owned by this desktop conversation. list returns summaries filtered by status/projectId; follow nextOffset for more. get requires id and returns saved execution results, lightweight self-check records and pending questions. Default delivery does not read or review result content; read it only to answer an explicit user follow-up. For a Ticket question card, use the exact Attention.id as the ask_user_question question id and preserve its question and option labels. Other conversations and channels are excluded. Read only; never starts or changes work.', {
       op: { type: 'string', enum: ['list', 'get'] }, id: string, status: string, projectId: string,
       limit: { type: 'integer', minimum: 1, maximum: 100 }, offset: { type: 'integer', minimum: 0 },
     }, [], async ({ op = 'list', id, ...filters }, exec) => {
@@ -552,7 +552,7 @@ export async function mountAssistant(ctx, commander, providers) {
       if (op === 'budget') return store.review.budget();
       return store.review.list(args);
     });
-    register('assistant_goals', 'Read or create a persistent goal only when the user explicitly asks for continuing work. Creation requires a stable goal.requestId and human approval. Every leaf requires explicit provider/model IDs and durable Tickets. Goals have no budget or quota; request and token usage is recorded for display only. Scope is unsupported. Completion requires current-version review evidence. Goals are available in Resources.', { op: { type: 'string', enum: ['list', 'get', 'create', 'advance'] }, id: string, goal: object }, [], async ({ op = 'list', id, goal }, exec) => {
+    register('assistant_goals', 'Read or create a persistent goal only when the user explicitly asks for continuing work. Creation requires a stable goal.requestId and human approval. Every leaf requires explicit provider/model IDs and durable Tickets. Goals have no budget or quota; request and token usage is recorded for display only. Scope is unsupported. Completion requires current-version Worker self-check evidence and confirmed delivery. Goals are available in Resources.', { op: { type: 'string', enum: ['list', 'get', 'create', 'advance'] }, id: string, goal: object }, [], async ({ op = 'list', id, goal }, exec) => {
       if (exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可操作持续目标');
       const ownerSessionId = ownerAgent.id;
       if (op === 'list') return { goals: scheduler.goals().filter(row => row.ownerSessionId === ownerSessionId) };
@@ -741,13 +741,7 @@ export async function mountAssistant(ctx, commander, providers) {
       case 'evaluationDispose': return evaluations.dispose({ ...input, action: input.disposition }, { kind: 'human', actorId: peer?.principal?.deviceId ? `device:${peer.principal.deviceId}` : 'desktop-owner' });
       case 'ticketStop': return store.orchestration.cancelTicket(input.ticketId);
       case 'ticketPause': return store.orchestration.pauseTicket(input.ticketId);
-      case 'ticketResume': {
-        const ticket = store.orchestration.getTicket(input.ticketId);
-        const result = store.orchestration.results(input.ticketId).at(-1);
-        if (ticket?.status === 'waiting' && (result?.review?.waitKind === 'continuation_wait' || ticket.continuationWait)) return orchestrationRuntime.resumeReviewWork(input.ticketId, input.expectedResultVersion);
-        return store.orchestration.resumeTicket(input.ticketId);
-      }
-      case 'ticketRetryReview': return orchestrationRuntime.retryReview(input.ticketId, { expectedResultVersion: input.expectedResultVersion });
+      case 'ticketResume': return store.orchestration.resumeTicket(input.ticketId);
       case 'ticketAnswer': return store.orchestration.answerDesktopAttention(input);
       case 'ticketChange': {
         const original = JSON.stringify(input), ownerAgent = await engine.ensureSession({ threadId });
@@ -766,17 +760,14 @@ export async function mountAssistant(ctx, commander, providers) {
           if (!ticket || ticket.mandate.source?.channel !== 'desktop' || (ticket.mandate.source.threadId || 'main') !== threadId) return event;
           const result = store.orchestration.results(ticket.id).findLast(item => item.version === ticket.resultVersion
             && (item.instructionRevision ?? 1) === ticket.instructionRevision);
-          const review = result?.review;
           const currentResult = result ? { version: result.version, instructionRevision: result.instructionRevision ?? 1,
-            ...(review ? { review: { verdict: review.verdict, waitKind: review.waitKind, reason: review.reason,
-              retryAt: review.retryAt, continuationWait: review.continuationWait } } : {}) } : null;
+            outcome: result.outcome, selfCheck: result.selfCheck } : null;
           const attentions = store.orchestration.attentions(ticket.id).map(item => ({ ...item,
             instructionRevision: item.instructionRevision ?? store.orchestration.getAssignment(item.assignmentId)?.instructionRevision ?? 1 }));
           const currentAttention = ['open', 'waiting'].includes(ticket.status) ? attentions.find(item => item.state === 'waiting'
-            && !item.answerTriggerId && item.instructionRevision === ticket.instructionRevision
-            && (item.origin !== 'review' || item.resultVersion === ticket.resultVersion)) || null : null;
+            && !item.answerTriggerId && item.instructionRevision === ticket.instructionRevision) || null : null;
           const current = { ...event, ticketStatus: ticket.status, currentInstructionRevision: ticket.instructionRevision,
-            currentResultVersion: ticket.resultVersion, continuationWait: ticket.continuationWait,
+            currentResultVersion: ticket.resultVersion,
             currentResult, currentAttention, currentPauseReason: ticket.pauseReason || null };
           if (event.type !== 'ticket.attention' || !event.attentionId) return current;
           const attention = attentions.find(item => item.id === event.attentionId);

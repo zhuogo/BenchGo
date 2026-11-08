@@ -4,7 +4,7 @@ export function ticketGoalRecord(database, ticketId) {
   if (!ticket) return null;
   const latest = database.results(ticketId).at(-1);
   // Only the current committed result may satisfy a Goal. Do not search older
-  // successful versions after a newer review or requirements change.
+  // successful versions after a requirements change.
   const current = latest?.ticketId === ticket.id
     && latest.version === ticket.resultVersion
     && latest.instructionRevision === ticket.instructionRevision ? latest : null;
@@ -15,7 +15,7 @@ export function ticketGoalRecord(database, ticketId) {
     kind: 'ticket',
     status: blocked ? 'waiting' : ticket.status === 'open' ? 'running' : ticket.status,
     instructionRevision: ticket.instructionRevision,
-    result: current ? { ...current, acceptanceVerdict: current.review?.verdict } : null,
+    result: current,
     waitReason: ticket.status === 'cancelling' ? 'cancellation' : blocked || ticket.status === 'waiting' ? 'external' : undefined,
   };
 }

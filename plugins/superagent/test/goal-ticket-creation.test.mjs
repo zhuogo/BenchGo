@@ -8,6 +8,16 @@ import { createAssistantScheduler } from '../src/scheduler.mjs';
 import { createDesktopDelegationService } from '../src/desktop-delegation-service.mjs';
 import { createGoalTickets } from '../src/goal-ticket-creation.mjs';
 import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
+import { commitWorkerResult } from '../src/result-commit.mjs';
+
+function commitAndDeliver(database, ticket) {
+  const saved = commitWorkerResult({ database, ticket, uniqueKey: `result:${ticket.id}`, result: {
+    outcome: 'completed', summary: '原文结果', selfCheck: { summary: '已检查当前要求和执行结果' }, evidenceRefs: [],
+  } });
+  const delivery = database.claimOutbox('goal-test').find(row => row.id === saved.outbox.id);
+  assert.ok(delivery);
+  database.finishOutbox(delivery.id, { owner: 'goal-test', sent: true, receipt: { status: 'accepted', messageId: `sent:${ticket.id}` } });
+}
 
 for (const budgeted of [false, true]) test(`Ticket goal survives partial creation and restart without duplicate dispatch or changed retry (aggregateInterrupted=${budgeted})`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-goal-tickets-'));
@@ -87,12 +97,17 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
   assert.equal((await scheduler.updateGoal(parent.id, { status: 'active' }, { rowVersion: paused.rowVersion })).status, 'active');
   assert.ok(database.listTickets().every(ticket => ticket.status === 'open'));
 
-  for (const ticket of database.listTickets()) database.commitResult(ticket.id, { uniqueKey: `result:${ticket.id}`, result: { review: { verdict: 'passed' }, evidenceRefs: [{ sessionId: 'worker' }] } });
+  for (const ticket of database.listTickets()) commitWorkerResult({ database, ticket, uniqueKey: `result:${ticket.id}`, result: {
+    outcome: 'completed', summary: '原文结果', selfCheck: { summary: '已检查当前要求和执行结果' }, evidenceRefs: [],
+  } });
+  assert.equal((await scheduler.advanceGoal(parent.id)).status, 'waiting', 'result persistence alone cannot complete a Goal');
+  for (const delivery of database.claimOutbox('goal-test')) database.finishOutbox(delivery.id, { owner: 'goal-test', sent: true,
+    receipt: { status: 'accepted', messageId: `sent:${delivery.ticketId}` } });
   assert.equal((await scheduler.advanceGoal(parent.id)).status, 'completed');
   assert.equal(database.listTickets().length, 2);
 });
 
-test('a changed Ticket cannot complete the original Goal even after passing its new review', async t => {
+test('a changed Ticket cannot complete the original Goal even after delivering its new result', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-goal-revision-'));
   const database = createAssistantOrchestrationStore({ directory });
   const store = { orchestration: database, paths: { database: join(directory, 'assistant.db') } };
@@ -107,7 +122,7 @@ test('a changed Ticket cannot complete the original Goal even after passing its 
   const goal = await scheduler.createGoal({ requestId: 'goal', ownerSessionId: 'owner', objective: 'original objective', projectId: 'project', provider: 'provider', model: 'exact', text: ticket.target, acceptance: ticket.acceptance }, { ticketId: ticket.id });
   assert.equal(goal.ticketRevisions[ticket.id], 1);
   database.updateTicket(ticket.id, { target: 'different work' }, { expectedInstructionRevision: 1 });
-  database.commitResult(ticket.id, { instructionRevision: 2, uniqueKey: 'changed-result', result: { review: { verdict: 'passed' }, evidenceRefs: [{ sessionId: 'worker' }] } });
+  commitAndDeliver(database, database.getTicket(ticket.id));
   const checked = await scheduler.advanceGoal(goal.id);
   assert.equal(checked.status, 'waiting');
   assert.equal(checked.waitReason, 'requirements');

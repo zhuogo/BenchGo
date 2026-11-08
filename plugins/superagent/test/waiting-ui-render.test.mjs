@@ -24,6 +24,7 @@ async function fixture() {
       import { QuietChat } from './plugins/superagent/client/quiet-chat.jsx';
       import { AssistantConversation } from './plugins/superagent/client/conversation.jsx';
       import { AssistantHome } from './plugins/superagent/client/home.jsx';
+      import { Evaluations } from './plugins/superagent/client/evaluations.jsx';
       import css from './plugins/superagent/client/style.css';
       const root = createRoot(document.getElementById('root')); let serial = 0;
       window.renderScenario = (surface, state='data', overrides={}) => {
@@ -31,7 +32,7 @@ async function fixture() {
         const control=window.control={state,fail:false};
         const ticket={id:'original',title:'核验工作结果',target:'核验工作结果',status:'waiting',instructionRevision:2,resultVersion:3,
           mandate:{source:{channel:'desktop'}}, createdAt:'2026-11-05T10:00:00Z',updatedAt:'2026-11-05T10:02:00Z',
-          results:[{instructionRevision:2,version:3,review:{verdict:'wait',waitKind:'review_wait',reason:'核验服务暂不可用'}}],...overrides};
+          results:[{instructionRevision:2,version:3,summary:'原结果正文',outcome:'completed',selfCheck:{summary:'已按要求自检'}}],...overrides};
         const api=async(name,input)=>{
           window.calls.push([name,input]);
           if(control.state==='loading') return new Promise(()=>{});
@@ -40,6 +41,7 @@ async function fixture() {
           if(name==='goalList') return {goals:[]};
           if(name==='checkpointList') return {checkpoints:[]};
           if(name==='state') return {config:{revision:1,workerConcurrency:2}};
+          if(name==='evaluations') return {candidates:control.state==='empty'?[]:[{id:'audit',threadId:'remote',retryCount:2,intakeEvent:{id:'raw',intakeStage:'pending',content:'原始评估正文\\n完整原始证据',source:{channel:'feishu'}}}]};
           if(name==='ticketResume') return control.blocked ? {queued:false,code:'MANDATE_REVOKED'} : {queued:true};
           return {};
         };
@@ -49,6 +51,7 @@ async function fixture() {
         let content;
         if(surface==='waiting') content=<TicketWaiting api={api} ticket={ticket} onRefresh={refresh} onOpenResources={resources}/>;
         if(surface==='tickets') content=<Tickets api={api} requestedTicket={state==='linked'?{ticketId:'original'}:state==='missing'?{ticketId:'missing'}:undefined} onCreateGoal={()=>window.calls.push(['createGoal'])} onOpenGoals={()=>resources('goals')}/>;
+        if(surface==='evaluations') content=<Evaluations api={api}/>;
         if(surface==='chat') {
           const notification={eventId:'wait',threadId:'main',ticketId:ticket.id,ticketStatus:ticket.status,currentInstructionRevision:2,currentResultVersion:3,
             currentResult:ticket.results[0],currentAttention:ticket.attentions?.[0],continuationWait:ticket.continuationWait,text:'先前的报告',createdAt:'2026-11-05T10:01:00Z'};
@@ -90,10 +93,11 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     const calls = () => page.evaluate(() => window.calls);
     const button = name => page.getByRole('button', { name, exact: true });
     await scenario('waiting');
-    await button('重试核验').click();
-    assert.deepEqual((await calls()).slice(0, 2), [['ticketRetryReview', { ticketId: 'original', expectedResultVersion: 3 }], ['refresh']]);
+    assert.equal(await button('重试核验').count(), 0);
+    await button('刷新状态').click();
+    assert.deepEqual((await calls()).slice(0, 1), [['refresh']]);
     await page.evaluate(() => window.control.fail = true);
-    await button('重试核验').click();
+    await button('停止工单').click();
     await page.getByRole('alert').waitFor();
     assert.match(await page.getByRole('alert').innerText(), /先刷新状态/);
     // Tickets parked by the execution-time gate removed on 2026-11-06 resume without added time.
@@ -114,7 +118,7 @@ test('real waiting controls and chat/ticket connection states remain actionable 
       await button('停止工单').click();
       assert((await calls()).some(([name, input]) => name === 'ticketStop' && input.ticketId === 'original'));
     }
-    const question = { id: 'question', state: 'waiting', origin: 'review', instructionRevision: 2, resultVersion: 3,
+    const question = { id: 'question', state: 'waiting', origin: 'worker', instructionRevision: 2, resultVersion: 3,
       question: { question: '请选择本次范围', options: [{ label: '全部' }] } };
     await scenario('chat', 'data', { attentions: [question] });
     await page.getByRole('radio', { name: '全部' }).check();
@@ -158,14 +162,36 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     await page.locator('.ba-task-list').getByText('核验工作结果', { exact: true }).click();
     await page.getByRole('dialog').waitFor();
     assert.equal(await page.getByRole('dialog').getByRole('button', { name: '停止工单', exact: true }).count(), 1);
-    await button('重试核验').click();
-    assert((await calls()).some(([name, input]) => name === 'ticketRetryReview' && input.expectedResultVersion === 3));
+    assert.equal(await button('重试核验').count(), 0);
+    assert(await button('刷新状态').isVisible());
     await scenario('tickets', 'linked');
     await page.getByRole('dialog').waitFor();
     assert.equal(await page.getByRole('dialog').getByRole('heading', { name: '核验工作结果', exact: true }).count(), 1);
     await scenario('tickets', 'missing');
     await page.getByText('关联工单暂不可用', { exact: true }).waitFor();
     assert(await button('重新读取').isVisible());
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('intake audit evaluations render loading, empty, error and original data at desktop and mobile widths', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html = await fixture(), browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    const page = await browser.newPage(), errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort());
+    await page.goto('http://localhost/');
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const [state, label] of [['loading', '正在读取评估'], ['empty', '暂无待处置评估'], ['error', '评估暂时无法读取'], ['data', '原始评估正文']]) {
+        await page.evaluate(state => window.renderScenario('evaluations', state), state);
+        await page.getByText(label, { exact: true }).waitFor();
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+      }
+      await page.getByText('原始评估正文', { exact: true }).click();
+      await page.getByRole('dialog').getByText(/完整原始证据/).waitFor();
+      assert.match(await page.getByRole('dialog').innerText(), /feishu/);
+    }
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

@@ -263,7 +263,7 @@
     "/api/commander/assistant": {
       "post": {
         "summary": "SuperAgent 主聊天、旁聊、配置、记忆与任务操作",
-        "description": "BenchGo SuperAgent owner 通道。Router 兼任对话助手与总调度，负责自然聊天、回答、协调和自动委派，无网页、文件、shell 探索权限。当前明确人类请求授权普通派工，无额外 Ticket 审批；实际副作用保留原授权门禁。send 持久接收并按会话分诊，history.requests 可查询处理状态。桌面派工成功后由当前 Router 自然回复；显式人类渠道请求的接单正文复用同次研判 replyText，通过 ticket.accepted 持久投递，无固定文案兜底。任务结果验收后回原来源。辅助 review 控制研判与成果验收，不额外限制 Worker 并发。models 为 Router 首选与备用；workerModels 为 Worker 独立队列，缺省或空数组继承 Router；auxiliary 仅对启用用途使用，失败回 Router。显式模型选择优先，providerId/modelId 原样保存。directReplyReconcile/outboxReconcile 仅已认证 owner 可调用，核实 uncertain 投递，不重放执行。",
+        "description": "Trusted same-origin authenticated owner peer endpoint. Router handles dialogue and delegation; Workers self-check and commit results to the original source. Router does not review content. Background memory review remains independent. Explicit providerId/modelId values are opaque and preserved. Send receipts do not imply task completion; uncertain deliveries require authenticated owner reconciliation without replay.",
         "requestBody": {
           "required": true,
           "content": {
@@ -743,7 +743,7 @@
               },
               "ticketAnswer": {
                 "type": "object",
-                "description": "回答明确 attentionId 对应的原问题，需 ticketId/instructionRevision/requestId/answer；Review Attention 同时校验当前结果版本。仅信息、权限、范围问题建立 Attention，内部核验不要求用户回答。答复持久关联原单并在原 Assignment/Run/session 续做，不扩大授权。",
+                "description": "回答明确 attentionId 对应的原问题，需 ticketId/instructionRevision/requestId/answer。仅信息、权限、范围问题建立 Attention；答复关联原单并在原 Assignment/Run/session 续做，不扩大授权。",
                 "additionalProperties": true
               },
               "ticketPause": {
@@ -760,14 +760,9 @@
                 "$ref": "#/components/schemas/AssistantTicket",
                 "description": "终态工单的 revise/reopen/adjustment 均创建关联新单；adjustmentOfTicketId 指向原单，新单 instructionRevision=1/resultVersion=0。原 completed 状态与结果保留；进行中仅允许 revise。"
               },
-              "ticketRetryReview": {
-                "type": "object",
-                "description": "只锁定并复核原执行证据，不是补做入口。内部 review_wait 由系统按持久退避重核；blocked 必须回答原 Attention。failed/rework 自然说明原因并恢复原 Assignment/Run/session/工作区，不以固定次数终单；无进展或额度不足保留可恢复等待。旧 open/uncertain 且 resultVersion=0 可用 expectedResultVersion=0 核实原执行，不重放未知动作。toolEvidence 截断不代表缺证据，按需分页读取。unchanged=true 仅为去重，不代表任务继续或完成。",
-                "additionalProperties": true
-              },
               "tickets": {
                 "type": "object",
-                "description": "工单及结果记录。独立 title 最多10个Unicode字符，target/acceptance保留完整任务要求。review.verdict 为 passed/failed/wait/rework，failed/rework 仅表示本轮结果未通过；内部待核验为 review_wait，真实缺用户决定为 blocked+Attention，资源/无进展保留 continuationWait。系统故障 publication.origin=system 与 AI 正文分开。普通选项和信息答复不能替代动作审批。",
+                "description": "工单及结果记录。独立 title 最多10个Unicode字符，target/acceptance保留完整任务要求。Worker 自校验后提交结果，真实缺用户决定为 blocked+Attention。系统故障 publication.origin=system 与 AI 正文分开。普通信息答复不能替代动作审批。",
                 "additionalProperties": true,
                 "properties": {
                   "tickets": {
@@ -2007,7 +2002,6 @@
               "ticketChange",
               "ticketPause",
               "ticketResume",
-              "ticketRetryReview",
               "ticketStop",
               "tickets",
               "notificationOption",
@@ -3680,7 +3674,6 @@
         "properties": {
           "state": {
             "enum": [
-              "review_wait",
               "delivery_wait",
               "budget_wait",
               "continuation_wait",
@@ -3897,46 +3890,26 @@
             "type": "integer",
             "minimum": 1
           },
-          "review": {
+          "selfCheck": {
             "type": "object",
+            "required": [
+              "summary"
+            ],
             "properties": {
-              "verdict": {
-                "enum": [
-                  "passed",
-                  "failed",
-                  "wait",
-                  "rework"
-                ]
-              },
-              "waitKind": {
-                "enum": [
-                  "review_wait",
-                  "blocked",
-                  "continuation_wait"
-                ]
-              },
-              "reason": {
-                "type": "string"
-              },
-              "retryAt": {
-                "type": [
-                  "string",
-                  "number",
-                  "null"
-                ]
-              },
-              "continuationWait": {
-                "type": [
-                  "object",
-                  "null"
-                ],
-                "additionalProperties": true
+              "summary": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "additionalProperties": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": true,
+        "not": {
+          "required": [
+            "review"
+          ]
+        }
       },
       "AssistantAttention": {
         "type": "object",
@@ -3992,8 +3965,7 @@
           },
           "origin": {
             "enum": [
-              "worker",
-              "review"
+              "worker"
             ]
           },
           "instructionRevision": {

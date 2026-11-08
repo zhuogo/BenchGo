@@ -8,7 +8,7 @@ test('board projects current execution and wait fences instead of display comple
   assert.equal(ticketLane({ status: 'open', assignments: [{ state: 'claimed' }] }), 'running');
   assert.equal(ticketLane({ status: 'waiting', attentions: [{ state: 'waiting', instructionRevision: 1 }] }), 'attention');
   assert.equal(ticketLane({ status: 'waiting', resultVersion: 3, continuationWait: { sourceResultVersion: 3, code: 'EXECUTION_EFFECTS_UNKNOWN' } }), 'attention');
-  assert.equal(ticketLane({ status: 'waiting', results: [{ review: { verdict: 'wait' } }] }), 'running');
+  assert.equal(ticketLane({ status: 'waiting', results: [{ outcome: 'completed' }] }), 'attention');
   for (const status of ['completed', 'failed', 'cancelled', 'closed']) assert.equal(ticketLane({ status }), 'finished');
   for (const status of ['paused', 'uncertain', 'blocked', 'future-state']) assert.equal(ticketLane({ status }), 'attention');
 });

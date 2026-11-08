@@ -1,23 +1,9 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import { executionEffects } from '../src/execution-effects.mjs';
-import { reviewInputHash } from '../src/review-input.mjs';
 
 const call = (id, name) => ({ type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id, name, arguments: '{}' }] } } });
 const result = (id, code) => ({ type: 'tool/result', data: { message: { toolCallId: id, content: [], ...(code ? { isError: true } : {}) }, ...(code ? { error: { code } } : {}) } });
-
-test('review fingerprint invalidates verdicts cached before instruction priority changed', () => {
-  const ticket = { target: 'task', acceptance: 'check', instructionRevision: 1, mandate: {} };
-  const evidence = { summary: 'same summary' };
-  const fingerprint = (reviewProtocol) => createHash('sha256').update(JSON.stringify({
-    reviewProtocol, target: ticket.target, acceptance: ticket.acceptance,
-    instructionRevision: ticket.instructionRevision, mandate: ticket.mandate, evidence,
-  })).digest('hex');
-  const current = reviewInputHash({ ticket, result: evidence });
-  assert.equal(current, fingerprint(6));
-  assert.notEqual(current, fingerprint(5));
-});
 
 test('effect analysis includes missing/error outcomes across all turns without assuming later success resolved them', () => {
   const observed = executionEffects({ events: [
@@ -53,13 +39,4 @@ test('nested dispatch uncertainty survives a successful composite tool result', 
     result('outer'),
   ] });
   assert.deepEqual(observed, { effectsVerified: false, unknownCallIds: ['sub-missing', 'sub-error'] });
-});
-
-test('review fingerprint includes host-observed effect safety independently of Worker summary', () => {
-  const input = { ticket: { target: 'task', acceptance: 'check', instructionRevision: 1, mandate: {} }, result: { summary: 'same summary' } };
-  const legacy = reviewInputHash(input);
-  const verified = reviewInputHash({ ...input, result: { ...input.result, executionEffects: { effectsVerified: true, unknownCallIds: [] } } });
-  const unknown = reviewInputHash({ ...input, result: { ...input.result, executionEffects: { effectsVerified: false, unknownCallIds: ['send'] } } });
-  assert.notEqual(legacy, verified);
-  assert.notEqual(verified, unknown);
 });
