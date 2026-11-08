@@ -27,6 +27,7 @@ import { Goals } from './goals.jsx';
 import { Tickets } from './tickets.jsx';
 import { ActionPermissions } from './action-permissions.jsx';
 import { registerExecutionSessionRows, openExecutionSession } from './execution-session.jsx';
+import { registerExecutionSessionDiscovery } from './execution-session-navigation.mjs';
 import { registerChannelSessionRows } from './channel-session.jsx';
 import { ActivityPanel, ActivityProvider } from './activity-panel.jsx';
 import { Evaluations } from './evaluations.jsx';
@@ -492,7 +493,9 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
 }
 export function mountAssistant(ctx) {
   mountAssistantConversation(ctx);
-  registerExecutionSessionRows(ctx, async signal => (await api('executionSessions', {}, signal)).sessions || []);
+  const loadExecutionSessions = async signal => (await api('executionSessions', {}, signal)).sessions || [];
+  registerExecutionSessionDiscovery(ctx, loadExecutionSessions);
+  registerExecutionSessionRows(ctx, loadExecutionSessions);
   registerChannelSessionRows(ctx);
   ctx.effect(() => () => {
     if (ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL) ctx.layout.selectPanel(null);
