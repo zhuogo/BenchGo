@@ -102,8 +102,10 @@ export async function requestInterruptedContinuation({ ctx, database, assignment
       return { state: 'queued', assignment: result };
     } finally { await handle.close(); }
   } catch (error) {
-    if (!inspectOnly && !signal.aborted && !['CONTINUATION_LIMIT', 'CONTINUATION_BACKOFF'].includes(error?.code)) {
-      database.recordInterruptedContinuationFailure(assignmentId, { fence, instructionRevision, automatic, code: error?.code, now });
+    const timedOut = signal.aborted && signal.reason?.name === 'TimeoutError';
+    if (!inspectOnly && (!signal.aborted || timedOut) && !['CONTINUATION_LIMIT', 'CONTINUATION_BACKOFF'].includes(error?.code)) {
+      database.recordInterruptedContinuationFailure(assignmentId, { fence, instructionRevision, automatic,
+        code: timedOut ? 'TIMEOUT' : error?.code, now });
     }
     throw error;
   }

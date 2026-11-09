@@ -309,3 +309,30 @@ for (const intervention of ['revoked', 'revision', 'paused', 'stopped']) test(`u
   await assert.rejects(requestInterruptedContinuation(f.input));
   assert.equal(f.database.runs(f.assignment.id)[0].interruptedRecoveries, undefined);
 });
+
+test('automatic inspection timeouts consume the same bounded budget while shutdown abort does not', async t => {
+  const f = await fixture(t), at = Date.now() + 100;
+  const open = f.ctx.sessionPersistence.open;
+  f.ctx.sessionPersistence.open = async (...args) => {
+    const handle = await open(...args), signal = args[2].signal;
+    return { ...handle, async read() { await new Promise(resolve => setTimeout(resolve, 15)); signal.throwIfAborted(); } };
+  };
+  for (const now of [at, at + 30000]) {
+    await assert.rejects(requestInterruptedContinuation({ ...f.input, now, signal: AbortSignal.timeout(5) }), { name: 'TimeoutError' });
+  }
+  const run = f.database.runs(f.assignment.id)[0];
+  assert.equal(run.interruptedRecoveries.length, 2);
+  assert.ok(run.interruptedRecoveries.every(row => row.queued === false && row.code === 'TIMEOUT'));
+  assert.equal(executionRecoverySignal(f.database, f.database.getTicket(f.ticket.id)).phase, 'escalated');
+  assert.equal(f.database.getAssignment(f.assignment.id).state, 'uncertain');
+  await assert.rejects(requestInterruptedContinuation({ ...f.input, now: at + 60000 }), { code: 'CONTINUATION_LIMIT' });
+
+  const shutdown = await fixture(t), controller = new AbortController();
+  const shutdownOpen = shutdown.ctx.sessionPersistence.open;
+  shutdown.ctx.sessionPersistence.open = async (...args) => {
+    const handle = await shutdownOpen(...args);
+    return { ...handle, async read() { controller.abort(); controller.signal.throwIfAborted(); } };
+  };
+  await assert.rejects(requestInterruptedContinuation({ ...shutdown.input, signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(shutdown.database.runs(shutdown.assignment.id)[0].interruptedRecoveries, undefined);
+});

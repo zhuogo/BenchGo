@@ -2,7 +2,7 @@ import { interruptedContinuationPolicy } from './interrupted-continuation-policy
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const inspectionCodes = new Set(['VERIFIED_INTERRUPTED', 'VERIFIED_COMPLETED', 'VERIFIED_PAUSED', 'EVIDENCE_MISMATCH', 'EXECUTION_EFFECTS_UNKNOWN',
   'SESSION_UNAVAILABLE', 'SESSION_STILL_LIVE', 'WORKER_MODEL_ROUTE', 'CHECKPOINT_UNCERTAIN', 'CHECKPOINT_RESTORED',
-  'EXECUTION_PAUSE_UNVERIFIED', 'FENCING_CONFLICT', 'INSTRUCTION_REVISION_CONFLICT', 'MANDATE_REVOKED', 'EVIDENCE_UNVERIFIED']);
+  'EXECUTION_PAUSE_UNVERIFIED', 'FENCING_CONFLICT', 'INSTRUCTION_REVISION_CONFLICT', 'MANDATE_REVOKED', 'EVIDENCE_UNVERIFIED', 'TIMEOUT']);
 
 /** BenchGo ledger boundary only; official session ownership is verified by the caller. */
 export function installInterruptedContinuationStore({ db, tx, api }) {
