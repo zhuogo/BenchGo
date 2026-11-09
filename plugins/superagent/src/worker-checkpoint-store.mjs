@@ -53,27 +53,33 @@ export function createWorkerCheckpointStore({ directory, onObservation, onObserv
     const actual = await realpath(directory);
     if (actual === root || inside(actual, root)) throw new Error('Checkpoint storage must be outside the workspace');
     const files = Object.create(null); let count = 0, total = 0;
-    async function walk(path, prefix = '') {
+    const sameStat = (before, after) => ['ino', 'dev', 'size', 'mode', 'nlink', 'ctimeMs', 'mtimeMs'].every(key => before[key] === after[key]);
+    async function walk(path, prefix, before) {
+      if (!before.isDirectory() || before.isSymbolicLink()) throw fail('CHECKPOINT_UNSAFE_PATH', 'Checkpoint requires a real directory');
       for (const name of (await readdir(path)).sort()) {
         if (ignored(name)) continue;
         const file = join(path, name), key = prefix ? `${prefix}/${name}` : name, stat = await lstat(file);
         if (++count > maxFiles) throw fail('CHECKPOINT_LIMIT', 'Checkpoint file limit exceeded');
         if (stat.isSymbolicLink()) throw fail('CHECKPOINT_UNSAFE_PATH', 'Checkpoint cannot follow symbolic links');
-        if (stat.isDirectory()) { await walk(file, key); continue; }
+        if (stat.isDirectory()) { await walk(file, key, stat); continue; }
         if (!stat.isFile() || stat.nlink > 1) throw fail('CHECKPOINT_UNSAFE_PATH', 'Checkpoint requires regular, unlinked files');
         total += stat.size;
         if (stat.size > maxFileBytes || total > maxBytes) throw fail('CHECKPOINT_LIMIT', 'Checkpoint byte limit exceeded');
         const handle = await open(file, 'r');
         try {
           const opened = await handle.stat();
-          if (opened.ino !== stat.ino || opened.dev !== stat.dev || !opened.isFile()) throw new Error('Workspace changed while checkpointing');
+          if (!opened.isFile() || !sameStat(stat, opened)) throw fail('CHECKPOINT_CHANGED', 'Workspace changed while checkpointing');
           const bytes = await handle.readFile(), after = await handle.stat();
-          if (bytes.length !== stat.size || opened.ctimeMs !== after.ctimeMs || opened.mtimeMs !== after.mtimeMs) throw new Error('Workspace changed while checkpointing');
+          if (bytes.length !== stat.size || !after.isFile() || !sameStat(opened, after)) throw fail('CHECKPOINT_CHANGED', 'Workspace changed while checkpointing');
           files[key] = { hash: hash(bytes), mode: stat.mode & 0o777, size: bytes.length, ...(persist ? { blob: await blob(bytes) } : {}) };
         } finally { await handle.close(); }
       }
+      // Detect names added/removed or directory replacement during this same
+      // traversal; a partial manifest must never become complete evidence.
+      const after = await lstat(path);
+      if (!after.isDirectory() || after.isSymbolicLink() || !sameStat(before, after)) throw fail('CHECKPOINT_CHANGED', 'Workspace changed while checkpointing');
     }
-    await walk(actual);
+    await walk(actual, '', info);
     return { directory: actual, files };
   }
   const comparable = file => file ? { hash: file.hash, mode: file.mode, size: file.size } : null;
