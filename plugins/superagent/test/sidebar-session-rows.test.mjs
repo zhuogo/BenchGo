@@ -9,7 +9,8 @@ const { transformSync } = require('esbuild');
 const slots = ['sidebar.session.row.trailing', 'benchgo.sidebar.session.row.trailing'];
 
 function fixture(file) {
-  const effects = [], subscriptions = [], registrations = [], removed = [], timers = [];
+  const effects = [], subscriptions = [], registrations = [], removed = [], timers = [], eventDefinitions = [], removedEvents = [];
+  const scopeCleanups = [];
   const react = {
     createElement: (type, props, ...children) => ({ type, props, children }),
     useSyncExternalStore: (subscribe, snapshot) => { subscriptions.push(subscribe(() => {})); return snapshot(); },
@@ -21,12 +22,18 @@ function fixture(file) {
     require: name => name === 'react' ? react : {},
     setInterval: callback => { timers.push(callback); return timers.length; }, clearInterval: id => { timers[id - 1] = null; },
   });
-  const ctx = { effect: setup => { effects.push(setup); }, slots: {
+  const ctx = { effect: setup => {
+    const cleanup = setup(); let disposed = false;
+    const dispose = () => { if (!disposed) { disposed = true; cleanup(); } };
+    scopeCleanups.push(dispose); return dispose;
+  }, uiConversation: { events: {
+    register: definition => { eventDefinitions.push(definition); return () => removedEvents.push(definition); },
+  } }, slots: {
     inject: (name, setup) => { setup(); return () => removed.push(name); },
     register: (options, component) => { registrations.push({ ...options, component }); return () => {}; },
   } };
-  return { api: module.exports, ctx, effects, timers, registrations, removed,
-    dispose: () => { for (const cleanup of subscriptions) cleanup(); } };
+  return { api: module.exports, ctx, effects, timers, registrations, removed, eventDefinitions, removedEvents,
+    dispose: () => { for (const cleanup of subscriptions) cleanup(); for (const cleanup of scopeCleanups.slice().reverse()) cleanup(); } };
 }
 
 test('both sidebar slots share one Ticket component, projection request and polling lifetime', async () => {
@@ -37,7 +44,6 @@ test('both sidebar slots share one Ticket component, projection request and poll
   assert.deepEqual(f.registrations.map(entry => entry.name), slots);
   assert.equal(f.registrations[0].component, f.registrations[1].component);
   assert.equal(f.timers.length, 1);
-  const cleanup = f.effects.shift()();
   for (const entry of f.registrations) assert.equal(entry.component({ sessionId: 'worker' }), null);
   for (const effect of f.effects.splice(0)) effect();
   assert.equal(requests, 1);
@@ -50,7 +56,7 @@ test('both sidebar slots share one Ticket component, projection request and poll
     assert.deepEqual(Array.from(mark.children), ['工单']);
   }
   dispose(); assert.deepEqual(f.removed, slots);
-  f.dispose(); cleanup(); assert.equal(f.timers[0], null);
+  f.dispose(); assert.equal(f.timers[0], null);
 });
 
 test('both sidebar slots share the Channel component and read the official summary projection', () => {
@@ -65,5 +71,8 @@ test('both sidebar slots share the Channel component and read the official summa
     assert.equal(mark.props['aria-label'], '渠道来源：feishu · group');
   }
   assert.equal(f.timers.length, 0);
+  assert.deepEqual(f.eventDefinitions, [f.api.channelMessageDefinition]);
   dispose(); assert.deepEqual(f.removed, slots);
+  assert.deepEqual(f.removedEvents, [f.api.channelMessageDefinition]);
+  f.dispose(); assert.equal(f.removedEvents.length, 1, 'scope disposal must not unregister the event twice');
 });

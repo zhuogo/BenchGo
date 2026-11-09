@@ -65,7 +65,9 @@ async function fixture() {
           const ctx={sessions:{retain(){if(control.state==='error')throw Error('test connection');return {ready:control.state==='loading'?new Promise(()=>{}):Promise.resolve(),release(){window.calls.push(['release']);}}}},uiConversation:{binding(){return {activate:view=>window.calls.push(['activate',view])}}}};
           content=<AssistantConversation ctx={ctx} sessionId='session' SessionProvider={({children})=><>{children}</>} renderSlot={()=><div data-connected=''>聊天已就绪</div>}/>;
         }
-        root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main style={{width:'100%',padding:24}}>{content}</main></div>);
+        const renderId=++serial;
+        root.render(<div className='ba-root' key={renderId} data-fixture-render={renderId}><style>{hostCss}{css}</style><main style={{width:'100%',padding:24}}>{content}</main></div>);
+        return renderId;
       };
     ` },
     bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-waiting-test-output'), format: 'iife', jsx: 'automatic',
@@ -90,10 +92,12 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     page.setDefaultTimeout(5000);
     await page.goto('http://localhost/');
     const scenario = async (surface, state = 'data', overrides = {}) => {
-      await page.evaluate(args => window.renderScenario(...args), [surface, state, overrides]);
+      const renderId = await page.evaluate(args => window.renderScenario(...args), [surface, state, overrides]);
+      await page.locator(`[data-fixture-render="${renderId}"]`).waitFor();
     };
     const calls = () => page.evaluate(() => window.calls);
     const button = name => page.getByRole('button', { name, exact: true });
+    const detail = page.getByRole('region', { name: '任务详情', exact: true });
     await scenario('waiting');
     assert.equal(await button('重试核验').count(), 0);
     await button('刷新记录').click();
@@ -181,7 +185,12 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     assert((await calls()).some(([name, next]) => name === 'resources' && next === 'tasks'));
     await scenario('tickets');
     await page.locator('.ba-task-list').getByText('核验工作结果', { exact: true }).click();
-    await page.getByRole('dialog').getByRole('heading').filter({ hasText: '核验工作结果' }).waitFor();
+    await detail.getByRole('heading').filter({ hasText: '核验工作结果' }).waitFor();
+    assert.equal(await page.getByRole('dialog').count(), 0, 'ticket details remain inside their original container');
+    assert(await detail.evaluate(node => !!node.closest('.ba-tasks')));
+    await detail.getByRole('button', { name: '返回列表', exact: true }).click();
+    await detail.waitFor({ state: 'hidden' });
+    await page.locator('.ba-task-list').getByText('核验工作结果', { exact: true }).waitFor();
     await scenario('chat', 'empty');
     await page.locator('.ba-home').waitFor();
     for (const state of ['loading', 'error', 'data']) {
@@ -209,16 +218,19 @@ test('real waiting controls and chat/ticket connection states remain actionable 
       if (state === 'data' || state === 'error') await page.locator('.ba-task-list').getByText('核验工作结果', { exact: true }).waitFor();
     }
     await page.locator('.ba-task-list').getByText('核验工作结果', { exact: true }).click();
-    await page.getByRole('dialog').waitFor();
-    assert.equal(await page.getByRole('dialog').getByRole('button', { name: '停止工单', exact: true }).count(), 1);
+    await detail.waitFor();
+    assert.equal(await detail.getByRole('button', { name: '停止工单', exact: true }).count(), 1);
     assert.equal(await button('重试核验').count(), 0);
     assert(await button('刷新记录').isVisible());
     await scenario('tickets', 'linked');
-    await page.getByRole('dialog').waitFor();
-    assert.equal(await page.getByRole('dialog').getByRole('heading').filter({ hasText: '核验工作结果' }).count(), 1);
+    await detail.waitFor();
+    assert.equal(await detail.getByRole('heading').filter({ hasText: '核验工作结果' }).count(), 1);
     await scenario('tickets', 'missing');
     await page.getByText('关联工单暂不可用', { exact: true }).waitFor();
-    assert(await button('重新读取').isVisible());
+    const retriesBefore = (await calls()).filter(([name, input]) => name === 'tickets' && input?.ticketId === 'missing').length;
+    await detail.getByRole('button', { name: '重试', exact: true }).click();
+    await page.waitForFunction(before => window.calls.filter(([name, input]) => name === 'tickets' && input?.ticketId === 'missing').length > before, retriesBefore);
+    await detail.getByText('关联工单暂不可用', { exact: true }).waitFor();
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });
