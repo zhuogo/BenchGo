@@ -229,3 +229,23 @@ test('recovery notices refresh queued inspection facts, yield to humans and keep
   assert.match(f.sent[1].content[0].text, /"attempts":1/);
   assert.deepEqual((await f.inbox.state('main')).map(row => row.requestId), ['human-priority']);
 });
+
+test('a delayed retry cannot replay a newer recovery expression that has already settled', async () => {
+  let unavailable = true, f;
+  f = fixture({}, { getAgent: () => unavailable ? undefined : f.agent, ensureSession: async () => {
+    if (unavailable) throw new Error('session startup unavailable');
+    return f.agent;
+  } });
+  const signal = { kind: 'recovery', eventKey: 'recovery:startup', ticketId: 't', phase: 'entered' };
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal }); await f.inbox.settle('main');
+  const original = structuredClone(f.state().requests[0]);
+  assert.equal(original.status, 'failed'); unavailable = false;
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal, retry: true, retryMessageId: original.messageId });
+  await f.inbox.settle('main'); await f.finish();
+  const restored = structuredClone(f.state().requests[0]);
+  assert.equal(restored.status, 'processed'); assert.notEqual(restored.messageId, original.messageId);
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal, retry: true, retryMessageId: original.messageId });
+  await f.inbox.settle('main');
+  assert.equal(f.sent.length, 1); assert.equal(f.state().requests[0].messageId, restored.messageId);
+  assert.equal(f.state().requests[0].attempt, 2);
+});

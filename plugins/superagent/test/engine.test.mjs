@@ -2426,6 +2426,72 @@ test('an internal result expression blocked before processing persistence retrie
   assert.equal(f.requests.length, 1, 'only the Router expression starts; the original Worker is not involved');
 });
 
+async function unstartedRecoveryFixture(t, options = {}) {
+  let clock = Date.now(), injected = false;
+  const f = await stateReportFixture(t, () => text('资料整理中断后的记录已核对，我会在原有范围内继续处理。'), { now: () => clock,
+    beforeStateWrite(patch) {
+      if (!injected && patch.requests?.some(row => row.ticketReply?.kind === 'recovery' && row.status === 'processing')) {
+        injected = true; throw Object.assign(new Error('EPERM: injected recovery startup rename refusal'), { code: 'EPERM' });
+      }
+      options.beforeStateWrite?.(patch);
+    } });
+  if (options.escalated) f.assignment.verificationInspectionAttempts = 6;
+  await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id });
+  let original;
+  for (let i = 0; i < 100; i++) {
+    original = (await f.store.getState()).requests.find(row => row.ticketReply?.kind === 'recovery');
+    if (original?.status === 'failed') break;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal(original.status, 'failed'); assert.equal(original.sessionId, undefined); assert.equal(f.requests.length, 0);
+  return { ...f, original, advance() { clock += 31_000; }, clock: () => clock };
+}
+
+for (const escalated of [false, true]) test(`never-dispatched ${escalated ? 'escalated' : 'entered'} recovery notices resume through the existing cycle backoff exactly once`, async t => {
+  const f = await unstartedRecoveryFixture(t, { escalated });
+  const scheduled = await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id });
+  assert.equal(scheduled.retryAt, f.clock() + 30_000); assert.equal(scheduled.messageId, f.original.messageId);
+  f.advance();
+  await Promise.all([f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id }), f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id })]);
+  for (let i = 0; i < 100 && !f.requests.length; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  await f.agent.whenIdle();
+  for (let i = 0; i < 100 && (await f.store.getState()).requests.find(row => row.requestId === f.original.requestId)?.status === 'processing'; i++)
+    await new Promise(resolve => setTimeout(resolve, 10));
+  const restored = (await f.store.getState()).requests.find(row => row.requestId === f.original.requestId);
+  assert.equal(restored.ticketReply.eventKey, f.original.ticketReply.eventKey);
+  assert.notEqual(restored.messageId, f.original.messageId); assert.equal(restored.attempt, 2);
+  assert.equal(restored.status, 'processed'); assert.equal(f.requests.length, 1);
+  assert.match((await f.engine.history()).messages[0].text, /资料整理/);
+  f.advance(); await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id });
+  assert.equal(f.requests.length, 1, 'an entered recovery turn may have acted and must never replay');
+});
+
+for (const boundary of ['session-identity', 'prepared-record', 'uncertain', 'cancelled']) test(`startup recovery notice never replays across ${boundary}`, async t => {
+  const f = await unstartedRecoveryFixture(t);
+  if (boundary === 'prepared-record') modules[0].appendPluginRecord(f.agent.session, 'plugin:benchgo-plugin/prepared-expression-test', { requestId: f.original.messageId });
+  else await f.store.updateState({ requests: (await f.store.getState()).requests.map(row => row.requestId === f.original.requestId
+    ? { ...row, ...(boundary === 'session-identity' ? { sessionId: f.agent.id } : { status: boundary }) } : row) });
+  f.advance(); await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id });
+  assert.equal(f.requests.length, 0);
+  assert.equal((await f.store.getState()).requests.find(row => row.requestId === f.original.requestId).messageId, f.original.messageId);
+});
+
+for (const change of ['stopped', 'revoked', 'revision', 'fence']) test(`startup recovery retry rechecks ${change} facts after scheduling and before re-entry`, async t => {
+  let f, armed = false;
+  f = await unstartedRecoveryFixture(t, { beforeStateWrite(patch) {
+    if (!armed || !patch.requests?.some(row => row.retryAt !== undefined)) return;
+    armed = false;
+    if (change === 'stopped') f.ticket.status = 'cancelled';
+    else if (change === 'revoked') f.ticket.mandate.policyVersion = 'revoked';
+    else if (change === 'revision') f.ticket.instructionRevision++;
+    else f.assignment.fence++;
+  } });
+  f.advance(); armed = true;
+  await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id });
+  assert.equal(f.requests.length, 0);
+  assert.equal((await f.store.getState()).requests.find(row => row.requestId === f.original.requestId).messageId, f.original.messageId);
+});
+
 for (const boundary of ['prepared-record', 'uncertain', 'cancelled']) test(`missing session identity does not permit expression replay across ${boundary}`, async t => {
   let clock = Date.now(), injected = false;
   const f = await stateReportFixture(t, () => text('MUST NOT RUN'), { workerResult: true, now: () => clock,

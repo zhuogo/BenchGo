@@ -128,7 +128,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
   }
   async function definitelyUnstartedExpression(threadId, row) {
     if (row.status !== 'failed' || row.sessionId || row.suppressed || !row.messageId
-      || !['result', 'state'].includes(row.ticketReply?.kind) || row.message?.id !== row.messageId
+      || !['result', 'state', 'recovery'].includes(row.ticketReply?.kind) || row.message?.id !== row.messageId
       || row.message.source?.kind !== ticketReplySource || row.message.source.eventKey !== row.ticketReply.eventKey) return false;
     // The inbox persists processing+session identity before followup. Legacy
     // failures without that identity also need absence from every original
@@ -147,6 +147,17 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     }
     const current = ((await store.getState()).requests || []).find(item => item.requestId === row.requestId);
     return current?.messageId === row.messageId && current.status === 'failed' && !current.sessionId && !current.suppressed;
+  }
+  async function retryTicketExpression(threadId, row, signal, { allowStarted = false } = {}) {
+    if (row.status !== 'failed' && !(allowStarted && row.status === 'processed' && row.sessionId)
+      || row.sessionId && !allowStarted) return false;
+    const retryAt = row.retryAt ?? Date.parse(row.updatedAt || row.createdAt) + Math.min(300_000, 30_000 * 2 ** Math.min(4, (row.attempt || 1) - 1));
+    if (row.retryAt === undefined) await updateState(state => ({ requests: state.requests.map(item => item.requestId === row.requestId
+      && item.messageId === row.messageId ? { ...item, retryAt } : item) }));
+    if (!(now() >= retryAt) || !(allowStarted && row.sessionId || await definitelyUnstartedExpression(threadId, row))
+      || !await mayReplyToTicket(threadId, row.messageId)) return false;
+    await inbox.enqueueTicketReply({ threadId, signal, retry: true, retryMessageId: row.messageId });
+    return true;
   }
   async function prepareRouterMessage(agent, message, { recovery = false } = {}) {
     const config = await store.getConfig();
@@ -638,7 +649,12 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         || signal.source.channel === 'desktop' && !scope.sessionIds.includes(signal.source.sessionId))
         return { status: 'suppressed', reason: 'conversation-unavailable' };
       const existing = (state.requests || []).find(row => row.requestId === `ticket-reply:${signal.eventKey}`);
-      if (existing && existing.status !== 'queued') return existing;
+      if (existing && existing.status !== 'queued') {
+        // Recovery turns can coordinate execution. Only a mechanically proven
+        // never-dispatched notice may re-enter, using the existing cycle/backoff.
+        await retryTicketExpression(threadId, existing, signal);
+        return ((await store.getState()).requests || []).find(row => row.requestId === existing.requestId);
+      }
       return inbox.enqueueTicketReply({ threadId, signal });
     },
     async notifyApprovalPending(identity) {
@@ -705,15 +721,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       }
       // A settled failed turn has no external effect: retry only expression,
       // under the same event identity. Ambiguous/cancelled turns never replay.
-      if (row.status === 'failed' || row.status === 'processed' && row.sessionId) {
-        const retryAt = row.retryAt ?? Date.parse(row.updatedAt || row.createdAt) + Math.min(300_000, 30_000 * 2 ** Math.min(4, (row.attempt || 1) - 1));
-        if (row.retryAt === undefined) await updateState(state => ({ requests: state.requests.map(item => item.requestId === row.requestId
-          && item.messageId === row.messageId ? { ...item, retryAt } : item) }));
-        if (now() >= retryAt && (row.sessionId || await definitelyUnstartedExpression(threadId, row))) {
-          await inbox.enqueueTicketReply({ threadId, signal, retry: true });
-          return { status: 'pending' };
-        }
-      }
+      if (await retryTicketExpression(threadId, row, signal, { allowStarted: true })) return { status: 'pending' };
       if (['failed', 'cancelled', 'uncertain', 'processed'].includes(row.status)) return { status: 'failed', reason: row.error || 'Router 自然回复尚未完成' };
       return { status: 'pending' };
     },

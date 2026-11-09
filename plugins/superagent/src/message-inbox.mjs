@@ -114,12 +114,13 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
     return operation;
   }
   return {
-    async enqueueTicketReply({ threadId, signal, retry = false }) {
+    async enqueueTicketReply({ threadId, signal, retry = false, retryMessageId }) {
       const requestId = `ticket-reply:${signal.eventKey}`, digest = fingerprint(threadId, signal);
       await updateState(state => {
         const previous = (state.requests || []).find(row => row.requestId === requestId);
         if (previous) {
           if (previous.threadId !== threadId || ticketReplyIdentity(previous.ticketReply) !== ticketReplyIdentity(signal)) throw new Error('工单回复标识冲突');
+          if (retry && retryMessageId !== undefined && previous.messageId !== retryMessageId) return {};
           if (retry && ['failed', 'processed'].includes(previous.status) && !previous.suppressed) {
             const message = createUserMessage({ source: { kind: ticketReplySource, replyKind: signal.kind,
               eventKey: signal.eventKey, ticketId: signal.ticketId }, content: [{ type: 'text', text: ticketReplyInstruction(signal) }] });
