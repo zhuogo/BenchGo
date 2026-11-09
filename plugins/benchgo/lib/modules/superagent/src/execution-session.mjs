@@ -1,4 +1,31 @@
+import { SUPERAGENT_ROLE_PROFILE } from './session-role-assembly.mjs';
 const terminal = new Set(['completed', 'failed', 'cancelled', 'closed']);
+
+/** Cold owned sessions stay owned even before their first assembly audit. */
+export async function readOwnedSessionRole({ store, sessionId, readSession }) {
+  if (typeof sessionId !== 'string' || !sessionId) return null;
+  const database = store.orchestration, saved = database?.getSessionRole?.(sessionId);
+  if (saved) return saved;
+  const state = await store.getState();
+  const thread = state.mainSessionId === sessionId ? 'main' : state.threads?.find(row => row.sessionId === sessionId)?.id
+    ?? Object.entries(state.sessionLineage || {}).find(([, ids]) => ids.includes(sessionId))?.[0];
+  const pending = identity => ({ sessionId, ...identity, expected: { ...SUPERAGENT_ROLE_PROFILE }, actual: null,
+    status: 'pending', reason: { code: 'ROLE_NOT_VERIFIED', message: '自有会话尚未核验实际角色装配' }, updatedAt: null });
+  if (thread) return pending({ role: 'router', threadId: thread });
+  if (!database) return null;
+  const worker = findExecutionSessionOwner(database, sessionId);
+  if (worker) return pending({ role: 'worker', ticketId: worker.ticket.id, assignmentId: worker.assignment.id, runId: worker.run.id });
+  if (readSession) {
+    const session = await readSession(sessionId);
+    if (session?.header?.origin === 'subagent' && session.header.parentSession) {
+      const parent = findExecutionSessionOwner(database, session.header.parentSession);
+      if (parent) return { ...pending({ role: 'child-worker', ticketId: parent.ticket.id, assignmentId: parent.assignment.id,
+        runId: parent.run.id, parentSessionId: session.header.parentSession }),
+        expected: { ...SUPERAGENT_ROLE_PROFILE, permissionPreset: 'custom', approval: 'never', delegationApproval: 'parent-required' } };
+    }
+  }
+  return null;
+}
 
 /** Resolve only persisted Ticket/Assignment/Run ownership, never UI input. */
 export function findExecutionSessionOwner(database, sessionId) {

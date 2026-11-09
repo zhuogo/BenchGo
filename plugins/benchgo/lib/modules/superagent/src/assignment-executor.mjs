@@ -25,6 +25,7 @@ import { workerModelQueueType, selectWorkerModel as selectModel, workerModelRout
 import { installWorkerSelfCheck, workerSelfCheckRequirement } from './worker-self-check.mjs';
 import { attachExecutionSession } from './execution-session.mjs';
 import { modelFallbackType, modelFallbackSource, fallbackCallSignature as toolSignature } from './model-fallback.mjs';
+import { createSessionRoleAssembly } from './session-role-assembly.mjs';
 
 /** Uses the host agent lifecycle and transcript; no separate model/tool loop. */
 export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readSourceContext, notifyExecutionInput, checkpoints, captureCheckpoint = captureArtifactCheckpoint }) {
@@ -70,8 +71,8 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       let modelIndex = 0, pendingFallback, claimedMessages = [], currentTurn, savedQueue;
       const modelFailures = [];
       const priorFallbackCalls = new Set();
-      const presets = ctx.get?.('agentPresets');
-      const preset = presets ? await presets.resolve(assignment.agentPreset) : undefined;
+      const role = await createSessionRoleAssembly({ ctx, database, identity: { role: 'worker', sessionId,
+        ticketId: ticket.id, assignmentId: assignment.id, runId: run.id } });
       const setup = async (scope, agent) => {
         scope.provide?.('benchgoWorkerExecution', Object.freeze({ ticketId: ticket.id, assignmentId: assignment.id,
           runId: run.id, sessionId, owner: assignment.owner, fence: assignment.fence }));
@@ -103,6 +104,9 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           }
           await verifyArtifactCheckpoint(environment || directory, resumed.evidence.checkpoint, { signal });
         }
+        // Verify the saved recovery boundary first, then role, before any model
+        // selection is appended to an incompatible legacy session.
+        await role.mount(scope, agent);
         savedQueue = database.getWorkerExecutionState(run.id);
         // Read old queue records only for additive migration; new records live in BenchGo's ledger.
         let legacyFallback;
@@ -119,8 +123,6 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         modelIndex = frozen.index;
         if (legacyFallback) database.recordWorkerFallback({ assignmentId: assignment.id, runId: run.id, ...ownership, plan: legacyFallback });
         selectModel(agent, models[modelIndex]);
-        // Official durable policy representation (user-approval setApprovalPolicy).
-        agent.session?.append?.('approval/policy', { policy: 'ask' });
         const priorFallback = database.getWorkerExecutionState(run.id)?.fallbackPlan;
         if (priorFallback) for (const event of agent.session.snapshotEvents()) {
           if (event.type !== 'assistant/message') continue;
@@ -147,7 +149,6 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           pendingFallback = plan;
           return true;
         };
-        if (preset) await presets.mount(scope, preset.id);
         installProjectRules(scope, agent);
         if (project && !resumed) {
           const worktrees = await workerWorktrees(scope);
@@ -191,7 +192,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
             runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory, callId: execution.callId,
           }, dispatch) } : {}),
         });
-        installWorkerSubagents(scope, agent, { ctx, database, assignment, readPolicy, authorizeAction, models, currentModel: () => models[modelIndex],
+        installWorkerSubagents(scope, agent, { ctx, database, assignment, readPolicy, authorizeAction, models, currentModel: () => models[modelIndex], parentRole: role,
           ...(checkpoints ? { withCheckpoint: (execution, dispatch) => checkpoints.protect({
             runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory, callId: execution.callId,
           }, dispatch) } : {}),
@@ -238,10 +239,12 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       executionPhase = resumed ? 'resume' : 'create';
       handle = resumed
         ? await ctx.agents.resume({ resumeSessionId: sessionId, signal, setup })
-        : await ctx.agents.create({ sessionId, meta: { cwd: project?.path || directory, ...(preset ? { agentPreset: preset.id } : {}) }, setup });
+        : await ctx.agents.create({ sessionId, meta: { cwd: project?.path || directory, agentPreset: role.expected.agentPreset }, setup });
+      await role.reconcile();
       await attachExecutionSession(ctx, handle.agent, { ticket, run });
       await renew();
       signal.throwIfAborted();
+      await role.reconcile();
       // Persist submission intent before entering the host. A crash here is ambiguous,
       // so recovery inspects the official transcript instead of replaying the prompt.
       executionPhase = 'submit';

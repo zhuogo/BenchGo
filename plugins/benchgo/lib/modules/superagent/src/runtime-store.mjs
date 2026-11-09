@@ -9,7 +9,7 @@ const decode = row => row ? { ...JSON.parse(row.payload), ...(row.unique_key?.st
   ? { ticketStateEventKey: row.unique_key.slice('ticket-delivery:'.length) } : {}) } : null;
 
 /** Durable notification and Goal storage for the current SuperAgent baseline. */
-export function createAssistantRuntimeStore({ directory, filename } = {}) {
+export function createAssistantRuntimeStore({ directory, filename, afterCommit } = {}) {
   if (!directory && !filename) throw new Error('Task store requires a database path');
   if (directory) mkdirSync(directory, { recursive: true });
   const path = filename || join(directory, 'assistant.db');
@@ -25,11 +25,13 @@ export function createAssistantRuntimeStore({ directory, filename } = {}) {
     CREATE TABLE IF NOT EXISTS assistant_goals (id TEXT PRIMARY KEY, request_id TEXT UNIQUE, status TEXT NOT NULL, row_version INTEGER NOT NULL, payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS assistant_message_reactions (scope TEXT NOT NULL, message_key TEXT NOT NULL, emoji TEXT NOT NULL, PRIMARY KEY(scope,message_key));
 `);
-  let closed = false;
+  let closed = false, inTransaction = false;
+  const committed = () => { if (!inTransaction) { try { afterCommit?.(); } catch { /* Observation cannot undo a committed domain write. */ } } };
   const transaction = fn => {
     db.exec('BEGIN IMMEDIATE');
-    try { const result = fn(); db.exec('COMMIT'); return result; }
-    catch (error) { db.exec('ROLLBACK'); throw error; }
+    inTransaction = true;
+    try { const result = fn(); db.exec('COMMIT'); inTransaction = false; committed(); return result; }
+    catch (error) { db.exec('ROLLBACK'); inTransaction = false; throw error; }
   };
   const publishPending = row => {
     const event = notificationPublication({ ...decode(row), seq: row.seq });
@@ -199,5 +201,12 @@ export function createAssistantRuntimeStore({ directory, filename } = {}) {
     releaseLease(owner) { transaction(() => { const current = api.meta('scheduler'); if (current?.owner === owner) api.setMeta('scheduler', { ...current, until: 0 }); }); },
     close() { if (!closed) { closed = true; db.close(); } },
   };
+  // Standalone SQLite writes autocommit. Inside a transaction the outer commit
+  // emits once; rollback never wakes execution-fact consumers.
+  for (const name of ['setMessageReaction', 'setMeta', 'event', 'delivered', 'retryDelivery', 'insertGoal', 'updateGoal']) {
+    if (typeof api[name] !== 'function') continue;
+    const write = api[name];
+    api[name] = (...args) => { const result = write(...args); committed(); return result; };
+  }
   return api;
 }

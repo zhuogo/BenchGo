@@ -31,6 +31,9 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     catch { mirrorRetry.set(key, now() + 30000); }
   }
   const executionProgress = createTaskExecutionProgress({ ctx, database, now });
+  // Activation awaits this promise. Domain-only synchronous readers remain
+  // usable during preparation; a missing official dependency still rejects it.
+  executionProgress.ready.catch(() => {});
   const readPolicy = threadId => readAssessmentPolicy(store, ctx.workspaceRegistry, threadId);
   const directReplies = createDirectReplyDelivery({ database, readPolicy, signal: shutdown.signal, onDelivered: mirrorDelivered,
     getAdapter: channel => channels?.get(channel) || (channel === 'feishu' ? feishu : null) });
@@ -300,7 +303,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     running ||= cycle().catch(error => { if (!shutdown.signal.aborted) ctx.logger?.warn?.(`SuperAgent 编排未完成：${error.message}`); }).finally(() => { running = undefined; });
     return Promise.all([running, replies]);
   }
-  return {
+  const runtime = {
     checkpoints,
     tick,
     async manageExecution({ ticketId, assignmentId, fence, instructionRevision, operation, automatic = true }) {
@@ -349,10 +352,10 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       return { status: 'scheduled', action: 'inspect-saved-evidence',
         reason: '已排入现有只读核查；只有可信结束证据确认后才走原有收尾，不重跑外部动作', uncertainty: fact };
     },
-    state({ newestFirst = false, archived, ticketId, limit = 1000 } = {}) {
+    state({ newestFirst = false, archived, ticketId, limit = 1000, offset = 0 } = {}) {
       const progress = executionProgress.batch();
       const boundedLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 1000;
-      const tickets = ticketId === undefined ? database.listTickets({ limit: boundedLimit, newestFirst, archived }) : [database.getTicket(ticketId)].filter(Boolean);
+      const tickets = ticketId === undefined ? database.listTickets({ limit: boundedLimit, offset, newestFirst, archived }) : [database.getTicket(ticketId)].filter(Boolean);
       return tickets.map(ticket => {
         const assignments = database.assignments(ticket.id);
         const inputDiagnostics = (database.ticketInputs?.(ticket.id) || []).filter(input => input.snapshot?.executionInput?.outcome === 'failed')
@@ -369,13 +372,94 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
           execution: projected ? { ...projected, uncertainty, ...stopping } : null };
       });
     },
-    start() { if (timer || shutdown.signal.aborted) return; timer = setInterval(tick, intervalMs); timer.unref?.(); void tick(); },
+    async start() { await executionProgress.ready; if (timer || shutdown.signal.aborted) return; timer = setInterval(tick, intervalMs); timer.unref?.(); void tick(); },
     async stop() {
       shutdown.abort(); clearInterval(timer);
-      executionProgress.dispose();
+      const observations = executionProgress.dispose();
       const stopped = worker.stop();
       await running;
-      await Promise.allSettled([recovery, recoveryNotifications, stopped, directReplies.stop()]);
+      await Promise.allSettled([recovery, recoveryNotifications, stopped, observations, executionProgress.ready, directReplies.stop()]);
     },
   };
+  const timestamp = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : null;
+  function evidenceRuntime(ticket, requestedRunId) {
+    const assignments = database.assignments(ticket.id);
+    const assignment = requestedRunId ? assignments.find(row => database.runs(row.id).some(run => run.id === requestedRunId)) : assignments.at(-1);
+    const run = assignment && (requestedRunId ? database.runs(assignment.id).find(row => row.id === requestedRunId)
+      : database.runs(assignment.id).filter(row => row.fence === assignment.fence).at(-1));
+    if (requestedRunId && !run) throw Object.assign(new Error('Execution does not belong to this Ticket'), { code: 'EXECUTION_FACT_BINDING' });
+    const projections = database.executionProjections({ ticketId: ticket.id, ...(run ? { runId: run.id } : {}) });
+    const source = projections.find(row => row.sessionId === run?.sessionId);
+    const agent = run && ctx.agents?.get?.(run.sessionId);
+    const uncertainty = executionUncertainty(database, ticket, { now: now() });
+    const stopping = executionStopConfirmation(database, ticket, { now: now() });
+    const attention = database.attentions(ticket.id).find(row => row.state === 'waiting');
+    let request = agent && source?.live?.bootId === executionProgress.bootId && source.live.request
+      || { state: 'unknown', startedAt: null, settledAt: null, deadline: null };
+    if (request.state === 'inflight' && source.state?.request?.state === 'settled'
+      && Date.parse(source.state.request.settledAt) >= Date.parse(request.startedAt)) request = { ...request, state: 'settled', settledAt: source.state.request.settledAt };
+    const gateway = ctx.get?.('typertGateway');
+    const pending = run && gateway?.getPendingRemoteEvents ? gateway.getPendingRemoteEvents().filter(row => String(row.agentId) === run.sessionId
+      || projections.some(source => source.parentSessionId === run.sessionId && source.sessionId === String(row.agentId))) : [];
+    const waitKind = ['paused', 'pausing'].includes(ticket.status) ? 'paused' : pending.some(row => row.event === 'approval/request') ? 'approval'
+      : attention || pending.some(row => row.event === 'user-questions/request') ? 'user'
+      : ticket.continuationWait ? 'continuation' : ['waiting', 'uncertain'].includes(assignment?.state) ? 'unknown' : 'none';
+    const inspected = uncertainty?.lastInspection;
+    return {
+      evidenceCursor: database.executionTicketCursor(ticket.id),
+      ticket: { id: ticket.id, status: ticket.status, instructionRevision: ticket.instructionRevision ?? 1 },
+      assignment: assignment ? { id: assignment.id, state: assignment.state, owner: assignment.owner ?? null, fence: assignment.fence,
+        leaseUntil: assignment.leaseUntil ?? null, updatedAt: assignment.updatedAt } : null,
+      run: run ? { id: run.id, state: run.state, sessionId: run.sessionId, instructionRevision: run.instructionRevision ?? assignment.instructionRevision ?? 1, updatedAt: run.updatedAt } : null,
+      executionAlive: { status: !run || !ctx.agents?.get ? 'unknown' : agent?.status === 'running' ? 'running' : agent?.status === 'idle' ? 'idle' : 'absent',
+        observedAt: timestamp(now()), bootId: executionProgress.bootId },
+      request, wait: { kind: waitKind, since: timestamp(attention?.createdAt || ticket.pauseReason?.at || ticket.continuationWait?.at), expectedUntil: null },
+      stop: { requestedAt: stopping.stopRequestedAt || assignment?.stopRequest?.at || null,
+        confirmedAt: assignment?.executionStopped && assignment.executionStopped.fence === assignment.fence ? assignment.executionStopped.at : null,
+        confirmationOverdue: stopping.stopConfirmationOverdue },
+      recovery: uncertainty ? { reasonCode: uncertainty.reasonCode, attempts: uncertainty.attempts, nextCheckAt: uncertainty.nextCheckAt,
+        automatic: uncertainty.automatic, escalated: uncertainty.escalated,
+        ...(inspected ? { lastInspection: { id: inspected.id ?? null, at: inspected.at ?? null, status: inspected.status ?? inspected.outcome ?? null, code: inspected.code ?? null } } : {}) } : null,
+      watermarks: projections.map(row => ({ sessionId: row.sessionId, sourceSeq: row.cursor, flushedSeq: row.flushedCursor,
+        sourceDurability: row.sourceDurability, complete: row.complete, missingReason: row.missingReason })),
+      outputChanges: null,
+    };
+  }
+  let decorateTickets = rows => rows;
+  runtime.executionFacts = {
+    ready: executionProgress.ready,
+    currentCursor: () => database.executionFactCursor(),
+    subscribe: listener => database.onExecutionFacts(listener),
+    page: options => database.executionFactPage(options),
+    setTicketProjection(project) { if (typeof project !== 'function') throw new TypeError('Ticket projection must be a function'); decorateTickets = project; },
+    snapshot({ ticketId } = {}) {
+      const rows = [];
+      for (let offset = 0; ; offset += 1000) {
+        const page = runtime.state({ newestFirst: true, ticketId, limit: 1000, offset });
+        rows.push(...page);
+        if (ticketId !== undefined || page.length < 1000) break;
+      }
+      const tickets = decorateTickets(rows), truncated = false;
+      // Match the existing Fetch route's JSON representation: optional domain
+      // fields are absent on the wire, never JavaScript undefined values.
+      return JSON.parse(JSON.stringify({ cursor: database.executionFactCursor(), tickets, bootId: executionProgress.bootId, observedAt: timestamp(now()),
+        completeness: { complete: !truncated && tickets.every(ticket => !ticket.execution || ticket.execution.completeness === 'complete'), truncated } }));
+    },
+    evidence(input) {
+      const evidence = database.executionEvidence(input), ticket = database.getTicket(input.ticketId);
+      if (!ticket) throw Object.assign(new Error('Ticket not found'), { code: 'TICKET_NOT_FOUND' });
+      return { ...evidence, runtime: evidenceRuntime(ticket, input.runId), bootId: executionProgress.bootId, observedAt: timestamp(now()) };
+    },
+    evidenceSnapshot({ limit = 1000 } = {}) {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new TypeError('Invalid execution evidence limit');
+      const tickets = database.listTickets({ archived: false, limit, newestFirst: true });
+      const truncated = database.listTickets({ archived: false, limit: 1, offset: limit }).length > 0;
+      const executions = tickets.map(ticket => evidenceRuntime(ticket));
+      const cursor = database.executionFactCursor();
+      return { cursor, currentCursor: cursor, observedAt: timestamp(now()), bootId: executionProgress.bootId, executions,
+        complete: !truncated && executions.every(row => !row.run || row.watermarks.length > 0 && row.watermarks.every(source => source.complete)),
+        truncated, schedulerHeartbeat: null };
+    },
+  };
+  return runtime;
 }
