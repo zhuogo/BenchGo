@@ -7,7 +7,7 @@ import { createAssistantStore } from '../src/store.mjs';
 import { readAssessmentPolicy } from '../src/assessment-policy.mjs';
 import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
 
-async function fixture(t, { send, execute, onDelivered, prepareTicketReply, channel = 'desktop', ctx = {}, now, result: patch = {} } = {}) {
+async function fixture(t, { send, execute, onDelivered, prepareTicketReply, notifyExecutionRecovery, channel = 'desktop', ctx = {}, now, result: patch = {} } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-direct-delivery-'));
   const store = await createAssistantStore({ dataDirectory: directory });
   if (channel === 'feishu') store.connections.update({ enabled: true, appId: 'app', appSecretRef: 'env:SECRET', ownerOpenIds: ['owner'], chatIds: ['chat'] }, { revision: 0 });
@@ -21,7 +21,7 @@ async function fixture(t, { send, execute, onDelivered, prepareTicketReply, chan
   let executions = 0, sends = 0;
   const original = '  完整原文\n\n纯文本不要求产物文件。\n';
   const deliver = async delivery => { sends++; return send ? send(delivery, db) : { status: 'accepted', messageId: 'durable-message' }; };
-  const runtime = createOrchestrationRuntime({ ctx: { llm: { stream() { throw new Error('No content review model may be called'); } }, ...ctx }, store, onDelivered, ...(now ? { now } : {}),
+  const runtime = createOrchestrationRuntime({ ctx: { llm: { stream() { throw new Error('No content review model may be called'); } }, ...ctx }, store, onDelivered, notifyExecutionRecovery, ...(now ? { now } : {}),
     prepareTicketReply: async delivery => prepareTicketReply ? prepareTicketReply(delivery, db, store) : { status: 'ready', text: '已完成，我整理好了结果。' },
     execute: async (assignment, context) => { executions++; return execute ? execute(assignment, context, db) : { summary: original, selfCheck: { summary: '已检查数量、格式与明确要求' }, evidenceRefs: [], ...patch }; },
     deliverDesktop: deliver,
@@ -231,4 +231,32 @@ test('confirmed delivery stays closed when conversation mirror or official archi
   await app.runtime.tick(); await app.runtime.tick();
   assert.equal(mirrors, 2); assert.equal(archives, 2);
   assert.deepEqual(app.counts(), { executions: 1, sends: 1 });
+});
+
+test('recovery coordination cannot rerun unknown external effects or invent structural failure evidence', async t => {
+  const app = await fixture(t, { execute() { throw Object.assign(new Error('not public'), { code: 'EXECUTION_EFFECTS_UNKNOWN' }); } });
+  await app.advance();
+  const ticket = app.db.getTicket(app.ticket.id), assignment = app.db.getAssignment('work');
+  const input = { ticketId: ticket.id, assignmentId: assignment.id, fence: assignment.fence, instructionRevision: ticket.instructionRevision };
+  const state = app.runtime.state({ ticketId: ticket.id })[0];
+  assert.equal(state.execution.uncertainty.reasonCode, 'external-effects-unknown');
+  assert.equal(state.execution.instructionRevision, ticket.instructionRevision);
+  assert.equal((await app.runtime.manageExecution({ ...input, operation: 'wait' })).status, 'waiting');
+  assert.equal((await app.runtime.manageExecution({ ...input, operation: 'resume' })).status, 'blocked');
+  assert.equal((await app.runtime.manageExecution({ ...input, operation: 'fail' })).status, 'blocked');
+  await app.runtime.tick(); assert.equal(app.counts().executions, 1);
+  assert.equal(app.db.results(ticket.id).length, 0);
+  await assert.rejects(app.runtime.manageExecution({ ...input, instructionRevision: input.instructionRevision + 1, operation: 'check-now' }), /授权或要求已变化/);
+  assert.equal((await app.runtime.manageExecution({ ...input, fence: assignment.fence + 1, operation: 'check-now' })).status, 'blocked');
+});
+
+test('notification work waits independently while delivery and Router-facing state keep progressing', async t => {
+  let release, notifications = 0;
+  const gate = new Promise(resolve => { release = resolve; });
+  const app = await fixture(t, { notifyExecutionRecovery: async () => { notifications++; await gate; } });
+  try {
+    await app.advance();
+    assert.ok(notifications > 0); assert.equal(app.db.getTicket(app.ticket.id).status, 'completed');
+    assert.deepEqual(app.counts(), { executions: 1, sends: 1 });
+  } finally { release(); }
 });

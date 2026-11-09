@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { readModelFallbacks } from './model-fallback.mjs';
 import { readQuestionReply, readBoundQuestionReply } from './question-reply.mjs';
-import { ticketReplySource, ticketReplyInstruction } from './ticket-reply.mjs';
+import { ticketReplySource, ticketReplyInstruction, ticketReplyIdentity } from './ticket-reply.mjs';
 
 const active = new Set(['queued', 'processing', 'prepared']);
 const fingerprint = (threadId, text, context) => createHash('sha256').update(JSON.stringify(context === undefined ? [threadId, text] : [threadId, text, context])).digest('hex');
@@ -119,8 +119,7 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
       await updateState(state => {
         const previous = (state.requests || []).find(row => row.requestId === requestId);
         if (previous) {
-          const identity = value => JSON.stringify({ ...value, title: undefined, status: undefined });
-          if (previous.threadId !== threadId || identity(previous.ticketReply) !== identity(signal)) throw new Error('工单回复标识冲突');
+          if (previous.threadId !== threadId || ticketReplyIdentity(previous.ticketReply) !== ticketReplyIdentity(signal)) throw new Error('工单回复标识冲突');
           if (retry && ['failed', 'processed'].includes(previous.status) && !previous.suppressed) {
             const message = createUserMessage({ source: { kind: ticketReplySource, replyKind: signal.kind,
               eventKey: signal.eventKey, ticketId: signal.ticketId }, content: [{ type: 'text', text: ticketReplyInstruction(signal) }] });

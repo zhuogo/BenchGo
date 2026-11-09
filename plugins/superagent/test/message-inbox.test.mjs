@@ -214,3 +214,18 @@ test('revalidation suppresses a stale queued notice without dispatching or expos
   assert.equal(f.state().requests[0].suppressed, true);
   assert.deepEqual(await f.inbox.state('main'), []);
 });
+
+test('recovery notices refresh queued inspection facts, yield to humans and keep one durable execution identity', async () => {
+  const f = fixture(); f.agent.status = 'running';
+  const signal = { kind: 'recovery', eventKey: 'recovery:a:2:entered', ticketId: 't', assignmentId: 'a', fence: 2,
+    instructionRevision: 1, source: { channel: 'desktop', sessionId: 'owner' }, phase: 'entered', attempts: 0, nextCheckAt: null };
+  const first = await f.inbox.enqueueTicketReply({ threadId: 'main', signal });
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal: { ...signal, attempts: 1, nextCheckAt: '2026-11-09T00:01:00Z' } });
+  await assert.rejects(f.inbox.enqueueTicketReply({ threadId: 'main', signal: { ...signal, fence: 3 } }), /冲突/);
+  await f.inbox.enqueue({ text: '先聊别的', requestId: 'human-priority' });
+  f.agent.status = 'idle'; await f.inbox.settle('main');
+  assert.equal(f.sent[0].source.kind, 'user'); await f.finish();
+  assert.equal(f.sent[1].id, first.messageId); assert.equal(f.sent[1].source.replyKind, 'recovery');
+  assert.match(f.sent[1].content[0].text, /"attempts":1/);
+  assert.deepEqual((await f.inbox.state('main')).map(row => row.requestId), ['human-priority']);
+});

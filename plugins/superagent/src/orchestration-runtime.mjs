@@ -12,11 +12,13 @@ import { commitWorkerResult } from './result-commit.mjs';
 import { knownNotSent } from './channels/delivery-outcome.mjs';
 import { createTaskExecutionProgress } from './task-execution-progress.mjs';
 import { archiveClosedExecutionSessions, executionSessionProjection } from './execution-session.mjs';
+import { executionUncertainty, executionStopConfirmation } from './execution-uncertainty.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
-export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, prepareTicketReply, notifyExecutionInput, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
+export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, prepareTicketReply, notifyExecutionInput, notifyExecutionRecovery, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
   const database = store.orchestration, owner = `delivery:${randomUUID()}`, shutdown = new AbortController();
   const archived = new Set(), archiveRetry = new Map();
+  const requestedChecks = new Map();
   const finishDelivery = (id, options) => database.finishOutbox(id, { now: now(), ...options });
   const mirrored = new Set(), mirrorRetry = new Map();
   async function mirrorDelivered(row) {
@@ -74,7 +76,18 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   async function recoverPending() {
     shutdown.signal.throwIfAborted();
     if (!recoveryStorage(ctx)?.open || !ctx.agents?.get) return;
-    for (const { assignment, run } of database.pauseRecoveryCandidates()) {
+    const immediate = new Map(requestedChecks); requestedChecks.clear();
+    const forced = [...immediate.values()].map(identity => {
+      const assignment = database.getAssignment(identity.assignmentId), ticket = assignment && database.getTicket(assignment.ticketId);
+      if (!assignment || assignment.fence !== identity.fence || ticket?.instructionRevision !== identity.instructionRevision) return null;
+      const run = database.runs(assignment.id).find(row => row.fence === assignment.fence);
+      return run && { assignment, ticket, run };
+    }).filter(Boolean);
+    const pauseCandidates = database.pauseRecoveryCandidates({ now: now() });
+    for (const candidate of forced.filter(row => row.ticket.status === 'pausing' && row.run.evidence?.waitingPause
+      && (row.assignment.state === 'uncertain' || row.assignment.state === 'claimed' && row.assignment.leaseUntil <= now())))
+      if (!pauseCandidates.some(row => row.assignment.id === candidate.assignment.id)) pauseCandidates.push(candidate);
+    for (const { assignment, run } of pauseCandidates) {
       shutdown.signal.throwIfAborted();
       const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(60000)]);
       try {
@@ -87,7 +100,11 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         database.deferPauseRecovery(assignment.id, { fence: assignment.fence });
       }
     }
-    for (const { assignment, run } of database.verificationCandidates()) {
+    const verificationCandidates = database.verificationCandidates({ now: now() });
+    for (const candidate of forced.filter(row => row.ticket.status === 'open' && row.assignment.state === 'uncertain'
+      && executionUncertainty(database, row.ticket, { now: now() })?.automatic))
+      if (!verificationCandidates.some(row => row.assignment.id === candidate.assignment.id)) verificationCandidates.push(candidate);
+    for (const { assignment, run } of verificationCandidates) {
       shutdown.signal.throwIfAborted();
       const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(run.environment ? 60000 : 15000)]);
       try {
@@ -96,19 +113,26 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
           const policy = await readPolicy();
           signal.throwIfAborted();
           database.queueVerification(assignment.id, { fence: assignment.fence, runId: run.id, observation,
+            ownerRetry: immediate.has(assignment.id), now: now(),
             validateMandate: mandate => validateTicketMandate(mandate, { policy }) });
         });
       } catch (error) {
         // Persist inspection backoff so one busy/invalid session cannot starve
         // other candidates or restart a tight polling loop after a process restart.
-        database.deferVerification(assignment.id, { fence: assignment.fence, reason: error.code || 'EVIDENCE_UNVERIFIED' });
+        database.deferVerification(assignment.id, { fence: assignment.fence, now: now(), reason: error.code || 'EVIDENCE_UNVERIFIED' });
       }
     }
   }
 
-  let timer, running, recovery;
+  let timer, running, recovery, recoveryNotifications;
   async function cycle() {
     const policy = await readPolicy();
+    // The existing Router inbox owns delivery and prioritizes human messages.
+    // Notification work must not wait for log locks or occupy this cycle.
+    if (notifyExecutionRecovery) recoveryNotifications ||= (async () => {
+      for (const ticket of database.listTickets({ limit: 1000 })) await notifyExecutionRecovery({ ticketId: ticket.id });
+    })().catch(error => ctx.logger?.warn?.(`SuperAgent 恢复提醒待重试：${error.code || error.name}`))
+      .finally(() => { recoveryNotifications = undefined; });
     if (onDelivered) {
       for (const ticket of database.listTickets({ limit: 1000 })) for (const row of database.deliveries(ticket.id)) await mirrorDelivered(row);
       for (const row of database.directReplies?.({ state: 'sent', limit: 1000 }) || []) await mirrorDelivered(row);
@@ -236,6 +260,27 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   return {
     checkpoints,
     tick,
+    async manageExecution({ ticketId, assignmentId, fence, instructionRevision, operation }) {
+      const ticket = database.getTicket(ticketId), policy = await readPolicy();
+      if (!ticket || ticket.instructionRevision !== instructionRevision || !validateTicketMandate(ticket.mandate, { policy }))
+        throw Object.assign(new Error('恢复处置的授权或要求已变化'), { code: 'MANDATE_REVOKED' });
+      const fact = executionUncertainty(database, ticket, { now: now() });
+      if (!fact || fact.assignmentId !== assignmentId || fact.fence !== fence)
+        return { status: 'blocked', reason: '执行身份或核查状态已变化，请重新读取事实' };
+      if (operation === 'wait') return { status: 'waiting', uncertainty: fact };
+      if (!['check-now', 'resume', 'fail'].includes(operation)) throw new Error('未知恢复处置');
+      if (!fact.automatic) return { status: 'blocked', reason: fact.recoveryBlocked, uncertainty: fact };
+      const assignment = database.getAssignment(assignmentId), run = database.runs(assignmentId).find(row => row.fence === fence);
+      if (operation === 'resume' && (fact.reasonCode === 'external-effects-unknown' || ticket.status !== 'open'))
+        return { status: 'blocked', reason: '外部效果未核清或用户暂停尚未解除，只能核查，不能续跑', uncertainty: fact };
+      if (operation === 'fail' && (fact.reasonCode === 'external-effects-unknown' || run?.evidence?.outcome !== 'failed'
+        || !run.evidence.selfCheck?.summary || !run.evidence.failure?.attempted || !run.evidence.failure?.cause || !run.evidence.failure?.resumeConditions))
+        return { status: 'blocked', reason: '没有已保存的结构性失败证据与自检说明，不得凭空报失败或关单', uncertainty: fact };
+      requestedChecks.set(assignment.id, { assignmentId, fence, instructionRevision });
+      void tick();
+      return { status: 'scheduled', action: 'inspect-saved-evidence',
+        reason: '已排入现有只读核查；只有可信结束证据确认后才走原有收尾，不重跑外部动作', uncertainty: fact };
+    },
     state({ newestFirst = false, archived, ticketId, limit = 1000 } = {}) {
       const progress = executionProgress.batch();
       const boundedLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 1000;
@@ -245,7 +290,15 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         const inputDiagnostics = (database.ticketInputs?.(ticket.id) || []).filter(input => input.snapshot?.executionInput?.outcome === 'failed')
           .map(input => ({ id: input.id, triggerId: input.triggerId, state: input.state, receivedAt: input.receivedAt,
             code: input.snapshot.executionInput.code, reason: input.snapshot.executionInput.reason }));
-        return { ...ticket, inputDiagnostics, revisions: database.ticketRevisions(ticket.id), assignments, attentions: database.attentions(ticket.id), attentionResolutions: database.attentionResolutions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id), executionSession: executionSessionProjection(database, ticket.id), execution: progress(ticket, assignments) };
+        const uncertainty = executionUncertainty(database, ticket, { now: now() });
+        const execution = progress(ticket, assignments);
+        const stopping = executionStopConfirmation(database, ticket, { now: now() });
+        const stoppedAssignment = stopping.stopRequestedAt && assignments.find(row => row.stopRequest?.at === stopping.stopRequestedAt);
+        const projected = execution || (uncertainty || stoppedAssignment ? { assignmentId: uncertainty?.assignmentId || stoppedAssignment.id,
+          runId: uncertainty ? uncertainty.runId : database.runs(stoppedAssignment.id).find(row => row.fence === stoppedAssignment.fence)?.id,
+          instructionRevision: ticket.instructionRevision } : null);
+        return { ...ticket, inputDiagnostics, revisions: database.ticketRevisions(ticket.id), assignments, attentions: database.attentions(ticket.id), attentionResolutions: database.attentionResolutions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id), executionSession: executionSessionProjection(database, ticket.id),
+          execution: projected ? { ...projected, uncertainty, ...stopping } : null };
       });
     },
     start() { if (timer || shutdown.signal.aborted) return; timer = setInterval(tick, intervalMs); timer.unref?.(); void tick(); },
@@ -254,7 +307,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       executionProgress.dispose();
       const stopped = worker.stop();
       await running;
-      await Promise.allSettled([recovery, stopped, directReplies.stop()]);
+      await Promise.allSettled([recovery, recoveryNotifications, stopped, directReplies.stop()]);
     },
   };
 }
