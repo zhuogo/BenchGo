@@ -30,6 +30,8 @@ import { currentExecutionRecoverySignal, executionRecoverySignal, executionUncer
 
 const routeKey = model => JSON.stringify([model.providerId, model.modelId]);
 const copy = value => structuredClone(value);
+const replyToolEnabled = (kind, name) => name === 'assistant_reply'
+  || kind === 'recovery' && name === 'assistant_execution_manage';
 export async function readBuiltinLayer(source = new URL('../prompts/builtin-layer.md', import.meta.url)) {
   let document;
   try { document = await readFile(source, 'utf8'); }
@@ -278,8 +280,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           // registration-time activation condition instead of duplicate registration.
           expressionRestrictions.push(scope.tools.restrict({ allow: [] }));
         };
-        const expressionToolEnabled = name => !expressionKind || name === 'assistant_reply'
-          || expressionKind === 'recovery' && name === 'assistant_execution_manage';
+        const expressionToolEnabled = name => !expressionKind || replyToolEnabled(expressionKind, name);
         scope.on('tools/execute', async (execution, next) => {
           if (execution.agent === agent && !expressionToolEnabled(execution.name))
             throw Object.assign(new Error('内部表达回合只能回复或协调当前恢复，不能开启新的执行'), { code: 'ROUTER_EXPRESSION_ONLY' });
@@ -527,8 +528,12 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         scope.on('tools/execute', async (execution, next) => {
           const active = activeChatReply(agent.session.snapshotEvents(), { includeInternal: true });
           const request = agent.session.snapshotEvents().find(event => event.type === 'user/message' && event.data?.id === active?.requestId)?.data;
-          if (execution.agent === agent && [ticketStateSource, ticketReplySource].includes(request?.source?.kind) && execution.name !== 'assistant_reply') {
-            throw Object.assign(new Error('工单状态通知只用于报告现有状态，不能执行动作或读取成果。'), { code: 'ROUTER_STATE_REPORT_ONLY' });
+          if (execution.agent === agent && [ticketStateSource, ticketReplySource].includes(request?.source?.kind)) {
+            const kind = request.source.kind === ticketReplySource ? request.source.replyKind : undefined;
+            if (!replyToolEnabled(kind, execution.name))
+              throw Object.assign(new Error('内部通知只允许回复；有效恢复信号另可协调原执行，不能开启新的动作。'), { code: 'ROUTER_STATE_REPORT_ONLY' });
+            if (execution.name === 'assistant_execution_manage' && !await mayReplyToTicket(threadId, request.id))
+              throw Object.assign(new Error('恢复信号已失效，不能协调原执行。'), { code: 'ROUTER_RECOVERY_STALE' });
           }
           if (execution.agent === agent && request?.source?.kind === executionInputSource && !['assistant_reply', 'ask_user_question'].includes(execution.name)) {
             throw Object.assign(new Error('执行输入授权核实通知只能说明差异或询问真实用户'), { code: 'ROUTER_INPUT_CONFIRMATION_ONLY' });
