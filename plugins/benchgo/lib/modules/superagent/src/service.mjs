@@ -34,6 +34,7 @@ import { createChannelSessionHost, registerChannelSessionProjection } from './ch
 import { assertRouterMemoryTool } from './memory-tool-policy.mjs';
 import { executionSessionProjection } from './execution-session.mjs';
 import { resolveExecutionApprovalOrigins } from './execution-approval-origin.mjs';
+import { registerAssistantFetchRoute } from './assistant-fetch-route.mjs';
 import { createActionPermissionStore } from './action-permissions.mjs';
 import { createExternalActionRegistry, createExternalActionHost, registerChannelExternalActions, createActionPermissionApi } from './external-actions.mjs';
 import { createChannelCredentials } from './channel-credentials.mjs';
@@ -923,10 +924,7 @@ export async function mountAssistant(ctx, commander, providers) {
       default: throw new Error('未知总助手操作');
     }
   }
-  ctx.effect(() => ctx.connection.fetch.register({ path: '/api/commander/assistant', methods: ['POST'], requestBody: 'buffered', async fetch(request, peer) {
-    try { assertSameOrigin(request); return Response.json(await dispatch(await request.json(), peer), { headers: { 'cache-control': 'no-store' } }); }
-    catch (error) { if (['DELIVERY_RECONCILIATION_CONFLICT', 'OUTBOX_RECONCILIATION_CONFLICT'].includes(error.code)) error.status = 409; if (['DIRECT_REPLY_NOT_FOUND', 'OUTBOX_NOT_FOUND'].includes(error.code)) error.status = 404; return Response.json({ error: error.message, code: error.code, ...(error.revision === undefined ? {} : { revision: error.revision }), ...(error.hash === undefined ? {} : { hash: error.hash }) }, { status: ['ROW_CONFLICT', 'REVISION_CONFLICT', 'HASH_CONFLICT', 'IDEMPOTENCY_CONFLICT', 'INSTRUCTION_REVISION_CONFLICT', 'EXECUTION_PENDING', 'MIGRATION_CONFLICT', 'CHECKPOINT_EXECUTION_ACTIVE', 'CHECKPOINT_POLICY_CHANGED', 'CHECKPOINT_CONFLICT', 'CHECKPOINT_UNCERTAIN', 'CHECKPOINT_RESTORED'].includes(error.code) ? 409 : error.status || 400 }); }
-  } }));
+  ctx.effect(() => registerAssistantFetchRoute({ connection: ctx.connection, dispatch }));
   for (const [name, handler] of [['transcribe', media.handlers.transcribe], ['speech', media.handlers.speech], ['worklet', media.handlers.worklet]]) {
     ctx.effect(() => ctx.connection.fetch.register({ path: `/api/commander/assistant/voice/${name}`, methods: [name === 'worklet' ? 'GET' : 'POST'], requestBody: name === 'worklet' ? 'buffered' : 'streaming', async fetch(request) {
       try {
