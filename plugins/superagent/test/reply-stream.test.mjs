@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PartialArguments } from '@deepseek-ai/dsh-util-values';
-import { activeChatReply } from '../src/chat-publication.mjs';
+import { activeChatReply, projectChatMessages } from '../src/chat-publication.mjs';
 import { projectReplyStream } from '../client/reply-stream.mjs';
 
 const history = { sessionId: 'session', activeReply: { requestId: 'human', turn: 2 }, messages: [{ id: 'human', role: 'user', time: 1 }] };
@@ -118,7 +118,6 @@ test('settlement requires a durable ordinary answer, the latest real turn and an
   }
   for (const changes of [
     { messageId: undefined }, { interrupted: true }, { parentCallId: 'worker' }, { seq: 13 },
-    { blocks: [{ kind: 'text', text: 'tool preamble' }, { kind: 'tool-call', name: 'shell' }] },
     { blocks: [{ kind: 'reasoning', text: 'PRIVATE' }] },
   ]) assert.equal(run([], { chat: settledChat('completed', changes), running: false }), null);
   const chat = settledChat();
@@ -135,15 +134,86 @@ test('settlement requires a durable ordinary answer, the latest real turn and an
   assert.equal(run([], { chat: truncated }), null, 'history identity alone cannot borrow a missing user from another loaded turn');
 });
 
-test('new streams and explicit publication supersede a settled ordinary step', () => {
+test('new ordinary steps append while explicit publication may replace the public draft', () => {
   const chat = settledChat(null);
   chat.legacy.partial = { turn: 2, blocks: [{ kind: 'text', text: '下一步正文' }] };
-  assert.equal(run([], { chat }).text, '下一步正文');
+  assert.equal(run([], { chat }).text, '完整正文\n\n下一步正文');
   chat.legacy.runningCalls = [call(PartialArguments.fromObject({ text: '显式正文' }))];
   assert.equal(run([], { chat }).text, '显式正文');
   chat.legacy.nodes.push({ ...call(PartialArguments.fromObject({ text: '已发表正文' })), kind: 'tool-result',
     content: [{ type: 'text', text: '{"published":true,"requestId":"human"}' }] });
   assert.equal(run([], { chat, running: false }).text, '已发表正文');
+});
+
+test('all public steps survive tools and reasoning, then hand off unchanged to completed history', () => {
+  const chat = settledChat(null, { blocks: [{ kind: 'text', text: '先看资料。' }, { kind: 'tool-call', name: 'read', argsRaw: 'PRIVATE_ARGS' }] });
+  const first = run([], { chat });
+  assert.equal(first.text, '先看资料。');
+  chat.legacy.nodes.push({ kind: 'tool-result', seq: 11, turn: 2, step: 1, content: [{ type: 'text', text: 'PRIVATE_RESULT' }] });
+  for (const partial of [undefined, { turn: 2, step: 2, blocks: [] }, { turn: 2, step: 2, blocks: [{ kind: 'reasoning', text: 'PRIVATE_REASONING' }] }]) {
+    chat.legacy.partial = partial;
+    assert.equal(run([], { chat }).text, first.text, 'a content-free phase keeps earlier public text');
+  }
+  chat.legacy.partial.blocks.push({ kind: 'text', text: '找到结果。' });
+  assert.equal(run([], { chat }).text, '先看资料。\n\n找到结果。');
+  chat.legacy.nodes.push({ kind: 'assistant', messageId: 'second', seq: 13, turn: 2, step: 2, blocks: chat.legacy.partial.blocks });
+  assert.equal(run([], { chat }).text, '先看资料。\n\n找到结果。', 'settled step wins over a delayed matching partial');
+  chat.legacy.partial = { turn: 2, step: 1, blocks: [{ kind: 'text', text: 'LATE_PARTIAL' }] };
+  assert.equal(run([], { chat }).text, '先看资料。\n\n找到结果。');
+  const end = { seq: 14, time: 4, data: { turn: 2, reason: { kind: 'completed' } } };
+  chat.timeline.turns.get(2).end = end;
+  chat.legacy.turnEnds.set(2, 14);
+  const completed = run([], { chat, running: false });
+  assert.equal(completed.text, '先看资料。\n\n找到结果。');
+  assert.equal(completed.key, first.key);
+  const events = [{ type: 'turn/start', seq: 7, data: { turn: 2 } },
+    { type: 'user/message', seq: 8, data: { id: 'human', source: { kind: 'user' }, content: [] } },
+    ...chat.legacy.nodes.filter(node => node.kind === 'assistant').map(node => ({ type: 'assistant/message', seq: node.seq, data: {
+      turn: node.turn, step: node.step, message: { id: node.messageId, source: { kind: 'model' }, content: node.blocks.map(({ kind, ...block }) => ({ type: kind, ...block })) },
+    } })), { type: 'turn/end', ...end }];
+  const messages = projectChatMessages(JSON.parse(JSON.stringify(events)));
+  assert.equal(messages.at(-1).text, completed.text);
+  assert.equal(messages.at(-1).id, completed.id);
+  assert.equal(run([], { chat, running: false, history: { ...history, activeReply: null, messages } }), null);
+  assert.doesNotMatch(JSON.stringify(completed), /PRIVATE|LATE_PARTIAL/);
+});
+
+test('tools may conclude a successful turn without erasing their preceding public text', () => {
+  const chat = settledChat('completed', { blocks: [{ kind: 'text', text: '已处理。' }, { kind: 'tool-call', name: 'read' }] });
+  assert.equal(run([], { chat, running: false }).text, '已处理。');
+  chat.legacy.nodes.push({ kind: 'assistant', messageId: 'reasoning', seq: 11, turn: 2, step: 2, blocks: [{ kind: 'reasoning', text: 'PRIVATE' }] });
+  assert.equal(run([], { chat, running: false }).text, '已处理。');
+});
+
+test('same-turn steering and late events cannot borrow the earlier request text', () => {
+  const chat = settledChat(null);
+  const next = { role: 'user', id: 'next', seq: 11, text: '新请求' };
+  chat.legacy.nodes.push({ kind: 'steering', messageId: next.id, seq: next.seq, source: { kind: 'user' } });
+  chat.timeline.turns.get(2).steps = [{ step: 1, start: { seq: 8 }, end: { seq: 10 } }, { step: 2, start: { seq: 10.5 } }];
+  const updated = { ...history, activeReply: { turn: 2, requestId: next.id }, messages: [...history.messages, next] };
+  chat.legacy.partial = { turn: 2, step: 1, blocks: [{ kind: 'text', text: 'LATE_FIRST_REQUEST' }] };
+  assert.equal(run([], { chat, history: updated }), null);
+  chat.legacy.partial = { turn: 2, step: 2, blocks: [{ kind: 'text', text: '只答新请求' }] };
+  const answer = run([], { chat, history: updated });
+  assert.equal(answer.text, '只答新请求');
+  assert.equal(answer.requestId, 'next');
+  chat.legacy.runningCalls = [{ ...call(PartialArguments.fromObject({ text: 'LATE_OLD_PUBLICATION' })), step: 1 }];
+  assert.equal(run([], { chat, history: updated }).text, answer.text, 'a delayed publication draft also keeps its original request boundary');
+  assert.equal(run([], { chat }), null, 'old history identity cannot adopt newly admitted user text');
+  assert.equal(run([], { chat, history: updated, sessionId: 'other-session' }), null);
+  chat.timeline.turnOrder.push(3);
+  chat.timeline.turns.set(3, { turn: 3, start: { seq: 20 } });
+  assert.equal(run([], { chat, history: updated }), null, 'late old-turn text cannot enter the next turn');
+});
+
+test('cancel and failure discard all uncommitted steps but preserve an accepted publication', () => {
+  for (const reason of ['aborted', 'error']) {
+    const chat = settledChat(reason, { blocks: [{ kind: 'text', text: '未提交进度' }, { kind: 'tool-call', name: 'read' }] });
+    assert.equal(run([], { chat, running: false }), null);
+    chat.legacy.nodes.push({ ...call(PartialArguments.fromObject({ text: '已正式提交' })), kind: 'tool-result',
+      content: [{ type: 'text', text: '{"published":true,"requestId":"human"}' }] });
+    assert.equal(run([], { chat, running: false }).text, '已正式提交');
+  }
 });
 
 test('server active reply identity requires an open user-owned turn', () => {

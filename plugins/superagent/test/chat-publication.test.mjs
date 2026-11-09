@@ -89,14 +89,35 @@ test('normal and explicit conversational replies preserve natural text verbatim'
   assert.equal(projectChatMessages([start(), user, reply(2, { text }), end()])[1].text, text);
 });
 
-test('only completed terminal text is published, never tool narration or failed partial output', () => {
-  const narration = answer([{ type: 'text', text: 'PRIVATE PROCESS' }, { type: 'tool-call', name: 'read' }]);
-  assert.equal(projectChatMessages([start(), user, narration, end()]).length, 1);
+test('completed turns preserve public text across tools and reasoning but discard failed drafts', () => {
+  const narration = answer([{ type: 'text', text: '先检查资料。' }, { type: 'tool-call', name: 'read', arguments: { secret: 'PRIVATE_ARGS' } }]);
+  assert.equal(projectChatMessages([start(), user, narration, end()])[1].text, '先检查资料。');
   for (const kind of ['error', 'aborted', 'interrupted', 'max-tokens', 'blocked']) {
     assert.equal(projectChatMessages([start(), user, answer([{ type: 'text', text: 'partial' }]), end(kind)]).length, 1);
   }
-  const rows = projectChatMessages([start(), user, narration, answer([{ type: 'text', text: 'Final answer' }]), end()]);
-  assert.deepEqual(rows.map(row => row.text), ['question', 'Final answer']);
+  const reasoning = answer([{ type: 'reasoning', text: 'PRIVATE_REASONING' }]);
+  assert.equal(projectChatMessages([start(), user, narration, reasoning, end()])[1].text, '先检查资料。');
+  const rows = projectChatMessages([start(), user, narration, reasoning,
+    { type: 'tool/result', data: { message: { content: [{ type: 'text', text: 'PRIVATE_RESULT' }] } } },
+    answer([{ type: 'text', text: 'Final answer' }]), end()]);
+  assert.deepEqual(rows.map(row => row.text), ['question', '先检查资料。\n\nFinal answer']);
+  assert.doesNotMatch(JSON.stringify(rows), /PRIVATE/);
+});
+
+test('public text belongs to its admitted request, with explicit publication surviving cancellation', () => {
+  const old = answer([{ type: 'text', text: 'Earlier request' }]);
+  const next = { ...user, seq: 3, data: { ...user.data, id: 'human-2' } };
+  const current = answer([{ type: 'text', text: 'Current request' }]);
+  const interrupted = { ...old, data: { ...old.data, interrupted: true } };
+  const nested = { ...old, data: { ...old.data, parentCallId: 'worker' } };
+  const rows = projectChatMessages([start(), user, old, next, interrupted, nested,
+    answer([{ type: 'text', text: 'FOREIGN_TURN' }], 2), current, end()]);
+  assert.equal(rows.at(-1).requestId, 'human-2');
+  assert.equal(rows.at(-1).text, 'Current request');
+  for (const reason of ['aborted', 'error']) {
+    const published = projectChatMessages([start(), user, old, reply(3), end(reason)]);
+    assert.deepEqual(published.map(row => row.text), ['question', 'answer']);
+  }
 });
 
 test('explicit publication wins and internal or mismatched turns cannot reply to an old user', () => {

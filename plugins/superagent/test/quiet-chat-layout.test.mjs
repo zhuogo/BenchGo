@@ -14,6 +14,59 @@ const { build } = createRequire(new URL('../../benchgo/package.json', import.met
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 const captureDir = process.env.BENCHGO_CHAT_SCREENSHOTS;
 
+test('Router public text stays mounted across tool and reasoning steps, completion and request boundaries', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html = await fixture(), browser = await chromium.launch({ headless:true, executablePath });
+  try {
+    const page = await browser.newPage({ reducedMotion:'reduce' }), errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.setContent(html);
+    for (const path of ['tool', 'reasoning', 'tool-end']) {
+      await page.evaluate(path => window.renderTurn('text',path),path);
+      const message = page.locator('[data-chat-key="message:reply:human"]');
+      await message.getByText('先看资料。',{exact:true}).waitFor();
+      await page.evaluate(() => {
+        window.turnMessage = document.querySelector('[data-chat-key="message:reply:human"]');
+        window.turnRemoved = false;
+        window.turnObserver = new MutationObserver(records => {
+          if(records.some(record => [...record.removedNodes].some(node => node === window.turnMessage || node.contains?.(window.turnMessage)))) window.turnRemoved = true;
+        });
+        window.turnObserver.observe(document.querySelector('.ba-chat-feed'),{childList:true,subtree:true});
+      });
+      const phases = path === 'tool-end' ? ['tool','completed','history'] : ['tool','reasoning','reasoning','next-text','settled','completed','history'];
+      for(const phase of phases) {
+        await page.evaluate(({phase,path}) => window.renderTurn(phase,path),{phase,path});
+        await message.getByText('先看资料。',{exact:true}).waitFor();
+        if(path !== 'tool-end' && ['next-text','settled','completed','history'].includes(phase)) await message.getByText('找到结果。',{exact:true}).waitFor();
+        assert.equal(await message.count(),1);
+        assert(await message.evaluate(node => node === window.turnMessage),`${path}/${phase}: the reply article stays mounted`);
+        assert.equal(await page.evaluate(() => window.turnRemoved),false,`${path}/${phase}: earlier text never disappears`);
+        assert.equal(await page.getByText(/PRIVATE|LATE/).count(),0);
+        if(captureDir) {
+          await mkdir(captureDir,{recursive:true});
+          await page.screenshot({path:join(captureDir,`continuity-${path}-${phase}.png`),fullPage:true});
+        }
+      }
+      await page.evaluate(() => window.turnObserver.disconnect());
+    }
+    for(const reason of ['aborted','error']) {
+      await page.evaluate(() => window.renderTurn('reasoning','tool'));
+      await page.getByText('先看资料。',{exact:true}).waitFor();
+      await page.evaluate(reason => window.renderTurn(reason,'tool'),reason);
+      await page.locator('[data-chat-key="message:reply:human"]').waitFor({state:'detached'});
+      await page.evaluate(reason => window.renderTurn(reason,'published'),reason);
+      await page.getByText('已正式发表。',{exact:true}).waitFor();
+    }
+    for(const phase of ['switch-session','next-request']) {
+      await page.evaluate(() => window.renderTurn('reasoning','tool'));
+      await page.getByText('先看资料。',{exact:true}).waitFor();
+      await page.evaluate(phase => window.renderTurn(phase,'tool'),phase);
+      await page.locator('[data-chat-key="message:reply:human"]').waitFor({state:'detached'});
+      assert.equal(await page.getByText(/PRIVATE|LATE/).count(),0);
+    }
+    assert.deepEqual(errors,[]);
+  } finally { await browser.close(); }
+});
+
 test('Router streaming message keeps its mounted identity through official settlement and delayed history', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
   const html = await fixture(), browser = await chromium.launch({ headless:true, executablePath });
   try {
@@ -119,6 +172,41 @@ async function fixture() {
       import { AssistantHome } from './plugins/superagent/client/home.jsx';
       import { PartialArguments } from '@deepseek-ai/dsh-util-values';
       const root = createRoot(document.getElementById('root'));
+      window.renderTurn = (phase, path) => {
+        const first='先看资料。', second='找到结果。';
+        const user={id:'human',role:'user',seq:8,text:'请检查',time:1793808000000};
+        const stopped=['aborted','error'].includes(phase);
+        const ended=stopped||['completed','history'].includes(phase);
+        const end=ended?{seq:18,time:1793808001000,data:{reason:{kind:stopped?phase:'completed'}}}:undefined;
+        const turn={turn:2,start:{seq:7},...(end?{end}:{}),steps:[{step:1,start:{seq:7.5},...(phase==='text'?{}:{end:{seq:11}})}]};
+        const blocks=[{kind:'text',text:first},...(path==='reasoning'?[]:[{kind:'tool-call',name:'read',argsRaw:'PRIVATE_ARGS'}])];
+        const legacy={nodes:[{kind:'user',messageId:'human',seq:8,source:{kind:'user'}}],turnEnds:new Map(end?[[2,18]]:[])};
+        if(phase==='text') legacy.partial={turn:2,step:1,blocks:[{kind:'text',text:first}]};
+        else {
+          legacy.nodes.push({kind:'assistant',messageId:'first-step',seq:10,turn:2,step:1,blocks});
+          if(path!=='reasoning') legacy.nodes.push({kind:'tool-result',seq:11,turn:2,step:1,content:[{type:'text',text:'PRIVATE_RESULT'}]});
+          if(path!=='tool-end' && phase!=='tool') {
+            turn.steps.push({step:2,start:{seq:12},...(['settled','completed','history'].includes(phase)?{end:{seq:16}}:{})});
+            if(['settled','completed','history'].includes(phase)) {
+              legacy.nodes.push({kind:'assistant',messageId:'second-step',seq:15,turn:2,step:2,blocks:[{kind:'text',text:second}]});
+              legacy.partial={turn:2,step:1,blocks:[{kind:'text',text:'LATE_PARTIAL'}]};
+            } else legacy.partial={turn:2,step:2,blocks:[{kind:'reasoning',text:'PRIVATE_REASONING'},...(phase==='next-text'?[{kind:'text',text:second}]:[])]};
+          }
+        }
+        if(path==='published') legacy.nodes.push({kind:'tool-result',name:'assistant_reply',turn:2,args:PartialArguments.fromObject({text:'已正式发表。'}),content:[{type:'text',text:JSON.stringify({published:true,requestId:'human'})}]});
+        const history={sessionId:'turn-session',activeReply:ended?null:{turn:2,requestId:'human'},messages:[user]};
+        if(phase==='history') history.messages.push({id:'reply:human',requestId:'human',role:'assistant',kind:'final',text:path==='tool-end'?first:first+'\\n\\n'+second,time:1793808001000});
+        const timeline={turnOrder:[2],turns:new Map([[2,turn]])};
+        if(phase==='next-request') {
+          const next={id:'next',role:'user',seq:21,text:'下一次问题',time:1793808002000};
+          history.messages.push(next); history.activeReply={turn:3,requestId:'next'};
+          legacy.nodes.push({kind:'user',messageId:'next',seq:21,source:{kind:'user'}});
+          legacy.partial={turn:2,step:2,blocks:[{kind:'text',text:'LATE_OLD_REQUEST'}]};
+          timeline.turnOrder.push(3);timeline.turns.set(3,{turn:3,start:{seq:20}});
+        }
+        const home={sessionId:phase==='switch-session'?'other-session':'turn-session',threadId:'main',assistantName:'BenchGo',history};
+        root.render(<div className="ba-root ba-official-conversation" data-assistant-chat=""><div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll=""><QuietChat home={home} session={{running:!ended}} chat={{legacy,timeline}} /></div></div></div>);
+      };
       window.renderHandoff = (phase, kind) => {
         const text = '同一条完整回复';
         const user = { id:'human', role:'user', seq:8, text:'请回复', time:1793808000000 };

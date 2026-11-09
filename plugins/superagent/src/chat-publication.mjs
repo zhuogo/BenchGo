@@ -58,13 +58,14 @@ export function projectChatMessages(events) {
       && typeof event.data.text === 'string' && event.data.text.trim() && event.data.text.length <= 16000) explicit.add(event.data.requestId);
   }
   users.clear();
-  let turn, request, lastAssistant;
+  let turn, request, lastAssistant, publicParts = [];
   const asked = new Map(), answered = new Set();
   for (const event of events) {
-    if (event.type === 'turn/start') { turn = event.data?.turn; request = undefined; lastAssistant = undefined; }
+    if (event.type === 'turn/start') { turn = event.data?.turn; request = undefined; lastAssistant = undefined; publicParts = []; }
     if (replyEvent(event, events)) {
       users.add(event.data.id);
       request = event.data;
+      lastAssistant = undefined; publicParts = [];
       if (legacyReply(request) || internalReply(request) || executionReply(request)) continue;
       const question = readQuestionReply(event.data, events);
       if (question) {
@@ -80,6 +81,7 @@ export function projectChatMessages(events) {
       }
     } else if (event.type === 'user/message' && continuations.has(event.data?.id)) {
       request = requests.get(continuations.get(event.data.id));
+      lastAssistant = undefined; publicParts = [];
     } else if (event.type === chatPublicationType && event.ignorable === true) {
       const row = event.data;
       if (row?.kind === 'ticket-reply' && internalReply(requests.get(row.requestId)) && ['approval', 'recovery'].includes(requests.get(row.requestId).source.replyKind)) {
@@ -105,21 +107,22 @@ export function projectChatMessages(events) {
       if (answers && !answered.has(callId)) rows.push({ seq: event.seq, id: `question:${callId}`, role: 'user', kind: 'question-reply', callId, questions, answers,
         text: questionReplyText(questions, answers), content: [{ type: 'text', text: questionReplyText(questions, answers) }], time: event.time });
       if (answers) answered.add(callId);
-    } else if (event.type === 'assistant/message' && turn !== undefined && event.data?.turn === turn) {
+    } else if (event.type === 'assistant/message' && turn !== undefined && event.data?.turn === turn
+      && !event.data.interrupted && !event.data.parentCallId && event.data.message?.source?.kind === 'model') {
       lastAssistant = event;
+      const text = textBlocks(event.data.message.content).map(block => block.text).join('\n');
+      if (text.trim()) publicParts.push(text);
     } else if (event.type === 'turn/end') {
-      const message = lastAssistant?.data?.message;
       if (turn !== undefined && event.data?.turn === turn && event.data?.reason?.kind === 'completed'
-        && request?.id && !internalReply(request) && !legacyReply(request) && !executionReply(request) && !explicit.has(request.id) && !published.has(request.id)
-        && message?.source?.kind === 'model' && !message.content?.some(block => block.type === 'tool-call')) {
-        const text = textBlocks(message.content).map(block => block.text).join('\n');
+        && request?.id && !internalReply(request) && !legacyReply(request) && !executionReply(request) && !explicit.has(request.id) && !published.has(request.id)) {
+        const text = publicParts.join('\n\n');
         if (text.trim()) {
           published.add(request.id);
           rows.push({ seq: event.seq, id: `reply:${request.id}`, role: 'assistant', kind: 'final', requestId: request.id,
             text, content: [{ type: 'text', text }], time: event.time, ...(publicUsage(lastAssistant.data.usage) ? { usage: publicUsage(lastAssistant.data.usage) } : {}) });
         }
       }
-      turn = undefined; request = undefined; lastAssistant = undefined;
+      turn = undefined; request = undefined; lastAssistant = undefined; publicParts = [];
     }
   }
   return rows;
