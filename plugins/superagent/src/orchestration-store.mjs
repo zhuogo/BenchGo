@@ -17,6 +17,7 @@ import { installWorkerExecutionStore } from './worker-execution-store.mjs';
 import { installInterruptedContinuationStore } from './interrupted-continuation-store.mjs';
 import { installRouterQuestionStore } from './router-question-store.mjs';
 import { normalizeTicketTitle } from './ticket-title.mjs';
+import { installExecutionFactsStore } from './execution-facts-store.mjs';
 
 const json = value => JSON.stringify(value);
 const parse = value => JSON.parse(value);
@@ -120,11 +121,11 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   if (!ticketColumns.has('adjustment_of_ticket_id')) db.exec('ALTER TABLE sa_tickets ADD COLUMN adjustment_of_ticket_id TEXT REFERENCES sa_tickets(id)');
   if (!ticketColumns.has('acceptance')) db.exec(`ALTER TABLE sa_tickets ADD COLUMN acceptance TEXT NOT NULL DEFAULT '';
     UPDATE sa_tickets SET acceptance=json_extract(mandate,'$.acceptance') WHERE json_type(mandate,'$.acceptance')='text';`);
-  let closed = false;
+  let closed = false, executionFacts;
   const tx = fn => {
     if (closed) throw new Error('Orchestration store is closed');
     db.exec('BEGIN IMMEDIATE');
-    try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
+    try { const result = fn(); db.exec('COMMIT'); executionFacts?.flushExecutionFactChanges(); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
   };
   const threadRow = threadId => db.prepare('SELECT * FROM sa_threads WHERE id=?').get(threadId);
   const triggerRow = triggerId => db.prepare('SELECT * FROM sa_triggers WHERE id=?').get(triggerId);
@@ -1029,7 +1030,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     },
     pendingOutbox(now = Date.now(), limit = 100) { return db.prepare("SELECT * FROM sa_outbox WHERE state='queued' AND next_at<=? ORDER BY created_at,id LIMIT ?").all(now, safeLimit(limit, 100, 1000)).map(parseOutbox); },
     deliveries(ticketId) { return db.prepare('SELECT * FROM sa_outbox WHERE ticket_id=? ORDER BY created_at,id').all(id(ticketId)).map(parseOutbox); },
-    close() { if (!closed) { closed = true; db.close(); } },
+    close() { if (!closed) { closed = true; executionFacts?.disposeExecutionFacts(); db.close(); } },
   };
 
   function closeDeliveredTicket(row, receipt, now) {
@@ -1174,5 +1175,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   Object.assign(api, installRouterQuestionStore({ db, tx, api }));
   retireContentReview({ db, tx });
   Object.assign(api, installLearningSourceStore({ db, tx, api }));
+  executionFacts = installExecutionFactsStore({ db, tx, api });
+  Object.assign(api, executionFacts);
   return api;
 }

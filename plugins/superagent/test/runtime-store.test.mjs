@@ -7,6 +7,27 @@ import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { systemStateDelivery } from '../src/result-delivery.mjs';
 
+test('display observers only wake after committed runtime writes, including standalone goals', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-runtime-commit-'));
+  let notices = 0, runtime;
+  runtime = createAssistantRuntimeStore({ directory, afterCommit: () => { notices++; assert.notEqual(runtime.meta('inside'), 'uncommitted'); } });
+  t.after(async () => { runtime.close(); await rm(directory, { recursive: true, force: true }); });
+  runtime.setMeta('plain', 1);
+  assert.equal(notices, 1);
+  assert.throws(() => runtime.transaction(() => {
+    runtime.setMeta('inside', 'uncommitted');
+    assert.equal(notices, 1);
+    throw new Error('rollback');
+  }), /rollback/);
+  assert.equal(notices, 1);
+  assert.equal(runtime.meta('inside'), null);
+  runtime.transaction(() => { runtime.setMeta('inside', 'committed'); runtime.setMeta('second', 2); assert.equal(notices, 1); });
+  assert.equal(notices, 2);
+  runtime.insertGoal({ id: 'goal', status: 'active' });
+  runtime.updateGoal('goal', { status: 'paused' });
+  assert.equal(notices, 4);
+});
+
 test('legacy delivery keys expose the same stable signal identity for the Router reply', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-legacy-state-key-'));
   const db = createAssistantRuntimeStore({ directory });
