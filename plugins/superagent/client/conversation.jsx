@@ -43,6 +43,7 @@ function PetConversationStatus({ home, session }) {
   const pendingInteraction = statuses.get(home.sessionId)?.pendingInteraction;
   const liveConfig = useSyncExternalStore(assistantConfigSync.subscribe, assistantConfigSync.getSnapshot);
   const config = liveConfig || home.assistantConfig || {};
+  const name = (config.name ?? home.assistantName) || '未命名';
   const [catalog, setCatalog] = useState(null), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [expression, setExpression] = useState(null);
   const lastEvent = useRef(null);
@@ -75,7 +76,7 @@ function PetConversationStatus({ home, session }) {
     try { await home.api('petDiscard', { draftId: draft.draftId }); setCatalog(value => ({ ...value, draft: null })); }
     catch (cause) { setError(cause.message); } finally { setBusy(false); }
   }
-  return <div className="ba-pet-chat"><style>{css}</style><div className="ba-chat-heading"><AssistantCard name={config.name || home.assistantName || 'BenchGo'} pet={pet} html={config.cardHtml} motion={config.cardMotion !== false} onOpen={() => { if (document.dispatchEvent(new Event('benchgo:assistant-open-identity', { cancelable: true }))) home.onOpenResources('resources'); }} /><ActivityTrigger api={home.api} /></div>{draft && <div className="ba-pet-chat-draft"><PetAvatar pet={draft.pet} src={draft.src} size={72} motion={false} /><div><strong>新形象预览</strong><p>应用后仍是同一个助手，记忆与会话保留。</p><div className="ba-pet-editor-actions"><Button variant="default" type="button" className="ba-primary" disabled={busy || session.running} onClick={apply}>{busy ? '应用中…' : '应用形象'}</Button><Button variant="ghost" type="button" className="ba-quiet" onClick={() => { petDesignIntent.request(home.threadId, 'refine'); }}>继续修改</Button><Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={discard}>取消预览</Button></div></div></div>}{error && <p className="ba-note" role="alert">形象信息：{error}</p>}</div>;
+  return <div className="ba-pet-chat"><style>{css}</style><div className="ba-chat-heading"><AssistantCard name={name} pet={pet} html={config.cardHtml} motion={config.cardMotion !== false} onOpen={() => { if (document.dispatchEvent(new Event('benchgo:assistant-open-identity', { cancelable: true }))) home.onOpenResources('resources'); }} /><ActivityTrigger api={home.api} /></div>{draft && <div className="ba-pet-chat-draft"><PetAvatar pet={draft.pet} src={draft.src} size={72} motion={false} /><div><strong>新形象预览</strong><p>应用后仍是同一个助手，记忆与会话保留。</p><div className="ba-pet-editor-actions"><Button variant="default" type="button" className="ba-primary" disabled={busy || session.running} onClick={apply}>{busy ? '应用中…' : '应用形象'}</Button><Button variant="ghost" type="button" className="ba-quiet" onClick={() => { petDesignIntent.request(home.threadId, 'refine'); }}>继续修改</Button><Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={discard}>取消预览</Button></div></div></div>}{error && <p className="ba-note" role="alert">形象信息：{error}</p>}</div>;
 }
 
 function OfficialConversation({ useSession, useConversation, renderFactorySlot }) {

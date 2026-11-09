@@ -47,7 +47,7 @@ export function AssistantHome({ api, assistantName, assistantConfig, onOpenResou
         <p>{hasWork ? '看看正在推进的事，再决定下一步。' : '说出目标，让我们一起把事情做好。'}</p>
       </div>
       <div className="ba-home-art" aria-hidden="true"><div className="ba-home-arch" /><div className="ba-home-mascot"><PetAvatar pet={assistantConfig?.pet} src={petImageUrl(assistantConfig?.pet, document.baseURI)} size={126} motion={assistantConfig?.cardMotion !== false} /></div><span className="ba-home-art-caption">思考 · 行动 · 交付</span></div>
-      <div className="ba-home-byline"><span>{assistantName || '你的总助手'} · 工作简报</span><span>{updated ? <><span className="ba-home-live" />已同步</> : '从这里开始'}</span></div>
+      <div className="ba-home-byline"><span>{(assistantConfig?.name ?? assistantName) || '你的总助手'} · 工作简报</span><span>{updated ? <><span className="ba-home-live" />已同步</> : '从这里开始'}</span></div>
     </header>
     {error && <div className="ba-home-error" role="alert"><span>{rows ? '暂时无法更新，以下为上次同步的任务。' : '暂时无法读取任务。'}<small>{error}</small></span><Button variant="ghost" type="button" onClick={refresh} disabled={loading}>{loading ? '重试中…' : '重试'}</Button></div>}
     {rows === null && !error ? <div className="ba-home-loading" role="status"><span />正在整理工作简报…</div> : <div className="ba-home-brief">

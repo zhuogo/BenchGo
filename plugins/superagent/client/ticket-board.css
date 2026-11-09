@@ -1,6 +1,10 @@
 .ba-ticket-view-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 18px}
-.ba-ticket-search{display:flex!important;align-items:center;gap:8px;flex:1;min-width:180px;max-width:400px;margin:0!important;color:var(--ba-muted)}
-.ba-ticket-search>input{box-sizing:border-box;width:100%;min-width:0;min-height:36px;padding:8px 10px;border:1px solid var(--ba-line);border-radius:8px;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#202124);font:inherit;font-size:13px}
+.ba-ticket-view-controls>.bg-segments-scroll{margin:0}
+.ba-ticket-search{position:relative;display:flex!important;flex-direction:row;align-items:center;flex:1;min-width:180px;max-width:400px;margin:0!important;color:var(--ba-muted)}
+.ba-ticket-search>.cmd-ui-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);pointer-events:none}
+.ba-root .ba-ticket-search>input{box-sizing:border-box;width:100%;min-width:0;min-height:36px;padding:8px 38px 8px 35px;border:1px solid var(--ba-line);border-radius:8px;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#202124);font:inherit;font-size:13px}
+.ba-ticket-search>input::-webkit-search-cancel-button{display:none}
+.ba-ticket-search .ba-ticket-search-clear{position:absolute;right:3px;top:50%;transform:translateY(-50%);width:30px;height:30px;min-height:30px;padding:0;border:0;border-radius:6px;color:var(--ba-muted)}
 .ba-ticket-search>input:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#315be8);outline-offset:2px}
 .ba-ticket-count{margin-left:auto;color:var(--ba-muted);font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .ba-ticket-board-frame{container-type:inline-size;min-width:0}
@@ -18,4 +22,4 @@
 .ba-ticket-board .ba-task-open strong{font-size:14px}
 @container(max-width:1040px){.ba-ticket-board{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @container(max-width:520px){.ba-ticket-board{grid-template-columns:minmax(0,1fr);gap:24px}.ba-ticket-lane-empty{min-height:80px}}
-@media(max-width:640px){.ba-ticket-search{max-width:none;flex-basis:100%;order:2}.ba-ticket-search>input{min-height:44px}.ba-ticket-view-controls{gap:10px}.ba-ticket-count{margin-left:auto}.ba-ticket-board .ba-task-row-actions{gap:6px}}
+@media(max-width:640px){.ba-ticket-search{max-width:none;flex-basis:100%;order:2}.ba-root .ba-ticket-search>input{min-height:44px;padding-right:44px}.ba-ticket-search .ba-ticket-search-clear{right:0;width:44px;height:44px;min-height:44px}.ba-ticket-view-controls{gap:10px}.ba-ticket-count{margin-left:auto}.ba-ticket-board .ba-task-row-actions{gap:6px}}

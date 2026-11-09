@@ -1,4 +1,4 @@
-import { TaskDetail } from './task-list.jsx';
+import { TaskDetail, TaskStatusGlyph as StatusGlyph, TaskStatusTitle } from './task-list.jsx';
 import { TicketWaiting } from './ticket-waiting.jsx';
 import { TaskExecution } from './task-execution.jsx';
 import { ticketWaiting } from './ticket-state.mjs';
@@ -43,16 +43,8 @@ const tabIcons = {
   tasks: <TabIcon path={<><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01" /></>} />,
   identity: <TabIcon path={<><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" /><circle cx="12" cy="12" r="3.2" /></>} />,
 };
-function StatusGlyph({ status }) {
-  if (status === 'completed') return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11" /></svg>;
-  if (['failed', 'blocked', 'uncertain', 'continuation_wait'].includes(status)) return <span className="ba-board-glyph-text" aria-hidden="true">!</span>;
-  if (['waiting', 'awaiting_user'].includes(status)) return <span className="ba-board-glyph-text" aria-hidden="true">?</span>;
-  if (['paused', 'pausing'].includes(status)) return <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>;
-  if (activeActivityStates(status)) return <span className="ba-board-pulse" aria-hidden="true" />;
-  return <span className="ba-board-dot" aria-hidden="true" />;
-}
 function BoardPet({ identity, size = 56 }) {
-  return <PetAvatar pet={identity?.pet} src={petImageUrl(identity?.pet, document.baseURI)} size={size} motion={false} alt={`${identity?.name || 'BenchGo'}的宠物形象`} />;
+  return <PetAvatar pet={identity?.pet} src={petImageUrl(identity?.pet, document.baseURI)} size={size} motion={false} alt={identity?.name ? `${identity.name}的宠物形象` : '未命名助手的宠物形象'} />;
 }
 function BoardEmpty({ identity, onReturn }) {
   return <div className="ba-board-empty" role="status">
@@ -158,12 +150,13 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources }) {
     catch (cause) { setActionError({ message: cause.message || '任务未能停止，请重试。', row }); } finally { setStopping(null); }
   };
   const selected = rows?.find(row => row.key === selectedKey);
+  const selectedWaiting = selected?.kind === 'ticket' ? ticketWaiting(selected) : null;
   const sorted = (rows || []).filter(row => !archivedActivityTicket(row)).sort((a, b) => (dateValue(b.time)?.getTime() || 0) - (dateValue(a.time)?.getTime() || 0));
   const active = sorted.filter(row => activeActivityStates(row.status));
   const attention = sorted.filter(row => attentionActivityStates.has(row.status));
-  const rest = sorted.filter(row => !activeActivityStates(row.status));
+  const rest = sorted.filter(row => !activeActivityStates(row.status) && !attentionActivityStates.has(row.status));
   const groups = new Map(); for (const row of rest) { const key = day(row.time); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }
-  const name = identity?.name || 'BenchGo';
+  const name = identity?.name || '未命名';
   const modelEntry = identity?.models?.[0];
   const modelLabel = typeof modelEntry === 'string' ? modelEntry : modelEntry?.modelId || modelEntry?.id || modelEntry?.name || '';
   const goalCount = sorted.filter(row => row.kind === 'goal').length;
@@ -194,6 +187,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources }) {
         {actionError && <ResourceState kind="error" title="未能停止任务" description={actionError.message} onAction={() => stop(actionError.row)} />}
         {error && tab !== 'identity' && <ResourceState kind="error" title="暂时无法更新任务" description={rows !== null ? '已保留上次的任务记录，请重试。' : '任务记录暂时无法读取，请检查连接后重试。'} onAction={refresh} />}
         {tab === 'tasks' && <>{rows === null && !error && loadingState}
+          {attention.length > 0 && <section className="ba-board-section"><h3 className="ba-board-day">待处理<span>{attention.length}</span></h3>{attention.map(renderRow)}</section>}
           {rows !== null && active.length > 0 && <section className="ba-board-section"><button type="button" className="ba-board-section-head" aria-expanded={activeOpen} aria-controls={`${id}-active`} onClick={() => setActiveOpen(value => !value)}><span>进行中</span><span className="ba-board-section-count">{active.length}</span><UIIcon name="chevronDown" size={13} /></button><div id={`${id}-active`} hidden={!activeOpen}>{active.map(renderRow)}</div></section>}
           {rows !== null && [...groups].map(([label, items]) => <section className="ba-activity-day ba-board-section" key={label}><h3 className="ba-board-day">{label}<span>{items.length}</span></h3>{items.map(renderRow)}</section>)}
           {rows !== null && !sorted.length && !error && <BoardEmpty identity={identity} onReturn={close} />}</>}
@@ -204,20 +198,15 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources }) {
           <dl className="ba-board-facts"><div><dt>工单</dt><dd>{rows === null ? '—' : `${ticketCount} 条 · 进行中 ${activeTickets}`}</dd></div><div><dt>持续目标</dt><dd>{rows === null ? '—' : `${goalCount} 个`}</dd></div><div><dt>待处理</dt><dd>{rows === null ? '—' : `${attention.length} 件`}</dd></div></dl>
           <div className="ba-board-links">
             <Button variant="ghost" onClick={() => openResource('pet')}><BoardPet identity={identity} size={32} /><span className="ba-board-link-label"><strong>助手形象</strong><small>选择陪你工作的伙伴</small></span><UIIcon name="chevronLeft" className="ba-board-arrow" size={15} /></Button>
-            {[['models', '身份与模型', '名字、偏好与模型配置', 'userlib'], ['memory', '记忆与档案', '保留重要的信息与约定', 'archive']].map(([key, title, description, icon]) => <Button variant="ghost" key={key} onClick={() => openResource(key)}><UIIcon name={icon} size={19} /><span className="ba-board-link-label"><strong>{title}</strong><small>{description}</small></span><UIIcon name="chevronLeft" className="ba-board-arrow" size={15} /></Button>)}
+            {[['models', '模型配置', '身份、工作与辅助模型', 'atom'], ['memory', '记忆与档案', '保留重要的信息与约定', 'archive']].map(([key, title, description, icon]) => <Button variant="ghost" key={key} onClick={() => openResource(key)}><UIIcon name={icon} size={19} /><span className="ba-board-link-label"><strong>{title}</strong><small>{description}</small></span><UIIcon name="chevronLeft" className="ba-board-arrow" size={15} /></Button>)}
           </div></section>}
       </div><footer className="ba-board-footer"><Button variant="ghost" className="ba-board-manage" onClick={() => openResource('tasks')}><UIIcon name="schedules" size={16} />任务管理</Button><span className="ba-board-updated" title={updated ? `上次同步：${stamp(updated)}` : undefined}>{error || identityError ? '同步失败' : loading || identityLoading ? '更新中…' : updated ? `${timeShort(updated)} 更新` : '尚未同步'}</span><Tooltip label="刷新看板" side="top" delayMs={450} portal><Button variant="ghost" className="ba-icon" aria-label="刷新看板" disabled={loading || identityLoading} onClick={refreshAll}><UIIcon name="refresh" size={16} /></Button></Tooltip></footer>
     </aside><style>{taskCss}</style>
-    <TaskDetail open={!!selected && open} title={taskTitle(selected)} onClose={() => setSelectedKey(null)}>{selected && <>
-      <div className="ba-activity-detail"><p>{detailPhase(selected)}</p></div>
-      {selected.kind === 'ticket' && <TaskExecution execution={selected.execution} ticketStatus={selected.status} stale={!!error} />}
-      <div className="ba-activity-detail">
-        {selected.kind === 'ticket' && selected.target && <section className="ba-task-instructions"><h3>任务要求</h3><p>{selected.target}</p>{selected.acceptance && <><h3>验收条件</h3><p>{selected.acceptance}</p></>}</section>}
-        {selected.detail && <p>{selected.detail}</p>}
-        <div>创建：{stamp(selected.createdAt)}</div><div>更新：{stamp(selected.updatedAt)}</div>
-      </div>
+    <TaskDetail open={!!selected && open} title={selected && <TaskStatusTitle title={taskTitle(selected)} status={selected.status} label={detailPhase(selected)} />} onClose={() => setSelectedKey(null)} footer={selected && <div className="ba-activity-detail-actions"><Button variant="ghost" onClick={() => openResource('tasks', selected.kind === 'ticket' ? { ticketId: selected.id } : undefined)}>前往任务管理</Button>{!terminal.has(selected.status) && !selectedWaiting && <Button variant="outline" disabled={stopping !== null} onClick={() => stop(selected)}>{stopping === selected.key ? '正在停止…' : '停止任务'}</Button>}</div>}>{selected && <>
       {actionError?.row.key === selected.key && <ResourceState kind="error" title="未能停止任务" description={actionError.message} onAction={() => stop(selected)} />}
       {selected.kind === 'ticket' && <TicketWaiting key={`${selected.id}:${selected.instructionRevision}:${selected.resultVersion}`} api={api} ticket={selected} onRefresh={refresh} onOpenResources={openResource} />}
-      <div className="ba-activity-detail-actions"><Button variant="ghost" onClick={() => openResource('tasks', selected.kind === 'ticket' ? { ticketId: selected.id } : undefined)}>前往任务管理</Button>{!terminal.has(selected.status) && !(selected.kind === 'ticket' && ticketWaiting(selected)) && <Button variant="outline" disabled={stopping !== null} onClick={() => stop(selected)}>{stopping === selected.key ? '正在停止…' : '停止任务'}</Button>}</div>
+      {selected.detail && selected.detail !== selectedWaiting?.reason && <section className="ba-activity-detail"><h3>{selected.status === 'completed' ? '结果摘要' : '当前进展'}</h3><p>{selected.detail}</p></section>}
+      {selected.kind === 'ticket' && <TaskExecution key={selected.key} execution={selected.execution} ticketStatus={selected.status} stale={!!error} />}
+      {!selectedWaiting && !selected.detail && !selected.execution?.worker && !selected.execution?.children?.length && <p className="ba-activity-detail-note">{selected.phase}</p>}
     </>}</TaskDetail></>;
 }

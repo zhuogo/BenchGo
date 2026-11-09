@@ -11,7 +11,7 @@ function harness({ fail = false } = {}) {
   const state = [[]], refs = [], calls = [], module = { exports: {} }; let cursor = 0, refCursor = 0, opened = 0;
   const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value != null && value !== false) }),
     useState: value => { const at = cursor++; if (!(at in state)) state[at] = value; return [state[at], next => { state[at] = typeof next === 'function' ? next(state[at]) : next; }]; },
-    useRef: value => refs[refCursor++] ||= { current: value }, useCallback: fn => fn, useEffect() {} };
+    useId: () => 'task-test', useRef: value => refs[refCursor++] ||= { current: value }, useCallback: fn => fn, useEffect() {} };
   const Modal = () => null;
   runInNewContext(code, { module, exports: module.exports, require: name => name.endsWith('ticket-board.mjs') ? ticketBoard : name.endsWith('/ui/button.jsx') ? { Button: 'button' } : name.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : name === 'react' ? react : { Modal, useDirtyRegistry: () => () => () => {} } });
   const props = { onCreateGoal: () => opened++, api: async (action, args) => {

@@ -72,6 +72,7 @@ test('ticket board renders four states, filters, retains details and routes real
     const shot = async name => { if (screenshots) await page.screenshot({ path: join(screenshots, name + '.png'), fullPage: true }); };
     for (const [state, title] of [['loading', '正在读取工单'], ['error', '工单暂时无法读取'], ['empty', '暂无工单']]) {
       await render(state); await page.getByText(title, { exact: true }).waitFor(); await shot(state);
+      assert(await page.getByText(state === 'empty' ? '0 项工单' : '数量待同步', { exact: true }).isVisible(), 'only a loaded empty response may show zero');
       assert(await page.getByRole('tab', { name: '已归档', exact: true }).isVisible(), 'archive navigation remains reachable in every resource state');
     }
     await page.getByRole('tab', { name: '已归档', exact: true }).click();
@@ -98,6 +99,9 @@ test('ticket board renders four states, filters, retains details and routes real
     await list.first().waitFor();
     await page.getByRole('tab', { name: '看板', exact: true }).click();
     const board = page.getByLabel('工单看板', { exact: true }); await board.waitFor();
+    const panelId = await page.getByRole('tab', { name: '看板', exact: true }).getAttribute('aria-controls');
+    assert.equal(await page.locator('[role=tabpanel]').getAttribute('id'), panelId);
+    assert.equal(await page.locator('[role=tabpanel]').getAttribute('aria-labelledby'), await page.getByRole('tab', { name: '看板', exact: true }).getAttribute('id'));
     assert.equal(await board.locator('.ba-ticket-lane').count(), 4);
     for (const title of ['待执行', '执行中', '待处理', '已结束']) assert.equal(await board.getByRole('region', { name: `${title}，1 项`, exact: true }).count(), 1);
     await shot('board-desktop');
@@ -108,6 +112,10 @@ test('ticket board renders four states, filters, retains details and routes real
     await page.getByRole('searchbox', { name: '搜索工单' }).fill('不存在');
     await page.getByText('没有匹配的工单', { exact: true }).waitFor();
     await page.getByRole('button', { name: '清除搜索', exact: true }).first().click();
+    assert(await page.getByRole('searchbox', { name: '搜索工单' }).evaluate(node => node === document.activeElement), 'inline clear restores search focus');
+    await page.getByRole('searchbox', { name: '搜索工单' }).fill('兼容');
+    await page.getByRole('searchbox', { name: '搜索工单' }).press('Escape');
+    assert.equal(await page.getByRole('searchbox', { name: '搜索工单' }).inputValue(), '');
     await board.getByRole('region', { name: '待处理，1 项', exact: true }).getByRole('button', { name: '继续工单', exact: true }).click();
     assert((await page.evaluate(() => window.calls)).some(([name, input]) => name === 'ticketResume' && input.ticketId === 'paused'));
     await board.getByRole('button', { name: /确认发布范围.*已暂停/ }).click();
