@@ -36,7 +36,8 @@ async function fixture() {
       const state={openState:mode==='loading'?'loading':mode==='error'?'error':'open',openError:mode==='error'?Error('system event must be first'):null,running:false,hasMore:false,loadingOlder:false,pendingSubmissions:[]};
       const chat={order:[...nodes.keys()],nodes,navigation:{items:()=>[]}},conversation={views:{grouped:()=>undefined}},sessions={byId:{channel:{projectionValues:{benchgoChannelSource:source}}}};
       const select=value=>selector=>selector(value),noop=()=>{};
-      root.render(<div key={++serial} style={{height:640,display:'flex',flexDirection:'column',maxWidth:1000,margin:'auto'}}><aside aria-label='来源'><SourceLabel sessionId='channel' useSessions={select(sessions)}/></aside><ChatView sessionId='channel' useSession={select(state)} useChat={select(chat)} useConversation={select(conversation)} useSessions={select(sessions)} usePresentation={select({collapseTiming:'immediate',mode:'all'})} useProjection={()=>undefined} useInteractionIds={select([])} dispatchInteraction={noop} useContextMenu={()=>({getTriggerProps:()=>({})})} resolveFilePath={value=>value} openFile={noop} openExternalLink={noop} loadOlder={noop} loadThrough={noop} loadImage={noop} inspectCall={noop} forkAt={noop} chatScroll={{read:()=>null,save:noop}} t={t} renderSlot={(name,props)=>name==='conversation.chat.flow'?props.entries.map(entry=><ContextMessageNodeView key={entry.key} node={nodes.get(entry.key)} t={t}/>):null}/></div>);
+      const renderId=++serial; root.render(<div key={renderId} data-fixture-render={renderId} style={{height:640,display:'flex',flexDirection:'column',maxWidth:1000,margin:'auto'}}><aside aria-label='来源'><SourceLabel sessionId='channel' useSessions={select(sessions)}/></aside><ChatView sessionId='channel' useSession={select(state)} useChat={select(chat)} useConversation={select(conversation)} useSessions={select(sessions)} usePresentation={select({collapseTiming:'immediate',mode:'all'})} useProjection={()=>undefined} useInteractionIds={select([])} dispatchInteraction={noop} useContextMenu={()=>({getTriggerProps:()=>({})})} resolveFilePath={value=>value} openFile={noop} openExternalLink={noop} loadOlder={noop} loadThrough={noop} loadImage={noop} inspectCall={noop} forkAt={noop} chatScroll={{read:()=>null,save:noop}} t={t} renderSlot={(name,props)=>name==='conversation.chat.flow'?props.entries.map(entry=><ContextMessageNodeView key={entry.key} node={nodes.get(entry.key)} t={t}/>):null}/></div>);
+      return serial;
     };
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-channel-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
@@ -66,7 +67,8 @@ test('channel plugin record renders through original ChatView and context disclo
     for (const width of [1440,390]) {
       await page.setViewportSize({ width, height: 800 });
       for (const mode of ['empty','loading','error','data']) {
-        await page.evaluate(mode=>window.renderScenario(mode),mode);
+        const renderId=await page.evaluate(mode=>window.renderScenario(mode),mode);
+        await page.locator(`[data-fixture-render="${renderId}"]`).waitFor();
         await page.getByLabel('来源').getByText('feishu',{exact:true}).waitFor();
         if(mode==='loading')await page.getByText('正在加载会话记录',{exact:true}).waitFor();
         if(mode==='error')await page.getByText('会话记录读取失败：system event must be first',{exact:true}).waitFor();
