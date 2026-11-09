@@ -47,11 +47,12 @@ test('cleanup freezes a persistent list, excludes unsettled work and archives on
   assert.deepEqual(receipt.items.map(row => row.id), ['one']);
   assert.deepEqual(f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'], confirmedBy, requestId: 'archive-1' }), receipt);
   assert.throws(() => f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'], confirmedBy, requestId: 'different-request' }), { code: 'CLEANUP_PREVIEW_CONSUMED' });
-  assert.deepEqual(f.orchestration.getTicket('one'), before, 'archive never rewrites domain state or requirements');
+  assert.deepEqual({ ...f.orchestration.getTicket('one'), archived: false }, before, 'archive only changes the presentation flag, never domain state or requirements');
+  assert.equal(f.orchestration.getTicket('one').archived, true);
   assert.equal(await readFile(artifact, 'utf8'), 'keep result');
   assert(f.orchestration.listTickets({ archived: true }).some(row => row.id === 'one'));
   assert(!f.orchestration.listTickets({ archived: false }).some(row => row.id === 'one'));
-  assert.equal(f.tasks.project('ticket', [before], { archived: true })[0].taskMeta.deleted, false);
+  assert.equal(Object.hasOwn(f.tasks.project('ticket', [before], { archived: true })[0].taskMeta, 'deleted'), false);
   assert.equal(f.tasks.cleanupHistory({ ticketId: 'one' }).length, 1);
   const next = f.tasks.previewCleanup({ scope, ids: ['two'] });
   assert.throws(() => f.tasks.commitCleanup({ previewId: next.previewId, ids: ['two'], confirmedBy: f.confirm(next), requestId: 'archive-1' }), { code: 'IDEMPOTENCY_CONFLICT' });
@@ -137,19 +138,64 @@ test('restore binds the approved subset and leaves the other archived items for 
 });
 
 test('legacy hidden tickets become recoverable archive tombstones without reopening execution', async t => {
-  const f = await fixture(t); f.ticket('legacy'); f.ticket('stale', 'open');
-  f.database.setMeta('task-presentation:ticket:legacy', { version: 2, deleted: true, executionRevision: 1, title: 'Legacy' });
-  f.database.setMeta('task-presentation:ticket:stale', { version: 2, deleted: true, executionRevision: 1 });
-  assert.deepEqual(f.orchestration.listTickets({ archived: true }).map(row => row.id), ['legacy']);
-  f.reopen();
-  const meta = f.database.meta('task-presentation:ticket:legacy');
-  assert.equal(meta.deleted, false); assert.equal(meta.archived, true); assert.equal(meta.version, 3);
-  assert.equal(f.orchestration.getTicket('legacy').status, 'cancelled');
-  assert.equal(f.database.meta('task-presentation:ticket:stale').archived, false);
-  const audit = f.tasks.cleanupHistory({ ticketId: 'legacy' })[0];
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-legacy-cleanup-'));
+  let orchestration = createAssistantOrchestrationStore({ directory }), database;
+  t.after(async () => { database?.close(); orchestration.close(); await rm(directory, { recursive: true, force: true }); });
+  orchestration.createThread({ id: 'owner', source: { type: 'desktop', id: 'main' } });
+  for (const id of ['legacy', 'stale', 'complete', 'visible', 'unsafe', 'archived']) {
+    orchestration.createTicket({ id, threadId: 'owner', target: id, mandate: {} });
+    if (id === 'unsafe') orchestration.createAssignment(id, {});
+    orchestration.updateTicket(id, { status: id === 'stale' ? 'open' : 'cancelled' });
+  }
+  const before = orchestration.getTicket('legacy');
+  orchestration.close();
+  let sqlite = new DatabaseSync(join(directory, 'assistant.db'));
+  const put = (kind, id, value) => sqlite.prepare('INSERT INTO task_meta(key,value) VALUES (?,?)').run(`task-presentation:${kind}:${id}`, JSON.stringify(value));
+  for (const id of ['legacy', 'stale', 'unsafe']) put('ticket', id, { version: 2, deleted: true, executionRevision: 1, title: 'Legacy' });
+  put('ticket', 'complete', { version: 2, deleted: false, completed: true, executionRevision: 1 });
+  put('ticket', 'visible', { version: 2, deleted: false, archived: true, executionRevision: 1 });
+  put('ticket', 'archived', { version: 2, deleted: false, archived: true, archiveRevision: 1, cleanupReceiptId: 'existing-receipt' });
+  const existingReceipt = JSON.stringify({ receiptId: 'existing-receipt', requestId: 'existing-request', operation: 'archive',
+    items: [{ id: 'archived', instructionRevision: 1, before: {}, after: { archived: true, archiveRevision: 1, cleanupReceiptId: 'existing-receipt' } }] });
+  sqlite.prepare('INSERT INTO task_cleanup_receipts(id,request_id,binding,payload) VALUES (?,?,?,?)').run('existing-receipt', 'existing-request', 'existing-binding', existingReceipt);
+  put('goal', 'goal', { version: 2, deleted: true }); put('evaluation', 'eval', { version: 2, deleted: true });
+  sqlite.close();
+  // Reopen only the authoritative store: migration must finish before runtime exists.
+  orchestration = createAssistantOrchestrationStore({ directory });
+  sqlite = new DatabaseSync(join(directory, 'assistant.db'));
+  const meta = id => JSON.parse(sqlite.prepare('SELECT value FROM task_meta WHERE key=?').get(`task-presentation:ticket:${id}`).value);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM task_meta WHERE key LIKE 'task-presentation:ticket:%' AND json_type(value,'$.deleted') IS NOT NULL").get().n, 0);
+  assert.equal(meta('legacy').archived, true); assert.equal(meta('legacy').archiveRevision, 1); assert.equal(meta('legacy').version, 3);
+  assert.equal(Object.hasOwn(meta('legacy'), 'executionRevision'), false);
+  assert.equal(meta('complete').completed, true); assert.equal(meta('complete').executionRevision, 1);
+  assert.equal(meta('archived').archiveRevision, 1); assert.equal(meta('archived').cleanupReceiptId, 'existing-receipt');
+  assert.equal(sqlite.prepare("SELECT payload FROM task_cleanup_receipts WHERE id='existing-receipt'").get().payload, existingReceipt, 'existing audit is immutable');
+  assert.equal(meta('stale').archived, undefined); assert.equal(meta('unsafe').archived, undefined);
+  assert.equal(sqlite.prepare("SELECT json_extract(value,'$.deleted') AS deleted FROM task_meta WHERE key='task-presentation:goal:goal'").get().deleted, 1);
+  assert.equal(sqlite.prepare("SELECT json_extract(value,'$.deleted') AS deleted FROM task_meta WHERE key='task-presentation:evaluation:eval'").get().deleted, 1);
+  const audits = sqlite.prepare('SELECT payload FROM task_cleanup_receipts').all().map(row => JSON.parse(row.payload));
+  assert.equal(audits.length, 4);
+  sqlite.close();
+  assert.deepEqual({ ...orchestration.getTicket('legacy'), archived: false }, before);
+  assert.equal(orchestration.getTicket('legacy').archived, true);
+  assert.deepEqual(orchestration.listTickets({ archived: true }).map(row => row.id).sort(), ['archived', 'legacy']);
+  assert(orchestration.listTickets({ archived: true }).every(row => row.archived));
+  database = createAssistantRuntimeStore({ directory });
+  const tasks = createTaskManagement({ database, orchestration });
+  assert.equal(tasks.project('ticket', [orchestration.getTicket('complete')])[0].taskMeta.completed, true);
+  assert.deepEqual(tasks.project('ticket', orchestration.listTickets(), { archived: true }).map(row => row.id).sort(), ['archived', 'legacy']);
+  const audit = tasks.cleanupHistory({ ticketId: 'legacy' })[0];
   assert.equal(audit.operation, 'legacy-migration'); assert.equal(audit.items[0].legacyDeleted, true);
-  f.reopen(); assert.equal(f.tasks.cleanupHistory({ ticketId: 'legacy' }).length, 1);
-  const sqlite = new DatabaseSync(f.database.path);
-  try { assert(sqlite.prepare("SELECT 1 FROM sa_tickets WHERE id='legacy'").get()); }
-  finally { sqlite.close(); }
+  const restore = tasks.previewRestore({ scope, receiptId: audit.receiptId });
+  const confirmedBy = tasks.createCleanupConfirmation({ previewId: restore.previewId, manifestHash: restore.manifestHash,
+    ids: ['legacy'], actorId: 'desktop-owner', source: { sessionId: 'main', messageId: 'restore-legacy' } });
+  tasks.restoreCleanup({ previewId: restore.previewId, ids: ['legacy'], confirmedBy, requestId: 'restore-legacy' });
+  assert.equal(Object.hasOwn(database.meta('task-presentation:ticket:legacy'), 'deleted'), false);
+  assert.equal(orchestration.getTicket('legacy').archived, false);
+  const count = tasks.cleanupHistory({}).length;
+  database.close(); database = undefined; orchestration.close();
+  orchestration = createAssistantOrchestrationStore({ directory });
+  database = createAssistantRuntimeStore({ directory });
+  assert.equal(database.taskCleanup.cleanupHistory({}).length, count, 'migration is not replayed');
+  assert.equal(orchestration.getTicket('legacy').status, 'cancelled');
 });

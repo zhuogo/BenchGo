@@ -71,7 +71,7 @@ test('active work cannot be hidden or marked completed; metadata writes validate
   assert.equal(metadata.size, 0);
 });
 
-test('a reopened execution does not inherit a prior completion or deletion marker', () => {
+test('a reopened execution does not inherit prior completion or archive markers', () => {
   const saved = new Map();
   const row = { id: 't', status: 'failed', instructionRevision: 1 };
   const database = { transaction: fn => fn(), meta: key => saved.get(key), setMeta: (key, value) => saved.set(key, value) };
@@ -81,12 +81,16 @@ test('a reopened execution does not inherit a prior completion or deletion marke
   assert.equal(tasks.project('ticket', [row])[0].taskMeta.completed, false);
   row.status = 'failed';
   assert.equal(tasks.project('ticket', [row])[0].taskMeta.completed, false);
+  row.status = 'cancelled';
   database.setMeta('task-presentation:ticket:t', { version: 2, archived: true, executionRevision: 2 });
+  assert.equal(tasks.project('ticket', [row], { archived: false }).length, 1, 'completion revision cannot stand in for archive revision');
+  database.setMeta('task-presentation:ticket:t', { version: 2, archived: true, archiveRevision: 2 });
   assert.equal(tasks.project('ticket', [row], { archived: true }).length, 1);
   row.status = 'open'; row.instructionRevision = 3;
   assert.equal(tasks.project('ticket', [row], { archived: false }).length, 1);
   tasks.update({ kind: 'ticket', id: 't', operation: 'rename', title: 'New execution', version: 2 });
   assert.equal(tasks.project('ticket', [row])[0].taskMeta.title, 'New execut');
+  assert.equal(Object.hasOwn(saved.get('task-presentation:ticket:t'), 'deleted'), false);
 });
 
 test('ticket names are capped in storage and legacy projections without truncating requirements', () => {

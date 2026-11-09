@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
-import { ticketArchiveSql } from './ticket-archive.mjs';
+import { ticketArchiveSql, ticketIsArchived, ticketPresentationKey } from './ticket-archive.mjs';
+import { initializeTicketCleanup } from './task-cleanup-store.mjs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -30,7 +31,6 @@ const copy = value => structuredClone(value);
 const uuid = () => randomUUID();
 const timestamp = n => new Date(n).toISOString();
 const safeLimit = (value, fallback, max) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : fallback;
-const archivedTicketStates = new Set(['completed', 'failed', 'closed']);
 
 /**
  * Durable single-machine SuperAgent orchestration control plane.
@@ -129,6 +129,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     db.exec('BEGIN IMMEDIATE');
     try { const result = fn(); db.exec('COMMIT'); executionFacts?.flushExecutionFactChanges(); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
   };
+  initializeTicketCleanup({ db, transaction: tx });
+  const ticketMetadata = db.prepare('SELECT value FROM task_meta WHERE key=?');
   const threadRow = threadId => db.prepare('SELECT * FROM sa_threads WHERE id=?').get(threadId);
   const triggerRow = triggerId => db.prepare('SELECT * FROM sa_triggers WHERE id=?').get(triggerId);
   const threadValue = row => row && ({ id: row.id, source: { type: row.source_type, id: row.source_id }, metadata: parse(row.metadata), createdAt: row.created_at });
@@ -136,7 +138,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   const candidateValue = row => row && ({ id: row.id, triggerId: row.trigger_id, threadId: row.thread_id, policyVersion: row.policy_version, gate: parse(row.gate), status: row.status, evalId: row.eval_id, retryCount: row.retry_count, handbackTicketId: row.handback_ticket_id, createdAt: row.created_at, updatedAt: row.updated_at });
   const evalValue = row => row && ({ id: row.id, threadId: row.thread_id, policyVersion: row.policy_version, candidateIds: parse(row.candidate_ids), owner: row.owner, attempt: row.attempt, status: row.status, deadline: row.deadline, createdAt: row.created_at, updatedAt: row.updated_at });
   const decisionValue = row => row && ({ id: row.id, candidateId: row.candidate_id, threadId: row.thread_id, outcome: row.outcome, assessment: parse(row.assessment), policyVersion: row.policy_version, ticketId: row.ticket_id, createdAt: row.created_at });
-  const ticketValue = row => row && ({ id: row.id, threadId: row.thread_id, title: normalizeTicketTitle(row.title, row.target), target: row.target, acceptance: row.acceptance, instructionRevision: row.instruction_revision, adjustmentOfTicketId: row.adjustment_of_ticket_id || null, liveSummary: ticketLiveSummary(row), status: row.status, archived: archivedTicketStates.has(row.status), pauseReason: row.pause_reason ? parse(row.pause_reason) : null, continuationWait: row.continuation_wait ? parse(row.continuation_wait) : null, mandate: { ...api.currentTicketMandate(row.id, parse(row.mandate)), target: row.target, acceptance: row.acceptance }, createdByDecision: row.created_by_decision, createdAt: row.created_at, updatedAt: row.updated_at, resultVersion: row.result_version });
+  const ticketValue = row => row && ({ id: row.id, threadId: row.thread_id, title: normalizeTicketTitle(row.title, row.target), target: row.target, acceptance: row.acceptance, instructionRevision: row.instruction_revision, adjustmentOfTicketId: row.adjustment_of_ticket_id || null, liveSummary: ticketLiveSummary(row), status: row.status, archived: ticketIsArchived({ status: row.status, instructionRevision: row.instruction_revision }, parse(ticketMetadata.get(ticketPresentationKey(row.id))?.value || '{}')), pauseReason: row.pause_reason ? parse(row.pause_reason) : null, continuationWait: row.continuation_wait ? parse(row.continuation_wait) : null, mandate: { ...api.currentTicketMandate(row.id, parse(row.mandate)), target: row.target, acceptance: row.acceptance }, createdByDecision: row.created_by_decision, createdAt: row.created_at, updatedAt: row.updated_at, resultVersion: row.result_version });
   function ticketLiveSummary(row) {
     const result = db.prepare('SELECT payload FROM sa_results WHERE ticket_id=? ORDER BY version DESC LIMIT 1').get(row.id);
     const saved = result ? parse(result.payload) : null;
@@ -497,8 +499,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       if (status) { where.push('status=?'); args.push(id(status, 'ticket status')); }
       if (archived !== undefined) {
         if (typeof archived !== 'boolean') throw new Error('Invalid ticket archive scope');
-        const hasMetadata = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_meta'").get();
-        where.push(`${archived ? '' : 'NOT '}${ticketArchiveSql({ hasMetadata })}`);
+        where.push(`${archived ? '' : 'NOT '}${ticketArchiveSql()}`);
       }
       if (ownerSessionId !== undefined) { where.push("json_extract(mandate, '$.source.channel')='desktop' AND json_extract(mandate, '$.source.sessionId')=?"); args.push(id(ownerSessionId, 'ownerSessionId')); }
       if (ownerSessionIds !== undefined) {

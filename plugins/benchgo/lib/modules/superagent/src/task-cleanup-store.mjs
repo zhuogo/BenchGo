@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { normalizeTicketTitle } from './ticket-title.mjs';
-import { settledTicketStates, ticketPresentationKey, ticketPresentation, ticketIsArchived } from './ticket-archive.mjs';
+import { settledTicketStates, ticketPresentationKey, ticketIsArchived } from './ticket-archive.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const copy = value => structuredClone(value);
@@ -20,10 +20,46 @@ const globalOwner = scope => {
 const archiveFields = ['archived', 'archivedAt', 'cleanupReceiptId', 'archiveRevision'];
 const archiveSlice = value => Object.fromEntries(archiveFields.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
 
+function initializeSchema(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS task_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS task_cleanup_previews(id TEXT PRIMARY KEY, manifest_hash TEXT NOT NULL, payload TEXT NOT NULL, consumed_by TEXT);
+    CREATE TABLE IF NOT EXISTS task_cleanup_receipts(id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, binding TEXT NOT NULL, payload TEXT NOT NULL);`);
+}
+
+/** Run on the authoritative orchestration connection before any Ticket reads. */
+export function initializeTicketCleanup({ db, transaction }) {
+  initializeSchema(db);
+  transaction(() => {
+    const rows = db.prepare("SELECT key,value FROM task_meta WHERE key LIKE 'task-presentation:ticket:%' AND json_type(value,'$.deleted') IS NOT NULL").all();
+    for (const row of rows) {
+      const id = row.key.slice('task-presentation:ticket:'.length), old = JSON.parse(row.value), next = { ...old };
+      delete next.deleted;
+      const ticket = db.prepare('SELECT id,status,instruction_revision FROM sa_tickets WHERE id=?').get(id);
+      const at = new Date().toISOString();
+      next.version = (old.version ?? 0) + 1; next.updatedAt = at;
+      if (old.deleted) {
+        const stopped = !db.prepare("SELECT 1 FROM sa_assignments WHERE ticket_id=? AND state NOT IN ('completed','failed','cancelled') LIMIT 1").get(id)
+          && !db.prepare("SELECT 1 FROM sa_runs r JOIN sa_assignments a ON a.id=r.assignment_id WHERE a.ticket_id=? AND r.state NOT IN ('completed','failed','cancelled') LIMIT 1").get(id);
+        const archived = !!ticket && settledTicketStates.includes(ticket.status) && old.executionRevision === ticket.instruction_revision && stopped;
+        const receiptId = randomUUID();
+        for (const key of archiveFields) delete next[key];
+        if (archived) Object.assign(next, { archived: true, archivedAt: old.updatedAt || at, archiveRevision: ticket.instruction_revision, cleanupReceiptId: receiptId });
+        if (!Object.hasOwn(old, 'completed')) delete next.executionRevision;
+        const value = { receiptId, requestId: `legacy-ticket-cleanup:${id}`, operation: 'legacy-migration', createdAt: at,
+          confirmedBy: { actorId: 'system-migration', source: { kind: 'legacy-presentation' } },
+          items: [{ id, instructionRevision: ticket?.instruction_revision ?? old.executionRevision, before: archiveSlice(old), after: archiveSlice(next),
+            beforeVersion: old.version ?? 0, afterVersion: next.version, legacyDeleted: true }] };
+        db.prepare('INSERT INTO task_cleanup_receipts(id,request_id,binding,payload) VALUES (?,?,?,?)')
+          .run(receiptId, value.requestId, hash(['legacy-migration', id]), JSON.stringify(value));
+      }
+      db.prepare('UPDATE task_meta SET value=? WHERE key=?').run(JSON.stringify(next), row.key);
+    }
+  });
+}
+
 /** Same SQLite connection for manifest reads, CAS writes and durable receipts. No filesystem operations. */
 export function installTaskCleanupStore({ db, transaction }) {
-  db.exec(`CREATE TABLE IF NOT EXISTS task_cleanup_previews(id TEXT PRIMARY KEY, manifest_hash TEXT NOT NULL, payload TEXT NOT NULL, consumed_by TEXT);
-    CREATE TABLE IF NOT EXISTS task_cleanup_receipts(id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, binding TEXT NOT NULL, payload TEXT NOT NULL);`);
+  initializeSchema(db);
   const confirmations = new WeakSet();
   const hasTickets = () => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sa_tickets'").get();
   const metadata = id => {
@@ -62,25 +98,6 @@ export function installTaskCleanupStore({ db, transaction }) {
     if (!row) throw fail('CLEANUP_PREVIEW_NOT_FOUND', '清理清单不存在，请重新预览');
     return { ...JSON.parse(row.payload), consumedBy: row.consumed_by };
   };
-  function migrateLegacy() {
-    if (!hasTickets()) return;
-    transaction(() => {
-      for (const row of db.prepare("SELECT key,value FROM task_meta WHERE key LIKE 'task-presentation:ticket:%' AND json_extract(value,'$.deleted')=1").all()) {
-        const id = row.key.slice('task-presentation:ticket:'.length), old = JSON.parse(row.value);
-        const ticket = readTicket(id);
-        if (!ticket) continue;
-        const at = new Date().toISOString(), receiptId = randomUUID();
-        const next = { ...ticketPresentation(ticket, old), version: (old.version ?? 0) + 1, updatedAt: at,
-          ...(ticketPresentation(ticket, old).archived ? { archivedAt: old.updatedAt || at, archiveRevision: ticket.instructionRevision, cleanupReceiptId: receiptId } : {}) };
-        putMetadata(id, next);
-        saveReceipt({ receiptId, requestId: `legacy-ticket-cleanup:${id}`, operation: 'legacy-migration', createdAt: at,
-          confirmedBy: { actorId: 'system-migration', source: { kind: 'legacy-presentation' } },
-          items: [{ id, instructionRevision: ticket.instructionRevision, before: archiveSlice(old), after: archiveSlice(next), beforeVersion: old.version ?? 0, afterVersion: next.version,
-            legacyDeleted: true }] }, hash(['legacy-migration', id]));
-      }
-    });
-  }
-  migrateLegacy();
   function previewCleanup({ scope, ids, includeUnsettled = false } = {}) {
     scope = globalOwner(scope);
     if (typeof includeUnsettled !== 'boolean') throw fail('CLEANUP_INPUT_INVALID', 'includeUnsettled 必须为布尔值');
@@ -149,7 +166,7 @@ export function installTaskCleanupStore({ db, transaction }) {
       });
       const receiptId = randomUUID(), createdAt = new Date().toISOString();
       const items = selected.map(row => {
-        const before = metadata(row.id), next = { ...before, deleted: false, archived: true, archivedAt: createdAt,
+        const before = metadata(row.id), next = { ...before, archived: true, archivedAt: createdAt,
           cleanupReceiptId: receiptId, archiveRevision: row.instructionRevision, version: row.metaVersion + 1, updatedAt: createdAt };
         putMetadata(row.id, next);
         return { id: row.id, status: row.status, instructionRevision: row.instructionRevision,
@@ -184,7 +201,7 @@ export function installTaskCleanupStore({ db, transaction }) {
       const items = selected.map(({ saved, current, ticket }) => {
         const next = { ...current };
         for (const key of archiveFields) delete next[key];
-        Object.assign(next, saved.before, { deleted: false, version: current.version + 1, updatedAt: createdAt });
+        Object.assign(next, saved.before, { version: current.version + 1, updatedAt: createdAt });
         putMetadata(saved.id, next);
         return { id: saved.id, status: ticket.status, before: archiveSlice(current), after: archiveSlice(next), beforeVersion: current.version, afterVersion: next.version };
       });

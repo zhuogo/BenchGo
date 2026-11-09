@@ -16,11 +16,14 @@ export function createTaskManagement({ database, orchestration, scheduler }) {
   const executionRevision = (kind, row) => kind === 'ticket' ? row.instructionRevision ?? 1 : kind === 'goal' ? row.rowVersion ?? 0 : row.dispositionRevision ?? 0;
   const meta = (kind, row) => {
     const stored = database.meta(key(kind, row.id)) || { version: 0 };
-    const value = kind === 'ticket' ? ticketPresentation(row, stored) : stored;
-    if (kind === 'ticket' && stored.title !== undefined) value.title = normalizeTicketTitle(stored.title, row.title || row.target);
+    if (kind === 'ticket') {
+      const value = ticketPresentation(row, stored);
+      if (stored.title !== undefined) value.title = normalizeTicketTitle(stored.title, row.title || row.target);
+      return value;
+    }
     // A fresh execution must not inherit a previous run's completion or deletion.
-    return (value.completed || value.deleted) && (!settled(kind, row) || value.executionRevision !== executionRevision(kind, row))
-      ? { ...value, completed: false, deleted: false } : value;
+    return (stored.completed || stored.deleted) && (!settled(kind, row) || stored.executionRevision !== executionRevision(kind, row))
+      ? { ...stored, completed: false, deleted: false } : stored;
   };
   const project = (kind, rows, { archived } = {}) => rows.map(row => {
     const taskMeta = meta(kind, row);
@@ -39,7 +42,7 @@ export function createTaskManagement({ database, orchestration, scheduler }) {
       if (!row) throw new Error('任务不存在');
       const current = meta(kind, row);
       if (!Number.isSafeInteger(version) || version !== current.version) throw Object.assign(new Error('任务已变化，请刷新后重试'), { code: 'REVISION_CONFLICT' });
-      if (current.deleted) throw new Error('任务已删除');
+      if (kind !== 'ticket' && current.deleted) throw new Error('任务已删除');
       if (operation === 'rename' && (typeof title !== 'string' || !title.trim() || kind !== 'ticket' && title.trim().length > 200)) throw new Error(kind === 'ticket' ? '名称不能为空' : '名称须为 1 至 200 字');
       if (['complete', 'delete'].includes(operation)) {
         if (!settled(kind, row)) throw Object.assign(new Error('任务仍在执行或等待执行，请先停止，再进行此操作'), { code: 'EXECUTION_PENDING' });
