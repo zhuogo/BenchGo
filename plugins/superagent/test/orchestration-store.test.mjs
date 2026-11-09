@@ -166,6 +166,10 @@ test('existing database migrates Ticket requirements without rewriting legacy As
   const filename = db.path;
   db.close();
   const old = new DatabaseSync(filename);
+  // This schema predates the execution-fact journal and its column-bound triggers.
+  for (const { name } of old.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name GLOB 'sa_execution_fact_*'").all())
+    old.exec(`DROP TRIGGER "${name.replaceAll('"', '""')}"`);
+  old.exec('DROP TABLE sa_execution_facts; DROP TABLE sa_execution_projection');
   old.exec('ALTER TABLE sa_tickets DROP COLUMN instruction_revision; ALTER TABLE sa_tickets DROP COLUMN acceptance');
   old.prepare('UPDATE sa_assignments SET payload=? WHERE id=?').run('{}', 'legacy');
   old.close();
@@ -174,6 +178,9 @@ test('existing database migrates Ticket requirements without rewriting legacy As
     assert.equal(reopened.getTicket(ticket.id).target, 'preserved');
     assert.equal(reopened.getTicket(ticket.id).instructionRevision, 1);
     assert.equal(reopened.getTicket(ticket.id).acceptance, 'preserved acceptance');
+    const migrated = new DatabaseSync(filename);
+    try { assert.equal(migrated.prepare('SELECT payload FROM sa_assignments WHERE id=?').get('legacy').payload, '{}'); }
+    finally { migrated.close(); }
     const [assignment] = reopened.claimAssignments('worker', { validateMandate: () => true, now: 0 });
     reopened.commitResult(ticket.id, { assignment, result: { summary: 'legacy complete' }, uniqueKey: 'legacy-result', now: 1 });
     assert.equal(reopened.getTicket(ticket.id).status, 'waiting');

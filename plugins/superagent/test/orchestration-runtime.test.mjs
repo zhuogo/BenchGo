@@ -142,8 +142,11 @@ test('known desktop persistence failure retries only saved result, never Worker'
 });
 
 test('Router model failure retains Worker result and same outbox without sending raw text', async t => {
-  let clock = Date.now() + 10000, generations = 0;
-  const app = await fixture(t, { now: () => clock, prepareTicketReply(delivery, db) {
+  let clock, generations = 0;
+  // Worker commits use wall time. Freeze only after its outbox is claimed,
+  // so slow fixture setup cannot place the initial delivery in the future.
+  const app = await fixture(t, { now: () => clock ?? Date.now(), prepareTicketReply(delivery, db) {
+    clock ??= Date.now();
     generations++;
     assert.equal(delivery.payload.text, undefined);
     assert.equal(delivery.payload.publication, undefined);
@@ -153,18 +156,25 @@ test('Router model failure retains Worker result and same outbox without sending
   await app.advance();
   const original = app.db.deliveries(app.ticket.id)[0];
   assert.equal(original.state, 'queued');
+  assert.equal(original.attempts, 1);
+  assert.equal(generations, 1);
+  assert.equal(original.nextAt, clock + 30000);
   assert.equal(app.db.getTicket(app.ticket.id).status, 'waiting');
-  clock += 31000; await app.runtime.tick();
+  clock = original.nextAt - 1; await app.runtime.tick();
+  assert.equal(generations, 1);
+  assert.equal(app.db.deliveries(app.ticket.id)[0].attempts, 1);
+  clock = original.nextAt; await app.runtime.tick();
   assert.equal(app.db.deliveries(app.ticket.id)[0].id, original.id);
+  assert.equal(app.db.deliveries(app.ticket.id)[0].attempts, 2);
   assert.equal(generations, 2);
   assert.deepEqual(app.counts(), { executions: 1, sends: 0 });
 });
 
 test('transport retry uses durable Router text and never generates another reply or Worker result', async t => {
-  let clock = Date.now() + 10000, generations = 0, sends = 0;
+  let clock, generations = 0, sends = 0;
   const texts = [];
-  const app = await fixture(t, { now: () => clock,
-    prepareTicketReply() { generations++; return { status: 'ready', text: '整理好了：这是完整的自然回复。', messageId: 'router-result' }; },
+  const app = await fixture(t, { now: () => clock ?? Date.now(),
+    prepareTicketReply() { clock ??= Date.now(); generations++; return { status: 'ready', text: '整理好了：这是完整的自然回复。', messageId: 'router-result' }; },
     send(delivery) {
       texts.push(delivery.payload.text);
       if (++sends === 1) throw new Error('desktop store temporarily unavailable');
@@ -173,9 +183,15 @@ test('transport retry uses durable Router text and never generates another reply
   await app.advance();
   const saved = app.db.deliveries(app.ticket.id)[0];
   assert.equal(saved.state, 'queued');
+  assert.equal(saved.attempts, 1);
+  assert.equal(saved.nextAt, clock + 30000);
   assert.equal(saved.payload.routerMessageId, 'router-result');
-  clock += 31000; await app.runtime.tick();
+  clock = saved.nextAt - 1; await app.runtime.tick();
+  assert.equal(sends, 1);
+  assert.equal(app.db.deliveries(app.ticket.id)[0].attempts, 1);
+  clock = saved.nextAt; await app.runtime.tick();
   assert.equal(app.db.deliveries(app.ticket.id)[0].id, saved.id);
+  assert.equal(app.db.deliveries(app.ticket.id)[0].attempts, 2);
   assert.equal(app.db.getTicket(app.ticket.id).status, 'completed');
   assert.deepEqual(texts, ['整理好了：这是完整的自然回复。', '整理好了：这是完整的自然回复。']);
   assert.equal(generations, 1);
@@ -250,10 +266,10 @@ test('external effect uncertainty cannot cause terminal delivery or automatic re
 });
 
 test('confirmed delivery stays closed when conversation mirror or official archival needs retry', async t => {
-  let mirrors = 0, archives = 0, clock = Date.now() + 10000;
-  const app = await fixture(t, { now: () => clock,
+  let mirrors = 0, archives = 0, clock;
+  const app = await fixture(t, { now: () => clock ?? Date.now(),
     ctx: { workspaceRegistry: { list: () => [], async archiveSession(sessionId) { assert.equal(sessionId, 'execution'); if (++archives === 1) throw new Error('official activity still releasing'); } } },
-    onDelivered(row) { assert.equal(row.state, 'sent'); if (++mirrors === 1) throw new Error('conversation persistence unavailable'); },
+    onDelivered(row) { clock ??= Date.now(); assert.equal(row.state, 'sent'); if (++mirrors === 1) throw new Error('conversation persistence unavailable'); },
     execute(assignment, _context, db) {
       const identity = { owner: assignment.owner, fence: assignment.fence };
       const run = db.prepareRun(assignment.id, { ...identity, sessionId: 'execution', directory: 'fixture' });
