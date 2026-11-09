@@ -2,6 +2,7 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, existsSync, openSync, fsyncSync, closeSync, copyFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { notifySettings } from '../../../../shared/settings-adapter-utils.mjs';
 
 export const ASSISTANT_DOCUMENTS = Object.freeze(['AGENTS.md', 'SOUL.md', 'USER.md', 'IDENTITY.md', 'TOOLS.md', 'MEMORY.md']);
 // TOOLS remains managed for legacy imports and on-demand reading, not injection.
@@ -58,6 +59,7 @@ function atomic(path, content) {
 
 /** Markdown is authoritative. SQLite holds only journal, history and derived metadata. */
 export async function createAssistantDocuments({ directory }) {
+  const listeners = new Set();
   directory = resolve(directory);
   mkdirSync(directory, { recursive: true });
   const db = new DatabaseSync(join(directory, 'assistant.db'));
@@ -162,6 +164,7 @@ export async function createAssistantDocuments({ directory }) {
       db.prepare("UPDATE document_versions SET status='committed' WHERE id=?").run(pending.id);
       db.prepare("UPDATE document_journal SET status='committed' WHERE id=?").run(id);
     });
+    notifySettings(listeners, { name });
     return { name, content, hash: pending.hash, revision: pending.revision, updatedAt: pending.createdAt, source: pending.source };
   }
   function initialize() {
@@ -205,6 +208,7 @@ export async function createAssistantDocuments({ directory }) {
   }
   try { await locked(initialize); } catch (error) { db.close(); throw error; }
   return {
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     names: ASSISTANT_DOCUMENTS,
     list: () => locked(() => ASSISTANT_DOCUMENTS.map(sync)),
     read: name => locked(() => sync(validName(name))),
@@ -260,6 +264,6 @@ export async function createAssistantDocuments({ directory }) {
         if (content !== row.content) db.prepare('UPDATE document_versions SET content=?,hash=? WHERE id=?').run(content, documentHash(content), row.id);
       }
     })),
-    close() { if (!closed) { closed = true; db.close(); } },
+    close() { if (!closed) { closed = true; listeners.clear(); db.close(); } },
   };
 }

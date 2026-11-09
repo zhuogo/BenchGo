@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { SKILLS_POLICY_SCHEMA } from './settings-schema.mjs';
 
 const DAY = 86400000;
 const hash = text => createHash('sha256').update(text).digest('hex');
@@ -29,7 +30,7 @@ export function installOwnedSkillStore({ db, tx }) {
     ownedSkillAudit(id) { return db.prepare('SELECT seq,action,version,body,hash,at FROM sa_skill_audit WHERE skill_id=? ORDER BY seq').all(id); },
     curatorPolicy() { const row = db.prepare('SELECT * FROM sa_curator_policy WHERE id=1').get(); return { staleDays: row.stale_days, archiveDays: row.archive_days, llmMerge: false }; },
     configureCurator({ staleDays, archiveDays }) {
-      if (!Number.isSafeInteger(staleDays) || staleDays < 1 || !Number.isSafeInteger(archiveDays) || archiveDays <= staleDays || archiveDays > 36500) throw new Error('Invalid Curator thresholds');
+      if (!Number.isSafeInteger(staleDays) || staleDays < SKILLS_POLICY_SCHEMA.properties.staleDays.minimum || !Number.isSafeInteger(archiveDays) || archiveDays <= staleDays || archiveDays > SKILLS_POLICY_SCHEMA.properties.archiveDays.maximum) throw new Error('Invalid Curator thresholds');
       db.prepare('UPDATE sa_curator_policy SET stale_days=?,archive_days=? WHERE id=1').run(staleDays, archiveDays);
       return this.curatorPolicy();
     },

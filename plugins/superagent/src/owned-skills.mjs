@@ -2,6 +2,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { installOwnedSkillStore } from './owned-skill-store.mjs';
+import { applySettingsOps, assertSettingsExpected, settingsSnapshot } from '../../benchgo/shared/settings-adapter-utils.mjs';
+import { SKILLS_POLICY_SCHEMA } from './settings-schema.mjs';
 
 const sections = ['When to Use', 'Procedure', 'Pitfalls', 'Verification'];
 export function validateOwnedSkill({ name, description, content }) {
@@ -72,6 +74,16 @@ export function createOwnedSkills({ directory }) {
     curate(options) { const result = core.curateOwnedSkills(options); if (result.length) changed(); return result.map(project); },
     audit(id) { return core.ownedSkillAudit(id); },
     policy: () => core.curatorPolicy(),
+    configurePolicy(patch, { ops, expected, signal } = {}) {
+      const result = tx(() => {
+        const current = core.curatorPolicy();
+        if (expected || ops) assertSettingsExpected(settingsSnapshot(current), expected, signal);
+        const next = ops ? applySettingsOps(current, ops, { blockedPaths: [['llmMerge']] }) : { ...current, ...patch };
+        if (Object.keys(next).some(key => !Object.hasOwn(SKILLS_POLICY_SCHEMA.properties, key)) || next.llmMerge !== undefined && next.llmMerge !== false) throw new Error('技能整理策略无效');
+        return core.configureCurator({ staleDays: next.staleDays ?? 14, archiveDays: next.archiveDays ?? 30 });
+      });
+      changed(); return result;
+    },
     onChange(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     close() { if (!closed) { closed = true; listeners.clear(); db.close(); } },
   };

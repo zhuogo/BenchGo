@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, renam
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { documentHash } from './documents.mjs';
+import { applySettingsOps, assertSettingsExpected, settingsSnapshot } from '../../benchgo/shared/settings-adapter-utils.mjs';
+import { LEARNING_CONFIG_SCHEMA } from './settings-schema.mjs';
 
 const now = () => new Date().toISOString();
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -174,6 +176,9 @@ export async function createAssistantMemory({ directory, documents }) {
   }
   async function learning() {
     const row = await documents.read('USER.md');
+    return learningFromDocument(row);
+  }
+  function learningFromDocument(row) {
     const match = learningPattern.exec(row.content);
     const config = match ? JSON.parse(match[1]) : {};
     const heading = /(?:^|\n)##\s+不要学习\s*\r?\n([\s\S]*?)(?=\n##\s|$)/u.exec(row.content)?.[1] || '';
@@ -368,13 +373,24 @@ export async function createAssistantMemory({ directory, documents }) {
       learning: settings };
     },
     learning,
-    async configureLearning(patch, { expectedHash } = {}) {
-      if (!object(patch) || Object.keys(patch).some(key => !['enabled', 'excludedScopes', 'excludedTerms'].includes(key))) throw new Error('Invalid learning configuration');
-      if (patch.enabled !== undefined && typeof patch.enabled !== 'boolean') throw new Error('Invalid learning enabled');
-      for (const key of ['excludedScopes', 'excludedTerms']) if (patch[key] !== undefined && (!Array.isArray(patch[key]) || patch[key].length > 100 || patch[key].some(value => typeof value !== 'string' || !value.trim() || value.length > 256))) throw new Error('Invalid learning exclusions');
-      await documents.mutate('USER.md', body => {
+    async learningSettingsSnapshot() {
+      const row = await documents.read('USER.md'), { hash, ...value } = learningFromDocument(row);
+      const match = learningPattern.exec(row.content), user = match ? JSON.parse(match[1]) : {};
+      const { hash: ignored, ...base } = learningFromDocument({ ...row, content: row.content.replace(learningPattern, '') });
+      return settingsSnapshot(value, hash, { user, base });
+    },
+    async configureLearning(patch, { expectedHash, ops, expected, signal } = {}) {
+      const validate = value => {
+        if (!object(value) || Object.keys(value).some(key => !Object.hasOwn(LEARNING_CONFIG_SCHEMA.properties, key))) throw new Error('Invalid learning configuration');
+        if (value.enabled !== undefined && typeof value.enabled !== 'boolean') throw new Error('Invalid learning enabled');
+        for (const key of ['excludedScopes', 'excludedTerms']) if (value[key] !== undefined && (!Array.isArray(value[key]) || value[key].length > LEARNING_CONFIG_SCHEMA.properties[key].maxItems || value[key].some(value => typeof value !== 'string' || !value.trim() || value.length > LEARNING_CONFIG_SCHEMA.properties[key].items.maxLength))) throw new Error('Invalid learning exclusions');
+      };
+      validate(patch);
+      await documents.mutate('USER.md', (body, row) => {
+        if (expected || ops) { const { hash, ...value } = learningFromDocument(row); assertSettingsExpected(settingsSnapshot(value, hash), expected, signal); }
         const match = learningPattern.exec(body), previous = match ? JSON.parse(match[1]) : {};
-        const next = { ...previous, ...patch };
+        const next = ops ? { enabled: true, excludedScopes: [], excludedTerms: [], ...applySettingsOps(previous, ops) } : { ...previous, ...patch };
+        validate(next);
         const text = `<!-- benchgo-learning ${JSON.stringify(next).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')} -->`;
         return match ? body.replace(learningPattern, text) : body.trimEnd() + '\n\n' + text + '\n';
       }, { expectedHash, source: { type: 'learning-settings' } });
