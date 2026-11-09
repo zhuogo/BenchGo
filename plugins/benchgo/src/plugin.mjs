@@ -28,6 +28,12 @@ export async function apply(ctx, config = {}) {
   const directory = config.dataDir ?? await prepareDefaultDataDirectory();
   await mkdir(directory, { recursive: true, mode: 0o700 });
   ctx.provide('benchgo', { config, directory });
+  // The optional observer runs in its own official profile; it needs no
+  // commander/assistant instance and adds no installed plugin entry.
+  if (config.watchdog !== undefined) ctx.inject(['agents', 'sessions', 'sessionPersistence', 'agentPresets', 'permissionPresets', 'agentDefaultModel', 'schedule'], async child => {
+    const { mountWatchdog } = await import('../lib/modules/superagent/src/watchdog-plugin.mjs');
+    await mountWatchdog(child, { directory, config: config.watchdog });
+  });
   mountInteractivePrompt(ctx);
   ctx.inject(['connection', 'webServer'], async child => { await mountWorkbench(child, { directory }); });
   ctx.inject(['connection'], async child => { await mountEfficiency(child, { directory }); });
