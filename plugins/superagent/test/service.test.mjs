@@ -98,7 +98,12 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
       mountAssistant(child, commander, providers).then(resolve, reject);
     });
   });
-  const call = async (input, peer) => routes.get('/api/commander/assistant').fetch(new Request('http://localhost/api/commander/assistant', { method: 'POST', body: JSON.stringify(input), headers: { 'content-type': 'application/json' } }), peer);
+  const call = async (input, peer) => {
+    // Official exact Fetch routes expose the authenticated peer through the
+    // connection service, not a second fetch() argument.
+    ctx.connection.browserPeer = peer;
+    return routes.get('/api/commander/assistant').fetch(new Request('http://localhost/api/commander/assistant', { method: 'POST', body: JSON.stringify(input), headers: { 'content-type': 'application/json' } }));
+  };
   for (const action of ['directReplyReconcile', 'outboxReconcile']) {
     const input = { action, id: 'missing', attempts: 1, outcome: 'unknown', evidence: '已检查上游回执' };
     assert.equal((await call(input)).status, 403);
@@ -299,6 +304,15 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal((await delegateTool.execute(delegation, { agent, authorized: true })).id, ticket.id);
   assert.ok((await (await call({ action: 'tickets' })).json()).tickets.some(row => row.id === ticket.id));
   assert.equal((await (await call({ action: 'ticketStop', ticketId: ticket.id })).json()).status, 'cancelled');
+  const pauseTicket = app.store.orchestration.createTicket({ threadId: ticket.threadId, target: 'Pause original investigation', mandate: ticket.mandate });
+  const controlTool = ctx.tools.get('assistant_ticket_control', agent);
+  assert.ok(controlTool.parameters.properties.operation.enum.includes('pause'));
+  const pauseReceipt = await controlTool.execute({ id: pauseTicket.id, operation: 'pause' }, { agent });
+  assert.equal(pauseReceipt.ticket.status, 'paused');
+  assert.equal(pauseReceipt.input.kind, 'pause'); assert.equal(pauseReceipt.input.state, 'applied');
+  assert.equal(app.store.orchestration.getTrigger(pauseReceipt.triggerId).content, 'hello');
+  assert.equal(app.store.orchestration.getTicket(pauseTicket.id).status, 'paused');
+  app.store.orchestration.cancelTicket(pauseTicket.id);
   const questionTicket = app.store.orchestration.createTicket({ threadId: ticket.threadId, target: 'Question', mandate: ticket.mandate });
   app.store.orchestration.createAssignment(questionTicket.id, {});
   const [questionAssignment] = app.store.orchestration.claimAssignments('test-worker', { validateMandate: () => true });

@@ -117,6 +117,9 @@ test('Router requests include builtin layer before user context without maintain
   assert.ok(request.indexOf('You are the BenchGo personal assistant.') < request.indexOf('# 内置层'));
   assert.ok(request.indexOf('# 内置层') < request.indexOf('Be concise.'));
   assert.doesNotMatch(request, /本节说明文字不属于提示词正文|插件发布清单包含本文件/);
+  assert.match(request, /When the user asks to pause, call assistant_ticket_control with operation=pause/);
+  assert.match(request, /before claiming the pause is saved/);
+  assert.match(request, /assistant_execution_manage wait only delays verification and is never a lifecycle pause/);
 });
 
 test('new side chats reuse empty drafts even when creation is concurrent', async t => {

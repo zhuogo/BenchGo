@@ -31,10 +31,13 @@ async function fixture() {
         const rows=[sample('queued','准备周报','open',{updatedAt:'2026-11-01T08:00:00Z'}),sample('running','运行兼容测试','open',{updatedAt:'2026-11-09T08:00:00Z',assignments:[{state:'claimed'}],executionSession:{available:true,sessionId:'real-execution',ticketId:'running'}}),
           sample('paused','确认发布范围','paused',{updatedAt:'2026-11-08T08:00:00Z'}),sample('stopped','已停止验证','cancelled',{updatedAt:null,taskCanOrganize:true}),
           sample('done','交付设计稿','completed',{archived:true,updatedAt:null,taskCanOrganize:true,resultVersion:1,results:[{version:1,summary:'保留原始成果与审计证据',selfCheck:{summary:'逐项检查通过'},evidenceRefs:[]}]})];
+        if(state==='uncertain')Object.assign(rows[1],{assignments:[{state:'uncertain'}]});
+        if(state==='blocked')Object.assign(rows[1],{status:'blocked'});
         const api=async(action,input)=>{
           window.calls.push([action,input]);
           if(window.control.state==='loading')return new Promise(()=>{});
           if(window.control.state==='error')throw Error('连接暂不可用');
+          if(action==='ticketPause'&&window.control.pauseError)throw Error('暂停未落账');
           if(action==='tickets')return {tickets:window.control.state==='empty'?[]:tasks.project('ticket',rows.filter(row=>input.ticketId?row.id===input.ticketId:!!row.archived===input.archived))};
           if(action==='checkpointList')return {checkpoints:[]};
           if(action==='state')return {config:{revision:1,workerConcurrency:2}};
@@ -155,6 +158,22 @@ test('ticket board renders four states, filters, retains details and routes real
     await render('archived-detail');
     await page.getByRole('dialog', { name: '交付设计稿' }).waitFor();
     assert((await page.evaluate(() => window.calls)).some(([name, input]) => name === 'tickets' && input.ticketId === 'done'), 'archived deep links retrieve the same ticket independently from active paging');
+    for(const state of ['uncertain','blocked']) {
+      await render(state);
+      const row=page.locator('.ba-task-list > .ba-task-list-row').filter({has:page.getByText('运行兼容测试',{exact:true})});
+      await row.waitFor();
+      assert(await row.getByRole('button',{name:'暂停工单',exact:true}).isEnabled(), 'uncertain and blocked work retains a real pause action');
+      await row.getByRole('button',{name:/运行兼容测试/}).click();
+      const dialog=page.getByRole('dialog'); await dialog.waitFor();
+      assert(await dialog.getByRole('button',{name:'暂停工单',exact:true}).isEnabled());
+      await page.evaluate(()=>window.control.pauseError=true);
+      await dialog.getByRole('button',{name:'暂停工单',exact:true}).click();
+      await dialog.getByRole('alert').getByText('暂停未落账',{exact:true}).waitFor();
+      await page.evaluate(()=>window.control.pauseError=false);
+      await dialog.getByRole('button',{name:'暂停工单',exact:true}).click();
+      assert((await page.evaluate(()=>window.calls)).some(([action,input])=>action==='ticketPause'&&input.ticketId==='running'));
+      await shot('pause-'+state+'-mobile');
+    }
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

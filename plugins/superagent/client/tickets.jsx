@@ -122,19 +122,21 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
       const summary = waiting?.reason || activity.progressSummary || activity.detail || activity.phase;
       const updatedLabel = row.updatedAt ? new Date(row.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
       const actions = [];
+      const canPause = !terminalStates.includes(row.status) && !['paused', 'pausing', 'cancelling'].includes(row.status);
       if (!terminalStates.includes(row.status)) {
         if (recovery) actions.push({ icon: 'play', label: recovery.label, onClick: () => lifecycle(row, 'ticketResume', recovery.input), disabled: busy !== null });
         else if (row.status === 'paused' && !safetyWait) actions.push({ icon: 'play', label: '继续工单', onClick: () => lifecycle(row, 'ticketResume'), disabled: busy !== null });
-        else if (!['pausing', 'cancelling', 'uncertain', 'blocked'].includes(status)) actions.push({ icon: 'pause', label: '暂停工单', onClick: () => lifecycle(row, 'ticketPause'), disabled: busy !== null });
+        if (canPause) actions.push({ icon: 'pause', label: '暂停工单', onClick: () => lifecycle(row, 'ticketPause'), disabled: busy !== null });
         if (status !== 'cancelling') actions.push({ icon: 'stop', label: '停止工单', onClick: () => stop(row), disabled: busy !== null });
       } else actions.push({ icon: 'refresh', label: '创建关联调整单', onClick: () => { setChangeId(row.id); setSelectedId(row.id); }, disabled: busy !== null });
       return <React.Fragment key={row.id}>{!detailOnly && <TaskListRow api={api} kind="ticket" row={row} title={title} verification={waiting?.verificationSummary} summary={<><span className="ba-task-state" data-state={status}>{stateLabel}</span><Tooltip label={summary} onlyWhenClipped><span className="ba-task-summary" tabIndex={0}>{summary}</span></Tooltip>{updatedLabel && <time className="ba-task-updated" dateTime={row.updatedAt}>更新 {updatedLabel}</time>}</>} completed={row.status === 'completed'} completionLocked={row.status === 'completed' && !row.taskMeta?.completed} onChanged={() => setGeneration(value => value + 1)} onOpen={() => { setChangeId(null); setSelectedId(row.id); }} actions={actions} onDirtyChange={dirtyEditor(`rename:${row.id}`)} />}
-      {detailOnly && <TaskDetail open title={<TaskStatusTitle title={title} status={status} label={stateLabel} />} dirty={detailDirty} onClose={() => { setSelectedId(null); setChangeId(null); }} footer={(row.executionSession?.available || (!terminalStates.includes(row.status) && !waiting)) && <div className="ba-row-actions">
+      {detailOnly && <TaskDetail open title={<TaskStatusTitle title={title} status={status} label={stateLabel} />} dirty={detailDirty} onClose={() => { setSelectedId(null); setChangeId(null); }} footer={(row.executionSession?.available || canPause || (!terminalStates.includes(row.status) && !waiting)) && <div className="ba-row-actions">
         {row.executionSession?.available && <Button variant="ghost" disabled={!onOpenExecution || busy !== null} onClick={async () => {
           setBusy(`execution:${row.id}`); setError('');
           try { await onOpenExecution(row.executionSession); } catch (cause) { setError(`执行会话暂时无法打开：${cause.message || cause}`); }
           finally { setBusy(null); }
         }}>{busy === `execution:${row.id}` ? '正在打开执行会话…' : '查看执行会话'}</Button>}
+        {canPause && <Button variant="ghost" disabled={busy !== null} onClick={() => lifecycle(row, 'ticketPause')}>{busy === row.id ? '正在提交暂停…' : '暂停工单'}</Button>}
         {!terminalStates.includes(row.status) && !waiting && <Button variant="outline" disabled={busy !== null} onClick={() => stop(row)}>{busy === row.id ? '正在提交停止…' : '停止工单'}</Button>}
       </div>}>
         {error && <p role="alert">{error}</p>}

@@ -100,3 +100,70 @@ test('cancellation is idempotent and stopped tickets cannot receive supplements'
   assert.equal(receipt.application.kind, 'stop-request'); assert.equal(receipt.application.executionStopped, true);
   assert.throws(() => f.control(ticket.id), /已停止/);
 });
+
+test('an explicit pause is saved once with original instruction and an applied receipt', t => {
+  const f = fixture(t), ticket = f.ticket();
+  f.events[1].data.content[0].text = '暂停刚才的调查，保留原单，不要再核查续跑';
+  const assignment = f.database.createAssignment(ticket.id, { interruptedContinuationRequest: { automatic: true, operation: 'resume-interrupted', nextAt: Date.now() + 1000 } });
+  const first = f.control(ticket.id, 'pause');
+  assert.equal(first.ticket.status, 'paused');
+  assert.equal(first.input.kind, 'pause'); assert.equal(first.input.state, 'applied');
+  assert.equal(first.input.application.kind, 'pause-request'); assert.equal(first.input.application.executionPaused, true);
+  assert.equal(f.database.getTrigger(first.triggerId).content, f.events[1].data.content[0].text);
+  assert.equal(f.control(ticket.id, 'pause').input.id, first.input.id);
+  assert.equal(f.database.ticketInputs(ticket.id).length, 1);
+  assert.deepEqual(f.database.getTicket(ticket.id).mandate, ticket.mandate);
+  assert.deepEqual(f.database.pendingSubscriptionMessages(ticket.id), []);
+  assert.equal(f.database.getAssignment(assignment.id).interruptedContinuationRequest, undefined);
+  assert.deepEqual(f.database.claimAssignments('worker', { validateMandate: () => true }), []);
+});
+
+for (const uncertain of [false, true]) test(`pause blocks ${uncertain ? 'uncertain' : 'claimed'} work without claiming the executor has paused`, t => {
+  const f = fixture(t), ticket = f.ticket();
+  f.database.createAssignment(ticket.id, {});
+  const [assignment] = f.database.claimAssignments('worker', { validateMandate: () => true });
+  const ownership = { owner: assignment.owner, fence: assignment.fence };
+  if (uncertain) {
+    const run = f.database.prepareRun(assignment.id, { ...ownership, sessionId: 'interrupted', directory: process.cwd() });
+    f.database.updateRun(run.id, { ...ownership, state: 'submitted' });
+    f.database.updateRun(run.id, { ...ownership, state: 'uncertain' });
+    f.database.renewAssignment(assignment.id, { ...ownership, validateMandate: () => false });
+  }
+  const result = f.control(ticket.id, 'pause');
+  assert.equal(result.ticket.status, 'pausing');
+  assert.equal(result.input.application.executionPaused, false);
+  assert.equal(result.input.application.ticketStatus, 'pausing');
+  assert.equal(f.database.getAssignment(assignment.id).state, uncertain ? 'uncertain' : 'claimed');
+  assert.throws(() => f.database.resumeTicket(ticket.id), { code: 'PAUSE_PENDING' });
+  assert.deepEqual(f.database.claimAssignments('other-worker', { validateMandate: () => true }), []);
+});
+
+test('pause promotes the original pending source receipt instead of creating a second ledger entry', t => {
+  const f = fixture(t), ticket = f.ticket();
+  f.control(ticket.id);
+  const before = f.database.ticketInputs(ticket.id)[0];
+  const paused = f.control(ticket.id, 'pause');
+  assert.equal(paused.input.id, before.id); assert.equal(paused.input.kind, 'pause');
+  assert.equal(f.database.ticketInputs(ticket.id).length, 1);
+});
+
+test('pause and its receipt are atomic if application fails', t => {
+  const f = fixture(t), ticket = f.ticket();
+  f.database.applyTicketPauseInputInTransaction = () => { throw Error('receipt failed'); };
+  assert.throws(() => f.control(ticket.id, 'pause'), /receipt failed/);
+  assert.equal(f.database.getTicket(ticket.id).status, ticket.status);
+  assert.deepEqual(f.database.ticketInputs(ticket.id), []);
+});
+
+test('pause rejects unrelated owners, internal notifications, child agents and terminal work', t => {
+  const f = fixture(t), ticket = f.ticket({ channel: 'desktop', sessionId: 'another' });
+  assert.throws(() => f.control(ticket.id, 'pause'), /不属于当前会话/);
+  const owned = f.ticket(); f.events[1].data.source.kind = 'benchgo-subscription';
+  assert.throws(() => f.control(owned.id, 'pause'), /原始用户/);
+  f.events[1].data.source.kind = 'user'; f.ownerAgent.session.header.origin = 'subagent';
+  assert.throws(() => f.control(owned.id, 'pause'), /原始用户/);
+  delete f.ownerAgent.session.header.origin;
+  f.database.cancelTicket(owned.id);
+  assert.throws(() => f.control(owned.id, 'pause'), /不能暂停/);
+  assert.deepEqual(f.database.ticketInputs(owned.id), []);
+});
