@@ -84,7 +84,7 @@ export function projectChatMessages(events) {
       lastAssistant = undefined; publicParts = [];
     } else if (event.type === chatPublicationType && event.ignorable === true) {
       const row = event.data;
-      if (row?.kind === 'ticket-reply' && internalReply(requests.get(row.requestId)) && ['approval', 'recovery'].includes(requests.get(row.requestId).source.replyKind)) {
+      if (row?.kind === 'ticket-reply' && internalReply(requests.get(row.requestId)) && ['approval', 'recovery', 'watchdog'].includes(requests.get(row.requestId).source.replyKind)) {
         if (users.has(row.requestId) && !published.has(row.requestId) && !row.suppressed
           && typeof row.text === 'string' && row.text.trim() && row.text.length <= 16000) {
           published.add(row.requestId);

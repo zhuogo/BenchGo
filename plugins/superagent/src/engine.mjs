@@ -28,11 +28,12 @@ import { readAssessmentPolicy, validateTicketMandate } from './assessment-policy
 import { routerAdmissionLanguagePolicy, routerLanguagePolicy } from './router-language-policy.mjs';
 import { currentExecutionRecoverySignal, executionRecoverySignal, executionUncertainty } from './execution-uncertainty.mjs';
 import { createSessionRoleAssembly, liveSessionRole } from './session-role-assembly.mjs';
+import { watchdogRouterSignal, inspectWatchdogRouterSignal, watchdogNoticeCurrent, assertWatchdogInspection } from './watchdog-router-signal.mjs';
 
 const routeKey = model => JSON.stringify([model.providerId, model.modelId]);
 const copy = value => structuredClone(value);
 const replyToolEnabled = (kind, name) => name === 'assistant_reply'
-  || kind === 'recovery' && name === 'assistant_execution_manage';
+  || ['recovery', 'watchdog-execution'].includes(kind) && name === 'assistant_execution_manage';
 export async function readBuiltinLayer(source = new URL('../prompts/builtin-layer.md', import.meta.url)) {
   let document;
   try { document = await readFile(source, 'utf8'); }
@@ -50,7 +51,7 @@ function selectMemories(entries, query) {
 }
 
 /** Assistant-owned Harness sessions; the engine remains the sole transcript writer. */
-export async function createAssistantEngine({ ctx, store, setupTools, scheduleBridge, compactionPlugin, appendChatRecord, onClearMain, onSourceMessage, now = Date.now, cooldownMs = 30_000 }) {
+export async function createAssistantEngine({ ctx, store, setupTools, scheduleBridge, compactionPlugin, appendChatRecord, onClearMain, onSourceMessage, readWatchdogFacts, now = Date.now, cooldownMs = 30_000 }) {
   const builtinLayer = await readBuiltinLayer();
   const Compaction = compactionPlugin ?? (await import('@deepseek-ai/dsh-compaction-basic')).default;
   const handles = new Map(), pending = new Map(), listeners = new Set(), cooldowns = new Map(), models = new Map(), errors = new Map(), failures = new Map(), queries = new Map(), sending = new Map();
@@ -100,6 +101,18 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     ]);
     const request = (state.requests || []).find(row => row.messageId === messageId && row.threadId === threadId);
     if (!request?.ticketReply || request.suppressed || request.status === 'cancelled' || currentThread.archived) return false;
+    if (request.ticketReply.kind === 'watchdog') {
+      if (!watchdogNoticeCurrent(request.ticketReply, state.requests || [])) return false;
+      const inspection = await inspectWatchdog(request.ticketReply);
+      if (!inspection.valid) return false;
+      const signal = request.ticketReply;
+      if (!signal.observation.execution) return threadId === 'main' && !currentThread.sourceKey;
+      const ticket = store.orchestration.getTicket(signal.ticketId);
+      if (!validateTicketMandate(ticket.mandate, { policy })) return false;
+      return signal.source.channel === 'desktop' ? !currentThread.sourceKey
+        && ownerScope.sessionIds.includes(signal.source.sessionId) && (signal.source.threadId || 'main') === threadId
+        : threadId === 'main' && !currentThread.sourceKey;
+    }
     const signal = request.ticketReply.kind === 'approval'
       ? await currentApprovalReminderSignal({ database: store.orchestration, signal: request.ticketReply,
         readSession: id => ctx.sessionQuery.readSession(id), now: now() })
@@ -113,6 +126,10 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     if (signal.kind === 'recovery') return threadId === 'main' && !currentThread.sourceKey;
     return currentThread.sourceKey === channelSessionKey(signal.source)
       && channelSessionKey(currentThread.source) === currentThread.sourceKey;
+  }
+  async function inspectWatchdog(signal) {
+    try { return inspectWatchdogRouterSignal(store.orchestration, signal, await readWatchdogFacts?.(), { now: now() }); }
+    catch { return { valid: false, reason: 'execution-facts-unavailable' }; }
   }
   async function mayReplyToExecutionInput(threadId, message) {
     const source = message?.source;
@@ -131,7 +148,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
   }
   async function definitelyUnstartedExpression(threadId, row) {
     if (row.status !== 'failed' || row.sessionId || row.suppressed || !row.messageId
-      || !['result', 'state', 'recovery'].includes(row.ticketReply?.kind) || row.message?.id !== row.messageId
+      || !['result', 'state', 'recovery', 'watchdog'].includes(row.ticketReply?.kind) || row.message?.id !== row.messageId
       || row.message.source?.kind !== ticketReplySource || row.message.source.eventKey !== row.ticketReply.eventKey) return false;
     // The inbox persists processing+session identity before followup. Legacy
     // failures without that identity also need absence from every original
@@ -277,7 +294,8 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         const routes = () => agent.session.snapshotEvents().filter(event => event.type === modelRouteType && event.ignorable === true);
         let expressionRestrictions = [], expressionKind;
         const expressionMode = source => {
-          const kind = source?.kind === ticketReplySource ? source.replyKind || 'expression' : undefined;
+          const kind = source?.kind === ticketReplySource ? source.replyKind === 'watchdog' && source.ticketId
+            ? 'watchdog-execution' : source.replyKind || 'expression' : undefined;
           if (kind === expressionKind) return;
           for (const dispose of expressionRestrictions) dispose(); expressionRestrictions = []; expressionKind = kind;
           if (!kind) return;
@@ -530,11 +548,17 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           const active = activeChatReply(agent.session.snapshotEvents(), { includeInternal: true });
           const request = agent.session.snapshotEvents().find(event => event.type === 'user/message' && event.data?.id === active?.requestId)?.data;
           if (execution.agent === agent && [ticketStateSource, ticketReplySource].includes(request?.source?.kind)) {
-            const kind = request.source.kind === ticketReplySource ? request.source.replyKind : undefined;
+            const kind = request.source.kind === ticketReplySource ? request.source.replyKind === 'watchdog' && request.source.ticketId
+              ? 'watchdog-execution' : request.source.replyKind : undefined;
             if (!replyToolEnabled(kind, execution.name))
               throw Object.assign(new Error('内部通知只允许回复；有效恢复信号另可协调原执行，不能开启新的动作。'), { code: 'ROUTER_STATE_REPORT_ONLY' });
             if (execution.name === 'assistant_execution_manage' && !await mayReplyToTicket(threadId, request.id))
               throw Object.assign(new Error('恢复信号已失效，不能协调原执行。'), { code: 'ROUTER_RECOVERY_STALE' });
+            if (kind === 'watchdog-execution' && execution.name === 'assistant_execution_manage') {
+              const row = ((await store.getState()).requests || []).find(item => item.messageId === request.id && item.threadId === threadId);
+              const args = typeof execution.arguments === 'string' ? JSON.parse(execution.arguments) : execution.arguments;
+              assertWatchdogInspection(row?.ticketReply, args ?? {});
+            }
           }
           if (execution.agent === agent && request?.source?.kind === executionInputSource && !['assistant_reply', 'ask_user_question'].includes(execution.name)) {
             throw Object.assign(new Error('执行输入授权核实通知只能说明差异或询问真实用户'), { code: 'ROUTER_INPUT_CONFIRMATION_ONLY' });
@@ -634,6 +658,43 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
   return {
     ensureSession,
     ticketOwnerScope,
+    async watchdogExecutionContext(threadId, agent, ticketId, operation) {
+      const active = activeChatReply(agent.session.snapshotEvents(), { includeInternal: true });
+      const request = ((await store.getState()).requests || []).find(row => row.messageId === active?.requestId && row.threadId === threadId);
+      if (request?.ticketReply?.kind !== 'watchdog') return null;
+      assertWatchdogInspection(request.ticketReply, { ticketId, operation });
+      if (!await mayReplyToTicket(threadId, request.messageId)) throw Object.assign(new Error('外部观察信号已失效'), { code: 'WATCHDOG_SIGNAL_STALE' });
+      const inspection = await inspectWatchdog(request.ticketReply);
+      if (!inspection.valid) throw Object.assign(new Error('外部观察证据已变化'), { code: 'WATCHDOG_SIGNAL_STALE' });
+      return { signal: copy(request.ticketReply), identity: copy(request.ticketReply.observation.execution), facts: inspection.facts };
+    },
+    async notifyWatchdogSignal(observation, { principal } = {}) {
+      assertOpen();
+      const signal = watchdogRouterSignal(store.orchestration, observation, principal);
+      const threadId = signal.source.channel === 'desktop' ? signal.source.threadId || 'main' : 'main';
+      const state = await store.getState();
+      const previous = (state.requests || []).find(row => row.requestId === `ticket-reply:${signal.eventKey}`);
+      const inspection = await inspectWatchdog(signal);
+      let suppressReason = inspection.valid ? undefined : inspection.reason;
+      if (!suppressReason) {
+        try {
+          const [scope, current, policy] = await Promise.all([ticketOwnerScope(threadId), thread(threadId), readAssessmentPolicy(store, ctx.workspaceRegistry, threadId)]);
+          const ticket = signal.ticketId && store.orchestration.getTicket(signal.ticketId);
+          if (current.archived || current.sourceKey || ticket && !validateTicketMandate(ticket.mandate, { policy })
+            || signal.source.channel === 'desktop' && !scope.sessionIds.includes(signal.source.sessionId)) suppressReason = 'conversation-unavailable';
+        } catch { suppressReason = 'conversation-unavailable'; }
+      }
+      const row = await inbox.enqueueTicketReply({ threadId, signal, suppressReason });
+      return { accepted: true, id: observation.id,
+        ...(previous || row.ticketReply.observation.id !== observation.id ? { duplicate: true } : {}),
+        status: row.status, ...(row.suppressed ? { suppressed: true, reason: row.suppressionReason } : {}) };
+    },
+    async retryWatchdogSignals() {
+      if (stopped) return;
+      for (const row of ((await store.getState()).requests || []).filter(item => item.ticketReply?.kind === 'watchdog'
+        && item.status === 'failed' && !item.suppressed && !item.sessionId))
+        await retryTicketExpression(row.threadId, row, row.ticketReply);
+    },
     async executionRecoveryContext(threadId, agent, ticketId) {
       const active = activeChatReply(agent.session.snapshotEvents(), { includeInternal: true });
       const request = ((await store.getState()).requests || []).find(row => row.messageId === active?.requestId && row.threadId === threadId);

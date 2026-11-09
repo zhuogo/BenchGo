@@ -3,6 +3,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { readModelFallbacks } from './model-fallback.mjs';
 import { readQuestionReply, readBoundQuestionReply } from './question-reply.mjs';
 import { ticketReplySource, ticketReplyInstruction, ticketReplyIdentity } from './ticket-reply.mjs';
+import { watchdogIncidentIdentity, watchdogNoticeCurrent, watchdogNotificationIdentity } from './watchdog-router-signal.mjs';
 
 const active = new Set(['queued', 'processing', 'prepared']);
 const fingerprint = (threadId, text, context) => createHash('sha256').update(JSON.stringify(context === undefined ? [threadId, text] : [threadId, text, context])).digest('hex');
@@ -114,11 +115,27 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
     return operation;
   }
   return {
-    async enqueueTicketReply({ threadId, signal, retry = false, retryMessageId }) {
+    async enqueueTicketReply({ threadId, signal, retry = false, retryMessageId, suppressReason }) {
       const requestId = `ticket-reply:${signal.eventKey}`, digest = fingerprint(threadId, signal);
       await updateState(state => {
+        if (signal.kind === 'watchdog') {
+          const sameId = (state.requests || []).find(row => row.ticketReply?.kind === 'watchdog'
+            && (row.ticketReply.observation.id === signal.observation.id || row.watchdogReceipts?.some(receipt => receipt.id === signal.observation.id)));
+          const alias = sameId?.watchdogReceipts?.find(receipt => receipt.id === signal.observation.id);
+          if (sameId && (alias ? alias.fingerprint !== digest : ticketReplyIdentity(sameId.ticketReply) !== ticketReplyIdentity(signal))) throw new Error('Watchdog 信号标识冲突');
+        }
         const previous = (state.requests || []).find(row => row.requestId === requestId);
         if (previous) {
+          if (signal.kind === 'watchdog' && previous.ticketReply?.kind === 'watchdog' && !retry) {
+            if (previous.threadId !== threadId || watchdogNotificationIdentity(previous.ticketReply) !== watchdogNotificationIdentity(signal))
+              throw new Error('Watchdog 观察事件标识冲突');
+            if (previous.ticketReply.observation.id !== signal.observation.id && !previous.watchdogReceipts?.some(receipt => receipt.id === signal.observation.id)) {
+              if ((previous.watchdogReceipts?.length || 0) >= 64) throw new Error('Watchdog 观察事件重复标识过多');
+              return { requests: state.requests.map(row => row.requestId === requestId
+                ? { ...row, watchdogReceipts: [...(row.watchdogReceipts || []), { id: signal.observation.id, fingerprint: digest }] } : row) };
+            }
+            return {};
+          }
           if (previous.threadId !== threadId || ticketReplyIdentity(previous.ticketReply) !== ticketReplyIdentity(signal)) throw new Error('工单回复标识冲突');
           if (retry && retryMessageId !== undefined && previous.messageId !== retryMessageId) return {};
           if (retry && ['failed', 'processed'].includes(previous.status) && !previous.suppressed) {
@@ -134,8 +151,16 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
         }
         const message = createUserMessage({ source: { kind: ticketReplySource, replyKind: signal.kind, eventKey: signal.eventKey, ticketId: signal.ticketId },
           content: [{ type: 'text', text: ticketReplyInstruction(signal) }] });
-        return { requests: [...(state.requests || []), { requestId, threadId, messageId: message.id, message,
-          ticketReply: signal, fingerprint: digest, attempt: 1, status: 'queued', createdAt: new Date(now()).toISOString() }] };
+        const superseded = signal.kind === 'watchdog' && !watchdogNoticeCurrent(signal, state.requests || []);
+        return { requests: [...(state.requests || []).map(row => !suppressReason && signal.kind === 'watchdog' && row.status === 'queued'
+          && watchdogIncidentIdentity(row.ticketReply) === watchdogIncidentIdentity(signal)
+          && !watchdogNoticeCurrent(row.ticketReply, [{ ticketReply: signal }])
+          ? { ...row, status: 'processed', suppressed: true, suppressionReason: 'watchdog-incident-superseded', message: undefined } : row),
+        { requestId, threadId, messageId: message.id, message,
+          ticketReply: signal, fingerprint: digest, attempt: 1,
+          status: suppressReason || superseded ? 'processed' : 'queued',
+          ...(suppressReason || superseded ? { suppressed: true, suppressionReason: suppressReason || 'watchdog-incident-superseded' } : {}),
+          createdAt: new Date(now()).toISOString() }] };
       });
       void drain(threadId);
       return structuredClone((await getState()).requests.find(row => row.requestId === requestId));
