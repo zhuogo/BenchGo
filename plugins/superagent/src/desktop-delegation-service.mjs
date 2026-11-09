@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readAssessmentPolicy } from './assessment-policy.mjs';
-import { normalizeTicketTitle } from './ticket-title.mjs';
+import { assertSpecificTicketDescription, normalizeTicketTitle } from './ticket-title.mjs';
 import { configuredWorkModel, rejectModelOverride } from './work-role-policy.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -33,6 +33,7 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
     const duplicateOfTicketId = input.duplicateOfTicketId === undefined ? undefined : required(input.duplicateOfTicketId, '重复工单标识', 512);
     const target = required(input.text, '任务内容');
     const title = normalizeTicketTitle(input.title, target);
+    assertSpecificTicketDescription({ title: input.title ?? title, target });
     const acceptance = input.acceptance ?? '';
     if (typeof acceptance !== 'string' || acceptance.length > 100000) throw new Error('无效验收条件');
     const requestKey = JSON.stringify([sessionId, requestId]);

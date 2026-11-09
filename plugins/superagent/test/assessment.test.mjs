@@ -77,6 +77,27 @@ test('opening contract keeps numeric criteria that are present in the original r
   assert.equal(accepted[0].acceptance, original);
 });
 
+test('intake returns model-authored business acknowledgement without adding a ticket status template', async () => {
+  const replyText = '我来比较这些获客项目，整理各自用途、活跃度和源码入口给你。';
+  const decision = { candidateId: 'a', outcome: 'accept', reason: '明确要求调研与清单', title: '获客项目清单',
+    target: '比较AI获客开源项目，整理用途、活跃度和源码入口', acceptance: '说明适用场景并附项目来源', replyText };
+  const llm = { async *stream({ messages, tools }) {
+    const prompt = messages.filter(message => message.role === 'system').flatMap(message => message.content).map(block => block.text || '').join('\n');
+    assert.match(prompt, /主语始终是正在替用户做的事情/);
+    assert.match(prompt, /title and work summary must identify the concrete thing/);
+    assert.deepEqual(tools, []);
+    yield { type: 'text-delta', text: JSON.stringify({ decisions: [decision] }) };
+    yield { type: 'finish', reason: { kind: 'stop' } };
+  } };
+  const options = { llm, model: { providerId: 'p', modelId: 'opaque' }, candidates: [{ candidateId: 'a' }], rules: '' };
+  const [actual] = await assessCandidates(options);
+  assert.deepEqual(actual, decision, 'the host preserves the authored reply and full work contract');
+  decision.title = '处理请求';
+  await assert.rejects(assessCandidates(options), { code: 'TICKET_DESCRIPTION_GENERIC', field: 'title' });
+  decision.title = '请求处理日志'; decision.target = '修复请求处理日志并提供验证结果';
+  assert.equal((await assessCandidates(options))[0].title, decision.title, 'specific business text is not a keyword filter');
+});
+
 test('assessment uses the full configured queue and stops on permission denial', async () => {
   for (const denied of [false, true]) {
     const calls = [];

@@ -124,6 +124,27 @@ test('opening a news task persists concrete original criteria before any review 
   assert.equal(f.database.results(ticket.id).length, 0);
 });
 
+test('placeholder admission labels fail before creating a Trigger or resolving a work model', async t => {
+  const f = await fixture(t);
+  let resolutions = 0;
+  f.ctx.llm.resolveModelInfo = async () => { resolutions++; throw Error('must not resolve placeholder work'); };
+  for (const patch of [{ title: '执行任务' }, { title: 'process request' }, { text: '处理请求' }]) {
+    await assert.rejects(f.service.delegate({ ...f.input, ...patch }, f.exec, f.options), { code: 'TICKET_DESCRIPTION_GENERIC' });
+  }
+  assert.equal(resolutions, 0);
+  assert.equal(f.database.listTickets().length, 0);
+  assert.equal(f.approvals(), 0);
+});
+
+test('a concrete user title and business summary remain unchanged at admission', async t => {
+  const f = await fixture(t);
+  const title = '请求日志修复报告', text = '为用户修复请求日志页面，并提供原因、改动和验证结果';
+  const ticket = await f.service.delegate({ ...f.input, title, text }, f.exec, f.options);
+  assert.equal(ticket.title, title);
+  assert.equal(ticket.target, text);
+  assert.equal(ticket.mandate.instruction, '原始要求，请执行修复');
+});
+
 for (const original of ['做任务进度看板', '检查网站状态']) test(`new tasks with progress or status wording retain literal authority: ${original}`, async t => {
   const f = await fixture(t);
   f.events[1].data.content = [{ type: 'text', text: original }];
