@@ -104,6 +104,7 @@
     },
     "client": {
       "inject": [
+        "@deepseek-ai/dsh-api-gateway",
         "@deepseek-ai/dsh-client-ui-sidebar",
         "@deepseek-ai/dsh-client-ui-workspace",
         "@deepseek-ai/dsh-client-ui-session",
@@ -124,6 +125,7 @@
     }
   },
   "dependencies": {
+    "@deepseek-ai/dsh-api-gateway": "0.2.2-rc.1",
     "@deepseek-ai/dsh-agent-instructions": "0.2.2-rc.1",
     "@deepseek-ai/dsh-atomic-write": "0.2.2-rc.1",
     "@deepseek-ai/dsh-attachment": "0.2.2-rc.1",

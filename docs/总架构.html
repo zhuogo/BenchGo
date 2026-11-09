@@ -144,7 +144,7 @@
 
     <section class="panel architecture" id="superagent">
       <h2>二、SuperAgent 全链路目标</h2>
-      <p class="note">桌面主人直通；渠道仅是适配器，外部消息经过统一入口管线。Super Harness 机制统合调度与执行、上下文管理、模型调度三层；权限、持久化与记忆横向支撑，沿用现有插件边界。图示是目标，实现状态见末节。</p>
+      <p class="note">桌面主人直通；仅准备新开单时核对当前原话、拟派事项与现成只读能力，可直答则退回同一 Router。渠道仅是适配器，外部消息经过统一入口管线。Super Harness 机制统合调度与执行、上下文管理、模型调度三层；权限、持久化与记忆横向支撑，沿用现有插件边界。图示是目标，实现状态见末节。</p>
       <div class="diagram-toolbar" role="group" aria-label="架构图查看工具">
         <button type="button" id="zoom-out" aria-label="缩小架构图">−</button>
         <output id="zoom-level" aria-live="polite" aria-label="架构图缩放比例">100%</output>
@@ -208,7 +208,7 @@
         <rect class="node node-violet" x="38" y="318" width="430" height="322" rx="14"/>
         <text class="svg-title" x="58" y="350">Main Agent / Router · 总调度</text>
         <text class="svg-label" x="58" y="378">· 用户始终与 Router 对话（主聊天 / 旁聊）</text>
-        <text class="svg-label" x="58" y="402">· 内部能力默认完整 · 主聊 / 旁聊无权限档位选择</text>
+        <text class="svg-label" x="58" y="402">· 可信角色装配 · 主聊 / 旁聊显示实际角色</text>
         <text class="svg-label" x="58" y="426">· 逐条分诊：直接答 / 开单 / 跟进 / 独立新任务</text>
         <text class="svg-label" x="58" y="450">· 收到完成信号，主动自然回复；摘要 / 全文自选</text>
         <text class="svg-label" x="58" y="474">· 随身文档：人设 · 身份 · 主人档案 · 做事规矩 · 记忆</text>
@@ -393,9 +393,10 @@
     </section>
 
     <section class="panel" id="permissions">
+      <p class="note">执行事实复用官方持久 Session、工单账和最小索引，列表与详情通过官方增量流共享；辅助摘要只用辅助模型，无可用模型时确定性降级。独立 Watchdog 使用独立宿主、profile 与官方 Schedule，只观察并向 Router 发信号，不改工单、不重启宿主。角色、流式连续性与监督的安装版适用验收仍需单独完成。权威契约见<a href="06-superagent/服务契约.md">服务契约</a>与<a href="06-superagent/任务与执行.md">任务与执行</a>。</p>
       <h2>四、权限继承与对外审批</h2>
       <div class="grid">
-        <article class="card"><h3>内部继承与逐层裁剪</h3><p>用户指令是业务授权唯一源头。Router → 工单 → Worker → 一层子代理只能收窄，工具面逐层裁剪；每个主 Worker 可有多个并行子代理，子代理无凭据工具、禁止再委派。主聊和旁聊不提供 Harness 权限档位选择。</p></article>
+        <article class="card"><h3>内部继承与逐层裁剪</h3><p>用户指令是业务授权唯一源头。Router → 工单 → Worker → 一层子代理只能收窄，工具面逐层裁剪；每个主 Worker 可有多个并行子代理，子代理无凭据工具、禁止再委派。主聊和旁聊通过官方插槽显示只读角色；普通会话保留官方预设。Agent preset、沙箱审批与模型路由分别核验，权限叠加宿主限制，不因隐藏选择器获得完全权限。</p></article>
         <article class="card"><h3>整站许可具有明确边界</h3><p>许可绑定精确 origin、动作类别、期限和真实授权人，持久留痕、可查看、可撤销。自用可明确覆盖较宽的常规敏感类别；四类高危始终除外。许可与工单 Mandate 叠加，互不替代。</p></article>
         <article class="card"><h3>凭据仅经保险库</h3><p>Agent 仅见条目与句柄，由系统安全代填。缺少凭据时提示用户安全录入保险库或接管；秘密不进入聊天、模型和日志。凭据录入与动作批准分别处理，录入不自动扩大授权。</p></article>
       </div>

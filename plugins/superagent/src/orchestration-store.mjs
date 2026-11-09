@@ -18,6 +18,7 @@ import { installInterruptedContinuationStore } from './interrupted-continuation-
 import { installRouterQuestionStore } from './router-question-store.mjs';
 import { normalizeTicketTitle } from './ticket-title.mjs';
 import { installExecutionFactsStore } from './execution-facts-store.mjs';
+import { installExecutionSummaryStore } from './execution-summary-store.mjs';
 
 const json = value => JSON.stringify(value);
 const parse = value => JSON.parse(value);
@@ -1177,5 +1178,6 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   Object.assign(api, installLearningSourceStore({ db, tx, api }));
   executionFacts = installExecutionFactsStore({ db, tx, api });
   Object.assign(api, executionFacts);
+  Object.assign(api, installExecutionSummaryStore({ db, tx }));
   return api;
 }
