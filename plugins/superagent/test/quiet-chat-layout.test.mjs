@@ -311,8 +311,8 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
       await page.locator('.ba-chat-feed').focus();
       const scenario=`${width}${containerWidth?'-container-'+containerWidth:''}/${dark}`;
       const replyFrame=await page.locator('[data-chat-key="message:reply"] .ba-chat-content').evaluate(node=>({label:node.getAttribute('aria-label'),header:getComputedStyle(node,'::before').content,border:getComputedStyle(node).borderLeftWidth,background:getComputedStyle(node).backgroundColor,animation:getComputedStyle(node,'::before').animationName}));
-      assert.equal(replyFrame.header,JSON.stringify(replyFrame.label),`${scenario}: identity uses the existing accessible assistant name`);
-      assert.equal(replyFrame.border,'2px');assert.notEqual(replyFrame.background,'rgba(0, 0, 0, 0)');assert.equal(replyFrame.animation,'none');
+      assert.equal(replyFrame.header,'none',`${scenario}: the reply bubble has no visible assistant identity header`);
+      assert.equal(replyFrame.border,'0px');assert.notEqual(replyFrame.background,'rgba(0, 0, 0, 0)');assert.equal(replyFrame.animation,'none');
       const baseline=await geometry(page);
       for(const row of await page.locator('.ba-chat-message').all()) {
         await row.hover();
