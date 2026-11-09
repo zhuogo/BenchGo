@@ -24,6 +24,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { installRoleHost } from './role-host-fixture.mjs';
 
 const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
 const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
@@ -53,6 +54,7 @@ async function fixture(t, script, options = {}) {
   await ctx.plugin(TokenMeter);
   await ctx.plugin(NativeToolExecutor);
   if (options.install) await options.install(ctx);
+  await installRoleHost(ctx);
   if (options.persistenceRoot) await ctx.plugin(await loadPackage('session/session-persistence-jsonl', '@deepseek-ai/dsh-session-persistence-jsonl'), { root: options.persistenceRoot, compression: 'none' });
   let state = { revision: 0, mainSessionId: null, threads: [], tasks: [] };
   let config = { models: [{ providerId: 'test', modelId: 'first' }, { providerId: 'test', modelId: 'second' }] };
@@ -84,12 +86,16 @@ async function fixture(t, script, options = {}) {
   const store = options.store || { paths: { workspace: process.cwd() }, getState: async () => structuredClone(state), updateState: async (patch, { revision }) => { assert.equal(revision, state.revision); state = { ...state, ...structuredClone(patch), revision: revision + 1 }; return state; }, getConfig: async () => structuredClone(config), getProfile: async () => profile, listMemories: async () => options.memories || [] };
   if (options.ledger) store.ledger = options.ledger;
   if (options.orchestration) store.orchestration = options.orchestration;
+  let ownedOrchestration;
+  if (!store.orchestration) {
+    store.orchestration = ownedOrchestration = createAssistantOrchestrationStore({ filename: ':memory:' });
+  }
   if (options.beforeStateWrite) {
     const update = store.updateState;
     store.updateState = async (...args) => { await options.beforeStateWrite(args[0]); return update(...args); };
   }
   const engine = await createAssistantEngine({ ctx, store, compactionPlugin: Compaction, appendChatRecord: modules[0].appendPluginRecord, ...options });
-  t.after(async () => { await engine.dispose(); await ctx.fiber.dispose(); if (options.store?.close) options.store.close(); });
+  t.after(async () => { await engine.dispose(); await ctx.fiber.dispose(); if (options.store?.close) options.store.close(); ownedOrchestration?.close(); });
   return { ctx, engine, requests, state: () => state, setConfig: value => { config = value; }, setProfile: value => { profile = value; } };
 }
 
@@ -209,7 +215,8 @@ for (const mode of ['text', 'assistant_reply']) test(`Router replies naturally a
       execute: (args, execution) => delegation.delegate(args, execution, { ownerAgent: agent, threadId }),
     });
   } });
-  delegation = createDesktopDelegationService({ ctx: f.ctx, database, readPolicy: async () => ({ desktopVersion: 'natural-reply-policy', projects: [], workerModels: [{ providerId: 'test', modelId: 'first' }] }) });
+  delegation = createDesktopDelegationService({ ctx: f.ctx, database, assessScope: async () => ({ decision: { outcome: 'delegate', reason: 'Fixture scope' }, routing: null }),
+    readPolicy: async () => ({ desktopVersion: 'natural-reply-policy', projects: [], workerModels: [{ providerId: 'test', modelId: 'first' }] }) });
   const agent = await f.engine.ensureSession();
   agent.followup(createUserMessage({ content: [{ type: 'text', text: requestText }], source: { kind: 'user' } }));
   await agent.whenIdle();
@@ -664,10 +671,17 @@ test('project worker mounts official worktrees and preserves dirty source while 
     await ctx.plugin((await loadPackage('interaction/user-questions', '@deepseek-ai/dsh-user-questions')).default);
     const official = name => loadPackage('experimental/worktree', name);
     const { default: Sandbox } = await official('@deepseek-ai/dsh-sandbox');
-    class UnusedSandbox extends Sandbox { async confine() { throw new Error('unexpected confinement'); } }
+    // This test verifies worktree policy propagation, not OS confinement. The
+    // backend only runs the fixture's official Git/Node commands and records
+    // their workspace-write policy; production sandbox enforcement is separate.
+    class WorktreeFixtureSandbox extends Sandbox { async confine(argv, policy) {
+      assert.equal(policy.mode, 'workspace-write'); assert.equal(policy.workspaceRoot, directory);
+      assert.match(argv[0], /(?:git|node)(?:\.exe)?$/i);
+      return { argv: [...argv], enforcement: 'partial', denialSignatures: [], runnerFailureRules: [] };
+    } }
     await ctx.plugin((await official('@deepseek-ai/dsh-fs-local')).default, { cwd: directory });
     await ctx.plugin((await official('@deepseek-ai/dsh-subprocess-local')).default);
-    await ctx.plugin(UnusedSandbox);
+    await ctx.plugin(WorktreeFixtureSandbox);
     await ctx.plugin((await official('@deepseek-ai/dsh-sandbox-policy')).default, { mode: 'danger-full-access', workspaceRoot: directory });
     await ctx.plugin((await official('@deepseek-ai/dsh-working-directory')).default);
     ctx.tools.register({ name: 'project_probe', description: 'Read and write isolated fixture', parameters: { type: 'object', properties: {} },
@@ -806,6 +820,21 @@ test('official preset is bound to the assistant while inherited execution tools 
   assert.equal(f.ctx.agentPresets.composedPreset(agent.ctx), 'standard');
   assert.equal(agent.session.header.agentPreset, 'standard');
   assert.equal(f.ctx.tools.schemas(agent).some(tool => tool.name === 'inherited_test'), false);
+});
+
+test('cached Router corrects a changed blank-session preset before the official first turn opens', async t => {
+  const f = await fixture(t, () => text('Ready'));
+  const agent = await f.engine.ensureSession();
+  await f.ctx.agentPresets.select(agent, 'other');
+  f.ctx.permissionPresets.set(agent.session, 'danger-full-access');
+  await f.engine.send({ text: 'First request' });
+  await (await f.engine.ensureSession()).whenIdle();
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.ctx.agentPresets.presetForSession(agent.session), 'standard');
+  assert.equal(f.ctx.agentPresets.composedPreset(agent.ctx), 'standard');
+  assert.equal(f.ctx.permissionPresets.current(agent.session), 'workspace-write');
+  const types = agent.session.snapshotEvents().map(event => event.type);
+  assert.ok(types.lastIndexOf('agent-preset/selected') < types.indexOf('turn/start'));
 });
 
 test('inherited tools remain subject to Harness permission decisions', async t => {
@@ -2181,7 +2210,7 @@ test('channel mirror survives official JSONL resume with summary source and zero
   const source = { channel: 'telegram', sourceType: 'topic', connectionId: 'bot', conversationId: 'group', chatId: 'group', topicId: 'topic' };
   const event = { source, threadId: 'remote-thread', text: 'original channel message' }, result = { trigger: null, intakeEvent: { id: 'durable-intake', intakeStage: 'pending' } };
   const first = await fixture(t, () => text('must not run'), options);
-  const host = createChannelSessionHost({ ctx: first.ctx, store, engine: first.engine });
+  const host = createChannelSessionHost({ ctx: first.ctx, store, engine: first.engine, appendRecord: modules[0].appendPluginRecord });
   const mirrored = await host.onInbound(event, result, { sessionKey: channelSessionKey(source) });
   const agent = await first.engine.ensureSession({ threadId: mirrored.threadId });
   const projection = first.ctx.sessionProjections.snapshot(agent.session, first.ctx.sessionProjections.summaryKeys());
@@ -2192,7 +2221,7 @@ test('channel mirror survives official JSONL resume with summary source and zero
   await first.engine.dispose(); await first.ctx.fiber.dispose();
   const second = await fixture(t, () => text('must not run'), options);
   t.after(async () => { await second.engine.dispose(); await second.ctx.fiber.dispose(); await rm(directory, { recursive: true, force: true }); });
-  const restoredHost = createChannelSessionHost({ ctx: second.ctx, store, engine: second.engine });
+  const restoredHost = createChannelSessionHost({ ctx: second.ctx, store, engine: second.engine, appendRecord: modules[0].appendPluginRecord });
   const restored = await restoredHost.onInbound(event, result);
   assert.equal(restored.sessionId, mirrored.sessionId);
   const resumed = await second.engine.ensureSession({ threadId: restored.threadId });

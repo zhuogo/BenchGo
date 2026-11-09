@@ -27,6 +27,7 @@ import { channelSessionKey } from './channel-policy.mjs';
 import { readAssessmentPolicy, validateTicketMandate } from './assessment-policy.mjs';
 import { routerAdmissionLanguagePolicy, routerLanguagePolicy } from './router-language-policy.mjs';
 import { currentExecutionRecoverySignal, executionRecoverySignal, executionUncertainty } from './execution-uncertainty.mjs';
+import { createSessionRoleAssembly, liveSessionRole } from './session-role-assembly.mjs';
 
 const routeKey = model => JSON.stringify([model.providerId, model.modelId]);
 const copy = value => structuredClone(value);
@@ -186,6 +187,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     getAgent: threadId => handles.get(threadId)?.agent,
     readSession: sessionId => ctx.sessionQuery.readSession(sessionId),
     beforeDispatch: async (request, agent) => {
+      await liveSessionRole(agent)?.reconcile();
       if (request.message?.source?.kind === executionInputSource && !await mayReplyToExecutionInput(request.threadId, request.message)) return false;
       if (request.ticketReply && !await mayReplyToTicket(request.threadId, request.messageId)) return false;
       if (request.ticketState) return false;
@@ -230,6 +232,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       const handle = handles.get(threadId);
       if ((await thread(threadId)).archived) throw new Error('请先恢复已归档的旁聊');
       if (handles.get(threadId) !== handle || (threadId === 'main' && resettingMain)) return ensureSession({ threadId });
+      if (handle.agent.status !== 'running') await liveSessionRole(handle.agent)?.reconcile();
       return handle.agent;
     }
     if (pending.has(threadId)) return pending.get(threadId);
@@ -249,6 +252,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       const existing = ctx.agents.get(record.sessionId);
       if (existing) {
         if (recovery) throw new Error('Router 恢复期间已有新写入者，停止本次恢复');
+        if (liveSessionRole(existing)?.role !== 'router') throw Object.assign(new Error('自有会话已有未装配角色的活动写入者；请先结束该写入者再恢复原会话'), { code: 'ROLE_LIVE_SESSION_UNMANAGED' });
         if (!handles.has(threadId)) handles.set(threadId, { agent: existing, dispose: async () => {} });
         return existing;
       }
@@ -265,7 +269,8 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       const savedSession = sessions.find(item => item.header.id === record.sessionId);
       if (recovery && !savedSession) throw new Error('Router 持久会话缺失，不能以空白会话替代恢复');
       const presets = ctx.get?.('agentPresets');
-      const preset = presets ? await presets.resolve(savedSession?.header?.agentPreset) : undefined;
+      const role = await createSessionRoleAssembly({ ctx, database: store.orchestration,
+        identity: { role: 'router', sessionId: record.sessionId, threadId } });
       const setup = async (scope, agent) => {
         const select = model => agent.model.select({ provider: model.providerId, model: model.modelId,
           ...(model.options?.reasoningEffort === undefined ? {} : { reasoningEffort: model.options.reasoningEffort }) });
@@ -384,14 +389,6 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           }
           return next();
         });
-        // Seed unpublished sessions only; every admitted message selects its
-        // frozen route at the official inbox boundary before tool preparation.
-        if (!agent.model?.current?.()) {
-          const configured = await store.getConfig();
-          validateAssistantModels(configured.models);
-          const initial = configured.models[0];
-          if (initial) agent.model?.select?.({ provider: initial.providerId, model: initial.modelId, ...(initial.options?.reasoningEffort === undefined ? {} : { reasoningEffort: initial.options.reasoningEffort }) });
-        }
         if (recoveredEvidence) {
           const events = agent.session.snapshotEvents();
           const prefix = recoveredEvidence.lastSeq === null ? [] : events.filter(event => event.seq <= recoveredEvidence.lastSeq);
@@ -402,12 +399,20 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
               || (event.type === 'turn/end' && event.data?.reason?.kind === 'interrupted')
               || (event.type === 'tool/result' && ['TOOL_OUTCOME_UNKNOWN', 'TOOL_NOT_STARTED'].includes(event.data?.error?.code)))))) throw new Error('Router 记录在恢复核实后发生变化');
         }
-        if (preset) await presets.mount(scope, preset.id);
+        await role.mount(scope, agent);
+        // Validate role before changing a legacy session's model. Every admitted
+        // message still freezes its route at the official inbox boundary.
+        if (!agent.model?.current?.()) {
+          const configured = await store.getConfig();
+          validateAssistantModels(configured.models);
+          const initial = configured.models[0];
+          if (initial) agent.model?.select?.({ provider: initial.providerId, model: initial.modelId, ...(initial.options?.reasoningEffort === undefined ? {} : { reasoningEffort: initial.options.reasoningEffort }) });
+        }
         installProjectRules(scope, agent);
         scope.systemPrompt.section({ name: 'deployment:persona-prefix', order: -1000, interpolate: false, text: 'You are the BenchGo personal assistant.' });
         scope.systemPrompt.section({ name: 'benchgo-builtin-layer', order: -500, interpolate: false, text: builtinLayer });
         scope.systemPrompt.section({ name: 'deployment:persona-suffix', order: 1000, interpolate: false, text: '' });
-        let compaction = preset && presets.serviceFor(agent, 'compaction');
+        let compaction = presets.serviceFor(agent, 'compaction');
         if (!compaction) {
           const compactScope = scope.isolate('compaction');
           await compactScope.plugin(Compaction, { auto: true, headroomTokens: 4096, maxTokens: 2048 });
@@ -591,7 +596,8 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       };
       const handle = savedSession
         ? await ctx.agents.resume({ resumeSessionId: record.sessionId, setup })
-        : await ctx.agents.create({ sessionId: record.sessionId, meta: { cwd: store.paths.workspace, ...(preset ? { agentPreset: preset.id } : {}) }, setup });
+        : await ctx.agents.create({ sessionId: record.sessionId, meta: { cwd: store.paths.workspace, agentPreset: role.expected.agentPreset }, setup });
+      await role.reconcile();
       if (stopped) { await handle.dispose(); throw new Error('总助手已关闭'); }
       handles.set(threadId, handle);
       if (savedSession) resumeFallback?.();

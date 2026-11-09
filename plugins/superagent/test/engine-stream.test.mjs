@@ -4,6 +4,8 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { createAssistantEngine } from '../src/engine.mjs';
 import { projectReplyStream } from '../client/reply-stream.mjs';
+import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
+import { installRoleHost } from './role-host-fixture.mjs';
 
 const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
 const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
@@ -21,6 +23,7 @@ for (const cancelled of [false, true]) test(`ordinary Router text uses live offi
   await ctx.plugin(LlmRuntime);
   for (let index = 0; index < modules.length; index++) await ctx.plugin(modules[index].default, index === modules.length - 1 ? { agents: [] } : undefined);
   await ctx.plugin(TokenMeter);
+  await installRoleHost(ctx);
   class Adapter extends LlmAdapter {
     async resolveModel(provider, id) { return { provider, id, name: id }; }
     async *stream() {
@@ -38,14 +41,14 @@ for (const cancelled of [false, true]) test(`ordinary Router text uses live offi
   }
   ctx.llm.registerAdapter(['stream-test'], new Adapter());
   let state = { revision: 0, mainSessionId: null, threads: [], requests: [] };
-  const store = { paths: { workspace: process.cwd() }, getState: async () => structuredClone(state),
+  const store = { paths: { workspace: process.cwd() }, orchestration: createAssistantOrchestrationStore({ filename: ':memory:' }), getState: async () => structuredClone(state),
     updateState: async (patch, { revision }) => { assert.equal(revision, state.revision); state = { ...state, ...structuredClone(patch), revision: revision + 1 }; return state; },
     getConfig: async () => ({ models: [{ providerId: 'stream-test', modelId: 'opaque' }] }),
     getProfile: async () => ({ identity: '', user: '' }), listMemories: async () => [],
   };
   ctx.provide('sessionQuery', { listSessions: async () => ctx.sessions.list().map(session => ({ header: session.header })), readSession: async id => ({ events: ctx.sessions.get(id).snapshotEvents() }) });
   const engine = await createAssistantEngine({ ctx, store, compactionPlugin: Compaction, appendChatRecord: modules[0].appendPluginRecord });
-  t.after(async () => { second.resolve(); finish.resolve(); await engine.dispose(); await ctx.fiber.dispose(); });
+  t.after(async () => { second.resolve(); finish.resolve(); await engine.dispose(); await ctx.fiber.dispose(); store.orchestration.close(); });
   const assembler = new BlockAssembler();
   let current, textCount = 0;
   ctx.on('agent/assistant-stream', ({ agent, frame }) => {
