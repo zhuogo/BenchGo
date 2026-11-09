@@ -1,3 +1,4 @@
+import { Loading } from '../../shared/client/ui/loading.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { Button } from '../../shared/client/ui/button.jsx';
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
@@ -52,7 +53,7 @@ export function SkillDeck({ api, onBack }) {
     {!selected ? <>
       <label className="bg-skill-search"><UIIcon name="search" size={17} /><input type="search" aria-label="搜索工程技能" placeholder="搜索工程技能" value={query} onChange={event => setQuery(event.target.value)} /></label>
       <div className="bg-skill-list" aria-label="工程技能列表" aria-busy={loading}>
-        {loading && !catalog ? <div className="bg-skill-empty" role="status"><UIIcon name="refresh" size={28} /><strong>正在读取工程技能</strong><p>核对目录与已安装来源…</p></div>
+        {loading && !catalog ? <Loading className="bg-skill-empty" label="正在读取工程技能" />
           : visible.length ? visible.map(row => <button type="button" className="bg-skill-row" key={row.name} disabled={loading || busy} onClick={() => select(row)}><span className="bg-skill-row-title"><strong>{row.name}</strong><span className={`bg-skill-status${row.available ? ' is-available' : ''}`}>{states[row.status]}</span></span><span className="bg-skill-description">{row.description}</span><span className="bg-skill-row-meta">{row.category === 'engineering' ? '工程开发' : '效率与协作'}{row.dependencies.length > 0 && ` · ${row.dependencies.length} 项关联技能`}<UIIcon name="chevronLeft" size={14} className="bg-skill-forward" /></span></button>)
             : <div className="bg-skill-empty" role="status"><UIIcon name="search" size={28} /><strong>{error ? '工程技能暂不可用' : '没有匹配的工程技能'}</strong><p>{error ? '请重试读取目录。' : '换一个关键词，或清除搜索。'}</p><Button variant="ghost" onClick={() => { setQuery(''); if (error) setRevision(value => value + 1); }}>{error ? '重试' : '清除搜索'}</Button></div>}
       </div>
@@ -61,7 +62,7 @@ export function SkillDeck({ api, onBack }) {
       <header className="bg-skill-detail-head"><h3 ref={heading} tabIndex={-1}>{selected}</h3><p>{current?.description}</p>{current && <span className={`bg-skill-status${current.available ? ' is-available' : ''}`}>{states[current.status]}</span>}</header>
       {detailError && <p className="bg-skill-notice" role="alert">{detailError}{!detail && <button type="button" onClick={() => select(current || { name: selected })}>重试</button>}</p>}
       {notice && <p className="bg-skill-notice" role="status">{notice}</p>}
-      {detailLoading ? <p role="status" className="bg-skill-deck-loading"><UIIcon name="refresh" size={18} />正在下载并校验固定版本正文…</p> : detail && <>
+      {detailLoading ? <Loading label="正在下载并校验固定版本正文…" /> : detail && <>
         <dl className="bg-skill-facts"><div><dt>来源</dt><dd><a href={detail.skill.url} target="_blank" rel="noreferrer">查看 GitHub 原文</a> · v{detail.version}</dd></div><div><dt>AI 调用</dt><dd>{detail.skill.modelInvocable ? '按官方技能策略调用' : '仅手动调用，保留原始限制'}</dd></div><div className="bg-skill-path"><dt>安装位置</dt><dd>{detail.destination}</dd></div><div><dt>随同安装</dt><dd>{missing.length ? missing.map(row => row.name).join('、') : '该技能及关联技能均已安装'}</dd></div></dl>
         <div className="bg-skill-management"><Button variant="default" disabled={busy || catalog?.available === false || conflicts.length > 0 || !missing.length} onClick={install}>{busy ? '正在下载并安装…' : missing.length > 1 ? `安装技能及关联项（${missing.length}）` : '安装技能'}</Button>{conflicts.length > 0 && <p>同名技能已有其他来源：{conflicts.map(row => row.name).join('、')}。保留现有内容，不覆盖安装。</p>}<p>仅写入所列技能文件。需配置工单的技能，请在目标项目中按需调用 setup-matt-pocock-skills。</p></div>
         <section className="bg-skill-body"><h4>技能正文</h4><pre>{detail.skill.content}</pre></section>

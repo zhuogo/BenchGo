@@ -1,3 +1,4 @@
+import { officialTooltipSource } from './official-tooltip-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -23,10 +24,10 @@ test('vault keyboard flow reaches long-list editing, restores focus, recovers er
     window.fetch=(url,options)=>{window.signals.push(options.signal);return originalFetch(url,options)};
     window.showVault=()=>root.render(<main className='ba-root'><style>{shellCss}{css}</style><section className='ba-studio-body'><VaultSettingsSection key={++key}/></section></main>);
     window.hideVault=()=>root.render(null);window.showVault();
-  ` }, bundle: true, write: false, format: 'iife', jsx: 'automatic',
+  ` }, bundle: true, write: false, outdir: fileURLToPath(new URL('../../../artifacts/unused-feedback-test/', import.meta.url)), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
-    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
+    loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text' }, plugins: [officialTooltipSource(), sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   const browser = await chromium.launch({ headless: true, executablePath });
   const screenshots = process.env.BENCHGO_VAULT_SCREENSHOTS;
   if (screenshots) await mkdir(screenshots, { recursive: true });
@@ -42,7 +43,7 @@ test('vault keyboard flow reaches long-list editing, restores focus, recovers er
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ entries: mode === 'empty' ? [] : entries }) });
     });
     await page.route('http://localhost/', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;font-family:Arial,sans-serif}.ba-root{height:auto!important;min-width:0!important}.ba-studio-body{max-width:960px;margin:auto}body[data-ds-dark-theme]{--dsw-alias-label-primary:#ededee;--dsw-alias-label-secondary:#a3a3a8;--dsw-alias-bg-base:#19191b;background:#19191b;color:#ededee}</style></head><body><div id="app"></div></body></html>' }));
-    await page.goto('http://localhost/');await page.addScriptTag({ content: bundle.outputFiles[0].text });
+    await page.goto('http://localhost/');await page.addStyleTag({content:bundle.outputFiles.filter(file=>file.path.endsWith('.css')).map(file=>file.text).join('\n')}); await page.addScriptTag({ content: bundle.outputFiles.find(file=>file.path.endsWith('.js')).text });
     const add = page.getByRole('button', { name: '添加凭据', exact: true });
     const cancel = page.getByRole('button', { name: '取消', exact: true });
     const secret = page.locator('input[type=password]');

@@ -1,8 +1,10 @@
+import { Loading } from '../../shared/client/ui/loading.jsx';
 import { readJsonResponse } from './http-response.mjs';
 import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { moduleSource } from './modules.mjs';
 import { createPortal } from 'react-dom';
 import { UIIcon } from './iconsax.jsx';
+import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import { ProviderBrandIcon } from './provider-brand-icon.jsx';
 import { ToolBrandIcon } from './tool-brand-icon.jsx';
 import { availableTools, currentToolId, providersForTool, selectionReasoningEffort, providerAllowsTool } from './model-picker-state.mjs';
@@ -276,20 +278,14 @@ function ModelPicker({ locked, available, useDirectory, load, select, binding, o
   };
   const sliderDisabled = busy || !catalog || !!catalogError || !modules.harness && currentTool !== 'deepseek';
   return <>
-    <button ref={trigger} type="button" className="cmd-model-trigger" data-empty={noProvider || undefined} disabled={modelLocked || !available || busy} title={noProvider ? '无模型可用，请先配置模型供应商' : bindingHint || undefined} aria-label={noProvider ? '无模型可用，请先配置模型供应商' : '选择工具与模型，当前 ' + (entries.find(item => item.id === currentTool)?.name ?? currentTool) + ' ' + (currentModel?.name ?? state.current?.model ?? '') + (sessionBinding?.bound ? '。可在当前工具和供应商内切换模型' : bindingHint ? '。' + bindingHint : '')} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => { if (open) close(); else { setTool(currentTool); setProvider(null); setQuery(''); setToolsOpen(false); setOpen(true); refresh(); } }}>
-      <span className="cmd-model-caption" title={noProvider ? '无模型可用，请先配置模型供应商' : modelLabel + (effortName ? ' · ' + effortName : '')}>{modelLabel}{!noProvider && effortName ? ' · ' + effortName : ''}</span><UIIcon name="chevronDown" size={14} />
-    </button>
+    <Tooltip label={noProvider ? '无模型可用，请先配置模型供应商' : modelLabel + (effortName ? ' · ' + effortName : '') + (bindingHint ? '。' + bindingHint : '')} portal><button ref={trigger} type="button" className="cmd-model-trigger" data-empty={noProvider || undefined} disabled={modelLocked || !available || busy} aria-label={noProvider ? '无模型可用，请先配置模型供应商' : '选择工具与模型，当前 ' + (entries.find(item => item.id === currentTool)?.name ?? currentTool) + ' ' + (currentModel?.name ?? state.current?.model ?? '') + (sessionBinding?.bound ? '。可在当前工具和供应商内切换模型' : bindingHint ? '。' + bindingHint : '')} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => { if (open) close(); else { setTool(currentTool); setProvider(null); setQuery(''); setToolsOpen(false); setOpen(true); refresh(); } }}>
+      <span className="cmd-model-caption">{modelLabel}{!noProvider && effortName ? ' · ' + effortName : ''}</span><UIIcon name="chevronDown" size={14} />
+    </button></Tooltip>
     {open && position && createPortal(<div ref={menu} id={id} role="dialog" aria-label="工具与模型" className="cmd-model-popup" style={position} onKeyDown={onMenuKey}>
-      {catalogLoading && <div className="cmd-model-loading-overlay" aria-label="正在加载模型目录" aria-live="polite">
-        <div className="cmd-model-shimmer-text" aria-hidden="true">
-          {'LOADING'.split('').map((letter, idx) => (
-            <span key={idx} style={{ '--char-idx': idx }}>{letter}</span>
-          ))}
-        </div>
-      </div>}
+      {catalogLoading && <Loading className="cmd-model-loading-overlay" label="正在加载模型目录" />}
       <div className="cmd-model-provider-card"><header className="cmd-model-header">
         {provider ? <button type="button" className="cmd-model-back" aria-label="返回供应商列表" disabled={busy} onClick={() => { setProvider(null); setQuery(''); }}><UIIcon name="chevronLeft" size={16} /><span>{selectedProvider?.name || '供应商'}</span></button> : <span className="cmd-model-heading">选择供应商</span>}
-        <button ref={toolTrigger} type="button" className="cmd-model-tool-trigger" aria-label="选择 Agent 工具" aria-haspopup="menu" aria-expanded={toolsOpen} disabled={busy || toolLocked} title={boundTool ? '当前工具为 ' + boundTool + '，只能切换该工具的模型' : undefined} onClick={() => setToolsOpen(value => !value)}><ToolBrandIcon tool={tool} size={18} muted={!activeTool?.installed || !activeTool?.routeSupported} /><span>{activeTool?.name || (catalogLoading ? '识别工具…' : tool)}</span><UIIcon name="chevronDown" size={13} /></button>
+        <Tooltip label={boundTool ? '当前工具为 ' + boundTool + '，只能切换该工具的模型' : '选择 Agent 工具'} portal><button ref={toolTrigger} type="button" className="cmd-model-tool-trigger" aria-label="选择 Agent 工具" aria-haspopup="menu" aria-expanded={toolsOpen} disabled={busy || toolLocked} onClick={() => setToolsOpen(value => !value)}><ToolBrandIcon tool={tool} size={18} muted={!activeTool?.installed || !activeTool?.routeSupported} /><span>{activeTool?.name || (catalogLoading ? '识别工具…' : tool)}</span><UIIcon name="chevronDown" size={13} /></button></Tooltip>
       </header>
       {toolsOpen && <div className="cmd-model-tool-menu" role="menu" aria-label="本机可用 Agent 工具">{entries.map(entry => <button key={entry.id} type="button" role="menuitemradio" disabled={toolLocked || !entry.routeSupported || !providerAllowsTool(selectedProvider, entry.id)} aria-checked={tool === entry.id} className={tool === entry.id ? 'is-selected' : ''} onClick={() => { if (!providerAllowsTool(selectedProvider, entry.id)) return; setTool(entry.id); setProvider(null); setQuery(''); setToolsOpen(false); }}><ToolBrandIcon tool={entry.id} size={20} muted={!entry.installed || !entry.routeSupported} /><span>{entry.name}{!providerAllowsTool(selectedProvider, entry.id) ? <small>此订阅仅限对应工具</small> : !entry.routeSupported && <small>{entry.routeReason || '供应商隔离待适配'}</small>}</span>{tool === entry.id && <UIIcon name="check" size={16} />}</button>)}<small>{boundTool ? `当前工具为 ${boundTool}，可在当前供应商内切换模型` : catalogLoading ? '正在识别本机工具…' : '自动识别本机已安装的对话工具'}</small></div>}
       <label className="cmd-model-search"><UIIcon name="search" size={16} /><input ref={search} type="search" autoComplete="off" spellCheck={false} aria-label={provider ? '搜索模型' : '搜索供应商'} placeholder={provider ? '搜索模型' : '搜索供应商'} value={query} onChange={event => setQuery(event.target.value)} /></label>
@@ -303,7 +299,7 @@ function ModelPicker({ locked, available, useDirectory, load, select, binding, o
           const pinned = isPinned(group, model);
           return <div key={group.id + '/' + model.id} className={'cmd-model-choice' + (selected ? ' is-selected' : '')}><button type="button" role="menuitemradio" aria-checked={selected} disabled={busy || catalogLoading || !catalog || !!catalogError || !modules.harness && tool !== 'deepseek'} className={selected ? 'is-selected' : ''} onClick={() => void choose(group, model)}><span>{model.name}{nativeModelId && nativeModelId !== model.name && <small>{nativeModelId}</small>}</span>{selected && <UIIcon name="check" size={16} />}</button><button type="button" className={'cmd-model-pin' + (pinned ? ' is-pinned' : '')} aria-label={pinned ? '取消置顶模型' : '置顶模型'} aria-pressed={pinned} onClick={event => toggleModelPin(group, model, event)}>{pinned ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />}</button></div>;
         })}
-        {selectedProvider?.nativeRequired ? <div className="cmd-model-native-required"><p role="status">{selectedProvider.routeReason || '此订阅仅能用于对应工具，请使用该工具的本机登录。'}</p><button type="button" disabled={busy || !modules.harness} title={modules.harness ? undefined : 'Harness 聚合未启用'} onClick={() => { try { openSettingsSection('harness-tools'); close(); } catch (reason) { setError(reason.message); } }}><UIIcon name="settings" size={15} />打开 Harness 工具</button></div> : !(provider ? models : visibleProviders).length && <p role="status">{loading ? '正在加载…' : query ? '没有匹配结果' : provider ? '暂无可用模型' : tool === 'deepseek' ? '请先在模型设置中添加供应商' : '暂无可用供应商，请在模型设置中配置此工具'}</p>}
+        {selectedProvider?.nativeRequired ? <div className="cmd-model-native-required"><p role="status">{selectedProvider.routeReason || '此订阅仅能用于对应工具，请使用该工具的本机登录。'}</p><Tooltip label={modules.harness ? '打开 Harness 工具' : 'Harness 聚合未启用'} portal><button type="button" disabled={busy || !modules.harness} onClick={() => { try { openSettingsSection('harness-tools'); close(); } catch (reason) { setError(reason.message); } }}><UIIcon name="settings" size={15} />打开 Harness 工具</button></Tooltip></div> : !(provider ? models : visibleProviders).length && <p role="status">{loading ? '正在加载…' : query ? '没有匹配结果' : provider ? '暂无可用模型' : tool === 'deepseek' ? '请先在模型设置中添加供应商' : '暂无可用供应商，请在模型设置中配置此工具'}</p>}
       </div>
       </div>
       {effortModel && <section className="cmd-model-current-card" aria-label="当前模型与推理强度">

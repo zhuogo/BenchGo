@@ -73,58 +73,6 @@ html[data-commander-no-provider] [data-composer-card] [class*="_primary"]{opacit
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
-.cmd-model-shimmer-text {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
-  font-size: 13px;
-  font-weight: 750;
-  letter-spacing: 0.28em;
-  padding-left: 0.28em;
-}
-.cmd-model-shimmer-text span {
-  display: inline-block;
-  animation: cmd-letter-wave 1.3s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  animation-delay: calc(var(--char-idx) * 85ms);
-  color: var(--cmd-shimmer-idle, rgba(16, 18, 20, 0.2));
-}
-[data-ds-dark-theme] .cmd-model-shimmer-text span {
-  --cmd-shimmer-idle: rgba(255, 255, 255, 0.2);
-}
-@keyframes cmd-letter-wave {
-  0%, 100% {
-    color: rgba(16, 18, 20, 0.2);
-    transform: translateY(0);
-  }
-  35% {
-    color: #000000;
-    transform: translateY(-2.5px);
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
-  }
-  70% {
-    color: rgba(16, 18, 20, 0.35);
-    transform: translateY(0);
-  }
-}
-[data-ds-dark-theme] .cmd-model-shimmer-text span {
-  animation-name: cmd-letter-wave-dark;
-}
-@keyframes cmd-letter-wave-dark {
-  0%, 100% {
-    color: rgba(255, 255, 255, 0.2);
-    transform: translateY(0);
-  }
-  35% {
-    color: #ffffff;
-    transform: translateY(-2.5px);
-    text-shadow: 0 0 6px rgba(255, 255, 255, 0.4);
-  }
-  70% {
-    color: rgba(255, 255, 255, 0.4);
-    transform: translateY(0);
-  }
-}
 @keyframes cmd-overlay-fade {
   from { opacity: 0; }
   to { opacity: 1; }

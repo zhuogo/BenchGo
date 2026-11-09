@@ -27,7 +27,7 @@ async function mount(respond = () => initial(), props = {}, timers = {}) {
   const Select = ({ children, onChange, value, ...props }) => React.createElement('select', { ...props, value: value ?? '', onChange: event => onChange?.({ target: { value: event.target.value } }) }, children);
   runInNewContext(compiled, { module, exports: module.exports, document: dom.window.document, location: dom.window.location, URL, AbortController, AbortSignal, setInterval, clearInterval, ...timers,
     fetch: async (url, options) => { const body = JSON.parse(options.body); calls.push(body); assert.equal(String(url), 'https://desktop.example/link/api/commander/updates'); assert.equal(options.credentials, 'same-origin'); const result = await respond(body); return new Response(JSON.stringify(result), { status: result?.httpError || 200, headers: { 'content-type': 'application/json' } }); },
-    require: id => id === './http-response.mjs' ? { readJsonResponse } : id === 'react' ? React : id.includes('ui-primitives') ? primitives : id.includes('shared/client/select.jsx') ? { Select } : id.includes('link/client/brand.jsx') ? { brandIcon: 'data:image/svg+xml,<svg/>' } : id.endsWith('.css') ? '' : { UIIcon: () => null },
+    require: id => id === './http-response.mjs' ? { readJsonResponse } : id === 'react' ? React : id.includes('ui-primitives') ? primitives : id.endsWith('/ui/tooltip.jsx') ? { Tooltip: ({ children }) => children } : id.includes('shared/client/select.jsx') ? { Select } : id.includes('link/client/brand.jsx') ? { brandIcon: 'data:image/svg+xml,<svg/>' } : id.endsWith('.css') ? '' : { UIIcon: () => null },
   });
   const root = createRoot(dom.window.document.getElementById('root'));
   const flush = callback => React.act(async () => { callback?.(); await new Promise(resolve => setImmediate(resolve)); });
@@ -289,7 +289,7 @@ test('host activity becoming idle enables installation without reopening or disa
   try {
     await view.click('更新，有更新');
     assert(view.button('更新插件').disabled);
-    assert.match(view.button('更新插件').title, /有任务正在运行/);
+    assert.match(view.document.querySelector('[role="dialog"]').textContent, /有任务正在运行/);
     assert.equal(typeof tick, 'function');
     state = update();
     await view.flush(tick);

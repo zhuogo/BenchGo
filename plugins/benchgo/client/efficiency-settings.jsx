@@ -1,3 +1,4 @@
+import { Loading } from '../../shared/client/ui/loading.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { Button } from '../../shared/client/ui/index.jsx';
 import { readJsonResponse } from './http-response.mjs';
@@ -42,7 +43,7 @@ export function EfficiencySettings({ read = request }) {
     <h2>执行增强</h2>
     <p className="cmd-efficiency-intro">为官方 Harness 会话提供工具与上下文能力，设置保存后即时生效。</p>
     {error && <div className="cmd-efficiency-error" role="alert"><span>{error}</span><Button variant="outline" size="sm" disabled={!!busy} onClick={() => refresh(lifetime.current?.signal)}>重试</Button></div>}
-    {!value && !error && <p role="status">正在读取执行能力…</p>}
+    {!value && !error && <Loading label="正在读取执行能力…" />}
     {value && !value.features && <p role="status">宿主尚未提供执行增强状态。</p>}
     {value?.features && Object.entries(descriptions).map(([name, item]) => {
       const feature = value.features[name];

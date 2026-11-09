@@ -1,3 +1,4 @@
+import { officialTooltipSource } from './official-tooltip-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -22,7 +23,7 @@ test('execution settings render four states, save a single feature, reload, and 
       if(body){if(window.conflict)throw Error('配置已变化，请刷新后重试');if(body.revision!==window.saved.revision)throw Error('stale revision');for(const [k,v] of Object.entries(body.features))Object.assign(window.saved.features[k],v,{available:v.enabled});window.saved.revision++;}
       return structuredClone(window.saved);}
     const root=createRoot(document.getElementById('app'));window.mount=key=>root.render(<EfficiencySettings key={key} read={read}/>);window.mount('first');
-  `, resolveDir: fileURLToPath(new URL('../client/', import.meta.url)), loader: 'jsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic', loader: { '.css': 'text' }, nodePaths: [fileURLToPath(new URL('../node_modules/', import.meta.url))], alias: { react: dirname(react.resolve('react/package.json')), 'react-dom': dirname(react.resolve('react-dom/package.json')) }, plugins: [sharedUiStyles()], logLevel: 'silent' });
+  `, resolveDir: fileURLToPath(new URL('../client/', import.meta.url)), loader: 'jsx' }, bundle: true, write: false, outdir: fileURLToPath(new URL('../../../artifacts/unused-feedback-test/', import.meta.url)), format: 'iife', jsx: 'automatic', loader: { '.css': 'text', '.module.css': 'local-css' }, nodePaths: [fileURLToPath(new URL('../node_modules/', import.meta.url))], alias: { react: dirname(react.resolve('react/package.json')), 'react-dom': dirname(react.resolve('react-dom/package.json')) }, plugins: [officialTooltipSource(), sharedUiStyles()], logLevel: 'silent' });
   const browser = await chromium.launch({ headless: true, executablePath });
   const output = fileURLToPath(new URL('../../../artifacts/efficiency-fusion/', import.meta.url)); await mkdir(output, { recursive: true });
   try {
@@ -30,7 +31,7 @@ test('execution settings render four states, save a single feature, reload, and 
     const open = async (mode, width = 1440) => {
       await page.setViewportSize({ width, height: 900 }); await page.goto('about:blank');
       await page.setContent('<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:Arial,sans-serif;padding:24px;margin:0}</style><div id="app"></div>');
-      await page.evaluate(mode => { window.mode = mode; }, mode); await page.addScriptTag({ content: result.outputFiles[0].text });
+      await page.evaluate(mode => { window.mode = mode; }, mode); await page.addStyleTag({content:result.outputFiles.filter(file=>file.path.endsWith('.css')).map(file=>file.text).join('\n')}); await page.addScriptTag({ content: result.outputFiles.find(file=>file.path.endsWith('.js')).text });
     };
     for (const [mode, text] of [['loading', '正在读取执行能力…'], ['empty', '宿主尚未提供执行增强状态。'], ['error', '服务不可用']]) {
       await open(mode); await page.getByText(text, { exact: true }).waitFor(); await page.screenshot({ path: output + mode + '.png', fullPage: true });

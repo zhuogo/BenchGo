@@ -1,3 +1,4 @@
+import { Loading } from './ui/loading.jsx';
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { readJsonResponse } from '../../benchgo/client/http-response.mjs';
 import { CustomSelect } from './custom-select.jsx';
@@ -73,7 +74,7 @@ export function VaultSettingsSection({ onDirtyChange } = {}) {
       </div>
     </header>
     {!draft && errorView}{notice && <p role="status" className="bg-vault-notice"><span aria-hidden="true" />{notice}</p>}
-    {loading && !draft && <div className="bg-vault-loading" role="status" aria-label="正在加载凭据" aria-busy="true"><span>正在加载凭据…</span>{[0, 1, 2].map(index => <div className="bg-vault-skeleton-row" key={index} aria-hidden="true"><i /><div><b /><b /></div></div>)}</div>}
+    {loading && !draft && <Loading className="bg-vault-loading" label="正在加载凭据" />}
     {!loading && !error && !entries.length && !draft && <div className="bg-vault-empty"><div className="bg-vault-empty-icon"><ResourceIcon name="key" size={30} /></div><strong>还没有凭据</strong><p>通过右上角添加，供助手在授权范围内使用。</p></div>}
     {!!entries.length && <ul className="bg-vault-list" aria-busy={busy}>{entries.map(entry => { const updated = entry.updatedAt ? new Date(entry.updatedAt) : null; const hasTime = updated && !Number.isNaN(updated.getTime()); return <li key={entry.handle}><div className="bg-vault-entry-icon"><ResourceIcon name="key" size={20} /></div><div className="bg-vault-entry-content"><div className="bg-vault-entry-title"><strong>{entry.label}</strong><span className="bg-vault-kind">{entry.kind === 'otp' ? '一次性验证码' : entry.kind === 'password' ? '密码' : 'API Key'}</span><span className="bg-vault-status" data-available={entry.available !== false}><i aria-hidden="true" />{entry.available === false ? '已过期' : '可使用'}</span></div><small className="bg-vault-target"><span>{entry.method}</span>{entry.target}</small><small>{entry.placement === 'header' ? '请求头' : entry.placement === 'json' ? 'JSON 字段' : '表单字段'} · {entry.field}{entry.kind === 'otp' ? entry.available ? ' · 5 分钟内仅用一次' : ' · 请更新验证码' : ''}</small>{hasTime && <time dateTime={updated.toISOString()}>更新于 {updated.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>}</div><div className="bg-vault-actions"><Button variant="outline" disabled={pending || !!draft} onClick={event => edit({ ...entry }, event.currentTarget)}>更新</Button><Button variant="ghost" className="bg-vault-remove" disabled={pending || !!draft} onClick={() => run(signal => api('remove', { handle: entry.handle, revision: entry.revision }, signal), '凭据已移除')}>移除</Button></div></li>; })}</ul>}
     {draft && <form className="bg-vault-editor" onSubmit={save}>

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import { formatTokens } from './usage-state.mjs';
 
 const periods = { hour: '小时', day: '天', month: '月', year: '年' };
@@ -37,13 +38,13 @@ function UsageChart({ timeline }) {
         const missing = bucket.measuredCalls < bucket.calls;
         const description = label(bucket, timeline, true) + '：' + count(bucket.calls) + ' 条记录，' + (missing ? '已知 Token ' : 'Token ') + formatTokens(bucket.totalTokens) + (missing ? '，' + count(bucket.calls - bucket.measuredCalls) + ' 条未提供' : '');
         const { x, y } = points[index], barHeight = (bucket.totalTokens ?? 0) / tokenMaximum * plotHeight;
-        return <g key={bucket.time} className="cmd-usage-chart-column" tabIndex={0} role="img" aria-label={description}><title>{description}</title>
+        return <Tooltip key={bucket.time} label={description}><g className="cmd-usage-chart-column" tabIndex={0} role="img" aria-label={description}>
           <rect className="cmd-usage-chart-hit" x={x - step / 2} y={top} width={step} height={plotHeight} />
           <rect className="cmd-usage-chart-bar" x={x - barWidth / 2} y={top + plotHeight - barHeight} width={barWidth} height={barHeight} rx={2} />
           {missing && <path className="cmd-usage-chart-missing" d={'M' + (x - 3) + ',' + (top + plotHeight - Math.max(barHeight, 4) - 5) + 'l6,-6'} />}
           <circle className="cmd-usage-chart-point" cx={x} cy={y} r={3} />
           {(index % tickEvery === 0 || index === buckets.length - 1) && <text className="cmd-usage-chart-tick" x={x} y={height - 12} textAnchor="middle">{label(bucket, timeline)}</text>}
-        </g>;
+        </g></Tooltip>;
       })}
       <path className="cmd-usage-chart-line" d={line} aria-hidden="true" />
     </svg>

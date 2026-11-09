@@ -1,3 +1,4 @@
+import { officialTooltipSource } from './official-tooltip-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -28,10 +29,10 @@ test('real skill library renders four states and completes preview/install/refre
         if(action==='deckInstall'){if(window.failInstall)throw Error('下载失败，请重试');installed=true;return {installed:['handoff']};}}
       const ownedApi=async()=>({available:true,skills:[]});
       window.calls=[];window.draw=()=>createRoot(document.getElementById('app')).render(<SkillsLibrary api={api} ownedApi={ownedApi}/>);window.draw();`, resolveDir: client, loader: 'jsx' },
-    bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic',
+    bundle: true, write: false, outdir: fileURLToPath(new URL('../../../artifacts/unused-feedback-test/', import.meta.url)), format: 'iife', platform: 'browser', jsx: 'automatic',
     nodePaths: [fileURLToPath(new URL('../node_modules/', import.meta.url))],
     alias: { react: dirname(reactRequire.resolve('react/package.json')), 'react-dom': dirname(reactRequire.resolve('react-dom/package.json')) },
-    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles()], logLevel: 'silent',
+    loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text' }, plugins: [officialTooltipSource(), sharedUiStyles()], logLevel: 'silent',
   });
   const browser = await chromium.launch({ headless: true, executablePath });
   await mkdir(output, { recursive: true });
@@ -43,7 +44,7 @@ test('real skill library renders four states and completes preview/install/refre
       await page.goto('about:blank');
       await page.setContent('<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0;padding:24px;font-family:Arial,sans-serif}#app{max-width:1100px;margin:auto}</style></head><body><div id="app"></div></body></html>');
       await page.evaluate(mode => { window.mode = mode; }, mode);
-      await page.addScriptTag({ content: script.outputFiles[0].text });
+      await page.addStyleTag({content:script.outputFiles.filter(file=>file.path.endsWith('.css')).map(file=>file.text).join('\n')}); await page.addScriptTag({ content: script.outputFiles.find(file=>file.path.endsWith('.js')).text });
       await page.getByRole('button', { name: '浏览工程技能', exact: true }).click();
     }
     for (const [mode, text] of [['loading', '正在读取工程技能'], ['empty', '没有匹配的工程技能'], ['error', '工程技能目录读取失败：连接中断']]) {

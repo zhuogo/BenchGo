@@ -114,7 +114,7 @@ test('selected model caption retains its exact name and exposes complete text wh
   const caption=view.nodes.find(node=>node.props.className==='cmd-model-caption');
   const label=current?.model === route.modelId ? 'Model X · High' : current?.model || '选择模型';
   assert.equal(caption.children.join(''),label);
-  assert.equal(caption.props.title,label);
+  assert(view.nodes.some(node=>typeof node.props.label==='string'&&node.props.label.startsWith(label)));
  }
  const css=readFileSync(new URL('../client/model-picker.css',import.meta.url),'utf8');
  assert.match(css,/\.cmd-model-caption\{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap\}/);

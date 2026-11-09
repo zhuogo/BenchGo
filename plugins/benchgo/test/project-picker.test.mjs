@@ -24,7 +24,7 @@ async function mount({ api, desktop, onSelected = () => {}, onClose = () => {} }
     Tooltip: ({ children }) => children,
     LinkIconMedium: () => null,
   };
-  runInNewContext(compiled, { module, exports: module.exports, document: dom.window.document, __DSH_DIRECTORY_PICKER__: desktop, require: id => id === 'react' ? React : id.includes('shared/client/ui/') ? { Button: ({ variant, size, ...props }) => React.createElement('button', props) } : id.includes('ui-primitives') ? primitives : { UIIcon: () => null } });
+  runInNewContext(compiled, { module, exports: module.exports, document: dom.window.document, __DSH_DIRECTORY_PICKER__: desktop, require: id => id === 'react' ? React : id.endsWith('/ui/tooltip.jsx') ? { Tooltip: ({ children }) => children } : id.endsWith('/ui/loading.jsx') ? { Loading: ({ label, className }) => React.createElement('div', { role: 'status', 'aria-label': label, className }, label) } : id.includes('shared/client/ui/') ? { Button: ({ variant, size, ...props }) => React.createElement('button', props) } : id.includes('ui-primitives') ? primitives : { UIIcon: () => null } });
   const root = createRoot(dom.window.document.getElementById('root'));
   const flush = callback => React.act(async () => { callback?.(); await new Promise(resolve => setImmediate(resolve)); });
   const button = label => [...dom.window.document.querySelectorAll('button')].find(node => node.textContent === label || node.getAttribute('aria-label') === label);
