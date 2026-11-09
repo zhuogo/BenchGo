@@ -1,3 +1,5 @@
+import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
+import { useConfirmation } from '../../shared/client/ui/confirmation.jsx';
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
 import React, { useEffect, useId, useRef, useState } from 'react';
@@ -54,6 +56,7 @@ export function TicketChange({ api, ticket, reload, onDirtyChange, startOpen = f
 }
 
 export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenExecution, requestedTicket }) {
+  const [confirm, confirmation] = useConfirmation();
   const [listDirty, setListDirty] = useState(false);
   const dirtyEditor = useDirtyRegistry((dirty, keys) => { setListDirty(keys.some(key => key.startsWith('rename:'))); onDirtyChange?.(dirty, keys); });
   const [rows, setRows] = useState(null), [error, setError] = useState(''), [busy, setBusy] = useState(null), [generation, setGeneration] = useState(0);
@@ -97,7 +100,7 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
     void load(); return () => { controller.abort(); clearTimeout(timer); };
   }, [api, generation, archiveScope, selectedId]);
   const stop = async row => {
-    if (!window.confirm(`停止“${row.target}”？已发生的外部操作仍会保留，运行中的执行需要核实。`)) return;
+    if (!await confirm({ title: `停止“${normalizeTicketTitle(row.taskMeta?.title || row.title, row.target)}”？`, description: '已发生的外部操作仍会保留，运行中的执行需要核实。', confirmLabel: '停止工单', destructive: true })) return;
     setBusy(row.id);
     try { await api('ticketStop', { ticketId: row.id }); setGeneration(value => value + 1); }
     catch (cause) { setError(cause.message); }
@@ -125,7 +128,7 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
         else if (!['pausing', 'cancelling', 'uncertain', 'blocked'].includes(status)) actions.push({ icon: 'pause', label: '暂停工单', onClick: () => lifecycle(row, 'ticketPause'), disabled: busy !== null });
         actions.push({ icon: 'stop', label: '停止工单', onClick: () => stop(row), disabled: busy !== null });
       } else actions.push({ icon: 'refresh', label: '创建关联调整单', onClick: () => { setChangeId(row.id); setSelectedId(row.id); }, disabled: busy !== null });
-      return <React.Fragment key={row.id}>{!detailOnly && <TaskListRow api={api} kind="ticket" row={row} title={title} summary={<><span className="ba-task-state" data-state={status}>{stateLabel}</span><span className="ba-task-summary" title={summary}>{summary}</span>{updatedLabel && <time className="ba-task-updated" dateTime={row.updatedAt}>更新 {updatedLabel}</time>}</>} completed={row.status === 'completed'} completionLocked={row.status === 'completed' && !row.taskMeta?.completed} onChanged={() => setGeneration(value => value + 1)} onOpen={() => { setChangeId(null); setSelectedId(row.id); }} actions={actions} onDirtyChange={dirtyEditor(`rename:${row.id}`)} />}
+      return <React.Fragment key={row.id}>{!detailOnly && <TaskListRow api={api} kind="ticket" row={row} title={title} summary={<><span className="ba-task-state" data-state={status}>{stateLabel}</span><Tooltip label={summary} onlyWhenClipped><span className="ba-task-summary" tabIndex={0}>{summary}</span></Tooltip>{updatedLabel && <time className="ba-task-updated" dateTime={row.updatedAt}>更新 {updatedLabel}</time>}</>} completed={row.status === 'completed'} completionLocked={row.status === 'completed' && !row.taskMeta?.completed} onChanged={() => setGeneration(value => value + 1)} onOpen={() => { setChangeId(null); setSelectedId(row.id); }} actions={actions} onDirtyChange={dirtyEditor(`rename:${row.id}`)} />}
       {detailOnly && <TaskDetail open title={<TaskStatusTitle title={title} status={status} label={stateLabel} />} dirty={detailDirty} onClose={() => { setSelectedId(null); setChangeId(null); }} footer={(row.executionSession?.available || (!terminalStates.includes(row.status) && !waiting)) && <div className="ba-row-actions">
         {row.executionSession?.available && <Button variant="ghost" disabled={!onOpenExecution || busy !== null} onClick={async () => {
           setBusy(`execution:${row.id}`); setError('');
@@ -149,7 +152,7 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
       </TaskDetail>}</React.Fragment>;
 
   };
-  return <section className="ba-group ba-tasks" aria-label="工单"><style>{taskCss}</style><div className="ba-group-head"><div><h2>工单</h2><p>查看执行进展，确认结果与下一步。</p></div><div className="ba-task-actions">{onSchedule && <Button variant="ghost" type="button" className="ba-task-secondary" onClick={onSchedule}><UIIcon name="schedules" size={16} />定时任务</Button>}{onCreateGoal && <Button type="button" className="ba-primary" onClick={onCreateGoal}><UIIcon name="plus" size={16} />新建持续目标</Button>}<Button variant="ghost" type="button" className="ba-task-secondary" onClick={() => { setSettingsOpen(true); setConfigRevision(null); void loadConfig(); }}><UIIcon name="settings" size={16} />设置</Button></div></div>
+  return <section className="ba-group ba-tasks" aria-label="工单">{confirmation}<style>{taskCss}</style><div className="ba-group-head"><div><h2>工单</h2><p>查看执行进展，确认结果与下一步。</p></div><div className="ba-task-actions">{onSchedule && <Button variant="ghost" type="button" className="ba-task-secondary" onClick={onSchedule}><UIIcon name="schedules" size={16} />定时任务</Button>}{onCreateGoal && <Button type="button" className="ba-primary" onClick={onCreateGoal}><UIIcon name="plus" size={16} />新建持续目标</Button>}<Button variant="ghost" type="button" className="ba-task-secondary" onClick={() => { setSettingsOpen(true); setConfigRevision(null); void loadConfig(); }}><UIIcon name="settings" size={16} />设置</Button></div></div>
     <Modal open={settingsOpen} onClose={closeSettings} title="工单设置" closeLabel="关闭" footer={<><Button variant="ghost" className="cmd-dialog-button" disabled={busy === 'configuration'} onClick={closeSettings}>取消</Button><Button className="cmd-dialog-button cmd-dialog-primary" type="submit" form="ba-worker-settings" disabled={configRevision === null || busy === 'configuration' || !Number.isInteger(Number(concurrency)) || Number(concurrency) < 1}>{busy === 'configuration' ? '保存中…' : '保存'}</Button></>}><form id="ba-worker-settings" className="cmd-rename-form ba-worker-settings" aria-label="并发执行设置" onSubmit={saveConcurrency}><div className="ba-worker-settings-intro"><UIIcon name="settings" size={22} /><div><strong>执行容量</strong><p id="ba-worker-concurrency-help">设置同时执行的工单数量，按设备性能与模型额度调整。</p></div></div><label htmlFor="ba-worker-concurrency">并发数</label><div className="ba-worker-settings-input"><input id="ba-worker-concurrency" aria-describedby="ba-worker-concurrency-help" autoFocus type="number" min="1" step="1" required value={concurrency} disabled={configRevision === null || busy === 'configuration'} onChange={event => setConcurrency(event.target.value)} /><span>项工单</span></div>{configRevision === null && !configError && <p className="ba-worker-settings-status" role="status"><UIIcon name="refresh" size={16} />正在读取执行设置…</p>}{configError && <p className="ba-worker-settings-error" role="alert"><UIIcon name="close" size={16} /><span>{configError}</span><Button variant="ghost" type="button" disabled={busy === 'configuration'} onClick={loadConfig}>重新读取</Button></p>}</form></Modal>
     <TicketViewControls disabled={listDirty || detailDirty} view={view} onViewChange={setView} archiveScope={archiveScope} onArchiveScopeChange={switchArchiveScope} query={query} onQueryChange={setQuery} count={filteredRows.length} total={visibleRows?.length} panelId={`${viewId}-panel`} tabIdPrefix={`${viewId}-tab`} />
     {error && (rows === null ? <ResourceState kind="error" title="工单暂时无法读取" description={error} onAction={() => setGeneration(value => value + 1)} /> : <div className="ba-task-feedback" role="alert"><UIIcon name="close" size={18} /><span tabIndex={0} aria-label="工单错误详情">工单未能更新：{error}</span><Button variant="ghost" type="button" className="ba-quiet" onClick={() => setGeneration(value => value + 1)}>重试读取</Button></div>)}

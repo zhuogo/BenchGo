@@ -1,4 +1,6 @@
+import { Loading } from '../../shared/client/ui/loading.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
+import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
@@ -67,7 +69,7 @@ export function SystemFiles({ api, onPreviewChange }) {
       </div>
       {error && <div className="ba-system-error" role="alert"><UIIcon name="close" size={20} /><div><strong>暂时无法读取此目录</strong><p>{error}{listing ? '。已保留上次读取的文件，请在工具栏重试。' : '。请在工具栏重试。'}</p></div></div>}
       <div className="ba-system-list" role="region" aria-label="目录内容" aria-busy={loading}>
-        {loading && !listing && <div className="ba-system-loading" role="status"><div><UIIcon name="folder" size={20} /><span>正在读取文件…</span></div><div className="ba-system-skeleton" aria-hidden="true">{[0, 1, 2, 3].map(row => <div key={row}><i /><span /><b /></div>)}</div></div>}
+        {loading && !listing && <Loading className="ba-system-loading" label="正在读取文件…" />}
         {!!rows.length && <table><caption className="ba-visually-hidden">当前目录文件</caption><thead><tr><th scope="col">名称</th><th scope="col">类型</th><th scope="col">大小</th><th scope="col">修改时间</th><th scope="col"><span className="ba-visually-hidden">操作</span></th></tr></thead><tbody>
           {folders.length > 0 && <tr className="ba-system-group"><th colSpan="5" scope="colgroup">文件夹</th></tr>}
           {folders.map(entry => <SystemFileRow key={entry.path} entry={entry} onOpen={open} className="ba-system-entry" />)}
@@ -84,7 +86,7 @@ export function SystemFiles({ api, onPreviewChange }) {
 function SystemFileRow({ entry, onOpen, className }) {
   return <tr className={className || 'ba-system-row'} data-available={entry.available !== false} onClick={event => onOpen(entry, event.currentTarget.querySelector('.ba-system-trigger'))}>
     <th scope="row" data-label="名称"><Button variant="ghost" type="button" className="ba-system-trigger" data-file-path={entry.path} disabled={entry.available === false} title={entry.available === false ? '文件超过 25 MB，暂不支持在线读取' : entry.name} onClick={event => { event.stopPropagation(); onOpen(entry, event.currentTarget); }}><span aria-hidden="true">{entry.type === 'directory' ? <UIIcon name="folder" size={20} /> : <ResourceIcon name="document" size={20} />}</span><strong>{entry.name}</strong></Button></th>
-    <td className="ba-system-type" data-label="类型"><span className="ba-system-file-badge" title={entry.available === false ? '文件超过 25 MB，暂不支持在线读取' : undefined}>{entry.available === false ? '超出读取上限' : fileType(entry)}</span></td>
+    <td className="ba-system-type" data-label="类型"><Tooltip label={entry.available === false ? '文件超过 25 MB，暂不支持在线读取' : ''} portal><span className="ba-system-file-badge" tabIndex={entry.available === false ? 0 : undefined}>{entry.available === false ? '超出读取上限' : fileType(entry)}</span></Tooltip></td>
     <td className="ba-system-size" data-label="大小">{entry.type === 'directory' ? '—' : size(entry.bytes)}</td>
     <td className="ba-system-time" data-label="修改时间"><time dateTime={entry.updatedAt}>{modified(entry.updatedAt)}</time></td>
     <td className="ba-system-open" aria-hidden="true">→</td>

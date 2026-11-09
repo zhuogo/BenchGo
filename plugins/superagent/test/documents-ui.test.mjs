@@ -31,7 +31,7 @@ function harness({ updateError, memory = false } = {}) {
     },
   };
   const module = { exports: {} };
-  runInNewContext(code, { module, exports: module.exports, window: { confirm: () => confirmed }, require: id => id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id === 'react' ? react : {} });
+  runInNewContext(code, { module, exports: module.exports, window: { confirm: () => confirmed }, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => confirmed, null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id === 'react' ? react : {} });
   const props = {
     memory,
     api: async (action, payload) => {

@@ -19,7 +19,7 @@ function fixture({ api, refresh = async () => {}, entries = [] }) {
   const code = transformSync(readFileSync(new URL('../client/memory.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
   runInNewContext(code, { module, exports: module.exports,
     window: { confirm() { confirmations++; return true; }, matchMedia: () => ({ matches: true }) },
-    require: id => id === 'react' ? react : id.endsWith('time-groups.mjs') ? { groupByDay } : id.endsWith('button.jsx') ? { Button: 'button' } : id.endsWith('collapsible.jsx') ? { Disclosure: 'disclosure' } : {},
+    require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => { confirmations++; return true; }, null] } : id === 'react' ? react : id.endsWith('time-groups.mjs') ? { groupByDay } : id.endsWith('button.jsx') ? { Button: 'button' } : id.endsWith('collapsible.jsx') ? { Disclosure: 'disclosure' } : {},
   });
   const render = () => { cursor = 0; return walk(module.exports.MemoryFeed({ api, refresh, entries, threadId: 'main' })); };
   const button = label => render().find(node => node.type === 'button' && walk(node).some(child => child.children.includes(label)));

@@ -54,13 +54,6 @@
 .ba-system-empty p{max-width:360px;margin:0;line-height:1.7}
 .ba-system-empty button{margin-top:6px}
 .ba-system-loading{min-height:280px;padding:16px 8px;color:var(--ba-muted);font-size:13px}
-.ba-system-loading>div:first-child{display:flex;align-items:center;gap:8px;margin-bottom:24px}
-.ba-system-skeleton{display:grid;gap:18px}
-.ba-system-skeleton>div{display:flex;align-items:center;gap:12px;height:32px}
-.ba-system-skeleton i,.ba-system-skeleton span,.ba-system-skeleton b{display:block;border-radius:5px;background:var(--ba-hover)}
-.ba-system-skeleton i{width:32px;height:32px;flex:none}
-.ba-system-skeleton span{width:clamp(80px,40%,240px);height:13px}
-.ba-system-skeleton b{width:18%;height:11px;margin-left:auto;font-weight:400}
 .ba-visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 @media(max-width:900px){.ba-system-breadcrumb{flex-basis:calc(100% - 180px)}.ba-root .ba-system-search{flex:1 1 180px}.ba-system-list thead th:nth-child(2){width:108px}.ba-system-list thead th:nth-child(4){width:130px}}
 @media(max-width:760px){

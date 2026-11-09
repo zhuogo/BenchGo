@@ -1,3 +1,4 @@
+import { useConfirmation } from '../../shared/client/ui/confirmation.jsx';
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { AssistantDocuments } from './documents.jsx';
 import css from './memory.css';
@@ -10,20 +11,22 @@ import { groupByDay } from './time-groups.mjs';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent, Disclosure } from '../../shared/client/ui/collapsible.jsx';
 
 export function MemoryPage({ api, refresh, onDirtyChange, entries, threadId }) {
+  const [confirm, confirmation] = useConfirmation();
   const [tab, setTab] = useState('entries'), [dirty, setDirty] = useState(false), id = useId();
   const reportDirty = React.useCallback(value => { setDirty(value); onDirtyChange?.(value); }, [onDirtyChange]);
-  const choose = next => {
+  const choose = async next => {
     if (next === tab) return;
-    if (dirty && !window.confirm('切换视图会放弃未保存的记忆修改。')) return;
+    if (dirty && !await confirm({ title: '放弃未保存的记忆？', description: '切换视图会放弃未保存的记忆修改。', confirmLabel: '放弃并切换', cancelLabel: '继续编辑', destructive: true })) return;
     reportDirty(false); setTab(next);
   };
-  return <section className="ba-memory-page"><style>{css}</style>
+  return <section className="ba-memory-page">{confirmation}<style>{css}</style>
     <SegmentedControl options={[{ value: 'entries', label: '记忆动态', icon: <ResourceIcon name="feed" size={16} /> }, { value: 'document', label: 'MEMORY.md', icon: <ResourceIcon name="book" size={16} /> }]} value={tab} onChange={choose} label="记忆视图" tabIdPrefix={id} panelId={`${id}-panel`} />
     <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-${tab}`} tabIndex={0}>{tab === 'entries' ? <MemoryFeed api={api} refresh={refresh} entries={entries} threadId={threadId} onDirtyChange={reportDirty} /> : <AssistantDocuments api={api} refresh={refresh} memory onDirtyChange={reportDirty} />}</div>
   </section>;
 }
 
 export function MemoryFeed({ api, entries = [], refresh, threadId, onDirtyChange }) {
+  const [confirm, confirmation] = useConfirmation();
   const [draft, setDraft] = useState(''), [editing, setEditing] = useState(null);
   const [busy, setBusy] = useState(false), [feedback, setFeedback] = useState(null);
   const composer = useRef(null), inFlight = useRef(false), composerId = useId();
@@ -60,9 +63,9 @@ export function MemoryFeed({ api, entries = [], refresh, threadId, onDirtyChange
     finally { inFlight.current = false; setBusy(false); }
   }
   function clearDraft() { setDraft(''); setEditing(null); }
-  function edit(entry) {
+  async function edit(entry) {
     if (editing?.id === entry.id) { composer.current?.focus(); return; }
-    if (dirty && !window.confirm('编辑这条记忆会放弃当前草稿。')) return;
+    if (dirty && !await confirm({ title: '放弃当前草稿？', description: '编辑这条记忆会放弃当前草稿。', confirmLabel: '放弃并编辑', cancelLabel: '继续当前编辑', destructive: true })) return;
     setEditing(entry); setDraft(entry.content); setFeedback(null);
     composer.current?.focus();
     composer.current?.scrollIntoView({ block: 'center', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
@@ -85,12 +88,12 @@ export function MemoryFeed({ api, entries = [], refresh, threadId, onDirtyChange
   });
   const groups = groupByDay(entries, entry => entry.updatedAt || entry.createdAt);
   const sourceLabel = entry => entry.document === 'USER.md' ? '关于你' : entry.document === 'TOOLS.md' ? '工具笔记' : '长期记忆';
-  return <section className="ba-memory-feed" aria-busy={busy}>
+  return <section className="ba-memory-feed" aria-busy={busy}>{confirmation}
     <form className="ba-memory-compose" data-editing={!!editing} aria-label={editing ? '编辑记忆' : '新增记忆'} onSubmit={save}>
       <label htmlFor={composerId} className="ba-memory-compose-title"><UIIcon name="edit" size={16} /><span>{editing ? '修改这段记忆' : '有什么值得记住？'}</span></label>
       <textarea id={composerId} ref={composer} rows={editing ? 5 : 2} maxLength={16000} disabled={busy} placeholder="一个偏好、一项决定，或想让助手记住的小事…" value={draft} onChange={event => setDraft(event.target.value)} />
       <footer><span>{editing ? '保存后会替代当前版本' : '对话记忆自动记录，无需逐条确认'}</span><div className="ba-row-actions">
-        {editing && <Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={() => { if (dirty && !window.confirm('取消会放弃未保存的记忆修改。')) return; pendingFocus.current = { id: editing.id }; clearDraft(); }}>取消</Button>}
+        {editing && <Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={async () => { if (dirty && !await confirm({ title: '放弃未保存的记忆？', description: '取消会放弃未保存的记忆修改。', confirmLabel: '放弃修改', cancelLabel: '继续编辑', destructive: true })) return; pendingFocus.current = { id: editing.id }; clearDraft(); }}>取消</Button>}
         <Button variant="default" type="submit" className="ba-primary" disabled={busy || !draft.trim() || !dirty}>{busy ? '处理中…' : editing ? '保存修改' : '记下来'}</Button>
       </div></footer>
     </form>

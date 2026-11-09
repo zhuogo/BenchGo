@@ -89,10 +89,6 @@
 .ba-connection-placeholder>.bg-ui-button{margin-top:4px}
 .ba-channel-conversations .ba-connection-placeholder{min-height:180px;margin-top:14px;border-style:dashed;background:var(--ba-surface)}
 #ba-channel-panel>.ba-connection-placeholder{margin-top:16px}
-.ba-connection-skeleton{display:grid;gap:8px;width:min(100%,280px);margin-top:8px}
-.ba-connection-skeleton span{height:8px;border-radius:4px;background:var(--ba-hover)}
-.ba-connection-skeleton span:nth-child(2){width:85%;justify-self:center}
-.ba-connection-skeleton span:nth-child(3){width:60%;justify-self:center}
 .ba-connection-checks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--ba-line);border-radius:10px;background:var(--ba-surface)}
 .ba-connection-check{display:grid;gap:10px;min-width:0;padding:16px;border-right:1px solid var(--ba-line)}
 .ba-connection-check:last-child{border-right:0}

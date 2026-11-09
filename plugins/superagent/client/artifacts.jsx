@@ -1,3 +1,4 @@
+import { Loading } from '../../shared/client/ui/loading.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
 import { Tooltip, Modal, Menu, IconDownloadOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
 import React, { useEffect, useId, useRef, useState } from 'react';
@@ -134,7 +135,7 @@ export function Artifacts({ api }) {
         {notice && <p className="ba-artifact-status" role="status">{notice}</p>}
         {!!visibleFiles.length && <div className="ba-artifact-batch"><Button variant="ghost" disabled={busy || loading} onClick={() => setChecked(checked.length === visibleFiles.length ? [] : visibleFiles.map(file => file.name))}>{checked.length === visibleFiles.length && checked.length ? '取消全选' : query ? '全选当前结果' : '全选已加载文件'}</Button>{!!checked.length && <><span>已选 {checked.length} 个</span><Button variant="destructive" disabled={busy || loading} onClick={() => { setOperationError(''); setOperation({ type: 'batchDelete', files: page.artifacts.filter(file => checked.includes(file.name)) }); }}>删除所选</Button></>}</div>}
         {error && <div className="ba-artifact-error" role="alert"><UIIcon name="box" size={20} /><div><strong>文件读取或操作未完成</strong><span>{error}{page.artifacts.length > 0 ? '。当前保留上次读取的文件，可在页眉重试。' : '。请在页眉重试。'}</span></div></div>}
-        {loading && !page.artifacts.length && <div className="ba-artifact-loading" role="status"><span className="ba-artifact-loading-label"><UIIcon name="box" size={20} />正在整理工作区文件…</span><div aria-hidden="true">{[0, 1, 2].map(row => <div className="ba-artifact-skeleton-row" key={row}><i /><span><b /><b /></span></div>)}</div></div>}
+        {loading && !page.artifacts.length && <Loading className="ba-artifact-loading" label="正在整理工作区文件…" />}
         {!loading && !error && !query && !page.artifacts.length && <div className="ba-artifact-empty"><span className="ba-artifact-empty-icon" aria-hidden="true"><UIIcon name="box" size={26} /></span><strong>暂无{label}产物</strong><p>让助手创建{label}并保存到工作区，完成后即可在这里查看与下载。</p></div>}
         {query && !visibleFiles.length && !loading && <div className="ba-artifact-empty"><span className="ba-artifact-empty-icon"><UIIcon name="search" size={26} /></span><strong>没有匹配的文件</strong><p>{page.nextCursor ? '当前仅筛选已加载文件，可继续加载或更换名称。' : '试试其他名称，或清空搜索查看全部文件。'}</p></div>}
         {!!visibleFiles.length && <div className={`ba-artifact-files ba-artifact-${view}`} role="list" aria-label={`${label}文件列表`}>

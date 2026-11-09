@@ -1,3 +1,4 @@
+import { officialTooltipSource } from '../../benchgo/test/official-tooltip-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -44,7 +45,7 @@ async function fixture() {
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-goals-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
-    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
+    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles(), officialTooltipSource()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;font-family:Arial,sans-serif}.ba-root{height:auto!important;min-width:0!important}</style></head><body><div id="root"></div><script>${result.outputFiles[0].text.replaceAll('</script', '<\\/script')}</script></body></html>`;
 }
 
@@ -77,6 +78,11 @@ test('production goals render four states, use system worker model, recover cata
     await detail.getByRole('button',{name:'恢复目标',exact:true}).waitFor();
     await detail.getByRole('button',{name:'恢复目标',exact:true}).click();
     await detail.getByRole('button',{name:'停止目标',exact:true}).click();
+    const stopConfirm = page.getByRole('dialog').filter({hasText:'停止这个持续目标？'});
+    await stopConfirm.getByRole('button',{name:'取消',exact:true}).click();
+    assert.equal(await page.evaluate(()=>window.calls.filter(row=>row.action==='goalCancel').length),0);
+    await detail.getByRole('button',{name:'停止目标',exact:true}).click();
+    await stopConfirm.getByRole('button',{name:'停止目标',exact:true}).click();
     await detail.getByText('已取消 · 1 项工单',{exact:true}).waitFor();
     const controls=await page.evaluate(()=>window.calls.filter(row=>['goalPause','goalResume','goalCancel'].includes(row.action)));
     assert.deepEqual(controls.map(row=>[row.action,row.input]),[['goalPause',{id:'goal-one',rowVersion:7}],['goalResume',{id:'goal-one',rowVersion:8}],['goalCancel',{id:'goal-one',rowVersion:9}]]);

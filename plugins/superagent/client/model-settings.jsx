@@ -4,6 +4,7 @@ import { auxiliaryCapabilities, auxiliaryModelPatch, auxiliaryCapabilityPatch, v
 import css from './model-settings.css';
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
+import { Tooltip as Hint } from '../../shared/client/ui/tooltip.jsx';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 
 function InfoIcon() { return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></svg>; }
@@ -89,7 +90,7 @@ export function ModelSettings({ config, onChange, ModelFields, IconButton, valid
       {!!models.length && <><fieldset className="ba-auxiliary-uses"><legend>交给辅助模型的用途</legend><div className="ba-auxiliary-grid">{auxiliaryCapabilities.map(([key, label, description]) => {
         const checked = !!auxiliary?.capabilities?.includes(key);
         const route = checked && models[0]?.providerId && models[0]?.modelId ? `${models[0].providerId} / ${models[0].modelId}` : '跟随 Router';
-        return <div className="ba-auxiliary-use" key={key}><span><strong>{label}<small className="ba-auxiliary-route" title={`首选：${route}`} data-auxiliary={!!(checked && models[0]?.providerId && models[0]?.modelId)}>{route === '跟随 Router' ? route : '辅助模型'}</small></strong><small>{description}</small></span><Switch label={label} title={issues.auxiliary ? '请先补全辅助模型' : undefined} disabled={!!issues.auxiliary} checked={checked} onChange={enabled => onChange(auxiliaryCapabilityPatch(auxiliary, key, enabled))} /></div>;
+        return <div className="ba-auxiliary-use" key={key}><span><strong>{label}<Hint label={`首选：${route}`} portal><small tabIndex={0} className="ba-auxiliary-route" data-auxiliary={!!(checked && models[0]?.providerId && models[0]?.modelId)}>{route === '跟随 Router' ? route : '辅助模型'}</small></Hint></strong><small>{description}</small></span><Hint label={issues.auxiliary ? '请先补全辅助模型' : ''} portal><span style={{ display: 'inline-flex', flex: 'none' }} tabIndex={issues.auxiliary ? 0 : undefined}><Switch label={label} disabled={!!issues.auxiliary} checked={checked} onChange={enabled => onChange(auxiliaryCapabilityPatch(auxiliary, key, enabled))} /></span></Hint></div>;
       })}</div></fieldset>
       <p className="ba-model-footnote"><InfoIcon /><span>开启用途不会赋予额外能力，不支持的请求会明确报错。辅助模型不可用时尝试备用，再回 Router。绘画使用独立的图像生成配置。</span></p></>}
     </section></Disclosure>

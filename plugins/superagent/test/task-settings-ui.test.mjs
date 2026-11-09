@@ -13,7 +13,7 @@ function harness({ fail = false } = {}) {
     useState: value => { const at = cursor++; if (!(at in state)) state[at] = value; return [state[at], next => { state[at] = typeof next === 'function' ? next(state[at]) : next; }]; },
     useId: () => 'task-test', useRef: value => refs[refCursor++] ||= { current: value }, useCallback: fn => fn, useEffect() {} };
   const Modal = () => null;
-  runInNewContext(code, { module, exports: module.exports, require: name => name.endsWith('ticket-board.mjs') ? ticketBoard : name.endsWith('/ui/button.jsx') ? { Button: 'button' } : name.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : name === 'react' ? react : { Modal, useDirtyRegistry: () => () => () => {} } });
+  runInNewContext(code, { module, exports: module.exports, require: name => name.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => true, null] } : name.endsWith('ticket-board.mjs') ? ticketBoard : name.endsWith('/ui/button.jsx') ? { Button: 'button' } : name.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : name === 'react' ? react : { Modal, useDirtyRegistry: () => () => () => {} } });
   const props = { onCreateGoal: () => opened++, api: async (action, args) => {
     calls.push({ action, args });
     if (action === 'state') return { config: { revision: 7, workerConcurrency: 2 } };

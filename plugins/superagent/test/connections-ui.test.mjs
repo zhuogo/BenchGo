@@ -9,7 +9,7 @@ const walk = node => node && typeof node === 'object' ? [node, ...(node.children
 test('channel brand color is driven by saved availability, including fallback icons', () => {
   const source = transformSync(readFileSync(new URL('../../shared/client/channel-brand-icon.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
   const module = { exports: {} };
-  runInNewContext(source, { module, exports: module.exports, require: path => path.endsWith('/ui/button.jsx') ? { Button: 'button' } : path.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : path === 'react' ? { createElement: (type, props, ...children) => ({ type, props, children }) } : path.endsWith('catalog.json') ? { feishu: 'feishu.svg' } : { UIIcon: 'Icon' } });
+  runInNewContext(source, { module, exports: module.exports, require: path => path.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => confirm, null] } : path.endsWith('/ui/button.jsx') ? { Button: 'button' } : path.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : path === 'react' ? { createElement: (type, props, ...children) => ({ type, props, children }) } : path.endsWith('catalog.json') ? { feishu: 'feishu.svg' } : { UIIcon: 'Icon' } });
   const render = module.exports.ChannelBrandIcon;
   assert.equal(render({ channel: 'feishu', available: false, selected: true }).props.style.filter, 'grayscale(1)');
   assert.equal(render({ channel: 'feishu', available: true, selected: false }).props.style.filter, undefined);
@@ -24,7 +24,7 @@ function harness({ configureError = false, credentialError = false, confirm = tr
   const module = { exports: {} }, calls = [], visibilityListeners = new Set();
   const document = { visibilityState: 'visible', addEventListener: (_type, callback) => visibilityListeners.add(callback), removeEventListener: (_type, callback) => visibilityListeners.delete(callback) };
   react.useRef = initial => { const index = refCursor++; return refs[index] ||= { current: initial }; };
-  runInNewContext(code, { module, exports: module.exports, document, AbortController, AbortSignal, window: { confirm: () => confirm }, setTimeout: callback => { timers.add(callback); return callback; }, clearTimeout: callback => timers.delete(callback), require: path => path.endsWith('/ui/button.jsx') ? { Button: 'button' } : path.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : path === 'react' ? react : path === 'qrcode' ? { toDataURL: async content => 'data:image/png;base64,' + content } : { SegmentedControl: 'Tabs', ChannelBrandIcon: 'Brand', CustomSelect: 'CustomSelect' } });
+  runInNewContext(code, { module, exports: module.exports, document, AbortController, AbortSignal, window: { confirm: () => confirm }, setTimeout: callback => { timers.add(callback); return callback; }, clearTimeout: callback => timers.delete(callback), require: path => path.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => confirm, null] } : path.endsWith('/ui/button.jsx') ? { Button: 'button' } : path.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : path === 'react' ? react : path === 'qrcode' ? { toDataURL: async content => 'data:image/png;base64,' + content } : { SegmentedControl: 'Tabs', ChannelBrandIcon: 'Brand', CustomSelect: 'CustomSelect' } });
   const api = async (op, input) => {
     calls.push({ op, input });
     if (op === 'connectionAction') {
@@ -217,14 +217,14 @@ test('credential entry clears plaintext and stores only returned reference in co
   assert.equal(h.calls[1].input.patch.tokenRef, 'channel-secret:opaque-id');
   assert.equal(JSON.stringify(h.calls[1]).includes('secret-value'), false);
 });
-test('cancel and channel switch clear credential plaintext', () => {
+test('cancel and channel switch clear credential plaintext', async () => {
   const h = harness();
   const enter = () => h.render().find(node => node.type === 'input' && node.props.type === 'password').props.onChange({ target: { value: 'secret-value' } });
   enter();
   h.render().find(node => node.type === 'button' && node.children.includes('取消输入')).props.onClick();
   assert.equal(h.state[8].tokenRef, '');
   enter();
-  h.render().find(node => node.type === 'Tabs').props.onChange('discord');
+  await h.render().find(node => node.type === 'Tabs').props.onChange('discord');
   assert.equal(Object.keys(h.state[8]).length, 0);
 });
 test('QR login renders locally and merges only returned credential references into draft', async () => {

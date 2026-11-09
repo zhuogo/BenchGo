@@ -1,3 +1,4 @@
+import typographyCss from '../../shared/client/chat-typography.css';
 import { Button } from '../../shared/client/ui/button.jsx';
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { quietChatRows } from './quiet-chat.mjs';
@@ -50,7 +51,7 @@ export function QuietChat({ home, session, chat }) {
     setBusy(true); setError('');
     try { await operation(); } catch (cause) { setError(cause.message || String(cause)); } finally { setBusy(false); }
   }
-  return <section ref={scroll.root} className="ba-quiet-chat" aria-label="主助手对话"><style>{css}</style><div className="ba-quiet-chat-column">
+  return <section ref={scroll.root} className="ba-quiet-chat" aria-label="主助手对话"><style>{css}{typographyCss}</style><div className="ba-quiet-chat-column">
     {history.hasMore && <Button variant="ghost" type="button" className="ba-quiet ba-chat-load" disabled={busy} onClick={() => run(onLoadEarlier)}>查看更早消息</Button>}
     {rows.map((row, index) => {
       const verificationOnly = row.ticketStatus === 'uncertain' || ticketSnapshot({ status: row.ticketStatus,

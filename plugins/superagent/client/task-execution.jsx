@@ -1,5 +1,6 @@
 import React, { useId } from 'react';
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
+import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import css from './task-execution.css';
 
 const statusLabels = { running: '运行中', waiting: '等待后续', completed: '执行结束', failed: '执行失败', cancelled: '已停止', unknown: '状态未知' };
@@ -10,7 +11,7 @@ const stamp = value => {
 
 function UpdatedAt({ value }) {
   const date = stamp(value);
-  return date ? <time dateTime={date.toISOString()} title={date.toLocaleString('zh-CN')}>{date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</time> : <span>时间未记录</span>;
+  return date ? <Tooltip label={date.toLocaleString('zh-CN')} portal><time tabIndex={0} dateTime={date.toISOString()}>{date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</time></Tooltip> : <span>时间未记录</span>;
 }
 
 function ExecutionMark({ status }) {
@@ -23,13 +24,14 @@ function ExecutorRow({ worker, child = false, recentOnly = false }) {
   const label = worker.label || (child ? '子 Worker' : '主 Worker');
   const statusText = recentOnly && status === 'running' ? '上次记录为运行中' : child && status === 'completed' ? '已返回父 Worker' : statusLabels[status];
   const summary = worker.activity?.trim() || (status === 'running' ? '等待新的执行动态' : statusText);
-  return <li className="ba-execution-worker" data-worker-id={worker.id} data-worker-status={status} title={`${statusText} · 最近活动：${stamp(worker.updatedAt)?.toLocaleString('zh-CN') || '时间未记录'}`}>
+  const description = `${label} · ${statusText} · ${summary} · 最近活动：${stamp(worker.updatedAt)?.toLocaleString('zh-CN') || '时间未记录'}`;
+  return <Tooltip label={description} maxWidth={420} portal><li tabIndex={0} className="ba-execution-worker" data-worker-id={worker.id} data-worker-status={status}>
     <ExecutionMark status={status} />
     <div className="ba-execution-worker-body">
-      <div className="ba-execution-worker-heading"><strong title={label}>{label}</strong>{(recentOnly || status !== 'running') && summary !== statusText && <span className="ba-execution-status" data-status={status}>{statusText}</span>}</div>
-      <p title={summary}>{summary}</p>
+      <div className="ba-execution-worker-heading"><strong>{label}</strong>{(recentOnly || status !== 'running') && summary !== statusText && <span className="ba-execution-status" data-status={status}>{statusText}</span>}</div>
+      <p>{summary}</p>
     </div>
-  </li>;
+  </li></Tooltip>;
 }
 
 /** A projection of observed execution only; no inferred percentage or transcript text. */

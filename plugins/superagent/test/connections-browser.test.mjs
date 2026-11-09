@@ -1,3 +1,4 @@
+import { officialTooltipSource } from '../../benchgo/test/official-tooltip-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -52,10 +53,10 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
     window.setConnectionsActive=active=>root.render(<Connections api={api} active={active}/>);
     window.setConnectionsActive(true);
   `, resolveDir: fileURLToPath(new URL('../client/', import.meta.url)), loader: 'jsx' },
-    bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic',
+    bundle: true, write: false, outdir: 'unused-connections-ui-test', format: 'iife', platform: 'browser', jsx: 'automatic',
     nodePaths: [fileURLToPath(new URL('../../benchgo/node_modules/', import.meta.url))],
     alias: { react: dirname(reactRequire.resolve('react/package.json')), 'react-dom': dirname(reactRequire.resolve('react-dom/package.json')) },
-    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles()], logLevel: 'silent',
+    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles(), officialTooltipSource()], logLevel: 'silent',
   });
   const browser = await chromium.launch({ headless: true, executablePath });
   await mkdir(output, { recursive: true });

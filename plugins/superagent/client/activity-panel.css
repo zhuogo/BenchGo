@@ -124,3 +124,7 @@
   .ba-board .ba-board-manage,.ba-board .ba-board-section-head,.ba-board-empty .bg-ui-button{min-height:44px}
 }
 @media(prefers-reduced-motion:reduce){.ba-board *{transition:none!important}}
+
+.ba-board-refreshing{animation:ba-board-refresh 900ms linear infinite}
+@keyframes ba-board-refresh{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.ba-board-refreshing{animation:none}}

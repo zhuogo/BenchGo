@@ -1,3 +1,4 @@
+import { Loading } from '../../shared/client/ui/loading.jsx';
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { Button } from '../../shared/client/ui/button.jsx';
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '../../shared/client/ui/dialog.jsx';
@@ -21,11 +22,11 @@ function permissionOrigin(value) {
 
 function PermissionState({ state, error, filtered, hasHistory }) {
   const loading = state === 'loading', failed = state === 'error';
-  return <div className="ba-permission-placeholder" role={failed ? 'alert' : 'status'} aria-busy={loading}>
-    <span className="ba-permission-placeholder-icon"><UIIcon name={loading ? 'refresh' : failed ? 'close' : 'link'} size={26} /></span>
-    <strong>{loading ? '正在读取授权' : failed ? '授权暂时无法读取' : filtered === 'history' ? '暂无历史许可' : filtered === 'active' ? '暂无有效许可' : '还没有站点许可'}</strong>
-    <p>{loading ? '正在同步站点、动作类别和有效期限。' : failed ? error : filtered === 'history' ? '过期或撤销的许可会保留在这里。' : hasHistory ? '以往许可已过期或撤销，可切换到历史许可查看。' : '可为明确站点的登录或私有内容上传设置有效期。'}</p>
-    {loading && <div className="ba-permission-skeleton" aria-hidden="true"><span /><span /><span /></div>}
+  if (loading) return <Loading label="正在读取授权" />;
+  return <div className="ba-permission-placeholder" role={failed ? 'alert' : 'status'}>
+    <span className="ba-permission-placeholder-icon"><UIIcon name={failed ? 'close' : 'link'} size={26} /></span>
+    <strong>{failed ? '授权暂时无法读取' : filtered === 'history' ? '暂无历史许可' : filtered === 'active' ? '暂无有效许可' : '还没有站点许可'}</strong>
+    <p>{failed ? error : filtered === 'history' ? '过期或撤销的许可会保留在这里。' : hasHistory ? '以往许可已过期或撤销，可切换到历史许可查看。' : '可为明确站点的登录或私有内容上传设置有效期。'}</p>
   </div>;
 }
 

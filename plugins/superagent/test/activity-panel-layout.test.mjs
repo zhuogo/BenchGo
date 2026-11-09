@@ -206,6 +206,10 @@ test('activity board renders honest states, keyboard navigation and responsive t
     assert(await focusedTask.evaluate(node=>node===document.activeElement),'closing details restores focus to the task');
     await focusedTask.press('Enter');
     await page.getByRole('dialog').getByRole('button',{name:'停止任务',exact:true}).click();
+    const stopConfirm = page.getByRole('dialog').filter({hasText:'停止后将拦截这项任务的后续执行。'});
+    await stopConfirm.getByRole('button',{name:'继续执行',exact:true}).click();
+    await page.getByRole('dialog').getByRole('button',{name:'停止任务',exact:true}).click();
+    await stopConfirm.getByRole('button',{name:'停止任务',exact:true}).click();
     await page.waitForFunction(()=>window.apiCalls.some(([name,args])=>name==='ticketStop'&&args.ticketId==='running'));
     await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
     await panel.locator('[data-task-key="ticket:running"]').getByText('已停止',{exact:true}).waitFor();

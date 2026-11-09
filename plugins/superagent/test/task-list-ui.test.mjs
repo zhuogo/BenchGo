@@ -10,7 +10,7 @@ const walk = node => node && typeof node === 'object' && node.props ? [node, ...
 function harness(fail = false) {
   let cursor = 0, changed = 0, opened = 0; const state = [], calls = [], module = { exports: {} };
   const react = { useEffect() {}, createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }), useState: initial => { const i = cursor++; if (!(i in state)) state[i] = initial; return [state[i], value => state[i] = value]; } };
-  runInNewContext(code, { module, exports: module.exports, window: { confirm: () => true }, require: id => id === 'react' ? react : id.endsWith('ticket-title.mjs') ? ticketTitle : id.endsWith('.css') ? '' : {} });
+  runInNewContext(code, { module, exports: module.exports, window: { confirm: () => true }, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => true, null] } : id === 'react' ? react : id.endsWith('ticket-title.mjs') ? ticketTitle : id.endsWith('.css') ? '' : {} });
   const props = { kind: 'ticket', row: { id: 't1', taskMeta: { version: 4 } }, title: 'Task', summary: 'Summary', onChanged: () => changed++, onOpen: () => opened++, api: async (...args) => { calls.push(args); if (fail) throw new Error('版本冲突'); } };
   return { calls, get changed() { return changed; }, get opened() { return opened; }, render(extra = {}) { cursor = 0; return walk(module.exports.TaskListRow({ ...props, ...extra })); } };
 }

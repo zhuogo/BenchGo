@@ -1,3 +1,6 @@
+import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
+import { Loading } from '../../shared/client/ui/loading.jsx';
+import { useConfirmation } from '../../shared/client/ui/confirmation.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
 import { ChannelBrandIcon } from '../../shared/client/channel-brand-icon.jsx';
@@ -16,9 +19,11 @@ const available = status => status?.enabled === true && !status?.error && ['veri
 const stateLabel = status => !status?.enabled ? '' : ({ connected: '已连接', connecting: '连接中', reconnecting: '重连中', failed: '连接失败', stopped: '已停止', listening: '监听中', idle: '待连接', error: '连接失败', unavailable: '不可用', disabled: '' })[status?.connection?.state] || '未连接';
 const connectionTone = status => !status?.enabled ? 'neutral' : status?.error || ['failed', 'error', 'unavailable'].includes(status?.connection?.state) ? 'error' : available(status) ? 'success' : 'pending';
 function ConnectionState({ icon = 'link', title, description, loading = false, children }) {
-  return <div className="ba-connection-placeholder" role="status" aria-busy={loading}><span className="ba-connection-placeholder-icon"><UIIcon name={icon} size={26} /></span><strong>{title}</strong><p>{description}</p>{loading && <div className="ba-connection-skeleton" aria-hidden="true"><span /><span /><span /></div>}{children}</div>;
+  if (loading) return <Loading label={title} />;
+  return <div className="ba-connection-placeholder" role="status" aria-busy={loading}><span className="ba-connection-placeholder-icon"><UIIcon name={icon} size={26} /></span><strong>{title}</strong><p>{description}</p>{children}</div>;
 }
 export function Connections({ api, onDirtyChange, active = true }) {
+  const [confirm, confirmation] = useConfirmation();
   const [catalog, setCatalog] = useState([]), [channel, setChannel] = useState('feishu');
   const [base, setBase] = useState(null), [draft, setDraft] = useState(null), [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(true), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -109,8 +114,8 @@ export function Connections({ api, onDirtyChange, active = true }) {
     finally { controller.abort(); if (current(request)) setBusy(false); }
   };
   useEffect(() => { lifecycle.current = new AbortController(); void load('feishu', true); return () => { generation.current++; lifecycle.current.abort(); loadingRequest.current?.abort(); cancelLogin(); }; }, []);
-  const choose = next => {
-    if (next === channel || busy || (dirty && !window.confirm('切换渠道会放弃未保存的修改。'))) return;
+  const choose = async next => {
+    if (next === channel || busy || (dirty && !await confirm({ title: '放弃渠道修改？', description: '切换渠道会放弃未保存的修改。', confirmLabel: '放弃并切换', cancelLabel: '继续编辑', destructive: true }))) return;
     setSecrets({}); setChannel(next); setBase(null); setDraft(null); setStatus(null); void load(next);
   };
   useEffect(() => {
@@ -216,12 +221,12 @@ export function Connections({ api, onDirtyChange, active = true }) {
     { label: '消息接收', value: status?.events === 'verified' ? '已验证' : '未验证', tone: status?.events === 'verified' ? 'success' : 'neutral' },
     { label: '结果发送', value: status?.sending === 'pull' ? '工单 / API 取结果' : status?.sending === 'verified' ? '已验证' : status?.sending === 'accepted' ? '已受理' : '未验证', tone: ['verified', 'pull'].includes(status?.sending) ? 'success' : status?.sending === 'accepted' ? 'pending' : 'neutral' },
   ];
-  return <section className="ba-group ba-connections" data-channel={channel}><style>{css + feishuCss}</style>
+  return <section className="ba-group ba-connections" data-channel={channel}>{confirmation}<style>{css + feishuCss}</style>
     {!!catalog.length && <SegmentedControl options={catalog.map(item => ({ value: item.id, label: item.label, icon: <ChannelBrandIcon channel={item.id} available={!synced[item.id]?.stale && available(item.id === channel ? status : item.status)} size={18} /> }))} value={channel} onChange={choose} disabled={busy} label="多平台渠道" tabIdPrefix="ba-channel" panelId="ba-channel-panel" />}
     {error && <div className="ba-error ba-connection-error" role="alert"><UIIcon name="link" size={18} /><div><strong>连接操作未完成</strong><p>{error}</p></div><Button variant="outline" type="button" disabled={busy} onClick={() => retryAction.current?.()}>重试</Button></div>}
     <div id="ba-channel-panel" role="tabpanel" aria-labelledby={`ba-channel-${channel}`} aria-busy={busy}>
       {!draft || !definition ? <ConnectionState icon={busy ? 'refresh' : 'link'} title={busy ? '正在读取连接配置' : error ? '暂时无法读取配置' : '暂未提供可配置渠道'} description={busy ? '正在同步平台信息与连接状态。' : error ? '配置保留在原处，恢复连接后即可继续。' : '刷新渠道目录后，再选择要接入的应用。'} loading={busy}>{!busy && !error && <Button variant="outline" type="button" onClick={() => load(channel, true)}>重新加载</Button>}</ConnectionState> : <form ref={form} className="ba-connection-form" onSubmit={save} onInvalidCapture={event => { if (event.target.closest('.ba-channel-advanced')) setAdvancedOpen(true); }}>
-        <section className="ba-connection-overview" aria-label="连接状态"><div><div className="ba-channel-title"><ChannelBrandIcon channel={channel} available={fresh && available(status)} size={28} /><strong>{definition.label}</strong><span className="ba-channel-status" data-tone={fresh ? connectionTone(status) : 'neutral'} role="status"><span className={`ba-connection-dot is-${fresh && status?.enabled ? status?.connection?.state || 'stopped' : 'stopped'}`} aria-hidden="true" />{!fresh ? '状态待确认' : status?.enabled ? stateLabel(status) : '未启用'}</span></div>{definition.description && <p>{definition.description}</p>}{sync?.at && <div className="ba-connection-sync" data-stale={!fresh} role="status"><span title={new Date(sync.at).toLocaleString()}>上次同步 {new Date(sync.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>{!fresh && <span title={sync.error || undefined}>{refreshing ? '正在重新确认…' : sync.error ? '同步失败，稍后自动重试' : '等待同步'}</span>}{!fresh && sync.error && <Button variant="ghost" size="sm" disabled={refreshing || busy} onClick={() => setSyncRevision(value => value + 1)}>同步状态</Button>}</div>}</div>
+        <section className="ba-connection-overview" aria-label="连接状态"><div><div className="ba-channel-title"><ChannelBrandIcon channel={channel} available={fresh && available(status)} size={28} /><strong>{definition.label}</strong><span className="ba-channel-status" data-tone={fresh ? connectionTone(status) : 'neutral'} role="status"><span className={`ba-connection-dot is-${fresh && status?.enabled ? status?.connection?.state || 'stopped' : 'stopped'}`} aria-hidden="true" />{!fresh ? '状态待确认' : status?.enabled ? stateLabel(status) : '未启用'}</span></div>{definition.description && <p>{definition.description}</p>}{sync?.at && <div className="ba-connection-sync" data-stale={!fresh} role="status"><Tooltip label={new Date(sync.at).toLocaleString()}><span tabIndex={0}>上次同步 {new Date(sync.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span></Tooltip>{!fresh && <Tooltip label={sync.error}><span tabIndex={sync.error ? 0 : undefined}>{refreshing ? '正在重新确认…' : sync.error ? '同步失败，稍后自动重试' : '等待同步'}</span></Tooltip>}{!fresh && sync.error && <Button variant="ghost" size="sm" disabled={refreshing || busy} onClick={() => setSyncRevision(value => value + 1)}>同步状态</Button>}</div>}</div>
           {enableControl}
         </section>
         {status?.error && <div className="ba-error ba-connection-error" role="alert"><UIIcon name="link" size={18} /><div><strong>渠道连接需要检查</strong><p>{typeof status.error === 'string' ? status.error : status.error.message || '渠道暂不可用'}</p></div><Button variant="outline" type="button" disabled={busy || dirty} onClick={verify}>重新验证</Button></div>}
@@ -266,7 +271,7 @@ export function Connections({ api, onDirtyChange, active = true }) {
           <div className="ba-connection-checks" role="status">{verification.map(item => <div key={item.label} className="ba-connection-check" data-tone={fresh ? item.tone : 'neutral'}><span>{item.label}</span><strong><span className="ba-connection-dot" aria-hidden="true" />{!fresh ? '状态待确认' : item.value}</strong></div>)}</div>
         </section>
         <footer className="ba-identity-save" data-dirty={dirty}><span role="status">{notice || (dirty ? '有未保存的修改' : feishu ? '当前配置已保存' : '')}</span><div className="ba-row-actions">
-          <Button variant={feishu ? 'outline' : 'ghost'} type="button" disabled={busy} onClick={() => { if (!dirty || window.confirm('重新加载会放弃未保存的修改。')) void load(channel, true); }}>重新加载</Button>
+          <Button variant={feishu ? 'outline' : 'ghost'} type="button" disabled={busy} onClick={async () => { if (!dirty || await confirm({ title: '重新加载渠道？', description: '重新加载会放弃未保存的修改。', confirmLabel: '放弃并加载', cancelLabel: '继续编辑', destructive: true })) void load(channel, true); }}>重新加载</Button>
 
           <Button className="ba-primary" disabled={busy || !dirty} type="submit">{busy ? '处理中…' : '保存更改'}</Button>
         </div></footer>

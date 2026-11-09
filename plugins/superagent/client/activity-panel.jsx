@@ -3,6 +3,7 @@ import { TicketWaiting } from './ticket-waiting.jsx';
 import { TaskExecution } from './task-execution.jsx';
 import { ticketWaiting } from './ticket-state.mjs';
 import taskCss from './task-list.css';
+import { useConfirmation } from '../../shared/client/ui/confirmation.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
 import React, { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Tooltip, IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
@@ -88,6 +89,8 @@ export function ActivityTrigger({ api }) {
 }
 export function ActivityPanel({ api, assistantConfig, onOpenResources }) {
   const { open, id, close } = useContext(ActivityContext);
+  const [confirm, confirmation] = useConfirmation();
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   const [stopping, setStopping] = useState(null), [actionError, setActionError] = useState(null), [selectedKey, setSelectedKey] = useState(null);
   const [tab, setTab] = useState('tasks'), [fetchedIdentity, setIdentity] = useState(null), [activeOpen, setActiveOpen] = useState(true);
   const [identityError, setIdentityError] = useState(''), [identityLoading, setIdentityLoading] = useState(false);
@@ -116,7 +119,11 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources }) {
     void refreshIdentity();
     return () => identityRequest.current?.abort();
   }, [open, refreshIdentity]);
-  const refreshAll = () => Promise.all([refresh(), refreshIdentity()]);
+  const refreshAll = async () => {
+    if (manualRefreshing) return;
+    setManualRefreshing(true);
+    try { await Promise.all([refresh(), refreshIdentity()]); } finally { setManualRefreshing(false); }
+  };
   const openResource = (resource, selection) => { setSelectedKey(null); close(); onOpenResources?.(resource, selection); };
   useLayoutEffect(() => {
     const body = panel.current?.querySelector('.ba-activity-body');
@@ -144,7 +151,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources }) {
   }, [rows, open, tab]);
   useEffect(() => { if (open) panel.current?.focus(); }, [open ]);
   const stop = async row => {
-    if (stopping !== null) return;
+    if (stopping !== null || !await confirm({ title: `停止“${taskTitle(row)}”？`, description: '停止后将拦截这项任务的后续执行。', confirmLabel: '停止任务', cancelLabel: '继续执行', destructive: true })) return;
     setStopping(row.key); setActionError(null);
     try { await api(row.kind === 'goal' ? 'goalCancel' : 'ticketStop', row.kind === 'goal' ? { id: row.id, rowVersion: row.rowVersion } : { ticketId: row.id }); await refresh(); }
     catch (cause) { setActionError({ message: cause.message || '任务未能停止，请重试。', row }); } finally { setStopping(null); }
@@ -177,7 +184,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources }) {
   };
   const tabs = [['tasks', '任务', active.length], ['identity', '身份', 0]].map(([value, label, count]) => ({ value, icon: tabIcons[value], label: <>{label}{count > 0 && <span className="ba-board-tab-count">{count}</span>}</> }));
   const loadingState = <ResourceState kind="loading" title="正在读取任务" description="正在同步进度与结果，请稍候。" />;
-  return <><div className="ba-activity-backdrop" hidden={!open} onClick={close} aria-hidden="true" />
+  return <>{confirmation}<div className="ba-activity-backdrop" hidden={!open} onClick={close} aria-hidden="true" />
     <aside id={id} ref={panel} hidden={!open} tabIndex={-1} className="ba-activity-panel ba-board" aria-label="助手看板" onKeyDown={onKeyDown}>
       <header className="ba-board-head"><div className="ba-board-heading"><span>助手看板</span><Tooltip label="收起看板" side="bottom" delayMs={450} portal><Button variant="ghost" className="ba-icon" aria-label="收起看板" onClick={close}><UIIcon name="close" size={16} /></Button></Tooltip></div>
         <div className="ba-board-companion"><BoardPet identity={identity} /><div className="ba-board-identity"><strong title={name}>{name}</strong><span className="ba-board-sync" data-state={syncState}><i aria-hidden="true" />{syncLabel}</span></div></div>
@@ -200,7 +207,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources }) {
             <Button variant="ghost" onClick={() => openResource('pet')}><BoardPet identity={identity} size={32} /><span className="ba-board-link-label"><strong>助手形象</strong><small>选择陪你工作的伙伴</small></span><UIIcon name="chevronLeft" className="ba-board-arrow" size={15} /></Button>
             {[['models', '模型配置', '身份、工作与辅助模型', 'atom'], ['memory', '记忆与档案', '保留重要的信息与约定', 'archive']].map(([key, title, description, icon]) => <Button variant="ghost" key={key} onClick={() => openResource(key)}><UIIcon name={icon} size={19} /><span className="ba-board-link-label"><strong>{title}</strong><small>{description}</small></span><UIIcon name="chevronLeft" className="ba-board-arrow" size={15} /></Button>)}
           </div></section>}
-      </div><footer className="ba-board-footer"><Button variant="ghost" className="ba-board-manage" onClick={() => openResource('tasks')}><UIIcon name="schedules" size={16} />任务管理</Button><span className="ba-board-updated" title={updated ? `上次同步：${stamp(updated)}` : undefined}>{error || identityError ? '同步失败' : loading || identityLoading ? '更新中…' : updated ? `${timeShort(updated)} 更新` : '尚未同步'}</span><Tooltip label="刷新看板" side="top" delayMs={450} portal><Button variant="ghost" className="ba-icon" aria-label="刷新看板" disabled={loading || identityLoading} onClick={refreshAll}><UIIcon name="refresh" size={16} /></Button></Tooltip></footer>
+      </div><footer className="ba-board-footer"><Button variant="ghost" className="ba-board-manage" onClick={() => openResource('tasks')}><UIIcon name="schedules" size={16} />任务管理</Button><span className="ba-board-updated" title={updated ? `上次同步：${stamp(updated)}` : undefined}>{error || identityError ? '同步失败' : loading || identityLoading ? '更新中…' : updated ? `${timeShort(updated)} 更新` : '尚未同步'}</span><Tooltip label="刷新看板" side="top" delayMs={450} portal><Button variant="ghost" className="ba-icon" aria-label="刷新看板" disabled={loading || identityLoading || manualRefreshing} onClick={refreshAll}><UIIcon name="refresh" className={manualRefreshing ? 'ba-board-refreshing' : undefined} size={16} /></Button></Tooltip></footer>
     </aside><style>{taskCss}</style>
     <TaskDetail open={!!selected && open} title={selected && <TaskStatusTitle title={taskTitle(selected)} status={selected.status} label={detailPhase(selected)} />} onClose={() => setSelectedKey(null)} footer={selected && <div className="ba-activity-detail-actions"><Button variant="ghost" onClick={() => openResource('tasks', selected.kind === 'ticket' ? { ticketId: selected.id } : undefined)}>前往任务管理</Button>{!terminal.has(selected.status) && !selectedWaiting && <Button variant="outline" disabled={stopping !== null} onClick={() => stop(selected)}>{stopping === selected.key ? '正在停止…' : '停止任务'}</Button>}</div>}>{selected && <>
       {actionError?.row.key === selected.key && <ResourceState kind="error" title="未能停止任务" description={actionError.message} onAction={() => stop(selected)} />}
