@@ -46,8 +46,8 @@ test('task organization persists without rewriting execution state and detects s
   assert.equal(tasks.project('ticket', [rows.ticket])[0].taskMeta.completed, true);
   tasks.update({ kind: 'ticket', id: 't', operation: 'reopen', version: 2 });
   assert.equal(rows.ticket.status, 'failed');
-  tasks.update({ kind: 'ticket', id: 't', operation: 'delete', version: 3 });
-  assert.deepEqual(tasks.project('ticket', [rows.ticket]), []);
+  assert.throws(() => tasks.update({ kind: 'ticket', id: 't', operation: 'delete', version: 3 }), { code: 'CLEANUP_PREVIEW_REQUIRED' });
+  assert.equal(tasks.project('ticket', [rows.ticket], { archived: true }).length, 1);
   for (const kind of ['goal', 'evaluation']) {
     tasks.update({ kind, id: rows[kind].id, operation: 'complete', version: 0 });
     assert.equal(tasks.project(kind, [rows[kind]])[0].taskMeta.completed, true);
@@ -60,7 +60,7 @@ test('active work cannot be hidden or marked completed; metadata writes validate
   const row = { id: 'active', status: 'open' };
   const database = { transaction: fn => fn(), meta: key => metadata.get(key), setMeta: (key, value) => metadata.set(key, value) };
   const tasks = createTaskManagement({ database, orchestration: { getTicket: id => id === row.id && row, getEvaluation: () => ({ status: 'queued' }) }, scheduler: { getGoal: () => ({ status: 'paused' }) } });
-  for (const kind of ['ticket', 'goal', 'evaluation']) for (const operation of ['complete', 'delete']) {
+  for (const kind of ['ticket', 'goal', 'evaluation']) for (const operation of kind === 'ticket' ? ['complete'] : ['complete', 'delete']) {
     assert.throws(() => tasks.update({ kind, id: 'active', operation, version: 0 }), { code: 'EXECUTION_PENDING' });
   }
   assert.equal(tasks.project('ticket', [row])[0].taskCanOrganize, false);
@@ -81,10 +81,10 @@ test('a reopened execution does not inherit a prior completion or deletion marke
   assert.equal(tasks.project('ticket', [row])[0].taskMeta.completed, false);
   row.status = 'failed';
   assert.equal(tasks.project('ticket', [row])[0].taskMeta.completed, false);
-  tasks.update({ kind: 'ticket', id: 't', operation: 'delete', version: 1 });
-  assert.equal(tasks.project('ticket', [row]).length, 0);
+  database.setMeta('task-presentation:ticket:t', { version: 2, archived: true, executionRevision: 2 });
+  assert.equal(tasks.project('ticket', [row], { archived: true }).length, 1);
   row.status = 'open'; row.instructionRevision = 3;
-  assert.equal(tasks.project('ticket', [row]).length, 1);
+  assert.equal(tasks.project('ticket', [row], { archived: false }).length, 1);
   tasks.update({ kind: 'ticket', id: 't', operation: 'rename', title: 'New execution', version: 2 });
   assert.equal(tasks.project('ticket', [row])[0].taskMeta.title, 'New execut');
 });

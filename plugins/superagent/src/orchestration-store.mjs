@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { ticketArchiveSql } from './ticket-archive.mjs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -496,8 +497,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       if (status) { where.push('status=?'); args.push(id(status, 'ticket status')); }
       if (archived !== undefined) {
         if (typeof archived !== 'boolean') throw new Error('Invalid ticket archive scope');
-        where.push(`status ${archived ? 'IN' : 'NOT IN'} (${[...archivedTicketStates].map(() => '?').join(',')})`);
-        args.push(...archivedTicketStates);
+        const hasMetadata = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_meta'").get();
+        where.push(`${archived ? '' : 'NOT '}${ticketArchiveSql({ hasMetadata })}`);
       }
       if (ownerSessionId !== undefined) { where.push("json_extract(mandate, '$.source.channel')='desktop' AND json_extract(mandate, '$.source.sessionId')=?"); args.push(id(ownerSessionId, 'ownerSessionId')); }
       if (ownerSessionIds !== undefined) {

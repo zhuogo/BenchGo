@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { notificationPublication } from './notification-publication.mjs';
+import { installTaskCleanupStore } from './task-cleanup-store.mjs';
 
 const encode = value => JSON.stringify(value);
 const decode = row => row ? { ...JSON.parse(row.payload), ...(row.unique_key?.startsWith('ticket-delivery:')
@@ -208,5 +209,6 @@ export function createAssistantRuntimeStore({ directory, filename, afterCommit }
     const write = api[name];
     api[name] = (...args) => { const result = write(...args); committed(); return result; };
   }
+  api.taskCleanup = installTaskCleanupStore({ db, transaction });
   return api;
 }

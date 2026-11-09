@@ -1,4 +1,5 @@
 import { normalizeTicketTitle } from './ticket-title.mjs';
+import { ticketPresentation, ticketIsArchived } from './ticket-archive.mjs';
 
 function activityTime(row) {
   for (const value of [row.updatedAt, row.createdAt]) {
@@ -15,19 +16,24 @@ export function createTaskManagement({ database, orchestration, scheduler }) {
   const executionRevision = (kind, row) => kind === 'ticket' ? row.instructionRevision ?? 1 : kind === 'goal' ? row.rowVersion ?? 0 : row.dispositionRevision ?? 0;
   const meta = (kind, row) => {
     const stored = database.meta(key(kind, row.id)) || { version: 0 };
-    const value = kind === 'ticket' && stored.title !== undefined
-      ? { ...stored, title: normalizeTicketTitle(stored.title, row.title || row.target) } : stored;
+    const value = kind === 'ticket' ? ticketPresentation(row, stored) : stored;
+    if (kind === 'ticket' && stored.title !== undefined) value.title = normalizeTicketTitle(stored.title, row.title || row.target);
     // A fresh execution must not inherit a previous run's completion or deletion.
     return (value.completed || value.deleted) && (!settled(kind, row) || value.executionRevision !== executionRevision(kind, row))
       ? { ...value, completed: false, deleted: false } : value;
   };
-  const project = (kind, rows) => rows.map(row => ({ ...row, taskMeta: meta(kind, row), taskCanOrganize: settled(kind, row) }))
-    .filter(row => !row.taskMeta.deleted)
+  const project = (kind, rows, { archived } = {}) => rows.map(row => {
+    const taskMeta = meta(kind, row);
+    return { ...row, ...(kind === 'ticket' ? { archived: ticketIsArchived(row, taskMeta),
+      cleanup: taskMeta.archived && taskMeta.cleanupReceiptId ? { id: taskMeta.cleanupReceiptId, archivedAt: taskMeta.archivedAt, version: taskMeta.version } : null } : {}), taskMeta, taskCanOrganize: settled(kind, row) };
+  })
+    .filter(row => kind === 'ticket' ? archived === undefined || row.archived === archived : !row.taskMeta.deleted)
     // Stable sort retains the source order when activity timestamps are equal.
     .sort((a, b) => activityTime(b) - activityTime(a));
   function update({ kind, id, operation, title, version }) {
     if (!['ticket', 'goal', 'evaluation'].includes(kind) || typeof id !== 'string' || !id) throw new Error('无效任务标识');
     if (!['rename', 'complete', 'reopen', 'delete'].includes(operation)) throw new Error('无效任务操作');
+    if (kind === 'ticket' && operation === 'delete') throw Object.assign(new Error('工单清理须先预览具体清单并取得本次确认'), { code: 'CLEANUP_PREVIEW_REQUIRED' });
     return database.transaction(() => {
       const row = kind === 'ticket' ? orchestration.getTicket(id) : kind === 'goal' ? scheduler.getGoal(id) : orchestration.getEvaluation(id);
       if (!row) throw new Error('任务不存在');
@@ -44,5 +50,12 @@ export function createTaskManagement({ database, orchestration, scheduler }) {
       return { id, kind, taskMeta: next };
     });
   }
-  return { project, update };
+  const cleanup = name => (...args) => {
+    if (!database.taskCleanup) throw new Error('工单清理存储不可用');
+    return database.taskCleanup[name](...args);
+  };
+  return { project, update,
+    previewCleanup: cleanup('previewCleanup'), getCleanupPreview: cleanup('getCleanupPreview'),
+    commitCleanup: cleanup('commitCleanup'), previewRestore: cleanup('previewRestore'), restoreCleanup: cleanup('restoreCleanup'),
+    createCleanupConfirmation: cleanup('createConfirmation'), cleanupHistory: cleanup('cleanupHistory') };
 }
