@@ -42,3 +42,11 @@
 .ba-task-instructions p{margin:0 0 16px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65}
 
 .ba-task-verification{font-size:12px;line-height:1.6;color:var(--cmd-muted,#85858a);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+
+.ba-task-inline{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;max-height:100%;outline:none;overflow:hidden}
+.ba-task-inline-head{flex:none;min-width:0;padding:8px 16px 16px}.ba-task-inline-head>.bg-ui-button{gap:5px;margin:0 0 12px -8px}.ba-task-inline-head h2{margin:0;font-size:17px;font-weight:600;line-height:1.5;overflow-wrap:anywhere}
+.ba-task-inline>.ba-task-dialog-body{padding:0 16px 20px}.ba-task-inline>.ba-task-dialog-footer{padding:12px 16px;justify-content:flex-start}
+.ba-task-inline .ba-activity-detail-title>span:last-child{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.ba-task-milestones h3{margin:0 0 10px;font-size:13px}.ba-task-milestones ol{display:grid;gap:10px;list-style:none;margin:0;padding:0 0 0 12px;border-left:1px solid var(--ba-line,#ddd)}.ba-task-milestones li{display:flex;gap:12px;justify-content:space-between;font-size:12px}.ba-task-milestones time{flex:none;color:var(--ba-muted,#737373);font-variant-numeric:tabular-nums}
+.ba-task-inline .ba-task-dialog-footer button{white-space:normal;min-height:36px}.ba-task-inline:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#315be8);outline-offset:-2px}
+@media(max-width:640px){.ba-task-inline-head{padding:8px 16px 12px}.ba-task-inline .ba-task-dialog-footer button{min-height:44px}}

@@ -134,3 +134,4 @@
 .ba-board-task-meta[data-checking] .ba-board-summary{flex-basis:100%;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.6}
 .ba-board-task-meta[data-checking] .ba-board-summary::before{content:none}
 .ba-board-verification{font-size:11px;line-height:1.6;color:var(--ba-muted);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.ba-board [hidden]{display:none!important}.ba-board-scope{margin-bottom:12px}.ba-board-scope .bg-segments button{font-size:12px;min-height:32px}.ba-board>.ba-task-inline{flex:1;min-height:0}.ba-board:has(>.ba-task-inline) .ba-board-companion{display:none}.ba-board .ba-task-inline .ba-task-dialog-body{font-size:13px}.ba-board .ba-task-inline h2{font-size:16px}.ba-board .ba-approval-review{font-size:13px}

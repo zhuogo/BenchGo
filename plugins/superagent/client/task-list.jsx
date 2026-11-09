@@ -27,11 +27,22 @@ export function TaskIconButton({ label, icon, ...props }) {
   return <Button variant="ghost" type="button" className="ba-task-icon" title={label} aria-label={label} {...props}>{paths[icon] ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">{paths[icon]}</svg> : <UIIcon name={icon} size={18} />}</Button>;
 }
 
-export function TaskDetail({ open, title, onClose, dirty = false, children, footer }) {
+export function TaskDetail({ open, title, onClose, dirty = false, children, footer, inline = false }) {
   const [confirm, confirmation] = useConfirmation();
   const opener = useRef(null);
+  const container = useRef(null);
+  useEffect(() => { if (inline && open) { opener.current = document.activeElement; container.current?.focus(); } }, [inline, open]);
   const close = async () => { if (!dirty || await confirm({ title: '放弃未保存的修改？', description: '关闭后，此处尚未保存的修改将丢失。', confirmLabel: '放弃并关闭', cancelLabel: '继续编辑', destructive: true })) onClose(); };
+  if (inline) return open ? <>{confirmation}<style>{css}</style><section className="ba-task-inline" ref={container} tabIndex={-1} aria-label="任务详情" onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); void close(); } }}><header className="ba-task-inline-head"><Button variant="ghost" onClick={close}><UIIcon name="chevronLeft" size={16} />返回列表</Button><h2>{title}</h2></header><div className="ba-root ba-task-dialog-body">{children}</div>{footer && <footer className="ba-root ba-task-dialog-footer">{footer}</footer>}</section></> : null;
   return <><Dialog open={open} onOpenChange={value => { if (!value) close(); }}><style>{css}</style><DialogContent className="ba-task-dialog" aria-describedby={undefined} onOpenAutoFocus={() => { opener.current = document.activeElement; }} onCloseAutoFocus={event => { if (opener.current?.isConnected) { event.preventDefault(); opener.current.focus(); } }}><DialogTitle>{typeof title === 'string' ? <Tooltip label={title} onlyWhenClipped><span className="ba-task-dialog-title-text" tabIndex={0}>{title}</span></Tooltip> : title}</DialogTitle><div className="ba-root ba-task-dialog-body">{children}</div>{footer && <footer className="ba-root ba-task-dialog-footer">{footer}</footer>}</DialogContent></Dialog>{confirmation}</>;
+}
+
+const milestoneLabels = { 'turn/start': '开始执行', 'turn/end': '执行回合结束', 'step/end': '完成一个执行阶段', 'subagent/catalog': '派出子 Worker', 'subagent/returned': '子 Worker 返回', 'recovery-unavailable': '历史执行记录不完整', result: '保存执行结果', delivery: '更新交付状态', attention: '等待用户处理', requirements: '要求已修订' };
+export function TicketFacts({ ticket }) {
+  const begin = Date.parse(ticket.createdAt), end = Date.parse(ticket.closedAt || ticket.completedAt || ticket.execution?.updatedAt || ticket.updatedAt);
+  const elapsed = Number.isFinite(begin) && Number.isFinite(end) && end >= begin ? Math.floor((end - begin) / 60000) : null;
+  const milestones = (ticket.execution?.milestones || []).filter(row => milestoneLabels[row.kind]);
+  return <><section className="ba-task-instructions"><h3>任务要求</h3><p>{ticket.target || '原始要求未记录'}</p>{ticket.acceptance && <><h3>验收条件</h3><p>{ticket.acceptance}</p></>}<span className="ba-note">截至最近记录 · {elapsed === null ? '耗时未知' : elapsed < 1 ? '不到 1 分钟' : elapsed < 60 ? `${elapsed} 分钟` : `${Math.floor(elapsed / 60)} 小时 ${elapsed % 60} 分钟`}</span></section>{milestones.length > 0 && <section className="ba-task-milestones" aria-label="关键工作流"><h3>关键工作流</h3><ol>{milestones.map(row => <li key={`${row.seq}:${row.kind}`}><span>{milestoneLabels[row.kind]}</span><time dateTime={row.time || undefined}>{Number.isFinite(Date.parse(row.time)) ? new Date(row.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '时间未记录'}</time></li>)}</ol></section>}</>;
 }
 
 export function TaskListRow({ api, kind, row, title: inputTitle, summary, verification, completed = false, completionLocked = false, onChanged, onOpen, actions = [], onDirtyChange }) {

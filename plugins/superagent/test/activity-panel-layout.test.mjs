@@ -23,6 +23,7 @@ async function fixture() {
       import { ActivityProvider, ActivityTrigger, ActivityPanel } from './plugins/superagent/client/activity-panel.jsx';
       import { AssistantCard } from './plugins/superagent/client/card.jsx';
       import { assistantConfigSync } from './plugins/superagent/client/config-sync.mjs';
+      import { configureAssistantActivity } from './plugins/superagent/client/use-activity.jsx';
       import css from './plugins/superagent/client/style.css';
       const root = createRoot(document.getElementById('root'));
       let serial = 0;
@@ -31,7 +32,7 @@ async function fixture() {
         window.updateConfig = config => { assistantConfigSync.accept({...config,revision:++serial},assistantConfigSync.begin());setConfig(config); };
         return <ActivityProvider><style>{css}</style><div className="ba-root">
           <main className="ba-main fixture-chat"><header><h1>主聊天</h1><ActivityTrigger api={api}/></header><p>BenchGo · 看板组件验收</p><div className="ba-assistant-section" style={{width:200}}><div className="ba-assistant-heading"><AssistantCard name="BenchGo" status="running" action="focus" onOpen={()=>{}}/></div></div></main>
-          <ActivityPanel api={api} assistantConfig={config} onOpenResources={(tab,selection)=>{window.resourceCalls.push(tab);window.resourceSelections.push(selection);}}/>
+          <ActivityPanel api={api} sessionId={window.scenarioControl.state==='stream'?'router-main':undefined} assistantConfig={config} onOpenResources={(tab,selection)=>{window.resourceCalls.push(tab);window.resourceSelections.push(selection);}}/>
         </div></ActivityProvider>;
       }
       window.renderScenario = (state='data', supplied=true) => {
@@ -85,10 +86,18 @@ async function fixture() {
           if(name==='state') return {config};
           if(name==='ticketStop'){tickets.find(row=>row.id===args.ticketId).status='cancelled';return {};}
           if(name==='goalCancel'){goals.find(row=>row.id===args.id).status='cancelled';return {};}
-          if(name==='tickets') return {tickets:control.state==='empty'?[]:tickets.filter(row=>['completed','failed','closed'].includes(row.status)===args.archived).slice(0,args.limit||1000)};
+          if(name==='tickets') return {tickets:control.state==='empty'?[]:args.ticketId?tickets.filter(row=>row.id===args.ticketId):tickets.filter(row=>['completed','failed','closed'].includes(row.status)===args.archived).slice(0,args.limit||1000)};
           if(name==='goalList') return {goals:control.state==='empty'?[]:goals};
           return {};
         };
+        if(state==='stream') {
+          tickets.forEach((row,index)=>row.mandate={source:{sessionId:index<2?'router-main':'router-other'}});
+          for(let index=0;index<18;index++) tickets.push({id:'stable-'+index,title:'稳定任务'+index,target:'保留原始任务要求',status:'open',createdAt:at(20+index),updatedAt:at(10+index),mandate:{source:{sessionId:'router-other'}}});
+          let cursor=0;
+          configureAssistantActivity(api,{connect(sink){window.streamSink=sink;return {start(){sink.replace({cursor,tickets});},restart(){sink.replace({cursor,tickets});},dispose(){}};}});
+          window.streamUpdate=()=>{window.updateExecution('running');window.streamSink.update({cursor:++cursor,entries:[{seq:cursor,ticketId:'running',kind:'execution'}]});};
+          window.streamGoals=()=>{goals[0].target='持续目标已同步';window.streamSink.update({cursor:++cursor,entries:[{seq:cursor,ticketId:null,kind:'goal'}]});};
+        }
         root.render(<App key={++serial} api={api} initialConfig={supplied?config:undefined}/>);
       };
       window.renderScenario(location.hash.slice(1)||'data');
@@ -141,7 +150,7 @@ test('activity board renders honest states, keyboard navigation and responsive t
     await panel.locator('[data-task-key="ticket:running"]').waitFor();
     assert(await panel.locator('.benchgo-pet-avatar img').first().evaluate(node=>node.complete&&node.naturalWidth>0),'default identity renders the brand pet');
     assert.equal(await panel.getByText('已连接',{exact:false}).count(),0,'task fetch success does not claim a live connection');
-    assert.equal(await panel.getByRole('tab',{name:/审核/}).count(),0,'tasks do not have a separate confirmation page');
+    assert.equal(await panel.getByRole('tab',{name:/审核/}).count(),1,'board exposes the existing approval view');
     assert.equal(await panel.getByRole('button',{name:'查看记录',exact:true}).count(),0,'the task itself opens details');
     const focusedTask=panel.locator('[data-task-key="ticket:running"] .ba-board-task-open');
     await focusedTask.focus();
@@ -180,7 +189,7 @@ test('activity board renders honest states, keyboard navigation and responsive t
     }
     assert(await panel.getByText('4 条 · 进行中 1',{exact:true}).isVisible(),'active ticket count excludes the active goal');
     assert(await panel.getByText('1 个',{exact:true}).isVisible(),'goal count is reported separately');
-    await tab('任务').focus();await page.keyboard.press('ArrowRight');
+    await tab('审核').focus();await page.keyboard.press('ArrowRight');
     assert.equal(await tab('身份').getAttribute('aria-selected'),'true','arrow key changes the active tab');
     await page.keyboard.press('End');assert.equal(await tab('身份').getAttribute('aria-selected'),'true');
     await page.keyboard.press('Home');assert.equal(await tab('任务').getAttribute('aria-selected'),'true');
@@ -201,25 +210,25 @@ test('activity board renders honest states, keyboard navigation and responsive t
     assert(await page.evaluate(()=>!['ticket:running','goal:goal'].includes(document.activeElement.closest('[data-task-key]')?.dataset.taskKey)),'collapsed tasks are skipped in the tab order');
     await activeHeading.click();
     await panel.locator('[data-task-key="ticket:running"] .ba-board-task-open').click({position:{x:4,y:4}});
-    await page.getByRole('dialog').waitFor();
-    assert.equal(Array.from(await page.getByRole('dialog').getByRole('heading',{level:2}).innerText()).length,10,'ticket display titles have at most ten Unicode characters');
-    assert.equal(await page.getByRole('dialog').getByText(/任务要求|验收条件|创建：|更新：/).count(),0,'quick details omit requirements and record timestamps');
-    assert.equal(await page.getByRole('dialog').locator('.ba-task-execution').count(),0,'unobserved execution does not create an empty activity section');
-    assert.equal(await page.getByRole('dialog').locator('.ba-activity-detail-status').count(),1,'task state is beside its title');
-    const actionAlignment=await page.getByRole('dialog').locator('.ba-activity-detail-actions').evaluate(node=>({justify:getComputedStyle(node).justifyContent,footer:!!node.closest('.ba-task-dialog-footer')}));
+    await page.getByRole('region',{name:'任务详情',exact:true}).waitFor();
+    assert.equal(Array.from(await page.getByRole('region',{name:'任务详情',exact:true}).getByRole('heading',{level:2}).innerText()).length,10,'ticket display titles have at most ten Unicode characters');
+    assert.equal(await page.getByRole('region',{name:'任务详情',exact:true}).getByText(/任务要求|验收条件/).count(),2,'details keep the original requirements visible');
+    assert.equal(await page.getByRole('region',{name:'任务详情',exact:true}).locator('.ba-task-execution').count(),0,'unobserved execution does not create an empty activity section');
+    assert.equal(await page.getByRole('region',{name:'任务详情',exact:true}).locator('.ba-activity-detail-status').count(),1,'task state is beside its title');
+    const actionAlignment=await page.getByRole('region',{name:'任务详情',exact:true}).locator('.ba-activity-detail-actions').evaluate(node=>({justify:getComputedStyle(node).justifyContent,footer:!!node.closest('.ba-task-dialog-footer')}));
     assert.deepEqual(actionAlignment,{justify:'flex-end',footer:true},'detail actions stay together in the fixed bottom footer');
-    await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+    await page.keyboard.press('Escape');await page.getByRole('region',{name:'任务详情',exact:true}).waitFor({state:'hidden'});
     assert(await panel.isVisible(),'closing task details keeps the board open');
     await page.waitForFunction(()=>document.activeElement?.closest('[data-task-key]')?.dataset.taskKey==='ticket:running');
     assert(await focusedTask.evaluate(node=>node===document.activeElement),'closing details restores focus to the task');
     await focusedTask.press('Enter');
-    await page.getByRole('dialog').getByRole('button',{name:'停止任务',exact:true}).click();
+    await page.getByRole('region',{name:'任务详情',exact:true}).getByRole('button',{name:'停止任务',exact:true}).click();
     const stopConfirm = page.getByRole('dialog').filter({hasText:'停止后将拦截这项任务的后续执行。'});
     await stopConfirm.getByRole('button',{name:'继续执行',exact:true}).click();
-    await page.getByRole('dialog').getByRole('button',{name:'停止任务',exact:true}).click();
+    await page.getByRole('region',{name:'任务详情',exact:true}).getByRole('button',{name:'停止任务',exact:true}).click();
     await stopConfirm.getByRole('button',{name:'停止任务',exact:true}).click();
     await page.waitForFunction(()=>window.apiCalls.some(([name,args])=>name==='ticketStop'&&args.ticketId==='running'));
-    await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+    await page.keyboard.press('Escape');await page.getByRole('region',{name:'任务详情',exact:true}).waitFor({state:'hidden'});
     await panel.locator('[data-task-key="ticket:running"]').getByText('已停止',{exact:true}).waitFor();
     assert.equal(await panel.locator('[data-task-key="ticket:done"]').count(),0,'completed records remain accessible through task management archives');
     assert(!await page.evaluate(()=>window.apiCalls.some(([name])=>name==='taskUpdate')),'activity polling never changes completion');
@@ -289,7 +298,7 @@ test('activity board updates Worker and child execution in place without declari
       if(captureDir)await panel.screenshot({path:join(captureDir,`light-${width}-dynamic-list.png`)});
     }
     await row.locator('.ba-board-task-open').click();
-    const detail=page.getByRole('dialog');
+    const detail=page.getByRole('region',{name:'任务详情',exact:true});
     await detail.waitFor();
     assert.equal(await detail.locator('[data-worker-id]').count(),3,'one Worker and its two children are visible');
     assert.equal(await detail.locator('[data-worker-status="running"]').count(),3);
@@ -323,7 +332,7 @@ test('activity board updates Worker and child execution in place without declari
     assert.equal(await detail.locator('[data-worker-id]').count(),3,'refresh errors keep observed children with a stale-state notice');
     await page.evaluate(()=>{window.scenarioControl.fail=false;window.updateExecution('verifying');});
     await detail.getByText('动态更新暂不可用，以下保留上次记录。',{exact:true}).waitFor({state:'hidden'});
-    await row.getByText('正在保存结果',{exact:true}).waitFor();
+    await row.getByText('正在保存结果',{exact:true}).waitFor({state:'attached'});
     assert.equal(await detail.locator('[data-worker-status="completed"]').count(),3);
     assert.equal(await detail.getByText('已完成',{exact:true}).count(),0,'Worker completion still waits for ticket result persistence and delivery');
     if(captureDir)await page.screenshot({path:join(captureDir,'verifying-detail.png')});
@@ -366,7 +375,7 @@ test('long activity details keep current work and actions reachable while finish
       await page.evaluate(dark=>{document.body.toggleAttribute('data-ds-dark-theme',dark);window.renderScenario('dynamic');window.updateExecution('many');},dark);
       await page.locator('.ba-activity-trigger').click();
       await page.locator('[data-task-key="ticket:running"] .ba-board-task-open').click();
-      const detail=page.getByRole('dialog'), body=detail.locator('.ba-task-dialog-body');
+      const detail=page.getByRole('region',{name:'任务详情',exact:true}), body=detail.locator('.ba-task-dialog-body');
       await detail.waitFor();
       assert.equal(await detail.locator('[data-worker-id]').count(),9,'only live and abnormal steps appear by default');
       assert.equal(await detail.locator('[data-worker-status=failed]').count(),1,'failed steps are never hidden with completion history');
@@ -377,7 +386,7 @@ test('long activity details keep current work and actions reachable while finish
         const outer=node.getBoundingClientRect();
         return {left:outer.left,right:outer.right,width:outer.width,viewport:innerWidth,children:[...node.querySelectorAll(':scope>.ba-root')].map(child=>{const r=child.getBoundingClientRect();return {left:r.left,right:r.right};})};
       });
-      assert(bounds.left>=15&&bounds.right<=bounds.viewport-15&&bounds.width<=760,'dialog keeps viewport gutters');
+      assert(bounds.left>=0&&bounds.right<=bounds.viewport&&bounds.width<=Math.max(380,Math.min(390,bounds.viewport)),'detail remains inside the board');
       assert(bounds.children.every(child=>child.left>=bounds.left&&child.right<=bounds.right+1),'dialog body and footer fit the outer width: '+JSON.stringify(bounds));
       const before=await footer.boundingBox();
       assert(before.y+before.height<=900,'actions fit the viewport before scrolling');
@@ -428,12 +437,46 @@ test('activity board keeps verification facts visible and distinguishes a stoppe
     await page.evaluate(()=>window.updateUncertainty(true));
     await row.getByText('停止已生效 · 执行端未确认退出',{exact:true}).waitFor();
     await row.getByRole('button').click();
-    const detail=page.getByRole('dialog');
+    const detail=page.getByRole('region',{name:'任务详情',exact:true});
     await detail.getByText('等待执行端退出',{exact:true}).waitFor();
     assert.equal(await detail.getByRole('button',{name:'停止工单',exact:true}).count(),0);
     await detail.getByText(/后续动作已拦截，但执行端仍未确认退出/).waitFor();
     assert.equal(await page.evaluate(()=>window.apiCalls.some(([name])=>['ticketStop','ticketResume'].includes(name))),false);
     assert(await detail.evaluate(node=>node.scrollWidth<=node.clientWidth),'status detail fits the narrow dialog');
     if(captureDir)await page.screenshot({path:join(captureDir,'stop-unconfirmed-390.png'),fullPage:true});
+  }finally{await browser.close();}
+});
+
+
+
+test('healthy board scopes by true source session and preserves list DOM, scroll and focus across incremental details', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
+  const browser=await chromium.launch({headless:true,executablePath});
+  try{
+    const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'});
+    await page.setContent(await fixture()); await page.evaluate(()=>window.renderScenario('stream'));
+    await page.getByRole('button',{name:'展开看板',exact:true}).click();
+    const panel=page.locator('.ba-activity-panel'), body=panel.locator('.ba-activity-body');
+    await panel.locator('[data-task-key="ticket:running"]').waitFor();
+    assert.equal(await panel.locator('[data-task-key]').count(),2,'session view contains only tickets dispatched from the actual current session');
+    assert.equal(await page.evaluate(()=>window.apiCalls.filter(([name])=>name==='tickets').length),0,'opening baseline is used directly');
+    await panel.getByRole('tab',{name:'全部',exact:true}).click();
+    await panel.locator('[data-task-key="ticket:stable-4"]').waitFor();
+    const row=panel.locator('[data-task-key="ticket:stable-4"]'), button=row.getByRole('button');
+    await button.scrollIntoViewIfNeeded();await button.focus();
+    const before=await body.evaluate(node=>node.scrollTop), handle=await button.elementHandle();
+    await page.evaluate(()=>window.streamUpdate());
+    await page.waitForFunction(()=>window.apiCalls.some(([name,args])=>name==='tickets'&&args.ticketId==='running'));
+    assert(await handle.evaluate(node=>node.isConnected&&node===document.activeElement),'unaffected row keeps DOM and keyboard focus');
+    assert.equal(await body.evaluate(node=>node.scrollTop),before,'execution facts do not reset scroll');
+    await button.click();const detail=panel.getByRole('region',{name:'任务详情',exact:true});await detail.waitFor();
+    assert.equal(await page.getByRole('dialog').count(),0,'task details are not a modal');
+    await detail.getByRole('button',{name:'返回列表',exact:true}).click();
+    assert(await handle.evaluate(node=>node.isConnected&&node===document.activeElement),'return restores the original DOM focus');
+    assert.equal(await body.evaluate(node=>node.scrollTop),before);
+    await page.evaluate(()=>window.streamGoals());
+    await panel.getByRole('button',{name:'持续目标已同步',exact:true}).waitFor({state:'attached'});
+    await page.waitForTimeout(2200);
+    assert.equal(await page.evaluate(()=>window.apiCalls.filter(([name,args])=>name==='tickets'&&!args.ticketId).length),0,'healthy stream does not periodically pull the ledger');
+    assert.equal(await panel.getByText('已同步',{exact:true}).count(),0,'quiet updates have no flashing sync message');
   }finally{await browser.close();}
 });
