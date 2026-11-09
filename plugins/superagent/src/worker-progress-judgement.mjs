@@ -30,16 +30,17 @@ function readDecision(text, input) {
     || !Array.isArray(decision.evidenceRefs) || decision.evidenceRefs.length > 24
     || decision.evidenceRefs.some(ref => typeof ref !== 'string' || !input.evidenceRefs.includes(ref))
     || (suspicious.has(decision.classification) && !decision.evidenceRefs.length)) throw new Error('Invalid judgement');
-  const observedRefs = input.outputObservation?.observations?.map(row => row.evidenceRef) || [];
+  const observedRefs = decision.classification === 'no-progress' ? input.observation?.unchangedFiles?.evidenceRefs || []
+    : input.outputObservation?.observations?.map(row => row.evidenceRef) || [];
   if (suspicious.has(decision.classification) && (decision.outputRelevance !== 'relevant'
     || !decision.evidenceRefs.some(ref => observedRefs.includes(ref))
-    || decision.classification === 'no-progress' && !input.observation?.unchangedFiles)) return {
+    || decision.classification === 'no-progress' && (!input.evidenceComplete || !input.observation?.unchangedFiles))) return {
     classification: 'insufficient-evidence', outputRelevance: ['relevant', 'irrelevant'].includes(decision.outputRelevance) ? decision.outputRelevance : 'unknown',
     reason: '覆盖文件观察与工单产出要求尚不足以支持疑似判断', evidenceRefs: decision.evidenceRefs, uncertainty: 'high' };
   return {
     classification: decision.classification,
     outputRelevance: ['relevant', 'irrelevant'].includes(decision.outputRelevance) ? decision.outputRelevance : 'unknown',
-    reason: decision.classification === 'no-progress' ? `疑似：仅受保护文件的检查点净变化：${redactExecutionText(decision.reason, 240)}`
+    reason: decision.classification === 'no-progress' ? '疑似：与目标相关的受保护文件在所观察检查点内无净变化'
       : `${suspicious.has(decision.classification) ? '疑似：' : ''}${redactExecutionText(decision.reason, 300)}`,
     evidenceRefs: [...new Set(decision.evidenceRefs)],
     uncertainty: input.evidenceComplete && input.outputObservation !== 'unknown' ? decision.uncertainty : 'high',

@@ -178,7 +178,8 @@ export function createWatchdogRuntime({ store, config, client, judge, now = Date
               || ['completed', 'failed', 'cancelled'].includes(row.run?.state)
               || ['user', 'approval', 'paused'].includes(row.wait?.kind)
               || ['background-job', 'long-operation'].includes(row.wait?.kind) && Date.parse(row.wait.expectedUntil) > now()
-              || row.modelEvidence?.outputObservation?.comparison?.netChanged === true)) modelResolved.push(incident.conditionKey);
+              || row.modelEvidence?.outputObservation?.observations?.some(observation => observation.comparison?.netChanged === true
+                && /^execution:\d+$/.test(observation.evidenceRef) && Number(observation.evidenceRef.slice(10)) > incident.evidenceCursor))) modelResolved.push(incident.conditionKey);
           }
           const judgeSignal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(config.probeTimeoutMs)]);
           let judged = 0;
