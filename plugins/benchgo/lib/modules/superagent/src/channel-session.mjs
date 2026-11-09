@@ -33,13 +33,16 @@ export function createChannelSessionHost({ ctx, store, engine, receiveOwnerMessa
     pending.set(key, next);
     return next.finally(() => { if (pending.get(key) === next) pending.delete(key); });
   };
-  async function mirror({ source, threadId, key, text, direction, sessionKey = channelSessionKey(source) }) {
+  async function mirror({ source, threadId, key, text, direction, deliveredAt, sessionKey = channelSessionKey(source) }) {
     return serial(sessionKey, async () => {
       const existing = (await store.getState()).threads.find(row => row.sourceKey === sessionKey);
-      const currentSource = direction === 'delivery' && existing?.source ? existing.source : source;
-      const thread = await engine.ensureSourceThread({ sourceKey: sessionKey,
+      // Replaying the central sent ledger must not resurrect deleted history.
+      // Only an actual inbound event can establish a new source conversation.
+      if (direction === 'delivery' && (!existing || !Number.isFinite(Date.parse(existing.createdAt))
+        || !Number.isFinite(Date.parse(deliveredAt)) || Date.parse(deliveredAt) < Date.parse(existing.createdAt))) return null;
+      const thread = direction === 'delivery' ? existing : await engine.ensureSourceThread({ sourceKey: sessionKey,
         title: `${source.channel} · ${source.topicId || source.conversationId || source.sourceType}`,
-        source: { ...currentSource, threadId: threadId || currentSource.threadId || existing?.source?.threadId } });
+        source: { ...source, threadId: threadId || source.threadId || existing?.source?.threadId } });
       const agent = await engine.ensureSession({ threadId: thread.id });
       const persisted = await ctx.sessionQuery.readSession(agent.session.id);
       if (!persisted.events.some(event => channelMessageRecordOf(event)?.mirrorKey === key
@@ -66,7 +69,7 @@ export function createChannelSessionHost({ ctx, store, engine, receiveOwnerMessa
       const text = outbox.payload?.publication?.text ?? outbox.payload?.text ?? outbox.text;
       if (typeof text !== 'string' || !text) return null;
       return mirror({ source, threadId: outbox.threadId || source.threadId, key: `delivery:${outbox.kind || 'ticket'}:${outbox.id}`,
-        text, direction: 'delivery' });
+        text, direction: 'delivery', deliveredAt: outbox.sentAt ?? outbox.updatedAt });
     },
     async onSourceMessage(input) {
       const { thread, sessionId, message } = input;
