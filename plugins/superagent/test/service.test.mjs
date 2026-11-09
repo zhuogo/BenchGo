@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { publicConfig } from '../../voice/src/config.mjs';
+import { installRoleHost } from './role-host-fixture.mjs';
 
 const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
 const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
@@ -24,6 +25,11 @@ const { commitWorkerResult } = await import('../src/result-commit.mjs');
 const { Context } = await load('@deepseek-ai/cordis');
 const { default: LlmRuntime, LlmAdapter } = await load('@deepseek-ai/dsh-llm');
 const modules = await Promise.all(['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-agent-loop'].map(load));
+const gatewayRequire = createRequire(new URL('../../../deepseek-harness/packages/api/gateway/package.json', import.meta.url));
+const { default: TypertRegistry } = await import(pathToFileURL(gatewayRequire.resolve('@deepseek-ai/dsh-typert-registry')).href);
+const SessionPersistence = await load('@deepseek-ai/dsh-session-persistence-jsonl');
+const queryRequire = createRequire(new URL('../../../deepseek-harness/packages/session-query/session-query-sqlite/package.json', import.meta.url));
+const SessionQuery = await import(pathToFileURL(queryRequire.resolve('@deepseek-ai/dsh-session-query-sqlite')).href);
 
 test('mounted assistant HTTP routes execute real Harness and register scoped tools', async t => {
   const originalFetch = globalThis.fetch;
@@ -37,12 +43,26 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   t.after(async () => { await ctx.fiber.dispose(); hook.deregister(); await rm(directory, { recursive: true, force: true }); await rm(projectRoot, { recursive: true, force: true }); });
   await ctx.plugin(LlmRuntime);
   for (let i = 0; i < modules.length; i++) await ctx.plugin(modules[i].default, i === modules.length - 1 ? { agents: [] } : undefined);
+  await ctx.plugin(TypertRegistry);
+  await installRoleHost(ctx);
+  await ctx.plugin(SessionPersistence.default || SessionPersistence, { root: join(directory, 'official-sessions'), compression: 'none' });
+  await ctx.plugin(SessionQuery.default || SessionQuery, { path: ':memory:', openAt: 'never' });
   const tokenRequire = createRequire(new URL('../../../deepseek-harness/packages/llm/token-meter/package.json', import.meta.url));
   await ctx.plugin((await import(pathToFileURL(tokenRequire.resolve('@deepseek-ai/dsh-token-meter')).href)).default);
   let duringStream;
+  const scopeInputs = [];
   class Adapter extends LlmAdapter {
-    async resolveModel(provider, id) { return { provider, id, name: id }; }
-    async *stream() { const callback = duringStream; duringStream = undefined; if (callback) await callback(); yield { type: 'block-start', index: 0, blockType: 'text' }; yield { type: 'text-delta', index: 0, text: 'Mounted reply' }; yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Mounted reply' } }; yield { type: 'finish', reason: { kind: 'stop' } }; }
+    async resolveModel(provider, id) { return { provider, id, name: id, context: { contextWindow: 131072 } }; }
+    async *stream(request) {
+      if (request.purpose === 'superagent-delegation-scope') {
+        scopeInputs.push(JSON.parse(request.messages.find(message => message.role === 'user').content[0].text));
+        yield { type: 'text-delta', text: JSON.stringify({ outcome: 'delegate', reason: 'Mounted integration fixture confirms the proposed work scope' }) };
+        yield { type: 'finish', reason: { kind: 'stop' } }; return;
+      }
+      const callback = duringStream; duringStream = undefined; if (callback) await callback();
+      yield { type: 'block-start', index: 0, blockType: 'text' }; yield { type: 'text-delta', index: 0, text: 'Mounted reply' };
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Mounted reply' } }; yield { type: 'finish', reason: { kind: 'stop' } };
+    }
   }
   ctx.llm.registerAdapter(['mounted'], new Adapter());
   const scheduleEntries = [];
@@ -75,7 +95,6 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     get sessionIds() { return ['session-1']; },
   });
   ctx.provide('workspaceRegistry', { list: () => [workspaceEntity], get: id => id === 'project' ? workspaceEntity : undefined });
-  ctx.provide('sessionQuery', { listSessions: async () => ctx.sessions.list().map(s => ({ header: s.header })), readSession: async id => ({ events: ctx.sessions.get(id).snapshotEvents() }) });
   const commander = Object.assign(new EventEmitter(), { store: { directory }, list: () => [], catalog: () => [], providers: new Map() });
   const voiceRoutes = new Map();
   const providers = {
@@ -303,7 +322,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal((await call({ action: 'goalResume', id: ownedGoal.id, rowVersion: pausedGoal.rowVersion })).status, 200);
   app.store.orchestration.cancelTicket(ownedGoal.ticketIds[0]);
   } catch (error) { streamFailure = error; } };
-  await call({ action: 'send', text: 'hello', requestId: 'current-goal-authority-turn' });
+  await call({ action: 'send', text: '创建项目延后工作目标', requestId: 'current-goal-authority-turn' });
   await agent.whenIdle();
   if (streamFailure) throw streamFailure;
   duringStream = async () => { try {
@@ -312,7 +331,13 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   await assert.rejects(delegateTool.execute(delegation, { agent: { id: 'child' }, authorized: true }), /只有总助手/);
   await assert.rejects(delegateTool.execute({ ...delegation, provider: 'mounted', model: 'exact' }, { agent, authorized: true }));
   const ticket = await delegateTool.execute(delegation, { agent, authorized: true });
-  assert.equal(ticket.mandate.instruction, 'hello');
+  assert.equal(ticket.mandate.instruction, 'Inspect project');
+  const scopeInput = scopeInputs.at(-1);
+  assert.equal(scopeInput.currentRequest.text, 'Inspect project');
+  const visible = new Set(ctx.tools.schemas(agent).map(tool => tool.name));
+  assert.ok(scopeInput.capabilities.some(tool => tool.name === 'assistant_device_status'));
+  assert.ok(scopeInput.capabilities.every(tool => visible.has(tool.name) && ctx.tools.get(tool.name, agent)?.description === tool.description));
+  assert.equal(scopeInput.capabilities.some(tool => ['assistant_delegate', 'assistant_config'].includes(tool.name)), false);
   assert.equal((await delegateTool.execute(delegation, { agent, authorized: true })).id, ticket.id);
   assert.ok((await (await call({ action: 'tickets' })).json()).tickets.some(row => row.id === ticket.id));
   assert.equal((await (await call({ action: 'ticketStop', ticketId: ticket.id })).json()).status, 'cancelled');
@@ -322,7 +347,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const pauseReceipt = await controlTool.execute({ id: pauseTicket.id, operation: 'pause' }, { agent });
   assert.equal(pauseReceipt.ticket.status, 'paused');
   assert.equal(pauseReceipt.input.kind, 'pause'); assert.equal(pauseReceipt.input.state, 'applied');
-  assert.equal(app.store.orchestration.getTrigger(pauseReceipt.triggerId).content, 'hello');
+  assert.equal(app.store.orchestration.getTrigger(pauseReceipt.triggerId).content, 'Inspect project');
   assert.equal(app.store.orchestration.getTicket(pauseTicket.id).status, 'paused');
   app.store.orchestration.cancelTicket(pauseTicket.id);
   const questionTicket = app.store.orchestration.createTicket({ threadId: ticket.threadId, target: 'Question', mandate: ticket.mandate });
@@ -363,7 +388,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.ok(Array.isArray(await (await call({ action: 'requestState' })).json()));
   app.store.orchestration.cancelTicket(questionTicket.id);
   } catch (error) { streamFailure = error; } };
-  await call({ action: 'send', text: 'hello', requestId: 'current-authority-turn' });
+  await call({ action: 'send', text: 'Inspect project', requestId: 'current-authority-turn' });
   await agent.whenIdle();
   if (streamFailure) throw streamFailure;
   const memoryTool = ctx.tools.get('assistant_memory', agent);
