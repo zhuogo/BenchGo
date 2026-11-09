@@ -10,6 +10,34 @@ import { executionEvidence } from '../src/execution-evidence.mjs';
 import { executionEffects } from '../src/execution-effects.mjs';
 import { createAssignmentExecutor } from '../src/assignment-executor.mjs';
 import { executionUncertainty, executionRecoverySignal } from '../src/execution-uncertainty.mjs';
+import { installRoleHost, loadRolePackage } from './role-host-fixture.mjs';
+
+const loadHost = name => loadRolePackage('core/agent-loop', name);
+const { Context } = await loadHost('@deepseek-ai/cordis');
+const { createScope } = await loadHost('@deepseek-ai/dsh-scope');
+// Preserve the controlled recovery transcript while composing real upstream role services.
+async function installContinuationRoleHost(t, ctx) {
+  const host = new Context();
+  t.after(() => host.fiber.dispose());
+  for (const name of ['session', 'session-projection', 'system-prompt', 'tools', 'agent'])
+    await host.plugin((await loadHost(`@deepseek-ai/dsh-${name}`)).default);
+  await installRoleHost(host);
+  for (const name of ['agentPresets', 'permissionPresets', 'sandboxPolicy', 'approval']) ctx[name] = host[name];
+  ctx.agents.turnBoundaryOf = session => host.agents.turnBoundaryOf(session);
+  const resume = ctx.agents.resume;
+  ctx.agents.resume = input => resume({ ...input, setup: async (fixture, agent) => {
+    const scope = createScope(host, {});
+    t.after(() => scope.dispose());
+    const snapshotEvents = agent.session.snapshotEvents;
+    agent.id ??= input.resumeSessionId;
+    agent.session = host.sessions.create(agent.id, { meta: input.meta });
+    agent.session.snapshotEvents = snapshotEvents;
+    agent.model ??= { current: () => null, select() {} };
+    fixture.tools.schemas = value => host.get('tools').schemas(value);
+    agent.ctx = scope.ctx.extend({ ...fixture, get: name => fixture.get?.(name) ?? scope.ctx.get(name) });
+    await input.setup(agent.ctx, agent);
+  } });
+}
 
 const call = (id = 'read-1', name = 'read', args = { path: 'saved.txt' }) => ({ type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'tool-call', id, name, arguments: args }] } } });
 const result = (id = 'read-1', text = 'saved') => ({ type: 'tool/result', surfaceOp: 'append', data: { turn: 1, step: 1, message: { toolCallId: id, source: { kind: 'tool', callId: id }, content: [{ type: 'text', text }] } } });
@@ -131,6 +159,7 @@ test('executor uses official resume and followup in the original session with it
     await input.setup({ tools: { register: tool => tools.set(tool.name, tool) }, effect: fn => fn(), get: () => undefined, systemPrompt: { section() {}, context() {} }, on: (name, fn) => hooks.set(name, fn) }, agent);
     return { agent, dispose: async () => { disposed = true; } };
   };
+  await installContinuationRoleHost(t, f.ctx);
   const execute = createAssignmentExecutor({ ctx: f.ctx, database: f.database, workspaceRoot: f.directory, readPolicy: f.input.readPolicy, authorizeAction: async () => ({ allowed: true }) });
   const result = await execute(assignment, { ticket: f.database.getTicket(f.ticket.id), signal: f.input.signal, renew: async () => {} });
   assert.equal(message.source.kind, 'benchgo-interrupted-continuation');
@@ -152,6 +181,7 @@ test('filesystem changes after queueing prevent official continuation from dispa
     await input.setup({ tools: {}, systemPrompt: {}, on() {}, provide() {} }, { session: { snapshotEvents: () => [...f.log.events, ...interruptedTurnClosers(f.log.events)] } });
     assert.fail('changed artifact must never start followup');
   };
+  await installContinuationRoleHost(t, f.ctx);
   const execute = createAssignmentExecutor({ ctx: f.ctx, database: f.database, workspaceRoot: f.directory, readPolicy: f.input.readPolicy, authorizeAction: async () => ({ allowed: true }) });
   await assert.rejects(execute(assignment, { ticket: f.database.getTicket(f.ticket.id), signal: f.input.signal, renew: async () => {} }), /checkpoint no longer matches/);
   assert.equal(f.database.runs(assignment.id)[0].state, 'uncertain');

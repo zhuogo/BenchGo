@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { createAssignmentExecutor } from '../src/assignment-executor.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { modelFallbackSource } from '../src/model-fallback.mjs';
+import { installRoleHost } from './role-host-fixture.mjs';
 
 const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
 const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
@@ -30,6 +31,7 @@ async function fixture(t, script, { install, models = [primary, backup], persist
   await ctx.plugin(LlmRuntime);
   for (let i = 0; i < modules.length; i++) await ctx.plugin(modules[i].default, i === modules.length - 1 ? { agents: [] } : undefined);
   await ctx.plugin(NativeToolExecutor);
+  await installRoleHost(ctx);
   if (persistent) await ctx.plugin(await loadPackage('session/session-persistence-jsonl', '@deepseek-ai/dsh-session-persistence-jsonl'), { root: join(directory, 'sessions'), compression: 'none' });
   const requests = [], selections = [], logs = new Map();
   class Adapter extends LlmAdapter {
