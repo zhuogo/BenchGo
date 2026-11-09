@@ -148,6 +148,13 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   response = await call({ action: 'config', patch: { cardHtml: '<b>Service card</b>' } }); assert.equal(response.status, 200); assert.equal((await response.json()).cardHtml, '<b>Service card</b>');
   response = await call({ action: 'ensure' }); const { sessionId } = await response.json(); assert.ok(sessionId);
   const agent = await app.engine.ensureSession();
+  const deviceStatusTool = ctx.tools.get('assistant_device_status', agent);
+  assert.ok(deviceStatusTool);
+  assert.deepEqual(deviceStatusTool.parameters.properties, {});
+  assert.deepEqual(deviceStatusTool.parameters.required, []);
+  assert.equal(deviceStatusTool.parameters.additionalProperties, false);
+  assert.equal((await deviceStatusTool.execute({}, { agent })).code, 'OWNER_REQUIRED');
+  ctx.provide('benchgoLink', { status: () => ({ enabled: true, devices: [{ id: 'phone', name: '手机', deviceType: 'mobile', lastSeenAt: 123, tokenHash: 'PRIVATE' }], pending: [] }) });
   const ticketsTool = ctx.tools.get('assistant_tickets', agent);
   assert.ok(ticketsTool);
   assert.deepEqual(await ticketsTool.execute({}, { agent }), { tickets: [], nextOffset: null });
@@ -268,6 +275,11 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   app.store.orchestration.claimAssignments = claimAssignments;
   let streamFailure;
   duringStream = async () => { try {
+  const deviceStatus = await deviceStatusTool.execute({}, { agent });
+  assert.equal(deviceStatus.available, true);
+  assert.equal(deviceStatus.liveConnections, 'unknown');
+  assert.deepEqual(deviceStatus.devices, [{ id: 'phone', name: '手机', type: 'mobile', lastSeenAt: 123 }]);
+  assert.doesNotMatch(JSON.stringify(deviceStatus), /PRIVATE/);
   const delegateTool = ctx.tools.get('assistant_delegate', agent);
   assert.ok(delegateTool.parameters.required.includes('acceptance'));
   assert.equal(delegateTool.parameters.required.includes('provider'), false);
