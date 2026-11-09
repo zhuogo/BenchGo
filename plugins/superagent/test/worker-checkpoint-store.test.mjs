@@ -12,7 +12,8 @@ async function fixture(t, options = {}) {
   const directory = join(root, 'workspace'), backup = join(root, 'shadow');
   await mkdir(directory);
   const store = createWorkerCheckpointStore({ directory: backup, ...options });
-  const action = callback => store.protect({ directory, runId: 'run', ticketId: 'ticket', assignmentId: 'assignment' }, callback);
+  const action = (callback, identity = {}) => store.protect({ directory, runId: 'run', ticketId: 'ticket', assignmentId: 'assignment',
+    callId: 'call', fence: 1, instructionRevision: 1, ...identity }, callback);
   return { root, directory, backup, store, action, write: (name, text) => writeFile(join(directory, name), text), read: name => readFile(join(directory, name), 'utf8') };
 }
 
@@ -124,4 +125,92 @@ test('crash-pending records block further actions and rollback', async t => {
   const reloaded = createWorkerCheckpointStore({ directory: f.backup });
   await assert.rejects(reloaded.preview('run'), { code: 'CHECKPOINT_UNCERTAIN' });
   await assert.rejects(f.action(() => assert.fail('unfinished action must not repeat')), { code: 'CHECKPOINT_UNCERTAIN' });
+});
+
+test('complete observations compare existing metadata including zero net file changes without exporting files', async t => {
+  const observations = [];
+  const f = await fixture(t, { onObservation: async value => { await Promise.resolve(); observations.push(value); } });
+  await f.action(async () => 'empty');
+  assert.equal(observations.length, 1, 'protect awaits the persisted observation callback');
+  assert.deepEqual(observations[0].comparison, { beforeFiles: 0, afterFiles: 0, added: 0, modified: 0, deleted: 0, unchanged: 0, netChanged: false });
+  await f.write('same.txt', 'same'); await f.write('edited.txt', 'before'); await f.write('deleted.txt', 'before');
+  await f.action(async () => {
+    await f.write('same.txt', 'same'); await f.write('edited.txt', 'after'); await unlink(join(f.directory, 'deleted.txt')); await f.write('created.txt', 'new');
+  }, { instructionRevision: 3, fence: 2 });
+  const observed = observations[1], [first, second] = await f.store.list({ runId: 'run' });
+  assert.equal(observed.observationId, second.id); assert.equal(observations[0].observationId, first.id);
+  assert.equal(observed.sequence, 1); assert.equal(observed.callId, 'call'); assert.equal(observed.fence, 2); assert.equal(observed.instructionRevision, 3);
+  assert.equal(observed.ticketId, 'ticket'); assert.equal(observed.assignmentId, 'assignment'); assert.equal(observed.runId, 'run');
+  assert.equal(observed.directory, f.directory); assert.equal(Number.isFinite(Date.parse(observed.startedAt)), true);
+  assert.equal(Date.parse(observed.completedAt) >= Date.parse(observed.startedAt), true);
+  assert.deepEqual(observed.coverage, { kind: 'protected-workspace-files', complete: true, truncated: false, exclusionsVersion: 1,
+    externalEffects: 'not-observed', conversationOutputs: 'not-observed' });
+  assert.deepEqual(observed.comparison, { beforeFiles: 3, afterFiles: 3, added: 1, modified: 1, deleted: 1, unchanged: 1, netChanged: true });
+  assert.doesNotMatch(JSON.stringify(observations), /same\.txt|edited\.txt|deleted\.txt|created\.txt|"hash"|"blob"|"mode"/);
+  await f.action(() => f.write('edited.txt', 'after'));
+  assert.deepEqual(observations[2].comparison, { beforeFiles: 3, afterFiles: 3, added: 0, modified: 0, deleted: 0, unchanged: 3, netChanged: false });
+});
+
+test('dispatch errors still publish a complete after-state, but after scan failures remain pending and unobserved', async t => {
+  const observations = [];
+  const f = await fixture(t, { maxFileBytes: 8, onObservation: value => observations.push(value) });
+  const error = new Error('official dispatch failed');
+  await assert.rejects(f.action(async () => { await f.write('a', 'new'); throw error; }), value => value === error);
+  assert.equal(observations.length, 1); assert.equal(observations[0].comparison.added, 1);
+  assert.equal((await f.store.list({ runId: 'run' }))[0].state, 'complete');
+  await assert.rejects(f.action(() => f.write('a', 'too large for snapshot')), { code: 'CHECKPOINT_LIMIT' });
+  assert.equal(observations.length, 1);
+  assert.equal((await f.store.list({ runId: 'run' }))[1].state, 'pending');
+  await assert.rejects(f.action(() => assert.fail('unfinished action must not replay')), { code: 'CHECKPOINT_UNCERTAIN' });
+});
+
+test('observation journal and diagnostics failures cannot fail or replay an already executed action', async t => {
+  let dispatches = 0; const warnings = [];
+  const f = await fixture(t, { onObservation: async () => { throw new Error('journal unavailable'); },
+    onObservationError: metadata => { warnings.push(metadata); throw new Error('logger unavailable'); } });
+  assert.equal(await f.action(async () => { dispatches++; await f.write('a', 'done'); return 'official result'; }), 'official result');
+  assert.equal(dispatches, 1); assert.equal(await f.read('a'), 'done');
+  const [record] = await f.store.list({ runId: 'run' });
+  assert.equal(record.state, 'complete'); assert.equal(record.observationState, 'failed');
+  assert.deepEqual(f.store.observationCoverage('run'), { known: true, complete: false, firstSequence: 0, lastSequence: 0, pending: 0, failed: 1, restored: false });
+  assert.deepEqual(warnings, [{ observationId: record.id, runId: 'run', code: 'CHECKPOINT_OBSERVATION_FAILED' }]);
+  const failure = new Error('original dispatch failure');
+  await assert.rejects(f.action(async () => { dispatches++; throw failure; }), value => value === failure);
+  assert.equal(dispatches, 2);
+  await f.action(async () => 'next distinct action');
+  assert.equal((await f.store.list({ runId: 'run' })).length, 3, 'a missing projection is not a pending dispatch');
+});
+
+test('derived observation coverage stays unknown after restart and tracks queued and pending tails', async t => {
+  const f = await fixture(t, { onObservation: async () => {} });
+  assert.deepEqual(f.store.observationCoverage('run'), { known: false, complete: false, firstSequence: null, lastSequence: null, pending: 0, failed: 0, restored: false });
+  let releaseFirst, releaseSecond;
+  const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+  const secondGate = new Promise(resolve => { releaseSecond = resolve; });
+  let secondStarted;
+  const started = new Promise(resolve => { secondStarted = resolve; });
+  const first = f.action(() => firstGate), second = f.action(async () => { secondStarted(); await secondGate; });
+  assert.equal(f.store.observationCoverage('run').pending, 2, 'queued actions count immediately');
+  releaseFirst(); await first; await started;
+  assert.equal(f.store.observationCoverage('run').complete, false); assert.equal(f.store.observationCoverage('run').pending, 1);
+  releaseSecond(); await second;
+  assert.deepEqual(f.store.observationCoverage('run'), { known: true, complete: true, firstSequence: 0, lastSequence: 1, pending: 0, failed: 0, restored: false });
+  const reloaded = createWorkerCheckpointStore({ directory: f.backup, onObservation: async () => {} });
+  assert.equal(reloaded.observationCoverage('run').known, false);
+  await reloaded.list({ runId: 'run' });
+  assert.equal(reloaded.observationCoverage('run').complete, true, 'only persisted recorded observation metadata restores coverage');
+  const plan = await reloaded.preview('run'); await reloaded.restore('run', { token: plan.token });
+  assert.equal(reloaded.observationCoverage('run').restored, true); assert.equal(reloaded.observationCoverage('run').complete, false);
+});
+
+test('legacy complete records and incomplete after snapshots never restore complete observation coverage', async t => {
+  const legacy = await fixture(t); await legacy.action(async () => {});
+  assert.equal(legacy.store.observationCoverage('run').complete, false); assert.equal(legacy.store.observationCoverage('run').failed, 1);
+  const reloaded = createWorkerCheckpointStore({ directory: legacy.backup }); await reloaded.list({ runId: 'run' });
+  assert.equal(reloaded.observationCoverage('run').complete, false);
+  const f = await fixture(t, { maxFileBytes: 1, onObservation: async () => {} });
+  await assert.rejects(f.action(() => f.write('a', 'large')), { code: 'CHECKPOINT_LIMIT' });
+  assert.equal(f.store.observationCoverage('run').pending, 1); assert.equal(f.store.observationCoverage('run').complete, false);
+  const next = createWorkerCheckpointStore({ directory: f.backup }); await next.list({ runId: 'run' });
+  assert.equal(next.observationCoverage('run').pending, 1); assert.equal(next.observationCoverage('run').complete, false);
 });
