@@ -1,5 +1,6 @@
 import { ticketSnapshot, ticketWaiting } from './ticket-state.mjs';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
+import { transientRefreshError } from './refresh-error.mjs';
 
 export const terminalActivityStates = new Set(['completed', 'failed', 'cancelled', 'closed']);
 export const archivedActivityTicket = row => row.kind === 'ticket' && ['completed', 'failed', 'closed'].includes(row.status);
@@ -70,11 +71,17 @@ export function createActivityStore(api, environment = {}) {
   const page = environment.document ?? globalThis.document;
   const schedule = environment.setTimeout ?? globalThis.setTimeout;
   const cancel = environment.clearTimeout ?? globalThis.clearTimeout;
-  const listeners = new Set(), ticketRequests = new Map(), revisions = new Map(), dirty = new Set();
-  let snapshot = { rows: null, error: '', loading: true, updated: null, connection: 'connecting', completeness: null };
+  const listeners = new Set(), ticketRequests = new Map(), revisions = new Map(), dirty = new Set(), failures = new Map();
+  let snapshot = { rows: null, error: '', loading: true, updated: null, connection: 'connecting', completeness: null, lastFailure: null };
   let tickets = new Map(), goals = new Map(), timer, mergeTimer, request, goalRequest, transport;
-  let generation = 0, subscription = 0, cursor = null, healthy = false, retryDelay = 10000, refreshPending = false, sourceFailed = false;
+  let generation = 0, subscription = 0, cursor = null, healthy = false, retryDelay = 10000, refreshPending = false, sourceFailed = false, goalsDirty = false, goalsLoaded = false;
   const publish = patch => { snapshot = { ...snapshot, ...patch }; for (const listener of listeners) listener(); };
+  const recovered = key => { failures.delete(key); return { error: [...failures.values()].join('；') }; };
+  const failed = (key, cause, manual = false, carrier = false) => {
+    const message = cause?.message || '任务读取失败';
+    if (manual || snapshot.rows === null || !(carrier || transientRefreshError(cause))) failures.set(key, message);
+    publish({ error: [...failures.values()].join('；'), lastFailure: { source: key, message, time: new Date().toISOString() } });
+  };
   const same = (a, b) => a && JSON.stringify(a) === JSON.stringify(b);
   const project = (row, kind, prior) => { const next = activityTask(row, kind); return same(prior, next) ? prior : next; };
   const rows = () => [...tickets.values(), ...goals.values()];
@@ -85,23 +92,23 @@ export function createActivityStore(api, environment = {}) {
   const cancelReads = () => {
     request?.abort(); request = null; goalRequest?.abort(); goalRequest = null;
     for (const controller of ticketRequests.values()) controller.abort(); ticketRequests.clear();
-    dirty.clear(); cancel(mergeTimer); mergeTimer = null;
+    dirty.clear(); goalsDirty = false; cancel(mergeTimer); mergeTimer = null;
   };
   const scheduleFallback = (ms = retryDelay) => {
     cancel(timer);
     if (!healthy && listeners.size && !page?.hidden && !request) timer = schedule(() => { cancel(timer); timer = null; if (sourceFailed && environment.connect) connect(); void pull(); }, ms);
   };
-  const readGoals = async () => {
+  const readGoals = async (manual = false) => {
     goalRequest?.abort(); const controller = new AbortController(), epoch = generation; goalRequest = controller;
     try {
       const response = await api('goalList', {}, controller.signal);
       if (!controller.signal.aborted && epoch === generation) {
-        goals = new Map((response.goals || []).map(row => [row.id, project(row, 'goal', goals.get(row.id))])); commit();
+        goalsLoaded = true; goalsDirty = false; goals = new Map((response.goals || []).map(row => [row.id, project(row, 'goal', goals.get(row.id))])); commit(recovered('goals'));
       }
-    } catch (cause) { if (!controller.signal.aborted && epoch === generation) publish({ error: cause.message || '持续目标读取失败' }); }
+    } catch (cause) { if (!controller.signal.aborted && epoch === generation) { goalsDirty = true; failed('goals', cause, manual || !goalsLoaded); if (!mergeTimer && listeners.size && !page?.hidden) mergeTimer = schedule(flushChanges, retryDelay); retryDelay = Math.min(retryDelay * 2, 60000); } }
     finally { if (goalRequest === controller) goalRequest = null; }
   };
-  const refreshTickets = async ids => {
+  const refreshTickets = async (ids, manual = true) => {
     const epoch = generation;
     await Promise.all([...new Set(ids)].map(async id => {
       const version = (revisions.get(id) || 0) + 1; revisions.set(id, version);
@@ -111,31 +118,33 @@ export function createActivityStore(api, environment = {}) {
         if (controller.signal.aborted || epoch !== generation || revisions.get(id) !== version) return;
         const row = response.tickets?.find(row => row.id === id);
         if (row) tickets.set(id, project(row, 'ticket', tickets.get(id))); else tickets.delete(id);
-        commit({ error: '' });
+        commit(recovered(`ticket:${id}`));
       } catch (cause) {
-        if (!controller.signal.aborted && epoch === generation) { dirty.add(id); publish({ error: cause.message || '任务更新失败' }); if (!mergeTimer && listeners.size && !page?.hidden) mergeTimer = schedule(flushChanges, retryDelay); retryDelay = Math.min(retryDelay * 2, 60000); }
+        if (!controller.signal.aborted && epoch === generation) { dirty.add(id); failed(`ticket:${id}`, cause, manual); if (!mergeTimer && listeners.size && !page?.hidden) mergeTimer = schedule(flushChanges, retryDelay); retryDelay = Math.min(retryDelay * 2, 60000); }
       } finally { if (ticketRequests.get(id) === controller) ticketRequests.delete(id); }
     }));
   };
   const flushChanges = () => {
     cancel(mergeTimer); mergeTimer = null;
     const ids = [...dirty]; dirty.clear();
-    if (ids.length) void refreshTickets(ids);
+    if (ids.length) void refreshTickets(ids, false);
+    if (goalsDirty) void readGoals();
   };
   const replace = value => {
     generation++; cancelReads(); cursor = value.cursor; healthy = true; sourceFailed = false; retryDelay = 10000; cancel(timer);
     tickets = new Map((value.tickets || []).map(row => [row.id, project(row, 'ticket', tickets.get(row.id))]));
-    commit({ loading: false, error: '', connection: 'live', completeness: value.completeness || null });
+    for (const key of failures.keys()) if (key !== 'goals') failures.delete(key);
+    commit({ loading: false, error: [...failures.values()].join('；'), connection: 'live', completeness: value.completeness || null });
     void readGoals();
   };
-  const carrierFailed = cause => {
-    healthy = false; publish({ connection: 'reconnecting', error: cause?.message || '连接中断，正在重连', loading: snapshot.rows === null }); scheduleFallback();
+  const carrierFailed = (cause, carrier = true) => {
+    healthy = false; failed('stream', cause, false, carrier); publish({ connection: 'reconnecting', loading: snapshot.rows === null }); scheduleFallback();
   };
   const connect = () => {
     const token = ++subscription;
     void transport?.dispose();
     const guarded = fn => value => { if (token === subscription && listeners.size) fn(value); };
-    transport = environment.connect({ replace: guarded(replace), update: guarded(update), carrierFailed: guarded(carrierFailed), failed: guarded(error => { sourceFailed = true; carrierFailed(error); }) });
+    transport = environment.connect({ replace: guarded(replace), update: guarded(update), carrierFailed: guarded(carrierFailed), failed: guarded(error => { sourceFailed = true; carrierFailed(error, false); }) });
     transport.start();
   };
   const update = frame => {
@@ -158,9 +167,9 @@ export function createActivityStore(api, environment = {}) {
     cursor = next;
     if (dirty.size && !mergeTimer) mergeTimer = schedule(flushChanges, 80);
   };
-  async function pull() {
+  async function pull(manual = false) {
     if (!listeners.size || page?.hidden) return;
-    if (request) { refreshPending = true; return; }
+    if (request) { if (!manual) { refreshPending = true; return; } request.abort(); request = null; }
     cancel(timer); refreshPending = false;
     const controller = new AbortController(), epoch = generation; request = controller;
     if (snapshot.rows === null) publish({ loading: true });
@@ -171,26 +180,27 @@ export function createActivityStore(api, environment = {}) {
       if (!controller.signal.aborted && epoch === generation) {
         const unique = new Map([...(archived.tickets || []), ...(active.tickets || [])].map(row => [row.id, row]));
         tickets = new Map([...unique].map(([id, row]) => [id, project(row, 'ticket', tickets.get(id))]));
-        goals = new Map((targetGoals.goals || []).map(row => [row.id, project(row, 'goal', goals.get(row.id))]));
-        retryDelay = 10000; commit({ error: '', connection: healthy ? 'live' : 'reconnecting' });
+        goalsLoaded = true; goals = new Map((targetGoals.goals || []).map(row => [row.id, project(row, 'goal', goals.get(row.id))]));
+        for (const key of failures.keys()) if (key !== 'stream') failures.delete(key);
+        retryDelay = 10000; commit({ error: [...failures.values()].join('；'), connection: healthy ? 'live' : 'reconnecting' });
       }
     } catch (cause) {
-      if (!controller.signal.aborted && epoch === generation) { retryDelay = Math.min(retryDelay * 2, 60000); publish({ error: cause.message || '任务读取失败' }); }
+      if (!controller.signal.aborted && epoch === generation) { retryDelay = Math.min(retryDelay * 2, 60000); failed('snapshot', cause, manual); }
     } finally {
       if (request === controller) { request = null; publish({ loading: false }); scheduleFallback(refreshPending ? 0 : retryDelay); }
     }
   }
   const refresh = async () => {
     if (sourceFailed && environment.connect) connect();
-    if (transport && healthy) { await Promise.all([refreshTickets([...tickets.keys()]), readGoals()]); }
-    else await pull();
+    if (transport && healthy) { await Promise.all([refreshTickets([...tickets.keys()]), readGoals(true)]); }
+    else await pull(true);
   };
   const changed = event => {
     if (event?.detail?.ticketId) { dirty.add(event.detail.ticketId); if (!mergeTimer) mergeTimer = schedule(flushChanges, 80); }
     else if (!healthy) void pull();
   };
   const visibility = () => {
-    cancel(timer);
+    cancel(timer); cancel(mergeTimer); mergeTimer = null;
     if (!page?.hidden) { if (sourceFailed && environment.connect) connect(); else if (transport) transport.restart(); else void pull(); }
   };
   return {

@@ -82,7 +82,7 @@ async function fixture() {
         const api=async(name,args)=>{
           window.apiCalls.push([name,args]);
           if(control.state==='loading') return new Promise(()=>{});
-          if(control.state==='error'||control.fail) throw new Error('测试连接暂不可用');
+          if(control.state==='error'||control.fail) throw new TypeError('Failed to fetch');
           if(name==='state') return {config};
           if(name==='ticketStop'){tickets.find(row=>row.id===args.ticketId).status='cancelled';return {};}
           if(name==='goalCancel'){goals.find(row=>row.id===args.id).status='cancelled';return {};}
@@ -160,10 +160,13 @@ test('activity board renders honest states, keyboard navigation and responsive t
     await page.waitForFunction(count=>window.apiCalls.filter(([name])=>name==='tickets').length>count,requestCount);
     assert(await oldButton.evaluate(node=>node.isConnected&&node===document.activeElement),'background polling preserves task DOM and focus');
     await page.evaluate(()=>{window.scenarioControl.fail=true;document.dispatchEvent(new Event('benchgo:assistant-changed'));});
+    await page.waitForTimeout(220);
+    assert.equal(await panel.getByRole('alert').count(),0,'background transport failures stay silent');
+    await panel.getByRole('button',{name:'刷新看板',exact:true}).click();
     await panel.getByRole('alert').first().waitFor();
     assert.equal(await panel.locator('[data-task-key]').count(),5,'failed refresh retains current work without archived tickets');
     assert.equal(await panel.locator('[data-task-key="ticket:done"], [data-task-key="ticket:failed"]').count(),0,'closed tickets live in archives instead of the active drawer');
-    assert(await panel.getByText('已保留上次的任务记录，请重试。',{exact:true}).isVisible());
+    assert(await panel.getByText('已保留上次的任务记录，请重试。',{exact:false}).isVisible());
     await page.evaluate(()=>{window.scenarioControl.fail=false;});
     await panel.getByRole('button',{name:'刷新看板',exact:true}).click();
     await panel.getByRole('alert').waitFor({state:'hidden'});
@@ -328,7 +331,8 @@ test('activity board updates Worker and child execution in place without declari
       if(captureDir)await page.screenshot({path:join(captureDir,`${dark?'dark':'light'}-${width}-execution.png`)});
     }
     await page.evaluate(()=>{window.scenarioControl.fail=true;document.dispatchEvent(new Event('benchgo:assistant-changed'));});
-    await detail.getByText('动态更新暂不可用，以下保留上次记录。',{exact:true}).waitFor();
+    await page.waitForTimeout(220);
+    assert.equal(await detail.getByText('动态更新暂不可用，以下保留上次记录。',{exact:true}).count(),0,'background transport failure keeps the detail quiet');
     assert.equal(await detail.locator('[data-worker-id]').count(),3,'refresh errors keep observed children with a stale-state notice');
     await page.evaluate(()=>{window.scenarioControl.fail=false;window.updateExecution('verifying');});
     await detail.getByText('动态更新暂不可用，以下保留上次记录。',{exact:true}).waitFor({state:'hidden'});
@@ -449,7 +453,7 @@ test('activity board keeps verification facts visible and distinguishes a stoppe
 
 
 
-test('healthy board scopes by true source session and preserves list DOM, scroll and focus across incremental details', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
+test('healthy board shows all tasks without scope controls and preserves list DOM, scroll and focus across incremental details', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
   const browser=await chromium.launch({headless:true,executablePath});
   try{
     const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'});
@@ -457,9 +461,9 @@ test('healthy board scopes by true source session and preserves list DOM, scroll
     await page.getByRole('button',{name:'展开看板',exact:true}).click();
     const panel=page.locator('.ba-activity-panel'), body=panel.locator('.ba-activity-body');
     await panel.locator('[data-task-key="ticket:running"]').waitFor();
-    assert.equal(await panel.locator('[data-task-key]').count(),2,'session view contains only tickets dispatched from the actual current session');
+    assert.equal(await panel.locator('[data-task-key]').count(),23,'all current work is shown across true source sessions');
+    assert.equal(await panel.getByRole('tab',{name:/^(本会话|全部)$/}).count(),0,'scope switch is removed');
     assert.equal(await page.evaluate(()=>window.apiCalls.filter(([name])=>name==='tickets').length),0,'opening baseline is used directly');
-    await panel.getByRole('tab',{name:'全部',exact:true}).click();
     await panel.locator('[data-task-key="ticket:stable-4"]').waitFor();
     const row=panel.locator('[data-task-key="ticket:stable-4"]'), button=row.getByRole('button');
     await button.scrollIntoViewIfNeeded();await button.focus();

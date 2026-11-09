@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createActivityStore } from '../client/activity-data.mjs';
+import { transientRefreshError } from '../client/refresh-error.mjs';
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function setup(api) {
   const document = new EventTarget(); document.hidden = false;
@@ -63,4 +64,63 @@ test('disposed subscriptions cannot publish late baselines into a reopened view'
   h.sink.replace({ cursor: 0, bootId: 'restarted', tickets: [row('new')] }); await flush();
   old.replace({ cursor: 9, tickets: [row('late')] }); await flush();
   assert.equal(h.store.getSnapshot().rows[0].id, 'new'); stop();
+});
+
+test('background carrier and ticket retries retain snapshots silently; manual and domain failures remain visible', async () => {
+  let failure, title = '原记录';
+  const h = setup(async (name, args) => {
+    if (name === 'goalList') return { goals: [] };
+    if (failure) throw failure;
+    return { tickets: [row(args.ticketId, title)] };
+  });
+  h.sink.replace({ cursor: 0, tickets: [row('a', title), row('b')] }); await flush();
+  const previous = h.store.getSnapshot().rows;
+  h.sink.carrierFailed(new Error('载体断线'));
+  assert.strictEqual(h.store.getSnapshot().rows, previous);
+  assert.equal(h.store.getSnapshot().error, '');
+  assert.equal(h.store.getSnapshot().lastFailure.message, '载体断线');
+  h.sink.replace({ cursor: 0, tickets: [row('a', title), row('b')] }); await flush();
+  failure = new TypeError('Failed to fetch');
+  h.sink.update({ cursor: 1, entries: [{ seq: 1, ticketId: 'a', kind: 'execution' }] }); h.run(80); await flush();
+  assert.equal(h.store.getSnapshot().error, '');
+  assert.equal(h.store.getSnapshot().rows[0].title, title);
+  assert.equal(h.store.getSnapshot().lastFailure.source, 'ticket:a');
+  assert([...h.timers.values()].some(delay => delay >= 10000 && delay <= 60000));
+  await h.store.refreshTickets(['a']);
+  assert.equal(h.store.getSnapshot().error, 'Failed to fetch');
+  failure = new Error('工单版本冲突');
+  h.sink.update({ cursor: 2, entries: [{ seq: 2, ticketId: 'a', kind: 'execution' }] }); h.run(10000); await flush();
+  await h.store.refreshTickets(['a'], false);
+  assert.equal(h.store.getSnapshot().error, '工单版本冲突');
+  failure = null; title = '恢复后的记录'; await h.store.refreshTickets(['b']);
+  assert.equal(h.store.getSnapshot().error, '工单版本冲突', 'unrelated success cannot hide a domain error');
+  await h.store.refreshTickets(['a']);
+  assert.equal(h.store.getSnapshot().error, '');
+  assert.equal(h.store.getSnapshot().rows[0].title, title); h.stop();
+});
+
+test('first snapshot and terminal stream failures expose the actual error', async () => {
+  const h = setup(async () => ({ goals: [] }));
+  h.sink.carrierFailed(new Error('首次连接失败'));
+  assert.equal(h.store.getSnapshot().rows, null);
+  assert.equal(h.store.getSnapshot().error, '首次连接失败');
+  h.sink.replace({ cursor: 0, tickets: [] }); await flush();
+  h.sink.failed(new Error('执行事实协议不兼容'));
+  assert.equal(h.store.getSnapshot().error, '执行事实协议不兼容'); h.stop();
+});
+
+test('silent refresh only recognizes transport failures and never domain, authentication or malformed-response errors', () => {
+  for (const status of [408, 425, 429, 502, 503, 504]) assert(transientRefreshError(Object.assign(new Error('temporary'), { code: 'HTTP_ERROR', status })));
+  for (const status of [400, 401, 403, 404, 409, 422, 500]) assert.equal(transientRefreshError(Object.assign(new Error('domain'), { code: 'HTTP_ERROR', status })), false);
+  assert.equal(transientRefreshError(Object.assign(new Error('bad response'), { code: 'INVALID_JSON_RESPONSE' })), false);
+  assert.equal(transientRefreshError(new Error('offline')), false);
+});
+
+test('a ticket baseline cannot disguise the first failed goal read; bounded retry recovers that resource', async () => {
+  let fail = true;
+  const h = setup(async () => { if (fail) throw new TypeError('Failed to fetch'); return { goals: [] }; });
+  h.sink.replace({ cursor: 0, tickets: [] }); await flush();
+  assert.equal(h.store.getSnapshot().error, 'Failed to fetch');
+  fail = false; h.run(10000); await flush();
+  assert.equal(h.store.getSnapshot().error, ''); h.stop();
 });

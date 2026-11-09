@@ -96,7 +96,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const [stopping, setStopping] = useState(null), [actionError, setActionError] = useState(null), [selectedKey, setSelectedKey] = useState(null);
   const [tab, setTab] = useState('tasks'), [fetchedIdentity, setIdentity] = useState(null), [activeOpen, setActiveOpen] = useState(true);
-  const [scope, setScope] = useState('session'), [approvalCount, setApprovalCount] = useState(null);
+  const [approvalCount, setApprovalCount] = useState(null);
   const [reviewStarted, setReviewStarted] = useState(false);
   const listPosition = useRef({ top: 0, opener: null });
   const [identityError, setIdentityError] = useState(''), [identityLoading, setIdentityLoading] = useState(false);
@@ -169,7 +169,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
   };
   const selected = rows?.find(row => row.key === selectedKey);
   const selectedWaiting = selected?.kind === 'ticket' ? ticketWaiting(selected) : null;
-  const sorted = (rows || []).filter(row => !archivedActivityTicket(row) && !row.taskMeta?.deleted && (!sessionId || scope === 'all' || row.mandate?.source?.sessionId === sessionId)).sort((a, b) => (dateValue(b.time)?.getTime() || 0) - (dateValue(a.time)?.getTime() || 0));
+  const sorted = (rows || []).filter(row => !archivedActivityTicket(row) && !row.taskMeta?.deleted).sort((a, b) => (dateValue(b.time)?.getTime() || 0) - (dateValue(a.time)?.getTime() || 0));
   const active = sorted.filter(row => activeActivityStates(row.status));
   const attention = sorted.filter(row => attentionActivityStates.has(row.status));
   const rest = sorted.filter(row => !activeActivityStates(row.status) && !attentionActivityStates.has(row.status));
@@ -208,9 +208,9 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
       <nav hidden={!!selected} className="ba-board-tabs" aria-label="看板分页"><SegmentedControl options={tabs} value={tab} onChange={setTab} label="看板分页" panelId={`${id}-content`} tabIdPrefix={`${id}-tab`} /></nav>
       <div hidden={!!selected} id={`${id}-content`} role="tabpanel" aria-labelledby={`${id}-tab-${tab}`} tabIndex={0} className="ba-activity-body ba-board-body">
         {actionError && <ResourceState kind="error" title="操作未能完成" description={actionError.message} actionLabel="重新读取" onAction={async () => { setActionError(null); await refresh(); }} />}
-        {error && tab !== 'identity' && <ResourceState kind="error" title="暂时无法更新任务" description={rows !== null ? '已保留上次的任务记录，请重试。' : '任务记录暂时无法读取，请检查连接后重试。'} onAction={refresh} />}
+        {error && tab === 'tasks' && <ResourceState kind="error" title="暂时无法更新任务" description={`${rows !== null ? '已保留上次的任务记录，请重试。' : '任务记录暂时无法读取，请检查连接后重试。'} ${error}`} onAction={refresh} />}
         {completeness?.truncated && <p className="ba-activity-detail-note" role="status">当前仅同步了部分工单，未读取到的记录仍未知。</p>}
-        {tab === 'tasks' && <>{sessionId && <div className="ba-board-scope"><SegmentedControl options={[{ value: 'session', label: '本会话' }, { value: 'all', label: '全部' }]} value={scope} onChange={setScope} label="工单范围" /></div>}{rows === null && !error && loadingState}
+        {tab === 'tasks' && <>{rows === null && !error && loadingState}
           {attention.length > 0 && <section className="ba-board-section"><h3 className="ba-board-day">待处理<span>{attention.length}</span></h3>{attention.map(renderRow)}</section>}
           {rows !== null && active.length > 0 && <section className="ba-board-section"><button type="button" className="ba-board-section-head" aria-expanded={activeOpen} aria-controls={`${id}-active`} onClick={() => setActiveOpen(value => !value)}><span>进行中</span><span className="ba-board-section-count">{active.length}</span><UIIcon name="chevronDown" size={13} /></button><div id={`${id}-active`} hidden={!activeOpen}>{active.map(renderRow)}</div></section>}
           {rows !== null && [...groups].map(([label, items]) => <section className="ba-activity-day ba-board-section" key={label}><h3 className="ba-board-day">{label}<span>{items.length}</span></h3>{items.map(renderRow)}</section>)}

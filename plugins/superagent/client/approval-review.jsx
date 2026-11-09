@@ -6,6 +6,7 @@ import { ResourceState } from './resource-state.jsx';
 import { retainAssistantSession } from './session-retain.mjs';
 import { reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewDisplayText, reviewSessionOpenError, reviewRequestKey, sameReviewOrigin } from './approval-review.mjs';
 import css from './approval-review.css';
+import { transientRefreshError } from './refresh-error.mjs';
 
 const ApprovalContext = createContext(null), EMPTY_STATUSES = new Map();
 export const REVIEW_APPROVAL_SLOT = 'benchgo.assistant.review-approval';
@@ -63,6 +64,8 @@ function releaseConnection(item) { item.controller.abort(); item.unsubscribe?.()
 export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact = false, active = true, onCountChange }) {
   const [origins, setOrigins] = useState(null), [error, setError] = useState(''), [generation, setGeneration] = useState(0);
   const [connections, setConnections] = useState(new Map()), [selectedKey, setSelectedKey] = useState(null);
+  const [lastFailure, setLastFailure] = useState('');
+  const originsSnapshot = useRef(null), manualRetry = useRef(false);
   const source = ctx.uiSession?.sessionStatus;
   const statuses = useSyncExternalStore(listener => source?.subscribe(listener) || (() => {}), () => source?.getSnapshot() || EMPTY_STATUSES);
   const retained = useRef(new Map()), current = useRef([]), back = useRef(null), navigation = useRef(null);
@@ -80,16 +83,20 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact 
     if (saved.opener.isConnected) saved.opener.focus({ preventScroll: true });
     navigation.current = null;
   }, [selectedKey]);
-  const retry = () => { for (const item of retained.current.values()) releaseConnection(item); retained.current.clear(); setConnections(new Map()); setOrigins(null); setError(''); setGeneration(value => value + 1); };
+  const retry = () => {
+    for (const [id, item] of retained.current) if (item.error) { releaseConnection(item); retained.current.delete(id); }
+    manualRetry.current = true; setGeneration(value => value + 1);
+  };
   useEffect(() => {
-    const controller = new AbortController(); let timer, inFlight = false, dirty = false;
+    const controller = new AbortController(); let timer, inFlight = false, dirty = false, manual = manualRetry.current;
+    manualRetry.current = false;
     const schedule = () => { clearTimeout(timer); timer = setTimeout(tick, 150); };
     const tick = async () => {
       if (controller.signal.aborted || document.hidden) return;
       if (inFlight) { dirty = true; return; } inFlight = true;
-      try { const response = await api('approvalOrigins', {}, controller.signal); if (!controller.signal.aborted) { setOrigins(response.origins || []); setError(''); } }
-      catch (cause) { if (!controller.signal.aborted) { setOrigins(null); setError(reviewConnectionError(cause)); } }
-      finally { inFlight = false; if (dirty && !controller.signal.aborted) { dirty = false; schedule(); } }
+      try { const response = await api('approvalOrigins', {}, controller.signal); if (!controller.signal.aborted) { originsSnapshot.current = response.origins || []; setOrigins(originsSnapshot.current); setError(''); setLastFailure(''); } }
+      catch (cause) { if (!controller.signal.aborted) { const message = reviewConnectionError(cause); setLastFailure(message); if (manual || originsSnapshot.current === null || !transientRefreshError(cause)) setError(message); } }
+      finally { manual = false; inFlight = false; if (dirty && !controller.signal.aborted) { dirty = false; schedule(); } }
     };
     const unsubscribe = source?.subscribe(schedule);
     document.addEventListener('benchgo:assistant-changed', schedule); document.addEventListener('visibilitychange', schedule);
@@ -143,9 +150,9 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact 
     const pending = statuses.get(item.origin.sessionId)?.pendingInteraction;
     return pending && reviewRequestKey(item.origin, pending) === selectedKey;
   });
-  const count = error || origins === null || connecting || connectionErrors.length ? null : entries.length;
+  const count = error || lastFailure || origins === null || connecting || connectionErrors.length ? null : entries.length;
   useEffect(() => { onCountChange?.(count); }, [count, onCountChange]);
-  return <section className={`ba-approval-review${compact ? ' is-compact' : ''}`} aria-label="审核" hidden={!active} onKeyDown={event => {
+  return <section className={`ba-approval-review${compact ? ' is-compact' : ''}`} aria-label="审核" data-sync-state={lastFailure ? 'reconnecting' : 'ready'} data-sync-error={lastFailure || undefined} hidden={!active} onKeyDown={event => {
     if (selectedKey && event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); setSelectedKey(null); }
   }}><style>{css}</style>
     <header className="ba-review-heading"><div>{selectedKey ? <Button ref={back} type="button" variant="ghost" onClick={() => setSelectedKey(null)}><UIIcon name="chevronLeft" size={16} />返回审核列表</Button> : <><h2>审核 <span>{count ?? (entries.length ? `${entries.length}+` : '—')}</span></h2><p>查看待授权的操作，决定这一次是否执行。</p></>}</div><Button type="button" variant="ghost" aria-label="刷新审核" onClick={retry}><UIIcon name="refresh" size={16} />刷新</Button></header>

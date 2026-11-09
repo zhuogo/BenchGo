@@ -51,7 +51,7 @@ async function fixture() {
         if(action==='ensure'){window.trace.push('ensure:'+input.threadId);if(input.threadId==='side'&&window.mode==='ensure-error')throw Error('对话准备失败');
           if(input.threadId==='side'&&window.mode==='ensure-wait')return new Promise(resolve=>{window.completeEnsure=resolve;signal?.addEventListener('abort',()=>window.trace.push('abort-ensure:side'),{once:true});});
           return {sessionId:input.threadId==='side'?(window.mode==='replacement'?'router-new':'router-side'):'question-session'};}
-        if(window.mode==='loading')return new Promise(()=>{});if(window.mode==='error')throw Error('审核服务暂时不可用');
+        if(window.mode==='loading')return new Promise(()=>{});if(window.mode==='transient')throw new TypeError('Failed to fetch');if(window.mode==='error')throw Error('审核服务暂时不可用');
         return {origins:window.mode==='empty'?[]:input.sessionId?origins.filter(origin=>origin.sessionId===input.sessionId):origins};};
       let active=true;const scenarioKey=++serial;const counts=value=>window.reviewCounts.push(value);
       const render=()=>root.render(<div key={scenarioKey} className='ba-root'><style>{hostCss}{css}</style><main style={{padding:24,maxWidth:1120,margin:'auto',boxSizing:'border-box'}}><ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={()=> <CardSlot/>} compact={mode==='compact'} active={active} onCountChange={counts}/>{mode==='double'&&<ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={()=> <CardSlot/>}/>}</main></div>);
@@ -124,9 +124,25 @@ test('review Tab renders official Worker and Router approvals in four states; de
     assert.deepEqual(await page.evaluate(() => window.answers), [{ sessionId: 'worker-session', value: 'rejected' }]);
     await page.evaluate(() => window.renderScenario('data'));
     await openWorker();
+    const approval = await page.locator('[data-approval-key]').elementHandle();
+    const releasedBefore = await page.evaluate(() => window.releases.length);
+    await page.evaluate(() => { window.mode = 'transient'; document.dispatchEvent(new Event('benchgo:assistant-changed')); });
+    await page.waitForFunction(() => document.querySelector('.ba-approval-review').dataset.syncState === 'reconnecting');
+    assert.equal(await page.getByText('审核列表暂时无法读取', { exact: true }).count(), 0,'background transport read stays silent');
+    assert(await approval.evaluate(node => node.isConnected),'the original approval remains mounted');
+    assert.equal(await page.evaluate(() => window.releases.length),releasedBefore,'background reconnect retains official sessions');
+    assert.equal(await page.evaluate(() => window.reviewCounts.at(-1)),null,'a stale origin index is not reported as complete');
+    await page.getByRole('button', { name: '允许本次', exact: true }).click();
+    await page.getByText('Failed to fetch', { exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.answers),[],'a user decision still revalidates its origin and exposes failure');
+    await page.getByRole('button', { name: '刷新审核', exact: true }).click();
+    await page.getByText('审核列表暂时无法读取', { exact: true }).waitFor();
+    await page.evaluate(() => { window.mode = 'data'; });
+    await page.getByRole('button', { name: '刷新审核', exact: true }).click();
+    await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();
     await page.evaluate(() => { window.mode = 'error'; document.dispatchEvent(new Event('benchgo:assistant-changed')); });
     await page.getByText('审核列表暂时无法读取', { exact: true }).waitFor();
-    await page.waitForFunction(() => window.releases.includes('worker-session') && window.releases.includes('router-side'));
+    assert.equal(await page.evaluate(() => window.releases.length),releasedBefore,'a read error does not dispose valid official sessions');
     assert.equal(await page.locator('[data-approval-key]').count(), 0);
     await page.evaluate(() => window.renderScenario('error'));
     await page.getByRole('button', { name: '刷新审核', exact: true }).waitFor();
