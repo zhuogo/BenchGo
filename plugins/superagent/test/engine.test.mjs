@@ -2096,13 +2096,16 @@ async function stateReportFixture(t, script, options = {}) {
   return { ...f, store, directory, agent, ticket, assignment, delivery, settle, learningWrites: () => learningWrites };
 }
 
-async function approvalReminderFixture(t, script) {
-  const f = await stateReportFixture(t, script);
+async function approvalReminderFixture(t, script, options) {
+  const f = await stateReportFixture(t, script, options);
   const worker = f.ctx.sessions.create();
   const assignment = { id: 'approval-assignment', ticketId: f.ticket.id, state: 'claimed', owner: 'owner', fence: 1, leaseUntil: Date.now() + 60000 };
   const run = { id: 'approval-run', owner: 'owner', fence: 1, sessionId: String(worker.id), state: 'running' };
   f.store.orchestration.getAssignment = () => assignment;
   f.store.orchestration.runs = () => [run];
+  // This fixture owns an in-memory assignment; the real store snapshot closure
+  // must not try to resolve it from the deliberately empty SQLite ledger.
+  f.store.orchestration.appliedTicketSnapshot = () => structuredClone(f.ticket);
   const identity = { assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId, callId: 'approval-call', actionId: 'approval-action' };
   worker.append('turn/start', { turn: 1 });
   worker.append('assistant/message', { turn: 1, message: { content: [{ type: 'tool-call', id: identity.callId, name: 'assistant_external_action',
@@ -2138,6 +2141,62 @@ test('execution uncertainty proactively becomes one natural Router message using
   await f.agent.whenIdle(); assert.equal(f.requests.length, 2, 'existing sixth failed check creates one escalation');
   await f.engine.send({ text: '先回答这个问题', requestId: 'next-user' }); await f.agent.whenIdle();
   assert.ok(f.requests.at(-1).tools.some(row => row.name === 'assistant_delegate'), 'normal dialogue regains normal Router tools');
+});
+
+for (const boundary of ['valid', 'stopped', 'revoked', 'fence']) test(`recovery coordination crosses both official execution gates only with current authority (${boundary})`, async t => {
+  let f, executions = 0;
+  f = await stateReportFixture(t, (_request, count) => {
+    if (count !== 1) return text('资料整理的保存记录已经核对。');
+    if (boundary === 'stopped') f.ticket.status = 'cancelled';
+    if (boundary === 'revoked') f.ticket.mandate.policyVersion = 'revoked';
+    if (boundary === 'fence') f.assignment.fence++;
+    return [{ type: 'block-start', index: 0, blockType: 'tool-call' },
+      { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'recover-check', name: 'assistant_execution_manage',
+        arguments: JSON.stringify({ ticketId: f.ticket.id, operation: 'check-now' }) } },
+      { type: 'finish', reason: { kind: 'tool-calls' } }];
+  }, { setupTools(scope, { toolEnabled, agent, threadId }) {
+    scope.tools.register({ name: 'assistant_execution_manage', description: 'Inspect the original execution',
+      parameters: { type: 'object' }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      async execute(args) {
+        const signal = await f.engine.executionRecoveryContext(threadId, agent, args.ticketId);
+        assert.equal(signal.ticketId, f.ticket.id); executions++; return 'inspection scheduled';
+      } }, { when: () => toolEnabled('assistant_execution_manage') });
+  } });
+  await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id });
+  for (let i = 0; i < 100 && !f.requests.length; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  await f.agent.whenIdle();
+  const result = f.agent.session.snapshotEvents().find(event => event.type === 'tool/result' && event.data.message.toolCallId === 'recover-check');
+  assert.ok(result, 'the actual official tool dispatcher returned a terminal result');
+  assert.equal(result.data.message.isError, boundary !== 'valid', JSON.stringify(result));
+  assert.equal(executions, boundary === 'valid' ? 1 : 0);
+  if (boundary === 'valid') assert.match(JSON.stringify(result), /inspection scheduled/);
+});
+
+for (const kind of ['state', 'result', 'approval', 'recovery']) test(`internal ${kind} notice cannot execute a tool outside its recovery whitelist`, async t => {
+  let executions = 0;
+  const name = kind === 'recovery' ? 'assistant_delegate' : 'assistant_execution_manage';
+  const script = (_request, count) => count === 1
+    ? [{ type: 'block-start', index: 0, blockType: 'tool-call' },
+      { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'forbidden-coordination', name, arguments: '{}' } },
+      { type: 'finish', reason: { kind: 'tool-calls' } }]
+    : text('已按真实记录说明当前进展。');
+  const options = { workerResult: kind === 'result', setupTools(scope, { toolEnabled }) {
+    scope.tools.register({ name, description: name, parameters: { type: 'object' },
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      execute() { executions++; return 'MUST NOT EXECUTE'; } }, { when: () => toolEnabled(name) });
+  } };
+  const f = kind === 'approval' ? await approvalReminderFixture(t, script, options) : await stateReportFixture(t, script, options);
+  if (kind === 'recovery') await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id });
+  else if (kind === 'approval') {
+    const receipt = await f.engine.notifyApprovalPending(f.identity);
+    assert.notEqual(receipt.status, 'suppressed', JSON.stringify(receipt));
+  }
+  else await f.settle();
+  for (let i = 0; i < 100 && !f.requests.length; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  await f.agent.whenIdle();
+  const result = f.agent.session.snapshotEvents().find(event => event.type === 'tool/result' && event.data.message.toolCallId === 'forbidden-coordination');
+  assert.ok(result); assert.equal(result.data.message.isError, true);
+  assert.equal(executions, 0, 'no handler executes merely because a model named the tool');
 });
 
 for (const change of ['stopped', 'revoked', 'fence']) test(`execution recovery signal suppresses stale ${change} facts before publication`, async t => {
