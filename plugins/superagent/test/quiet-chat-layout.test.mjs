@@ -134,6 +134,49 @@ test('Router streaming message keeps its mounted identity through official settl
   } finally { await browser.close(); }
 });
 
+test('streaming reveals only new Markdown blocks without replaying existing text or final handoff', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html=await fixture(), browser=await chromium.launch({headless:true,executablePath});
+  try {
+    const page=await browser.newPage({viewport:{width:390,height:700},reducedMotion:'no-preference'});
+    await page.setContent(html);
+    await page.evaluate(()=>{
+      window.blockReveals=[];
+      document.addEventListener('animationstart',event=>{if(event.animationName==='ba-chat-reveal') window.blockReveals.push(event.target.tagName)});
+      window.renderHandoff('stream','text','第一段正文');
+    });
+    const message=page.locator('[data-chat-key="message:reply:human"]');
+    await message.getByText('第一段正文',{exact:true}).waitFor();
+    await page.waitForFunction(()=>window.blockReveals.length===1);
+    await page.evaluate(()=>window.firstRevealParagraph=document.querySelector('[data-chat-key="message:reply:human"] p'));
+    await page.evaluate(()=>window.renderHandoff('stream','text','第一段正文，继续补充。'));
+    await message.getByText('第一段正文，继续补充。',{exact:true}).waitFor();
+    assert(await message.locator('p').evaluate(node=>node===window.firstRevealParagraph),'appending text keeps its actual paragraph node');
+    assert.deepEqual(await page.evaluate(()=>window.blockReveals),['P'],'token additions never restart the existing block animation');
+    await page.evaluate(()=>window.renderHandoff('stream','text','第一段正文，继续补充。\n\n新增段落。'));
+    await message.getByText('新增段落。',{exact:true}).waitFor();
+    await page.waitForFunction(()=>window.blockReveals.length===2);
+    const wrapperMotion=await message.evaluate(node=>[node,node.querySelector('.ba-chat-content')].map(element=>getComputedStyle(element).animationName));
+    assert.deepEqual(wrapperMotion,['none','none'],'the message and bubble never animate as a whole');
+    for(const phase of ['completed','history']) {
+      await page.evaluate(async phase=>{
+        window.renderHandoff(phase,'text','第一段正文，继续补充。\n\n新增段落。');
+        await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
+      },phase);
+      assert.deepEqual(await page.evaluate(()=>window.blockReveals),['P','P'],'final settlement never replays reveal animations');
+      assert.deepEqual(await message.locator('p').evaluateAll(nodes=>nodes.map(node=>getComputedStyle(node).opacity)),['1','1']);
+    }
+    await page.emulateMedia({reducedMotion:'reduce'});
+    await page.evaluate(()=>window.renderHandoff('stream','text','第一段正文，继续补充。\n\n新增段落。\n\n减少动态效果。'));
+    await message.getByText('减少动态效果。',{exact:true}).waitFor();
+    assert.deepEqual(await message.locator('p').evaluateAll(nodes=>nodes.map(node=>getComputedStyle(node).animationName)),['none','none','none'],'reduced motion disables every reply reveal');
+    if(captureDir) {
+      await mkdir(captureDir,{recursive:true});
+      await page.screenshot({path:join(captureDir,'streaming-reduced-motion.png'),fullPage:true});
+      await writeFile(join(captureDir,'streaming-animation-evidence.json'),JSON.stringify(await page.evaluate(()=>({animationStarts:window.blockReveals,firstParagraphRetained:window.firstRevealParagraph===document.querySelector('[data-chat-key="message:reply:human"] p')})),null,2));
+    }
+  } finally { await browser.close(); }
+});
+
 test('Router natural chat excludes execution metadata, deduplicates delivery and retains real questions', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
   const html = await fixture();
   const browser = await chromium.launch({ headless:true, executablePath });
@@ -234,8 +277,8 @@ async function fixture() {
         const home={sessionId:phase==='switch-session'?'other-session':'turn-session',threadId:'main',assistantName:'BenchGo',history};
         root.render(<div className="ba-root ba-official-conversation" data-assistant-chat=""><div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll=""><QuietChat home={home} session={{running:!ended}} chat={{legacy,timeline}} /></div></div></div>);
       };
-      window.renderHandoff = (phase, kind) => {
-        const text = '同一条完整回复\\n\\n'+'这是一段完整的长回复，用于核对最终接管前后相同内容的折行与滚动位置。'.repeat(8)+'\\n\\n~~~js\\nconst message = "BenchGo keeps your messages readable";\\nconsole.log(message);\\n~~~\\n\\n| 项目 | 结果 |\\n| --- | --- |\\n| 暗主题 | 文字和气泡清晰可辨 |\\n| 操作 | 复制、表情、用量 |';
+      window.renderHandoff = (phase, kind, textOverride) => {
+        const text = textOverride || '同一条完整回复\\n\\n'+'这是一段完整的长回复，用于核对最终接管前后相同内容的折行与滚动位置。'.repeat(8)+'\\n\\n~~~js\\nconst message = "BenchGo keeps your messages readable";\\nconsole.log(message);\\n~~~\\n\\n| 项目 | 结果 |\\n| --- | --- |\\n| 暗主题 | 文字和气泡清晰可辨 |\\n| 操作 | 复制、表情、用量 |';
         const user = { id:'human', role:'user', seq:8, text:'请回复', time:1793808000000 };
         const reply = { id:'reply:human', requestId:'human', role:'assistant', kind:'final', text, time:1793808060000 };
         const running = ['stream','settled'].includes(phase);
@@ -256,7 +299,7 @@ async function fixture() {
         { id:'reply', role:'assistant', kind:'final', text:'已经记下。接下来按计划推进。', usage:{inputTokens:120,outputTokens:32}, time:1793808001000 },
         { id:'question:c1', role:'user', kind:'question-reply', questions:[{id:'use',question:'这台服务器主要用来做什么？',header:'用途'},{id:'old',question:'旧服务器怎么处理？'},{id:'note',question:'还有补充吗？'}], answers:[{id:'use',selected:['网站','文件共享']},{id:'old',selected:[],custom:'先保留观察'},{id:'note',selected:[]}], text:'用途：网站、文件共享', time:1793808001500 },
         { id:'long', role:'user', text:'请检查暗主题下输入消息的可读性。\\n长消息也要清楚显示，工具栏不能遮住文字。'.repeat(3), time:1793808002000 },
-        { id:'code', role:'assistant', kind:'final', text:'检查结果：\\n\\n~~~js\\nconst message = "BenchGo keeps your messages readable";\\nconsole.log(message);\\n~~~\\n\\n| 项目 | 结果 |\\n| --- | --- |\\n| 暗主题 | 文字和气泡清晰可辨 |\\n| 操作 | 复制、表情、用量 |', time:1793808003000 }
+        { id:'code', role:'assistant', kind:'final', text:'检查结果：\\n\\n~~~js\\nconst message = "BenchGo keeps your messages readable even when a complete source line extends beyond a narrow conversation viewport";\\nconsole.log(message);\\n~~~\\n\\n| 项目 | 结果 |\\n| --- | --- |\\n| 暗主题 | 文字和气泡清晰可辨 |\\n| 操作 | 复制、表情、用量 |\\n\\n| 供应商模型标识 | 上下文容量 | 输入类型 | 输出类型 | 实际可用状态 |\\n| --- | --- | --- | --- | --- |\\n| provider/model-version-2026-11-preview | 128000 tokens | 文字与文件内容 | 文字与结构化数据 | 已连接并完成真实请求验证 |', time:1793808003000 }
       ];
       window.renderScenario = (state = 'data') => {
         window.apiCalls = [];
@@ -374,6 +417,13 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no page overflow');
       assert(await page.locator('.ba-chat-feed').evaluate(node=>node.scrollWidth<=node.clientWidth),'no chat horizontal overflow');
       if((containerWidth||width)<=390) {
+        const wideTable=page.locator('[data-chat-key="message:code"] .md-table-wide');
+        assert(await wideTable.evaluate(node=>node.scrollWidth>node.clientWidth),'comparison tables scroll within the readable bubble');
+        await wideTable.focus();
+        assert.equal(await wideTable.evaluate(node=>getComputedStyle(node).overflowX),'scroll','the wide table remains keyboard scrollable');
+        await page.locator('.ba-chat-feed').focus();
+      }
+      if((containerWidth||width)<=390) {
         assert.equal(await short.locator('.ba-message-time-label').evaluate(node=>getComputedStyle(node).display),'none','narrow chat uses the time icon even in a wide window');
         assert.notEqual(await short.locator('.ba-message-time-icon').evaluate(node=>getComputedStyle(node).display),'none','full timestamp remains accessible through the time icon');
         assert(await short.locator('time').getAttribute('aria-label'),'time icon has a full accessible timestamp');
@@ -397,6 +447,7 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
       const next=page.locator('[data-chat-key="message:reply"]');
       const nextBounds=await next.boundingBox(), shortBounds=await short.boundingBox();
       assert(nextBounds.y-(shortBounds.y+shortBounds.height)<=20,'messages must not retain the old blank toolbar row');
+      await short.hover();
       await shot(page,`${dark?'dark':'light'}-${width}${containerWidth?'-container-'+containerWidth:''}`);
       const toolbarBounds=await short.locator('.ba-message-toolbar').boundingBox();
       await page.mouse.move(toolbarBounds.x+toolbarBounds.width/2,toolbarBounds.y+toolbarBounds.height/2,{steps:8});
