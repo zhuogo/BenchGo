@@ -37,7 +37,8 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
   const ownerAgent = { id: 'owner', status: 'running', session: { header: {}, snapshotEvents: () => [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'original', source: { kind: 'user' }, content: [{ type: 'text', text: 'complete work' }] } }] } };
   const ctx = { workspaceRegistry: { list: () => [{ id: 'project', path: directory }] }, llm: { resolveModelInfo: async (provider, id) => ({ provider, id }) } };
   ctx.agents = { get: () => ownerAgent, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) };
-  const service = createDesktopDelegationService({ ctx, database, readPolicy: async () => ({ desktopVersion: 'policy', workerModels: [{ providerId: 'opaque', modelId: 'exact' }], projects: ctx.workspaceRegistry.list() }) });
+  const service = createDesktopDelegationService({ ctx, database, readPolicy: async () => ({ desktopVersion: 'policy', workerModels: [{ providerId: 'opaque', modelId: 'exact' }], projects: ctx.workspaceRegistry.list() }),
+    assessScope: async () => ({ decision: { outcome: 'delegate', reason: 'Fixture confirms the Goal leaf scope' }, routing: null }) });
   let calls = 0, fail = true;
   const delegation = { delegate: async (...args) => { calls++; if (fail && calls === 2) throw new Error('interrupted'); return service.delegate(...args); } };
   const child = { objective: 'leaf', projectId: 'project', text: 'work', ...(budgeted ? { acceptance: 'evidence' } : {}) };
