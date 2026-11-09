@@ -320,11 +320,14 @@ test('changed live source or capabilities during scope checking prevents admissi
 });
 
 test('invalid, invented-tool and failed model responses cannot become a successful admission', async t => {
-  for (const outcome of ['invalid-json', 'unknown-tool', 'provider-failure']) {
+  for (const outcome of ['invalid-json', 'unknown-tool', 'provider-failure', 'delegate-with-tools', 'unconfirmed-with-tools']) {
     const f = await fixture(t);
     f.ctx.llm.stream = async function* () {
       if (outcome === 'provider-failure') throw Object.assign(new Error('PRIVATE provider body'), { code: 'POLICY_DENIED' });
-      yield { type: 'text-delta', text: outcome === 'invalid-json' ? 'not json' : JSON.stringify({ outcome: 'direct', reason: 'read', toolNames: ['unregistered_scan'] }) };
+      const decision = outcome.endsWith('-with-tools')
+        ? { outcome: outcome.split('-')[0], reason: 'scope conclusion', toolNames: [] }
+        : { outcome: 'direct', reason: 'read', toolNames: ['unregistered_scan'] };
+      yield { type: 'text-delta', text: outcome === 'invalid-json' ? 'not json' : JSON.stringify(decision) };
       yield { type: 'finish', reason: { kind: 'stop' } };
     };
     const service = scopedService(f);

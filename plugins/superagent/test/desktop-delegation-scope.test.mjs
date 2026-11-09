@@ -12,6 +12,25 @@ const policy = { model: router, models: [router], routingConfig: { revision: 5, 
   auxiliary: { models: [auxiliary], capabilities: ['review'] } } };
 const decision = { outcome: 'delegate', reason: 'Explicit investigation is outside product status' };
 
+test('each JSON example in the emitted system prompt passes the current scope validator', async () => {
+  // Bind the direct example's placeholder as an exact supplied capability name.
+  const exampleInput = { ...input, capabilities: [{ ...capability, name: 'exact supplied name' }] };
+  for (const outcome of ['delegate', 'unconfirmed', 'direct']) {
+    let example;
+    const llm = { async *stream(request) {
+      const system = request.messages.find(message => message.role === 'system').content.map(block => block.text || '').join('\n');
+      const examples = [...system.matchAll(/^\w+: (\{"outcome":.*\})$/gm)].map(match => ({ text: match[1], decision: JSON.parse(match[1]) }));
+      assert.deepEqual(examples.map(row => row.decision.outcome), ['delegate', 'unconfirmed', 'direct']);
+      example = examples.find(row => row.decision.outcome === outcome);
+      yield { type: 'text-delta', text: example.text };
+      yield { type: 'finish', reason: { kind: 'stop' } };
+    } };
+    const result = await assessDesktopDelegationScope({ llm, policy: { model: router, models: [router] }, input: exampleInput });
+    assert.deepEqual(result.decision, example.decision);
+    assert.equal(result.routing.attempts.length, 1);
+  }
+});
+
 test('scope uses the existing review queue and its recorded fallback, never the Worker queue', async () => {
   const requests = [];
   const llm = { async *stream(request) {
