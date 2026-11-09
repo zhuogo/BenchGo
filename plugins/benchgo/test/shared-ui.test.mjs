@@ -13,8 +13,9 @@ const result = await build({
   entryPoints: [fileURLToPath(new URL('../../shared/client/ui/index.jsx', import.meta.url))],
   bundle: true, write: false, format: 'cjs', platform: 'node', jsx: 'automatic',
   external: ['react', 'react-dom', 'react/jsx-runtime'],
+  alias: { '@deepseek-ai/dsh-client-ui-primitives': fileURLToPath(new URL('../../../deepseek-harness/packages/client/ui-primitives/src/Tooltip.tsx', import.meta.url)) },
   nodePaths: [fileURLToPath(new URL('../node_modules', import.meta.url))],
-  plugins: [sharedUiStyles()], loader: { '.css': 'text' }, metafile: true,
+  plugins: [sharedUiStyles()], loader: { '.css': 'text', '.module.css': 'text' }, metafile: true,
 });
 const module = { exports: {} };
 new Function('require', 'module', 'exports', result.outputFiles[0].text)(require, module, module.exports);
@@ -29,6 +30,10 @@ test('shared buttons preserve form safety, explicit submit and disabled actions'
   const link = render(Button, { asChild: true }, React.createElement('a', { href: '/settings' }, '设置'));
   assert.match(link, /<a[^>]*href="\/settings"/);
   assert.doesNotMatch(link, /<button/);
+  const hinted = render(Button, { title: '删除草稿' }, React.createElement('svg'));
+  assert.match(hinted, /aria-label="删除草稿"/);
+  assert.doesNotMatch(hinted, / title=/);
+  assert.match(render(Button, { title: '补充说明', 'aria-label': '明确操作' }, '操作'), /aria-label="明确操作"/);
 });
 
 test('disclosures expose accessible expanded state and keep closed content hidden', () => {

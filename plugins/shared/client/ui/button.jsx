@@ -3,6 +3,7 @@ import { Slot } from '@radix-ui/react-slot';
 import { cva } from 'class-variance-authority';
 import { cn } from './utils.js';
 import { UiStyles } from './styles.jsx';
+import { Tooltip } from './tooltip.jsx';
 
 export const buttonVariants = cva('bg-ui-button bg:inline-flex bg:items-center bg:justify-center', {
   variants: {
@@ -12,7 +13,8 @@ export const buttonVariants = cva('bg-ui-button bg:inline-flex bg:items-center b
   defaultVariants: { variant: 'default', size: 'default' },
 });
 
-export const Button = React.forwardRef(function Button({ className, variant, size, asChild = false, type = 'button', ...props }, ref) {
+export const Button = React.forwardRef(function Button({ className, variant, size, asChild = false, type = 'button', title, ...props }, ref) {
   const Component = asChild ? Slot : 'button';
-  return <><UiStyles /><Component ref={ref} type={asChild ? undefined : type} className={cn(buttonVariants({ variant, size }), className)} {...props} /></>;
+  const button = <Component ref={ref} type={asChild ? undefined : type} className={cn(buttonVariants({ variant, size }), className)} {...props} aria-label={props['aria-label'] ?? title} />;
+  return <><UiStyles />{title ? <Tooltip label={title}>{button}</Tooltip> : button}</>;
 });

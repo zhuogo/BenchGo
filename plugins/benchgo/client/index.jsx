@@ -12,6 +12,7 @@ import icons from './icons.json';
 import { FishLogo, Tooltip, Modal, Menu, LinkIconMedium, IconPinOutlineRegular, IconPinFillRegular, IconBranchOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
 import css from './style.css';
 import fontCss from './fonts.css';
+import chatTypographyCss from '../../shared/client/chat-typography.css';
 import { UIIcon } from './iconsax.jsx';
 import { mountModelPicker, mountNativeActivity } from './model-picker.jsx';
 import { moduleSource, startModuleLifecycle } from './modules.mjs';
@@ -99,7 +100,7 @@ function mountBaseUi(ctx) {
   mountInteractiveClient(ctx);
   mountWorkbenchClient(ctx);
   const lifetime = new AbortController();
-  const style = document.createElement('style'); style.textContent = fontCss + css; document.head.append(style); ctx.effect(() => () => style.remove());
+  const style = document.createElement('style'); style.textContent = fontCss + css + chatTypographyCss; document.head.append(style); ctx.effect(() => () => style.remove());
   let ensuringRecent;
   const ensureRecent = () => {
     if (ensuringRecent) return ensuringRecent;
