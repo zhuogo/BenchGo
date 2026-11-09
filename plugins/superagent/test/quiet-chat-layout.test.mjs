@@ -14,6 +14,46 @@ const { build } = createRequire(new URL('../../benchgo/package.json', import.met
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 const captureDir = process.env.BENCHGO_CHAT_SCREENSHOTS;
 
+test('Router streaming message keeps its mounted identity through official settlement and delayed history', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html = await fixture(), browser = await chromium.launch({ headless:true, executablePath });
+  try {
+    const page = await browser.newPage({ reducedMotion:'reduce' }), errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.setContent(html);
+    for (const kind of ['text', 'assistant_reply']) {
+      await page.evaluate(kind => window.renderHandoff('stream', kind), kind);
+      const message = page.locator('[data-chat-key="message:reply:human"]');
+      await message.getByText('同一条完整回复',{exact:true}).waitFor();
+      await page.evaluate(() => {
+        window.streamMessage = document.querySelector('[data-chat-key="message:reply:human"]');
+        window.removedStream = false;
+        window.handoffObserver = new MutationObserver(records => {
+          if (records.some(record => [...record.removedNodes].some(node => node === window.streamMessage || node.contains?.(window.streamMessage)))) window.removedStream = true;
+        });
+        window.handoffObserver.observe(document.querySelector('.ba-chat-feed'),{childList:true,subtree:true});
+      });
+      for (const phase of ['settled', 'completed', 'history']) {
+        await page.evaluate(({phase,kind}) => window.renderHandoff(phase,kind),{phase,kind});
+        await message.getByText('同一条完整回复',{exact:true}).waitFor();
+        assert.equal(await message.count(),1);
+        assert(await message.evaluate(node=>node===window.streamMessage),`${kind}/${phase}: same mounted article`);
+        assert.equal(await page.evaluate(()=>window.removedStream),false,`${kind}/${phase}: message never disappears`);
+        assert.equal(await page.getByText('PRIVATE',{exact:true}).count(),0);
+        if(captureDir) {
+          await mkdir(captureDir,{recursive:true});
+          await page.screenshot({path:join(captureDir,`handoff-${kind}-${phase}.png`),fullPage:true});
+        }
+      }
+      await page.evaluate(()=>window.handoffObserver.disconnect());
+    }
+    for(const reason of ['aborted','error']) {
+      await page.evaluate(reason=>window.renderHandoff(reason,'text'),reason);
+      await page.locator('[data-chat-key="message:reply:human"]').waitFor({state:'detached'});
+    }
+    assert.deepEqual(errors,[],'no browser runtime errors during the handoff');
+  } finally { await browser.close(); }
+});
+
 test('Router natural chat excludes execution metadata, deduplicates delivery and retains real questions', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
   const html = await fixture();
   const browser = await chromium.launch({ headless:true, executablePath });
@@ -77,7 +117,25 @@ async function fixture() {
       import { createRoot } from 'react-dom/client';
       import { QuietChat } from './plugins/superagent/client/quiet-chat.jsx';
       import { AssistantHome } from './plugins/superagent/client/home.jsx';
+      import { PartialArguments } from '@deepseek-ai/dsh-util-values';
       const root = createRoot(document.getElementById('root'));
+      window.renderHandoff = (phase, kind) => {
+        const text = '同一条完整回复';
+        const user = { id:'human', role:'user', seq:8, text:'请回复', time:1793808000000 };
+        const reply = { id:'reply:human', requestId:'human', role:'assistant', kind:'final', text, time:1793808001000 };
+        const running = ['stream','settled'].includes(phase);
+        const end = running ? undefined : {seq:12,time:1793808001000,data:{reason:{kind:['aborted','error'].includes(phase)?phase:'completed'}}};
+        const turn = {turn:2,start:{seq:7},...(end?{end}:{})};
+        const args = PartialArguments.fromObject({text});
+        const legacy = {nodes:[{kind:'user',messageId:'human',seq:8,source:{kind:'user'}}],turnEnds:new Map(end?[[2,12]]:[])};
+        if(phase==='stream') {
+          if(kind==='assistant_reply') legacy.runningCalls=[{name:kind,turn:2,args}];
+          else legacy.partial={turn:2,blocks:[{kind:'reasoning',text:'PRIVATE'},{kind:'text',text}]};
+        } else if(kind==='assistant_reply') legacy.nodes.push({kind:'tool-result',name:kind,turn:2,args,content:[{type:'text',text:JSON.stringify({published:true,requestId:'human'})}]});
+        else legacy.nodes.push({kind:'assistant',messageId:'model-message',seq:10,turn:2,step:1,blocks:[{kind:'reasoning',text:'PRIVATE'},{kind:'text',text}]});
+        const home = {sessionId:'handoff',threadId:'main',assistantName:'BenchGo',history:{sessionId:'handoff',activeReply:running?{turn:2,requestId:'human'}:null,messages:phase==='history'?[user,reply]:[user]}};
+        root.render(<div className="ba-root ba-official-conversation" data-assistant-chat=""><div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll=""><QuietChat home={home} session={{running}} chat={{legacy,timeline:{turnOrder:[2],turns:new Map([[2,turn]])}}} /></div></div></div>);
+      };
       const messages = [
         { id:'short', role:'user', text:'好的', time:1793808000000 },
         { id:'reply', role:'assistant', kind:'final', text:'已经记下。接下来按计划推进。', usage:{inputTokens:120,outputTokens:32}, time:1793808001000 },

@@ -84,6 +84,68 @@ test('accepted publication bridges refresh then deduplicates; rejected calls van
   assert.equal(run([], { chat: { legacy: { nodes: [{ ...result, content: [{ type: 'text', text: '{"published":true,"requestId":"other"}' }] }] } } }), null);
 });
 
+const settledChat = (reason = 'completed', changes = {}) => {
+  const end = reason && { seq: 12, time: 4, data: { reason: { kind: reason } } };
+  return {
+    timeline: { turnOrder: [2], turns: new Map([[2, { turn: 2, start: { seq: 7 }, ...(end ? { end } : {}) }]]) },
+    legacy: { nodes: [
+      { kind: 'user', messageId: 'human', seq: 8, source: { kind: 'user', rpcId: 'rpc' } },
+      { kind: 'assistant', messageId: 'model-message', turn: 2, step: 1, seq: 10, time: 3,
+        blocks: [{ kind: 'reasoning', text: 'PRIVATE' }, { kind: 'text', text: '完整正文' }], ...changes },
+    ], turnEnds: new Map(end ? [[2, 12]] : []) },
+  };
+};
+
+test('ordinary text survives partial → official settlement → history without a second reply store', () => {
+  const partial = run([], { chat: { legacy: { partial: { turn: 2, blocks: [{ kind: 'text', text: '完整' }] } } } });
+  const settling = run([], { chat: settledChat(null) });
+  assert.equal(settling.text, '完整正文');
+  assert.equal(settling.streaming, true, 'a settled step cannot claim the whole turn completed');
+  const completed = run([], { chat: settledChat(), running: false });
+  assert.equal(completed.text, '完整正文');
+  assert.equal(completed.streaming, false);
+  assert.equal(completed.key, partial.key);
+  assert.equal(settling.key, partial.key);
+  assert.doesNotMatch(JSON.stringify(completed), /PRIVATE/);
+  assert.equal(run([], { chat: settledChat(), running: false,
+    history: { ...history, activeReply: null, messages: [...history.messages, completed] } }), null, 'history assumes the same identity exactly once');
+  assert.equal(run([], { chat: settledChat(), history: { ...history, activeReply: null }, running: false }).key, partial.key, 'closed activeReply is not needed after official completion');
+});
+
+test('settlement requires a durable ordinary answer, the latest real turn and an admitted user', () => {
+  for (const reason of ['aborted', 'error', 'max-tokens', null]) {
+    assert.equal(run([], { chat: settledChat(reason), running: false }), null);
+  }
+  for (const changes of [
+    { messageId: undefined }, { interrupted: true }, { parentCallId: 'worker' }, { seq: 13 },
+    { blocks: [{ kind: 'text', text: 'tool preamble' }, { kind: 'tool-call', name: 'shell' }] },
+    { blocks: [{ kind: 'reasoning', text: 'PRIVATE' }] },
+  ]) assert.equal(run([], { chat: settledChat('completed', changes), running: false }), null);
+  const chat = settledChat();
+  chat.timeline.turnOrder.push(3);
+  chat.timeline.turns.set(3, { turn: 3, start: { seq: 13 } });
+  assert.equal(run([], { chat }), null, 'a later turn never reuses the preceding settled answer');
+  assert.equal(run([], { chat: settledChat(), history: { ...history, activeReply: { turn: 3, requestId: 'next' } } }), null);
+  assert.equal(run([], { chat: settledChat(), history: { ...history, messages: [] } }), null);
+  const internal = settledChat();
+  internal.legacy.nodes[0].source = { kind: 'system' };
+  assert.equal(run([], { chat: internal }), null);
+  const truncated = settledChat();
+  truncated.legacy.nodes.shift();
+  assert.equal(run([], { chat: truncated }), null, 'history identity alone cannot borrow a missing user from another loaded turn');
+});
+
+test('new streams and explicit publication supersede a settled ordinary step', () => {
+  const chat = settledChat(null);
+  chat.legacy.partial = { turn: 2, blocks: [{ kind: 'text', text: '下一步正文' }] };
+  assert.equal(run([], { chat }).text, '下一步正文');
+  chat.legacy.runningCalls = [call(PartialArguments.fromObject({ text: '显式正文' }))];
+  assert.equal(run([], { chat }).text, '显式正文');
+  chat.legacy.nodes.push({ ...call(PartialArguments.fromObject({ text: '已发表正文' })), kind: 'tool-result',
+    content: [{ type: 'text', text: '{"published":true,"requestId":"human"}' }] });
+  assert.equal(run([], { chat, running: false }).text, '已发表正文');
+});
+
 test('server active reply identity requires an open user-owned turn', () => {
   const start = { type: 'turn/start', data: { turn: 2 } };
   const user = { type: 'user/message', data: { id: 'human', source: { kind: 'user' } } };

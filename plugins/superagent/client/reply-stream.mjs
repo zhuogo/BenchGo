@@ -9,23 +9,40 @@ const replyText = call => {
 
 // History can be one request behind the official live view. Only a host-admitted
 // user node tied to a persisted message/receipt may bridge that refresh window.
-function activeIdentity(history, rows, turn, users) {
-  if (!Number.isSafeInteger(turn) || rows.turnEnds?.has(turn)) return null;
+function activeIdentity(history, rows, turn, users, boundary) {
+  if (!Number.isSafeInteger(turn) || (!boundary && rows.turnEnds?.has(turn))) return null;
   const active = history.activeReply;
-  if (active) return active.turn === turn && users.has(active.requestId) ? active : null;
-  const node = [...(rows.nodes || [])].reverse().find(item => ['user', 'steering'].includes(item.kind) && isChatUserMessage(item));
-  if (!node || !Number.isFinite(node.seq)) return null;
+  if (active && !boundary) return active.turn === turn && users.has(active.requestId) ? active : null;
+  if (active && active.turn !== turn) return null;
+  const node = [...(rows.nodes || [])].reverse().find(item => ['user', 'steering'].includes(item.kind)
+    && (!boundary || item.seq > boundary.start.seq && item.seq < (boundary.end?.seq ?? Infinity)));
+  if (!isChatUserMessage(node) || !Number.isFinite(node.seq)) return null;
   const priorEnd = Math.max(-1, ...[...(rows.turnEnds || [])].filter(([ended]) => ended < turn).map(([, seq]) => seq));
   if (node.seq <= priorEnd) return null;
   const question = readAdmittedQuestionReply(node);
   if (node.source.kind === 'user-question-reply' && !question) return null;
   const rpcId = node.source.rpcId || node.source.requestId;
-  const user = [...users.values()].find(item => item.seq === node.seq || (rpcId && item.rpcId === rpcId) || (question && item.callId === question.callId));
-  if (user) return { turn, requestId: user.id };
+  const user = [...users.values()].find(item => (node.messageId && item.id === node.messageId) || item.seq === node.seq || (rpcId && item.rpcId === rpcId) || (question && item.callId === question.callId));
+  if (user) return !active || active.requestId === user.id ? { turn, requestId: user.id } : null;
   const receipt = (history.requests || []).find(item => ((rpcId && item.requestId === rpcId) || (question && item.questionReply?.callId === question.callId))
     && item.sessionId === history.sessionId && typeof item.messageId === 'string'
     && ['processing', 'prepared'].includes(item.status));
-  return receipt ? { turn, requestId: receipt.messageId } : null;
+  return receipt && (!active || active.requestId === receipt.messageId) ? { turn, requestId: receipt.messageId } : null;
+}
+
+// The host replaces partial with a durable assistant node before history refreshes.
+// Read that same node and its real turn boundary instead of caching a second reply.
+function settledReply(history, chat, users, published, running, make) {
+  const turn = chat.timeline?.turns.get(chat.timeline.turnOrder.at(-1));
+  if (!turn?.start || (turn.end ? turn.end.data?.reason?.kind !== 'completed' : !running)) return null;
+  const rows = chat.legacy;
+  const node = [...(rows.nodes || [])].reverse().find(item => item.kind === 'assistant' && item.turn === turn.turn);
+  if (!node?.messageId || node.interrupted || node.parentCallId || node.seq <= turn.start.seq
+    || node.seq >= (turn.end?.seq ?? Infinity) || node.blocks?.some(block => block.kind === 'tool-call')) return null;
+  const active = activeIdentity(history, rows, turn.turn, users, turn);
+  if (!active || published.has(active.requestId)) return null;
+  const text = (node.blocks || []).filter(block => block.kind === 'text' && typeof block.text === 'string').map(block => block.text).join('\n');
+  return text.trim() ? make(active.requestId, text, !turn.end, turn.end?.time || node.time) : null;
 }
 
 /** Router text is public conversation; reasoning and tool payloads stay private. */
@@ -49,7 +66,7 @@ export function projectReplyStream({ history = {}, chat, sessionId, running = fa
     const text = replyText(call);
     if (text) return make(result.requestId, text.trim(), false, call.time);
   }
-  if (!running) return null;
+  if (!running) return settledReply(history, chat, users, published, running, make);
   // Explicit publication takes precedence when the model chooses it. Streaming
   // ordinary public text must not depend on that optional model tool choice.
   for (const call of [...(rows.runningCalls || [])].reverse()) {
@@ -58,7 +75,7 @@ export function projectReplyStream({ history = {}, chat, sessionId, running = fa
     if (active && !published.has(active.requestId) && text) return make(active.requestId, text, true, call.time || users.get(active.requestId)?.time);
   }
   const partial = rows.partial;
-  if (!partial || partial.parentCallId) return null;
+  if (!partial || partial.parentCallId) return settledReply(history, chat, users, published, running, make);
   const active = activeIdentity(history, rows, partial.turn, users);
   if (!active || published.has(active.requestId)) return null;
   const text = (partial.blocks || []).filter(block => block.kind === 'text' && typeof block.text === 'string').map(block => block.text).join('\n');
