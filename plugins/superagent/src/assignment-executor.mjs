@@ -13,6 +13,7 @@ import { continueWorkerContext } from './worker-context-continuation.mjs';
 import { workerWorktrees } from './worker-worktree.mjs';
 import { installProjectRules } from './project-rules.mjs';
 import { executionEvidence } from './execution-evidence.mjs';
+import { verifyInterruptedTranscript } from './interrupted-continuation.mjs';
 import { executionEffects, isReadOnlyWorkerTool } from './execution-effects.mjs';
 import { attentionBatchAnswers, installWorkerAttention } from './worker-attention.mjs';
 import { captureArtifactCheckpoint, verifyArtifactCheckpoint } from './worker-artifact-checkpoint.mjs';
@@ -35,7 +36,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
     signal.throwIfAborted();
     if (assignment.reviewRepair || assignment.reviewContinuation) throw new Error('Legacy content-review continuation is unsupported');
     const previous = database.runs(assignment.id);
-    const continuation = assignment.contextContinuation || assignment.attentionContinuation || assignment.pauseContinuation;
+    const continuation = assignment.interruptedContinuation || assignment.contextContinuation || assignment.attentionContinuation || assignment.pauseContinuation;
     const resumed = continuation && previous.find(item => item.id === continuation.runId && item.state === 'prepared' && item.fence === assignment.fence && item.owner === assignment.owner);
     if (previous.length && !resumed) throw new Error('Previous execution requires reconciliation before resubmission');
     if (continuation && !resumed) throw new Error('Original continuation identity is unavailable');
@@ -85,16 +86,21 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         installGoalBudgetUsage(scope, agent, { database, ticketId: ticket.id });
         if (resumed) {
           const events = agent.session.snapshotEvents(), saved = resumed.evidence;
-          const prefix = events.filter(event => event.seq <= saved?.transcript?.lastSeq);
-          const suffix = events.filter(event => event.seq > saved?.transcript?.lastSeq);
-          const observed = executionEvidence({ events: prefix });
-          if (saved.executionEffects !== undefined && JSON.stringify(saved.executionEffects) !== JSON.stringify(executionEffects({ events: prefix }))) throw new Error('Execution effects changed before continuation');
-          // The official loader adds its seed boundary before setup; no tool,
-          // user message or crash-repair event may extend the saved pause.
-          const contextContinuation = !!assignment.contextContinuation;
-          if ((contextContinuation ? saved?.waitingAttention || saved?.waitingPause : !saved?.waitingAttention && !saved?.waitingPause) || observed.transcript.hash !== saved.transcript?.hash
-            || suffix.length > 1 || suffix.some(event => event.type !== 'session/end-seed')
-            || prefix.at(-1)?.type !== 'turn/end' || (contextContinuation ? prefix.at(-1).data?.reason?.kind !== 'completed' : !isVerifiedPauseEnding(prefix.at(-1).data?.reason, saved))) throw new Error('Execution transcript changed before continuation');
+          if (assignment.interruptedContinuation) {
+            verifyInterruptedTranscript(events, saved);
+            if (!database.getWorkerExecutionState(run.id)?.models?.length) throw new Error('Original frozen Worker model is unavailable');
+          } else {
+            const prefix = events.filter(event => event.seq <= saved?.transcript?.lastSeq);
+            const suffix = events.filter(event => event.seq > saved?.transcript?.lastSeq);
+            const observed = executionEvidence({ events: prefix });
+            if (saved.executionEffects !== undefined && JSON.stringify(saved.executionEffects) !== JSON.stringify(executionEffects({ events: prefix }))) throw new Error('Execution effects changed before continuation');
+            // The official loader adds its seed boundary before setup; no tool,
+            // user message or crash-repair event may extend the saved pause.
+            const contextContinuation = !!assignment.contextContinuation;
+            if ((contextContinuation ? saved?.waitingAttention || saved?.waitingPause : !saved?.waitingAttention && !saved?.waitingPause) || observed.transcript.hash !== saved.transcript?.hash
+              || suffix.length > 1 || suffix.some(event => event.type !== 'session/end-seed')
+              || prefix.at(-1)?.type !== 'turn/end' || (contextContinuation ? prefix.at(-1).data?.reason?.kind !== 'completed' : !isVerifiedPauseEnding(prefix.at(-1).data?.reason, saved))) throw new Error('Execution transcript changed before continuation');
+          }
           await verifyArtifactCheckpoint(environment || directory, resumed.evidence.checkpoint, { signal });
         }
         savedQueue = database.getWorkerExecutionState(run.id);
@@ -241,7 +247,9 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       executionPhase = 'submit';
       database.updateRun(run.id, { ...ownership, state: 'submitted' });
       if (selfCheck) database.recordWorkerSelfCheck({ assignmentId: assignment.id, runId: run.id, ...ownership, value: null });
-      if (assignment.contextContinuation) {
+      if (assignment.interruptedContinuation) {
+        handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Continue this interrupted work in its original session and mandate from the verified saved transcript and current artifacts. Inspect completed tool results first; never repeat completed actions. Preserve all original requirements, apply pending user input at the next safe boundary, and perform the required lightweight self-check before reporting completion.' }], source: { kind: 'benchgo-interrupted-continuation', ticketId: ticket.id, runId: run.id } }));
+      } else if (assignment.contextContinuation) {
         handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Consider pending source context using the saved transcript. Stay within the original Ticket mandate; do not repeat completed actions.' }], source: { kind: 'benchgo-context-continuation', ticketId: ticket.id, runId: run.id } }));
       } else if (resumed?.evidence.waitingPause) {
         handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Resume the paused Ticket from the saved transcript. Continue only its original mandate; do not repeat completed actions.' }], source: { kind: 'benchgo-resume', ticketId: ticket.id, runId: run.id } }));
@@ -317,7 +325,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
     } catch (error) {
       try { if (error && typeof error === 'object') error.executionPhase = executionPhase; } catch { /* Preserve immutable host errors. */ }
       const current = database.runs(assignment.id).find(item => item.id === run.id);
-      if (current && ['submitted', 'running', 'verifying'].includes(current.state)) {
+      if (current && (['submitted', 'running', 'verifying'].includes(current.state) || assignment.interruptedContinuation && current.state === 'prepared')) {
         try { database.updateRun(run.id, { ...ownership, state: 'uncertain' }); } catch { /* Lease loss is handled by reconciliation. */ }
       }
       throw error;

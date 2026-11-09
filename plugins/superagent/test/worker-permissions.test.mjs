@@ -83,6 +83,26 @@ test('budget continuation blocks replay of a completed action while permitting f
   assert.equal(dispatches, 1);
 });
 
+for (const nested of [false, true]) test(`interrupted continuation mechanically blocks completed action replay (nested=${nested})`, async () => {
+  let wrapper, dispatches = 0;
+  const prior = nested ? [
+    { type: 'tool/ptc-dispatch-start', data: { subCallId: 'sent', name: 'opaque_send', arguments: { body: 'already completed' } } },
+    { type: 'tool/ptc-dispatch', data: { subCallId: 'sent', name: 'opaque_send', content: [] } },
+  ] : [
+    { type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'sent', name: 'opaque_send', arguments: '{"body":"already completed"}' }] } } },
+    { type: 'tool/result', data: { message: { toolCallId: 'sent', content: [] } } },
+  ];
+  installWorkerPermissionGate({ on(_name, fn) { wrapper = fn; } }, {
+    database: { getTicket: () => ({ mandate: {} }), renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }) },
+    assignment: { id: 'original', ticketId: 'ticket', interruptedContinuation: { runId: 'same-run' } },
+    priorToolEvents: prior, readPolicy: async () => ({ version: 'current' }), authorizeAction: async () => ({ allowed: true }),
+  });
+  const signal = new AbortController().signal;
+  await assert.rejects(wrapper({ name: 'opaque_send', arguments: { body: 'already completed' }, signal }, () => dispatches++), { code: 'ACTION_REPLAY_BLOCKED' });
+  await wrapper({ name: 'read', arguments: { path: 'result' }, signal }, () => dispatches++);
+  assert.equal(dispatches, 1);
+});
+
 for (const failed of [false, true]) test(`unknown previous effects block changed parameters and different actions during continuation (failed=${failed})`, async () => {
   let wrapper, dispatches = 0;
   const events = [{ type: 'assistant/message', data: { message: { content: [

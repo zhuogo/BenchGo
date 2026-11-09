@@ -194,3 +194,9 @@ test('recovery derives legacy effects from the log and rejects forged effect saf
   await assert.rejects(withRecoveredEvidence(f, () => assert.fail('forged effects')), /execution effects do not match/);
   assert.equal(f.closed(), 2);
 });
+
+test('mismatched official evidence exposes a bounded reason code to the recovery scheduler', async () => {
+  const f = fixture();
+  f.run.evidence.transcript.hash = 'changed';
+  await assert.rejects(withRecoveredEvidence(f, () => assert.fail('mismatch')), { code: 'EVIDENCE_MISMATCH' });
+});
