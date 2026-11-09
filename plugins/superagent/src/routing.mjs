@@ -36,9 +36,10 @@ export function roleModels(primary, config = {}, role = 'router') {
 }
 
 /** Share capability routing without changing each caller's tool permissions. */
-export function auxiliaryModels(primary, config = {}, capability) {
+export function auxiliaryModels(primary, config = {}, capability, routePolicy = 'router-fallback') {
+  if (!['router-fallback', 'auxiliary-only'].includes(routePolicy)) throw new Error('Unknown auxiliary route policy');
   const auxiliary = config.auxiliary?.capabilities?.includes(capability) ? config.auxiliary : null;
-  const selected = (auxiliary?.models || []).map(model => primary?.providerId === model.providerId && primary?.modelId === model.modelId ? primary : model);
-  const models = [...selected, ...roleModels(primary, config, 'router')];
+  const selected = (auxiliary?.models || []).map(model => routePolicy !== 'auxiliary-only' && primary?.providerId === model.providerId && primary?.modelId === model.modelId ? primary : model);
+  const models = [...selected, ...(routePolicy === 'auxiliary-only' ? [] : roleModels(primary, config, 'router'))];
   return orderedModels(models[0], models.slice(1));
 }

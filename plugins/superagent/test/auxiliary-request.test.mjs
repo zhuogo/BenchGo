@@ -166,3 +166,25 @@ test('safe stream diagnostics preserve the real provider error without exposing 
     config: {}, capability: 'review', model: { providerId: 'p', modelId: 'opaque' }, request: { maxTokens: 12288 } }), error => error === providerError);
   assert.deepEqual(auxiliaryFailureDiagnostic(providerError), { finishKind: 'missing', textCharacters: 0, hasText: false, maxTokens: 12288 });
 });
+
+test('auxiliary-only policy never falls back to Router, including quality and unconfigured cases', async () => {
+  const calls = [];
+  const result = await run(async function* (request) {
+    calls.push(request.provider);
+    yield delta(request.provider === 'aux' ? 'invalid' : '{"ok":true}'); yield stop;
+  }, { routePolicy: 'auxiliary-only', validate: JSON.parse });
+  assert.deepEqual(calls, ['aux', 'backup']);
+  assert.equal(result.routing.routePolicy, 'auxiliary-only');
+  await assert.rejects(run(async function* () { throw new Error('must not call'); }, { routePolicy: 'auxiliary-only', capability: 'unconfigured' }), { code: 'AUXILIARY_UNCONFIGURED' });
+  calls.length = 0;
+  await assert.rejects(run(async function* (request) { calls.push(request.provider); throw Object.assign(new Error('offline'), { status: 401 }); }, { routePolicy: 'auxiliary-only' }), /offline/);
+  assert.deepEqual(calls, ['aux', 'backup', 'unused']);
+});
+
+test('auxiliary-only uses its role options even when Router has the same opaque model ID', async () => {
+  let actual;
+  await run(async function* (request) { actual = request; yield delta('ok'); yield stop; }, {
+    routePolicy: 'auxiliary-only', config: { auxiliary: { capabilities: ['review'], models: [{ ...main, options: { maxTokens: 55 } }] } },
+  });
+  assert.equal(actual.maxTokens, 55);
+});
