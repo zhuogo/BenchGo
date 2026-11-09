@@ -2,6 +2,7 @@ import { actionHash, HIGH_RISK_ACTION_CATEGORIES, SITE_ACTION_CATEGORIES, canoni
 import { validateTicketMandate } from './assessment-policy.mjs';
 import { workerAppliedTicket } from './worker-permissions.mjs';
 import { requestExternalActionApproval } from './approval.mjs';
+import { channelExternalSendInputSchema } from './channel-policy.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
@@ -19,12 +20,12 @@ export function createExternalActionRegistry() {
     register(adapter) {
       if (!adapter || typeof adapter.id !== 'string' || !adapter.id || entries.has(adapter.id)
         || ![...HIGH_RISK_ACTION_CATEGORIES, ...SITE_ACTION_CATEGORIES].includes(adapter.category)
-        || typeof adapter.prepare !== 'function' || typeof adapter.submit !== 'function') throw new Error('Invalid external action adapter');
-      const entry = Object.freeze({ ...adapter }); entries.set(entry.id, entry);
+        || adapter.inputSchema?.type !== 'object' || typeof adapter.prepare !== 'function' || typeof adapter.submit !== 'function') throw new Error('Invalid external action adapter: inputSchema and structured prepare/submit are required');
+      const entry = Object.freeze({ ...adapter, inputSchema: freeze(canonicalAction(adapter.inputSchema)) }); entries.set(entry.id, entry);
       return () => { if (entries.get(entry.id) === entry) entries.delete(entry.id); };
     },
     get: id => entries.get(id),
-    catalog: () => [...entries.values()].map(({ id, category, label }) => ({ id, category, label: label || id })),
+    catalog: () => [...entries.values()].map(({ id, category, label, inputSchema }) => ({ id, category, label: label || id, inputSchema: structuredClone(inputSchema) })),
   };
 }
 
@@ -98,7 +99,7 @@ export function registerChannelExternalActions(registry, { getAdapter, channelId
   const disposers = [];
   for (const channel of channelIds) {
     if (!getCapabilities(channel)?.externalActions?.includes('external-send') || typeof getAdapter(channel)?.prepareExternalSend !== 'function') continue;
-    disposers.push(registry.register({ id: `channel:${channel}:send`, label: `${channel} 另行发送`, category: 'external-send',
+    disposers.push(registry.register({ id: `channel:${channel}:send`, label: `${channel} 另行发送`, category: 'external-send', inputSchema: channelExternalSendInputSchema,
       prepare: (input, context) => getAdapter(channel).prepareExternalSend(input, { principal: context.principal }),
       async validate(action, context) {
         const adapter = getAdapter(channel);
@@ -115,9 +116,9 @@ export function registerChannelExternalActions(registry, { getAdapter, channelId
 export function installExternalActionTools(scope, agent, { service }) {
   const output = { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] };
   return scope.tools.register({ name: 'assistant_external_action',
-    description: 'Prepare or submit a registered structured external action. Call catalog first. Payment/purchase, password changes, account deletion and additional external sending ALWAYS require an exact final-content one-time approval; absent adapters return human handoff. Open terminal/browser tools may only prepare these actions, never submit or bypass this channel. Normal authenticated source replies use the existing source delivery pipeline.',
+    description: 'Prepare or submit a registered structured external action. Call catalog first and follow the selected adapter inputSchema exactly for prepare.input; use the returned action id for submit.actionId. requestId is a stable idempotency key for the same exact target/content. Never guess field names or search application/source files to discover an adapter contract. If trusted target information is missing, ask rather than invent it. Payment/purchase, password changes, account deletion and additional external sending ALWAYS require an exact final-content one-time approval; absent adapters return human handoff. Open terminal/browser tools may only prepare these actions, never submit or bypass this channel. Normal authenticated source replies use the existing source delivery pipeline.',
     parameters: { type: 'object', additionalProperties: false, properties: {
-      operation: { type: 'string', enum: ['catalog', 'prepare', 'submit'] }, adapterId: { type: 'string' }, input: { type: 'object', additionalProperties: true }, requestId: { type: 'string' }, actionId: { type: 'string' },
+      operation: { type: 'string', enum: ['catalog', 'prepare', 'submit'] }, adapterId: { type: 'string', description: 'catalog 返回的确切通道 ID；prepare 必填。' }, input: { type: 'object', additionalProperties: true, description: 'prepare 专用：严格遵守所选通道 catalog.inputSchema，不接受猜测的字段别名。' }, requestId: { type: 'string', description: 'prepare 必填：同一目标与正文的稳定幂等键。' }, actionId: { type: 'string', description: 'submit 必填：prepare 返回的动作 id；submit 将等待真实用户逐次审批。' },
     }, required: ['operation'] }, output,
     async execute(input, exec) {
       if (exec.agent !== agent) throw fail('ACTION_AGENT_MISMATCH', '外部动作只供当前拥有工单的 Worker 使用');

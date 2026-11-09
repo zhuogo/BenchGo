@@ -5,12 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createActionPermissionStore, exactActionOrigin } from '../src/action-permissions.mjs';
 import { createExternalActionRegistry, createExternalActionService, createActionPermissionApi, createExternalActionHost, registerChannelExternalActions } from '../src/external-actions.mjs';
+import { prepareChannelExternalSend } from '../src/channel-policy.mjs';
 
 const actor = { profileId: 'profile', id: 'desktop-owner', label: '主人' };
 const context = () => ({ profileId: 'profile', actorId: actor.id, ticketId: 'ticket', assignmentId: 'assignment', runId: 'run', authorizationVersion: 'a1', policyVersion: 'p1', principal: { kind: 'owner' } });
 const exec = () => ({ signal: new AbortController().signal, callId: 'call', agent: {} });
 const open = t => { const store = createActionPermissionStore({ filename: ':memory:', profileId: 'profile' }); t.after(() => store.close()); return store; };
 const prepared = { origin: 'https://example.test', target: { recipient: 'person-1' }, content: { text: '完整正文' }, submission: { to: 'person-1', text: '完整正文' } };
+const inputSchema = { type: 'object', properties: {}, additionalProperties: true };
 
 test('site grants persist by exact origin, real actor and profile, expire and revoke idempotently', t => {
   const directory = mkdtempSync(join(tmpdir(), 'benchgo-action-')); let now = Date.now();
@@ -60,7 +62,7 @@ test('frozen action binds final content, actor, Mandate, run and once-only consu
 
 test('registered high-risk submit requests official once approval and concurrent/restart retries cannot duplicate', async t => {
   const store = open(t), registry = createExternalActionRegistry(); let sends = 0, asks = 0;
-  registry.register({ id: 'send', category: 'external-send', prepare: async () => prepared, submit: async action => { sends++; assert.equal(Object.isFrozen(action.content), true); return { status: 'accepted', receiptId: 'receipt' }; } });
+  registry.register({ id: 'send', category: 'external-send', inputSchema, prepare: async () => prepared, submit: async action => { sends++; assert.equal(Object.isFrozen(action.content), true); return { status: 'accepted', receiptId: 'receipt' }; } });
   const options = { store, registry, getContext: async () => context(), requestApproval: async ({ action }) => { asks++; assert.deepEqual(action.content, prepared.content); assert.equal(action.submission, undefined); return 'allowed-once'; } };
   let service = createExternalActionService(options);
   const action = await service.prepare({ adapterId: 'send', input: {}, requestId: 'send' }, exec());
@@ -74,7 +76,7 @@ test('no registered payment means handoff; fake authorized/always approval never
   const store = open(t), registry = createExternalActionRegistry(); let sends = 0;
   const service = createExternalActionService({ store, registry, getContext: async () => context(), requestApproval: async () => 'allowed-always' });
   assert.equal((await service.prepare({ adapterId: 'payment', input: { authorized: true }, requestId: 'pay' }, exec())).state, 'handoff');
-  registry.register({ id: 'send', category: 'external-send', prepare: () => prepared, submit: () => sends++ });
+  registry.register({ id: 'send', category: 'external-send', inputSchema, prepare: () => prepared, submit: () => sends++ });
   const action = await service.prepare({ adapterId: 'send', input: { authorized: true }, requestId: 'send' }, exec());
   assert.equal((await service.submit({ actionId: action.id }, exec())).state, 'denied'); assert.equal(sends, 0);
 });
@@ -82,7 +84,7 @@ test('no registered payment means handoff; fake authorized/always approval never
 test('regular site action reuses grant but final revoke and current Mandate stop submission', async t => {
   const store = open(t), registry = createExternalActionRegistry(); let sends = 0, revoked = false;
   const grant = store.grantSite({ requestId: 'grant', origin: prepared.origin, categories: ['login'], expiresAt: new Date(Date.now() + 60000).toISOString() }, actor);
-  registry.register({ id: 'login', category: 'login', prepare: () => prepared, validate: () => { store.revoke({ requestId: 'revoke', id: grant.id }, actor); revoked = true; }, submit: () => sends++ });
+  registry.register({ id: 'login', category: 'login', inputSchema, prepare: () => prepared, validate: () => { store.revoke({ requestId: 'revoke', id: grant.id }, actor); revoked = true; }, submit: () => sends++ });
   const service = createExternalActionService({ store, registry, getContext: async () => context(), requestApproval: async () => assert.fail('valid grant repeats approval') });
   const action = await service.prepare({ adapterId: 'login', input: {}, requestId: 'login' }, exec());
   await assert.rejects(service.submit({ actionId: action.id }, exec()), { code: 'ACTION_GRANT_REVOKED' });
@@ -91,7 +93,7 @@ test('regular site action reuses grant but final revoke and current Mandate stop
 
 test('authority narrowing while approval awaits blocks commit; thrown/unknown effects never auto replay', async t => {
   const store = open(t), registry = createExternalActionRegistry(); let authority = 'a1', sends = 0;
-  registry.register({ id: 'send', category: 'external-send', prepare: () => prepared, submit: () => { sends++; throw new Error('opaque private response'); } });
+  registry.register({ id: 'send', category: 'external-send', inputSchema, prepare: () => prepared, submit: () => { sends++; throw new Error('opaque private response'); } });
   let service = createExternalActionService({ store, registry, getContext: async () => ({ ...context(), authorizationVersion: authority }), requestApproval: async () => { authority = 'a2'; return 'allowed-once'; } });
   const action = await service.prepare({ adapterId: 'send', input: {}, requestId: 'first' }, exec());
   await assert.rejects(service.submit({ actionId: action.id }, exec()), { code: 'ACTION_BINDING_CHANGED' }); assert.equal(sends, 0);
@@ -167,7 +169,59 @@ test('a crash after durable submission cannot restore approved permission or rep
   assert.equal(store.prepare(input, context()).state, 'submitted');
   assert.throws(() => store.consume(action.id, context()), { code: 'ACTION_ONCE_REQUIRED' });
   const registry = createExternalActionRegistry();
-  registry.register({ id: 'send', category: 'external-send', prepare: () => prepared, submit: () => assert.fail('crash replay') });
+  registry.register({ id: 'send', category: 'external-send', inputSchema, prepare: () => prepared, submit: () => assert.fail('crash replay') });
   const service = createExternalActionService({ store, registry, getContext: async () => context(), requestApproval: async () => assert.fail('reapprove unknown effect') });
   assert.equal((await service.submit({ actionId: action.id }, exec())).requiresReconciliation, true);
+});
+
+test('registered action catalog publishes an immutable input contract and rejects missing contracts', () => {
+  const registry = createExternalActionRegistry();
+  const adapter = { id: 'send', category: 'external-send', prepare: () => prepared, submit: () => assert.fail('catalog must not submit') };
+  assert.throws(() => registry.register(adapter), /inputSchema/);
+  const schema = { type: 'object', properties: { recipient: { type: 'string' } }, required: ['recipient'], additionalProperties: false };
+  registry.register({ ...adapter, inputSchema: schema });
+  schema.required.push('invented');
+  const first = registry.catalog()[0];
+  assert.deepEqual(first.inputSchema.required, ['recipient']);
+  first.inputSchema.properties.recipient.type = 'number';
+  assert.equal(registry.catalog()[0].inputSchema.properties.recipient.type, 'string');
+});
+
+test('a channel action can be prepared from catalog contract alone, with actionable errors before side effects', async t => {
+  const store = open(t), registry = createExternalActionRegistry();
+  const source = { channel: 'test', sourceType: 'direct', conversationId: 'chat', chatId: 'chat', appId: 'bot', connectionId: 'test', connectionRevision: 1 };
+  let reads = 0;
+  const adapter = {
+    capabilities: { externalActions: ['external-send'] },
+    prepareExternalSend: (input, options) => prepareChannelExternalSend(() => ({ revision: 1, config: { enabled: true, appId: 'bot' } }), id => { reads++; return id === 'trusted-trigger' ? { source } : null; }, 'test', input, options),
+    send: () => assert.fail('prepare/catalog must never send'),
+  };
+  registerChannelExternalActions(registry, { channelIds: ['test'], getAdapter: () => adapter });
+  const service = createExternalActionService({ store, registry, getContext: async () => context(), requestApproval: () => assert.fail('prepare must never approve') });
+  const entry = service.catalog().adapters[0];
+  assert.deepEqual(entry.inputSchema.required, ['targetTriggerId', 'text']);
+  assert.equal(entry.inputSchema.additionalProperties, false);
+  for (const input of [{ sourceRef: 'trusted-trigger', content: '正文' }, { targetTriggerId: 'trusted-trigger', text: '正文', source: source }, { targetTriggerId: '', text: '正文' }, { targetTriggerId: 'trusted-trigger', text: ' ' }]) {
+    await assert.rejects(service.prepare({ adapterId: entry.id, requestId: 'invalid', input }, exec()), error => error.code === 'ACTION_INPUT_INVALID' && /targetTriggerId/.test(error.message) && /text/.test(error.message));
+  }
+  assert.equal(reads, 0);
+  assert.equal(store.list(actor).audit.length, 0);
+  const values = { targetTriggerId: 'trusted-trigger', text: '完整正文' };
+  const input = Object.fromEntries(entry.inputSchema.required.map(key => [key, values[key]]));
+  const action = await service.prepare({ adapterId: entry.id, requestId: 'valid', input }, exec());
+  assert.equal(action.state, 'pending');
+  assert.equal(action.content.text, '完整正文');
+  assert.equal(action.target.conversationId, 'chat');
+  assert.equal(reads, 1);
+});
+
+test('aborting an approval wait cannot consume the action or submit even if a late approval returns', async t => {
+  const store = open(t), registry = createExternalActionRegistry(), controller = new AbortController();
+  registry.register({ id: 'send', category: 'external-send', inputSchema, prepare: () => prepared, submit: () => assert.fail('stopped worker must never send') });
+  const service = createExternalActionService({ store, registry, getContext: async () => context(), requestApproval: async () => { controller.abort(); return 'allowed-once'; } });
+  const execution = { ...exec(), signal: controller.signal };
+  const action = await service.prepare({ adapterId: 'send', requestId: 'stopped', input: {} }, execution);
+  await assert.rejects(service.submit({ actionId: action.id }, execution), { name: 'AbortError' });
+  assert.equal(store.get(action.id).state, 'pending');
+  assert.equal(store.list(actor).audit.some(row => ['approved', 'submitted', 'completed'].includes(row.phase)), false);
 });
