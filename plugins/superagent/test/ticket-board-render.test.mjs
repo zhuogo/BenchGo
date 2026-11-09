@@ -19,6 +19,7 @@ async function fixture() {
       import React from 'react';
       import {createRoot} from 'react-dom/client';
       import {Tickets} from './plugins/superagent/client/tickets.jsx';
+      import {configureAssistantActivity} from './plugins/superagent/client/use-activity.jsx';
       import {createTaskManagement} from './plugins/superagent/src/task-management.mjs';
       import css from './plugins/superagent/client/style.css';
       import hostCss from './plugins/benchgo/client/style.css';
@@ -31,6 +32,7 @@ async function fixture() {
         const rows=[sample('queued','准备周报','open',{updatedAt:'2026-11-01T08:00:00Z'}),sample('running','运行兼容测试','open',{updatedAt:'2026-11-09T08:00:00Z',assignments:[{state:'claimed'}],executionSession:{available:true,sessionId:'real-execution',ticketId:'running'}}),
           sample('paused','确认发布范围','paused',{updatedAt:'2026-11-08T08:00:00Z'}),sample('stopped','已停止验证','cancelled',{updatedAt:null,taskCanOrganize:true}),
           sample('done','交付设计稿','completed',{archived:true,updatedAt:null,taskCanOrganize:true,resultVersion:1,results:[{version:1,summary:'保留原始成果与审计证据',selfCheck:{summary:'逐项检查通过'},evidenceRefs:[]}]})];
+        if(state==='long')rows.push(...Array.from({length:35},(_,index)=>sample('extra-'+index,'历史工作 '+index,'open',{updatedAt:'2026-11-02T08:00:00Z'})));
         if(state==='uncertain')Object.assign(rows[1],{assignments:[{state:'uncertain'}]});
         if(state==='blocked')Object.assign(rows[1],{status:'blocked'});
         const api=async(action,input)=>{
@@ -39,18 +41,30 @@ async function fixture() {
           if(window.control.state==='error')throw Error('连接暂不可用');
           if(action==='ticketPause'&&window.control.pauseError)throw Error('暂停未落账');
           if(action==='tickets')return {tickets:window.control.state==='empty'?[]:tasks.project('ticket',rows.filter(row=>input.ticketId?row.id===input.ticketId:!!row.archived===input.archived))};
+          if(action==='goalList')return {goals:[]};
           if(action==='checkpointList')return {checkpoints:[]};
           if(action==='state')return {config:{revision:1,workerConcurrency:2}};
           return {queued:true};
         };
-        root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main className='ba-studio-body' style={{padding:24,width:'100%',boxSizing:'border-box'}}>
+        let sink, cursor=0;
+        configureAssistantActivity(api,{connect(value){
+          sink=value;
+          const snapshot=()=>{
+            if(window.control.state==='loading')return;
+            if(window.control.state==='error'){sink.failed(Error('连接暂不可用'));return;}
+            sink.replace({cursor,tickets:window.control.state==='empty'?[]:tasks.project('ticket',rows)});
+          };
+          return {start(){queueMicrotask(snapshot);},restart:snapshot,dispose(){}};
+        }});
+        window.updateTicket=(id,patch)=>{Object.assign(rows.find(row=>row.id===id),patch);sink.update({type:'changes',cursor:++cursor,entries:[{seq:cursor,ticketId:id,kind:'execution'}]});};
+        root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main className='ba-studio-body' style={{padding:24,width:'100%',height:'100vh',overflow:'auto',boxSizing:'border-box'}}>
           <Tickets api={api} requestedTicket={state==='archived-detail'?{ticketId:'done'}:undefined} onCreateGoal={()=>window.calls.push(['createGoal'])} onSchedule={()=>window.calls.push(['openSchedule'])} onOpenExecution={async value=>{window.calls.push(['openExecution',value]);if(window.control.openError)throw Error('原会话尚未连接');}}/>
         </main></div>);
       };
     ` },
     bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-ticket-board-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
-    alias: { react: dirname(webRequire.resolve('react/package.json')), 'react-dom': dirname(webRequire.resolve('react-dom/package.json')),
+    alias: { '@deepseek-ai/dsh-deque':join(root,'deepseek-harness/packages/util/deque/src/index.ts'), '@deepseek-ai/dsh-api-gateway/client':join(root,'deepseek-harness/packages/api/gateway/src/client/index.ts'), react: dirname(webRequire.resolve('react/package.json')), 'react-dom': dirname(webRequire.resolve('react-dom/package.json')),
       '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts') },
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.woff2': 'dataurl', '.woff': 'dataurl', '.ttf': 'dataurl' },
     plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent',
@@ -86,15 +100,15 @@ test('ticket board renders four states, filters, retains details and routes real
     const list = page.locator('.ba-task-list > .ba-task-list-row');
     await list.first().waitFor();
     assert.deepEqual(await list.locator('.ba-task-open > strong').allTextContents(), ['运行兼容测试', '确认发布范围', '已停止验证', '准备周报']);
-    assert((await page.evaluate(() => window.calls)).some(([name, input]) => name === 'tickets' && input.archived === false));
+    assert(!(await page.evaluate(() => window.calls)).some(([name]) => name === 'tickets'), 'healthy opening uses the execution-facts snapshot directly');
     await page.getByRole('tab', { name: '已归档', exact: true }).click();
     await page.getByRole('button', { name: /交付设计稿.*已完成/ }).waitFor();
     assert.equal(await list.count(), 1);
     await page.getByRole('button', { name: /交付设计稿.*已完成/ }).click();
-    await page.getByRole('dialog').waitFor();
+    await page.getByRole('region', { name: '任务详情', exact: true }).waitFor();
     await page.getByText('查看结果与证据 · 要求版本 1', { exact: true }).click();
-    assert(await page.getByRole('dialog').getByText('保留原始成果与审计证据', { exact: true }).isVisible());
-    assert.equal(await page.getByRole('dialog').getByRole('button', { name: '继续工单', exact: true }).count(), 0);
+    assert(await page.getByRole('region', { name: '任务详情', exact: true }).getByText('保留原始成果与审计证据', { exact: true }).isVisible());
+    assert.equal(await page.getByRole('region', { name: '任务详情', exact: true }).getByRole('button', { name: '继续工单', exact: true }).count(), 0);
     await shot('archive-desktop');
     await page.keyboard.press('Escape');
     assert(!(await page.evaluate(() => window.calls)).some(([name]) => ['ticketResume', 'ticketStop', 'ticketChange'].includes(name)), 'browsing archives must not change or rerun the original task');
@@ -122,16 +136,16 @@ test('ticket board renders four states, filters, retains details and routes real
     await board.getByRole('region', { name: '待处理，1 项', exact: true }).getByRole('button', { name: '继续工单', exact: true }).click();
     assert((await page.evaluate(() => window.calls)).some(([name, input]) => name === 'ticketResume' && input.ticketId === 'paused'));
     await board.getByRole('button', { name: /确认发布范围.*已暂停/ }).click();
-    await page.getByRole('dialog').waitFor();
-    assert(await page.getByRole('dialog').getByText('确认发布范围：按要求完成并提供证据', { exact: true }).isVisible());
+    await page.getByRole('region', { name: '任务详情', exact: true }).waitFor();
+    assert(await page.getByRole('region', { name: '任务详情', exact: true }).getByText('确认发布范围：按要求完成并提供证据', { exact: true }).isVisible());
     assert.equal(await page.getByRole('button', { name: '查看执行会话', exact: true }).count(), 0);
     await page.keyboard.press('Escape');
     await board.getByRole('button', { name: /运行兼容测试.*执行中/ }).click();
-    await page.getByRole('dialog').waitFor();
+    await page.getByRole('region', { name: '任务详情', exact: true }).waitFor();
     assert(await page.getByRole('button', { name: '修订要求', exact: true }).isEnabled(), 'ordinary follow-up must remain available while Worker runs');
     await page.evaluate(() => window.control.openError = true);
     await page.getByRole('button', { name: '查看执行会话', exact: true }).click();
-    await page.getByRole('alert').getByText(/执行会话暂时无法打开/).waitFor();
+    await page.getByRole('region', { name: '任务详情', exact: true }).getByRole('alert').getByText(/执行会话暂时无法打开/).waitFor();
     await page.evaluate(() => window.control.openError = false);
     await page.getByRole('button', { name: '查看执行会话', exact: true }).click();
     assert((await page.evaluate(() => window.calls)).some(([name, value]) => name === 'openExecution' && value.sessionId === 'real-execution'));
@@ -156,7 +170,7 @@ test('ticket board renders four states, filters, retains details and routes real
     await shot('archive-mobile-dark');
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'archive tabs must fit dark-theme narrow screens');
     await render('archived-detail');
-    await page.getByRole('dialog', { name: '交付设计稿' }).waitFor();
+    await page.getByRole('region', { name: '任务详情', exact: true }).waitFor();
     assert((await page.evaluate(() => window.calls)).some(([name, input]) => name === 'tickets' && input.ticketId === 'done'), 'archived deep links retrieve the same ticket independently from active paging');
     for(const state of ['uncertain','blocked']) {
       await render(state);
@@ -164,7 +178,7 @@ test('ticket board renders four states, filters, retains details and routes real
       await row.waitFor();
       assert(await row.getByRole('button',{name:'暂停工单',exact:true}).isEnabled(), 'uncertain and blocked work retains a real pause action');
       await row.getByRole('button',{name:/运行兼容测试/}).click();
-      const dialog=page.getByRole('dialog'); await dialog.waitFor();
+      const dialog=page.getByRole('region', { name: '任务详情', exact: true }); await dialog.waitFor();
       assert(await dialog.getByRole('button',{name:'暂停工单',exact:true}).isEnabled());
       await page.evaluate(()=>window.control.pauseError=true);
       await dialog.getByRole('button',{name:'暂停工单',exact:true}).click();
@@ -175,5 +189,56 @@ test('ticket board renders four states, filters, retains details and routes real
       await shot('pause-'+state+'-mobile');
     }
     assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('incremental ticket details keep list nodes, filters, scroll and focus without healthy polling', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html = await fixture(), browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' });
+    page.setDefaultTimeout(5000);
+    await page.setContent(html);
+    await page.evaluate(() => window.renderScenario('long'));
+    const search = page.getByRole('searchbox', { name: '搜索工单' });
+    await search.fill('历史工作');
+    const row = page.locator('.ba-task-list-row').filter({ has: page.getByText('历史工作 20', { exact: true }) });
+    const button = row.locator('.ba-task-open'), handle = await row.elementHandle();
+    await button.scrollIntoViewIfNeeded();
+    await button.focus();
+    const scrollTop = await page.locator('.ba-studio-body').evaluate(node => node.scrollTop);
+    assert(scrollTop > 0, 'exercise a scrolled list');
+    await button.click();
+    const detail = page.getByRole('region', { name: '任务详情', exact: true });
+    await detail.waitFor();
+    assert.equal(await page.getByRole('dialog').count(), 0, 'task details stay in the original container');
+    assert(await detail.evaluate(node => !!node.closest('.ba-tasks')));
+    assert(await handle.evaluate(node => node.isConnected), 'the hidden list is retained');
+    await page.evaluate(() => window.updateTicket('extra-20', { execution: {
+      instructionRevision: 1, phase: 'executing', updatedAt: '2026-11-09T09:00:00Z',
+      worker: { id: 'main', status: 'running', activity: '正在整理验证证据' },
+      children: [{ id: 'child', status: 'completed', activity: '已返回检查结果' }],
+      childCounts: { total: 1, completed: 1 },
+    } }));
+    await detail.getByText('正在整理验证证据', { exact: true }).waitFor();
+    const history = detail.getByRole('button', { name: '已结束步骤 · 1', exact: true });
+    await history.click();
+    await page.evaluate(() => window.updateTicket('extra-20', { execution: {
+      instructionRevision: 1, phase: 'executing', updatedAt: '2026-11-09T09:00:01Z',
+      worker: { id: 'main', status: 'running', activity: '正在核对最终证据' },
+      children: [{ id: 'child', status: 'completed', activity: '已返回检查结果' }],
+      childCounts: { total: 1, completed: 1 },
+    } }));
+    await detail.getByText('正在核对最终证据', { exact: true }).waitFor();
+    assert.equal(await history.getAttribute('aria-expanded'), 'true', 'detail expansion survives incremental reads');
+    assert(await handle.evaluate(node => node.isConnected), 'incremental facts do not replace the retained row DOM');
+    await page.waitForTimeout(3200);
+    assert.deepEqual(await page.evaluate(() => window.calls.filter(([name]) => name === 'tickets').map(([, input]) => input)), [{ ticketId: 'extra-20' }, { ticketId: 'extra-20' }], 'healthy updates only fetch the touched ticket, with no three-second full refresh');
+    await detail.getByRole('button', { name: '返回列表', exact: true }).click();
+    await detail.waitFor({ state: 'hidden' });
+    assert.equal(await search.inputValue(), '历史工作');
+    assert(await button.evaluate(node => node === document.activeElement), 'return restores the original opener: '+await page.evaluate(()=>document.activeElement?.outerHTML));
+    assert.equal(await page.locator('.ba-studio-body').evaluate(node => node.scrollTop), scrollTop, 'return restores the original scroll position');
+    assert.equal(await page.getByRole('tab', { name: '列表', exact: true }).getAttribute('aria-selected'), 'true');
+    assert.equal(await page.locator('.ba-task-list-row').count(), 35, 'the search and full ledger remain intact');
   } finally { await browser.close(); }
 });
