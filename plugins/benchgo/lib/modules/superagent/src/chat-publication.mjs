@@ -82,6 +82,15 @@ export function projectChatMessages(events) {
       request = requests.get(continuations.get(event.data.id));
     } else if (event.type === chatPublicationType && event.ignorable === true) {
       const row = event.data;
+      if (row?.kind === 'ticket-reply' && internalReply(requests.get(row.requestId)) && requests.get(row.requestId).source.replyKind === 'approval') {
+        if (users.has(row.requestId) && !published.has(row.requestId) && !row.suppressed
+          && typeof row.text === 'string' && row.text.trim() && row.text.length <= 16000) {
+          published.add(row.requestId);
+          rows.push({ seq: event.seq, id: `reply:${row.requestId}`, role: 'assistant', kind: 'final', requestId: row.requestId,
+            text: row.text, content: [{ type: 'text', text: row.text }], time: event.time });
+        }
+        continue;
+      }
       if (row?.kind !== 'final' || !users.has(row.requestId) || published.has(row.requestId) || typeof row.text !== 'string' || !row.text.trim() || row.text.length > 16000) continue;
       if (internalReply(requests.get(row.requestId)) || legacyReply(requests.get(row.requestId))) continue;
       published.add(row.requestId);
@@ -148,7 +157,7 @@ export function installChatPublication(scope, agent, { onPublish, canPublish, ap
   });
   scope.tools.register({
     name: 'assistant_reply',
-    description: 'Publish your natural conversational reply and end this turn. Choose the wording and detail yourself. In a host internal Ticket reply turn, save the draft for host delivery instead. Only an internal state notice may use suppress=true when no interruption is needed. This grants no approval or action authority.',
+    description: 'Publish your natural conversational reply and end this turn. Choose the wording and detail yourself. In a host internal Ticket reply turn, save the draft for host delivery instead. An internal state or approval notice may use suppress=true when no interruption is needed. This grants no approval or action authority.',
     parameters: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 16000 }, suppress: { type: 'boolean' } }, additionalProperties: false },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute({ text, suppress = false }, execution) {
@@ -160,7 +169,7 @@ export function installChatPublication(scope, agent, { onPublish, canPublish, ap
       if (!request?.id) throw fail('没有可回复的用户请求');
       if (legacyReply(request)) throw fail('旧工单状态发布路径已停用');
       const internal = internalReply(request), kind = internal ? 'ticket-reply' : 'final';
-      if (suppress && (!internal || request.source.replyKind !== 'state' || text !== undefined)) throw fail('仅内部状态通知可选择静默');
+      if (suppress && (!internal || !['state', 'approval'].includes(request.source.replyKind) || text !== undefined)) throw fail('仅内部状态或审批提醒可选择静默');
       if (!suppress && (typeof text !== 'string' || !text.trim() || text.length > 16000)) throw fail('正式回复正文无效');
       const existing = events.find(event => event.type === chatPublicationType && event.data?.kind === kind && event.data.requestId === request.id);
       if (existing) {

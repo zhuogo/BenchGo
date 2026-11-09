@@ -33,7 +33,7 @@ import { createWorkbenchChannelIngress } from './workbench-channel-ingress.mjs';
 import { createChannelSessionHost, registerChannelSessionProjection } from './channel-session.mjs';
 import { assertRouterMemoryTool } from './memory-tool-policy.mjs';
 import { executionSessionProjection } from './execution-session.mjs';
-import { resolveExecutionApprovalOrigins } from './execution-approval-origin.mjs';
+import { resolveApprovalOrigins } from './execution-approval-origin.mjs';
 import { registerAssistantFetchRoute } from './assistant-fetch-route.mjs';
 import { createActionPermissionStore } from './action-permissions.mjs';
 import { createExternalActionRegistry, createExternalActionHost, registerChannelExternalActions, createActionPermissionApi } from './external-actions.mjs';
@@ -330,7 +330,8 @@ export async function mountAssistant(ctx, commander, providers) {
   mountChannelCallbacks(ctx, channels, feishu);
   actionPermissions = createActionPermissionStore({ directory: store.paths.directory, profileId: store.profileId });
   const externalRegistry = createExternalActionRegistry();
-  ctx.provide('benchgoExternalActions', createExternalActionHost({ ctx, store: actionPermissions, registry: externalRegistry }));
+  ctx.provide('benchgoExternalActions', createExternalActionHost({ ctx, store: actionPermissions, registry: externalRegistry,
+    onApprovalPending: input => engine?.notifyApprovalPending(input) }));
   const permissionApi = createActionPermissionApi({ store: actionPermissions, resolveActor: peer => peer?.principal?.kind === 'owner'
     ? { profileId: store.profileId, id: 'desktop-owner', label: '主人' } : null });
   orchestrationRuntime = createOrchestrationRuntime({ ctx, store, feishu, channels,
@@ -679,7 +680,7 @@ export async function mountAssistant(ctx, commander, providers) {
       case 'actionPermissions':
       case 'actionPermissionCreate':
       case 'actionPermissionRevoke': return permissionApi(input, peer);
-      case 'executionApprovalOrigins': return resolveExecutionApprovalOrigins({ store, engine, input, peer,
+      case 'approvalOrigins': return resolveApprovalOrigins({ store, engine, input, peer,
         readPolicy: id => readAssessmentPolicy(store, ctx.workspaceRegistry, id) });
       case 'executionSessions': {
         const sessions = [];

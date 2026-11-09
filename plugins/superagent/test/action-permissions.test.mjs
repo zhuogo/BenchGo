@@ -115,6 +115,7 @@ test('management API takes only authenticated host identity, not payload identit
 test('scoped host tool combines actual Worker, current mandate, official card and trusted channel target', async t => {
   const store = open(t), registry = createExternalActionRegistry(), agent = { id: 'session', session: { id: 'session' } }, tools = new Map();
   let sends = 0, asks = 0, status = 'open', revision = 1;
+  const reminders = [], warnings = [];
   const mandate = { policyVersion: 'p1', actorId: 'desktop-owner', admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval', source: { channel: 'desktop', sessionId: 'router', messageId: 'instruction' } };
   const database = {
     getTicket: () => ({ id: 'ticket', status, mandate }),
@@ -129,13 +130,20 @@ test('scoped host tool combines actual Worker, current mandate, official card an
   };
   registerChannelExternalActions(registry, { channelIds: ['test'], getAdapter: () => adapter });
   const scope = { tools: { register: tool => tools.set(tool.name, tool) }, get: () => ({ request: async request => { asks++; assert.equal(request.agent, agent); assert.equal(request.toolName, 'assistant_external_action'); assert.match(request.reason, /完整正文/); return 'allowed-once'; } }) };
-  createExternalActionHost({ ctx: {}, store, registry }).installWorker(scope, agent, {
+  createExternalActionHost({ ctx: { logger: { warn: value => warnings.push(value) } }, store, registry, onApprovalPending: input => {
+    assert.ok(asks > reminders.length, 'the official approval request starts before a reminder callback');
+    reminders.push(input); throw Object.assign(new Error('PRIVATE REMINDER FAILURE'), { code: 'TEST_REMINDER_FAILED' });
+  } }).installWorker(scope, agent, {
     database, assignment: { id: 'assignment', ticketId: 'ticket', owner: 'worker', fence: 1 }, run: { id: 'run', sessionId: 'session' }, readPolicy: async () => ({ desktopVersion: 'p1' }), authorizeAction: async () => ({ allowed: true }),
   });
   const tool = tools.get('assistant_external_action'), execution = { agent, name: tool.name, signal: new AbortController().signal, callId: 'call', authorized: true };
   const first = await tool.execute({ operation: 'prepare', adapterId: 'channel:test:send', input: { targetTriggerId: 'real-trigger', text: '完整正文' }, requestId: 'first' }, execution);
   assert.equal((await tool.execute({ operation: 'submit', actionId: first.id }, execution)).state, 'completed');
   assert.equal(sends, 1); assert.equal(asks, 1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(reminders, [{ assignmentId: 'assignment', runId: 'run', sessionId: 'session', callId: 'call', actionId: first.id }]);
+  assert.equal(warnings.length, 1, 'a failed async reminder never changes the approval or submission result');
+  assert.doesNotMatch(warnings[0], /PRIVATE REMINDER FAILURE/);
   const next = await tool.execute({ operation: 'prepare', adapterId: 'channel:test:send', input: { targetTriggerId: 'real-trigger', text: '完整正文' }, requestId: 'next' }, execution);
   revision++;
   await assert.rejects(tool.execute({ operation: 'submit', actionId: next.id }, execution), { code: 'ACTION_CONTENT_CHANGED' });

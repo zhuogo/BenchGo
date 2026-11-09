@@ -1076,9 +1076,9 @@
                 "description": "Trusted same-origin authenticated owner peer only.",
                 "additionalProperties": true
               },
-              "executionApprovalOrigins": {
+              "approvalOrigins": {
                 "type": "object",
-                "description": "Owner-only read-only links to the original official Worker approval. Does not create, grant or settle an approval.",
+                "description": "Owner-only read-only candidate sessions for the review tab. Official sessionStatus remains the sole PendingApproval source. Does not grant or settle an approval.",
                 "required": [
                   "origins"
                 ],
@@ -1089,30 +1089,26 @@
                     "items": {
                       "type": "object",
                       "required": [
-                        "ticketId",
+                        "kind",
                         "title",
-                        "assignmentId",
-                        "runId",
+                        "sourceTitle",
                         "sessionId",
                         "ownerSessionId",
                         "ownerThreadId"
                       ],
                       "additionalProperties": false,
                       "properties": {
-                        "ticketId": {
-                          "type": "string",
-                          "minLength": 1
+                        "kind": {
+                          "enum": [
+                            "router",
+                            "worker"
+                          ]
                         },
                         "title": {
                           "type": "string"
                         },
-                        "assignmentId": {
-                          "type": "string",
-                          "minLength": 1
-                        },
-                        "runId": {
-                          "type": "string",
-                          "minLength": 1
+                        "sourceTitle": {
+                          "type": "string"
                         },
                         "sessionId": {
                           "type": "string",
@@ -1125,8 +1121,38 @@
                         "ownerThreadId": {
                           "type": "string",
                           "minLength": 1
+                        },
+                        "ticketId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "assignmentId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
                         }
-                      }
+                      },
+                      "allOf": [
+                        {
+                          "if": {
+                            "properties": {
+                              "kind": {
+                                "const": "worker"
+                              }
+                            }
+                          },
+                          "then": {
+                            "required": [
+                              "ticketId",
+                              "assignmentId",
+                              "runId"
+                            ]
+                          }
+                        }
+                      ]
                     }
                   }
                 }
@@ -2158,7 +2184,7 @@
               "actionPermissions",
               "actionPermissionCreate",
               "actionPermissionRevoke",
-              "executionApprovalOrigins"
+              "approvalOrigins"
             ]
           },
           "threadId": {
@@ -2393,13 +2419,21 @@
             "type": "string",
             "format": "date-time"
           },
-          "ownerSessionId": {
-            "type": "string",
-            "minLength": 1
-          },
           "archived": {
             "type": "boolean",
             "description": "tickets: filter closed archived records before limit; omitted keeps both scopes."
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "approvalOrigins: optionally recheck one existing official session."
+          },
+          "toolName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "approvalOrigins: actual PendingApproval tool name; requires sessionId and rechecks current Worker tool scope."
           }
         },
         "additionalProperties": true,
@@ -2835,26 +2869,6 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "executionApprovalOrigins"
-                }
-              }
-            },
-            "then": {
-              "required": [
-                "ownerSessionId"
-              ],
-              "properties": {
-                "threadId": {
-                  "type": "string",
-                  "minLength": 1
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
                   "const": "tickets"
                 }
               }
@@ -2870,6 +2884,22 @@
                   "minimum": 1,
                   "maximum": 1000
                 }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "approvalOrigins"
+                }
+              }
+            },
+            "then": {
+              "dependentRequired": {
+                "toolName": [
+                  "sessionId"
+                ]
               }
             }
           }

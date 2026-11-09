@@ -113,6 +113,35 @@ test('transcript matching uses the exact message ID and records processing error
 const ticketSignal = { kind: 'state', eventKey: 'notice:1', ticketId: 'ticket', title: '整理资料', status: 'open', instructionRevision: 1,
   resultVersion: 0, state: 'continuation_wait', code: 'WORKER_TURN_INCOMPLETE', stage: 'execution', assignmentId: 'assignment', fence: 1 };
 
+test('approval reminders wait behind in-flight and queued user messages, retain source chat and deduplicate by official ask', async () => {
+  const f = fixture();
+  const signal = { kind: 'approval', eventKey: 'approval:worker:official-id', ticketId: 'ticket',
+    source: { channel: 'desktop', threadId: 'main', sessionId: 'router' }, approvalId: 'official-id' };
+  f.agent.status = 'running';
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal });
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal });
+  await f.inbox.enqueue({ threadId: 'main', text: '先回答我', requestId: 'human-next' });
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.state().requests.filter(row => row.ticketReply).length, 1);
+  f.agent.status = 'idle'; await f.inbox.settle('main');
+  assert.equal(f.sent[0].source.kind, 'user');
+  await f.finish();
+  assert.deepEqual(f.sent[1].source, { kind: ticketReplySource, replyKind: 'approval', eventKey: signal.eventKey, ticketId: 'ticket' });
+  assert.match(f.sent[1].content[0].text, /任务 → 审核/);
+  await f.finish(); await f.inbox.enqueueTicketReply({ threadId: 'main', signal });
+  assert.equal(f.sent.length, 2, 'the same official approval cannot create another reminder turn');
+});
+
+test('a decided queued approval is suppressed at dispatch without interrupting a user turn', async () => {
+  let pending = true;
+  const f = fixture({}, { beforeDispatch: request => !request.ticketReply || pending });
+  f.agent.status = 'running';
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal: { kind: 'approval', eventKey: 'approval:worker:ask', ticketId: 'ticket' } });
+  pending = false; f.agent.status = 'idle'; await f.inbox.settle('main');
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.state().requests[0].suppressed, true);
+});
+
 test('queued human messages take priority over state notices, which stay out of the user inbox', async () => {
   const f = fixture();
   f.agent.status = 'running';

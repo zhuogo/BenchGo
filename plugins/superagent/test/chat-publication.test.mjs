@@ -10,6 +10,37 @@ const start = (turn = 1) => ({ type: 'turn/start', seq: 0, data: { turn } });
 const answer = (content, turn = 1) => ({ type: 'assistant/message', seq: 2, data: { turn, message: { source: { kind: 'model' }, content } } });
 const end = (kind = 'completed', turn = 1) => ({ type: 'turn/end', seq: 3, data: { turn, reason: { kind } } });
 
+test('approval reminder publishes only after host validation and preserves its historical natural reply after approval is decided', async () => {
+  for (const allowed of [true, false]) {
+    const notice = { ...user, data: { ...user.data, id: 'approval-request', source: { kind: ticketReplySource, replyKind: 'approval' },
+      content: [{ type: 'text', text: 'PRIVATE HOST SIGNAL' }] } };
+    const events = [start(), notice, answer([{ type: 'text', text: '有项发送需要你确认，可在任务审核里看一下。' }])];
+    assert.deepEqual(projectChatMessages(events), []);
+    let stopping;
+    const agent = { session: { snapshotEvents: () => events } };
+    installChatPublication({ on: (_name, handler) => { stopping = handler; }, tools: { register() {} } }, agent,
+      { canPublish: async () => allowed, appendRecord: (_session, type, data) => events.push({ type, data, ignorable: true, seq: events.length }) });
+    await stopping({ agent, turn: 1 }); await stopping({ agent, turn: 1 });
+    const restored = projectChatMessages(JSON.parse(JSON.stringify([...events, end(), { type: 'approval/decided', data: { id: 'ask', outcome: 'allowed-once' } }])));
+    assert.equal(restored.length, allowed ? 1 : 0);
+    if (allowed) assert.match(restored[0].text, /任务审核/);
+    assert.doesNotMatch(JSON.stringify(restored), /PRIVATE HOST SIGNAL/);
+  }
+});
+
+test('only a bound internal approval publication can become a natural chat reminder', () => {
+  const notice = { ...user, data: { ...user.data, id: 'approval-request', source: { kind: ticketReplySource, replyKind: 'approval' } } };
+  const publication = reply(3, { kind: 'ticket-reply', requestId: notice.data.id, text: '已备好，请到任务审核确认。' });
+  assert.deepEqual(projectChatMessages([publication, notice]), [], 'a future internal request cannot authorize an earlier publication');
+  assert.deepEqual(projectChatMessages([notice, { ...publication, ignorable: false }]), []);
+  assert.deepEqual(projectChatMessages([notice, { ...publication, data: { ...publication.data, suppressed: true } }]), []);
+  assert.deepEqual(projectChatMessages([notice, { ...publication, data: { ...publication.data, requestId: 'foreign' } }]), []);
+  assert.equal(projectChatMessages([{ ...notice, data: { ...notice.data, source: { kind: 'user', replyKind: 'approval' } } }, publication]).length, 1,
+    'an ordinary human source with a forged approval tag has no internal reminder publication');
+  assert.deepEqual(projectChatMessages([{ ...notice, data: { ...notice.data, source: { kind: ticketReplySource, replyKind: 'result' } } }, publication]), [],
+    'result expressions still use their owned outbox instead of this reminder projection');
+});
+
 test('execution scope notices hide their source, publish only after current host validation, and restore one natural reply', async () => {
   for (const allowed of [true, false]) {
     const notice = { ...user, data: { ...user.data, id: 'execution-notice', source: { kind: executionInputSource, triggerId: 'native', ticketId: 'same-ticket' },

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire, registerHooks } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { registerAssistantFetchRoute } from '../src/assistant-fetch-route.mjs';
-import { resolveExecutionApprovalOrigins } from '../src/execution-approval-origin.mjs';
+import { resolveApprovalOrigins } from '../src/execution-approval-origin.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 
 const requireBenchgo = createRequire(new URL('../../benchgo/package.json', import.meta.url));
@@ -52,14 +52,14 @@ test('official shared Fetch dispatch reaches the registered assistant route with
   const engine = { ticketOwnerScope: async threadId => ({ threadId, sessionIds: [`router-${threadId}`] }) };
   registerAssistantFetchRoute({ connection, async dispatch(input, peer) {
     invocations.push({ input, peer });
-    if (input.action === 'executionApprovalOrigins') return resolveExecutionApprovalOrigins({ store, engine, input, peer, readPolicy: async () => policy });
+    if (input.action === 'approvalOrigins') return resolveApprovalOrigins({ store, engine, input, peer, readPolicy: async () => policy });
     throw Object.assign(new Error('fixture failure'), { code: input.errorCode, revision: 7, hash: 'saved-hash' });
   } });
   const shared = connection.createSharedFetchHandler('/api');
   const call = (input, peer = connection.browserPeer, headers = {}) => shared.fetch(new Request('http://localhost/api/commander/assistant', {
     method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost', ...headers }, body: JSON.stringify(input),
   }), peer);
-  const input = { action: 'executionApprovalOrigins', threadId: 'main', ownerSessionId: 'router-main' };
+  const input = { action: 'approvalOrigins', sessionId: 'worker-main', toolName: 'assistant_external_action' };
 
   await t.test('owner receives only the current source chat Worker through the real registered route', async () => {
     const response = await call(input);
@@ -72,7 +72,7 @@ test('official shared Fetch dispatch reaches the registered assistant route with
     assert.equal(origins[0].sessionId, 'worker-main');
     assert.equal(origins[0].ownerSessionId, 'router-main');
     assert.strictEqual(invocations.at(-1).peer, connection.browserPeer);
-    const side = await (await call({ ...input, threadId: 'side', ownerSessionId: 'router-side' })).json();
+    const side = await (await call({ ...input, sessionId: 'worker-side' })).json();
     assert.deepEqual(side.origins.map(origin => origin.sessionId), ['worker-side']);
   });
 
@@ -87,11 +87,11 @@ test('official shared Fetch dispatch reaches the registered assistant route with
 
   await t.test('JSON identity and Worker ids cannot override trusted owner or server-side origin projection', async () => {
     const response = await call({ ...input, principal: { kind: 'device' }, peer: { principal: { kind: 'device' } },
-      sessionId: 'worker-side', runId: runs.side.run.id, ticketId: runs.side.ticket.id });
+      ownerSessionId: 'forged-router', ownerThreadId: 'side', runId: runs.side.run.id, ticketId: runs.side.ticket.id });
     assert.equal(response.status, 200);
     assert.deepEqual((await response.json()).origins.map(origin => origin.sessionId), ['worker-main']);
     assert.strictEqual(invocations.at(-1).peer, connection.browserPeer);
-    const stale = await call({ ...input, ownerSessionId: 'forged-router' });
+    const stale = await call({ ...input, sessionId: 'forged-worker' });
     assert.deepEqual(await stale.json(), { origins: [] });
   });
 

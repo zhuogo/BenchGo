@@ -21,6 +21,7 @@ import { findExecutionSessionOwner } from './execution-session.mjs';
 import { isChatUserMessage } from './question-reply.mjs';
 import { installRouterQuestions } from './router-questions.mjs';
 import { ticketStateSource } from './ticket-state-report.mjs';
+import { approvalReminderSignal, currentApprovalReminderSignal } from './approval-reminder.mjs';
 import { currentTicketReplySignal, ticketReplySignal, ticketReplySource } from './ticket-reply.mjs';
 import { channelSessionKey } from './channel-policy.mjs';
 import { readAssessmentPolicy, validateTicketMandate } from './assessment-policy.mjs';
@@ -94,7 +95,10 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     ]);
     const request = (state.requests || []).find(row => row.messageId === messageId && row.threadId === threadId);
     if (!request?.ticketReply || request.suppressed || request.status === 'cancelled' || currentThread.archived) return false;
-    const signal = currentTicketReplySignal(store.orchestration, request.ticketReply);
+    const signal = request.ticketReply.kind === 'approval'
+      ? await currentApprovalReminderSignal({ database: store.orchestration, signal: request.ticketReply,
+        readSession: id => ctx.sessionQuery.readSession(id), now: now() })
+      : currentTicketReplySignal(store.orchestration, request.ticketReply);
     const ticket = signal && store.orchestration.getTicket(signal.ticketId);
     if (!ticket || !validateTicketMandate(ticket.mandate, { policy })) return false;
     if (signal.source.channel === 'desktop') return !currentThread.sourceKey
@@ -575,6 +579,23 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
   return {
     ensureSession,
     ticketOwnerScope,
+    async notifyApprovalPending(identity) {
+      assertOpen();
+      // Flush the official writer before reading its durable audit; a missing
+      // audit is never converted into a synthetic approval or guessed reminder.
+      const session = ctx.sessions.get(identity.sessionId);
+      if (!session) return { status: 'suppressed', reason: 'worker-unavailable' };
+      await ctx.sessions.flush(session);
+      const { events } = await ctx.sessionQuery.readSession(identity.sessionId);
+      const signal = approvalReminderSignal(store.orchestration, identity, events, now());
+      if (!signal) return { status: 'suppressed', reason: 'approval-unavailable' };
+      const threadId = signal.source.threadId || 'main';
+      const [scope, current, policy] = await Promise.all([ticketOwnerScope(threadId), thread(threadId), readAssessmentPolicy(store, ctx.workspaceRegistry, threadId)]);
+      if (current.archived || current.sourceKey || !scope.sessionIds.includes(signal.source.sessionId)
+        || !validateTicketMandate(store.orchestration.getTicket(signal.ticketId).mandate, { policy }))
+        return { status: 'suppressed', reason: 'conversation-unavailable' };
+      return inbox.enqueueTicketReply({ threadId, signal });
+    },
     async prepareTicketReply(delivery) {
       if (delivery?.payload?.suppressionReason === 'router-action-already-replied'
         || delivery?.payload?.publication?.systemState?.state === 'action_verified'

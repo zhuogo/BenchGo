@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { executionApprovalOrigins, resolveExecutionApprovalOrigins } from '../src/execution-approval-origin.mjs';
-import { executionApprovalResponse } from '../client/execution-approval.mjs';
+import { executionApprovalOrigins, resolveApprovalOrigins } from '../src/execution-approval-origin.mjs';
+import { channelSessionKey } from '../src/channel-policy.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 
 const policy = { desktopVersion: 'desktop-v1', version: 'channel-v1' };
@@ -45,13 +45,57 @@ test('profile-scoped owner API rejects remote principals, archived threads and s
   const f = fixture(), state = { mainSessionId: 'router-main', threads: [{ id: 'side', sessionId: 'router-side', archived: true }] };
   const dependencies = { store: { getState: async () => state, orchestration: f.database },
     engine: { ticketOwnerScope: async () => main }, readPolicy: async () => policy, peer: { principal: { kind: 'owner' } },
-    input: { ownerSessionId: 'router-main' } };
+    input: { sessionId: 'worker-session', toolName: 'assistant_external_action' } };
   // Real leases use wall time; this fixture's lease remains current for this API call.
   f.assignment.leaseUntil = Date.now() + 60000;
-  assert.equal((await resolveExecutionApprovalOrigins(dependencies)).origins.length, 1);
-  for (const peer of [null, { principal: { kind: 'machine' } }]) await assert.rejects(resolveExecutionApprovalOrigins({ ...dependencies, peer }), { status: 403 });
-  for (const input of [{ ownerSessionId: 'old-router' }, { threadId: 'side', ownerSessionId: 'router-side' },
-    { threadId: 'unknown', ownerSessionId: 'router-main' }]) assert.deepEqual(await resolveExecutionApprovalOrigins({ ...dependencies, input }), { origins: [] });
+  assert.equal((await resolveApprovalOrigins(dependencies)).origins.length, 1);
+  for (const peer of [null, { principal: { kind: 'machine' } }]) await assert.rejects(resolveApprovalOrigins({ ...dependencies, peer }), { status: 403 });
+  for (const input of [{ sessionId: 'old-router' }, { sessionId: 'router-side' },
+    { sessionId: 'unknown-worker' }]) assert.deepEqual(await resolveApprovalOrigins({ ...dependencies, input }), { origins: [] });
+});
+
+test('review inbox lists existing Router and Worker sessions; decisions recheck the actual tool scope', async () => {
+  const f = fixture(); f.assignment.leaseUntil = Date.now() + 60000;
+  f.ticket.mandate.toolScope = ['ops_read'];
+  const state = { mainSessionId: 'router-main', threads: [] };
+  const dependencies = { store: { getState: async () => state, orchestration: f.database },
+    engine: { ticketOwnerScope: async () => main }, readPolicy: async () => policy, peer: { principal: { kind: 'owner' } } };
+  const list = await resolveApprovalOrigins(dependencies);
+  assert.deepEqual(list.origins.map(row => [row.kind, row.sessionId]), [['router', 'router-main'], ['worker', 'worker-session']]);
+  assert.equal(list.origins[1].sourceTitle, '主聊天');
+  const read = input => resolveApprovalOrigins({ ...dependencies, input });
+  assert.equal((await read({ sessionId: 'worker-session', toolName: 'ops_read' })).origins.length, 1);
+  assert.deepEqual(await read({ sessionId: 'worker-session', toolName: 'assistant_external_action' }), { origins: [] });
+  for (const input of [{ toolName: 'ops_read' }, { sessionId: '' }, { sessionId: 'worker-session', toolName: '' }])
+    await assert.rejects(read(input), { status: 400 });
+  f.ticket.status = 'paused';
+  assert.deepEqual((await resolveApprovalOrigins(dependencies)).origins.map(row => row.kind), ['router']);
+});
+
+test('review source clear/archive during async policy lookup cannot authorize the old session', async () => {
+  const f = fixture(); f.assignment.leaseUntil = Date.now() + 60000;
+  const state = { mainSessionId: 'router-main', threads: [] };
+  const dependencies = { store: { getState: async () => state, orchestration: f.database },
+    engine: { ticketOwnerScope: async () => main }, peer: { principal: { kind: 'owner' } },
+    readPolicy: async () => { state.mainSessionId = 'new-router'; return policy; } };
+  assert.deepEqual(await resolveApprovalOrigins(dependencies), { origins: [] });
+});
+
+test('channel Worker review candidates use the verified unified source mapping, without desktop impersonation', async () => {
+  const f = fixture(); f.assignment.leaseUntil = Date.now() + 60000;
+  const source = { channel: 'feishu', appId: 'trusted-app', connectionId: 'feishu', sourceType: 'direct', chatId: 'chat', conversationId: 'chat' };
+  const thread = { id: 'channel-thread', title: '飞书私聊', sessionId: 'channel-router', source, sourceKey: channelSessionKey(source) };
+  f.ticket.mandate = { ...mandate(), source, actorId: 'feishu-owner', policyVersion: policy.version, admission: 'explicit-owner' };
+  const state = { mainSessionId: 'router-main', threads: [thread] };
+  const currentPolicy = { ...policy, connection: { enabled: true, appId: 'trusted-app', ownerOpenIds: ['feishu-owner'] } };
+  const dependencies = { store: { getState: async () => state, orchestration: f.database },
+    engine: { ticketOwnerScope: async id => ({ threadId: id, sessionIds: [id === 'main' ? 'router-main' : 'channel-router'] }) },
+    readPolicy: async () => currentPolicy, peer: { principal: { kind: 'owner' } } };
+  const workers = (await resolveApprovalOrigins(dependencies)).origins.filter(row => row.kind === 'worker');
+  assert.equal(workers.length, 1); assert.equal(workers[0].ownerThreadId, 'channel-thread');
+  assert.equal(workers[0].sourceTitle, '飞书私聊');
+  thread.sourceKey = 'forged-source';
+  assert.deepEqual((await resolveApprovalOrigins(dependencies)).origins.map(row => row.sessionId), ['router-main']);
 });
 
 test('real claimed assignment and official-run identity project without another approval store', t => {
@@ -65,41 +109,4 @@ test('real claimed assignment and official-run identity project without another 
   database.updateRun(run.id, { owner: assignment.owner, fence: assignment.fence, state: 'submitted' });
   const origins = executionApprovalOrigins({ database, ownerScope: main, ownerSessionId: 'router-main', policy });
   assert.equal(origins.length, 1); assert.equal(origins[0].runId, run.id); assert.equal(origins[0].sessionId, 'actual-worker');
-});
-
-test('one approval click answers the same pending only once and never grants always', async () => {
-  const origin = fixture().origins()[0], answers = [];
-  let release;
-  const read = new Promise(resolve => { release = resolve; });
-  const pending = { answerable: true, answer: async outcome => { answers.push(outcome); pending.answerable = false; } };
-  const response = executionApprovalResponse({ origin, pending, readOrigins: () => read });
-  const first = response.answer('allowed-once');
-  await assert.rejects(response.answer('allowed-once'), /正在提交/);
-  release([origin]); await first;
-  assert.deepEqual(answers, ['allowed-once']); assert.equal(response.canAnswer(), false);
-  await assert.rejects(response.answer('allowed-always'), /只允许本次/);
-});
-
-test('late decisions after stop, source switch, revocation or run replacement cannot settle original approval', async () => {
-  const origin = fixture().origins()[0];
-  for (const change of [() => [], () => [{ ...origin, runId: 'replacement' }], () => [{ ...origin, ownerThreadId: 'side' }]]) {
-    let answered = false;
-    const pending = { answerable: true, answer: async () => { answered = true; } };
-    const response = executionApprovalResponse({ pending, origin, readOrigins: async () => change() });
-    await assert.rejects(response.answer('allowed-once'), /已停止/); assert.equal(answered, false);
-  }
-  let current = true, answered = false;
-  const pending = { answerable: true, answer: async () => { answered = true; } };
-  const response = executionApprovalResponse({ pending, origin, isCurrent: () => current, readOrigins: async () => { current = false; return [origin]; } });
-  await assert.rejects(response.answer('rejected'), /已停止/); assert.equal(answered, false);
-  const aborted = executionApprovalResponse({ pending, origin, readOrigins: async () => { pending.answerable = false; return [origin]; } });
-  await assert.rejects(aborted.answer('allowed-once'), /已停止/); assert.equal(answered, false);
-});
-
-test('transient read failure allows retry; rejection uses the original pending without publishing another request', async () => {
-  const origin = fixture().origins()[0], answers = []; let reads = 0;
-  const pending = { answerable: true, answer: async value => { answers.push(value); pending.answerable = false; } };
-  const response = executionApprovalResponse({ pending, origin, readOrigins: async () => { if (++reads === 1) throw new Error('offline'); return [origin]; } });
-  await assert.rejects(response.answer('rejected'), /offline/); assert.equal(response.canAnswer(), true);
-  await response.answer('rejected'); assert.deepEqual(answers, ['rejected']);
 });

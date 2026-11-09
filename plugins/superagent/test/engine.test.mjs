@@ -2093,6 +2093,67 @@ async function stateReportFixture(t, script, options = {}) {
   return { ...f, store, directory, agent, ticket, delivery, settle, learningWrites: () => learningWrites };
 }
 
+async function approvalReminderFixture(t, script) {
+  const f = await stateReportFixture(t, script);
+  const worker = f.ctx.sessions.create();
+  const assignment = { id: 'approval-assignment', ticketId: f.ticket.id, state: 'claimed', owner: 'owner', fence: 1, leaseUntil: Date.now() + 60000 };
+  const run = { id: 'approval-run', owner: 'owner', fence: 1, sessionId: String(worker.id), state: 'running' };
+  f.store.orchestration.getAssignment = () => assignment;
+  f.store.orchestration.runs = () => [run];
+  const identity = { assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId, callId: 'approval-call', actionId: 'approval-action' };
+  worker.append('turn/start', { turn: 1 });
+  worker.append('assistant/message', { turn: 1, message: { content: [{ type: 'tool-call', id: identity.callId, name: 'assistant_external_action',
+    arguments: JSON.stringify({ operation: 'submit', actionId: identity.actionId }) }] } }, { surfaceOp: 'append' });
+  worker.append('approval/asked', { id: 'official-approval', callId: identity.callId, toolName: 'assistant_external_action', reason: 'PRIVATE ACTION BODY' });
+  return { ...f, worker, assignment, identity, decide() { worker.append('approval/decided', { id: 'official-approval', outcome: 'rejected' }); },
+    async wait() {
+      for (let i = 0; i < 100; i++) {
+        if ((await f.store.getState()).requests?.some(row => row.ticketReply?.kind === 'approval' && ['processed', 'failed', 'cancelled'].includes(row.status))) return;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.fail('approval reminder did not settle');
+    } };
+}
+
+test('approval reminder expresses through the original Router once and persists after decision without new task authority', async t => {
+  const f = await approvalReminderFixture(t, () => text('发送内容已备好，需要你在工作台的任务审核里确认。'));
+  await f.engine.notifyApprovalPending(f.identity); await f.wait();
+  assert.equal(f.requests.length, 1);
+  assert.deepEqual(f.requests[0].tools.map(tool => tool.name), ['assistant_reply']);
+  assert.doesNotMatch(JSON.stringify(f.requests), /PRIVATE ACTION BODY/);
+  assert.match(JSON.stringify(f.requests), /首次待批不得静默/);
+  assert.deepEqual((await f.engine.history()).messages.map(row => row.text), ['发送内容已备好，需要你在工作台的任务审核里确认。']);
+  await f.engine.notifyApprovalPending(f.identity); await f.agent.whenIdle();
+  assert.equal(f.requests.length, 1, 'same official ask never opens another expression turn');
+  assert.equal(f.learningWrites(), 0);
+  f.decide(); f.ticket.status = 'completed';
+  assert.deepEqual((await f.engine.history()).messages.map(row => row.text), ['发送内容已备好，需要你在工作台的任务审核里确认。']);
+});
+
+for (const change of ['decided', 'stopped', 'revoked']) test(`approval reminder rechecks ${change} before natural publication`, async t => {
+  let f;
+  f = await approvalReminderFixture(t, () => {
+    if (change === 'decided') f.decide();
+    if (change === 'stopped') f.ticket.status = 'cancelled';
+    if (change === 'revoked') f.ticket.mandate.policyVersion = 'revoked';
+    return text('STALE APPROVAL NOTICE');
+  });
+  await f.engine.notifyApprovalPending(f.identity); await f.wait();
+  assert.deepEqual((await f.engine.history()).messages, []);
+  assert.equal(f.agent.session.snapshotEvents().some(event => event.type === 'plugin:benchgo-plugin/chat-publication'), false);
+});
+
+test('approval reminder cannot cross Router chats or turn an already decided ask into a reminder', async t => {
+  const f = await approvalReminderFixture(t, () => text('MUST NOT PUBLISH'));
+  f.ticket.mandate.source.threadId = 'side';
+  const side = await f.engine.createThread({ title: '其他对话' });
+  f.ticket.mandate.source.threadId = side.id;
+  assert.equal((await f.engine.notifyApprovalPending(f.identity)).status, 'suppressed');
+  f.ticket.mandate.source.threadId = 'main'; f.decide();
+  assert.equal((await f.engine.notifyApprovalPending(f.identity)).status, 'suppressed');
+  assert.equal(f.requests.length, 0);
+});
+
 test('Ticket state reports use the saved Router fallback route without learning or Worker bodies', async t => {
   const f = await stateReportFixture(t, (_request, count) => count === 1
     ? [{ type: 'finish', reason: { kind: 'error', failure: { code: 'RATE_LIMIT', status: 429, message: 'busy' } } }]

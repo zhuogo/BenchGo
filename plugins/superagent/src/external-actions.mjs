@@ -142,7 +142,7 @@ export function createActionPermissionApi({ store, resolveActor }) {
 }
 
 /** The root service owns one registry/store, each owning Worker gets a scoped facade. */
-export function createExternalActionHost({ ctx, store, registry }) {
+export function createExternalActionHost({ ctx, store, registry, onApprovalPending }) {
   return {
     registry,
     installWorker(scope, agent, { database, assignment, run, readPolicy, authorizeAction, leaseMs = 60000 }) {
@@ -165,7 +165,15 @@ export function createExternalActionHost({ ctx, store, registry }) {
           authorizationVersion: String(ticket.authorizationVersion ?? ticket.mandate.authorizationVersion ?? 1), policyVersion: policy[versionKey],
           principal: ticket.mandate.source?.channel === 'desktop' && ticket.mandate.actorId === 'desktop-owner' ? { kind: 'owner' } : { kind: 'channel-user', id: ticket.mandate.actorId } };
       };
-      const service = createExternalActionService({ store, registry, getContext, requestApproval: request => requestExternalActionApproval(scope, request) });
+      const service = createExternalActionService({ store, registry, getContext, requestApproval: request => {
+        // The official service appends approval/asked synchronously before its
+        // answerer waterfall waits. Reminder failures never alter that promise.
+        const outcome = requestExternalActionApproval(scope, request);
+        if (onApprovalPending) void Promise.resolve().then(() => onApprovalPending({ assignmentId: assignment.id,
+          runId: run.id, sessionId: run.sessionId, callId: request.exec.callId, actionId: request.action.id }))
+          .catch(error => ctx.logger?.warn?.(`SuperAgent 审批提醒未入信：${error.code || error.name}`));
+        return outcome;
+      } });
       return installExternalActionTools(scope, agent, { service });
     },
   };
