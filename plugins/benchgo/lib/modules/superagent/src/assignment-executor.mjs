@@ -186,16 +186,19 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         scope.systemPrompt.section({ name: 'benchgo-task-time', order: -99, interpolate: false,
           text: JSON.stringify({ currentTime: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, originalRequestTime: ticket.createdAt })
             + '\nInterpret relative dates such as today against the original request time and timezone. Verify dates using source timestamps; do not ask the user to supply the system date.' });
+        const withCheckpoint = checkpoints && ((execution, dispatch) => {
+          // Freeze the applied requirements before checkpoint IO. The after-state
+          // must never be attributed to a revision that arrived during the tool.
+          const instructionRevision = currentSnapshot().instructionRevision;
+          return checkpoints.protect({ runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory,
+            callId: execution.callId, fence: assignment.fence, instructionRevision }, dispatch);
+        });
         installWorkerPermissionGate(scope, { database, assignment, readPolicy, authorizeAction,
           ...(resumed ? { priorToolEvents: agent.session.snapshotEvents() } : {}),
-          ...(checkpoints ? { withCheckpoint: (execution, dispatch) => checkpoints.protect({
-            runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory, callId: execution.callId,
-          }, dispatch) } : {}),
+          ...(withCheckpoint ? { withCheckpoint } : {}),
         });
         installWorkerSubagents(scope, agent, { ctx, database, assignment, readPolicy, authorizeAction, models, currentModel: () => models[modelIndex], parentRole: role,
-          ...(checkpoints ? { withCheckpoint: (execution, dispatch) => checkpoints.protect({
-            runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory, callId: execution.callId,
-          }, dispatch) } : {}),
+          ...(withCheckpoint ? { withCheckpoint } : {}),
         });
         selfCheck = installWorkerSelfCheck(scope, agent, { database, assignment, run, renew,
           isWaiting: () => !!attention?.waiting() || waitingPause });

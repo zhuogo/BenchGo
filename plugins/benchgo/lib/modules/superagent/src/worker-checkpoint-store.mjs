@@ -10,9 +10,9 @@ const fail = (code, message) => Object.assign(new Error(message), { code });
 const ignored = name => ['.git', 'node_modules', '.pnpm-store'].includes(name) || /^\.env(?:\.|$)/i.test(name) || /(?:^id_(?:rsa|ed25519)$|\.(?:pem|key|p12|pfx)$)/i.test(name);
 
 /** Separate, valid Git object storage; never opens or changes the project's Git index. */
-export function createWorkerCheckpointStore({ directory, maxFiles = 10000, maxBytes = 128 * 1024 * 1024, maxFileBytes = 32 * 1024 * 1024 } = {}) {
+export function createWorkerCheckpointStore({ directory, onObservation, onObservationError, maxFiles = 10000, maxBytes = 128 * 1024 * 1024, maxFileBytes = 32 * 1024 * 1024 } = {}) {
   if (!isAbsolute(directory || '')) throw new Error('Checkpoint storage requires an absolute directory');
-  const root = resolve(directory), queues = new Map();
+  const root = resolve(directory), queues = new Map(), coverageCache = new Map(), observing = new Map();
   let ready;
   const init = () => ready ||= (async () => {
     await mkdir(join(root, 'objects'), { recursive: true, mode: 0o700 });
@@ -53,31 +53,71 @@ export function createWorkerCheckpointStore({ directory, maxFiles = 10000, maxBy
     const actual = await realpath(directory);
     if (actual === root || inside(actual, root)) throw new Error('Checkpoint storage must be outside the workspace');
     const files = Object.create(null); let count = 0, total = 0;
-    async function walk(path, prefix = '') {
+    const sameStat = (before, after) => ['ino', 'dev', 'size', 'mode', 'nlink', 'ctimeMs', 'mtimeMs'].every(key => before[key] === after[key]);
+    async function walk(path, prefix, before) {
+      if (!before.isDirectory() || before.isSymbolicLink()) throw fail('CHECKPOINT_UNSAFE_PATH', 'Checkpoint requires a real directory');
       for (const name of (await readdir(path)).sort()) {
         if (ignored(name)) continue;
         const file = join(path, name), key = prefix ? `${prefix}/${name}` : name, stat = await lstat(file);
         if (++count > maxFiles) throw fail('CHECKPOINT_LIMIT', 'Checkpoint file limit exceeded');
         if (stat.isSymbolicLink()) throw fail('CHECKPOINT_UNSAFE_PATH', 'Checkpoint cannot follow symbolic links');
-        if (stat.isDirectory()) { await walk(file, key); continue; }
+        if (stat.isDirectory()) { await walk(file, key, stat); continue; }
         if (!stat.isFile() || stat.nlink > 1) throw fail('CHECKPOINT_UNSAFE_PATH', 'Checkpoint requires regular, unlinked files');
         total += stat.size;
         if (stat.size > maxFileBytes || total > maxBytes) throw fail('CHECKPOINT_LIMIT', 'Checkpoint byte limit exceeded');
         const handle = await open(file, 'r');
         try {
           const opened = await handle.stat();
-          if (opened.ino !== stat.ino || opened.dev !== stat.dev || !opened.isFile()) throw new Error('Workspace changed while checkpointing');
+          if (!opened.isFile() || !sameStat(stat, opened)) throw fail('CHECKPOINT_CHANGED', 'Workspace changed while checkpointing');
           const bytes = await handle.readFile(), after = await handle.stat();
-          if (bytes.length !== stat.size || opened.ctimeMs !== after.ctimeMs || opened.mtimeMs !== after.mtimeMs) throw new Error('Workspace changed while checkpointing');
+          if (bytes.length !== stat.size || !after.isFile() || !sameStat(opened, after)) throw fail('CHECKPOINT_CHANGED', 'Workspace changed while checkpointing');
           files[key] = { hash: hash(bytes), mode: stat.mode & 0o777, size: bytes.length, ...(persist ? { blob: await blob(bytes) } : {}) };
         } finally { await handle.close(); }
       }
+      // Detect names added/removed or directory replacement during this same
+      // traversal; a partial manifest must never become complete evidence.
+      const after = await lstat(path);
+      if (!after.isDirectory() || after.isSymbolicLink() || !sameStat(before, after)) throw fail('CHECKPOINT_CHANGED', 'Workspace changed while checkpointing');
     }
-    await walk(actual);
+    await walk(actual, '', info);
     return { directory: actual, files };
   }
   const comparable = file => file ? { hash: file.hash, mode: file.mode, size: file.size } : null;
   const identical = (a, b) => same(comparable(a), comparable(b));
+  function observation(record) {
+    const before = record.before.files, after = record.after.files;
+    let added = 0, modified = 0, deleted = 0, unchanged = 0;
+    for (const path of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (!before[path]) added++;
+      else if (!after[path]) deleted++;
+      else if (identical(before[path], after[path])) unchanged++;
+      else modified++;
+    }
+    return { observationId: record.id, ticketId: record.ticketId, assignmentId: record.assignmentId, runId: record.runId,
+      fence: record.fence, instructionRevision: record.instructionRevision, callId: record.callId ?? null, sequence: record.sequence,
+      startedAt: new Date(record.createdAt).toISOString(), completedAt: new Date(record.completedAt).toISOString(), directory: record.before.directory,
+      coverage: { kind: 'protected-workspace-files', complete: true, truncated: false, exclusionsVersion: 1,
+        externalEffects: 'not-observed', conversationOutputs: 'not-observed' },
+      comparison: { beforeFiles: Object.keys(before).length, afterFiles: Object.keys(after).length, added, modified, deleted, unchanged,
+        netChanged: added + modified + deleted > 0 } };
+  }
+  const unknownCoverage = () => ({ known: false, complete: false, firstSequence: null, lastSequence: null, pending: 0, failed: 0, restored: false });
+  function rememberCoverage(rows, runId) {
+    const runs = new Set(rows.map(row => row.runId));
+    if (runId) runs.add(runId);
+    for (const id of runs) {
+      const records = rows.filter(row => row.runId === id), actions = records.filter(row => row.kind === 'action').sort((a, b) => a.sequence - b.sequence);
+      const pending = actions.filter(row => row.state !== 'complete').length;
+      let failed = actions.filter(row => row.state === 'complete' && row.observationState !== 'recorded').length;
+      if (actions.some((row, index) => row.sequence !== index)) failed = Math.max(failed, 1);
+      const restored = records.some(row => row.kind === 'restore' || row.restoredAt);
+      const value = { known: true, complete: actions.length > 0 && !pending && !failed && !restored,
+        firstSequence: actions[0]?.sequence ?? null, lastSequence: actions.at(-1)?.sequence ?? null, pending, failed, restored };
+      coverageCache.delete(id); coverageCache.set(id, value);
+      // This is a bounded derived cache, never a second durable execution ledger.
+      if (coverageCache.size > 256) coverageCache.delete(coverageCache.keys().next().value);
+    }
+  }
   async function list({ ticketId, runId } = {}) {
     await init();
     const rows = [];
@@ -86,6 +126,7 @@ export function createWorkerCheckpointStore({ directory, maxFiles = 10000, maxBy
       const row = JSON.parse(await readFile(join(root, 'records', name), 'utf8'));
       if ((!ticketId || row.ticketId === ticketId) && (!runId || row.runId === runId)) rows.push(row);
     }
+    rememberCoverage(rows, runId);
     return rows.sort((a, b) => a.createdAt - b.createdAt || a.sequence - b.sequence);
   }
   async function preview(runId) {
@@ -121,25 +162,54 @@ export function createWorkerCheckpointStore({ directory, maxFiles = 10000, maxBy
   }
   const publicPreview = ({ desired, records, ...result }) => result;
   return {
+    observationCoverage(runId) {
+      const value = coverageCache.get(runId) || unknownCoverage(), pending = Math.max(value.pending, observing.get(runId) || 0);
+      return { ...value, pending, complete: value.complete && pending === 0 };
+    },
     async assertRunnable(runId) {
       if ((await list({ runId })).some(row => row.restoredAt || row.kind === 'restore')) throw fail('CHECKPOINT_RESTORED', 'Restored execution cannot continue; create a new execution');
     },
-    async protect({ runId, ticketId, assignmentId, directory, callId }, dispatch) {
+    async protect({ runId, ticketId, assignmentId, directory, callId, fence, instructionRevision }, dispatch) {
       if (![runId, ticketId, assignmentId].every(value => typeof value === 'string' && value)) throw new Error('Checkpoint requires execution ownership');
-      return locked(runId, async () => {
+      // Include callers waiting for the existing per-run lock in tail coverage.
+      observing.set(runId, (observing.get(runId) || 0) + 1);
+      try { return await locked(runId, async () => {
         await init();
         const existing = await list({ runId });
         if (existing.some(row => row.kind === 'action' && row.state !== 'complete')) throw fail('CHECKPOINT_UNCERTAIN', 'Previous action checkpoint is unfinished');
         if (existing.some(row => row.restoredAt || row.kind === 'restore')) throw fail('CHECKPOINT_RESTORED', 'Restored execution cannot continue');
-        const record = { id: randomUUID(), kind: 'action', runId, ticketId, assignmentId, callId, createdAt: Date.now(), sequence: existing.length, state: 'pending', before: await scan(directory) };
+        const record = { id: randomUUID(), kind: 'action', runId, ticketId, assignmentId, callId, fence, instructionRevision,
+          createdAt: Date.now(), sequence: existing.length, state: 'pending', before: await scan(directory) };
+        const remember = () => rememberCoverage([...existing, record], runId);
+        remember();
         await save(record);
         try { return await dispatch(); }
         finally {
           // Failure/cancellation may already have changed files. Record its after-state
           // too; a process crash leaves pending state and intentionally blocks restore.
-          record.after = await scan(directory); record.state = 'complete'; record.completedAt = Date.now(); await save(record);
+          record.after = await scan(directory);
+          if (record.after.directory !== record.before.directory) throw fail('CHECKPOINT_UNSAFE_PATH', 'Checkpoint workspace identity changed');
+          record.state = 'complete'; record.completedAt = Date.now(); await save(record);
+          remember();
+          if (onObservation) {
+            try {
+              await onObservation(observation(record));
+              record.observationState = 'recorded'; await save(record); remember();
+            }
+            catch (error) {
+              // The official dispatch already happened. A journal outage is an
+              // observation gap, never a reason to fail or replay that action.
+              record.observationState = 'failed';
+              remember();
+              await save(record).catch(() => {});
+              try { await onObservationError?.({ observationId: record.id, runId, code: 'CHECKPOINT_OBSERVATION_FAILED' }, error); } catch { /* Isolate diagnostics too. */ }
+            }
+          }
         }
-      });
+      }); } finally {
+        const pending = observing.get(runId) - 1;
+        if (pending) observing.set(runId, pending); else observing.delete(runId);
+      }
     },
     async list(filter) { return (await list(filter)).map(({ before, after, ...row }) => ({ ...row, directory: before?.directory, files: Object.keys(before?.files || {}).length })); },
     async preview(runId) { return locked(runId, async () => publicPreview(await preview(runId))); },
@@ -149,6 +219,7 @@ export function createWorkerCheckpointStore({ directory, maxFiles = 10000, maxBy
         if (!token || token !== plan.token) throw fail('CHECKPOINT_CHANGED', 'Rollback preview changed; review it again');
         if (plan.conflicts.length) throw fail('CHECKPOINT_CONFLICT', `Later changes must be preserved: ${plan.conflicts.join(', ')}`);
         const backup = { id: randomUUID(), kind: 'restore', runId, ticketId: plan.records[0].ticketId, assignmentId: plan.records[0].assignmentId, createdAt: Date.now(), sequence: plan.records.length, state: 'pending', before: await scan(plan.directory) };
+        rememberCoverage([...plan.records, backup], runId);
         await save(backup);
         // Verify again after the recovery backup has been persisted.
         if ((await preview(runId)).token !== token) throw fail('CHECKPOINT_CHANGED', 'Workspace changed while preparing rollback');
@@ -186,6 +257,7 @@ export function createWorkerCheckpointStore({ directory, maxFiles = 10000, maxBy
         }
         backup.after = await scan(plan.directory); backup.state = 'complete'; await save(backup);
         for (const row of plan.records) { row.restoredAt = Date.now(); row.restoreId = backup.id; await save(row); }
+        rememberCoverage([...plan.records, backup], runId);
         return { runId, restored: plan.changes.map(row => row.path), backupId: backup.id, externalEffectsReverted: false };
       });
     },

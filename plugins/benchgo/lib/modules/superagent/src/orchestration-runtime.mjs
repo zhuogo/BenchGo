@@ -15,6 +15,7 @@ import { archiveClosedExecutionSessions, executionSessionProjection } from './ex
 import { executionUncertainty, executionStopConfirmation } from './execution-uncertainty.mjs';
 import { requestInterruptedContinuation } from './interrupted-continuation.mjs';
 import { interruptedContinuationPolicy } from './interrupted-continuation-policy.mjs';
+import { createExecutionSummaryInput } from './execution-summary-input.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
 export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, prepareTicketReply, notifyExecutionInput, notifyExecutionRecovery, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
@@ -37,7 +38,9 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   const readPolicy = threadId => readAssessmentPolicy(store, ctx.workspaceRegistry, threadId);
   const directReplies = createDirectReplyDelivery({ database, readPolicy, signal: shutdown.signal, onDelivered: mirrorDelivered,
     getAdapter: channel => channels?.get(channel) || (channel === 'feishu' ? feishu : null) });
-  const checkpointStore = createWorkerCheckpointStore({ directory: join(store.paths.workspace, 'checkpoints') });
+  const checkpointStore = createWorkerCheckpointStore({ directory: join(store.paths.workspace, 'checkpoints'),
+    onObservation: observation => database.recordExecutionArtifactObservation(observation),
+    onObservationError: metadata => ctx.logger?.warn?.(`SuperAgent 文件观察未入账：${metadata.code}`) });
   const checkpoints = createCheckpointService({ database, checkpoints: checkpointStore, readPolicy, agents: ctx.agents });
   async function commitResult(result, { assignment, ticket, signal, beforeCommit }) {
     const policy = await readPolicy();
@@ -435,8 +438,20 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         ...(inspected ? { lastInspection: { id: inspected.id ?? null, at: inspected.at ?? null, status: inspected.status ?? inspected.outcome ?? null, code: inspected.code ?? null } } : {}) } : null,
       watermarks: projections.map(row => ({ sessionId: row.sessionId, sourceSeq: row.cursor, flushedSeq: row.flushedCursor,
         sourceDurability: row.sourceDurability, complete: row.complete, missingReason: row.missingReason })),
-      outputChanges: null,
+      artifactCoverage: checkpointStore.observationCoverage?.(run?.id) || { known: false, complete: false },
     };
+  }
+  function existingEvidence(ticket, requestedRunId) {
+    const runtime = evidenceRuntime(ticket, requestedRunId), watermark = database.executionFactCursor();
+    // One bounded suffix of the existing journal feeds both local and remote
+    // observers. No transcript, checkpoint blob or workspace scan is read here.
+    const facts = { ...database.executionEvidence({ ticketId: ticket.id, ...(runtime.run ? { runId: runtime.run.id } : {}),
+      instructionRevision: ticket.instructionRevision ?? 1, after: Math.max(0, watermark - 200), limit: 200 }),
+      runtime, observedAt: timestamp(now()) };
+    const modelEvidence = createExecutionSummaryInput({ ticketId: ticket.id, runId: runtime.run?.id || '',
+      instructionRevision: ticket.instructionRevision ?? 1, watermark, target: ticket.target, acceptance: ticket.acceptance,
+      facts });
+    return { ...runtime, modelEvidence };
   }
   let decorateTickets = rows => rows;
   runtime.executionFacts = {
@@ -461,13 +476,13 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     evidence(input) {
       const evidence = database.executionEvidence(input), ticket = database.getTicket(input.ticketId);
       if (!ticket) throw Object.assign(new Error('Ticket not found'), { code: 'TICKET_NOT_FOUND' });
-      return { ...evidence, runtime: evidenceRuntime(ticket, input.runId), bootId: executionProgress.bootId, observedAt: timestamp(now()) };
+      return { ...evidence, runtime: existingEvidence(ticket, input.runId), bootId: executionProgress.bootId, observedAt: timestamp(now()) };
     },
     evidenceSnapshot({ limit = 1000 } = {}) {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new TypeError('Invalid execution evidence limit');
       const tickets = database.listTickets({ archived: false, limit, newestFirst: true });
       const truncated = database.listTickets({ archived: false, limit: 1, offset: limit }).length > 0;
-      const executions = tickets.map(ticket => evidenceRuntime(ticket));
+      const executions = tickets.map(ticket => existingEvidence(ticket));
       const cursor = database.executionFactCursor();
       return { cursor, currentCursor: cursor, observedAt: timestamp(now()), bootId: executionProgress.bootId, executions,
         complete: !truncated && executions.every(row => !row.run || row.watermarks.length > 0 && row.watermarks.every(source => source.complete)),

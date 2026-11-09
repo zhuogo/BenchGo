@@ -69,6 +69,7 @@ export function installExecutionSummaryStore({ db, tx = callback => callback() }
       const result = value.result && { status: safeCode(value.result.status), code: value.result.code ? safeCode(value.result.code) : undefined,
         hits: integer(value.result.hits) ? value.result.hits : 0, signalEligible: value.result.signalEligible === true,
         classification: ['no-progress', 'off-target', 'waiting', 'insufficient-evidence'].includes(value.result.classification) ? value.result.classification : undefined,
+        outputRelevance: ['relevant', 'irrelevant'].includes(value.result.outputRelevance) ? value.result.outputRelevance : 'unknown',
         reason: redactExecutionText(value.result.reason, 300), evidenceWatermark: value.result.evidenceWatermark,
         evidenceRefs: (value.result.evidenceRefs || []).filter(id).slice(0, 24), uncertainty: ['low', 'medium', 'high'].includes(value.result.uncertainty) ? value.result.uncertainty : 'high' };
       const tracking = value.tracking && { lastAttemptAt: value.tracking.lastAttemptAt, lastJudgedWatermark: value.tracking.lastJudgedWatermark,
