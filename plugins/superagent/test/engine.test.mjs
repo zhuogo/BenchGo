@@ -2044,7 +2044,7 @@ test('channel mirror survives official JSONL resume with summary source and zero
   assert.equal(projection.values.benchgoChannelSource.channel, 'telegram');
   assert.equal(projection.values.benchgoChannelSource.sourceType, 'topic');
   assert.ok((await first.ctx.sessionPersistence.list()).some(row => row.header.id === mirrored.sessionId));
-  await host.onDelivery({ id: 'direct-reply', kind: 'owner', state: 'sent', source, threadId: event.threadId, text: 'confirmed reply', receipt: { status: 'accepted', messageId: 'remote-id' } });
+  await host.onDelivery({ id: 'direct-reply', kind: 'owner', state: 'sent', updatedAt: new Date().toISOString(), source, threadId: event.threadId, text: 'confirmed reply', receipt: { status: 'accepted', messageId: 'remote-id' } });
   await first.engine.dispose(); await first.ctx.fiber.dispose();
   const second = await fixture(t, () => text('must not run'), options);
   t.after(async () => { await second.engine.dispose(); await second.ctx.fiber.dispose(); await rm(directory, { recursive: true, force: true }); });

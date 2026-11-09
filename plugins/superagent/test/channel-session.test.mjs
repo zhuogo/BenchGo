@@ -10,7 +10,7 @@ function fixture() {
   const agent = { session: { id: 'official-session', append() { assert.fail('channel display mirrors must never append model-surface messages'); } } };
   const ctx = { sessionQuery: { async readSession() { return { events }; } }, sessions: { async flush() { flushes++; } } };
   const store = { async getState() { return { threads }; } };
-  const engine = { async ensureSourceThread(input) { let thread = threads.find(row => row.sourceKey === input.sourceKey); if (!thread) threads.push(thread = { ...input, id: 'thread', sessionId: agent.session.id }); return thread; }, async ensureSession() { return agent; } };
+  const engine = { async ensureSourceThread(input) { let thread = threads.find(row => row.sourceKey === input.sourceKey); if (!thread) threads.push(thread = { ...input, id: 'thread', sessionId: agent.session.id, createdAt: '2026-01-01T00:00:00.000Z' }); return thread; }, async ensureSession() { return agent; } };
   const host = createChannelSessionHost({ ctx, store, engine, appendRecord(session, type, data) {
     assert.equal(session, agent.session); assert.equal(type, channelMessageRecordType);
     events.push({ type, data, ignorable: true });
@@ -23,7 +23,7 @@ test('persisted inbound and confirmed outbox mirror to one official session with
   assert.equal(f.threads.length, 1); assert.equal(f.events.length, 1);
   assert.equal(f.threads[0].source.threadId, 'remote-thread');
   assert.equal(f.threads[0].sourceKey, channelSessionKey(source));
-  const delivery = { id: 'outbox', state: 'sent', receipt: { status: 'accepted', messageId: 'remote-message' }, payload: { source, publication: { origin: 'router', text: '结果' } } };
+  const delivery = { id: 'outbox', state: 'sent', sentAt: '2026-01-01T00:00:01.000Z', receipt: { status: 'accepted', messageId: 'remote-message' }, payload: { source, publication: { origin: 'router', text: '结果' } } };
   await f.host.onDelivery(delivery); await f.host.onDelivery(delivery);
   assert.equal(f.events.length, 2); assert.equal(f.events[1].data.text, '结果');
   assert.equal(channelMessageRecordOf(f.events[0]).direction, 'inbound');
@@ -62,6 +62,22 @@ test('historical raw mirror keys prevent duplicate new records without writing a
   assert.equal(f.events.length, 1);
   assert.equal(f.events[0].type, 'user/message');
   assert.equal(f.counts().flushes, 1);
+});
+
+test('sent ledger replay cannot recreate a deleted source or refill a newly created history', async () => {
+  const f = fixture();
+  const old = { id: 'old', state: 'sent', sentAt: '2025-12-31T23:59:59.000Z', source, text: 'deleted history', receipt: { status: 'accepted', messageId: 'old-receipt' } };
+  assert.equal(await f.host.onDelivery(old), null);
+  assert.equal(f.threads.length, 0);
+  await f.host.onInbound({ source, text: 'new real inbound' }, { intakeEvent: { id: 'new-input' } });
+  assert.equal(await f.host.onDelivery(old), null);
+  assert.equal(await f.host.onDelivery({ ...old, id: 'unverifiable', sentAt: undefined }), null);
+  assert.equal(f.events.length, 1);
+  await f.host.onDelivery({ ...old, id: 'new', sentAt: '2026-01-01T00:00:01.000Z', text: 'new reply' });
+  assert.equal(f.events.length, 2);
+  f.threads.length = 0;
+  assert.equal(await f.host.onDelivery({ ...old, sentAt: '2026-01-01T00:00:02.000Z' }), null);
+  assert.equal(f.threads.length, 0);
 });
 
 test('channel display record rejects foreign, malformed and capability-looking payloads as protocol identities', () => {

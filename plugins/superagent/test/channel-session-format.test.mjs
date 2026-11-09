@@ -41,13 +41,13 @@ test('real official Session channel records survive JSON/V4 restore without occu
     store: { async getState() { return { threads }; } },
     engine: { async ensureSourceThread(input) {
       let thread = threads.find(row => row.sourceKey === input.sourceKey);
-      if (!thread) threads.push(thread = { ...input, id: 'channel-thread', sessionId: session.id });
+      if (!thread) threads.push(thread = { ...input, id: 'channel-thread', sessionId: session.id, createdAt: '2026-01-01T00:00:00.000Z' });
       return thread;
     }, async ensureSession() { return { session }; } },
   });
   const event = { source, threadId: 'remote-thread', text: 'channel input' }, result = { intakeEvent: { id: 'original-trigger' } };
   await host.onInbound(event, result); await host.onInbound(event, result);
-  await host.onDelivery({ id: 'outbox', state: 'sent', receipt: { status: 'accepted', messageId: 'remote-message' },
+  await host.onDelivery({ id: 'outbox', state: 'sent', sentAt: '2026-01-01T00:00:01.000Z', receipt: { status: 'accepted', messageId: 'remote-message' },
     source, threadId: event.threadId, text: 'confirmed original-source reply' });
   assert.equal(flushes, 3);
   const physical = JSON.stringify({ header: { ...session.header, version: 4 }, events: session.snapshotEvents(), inheritedEventCount: 0 });
