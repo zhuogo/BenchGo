@@ -13,24 +13,32 @@ const { build } = createRequire(new URL('../../benchgo/package.json', import.met
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 const captureDir = process.env.BENCHGO_ROLE_SCREENSHOTS;
 
-test('official slot/provider/locale bindings retain ordinary controls and isolate owned session roles', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+test('owned and unknown sessions hide selectors and diagnostics while ordinary official controls remain usable', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
   const html = await fixture(), browser = await chromium.launch({ headless: true, executablePath });
   try {
-    const page = await browser.newPage({ reducedMotion: 'reduce' }), errors = [];
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 }, reducedMotion: 'reduce' }), errors = [];
     page.setDefaultTimeout(5000);
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
     await page.setContent(html);
-    await page.waitForFunction(() => document.querySelector('[data-fixture-session]'), undefined, { timeout: 5000 }).catch(async error => { throw new Error(JSON.stringify({ errors, body: await page.locator('body').innerText() }), { cause: error }); });
     const owned = page.locator('[data-fixture-session="owned"]'), ordinary = page.locator('[data-fixture-session="ordinary"]');
-    await owned.getByText('正在确认会话角色…', { exact: true }).waitFor();
+    const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const hidden = async phase => {
+      await settle();
+      assert.equal(await owned.innerText(), '自有会话', `${phase}: no role, model, status or diagnostic text`);
+      assert.equal(await owned.locator('[data-original], .ba-session-role, [title], [aria-label*="preset"]').count(), 0);
+      assert.equal(await page.getByRole('tooltip').count(), 0);
+      assert.equal(await owned.getByRole('textbox', { name: 'owned 输入框', exact: true }).count(), 1, 'official input remains available');
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      if (captureDir) { await mkdir(captureDir, { recursive: true }); await page.screenshot({ path: join(captureDir, `${phase}.png`), fullPage: true }); }
+    };
+    await owned.waitFor();
     await page.getByRole('button', { name: '预设 unbound', exact: true }).waitFor();
-    assert.equal(await owned.locator('.bg-loading-character').first().evaluate(node => getComputedStyle(node).animationName), 'none');
-    assert.equal(await owned.getByRole('button', { name: /权限：/ }).count(), 0);
-    await ordinary.getByRole('button', { name: '权限：read-only', exact: true }).waitFor().catch(async error => { throw new Error(JSON.stringify({ errors, body: await page.locator('body').innerText(), buttons: await page.getByRole('button').evaluateAll(nodes => nodes.map(node => node.outerHTML)) }), { cause: error }); });
-    assert.equal(await page.evaluate(() => window.injects.filter(row => row[1] === 'owned').length), 0, 'unknown ownership must not run the original selector injection');
+    await ordinary.getByRole('button', { name: '权限：read-only', exact: true }).waitFor();
+    await hidden('loading');
+    assert.equal(await page.evaluate(() => window.injects.filter(row => row[1] === 'owned').length), 0, 'unknown ownership must not consume original preset injection');
     await page.evaluate(() => window.lockOrdinary(true));
-    assert(await ordinary.getByRole('button', { name: '权限：read-only', exact: true }).isDisabled(), 'the official locked owner prop survives the private child slot');
+    assert(await ordinary.getByRole('button', { name: '权限：read-only', exact: true }).isDisabled(), 'official locked prop survives the private child slot');
     await page.evaluate(() => window.lockOrdinary(false));
     await ordinary.getByRole('button', { name: '权限：read-only', exact: true }).click();
     await page.getByRole('menuitem', { name: 'workspace-write', exact: true }).click();
@@ -39,75 +47,38 @@ test('official slot/provider/locale bindings retain ordinary controls and isolat
     await ordinary.getByRole('button', { name: '模型 ordinary B', exact: true }).waitFor();
     assert.deepEqual(await page.evaluate(() => window.writes), [['permission', 'ordinary', 'workspace-write'], ['model', 'ordinary', 'B']]);
     await page.evaluate(() => { window.ordinaryModel = document.querySelector('[data-fixture-session="ordinary"] [data-original="model"]'); window.resolveOwned('router'); });
-    await owned.getByText('Router', { exact: true }).waitFor();
-    assert.equal(await page.evaluate(() => window.injects.filter(row => row[1] === 'owned').length), 0, 'owned sessions must not create staged preset appliers');
-    for (const name of ['permission', 'model', 'preset', 'header', 'empty']) assert.equal(await owned.locator(`[data-original="${name}"]`).count(), 0);
-    assert(await ordinary.locator('[data-original="model"]').evaluate(node => node === window.ordinaryModel), 'another session role resolution cannot remount ordinary controls');
-    await owned.locator('.ba-session-role-summary').focus();
-    await owned.locator('.ba-session-role-summary').hover();
-    await page.getByRole('tooltip').getByText(/审批策略：ask/).waitFor();
-    await page.keyboard.press('Escape');
-    await page.mouse.move(0, 0);
-    await owned.locator('.ba-session-role-summary').focus();
-    await page.keyboard.press('Enter');
-    await page.getByRole('tooltip').getByText(/审批策略：ask/).waitFor();
-    await page.keyboard.press('Escape');
-
-    for (const dark of [false, true]) for (const width of [1100, 390]) {
-      await page.setViewportSize({ width, height: 800 });
-      await page.evaluate(dark => document.body.toggleAttribute('data-ds-dark-theme', dark), dark);
-      for (const phase of ['pending', 'blocked', 'ready', 'error', 'loading', 'ordinary']) {
-        await page.evaluate(phase => window.showOwned(phase), phase);
-        if (phase === 'ordinary') await owned.getByRole('button', { name: /权限：/ }).waitFor();
-        else if (phase === 'loading') await owned.getByText('正在确认会话角色…', { exact: true }).waitFor();
-        else await owned.locator(`.ba-session-role[data-state="${phase}"]`).waitFor();
-        if (phase === 'error') await owned.getByRole('alert').getByText(/服务暂不可用/).waitFor();
-        if (phase === 'blocked') await owned.getByText('旧会话预设无法原地迁移', { exact: true }).waitFor();
-        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${phase}/${width}: no horizontal overflow`);
-        assert.equal(await ordinary.locator('.ba-session-role').count(), 0, 'ordinary session remains independent');
-        if (captureDir) { await mkdir(captureDir, { recursive: true }); await page.screenshot({ path: join(captureDir, `${phase}-${dark ? 'dark' : 'light'}-${width}.png`), fullPage: true }); }
-      }
+    await hidden('ready');
+    for (const phase of ['pending', 'blocked', 'worker', 'child-worker', 'error', 'loading']) {
+      await page.evaluate(phase => window.showOwned(phase), phase);
+      await hidden(phase);
+      assert.equal(await page.evaluate(() => window.injects.filter(row => row[1] === 'owned').length), 0, `${phase}: no original selector injection`);
     }
     await page.evaluate(() => window.showOwned('error'));
-    await owned.getByRole('button', { name: '重试', exact: true }).waitFor();
-    await page.evaluate(() => window.nextOwned('worker'));
-    await owned.getByRole('button', { name: '重试', exact: true }).click();
-    await owned.getByText('Worker', { exact: true }).waitFor();
-    await page.evaluate(() => window.showOwned('child-worker'));
-    await owned.getByText('子 Worker', { exact: true }).waitFor();
-    assert.match(await owned.locator('.ba-session-role-summary').getAttribute('aria-label'), /审批策略：never/);
     const beforeModelChange = await page.evaluate(() => window.roleReads);
-    await page.evaluate(() => window.changeModelProjection());
+    await page.evaluate(() => { window.nextOwned('child-worker'); window.changeModelProjection(); });
     await page.waitForFunction(previous => window.roleReads > previous, beforeModelChange);
-
+    await hidden('recovered');
+    assert(await ordinary.locator('[data-original="model"]').evaluate(node => node === window.ordinaryModel), 'another session role resolution cannot remount ordinary controls');
     await page.evaluate(() => window.hideOwned(true));
     await owned.waitFor({ state: 'detached' });
     await page.evaluate(() => window.hideOwned(false));
-    await owned.getByText('子 Worker', { exact: true }).waitFor();
+    await owned.waitFor(); await hidden('reentry');
     await page.evaluate(() => window.disconnect());
-    await owned.getByText('正在确认会话角色…', { exact: true }).waitFor();
+    await hidden('disconnected');
     await page.evaluate(() => window.reconnect());
-    await owned.getByText('子 Worker', { exact: true }).waitFor();
+    await hidden('reconnected');
     await ordinary.getByRole('button', { name: '模型 ordinary B', exact: true }).waitFor();
-
+    await page.evaluate(() => window.showOwned('ordinary'));
+    await owned.getByRole('button', { name: /权限：/ }).waitFor();
+    await page.evaluate(() => window.showOwned('router'));
+    await hidden('owned-again');
     await page.evaluate(() => window.stopRoleControls());
     await owned.getByRole('button', { name: /权限：/ }).waitFor();
-    assert.equal(await page.locator('.ba-session-role').count(), 0);
     await page.evaluate(() => window.startRoleControls());
-    await owned.getByText('子 Worker', { exact: true }).waitFor();
+    await hidden('remounted');
     await page.evaluate(() => window.replaceModel());
     await ordinary.getByRole('button', { name: '新模型 ordinary B', exact: true }).waitFor();
-    assert.equal(await owned.locator('[data-original="model"]').count(), 0, 'hot replacement is guarded too');
-    const touch = await browser.newPage({ viewport: { width: 390, height: 800 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
-    touch.on('pageerror', error => errors.push(error.message));
-    await touch.setContent(html);
-    await touch.getByText('正在确认会话角色…', { exact: true }).waitFor();
-    await touch.evaluate(() => window.resolveOwned('worker'));
-    await touch.locator('.ba-session-role-summary').tap();
-    await touch.getByRole('tooltip').getByText(/审批策略：ask/).waitFor();
-    assert(await touch.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-    if (captureDir) await touch.screenshot({ path: join(captureDir, 'touch-role-details.png'), fullPage: true });
-    await touch.close();
+    await hidden('hot-replacement');
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

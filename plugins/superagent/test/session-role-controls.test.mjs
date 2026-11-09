@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSessionRoleDirectory, roleDetails } from '../client/session-role-controls.mjs';
+import { createSessionRoleDirectory } from '../client/session-role-controls.mjs';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const role = (sessionId, extra = {}) => ({ sessionId, role: 'router', status: 'ready', actual: { model: { provider: 'p', model: 'opaque/id' } }, ...extra });
@@ -53,7 +53,7 @@ test('repeated invalidations coalesce and unmount prevents the queued read', asy
   assert.equal(reads.length, 2); assert.equal(source.getSnapshot().phase, 'loading'); directory.dispose();
 });
 
-test('a stalled role query exposes retry without accepting its late reply', async () => {
+test('a stalled role query remains unknown and can refresh without accepting its late reply', async () => {
   const reads = [];
   const directory = createSessionRoleDirectory((sessionId, signal) => new Promise(resolve => reads.push({ signal, resolve })), { timeoutMs: 15 });
   const source = directory.sourceFor('one'), stop = source.subscribe(() => {});
@@ -62,13 +62,4 @@ test('a stalled role query exposes retry without accepting its late reply', asyn
   source.refresh(); await tick(); reads[0].resolve({ role: null }); await tick(); assert.equal(source.getSnapshot().phase, 'loading');
   reads[1].resolve({ role: role('one') }); await tick(); assert.equal(source.getSnapshot().role.role, 'router');
   stop(); directory.dispose();
-});
-
-test('read-only details use actual values and preserve opaque provider/model ids', () => {
-  const value = roleDetails(role('one', { expected: { sandbox: 'expected-not-effective' }, actual: {
-    agentPreset: 'standard', permissionPreset: 'custom', sandbox: 'workspace-write', approval: 'never',
-    model: { provider: 'opaque-provider', model: 'model/EXACT?v=2', reasoningEffort: 'vendor-effort' }, tools: ['x', 'y'],
-  }, reason: { message: '子代理由父 Worker 处理审批' } }));
-  assert.match(value, /model\/EXACT\?v=2/); assert.match(value, /审批策略：never/); assert.match(value, /工具：2 项/);
-  assert.doesNotMatch(value, /expected-not-effective/); assert.match(roleDetails(role('one', { actual: null })), /未核验/);
 });

@@ -98,17 +98,3 @@ export function shadowSessionControl(slots, name, id, wrap) {
     return () => { unsubscribe(); remove?.(); };
   });
 }
-
-export function roleDetails(role) {
-  const actual = role.actual, model = actual?.model;
-  return [
-    `角色：${{ router: 'Router', worker: 'Worker', 'child-worker': '子 Worker' }[role.role]}`,
-    `Agent preset：${actual?.agentPreset ?? '未核验'}`,
-    `权限预设：${actual?.permissionPreset ?? '未核验'}`,
-    `沙箱：${actual?.sandbox ?? '未核验'}`,
-    `审批策略：${actual?.approval ?? '未核验'}`,
-    `模型：${model?.model ? [model.provider, model.model, model.reasoningEffort].filter(Boolean).join(' / ') : '未核验'}`,
-    `工具：${Array.isArray(actual?.tools) ? actual.tools.length + ' 项' : '未核验'}`,
-    ...(role.reason?.message ? [role.reason.message] : []),
-  ].join('\n');
-}
