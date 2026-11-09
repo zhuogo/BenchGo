@@ -291,7 +291,9 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal(cancelledForm.status, 200);
   assert.equal((await cancelledForm.json()).status, 'cancelled');
   assert.equal(app.store.orchestration.getTicket(formTicket.id).status, 'cancelled');
-  app.store.orchestration.claimAssignments = claimAssignments;
+  // Keep claims reserved through the scoped-tool contract checks below. These
+  // queued tickets deliberately have no executable project/worker fixture;
+  // asynchronous claiming would turn an immediate queued stop into cancelling.
   let streamFailure;
   duringStream = async () => { try {
   const deviceStatus = await deviceStatusTool.execute({}, { agent });
@@ -352,7 +354,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   app.store.orchestration.cancelTicket(pauseTicket.id);
   const questionTicket = app.store.orchestration.createTicket({ threadId: ticket.threadId, target: 'Question', mandate: ticket.mandate });
   app.store.orchestration.createAssignment(questionTicket.id, {});
-  const [questionAssignment] = app.store.orchestration.claimAssignments('test-worker', { validateMandate: () => true });
+  const [questionAssignment] = claimAssignments.call(app.store.orchestration, 'test-worker', { validateMandate: () => true });
   const ownership = { owner: questionAssignment.owner, fence: questionAssignment.fence };
   const questionRun = app.store.orchestration.prepareRun(questionAssignment.id, { ...ownership, sessionId: 'question-session', directory });
   app.store.orchestration.updateRun(questionRun.id, { ...ownership, state: 'submitted' });
