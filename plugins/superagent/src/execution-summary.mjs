@@ -23,7 +23,7 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
     eventThreshold: bounded(config.eventThreshold, 12, 1, 200), timeoutMs: bounded(config.timeoutMs, 20000, 1, 90000) };
   const request = requestText || createExecutionAuxiliaryRequester({ llm, getConfig });
   const pending = new Map(), active = new Map(), lastStarted = new Map(), tasks = new Set();
-  let timer, closed = false, lastGlobalStarted = -Infinity, cursor = store.executionSummaryCursor?.() ?? 0, draining, unsubscribe;
+  let timer, retryTimer, retryDelay = 250, closed = false, lastGlobalStarted = -Infinity, cursor = store.executionSummaryCursor?.() ?? 0, draining, unsubscribe;
   const error = cause => { try { onError(cause); } catch {} };
   const safeNotify = ticketId => { try { onChange(ticketId); } catch (cause) { error(cause); } };
   const audit = record => store.recordAuxiliaryActivity({ kind: 'summary', ...record });
@@ -137,8 +137,9 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
   }
 
   async function drain() {
-    if (closed) return;
+    if (closed || retryTimer !== undefined) return;
     if (draining) return draining;
+    let failed = false;
     draining = (async () => {
       const through = await executionFacts.currentCursor();
       do {
@@ -147,13 +148,26 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
         const ids = [...new Set(entries.filter(row => !['presentation', 'summary'].includes(row.kind)).map(row => row.ticketId).filter(Boolean))];
         for (const ticketId of ids) await observe(ticketId, { force: entries.some(row => row.ticketId === ticketId && keyKinds.has(row.kind)) });
         const next = page.cursor ?? page.nextCursor ?? entries.at(-1)?.seq ?? through;
-        if (next <= cursor) break;
+        if (next <= cursor && cursor < through) throw Object.assign(new Error('Execution summary cursor did not advance'), { code: 'SUMMARY_CURSOR_STALLED' });
         cursor = next;
         store.advanceExecutionSummaryCursor?.(cursor);
       } while (!closed && cursor < through);
-    })().catch(error).finally(() => { draining = undefined; });
+    })().catch(cause => { failed = true; error(cause); }).finally(() => { draining = undefined; });
     await draining;
-    if (!closed && await executionFacts.currentCursor() > cursor) return drain();
+    if (closed) return;
+    if (failed) {
+      retryTimer = schedule(() => { retryTimer = undefined; void drain(); }, retryDelay);
+      retryDelay = Math.min(5000, retryDelay * 2);
+      retryTimer?.unref?.();
+      return;
+    }
+    retryDelay = 250;
+    // Yield between committed ranges. A producer or a read failure must never
+    // keep this observer in an unbounded chain of immediately resolved promises.
+    if (await executionFacts.currentCursor() > cursor) {
+      retryTimer = schedule(() => { retryTimer = undefined; void drain(); }, 0);
+      retryTimer?.unref?.();
+    }
   }
 
   const ready = Promise.resolve(executionFacts.ready).then(async () => {
@@ -164,6 +178,6 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
   }).catch(error);
   return { ready, observe, config: options, current: ticketId => store.executionSummary(ticketId),
     audit: query => store.auxiliaryActivities(query),
-    async dispose() { closed = true; if (timer) cancel(timer); unsubscribe?.(); pending.clear(); for (const controller of active.values()) controller.abort(); await ready; await draining; await Promise.allSettled([...tasks]); },
+    async dispose() { closed = true; if (timer) cancel(timer); if (retryTimer !== undefined) cancel(retryTimer); unsubscribe?.(); pending.clear(); for (const controller of active.values()) controller.abort(); await ready; await draining; await Promise.allSettled([...tasks]); },
   };
 }

@@ -157,3 +157,25 @@ test('a stalled adapter is timed out and a prior valid sentence remains visible 
   assert.equal(h.store.auxiliaryActivities().entries.at(-1).code, 'TIMEOUT');
   await h.close();
 });
+
+test('a failed or stalled fact page yields to the event loop, retries with backoff and stops cleanly', async () => {
+  for (const stalled of [false, true]) {
+    const db = new DatabaseSync(':memory:'), c = clock(), errors = [];
+    let calls = 0;
+    const store = installExecutionSummaryStore({ db });
+    const facts = { ready: Promise.resolve(), subscribe: () => () => {}, currentCursor: () => 1,
+      page: () => { calls++; if (calls === 1) { if (stalled) return { cursor: 0, entries: [] }; throw new Error('temporary read failure'); } return { cursor: 1, entries: [] }; } };
+    const runner = createExecutionSummaries({ executionFacts: facts, store, ...c, onError: error => errors.push(error) });
+    await runner.ready;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 1); assert.equal(errors.length, 1);
+    await c.advance(249); assert.equal(calls, 1);
+    await c.advance(1); assert.equal(calls, 2); assert.equal(store.executionSummaryCursor(), 1);
+    await runner.dispose(); db.close();
+  }
+  const db = new DatabaseSync(':memory:'), c = clock(); let calls = 0;
+  const runner = createExecutionSummaries({ executionFacts: { ready: Promise.resolve(), subscribe: () => () => {}, currentCursor: () => 1,
+    page: () => { calls++; throw new Error('offline'); } }, store: installExecutionSummaryStore({ db }), ...c });
+  await runner.ready; await runner.dispose(); await c.advance(5000);
+  assert.equal(calls, 1); db.close();
+});
