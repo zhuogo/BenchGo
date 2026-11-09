@@ -74,7 +74,7 @@ test('home and drawer share requests; background pages pause and last unsubscrib
   await flush();
   assert.deepEqual(calls.map(call => call.action), ['tickets', 'tickets', 'goalList']);
   assert.deepEqual(calls[0].args, { archived: false });
-  assert.deepEqual(calls[1].args, { archived: true, limit: 2 });
+  assert.deepEqual(calls[1].args, { archived: true });
   assert.equal(store.getSnapshot().rows.length, 2);
   assert.equal(env.timers.size, 1);
   env.document.hidden = true; env.document.dispatchEvent(new Event('visibilitychange'));

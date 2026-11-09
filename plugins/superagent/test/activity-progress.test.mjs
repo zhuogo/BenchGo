@@ -57,7 +57,7 @@ function environment() {
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-test('only an open board with live work requests rapid updates; hidden views and errors back off', async () => {
+test('fallback reads stay bounded regardless of open views and back off after errors', async () => {
   const env = environment(); let state = 'open', fail = false;
   const store = createActivityStore(async action => {
     if (fail) throw new Error('offline');
@@ -65,19 +65,19 @@ test('only an open board with live work requests rapid updates; hidden views and
   }, env);
   const unsubscribe = store.subscribe(() => {}); await flush();
   assert.deepEqual([...env.timers.values()], [10000]);
-  const close = store.retainLive(); await flush();
-  assert.deepEqual([...env.timers.values()], [2000]);
-  const closeSecond = store.retainLive(); await flush(); closeSecond();
-  assert.deepEqual([...env.timers.values()], [2000], 'a second view shares the one polling timer');
+  await flush();
+  assert.deepEqual([...env.timers.values()], [10000]);
+  await flush();
+  assert.deepEqual([...env.timers.values()], [10000], 'a second view shares the one polling timer');
   env.document.hidden = true; env.document.dispatchEvent(new Event('visibilitychange'));
   assert.equal(env.timers.size, 0);
   env.document.hidden = false; env.document.dispatchEvent(new Event('visibilitychange')); await flush();
   fail = true; await store.refresh();
   assert.equal(store.getSnapshot().rows.length, 1, 'failed refresh retains the last observation');
-  assert.deepEqual([...env.timers.values()], [10000]);
+  assert.deepEqual([...env.timers.values()], [20000]);
   fail = false; state = 'completed'; await store.refresh();
   assert.deepEqual([...env.timers.values()], [10000]);
-  state = 'open'; await store.refresh(); close();
+  state = 'open'; await store.refresh();
   assert.deepEqual([...env.timers.values()], [10000]);
   unsubscribe(); assert.equal(env.timers.size, 0);
 });

@@ -36,11 +36,12 @@ function executionSummary(execution) {
 }
 
 export function activityTask(row, kind) {
-  const { assignment, result, delivery, status: ticketStatus, safetyWait } = ticketSnapshot(row);
+  const domain = row.domainStatus ? { ...row, status: row.domainStatus } : row;
+  const { assignment, result, delivery, status: ticketStatus, safetyWait } = ticketSnapshot(domain);
   const execution = kind === 'ticket' ? currentExecution(row, assignment) : undefined;
   const status = kind === 'goal' ? row.status
     : ['open', 'claimed'].includes(ticketStatus) && execution?.phase === 'verifying' ? 'verifying' : ticketStatus;
-  const waiting = kind === 'ticket' ? ticketWaiting(row) : null;
+  const waiting = kind === 'ticket' ? ticketWaiting(domain) : null;
   const detail = kind === 'goal' ? row.error || ({ building_children: '正在拆分子目标', verify: '正在同步目标状态' })[row.nextStep] : waiting?.reason || result?.delivery?.text || result?.summary;
   const phase = kind === 'goal' ? `${row.ticketIds?.length || 0} 项关联工单`
     : status === 'verifying' ? 'Worker 已交回结果，正在保存'
@@ -50,8 +51,9 @@ export function activityTask(row, kind) {
     : result ? '结果已保存'
     : assignment ? `执行阶段 · ${activityLabels[assignment.state] || assignment.state || '状态未知'}` : '已接收 · 等待分配';
   const progressing = ['open', 'claimed', 'verifying'].includes(status);
-  const progressSummary = progressing ? status === 'verifying' ? phase : executionSummary(execution) : '';
-  return { ...row, execution, stateLabel: waiting?.label || activityLabels[status] || status, executionNotice: waiting?.executionNotice, verificationSummary: waiting?.verificationSummary, progressSummary, key: `${kind}:${row.id}`, kind, status, detail, phase, title: kind === 'ticket' ? normalizeTicketTitle(row.taskMeta?.title || row.title, row.target) : row.target || row.title || row.objective || '未命名任务', time: row.updatedAt || row.createdAt };
+  const summaryText = execution?.summary?.text || (typeof row.currentSummary === 'string' ? row.currentSummary : row.currentSummary?.text) || '';
+  const progressSummary = progressing ? summaryText || (status === 'verifying' ? phase : executionSummary(execution)) : '';
+  return { ...row, domainStatus: row.domainStatus ?? row.status, execution, stateLabel: waiting?.label || activityLabels[status] || status, executionNotice: waiting?.executionNotice, verificationSummary: waiting?.verificationSummary, summaryText, progressSummary, key: `${kind}:${row.id}`, kind, status, detail, phase, title: kind === 'ticket' ? normalizeTicketTitle(row.taskMeta?.title || row.title, row.target) : row.target || row.title || row.objective || '未命名任务', time: row.updatedAt || row.createdAt };
 }
 
 export function groupHomeActivity(rows = []) {
@@ -63,78 +65,152 @@ export function groupHomeActivity(rows = []) {
   };
 }
 
-/** One request stream shared by the home brief and the activity drawer. */
+/** One authoritative snapshot and incremental ticket reads, shared by every task view. */
 export function createActivityStore(api, environment = {}) {
   const page = environment.document ?? globalThis.document;
   const schedule = environment.setTimeout ?? globalThis.setTimeout;
   const cancel = environment.clearTimeout ?? globalThis.clearTimeout;
-  const listeners = new Set();
-  let snapshot = { rows: null, error: '', loading: true, updated: null };
-  let timer, request, liveViews = 0, refreshPending = false;
-  const publish = patch => { snapshot = { ...snapshot, ...patch }; listeners.forEach(listener => listener()); };
-  const delay = () => !snapshot.error && liveViews > 0 && snapshot.rows?.some(row => liveActivityStates(row.status)) ? 2000 : 10000;
-  const scheduleRefresh = (ms = delay()) => {
-    cancel(timer);
-    if (listeners.size && !page?.hidden && !request) timer = schedule(refresh, ms);
+  const listeners = new Set(), ticketRequests = new Map(), revisions = new Map(), dirty = new Set();
+  let snapshot = { rows: null, error: '', loading: true, updated: null, connection: 'connecting', completeness: null };
+  let tickets = new Map(), goals = new Map(), timer, mergeTimer, request, goalRequest, transport;
+  let generation = 0, subscription = 0, cursor = null, healthy = false, retryDelay = 10000, refreshPending = false, sourceFailed = false;
+  const publish = patch => { snapshot = { ...snapshot, ...patch }; for (const listener of listeners) listener(); };
+  const same = (a, b) => a && JSON.stringify(a) === JSON.stringify(b);
+  const project = (row, kind, prior) => { const next = activityTask(row, kind); return same(prior, next) ? prior : next; };
+  const rows = () => [...tickets.values(), ...goals.values()];
+  const commit = (extra = {}) => {
+    const next = rows(), previous = snapshot.rows;
+    publish({ rows: previous?.length === next.length && next.every((row, index) => row === previous[index]) ? previous : next, updated: new Date().toISOString(), ...extra });
   };
-  const refresh = async () => {
-    if (!listeners.size || page?.hidden) return;
-    // A change that arrives during a fetch must not be lost behind its old response.
-    if (request) { refreshPending = true; return; }
+  const cancelReads = () => {
+    request?.abort(); request = null; goalRequest?.abort(); goalRequest = null;
+    for (const controller of ticketRequests.values()) controller.abort(); ticketRequests.clear();
+    dirty.clear(); cancel(mergeTimer); mergeTimer = null;
+  };
+  const scheduleFallback = (ms = retryDelay) => {
     cancel(timer);
-    refreshPending = false;
-    const controller = new AbortController(); request = controller;
-    publish({ loading: true });
+    if (!healthy && listeners.size && !page?.hidden && !request) timer = schedule(() => { cancel(timer); timer = null; if (sourceFailed && environment.connect) connect(); void pull(); }, ms);
+  };
+  const readGoals = async () => {
+    goalRequest?.abort(); const controller = new AbortController(), epoch = generation; goalRequest = controller;
     try {
-      const [tickets, recent, goals] = await Promise.all([
-        api('tickets', { archived: false }, controller.signal),
-        api('tickets', { archived: true, limit: 2 }, controller.signal),
-        api('goalList', {}, controller.signal),
-      ]);
-      // Closed work is fetched only for the home's small recent-results section.
-      // Deduplicate the shared ledger if a ticket closes between the two reads.
-      const uniqueTickets = [...new Map([...(recent.tickets || []), ...(tickets.tickets || [])].map(row => [row.id, row])).values()];
-      if (!controller.signal.aborted) publish({ rows: [...uniqueTickets.map(row => activityTask(row, 'ticket')), ...(goals.goals || []).map(row => activityTask(row, 'goal'))], error: '', updated: new Date().toISOString() });
-    } catch (cause) {
-      if (!controller.signal.aborted) publish({ error: cause.message || '任务读取失败' });
-    } finally {
-      if (request === controller) {
-        request = null;
-        publish({ loading: false });
-        scheduleRefresh(refreshPending ? 0 : delay());
+      const response = await api('goalList', {}, controller.signal);
+      if (!controller.signal.aborted && epoch === generation) {
+        goals = new Map((response.goals || []).map(row => [row.id, project(row, 'goal', goals.get(row.id))])); commit();
       }
-    }
+    } catch (cause) { if (!controller.signal.aborted && epoch === generation) publish({ error: cause.message || '持续目标读取失败' }); }
+    finally { if (goalRequest === controller) goalRequest = null; }
   };
-  const visibility = () => { cancel(timer); if (!page?.hidden) void refresh(); };
+  const refreshTickets = async ids => {
+    const epoch = generation;
+    await Promise.all([...new Set(ids)].map(async id => {
+      const version = (revisions.get(id) || 0) + 1; revisions.set(id, version);
+      ticketRequests.get(id)?.abort(); const controller = new AbortController(); ticketRequests.set(id, controller);
+      try {
+        const response = await api('tickets', { ticketId: id }, controller.signal);
+        if (controller.signal.aborted || epoch !== generation || revisions.get(id) !== version) return;
+        const row = response.tickets?.find(row => row.id === id);
+        if (row) tickets.set(id, project(row, 'ticket', tickets.get(id))); else tickets.delete(id);
+        commit({ error: '' });
+      } catch (cause) {
+        if (!controller.signal.aborted && epoch === generation) { dirty.add(id); publish({ error: cause.message || '任务更新失败' }); if (!mergeTimer && listeners.size && !page?.hidden) mergeTimer = schedule(flushChanges, retryDelay); retryDelay = Math.min(retryDelay * 2, 60000); }
+      } finally { if (ticketRequests.get(id) === controller) ticketRequests.delete(id); }
+    }));
+  };
+  const flushChanges = () => {
+    cancel(mergeTimer); mergeTimer = null;
+    const ids = [...dirty]; dirty.clear();
+    if (ids.length) void refreshTickets(ids);
+  };
+  const replace = value => {
+    generation++; cancelReads(); cursor = value.cursor; healthy = true; sourceFailed = false; retryDelay = 10000; cancel(timer);
+    tickets = new Map((value.tickets || []).map(row => [row.id, project(row, 'ticket', tickets.get(row.id))]));
+    commit({ loading: false, error: '', connection: 'live', completeness: value.completeness || null });
+    void readGoals();
+  };
+  const carrierFailed = cause => {
+    healthy = false; publish({ connection: 'reconnecting', error: cause?.message || '连接中断，正在重连', loading: snapshot.rows === null }); scheduleFallback();
+  };
+  const connect = () => {
+    const token = ++subscription;
+    void transport?.dispose();
+    const guarded = fn => value => { if (token === subscription && listeners.size) fn(value); };
+    transport = environment.connect({ replace: guarded(replace), update: guarded(update), carrierFailed: guarded(carrierFailed), failed: guarded(error => { sourceFailed = true; carrierFailed(error); }) });
+    transport.start();
+  };
+  const update = frame => {
+    if (!healthy) return;
+    if (cursor === null) throw new Error('执行事实尚无快照');
+    let next = cursor;
+    for (const entry of frame.entries || []) {
+      if (entry.seq <= next) continue;
+      if (entry.seq !== next + 1) {
+        generation++; cancelReads(); carrierFailed(new Error('执行记录出现缺口，正在重新同步')); transport?.restart(); return;
+      }
+      next = entry.seq;
+    }
+    if (frame.cursor > next) { generation++; cancelReads(); carrierFailed(new Error('执行记录水位不连续，正在重新同步')); transport?.restart(); return; }
+    for (const entry of frame.entries || []) {
+      if (entry.seq <= cursor) continue;
+      if (entry.ticketId) { dirty.add(entry.ticketId); revisions.set(entry.ticketId, (revisions.get(entry.ticketId) || 0) + 1); }
+      if (entry.kind === 'goal' || (!entry.ticketId && entry.kind === 'presentation')) void readGoals();
+    }
+    cursor = next;
+    if (dirty.size && !mergeTimer) mergeTimer = schedule(flushChanges, 80);
+  };
+  async function pull() {
+    if (!listeners.size || page?.hidden) return;
+    if (request) { refreshPending = true; return; }
+    cancel(timer); refreshPending = false;
+    const controller = new AbortController(), epoch = generation; request = controller;
+    if (snapshot.rows === null) publish({ loading: true });
+    try {
+      const [active, archived, targetGoals] = await Promise.all([
+        api('tickets', { archived: false }, controller.signal), api('tickets', { archived: true }, controller.signal), api('goalList', {}, controller.signal),
+      ]);
+      if (!controller.signal.aborted && epoch === generation) {
+        const unique = new Map([...(archived.tickets || []), ...(active.tickets || [])].map(row => [row.id, row]));
+        tickets = new Map([...unique].map(([id, row]) => [id, project(row, 'ticket', tickets.get(id))]));
+        goals = new Map((targetGoals.goals || []).map(row => [row.id, project(row, 'goal', goals.get(row.id))]));
+        retryDelay = 10000; commit({ error: '', connection: healthy ? 'live' : 'reconnecting' });
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted && epoch === generation) { retryDelay = Math.min(retryDelay * 2, 60000); publish({ error: cause.message || '任务读取失败' }); }
+    } finally {
+      if (request === controller) { request = null; publish({ loading: false }); scheduleFallback(refreshPending ? 0 : retryDelay); }
+    }
+  }
+  const refresh = async () => {
+    if (sourceFailed && environment.connect) connect();
+    if (transport && healthy) { await Promise.all([refreshTickets([...tickets.keys()]), readGoals()]); }
+    else await pull();
+  };
+  const changed = event => {
+    if (event?.detail?.ticketId) { dirty.add(event.detail.ticketId); if (!mergeTimer) mergeTimer = schedule(flushChanges, 80); }
+    else if (!healthy) void pull();
+  };
+  const visibility = () => {
+    cancel(timer);
+    if (!page?.hidden) { if (sourceFailed && environment.connect) connect(); else if (transport) transport.restart(); else void pull(); }
+  };
   return {
-    getSnapshot: () => snapshot,
-    refresh,
-    retainLive() {
-      liveViews++;
-      if (!request) void refresh();
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true; liveViews--;
-        scheduleRefresh();
-      };
-    },
+    getSnapshot: () => snapshot, refresh, refreshTickets,
     subscribe(listener) {
       listeners.add(listener);
       if (listeners.size === 1) {
-        page?.addEventListener('visibilitychange', visibility);
-        page?.addEventListener('benchgo:assistant-changed', refresh);
-        void refresh();
+        page?.addEventListener('visibilitychange', visibility); page?.addEventListener('benchgo:assistant-changed', changed);
+        if (environment.connect) {
+          connect();
+        } else void pull();
       }
       return () => {
         listeners.delete(listener);
         if (!listeners.size) {
-          cancel(timer); request?.abort(); request = null; refreshPending = false;
-          page?.removeEventListener('visibilitychange', visibility);
-          page?.removeEventListener('benchgo:assistant-changed', refresh);
+          generation++; subscription++; cancel(timer); cancelReads(); refreshPending = false; healthy = false;
+          void transport?.dispose(); transport = null;
+          page?.removeEventListener('visibilitychange', visibility); page?.removeEventListener('benchgo:assistant-changed', changed);
         }
       };
     },
   };
 }
-
