@@ -1485,6 +1485,119 @@ test('native prompt keeps exact messages and freezes each queued model before of
   assert.equal(actual.source.rpcId, request.requestId);
 });
 
+test('Router Native schemas exclude late scope tools and replaced definitions while retaining coordination and live context', async t => {
+  let ownedContext = [], removeDevice, removeQuestion, dispatched = 0;
+  const definition = name => ({ name, description: `Schema boundary fixture ${name}`, parameters: { type: 'object', properties: {} },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: () => { dispatched++; return name; } });
+  const f = await fixture(t, () => text('Checked'), {
+    install(ctx) {
+      ctx.provide('benchgoEfficiency', { contextTools: () => ownedContext });
+      removeQuestion = ctx.tools.register(definition('ask_user_question'));
+      ctx.tools.register(definition('schedule_create'));
+      // The official factory announces after setup, matching OPS publication.
+      ctx.on('agent/created', ({ agent }) => {
+        agent.ctx.tools.register(definition('ops_discover_tools'));
+        agent.ctx.tools.register(definition('ops_read_files'));
+      });
+    },
+    setupTools(scope) { removeDevice = scope.tools.register(definition('assistant_device_status')); },
+  });
+  const agent = await f.engine.ensureSession();
+  const execute = name => executeTool(f.ctx, { agent, name, arguments: {}, callId: `schema-${name}`, signal: new AbortController().signal });
+  const request = async () => {
+    await f.engine.send({ text: 'Check available state.' });
+    await agent.whenIdle();
+    const names = f.requests.at(-1).tools.map(tool => tool.name).sort();
+    const header = agent.session.snapshotEvents().findLast(event => event.type === 'request/header').data.header;
+    assert.deepEqual(header.tools.map(tool => tool.name).sort(), names, 'the durable request header matches the actual Native request');
+    assert.equal(names.includes('ops_discover_tools'), false);
+    assert.equal(names.includes('ops_read_files'), false);
+    return names;
+  };
+  assert.ok(f.ctx.tools.get('ops_discover_tools', agent), 'own scoped OPS registration bypasses inherited restriction');
+  const initial = await request();
+  for (const name of ['assistant_device_status', 'assistant_reply', 'ask_user_question', 'schedule_create']) assert.ok(initial.includes(name), name);
+  assert.equal((await execute('ops_discover_tools')).isError, true);
+  assert.equal((await execute('assistant_device_status')).isError, false);
+  assert.equal(dispatched, 1);
+
+  const compact = definition('compact_now'), status = definition('context_status');
+  f.ctx.tools.register(compact); const removeContext = f.ctx.tools.register(status);
+  ownedContext = [{ name: compact.name, definition: compact }, { name: status.name, definition: status }];
+  f.ctx.emit('tools/change');
+  const enabled = await request();
+  for (const name of ['compact_now', 'context_status']) assert.ok(enabled.includes(name), name);
+  assert.equal((await execute('context_status')).isError, false);
+
+  // A matching name never gives a foreign implementation the old approval.
+  removeDevice(); agent.ctx.tools.register(definition('assistant_device_status'));
+  removeContext(); f.ctx.tools.register(definition('context_status'));
+  const replaced = await request();
+  assert.equal(replaced.includes('assistant_device_status'), false);
+  assert.equal(replaced.includes('context_status'), false);
+  assert.equal(replaced.includes('compact_now'), true);
+  assert.equal((await execute('assistant_device_status')).isError, true);
+  assert.equal((await execute('context_status')).isError, true);
+
+  ownedContext = []; f.ctx.emit('tools/change');
+  removeQuestion(); f.ctx.tools.register(definition('ask_user_question'));
+  const disabled = await request();
+  assert.equal(disabled.includes('compact_now'), false);
+  assert.equal(disabled.includes('ask_user_question'), true, 'coordination follows the current official host definition');
+  assert.equal((await execute('ask_user_question')).isError, false);
+
+  // A Router presentation filter never changes another Agent's official scope.
+  const foreign = await f.ctx.agents.create({ sessionId: 'router-schema-foreign', meta: { cwd: process.cwd() } });
+  const foreignAssembly = await f.ctx.systemPrompt.assemble({ scope: foreign.agent });
+  assert.ok(foreignAssembly.tools.some(tool => tool.name === 'ops_discover_tools'));
+  const foreignResult = await executeTool(f.ctx, { agent: foreign.agent, name: 'ops_discover_tools', arguments: {}, callId: 'foreign-discovery', signal: new AbortController().signal });
+  assert.equal(foreignResult.isError, false);
+  await foreign.dispose();
+});
+
+test('two Router scopes refresh context masks once each without sharing approved definitions', async t => {
+  let ownedContext = [], changes = 0;
+  const roles = new Map();
+  const definition = name => ({ name, description: name, parameters: { type: 'object' },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: () => name });
+  const context = definition('context_status');
+  const f = await fixture(t, () => text('Ready'), {
+    install(ctx) {
+      ctx.provide('benchgoEfficiency', { contextTools: () => ownedContext });
+      ctx.tools.register(context);
+      ctx.on('tools/change', () => { changes++; });
+    },
+    setupTools(scope, { agent }) {
+      const role = definition(`assistant_role_${roles.size}`);
+      roles.set(agent.id, role);
+      scope.tools.register(role);
+    },
+  });
+  const main = await f.engine.ensureSession();
+  const thread = await f.engine.createThread({ title: 'Schema sibling' });
+  const side = f.ctx.agents.get(thread.sessionId);
+  assert.ok(side);
+  const assertScopes = async enabled => {
+    for (const agent of [main, side]) {
+      const names = (await f.ctx.systemPrompt.assemble({ scope: agent })).tools.map(tool => tool.name);
+      assert.ok(names.includes(roles.get(agent.id).name));
+      assert.equal(names.includes(roles.get(agent === main ? side.id : main.id).name), false);
+      assert.equal(names.includes('context_status'), enabled);
+    }
+  };
+  await assertScopes(false);
+  for (const enabled of [true, false, true]) {
+    ownedContext = enabled ? [{ name: context.name, definition: context }] : [];
+    changes = 0;
+    f.ctx.emit('tools/change');
+    assert.ok(changes <= 5, `one source event plus two mask changes per Router, observed ${changes}`);
+    await assertScopes(enabled);
+  }
+  // A foreign definition cannot inherit the sibling Router's approval by name.
+  main.ctx.tools.register(definition(roles.get(side.id).name));
+  await assertScopes(true);
+});
+
 test('Router corrects a denied tool call without leaving a conversation failure', async t => {
   let dispatched = 0, removeDefinition;
   const definition = () => ({ name: 'ops_discover_tools', description: 'Fixture execution discovery', parameters: { type: 'object', properties: {} },
@@ -1502,6 +1615,7 @@ test('Router corrects a denied tool call without leaving a conversation failure'
   await agent.whenIdle();
   const events = agent.session.snapshotEvents();
   assert.equal(dispatched, 0);
+  assert.ok(f.requests.every(request => !request.tools.some(tool => tool.name === 'ops_discover_tools')), 'the replaced local tool is absent from every Native model request');
   const refusal = events.find(event => event.type === 'tool/result' && event.data.message?.toolCallId === 'denied-discovery');
   assert.equal(refusal?.data.message.isError, true);
   assert.match(JSON.stringify(refusal), /Router 不直接执行 ops_discover_tools/);
