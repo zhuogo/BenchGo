@@ -387,14 +387,23 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     cancelTicket(ticketId) {
       return tx(() => cancelTicketInternal(ticketId));
     },
-    pauseTicket(ticketId, { reason = { kind: 'manual' } } = {}) {
+    pauseTicket(ticketId, { reason = { kind: 'manual' }, triggerId } = {}) {
       if (!record(reason) || reason.kind !== 'manual') throw fail('INVALID_PAUSE_REASON', 'Invalid pause reason');
       return tx(() => {
         const ticket = api.getTicket(ticketId);
         if (!ticket) throw fail('TICKET_NOT_FOUND', 'Ticket does not exist');
-        if (['completed', 'failed', 'closed', 'cancelled', 'cancelling', 'paused'].includes(ticket.status)) return ticket;
+        if (['completed', 'failed', 'closed', 'cancelled', 'cancelling'].includes(ticket.status)) return ticket;
+        if (triggerId) api.recordTicketInputInTransaction({ ticketId, triggerId, kind: 'pause', idempotencyKey: `trigger:${triggerId}` });
+        // Pausing also withdraws delayed recovery intent in this transaction;
+        // a later scheduler tick must not revive work the user just paused.
+        db.prepare("UPDATE sa_assignments SET payload=json_remove(payload,'$.interruptedContinuationRequest') WHERE ticket_id=? AND json_type(payload,'$.interruptedContinuationRequest') IS NOT NULL").run(ticketId);
+        if (ticket.status === 'paused') {
+          if (triggerId) api.applyTicketPauseInputInTransaction(ticketId, triggerId);
+          return ticket;
+        }
         const pending = api.assignments(ticketId).some(row => ['claimed', 'uncertain'].includes(row.state));
         db.prepare('UPDATE sa_tickets SET status=?,pause_reason=?,updated_at=? WHERE id=?').run(pending ? 'pausing' : 'paused', json(reason), new Date().toISOString(), ticketId);
+        if (triggerId) api.applyTicketPauseInputInTransaction(ticketId, triggerId);
         return api.getTicket(ticketId);
       });
     },

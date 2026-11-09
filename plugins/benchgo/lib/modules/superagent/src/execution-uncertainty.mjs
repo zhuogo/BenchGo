@@ -1,4 +1,5 @@
-// Read-only ledger facts. These thresholds change presentation, never execution gates.
+import { interruptedContinuationPolicy } from './interrupted-continuation-policy.mjs';
+// Read-only ledger facts. Execution gates independently enforce the persisted retry policy.
 export const stopConfirmationNoticeMs = 30_000;
 export const verificationEscalationAttempts = 6;
 const terminal = new Set(['completed', 'failed', 'closed', 'cancelled']);
@@ -29,10 +30,15 @@ export function executionUncertainty(database, ticket, { now = Date.now() } = {}
   const recoverable = !!run && !!evidence && !evidence.interrupted && (pause ? evidence.waitingPause === true
     : typeof evidence.summary === 'string' && typeof evidence.transcript?.hash === 'string'
       && (!run.environment || typeof evidence.checkpoint?.manifestHash === 'string'));
+  const retry = interruptedContinuationPolicy(run, { now });
+  const limited = !recoverable && retry.exhausted;
   return { reasonCode, reason, attempts, nextCheckAt: recoverable ? iso(scheduled) : null,
-    escalated: attempts >= verificationEscalationAttempts, automatic: recoverable,
+    continuationRetry: { attempts: retry.attempts, limit: retry.limit, exhausted: retry.exhausted,
+      nextAttemptAt: !recoverable && !pause && !external ? iso(retry.nextAttemptAt) : null },
+    escalated: attempts >= verificationEscalationAttempts || limited, automatic: recoverable,
     ...(!recoverable ? { recoveryBlocked: external ? '外部实际效果尚未核清，只能继续核查，不得续跑或重发'
-      : '尚无完整结束证据，由 Router 核查是否能安全续接原会话，不得直接重跑' } : {}),
+      : limited ? '自动续接已达上限，已停止自动尝试并保留待核实；等待用户决定或仅作只读核查'
+        : '尚无完整结束证据，由 Router 核查是否能安全续接原会话，不得直接重跑' } : {}),
     ...(lastInspection ? { lastInspection } : {}),
     assignmentId: assignment.id, runId: run?.id || null, sessionId: run?.sessionId || null, fence: assignment.fence,
     instructionRevision: ticket.instructionRevision };
@@ -63,7 +69,7 @@ export function executionRecoverySignal(database, ticket, { now = Date.now(), pr
   if (!assignment || !['queued', 'claimed', 'paused', 'waiting', 'completed'].includes(assignment.state)) return null;
   const run = database.runs(assignment.id).find(row => row.id === previous.runId);
   const originalFence = previous.recoveredFromFence ?? previous.fence;
-  const receipt = run?.interruptedRecoveries?.find(row => row.fromFence === originalFence
+  const receipt = run?.interruptedRecoveries?.find(row => row.queued !== false && row.fromFence === originalFence
     && row.instructionRevision === ticket.instructionRevision && row.sessionId === previous.sessionId);
   const continued = assignment.fence === originalFence + 1 && run?.fence === assignment.fence
     && run.sessionId === previous.sessionId && !!receipt;
@@ -80,7 +86,7 @@ export function executionRecoverySignal(database, ticket, { now = Date.now(), pr
 
 export const recoverySignalIdentity = value => JSON.stringify({ ...value, title: undefined, target: undefined,
   reason: undefined, attempts: undefined, nextCheckAt: undefined, automatic: undefined,
-  recoveryBlocked: undefined, resultVersion: undefined });
+  recoveryBlocked: undefined, continuationRetry: undefined, resultVersion: undefined });
 
 export function currentExecutionRecoverySignal(database, signal, { now = Date.now() } = {}) {
   const ticket = database.getTicket(signal?.ticketId);

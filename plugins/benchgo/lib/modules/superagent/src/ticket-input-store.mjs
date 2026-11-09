@@ -33,7 +33,7 @@ export function installTicketInputStore({ db, tx, api }) {
   };
   function record(input) {
     const ticket = db.prepare('SELECT * FROM sa_tickets WHERE id=?').get(input.ticketId), trigger = api.getTrigger(input.triggerId);
-    if (!ticket || !trigger || !['context', 'revision', 'answer', 'stop', 'authorization'].includes(input.kind)
+    if (!ticket || !trigger || !['context', 'revision', 'answer', 'stop', 'pause', 'authorization'].includes(input.kind)
       || typeof input.idempotencyKey !== 'string' || !input.idempotencyKey || input.idempotencyKey.length > 2048) throw fail('INVALID_TICKET_INPUT', '工单输入缺少可信来源或幂等键');
     const revision = input.instructionRevision ?? ticket.instruction_revision;
     const current = db.prepare('SELECT snapshot FROM sa_ticket_revisions WHERE ticket_id=? ORDER BY revision DESC LIMIT 1').get(input.ticketId);
@@ -46,7 +46,7 @@ export function installTicketInputStore({ db, tx, api }) {
     if (old) {
       // A stable source message is one input even when it reaches another entry.
       if (old.ticket_id === input.ticketId && old.trigger_id === input.triggerId && input.kind === 'context') return value(old);
-      if (old.ticket_id === input.ticketId && old.trigger_id === input.triggerId && old.kind === 'context' && ['revision', 'stop'].includes(input.kind) && old.state === 'pending') {
+      if (old.ticket_id === input.ticketId && old.trigger_id === input.triggerId && old.kind === 'context' && ['revision', 'stop', 'pause'].includes(input.kind) && old.state === 'pending') {
         db.prepare('UPDATE sa_ticket_inputs SET kind=?,fingerprint=?,instruction_revision=?,authorization_version=?,snapshot=? WHERE id=?')
           .run(input.kind, fingerprint, revision, authorizationVersion, input.snapshot ? JSON.stringify(input.snapshot) : null, old.id);
         return value(db.prepare('SELECT * FROM sa_ticket_inputs WHERE id=?').get(old.id));
@@ -83,14 +83,15 @@ export function installTicketInputStore({ db, tx, api }) {
     db.prepare('UPDATE sa_assignments SET payload=?,updated_at=? WHERE id=?').run(JSON.stringify(payload), at, row.id);
     return current;
   }
-  function controlApplied(ticketId, triggerId) {
-    const row = db.prepare("SELECT * FROM sa_ticket_inputs WHERE ticket_id=? AND trigger_id=? AND kind='stop'").get(ticketId, triggerId);
+  function controlApplied(ticketId, triggerId, kind = 'stop') {
+    const row = db.prepare('SELECT * FROM sa_ticket_inputs WHERE ticket_id=? AND trigger_id=? AND kind=?').get(ticketId, triggerId, kind);
     const ticket = api.getTicket(ticketId);
-    if (!row || !['cancelling', 'cancelled'].includes(ticket?.status)) throw fail('TICKET_CONTROL_NOT_APPLIED', '停止请求尚未应用到工单');
+    const paused = kind === 'pause';
+    if (!row || !(paused ? ['pausing', 'paused'] : ['cancelling', 'cancelled']).includes(ticket?.status)) throw fail('TICKET_CONTROL_NOT_APPLIED', paused ? '暂停请求尚未应用到工单' : '停止请求尚未应用到工单');
     if (row.state !== 'applied') db.prepare("UPDATE sa_ticket_inputs SET state='applied',application=? WHERE id=?").run(JSON.stringify({
-      kind: 'stop-request', boundaryId: `control:stop:${triggerId}`, runId: null, ticketStatus: ticket.status,
+      kind: `${kind}-request`, boundaryId: `control:${kind}:${triggerId}`, runId: null, ticketStatus: ticket.status,
       // The request is applied; actual executor stop remains its separate fact.
-      executionStopped: ticket.status === 'cancelled', at: new Date().toISOString(),
+      ...(paused ? { executionPaused: ticket.status === 'paused' } : { executionStopped: ticket.status === 'cancelled' }), at: new Date().toISOString(),
     }), row.id);
     return value(db.prepare('SELECT * FROM sa_ticket_inputs WHERE id=?').get(row.id));
   }
@@ -117,6 +118,7 @@ export function installTicketInputStore({ db, tx, api }) {
     applyTicketInput: (triggerId, application) => tx(() => applyInput(triggerId, application)),
     applyTicketStopInputInTransaction: controlApplied,
     applyTicketStopInput: (ticketId, triggerId) => tx(() => controlApplied(ticketId, triggerId)),
+    applyTicketPauseInputInTransaction: (ticketId, triggerId) => controlApplied(ticketId, triggerId, 'pause'),
     saveExecutionInputDisposition(triggerId, { assignmentId, owner, fence, runId, sessionId, disposition }) {
       return tx(() => {
         const assignment = api.getAssignment(assignmentId), run = assignment && api.runs(assignmentId).find(row => row.id === runId);

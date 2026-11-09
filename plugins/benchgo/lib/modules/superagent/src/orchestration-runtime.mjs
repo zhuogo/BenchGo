@@ -14,6 +14,7 @@ import { createTaskExecutionProgress } from './task-execution-progress.mjs';
 import { archiveClosedExecutionSessions, executionSessionProjection } from './execution-session.mjs';
 import { executionUncertainty, executionStopConfirmation } from './execution-uncertainty.mjs';
 import { requestInterruptedContinuation } from './interrupted-continuation.mjs';
+import { interruptedContinuationPolicy } from './interrupted-continuation-policy.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
 export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, prepareTicketReply, notifyExecutionInput, notifyExecutionRecovery, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
@@ -77,7 +78,12 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   async function recoverPending() {
     shutdown.signal.throwIfAborted();
     if (!recoveryStorage(ctx)?.open || !ctx.agents?.get) return;
-    const immediate = new Map(requestedChecks); requestedChecks.clear();
+    const immediate = new Map();
+    for (const [key, request] of requestedChecks) if (!request.nextAt || request.nextAt <= now()) {
+      immediate.set(key, request); requestedChecks.delete(key);
+    }
+    for (const request of database.takeInterruptedContinuationRequests({ now: now() }))
+      if (!immediate.has(request.assignmentId)) immediate.set(request.assignmentId, request);
     for (const identity of immediate.values()) {
       if (!['resume-interrupted', 'inspect'].includes(identity.operation)) continue;
       const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(15000)]);
@@ -86,7 +92,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       if (!assignment || assignment.fence !== identity.fence || ticket?.instructionRevision !== identity.instructionRevision || !run) continue;
       try {
         if (identity.operation === 'resume-interrupted') {
-          await requestInterruptedContinuation({ ctx, database, ...identity, readPolicy, checkpoints: checkpointStore, signal });
+          await requestInterruptedContinuation({ ctx, database, ...identity, now: now(), readPolicy, checkpoints: checkpointStore, signal });
           continue;
         }
         let observed, code;
@@ -297,7 +303,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   return {
     checkpoints,
     tick,
-    async manageExecution({ ticketId, assignmentId, fence, instructionRevision, operation }) {
+    async manageExecution({ ticketId, assignmentId, fence, instructionRevision, operation, automatic = true }) {
       const ticket = database.getTicket(ticketId), policy = await readPolicy();
       if (!ticket || ticket.instructionRevision !== instructionRevision || !validateTicketMandate(ticket.mandate, { policy }))
         throw Object.assign(new Error('恢复处置的授权或要求已变化'), { code: 'MANDATE_REVOKED' });
@@ -321,10 +327,18 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       if (operation === 'resume' && !fact.automatic) {
         if (!run?.sessionId || assignment.stopRequest || assignment.retiredExecution)
           return { status: 'blocked', reason: '原执行会话缺失或已停止，不能安全续接', uncertainty: fact };
-        requestedChecks.set(assignment.id, { assignmentId, fence, instructionRevision, operation: 'resume-interrupted' });
+        const retry = interruptedContinuationPolicy(run, { now: now() });
+        if (automatic !== false && retry.exhausted)
+          return { status: 'blocked', reason: '自动续接已达上限，保留原执行待核实；只能只读核查或等待用户明确决定', uncertainty: fact };
+        const nextAt = automatic !== false && retry.backingOff ? retry.nextAttemptAt : undefined;
+        if (nextAt) database.deferInterruptedContinuation(assignment.id, { fence, instructionRevision, now: now() });
+        else requestedChecks.set(assignment.id, { assignmentId, fence, instructionRevision,
+          automatic: automatic !== false, operation: 'resume-interrupted' });
         void tick();
         return { status: 'scheduled', action: 'inspect-interrupted-continuation',
-          reason: '正在异步核查原会话写锁、全部工具回执与外部效果；安全证据通过后才续接原会话，不新建执行', uncertainty: fact };
+          ...(nextAt ? { nextAttemptAt: new Date(nextAt).toISOString() } : {}),
+          reason: nextAt ? '已按持久退避安排原会话核查续接，等待期间不执行工具'
+            : '正在异步核查原会话写锁、全部工具回执与外部效果；安全证据通过后才续接原会话，不新建执行', uncertainty: fact };
       }
       if (!fact.automatic) return { status: 'blocked', reason: fact.recoveryBlocked, uncertainty: fact };
       if (operation === 'fail' && (fact.reasonCode === 'external-effects-unknown' || run?.evidence?.outcome !== 'failed'

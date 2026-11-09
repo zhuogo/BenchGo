@@ -7,7 +7,7 @@ export function createDesktopTicketControl({ ctx, database }) {
   return {
     control({ id, operation, attentionId }, exec, { ownerAgent, threadId = 'main', ownerScope } = {}) {
       if (!ownerAgent || exec?.agent !== ownerAgent) throw new Error('只有总助手当前会话可管理工单');
-      if (!['supplement', 'cancel', 'answer'].includes(operation)) throw new Error('无效工单操作');
+      if (!['supplement', 'cancel', 'pause', 'answer'].includes(operation)) throw new Error('无效工单操作');
       if (operation === 'answer' && (typeof attentionId !== 'string' || !attentionId)) throw new Error('请先读取并明确选择原工单的问题');
       const instruction = currentHumanInstruction(ctx, ownerAgent);
       const message = instruction?.message;
@@ -27,7 +27,13 @@ export function createDesktopTicketControl({ ctx, database }) {
         return { operation, ticketId: id, attention: answer };
       }
       if (operation === 'supplement' && ['completed', 'failed', 'closed', 'cancelled', 'cancelling'].includes(ticket.status)) throw new Error('工单已停止；请通过工单修订或重开处理新要求');
+      if (operation === 'pause' && ['completed', 'failed', 'closed', 'cancelled', 'cancelling'].includes(ticket.status)) throw new Error('工单已结束或停止，不能暂停');
       const { trigger } = recordDesktopTrigger(database, { sessionId: ownerAgent.id, threadId, message });
+      if (operation === 'pause') {
+        const ticket = database.pauseTicket(id, { triggerId: trigger.id });
+        const input = database.ticketInputs(id).find(row => row.triggerId === trigger.id);
+        return { operation, triggerId: trigger.id, ticket, input };
+      }
       if (operation === 'cancel') {
         database.recordTicketInput({ ticketId: id, triggerId: trigger.id, kind: 'stop', idempotencyKey: `trigger:${trigger.id}` });
         const ticket = database.cancelTicket(id);
