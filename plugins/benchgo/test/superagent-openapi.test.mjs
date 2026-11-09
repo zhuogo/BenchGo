@@ -356,3 +356,17 @@ test('trusted execution-session and website-permission actions expose the curren
   assert.equal(result({ version: 1, instructionRevision: 1, review: { verdict: 'passed' } }), false);
   valid(request, { action: 'review' }); // Background memory review remains independent.
 });
+
+test('execution approval projection is a read-only origin link with an explicit Router session', () => {
+  valid(request, { action: 'executionApprovalOrigins', ownerSessionId: 'router', threadId: 'main' });
+  assert.equal(request({ action: 'executionApprovalOrigins' }), false);
+  assert.equal(request({ action: 'executionApprovalOrigins', ownerSessionId: '' }), false);
+  const validate = response(path, 'executionApprovalOrigins');
+  valid(validate, { origins: [] });
+  const origin = { ticketId: 'ticket', title: '发送准备稿', assignmentId: 'assignment', runId: 'run',
+    sessionId: 'worker', ownerSessionId: 'router', ownerThreadId: 'main' };
+  valid(validate, { origins: [origin] });
+  assert.equal(validate({ origins: [{ ...origin, approvalToken: 'invented' }] }), false);
+  const { runId, ...missing } = origin;
+  assert.equal(validate({ origins: [missing] }), false);
+});

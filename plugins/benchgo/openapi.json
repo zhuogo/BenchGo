@@ -1075,6 +1075,61 @@
                 "type": "object",
                 "description": "Trusted same-origin authenticated owner peer only.",
                 "additionalProperties": true
+              },
+              "executionApprovalOrigins": {
+                "type": "object",
+                "description": "Owner-only read-only links to the original official Worker approval. Does not create, grant or settle an approval.",
+                "required": [
+                  "origins"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "origins": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "ticketId",
+                        "title",
+                        "assignmentId",
+                        "runId",
+                        "sessionId",
+                        "ownerSessionId",
+                        "ownerThreadId"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "ticketId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "assignmentId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "ownerSessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "ownerThreadId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           },
@@ -2102,7 +2157,8 @@
               "executionSessions",
               "actionPermissions",
               "actionPermissionCreate",
-              "actionPermissionRevoke"
+              "actionPermissionRevoke",
+              "executionApprovalOrigins"
             ]
           },
           "threadId": {
@@ -2336,6 +2392,10 @@
           "expiresAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "ownerSessionId": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "additionalProperties": true,
@@ -2765,6 +2825,26 @@
               "required": [
                 "goal"
               ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "executionApprovalOrigins"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "ownerSessionId"
+              ],
+              "properties": {
+                "threadId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
             }
           }
         ],

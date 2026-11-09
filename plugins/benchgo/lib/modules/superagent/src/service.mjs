@@ -33,6 +33,7 @@ import { createWorkbenchChannelIngress } from './workbench-channel-ingress.mjs';
 import { createChannelSessionHost, registerChannelSessionProjection } from './channel-session.mjs';
 import { assertRouterMemoryTool } from './memory-tool-policy.mjs';
 import { executionSessionProjection } from './execution-session.mjs';
+import { resolveExecutionApprovalOrigins } from './execution-approval-origin.mjs';
 import { createActionPermissionStore } from './action-permissions.mjs';
 import { createExternalActionRegistry, createExternalActionHost, registerChannelExternalActions, createActionPermissionApi } from './external-actions.mjs';
 import { createChannelCredentials } from './channel-credentials.mjs';
@@ -677,6 +678,8 @@ export async function mountAssistant(ctx, commander, providers) {
       case 'actionPermissions':
       case 'actionPermissionCreate':
       case 'actionPermissionRevoke': return permissionApi(input, peer);
+      case 'executionApprovalOrigins': return resolveExecutionApprovalOrigins({ store, engine, input, peer,
+        readPolicy: id => readAssessmentPolicy(store, ctx.workspaceRegistry, id) });
       case 'executionSessions': {
         const sessions = [];
         const existing = new Set((await ctx.sessionQuery.listSessions()).map(row => row.header.id));
