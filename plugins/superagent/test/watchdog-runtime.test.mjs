@@ -6,6 +6,8 @@ import { join, relative, resolve } from 'node:path';
 import { resolveWatchdogConfig } from '../src/watchdog-config.mjs';
 import { createWatchdogStore, watchdogDigest } from '../src/watchdog-store.mjs';
 import { createWatchdogRuntime } from '../src/watchdog-runtime.mjs';
+import { createExecutionSummaryInput } from '../src/execution-summary-input.mjs';
+import { createWorkerProgressJudge } from '../src/worker-progress-judgement.mjs';
 
 const epoch = Date.parse('2026-11-09T00:00:00.000Z');
 const iso = value => new Date(value).toISOString();
@@ -32,6 +34,56 @@ function facts(now = epoch, overdue = false) {
   return { cursor: 20, currentCursor: 20, observedAt: iso(now), bootId: 'boot-1', complete: true,
     truncated: false, schedulerHeartbeat: { at: iso(now) }, executions: [execution(now, overdue)] };
 }
+function observedFiles(now, cursor = 20) {
+  const current = facts(now), execution = current.executions[0]; current.cursor = current.currentCursor = cursor;
+  const entries = [0, 1].map(index => ({ ticketId: 'ticket', runId: 'run', instructionRevision: 1, fence: 1,
+    seq: cursor - 2 + index, kind: 'artifact-observation', data: { sequence: cursor - 2 + index,
+      startedAt: iso(now - (index ? 500 : 1500)), completedAt: iso(now - (index ? 0 : 1000)),
+      coverage: { kind: 'protected-workspace-files', complete: true, truncated: false, exclusionsVersion: 1 },
+      comparison: { beforeFiles: 1, afterFiles: 1, added: 0, modified: 0, deleted: 0, unchanged: 1, netChanged: false } } }));
+  entries.push({ ticketId: 'ticket', runId: 'run', instructionRevision: 1, fence: 1, seq: cursor, kind: 'tool/result', data: {} });
+  execution.modelEvidence = createExecutionSummaryInput({ ticketId: 'ticket', runId: 'run', instructionRevision: 1,
+    watermark: cursor, target: '生成本地报告', acceptance: '报告文件完成', facts: { entries, observedAt: iso(now),
+      runtime: { assignment: { fence: 1 }, artifactCoverage: { known: true, complete: true, lastSequence: cursor - 1 } },
+      projections: [{ ticketId: 'ticket', runId: 'run', instructionRevision: 1, complete: true,
+        state: { status: 'running', activity: 'working', tools: { calls: cursor, results: cursor } } }] } });
+  return current;
+}
+
+test('an alive Worker with observed unchanged files reaches the model before any mechanical fault and needs consecutive evidence', async t => {
+  let f, modelCalls = 0;
+  const worker = createWorkerProgressJudge({ now: () => f.time, config: { minObservationMs: 1000, minIntervalMs: 0 },
+    requestText: async request => { modelCalls++; return { text: JSON.stringify({ classification: 'no-progress', outputRelevance: 'relevant',
+      reason: '覆盖的报告文件无净变化', evidenceRefs: request.input.outputObservation.observations.map(row => row.evidenceRef), uncertainty: 'medium' }) }; } });
+  t.after(() => worker.dispose());
+  f = await fixture(t, { readFacts: api => observedFiles(api.time, 20 + Math.round((api.time - epoch) / 60000)),
+    judge: ({ evidence, signal }) => worker.evaluate({ ...evidence, signal }) });
+  const first = await f.runtime.check(f.receipt());
+  assert.equal(first.outcome, 'observed'); assert.equal(modelCalls, 1); assert.equal(f.calls.signals.length, 0);
+  f.time += 60000;
+  const next = await f.runtime.check(f.receipt());
+  assert.equal(modelCalls, 2); assert.deepEqual(next.findings, ['MODEL_NO_PROGRESS']);
+  assert.equal(f.calls.signals.length, 1); assert.equal(f.calls.signals[0].kind, 'model');
+  assert.match(f.calls.signals[0].summary, /受保护文件/);
+});
+
+test('file candidates exempt waits, stale identities, unknown or changed outputs and missing genuine tool activity', async t => {
+  for (const alter of [
+    value => { value.executions[0].wait.kind = 'user'; },
+    value => { value.executions[0].wait.kind = 'approval'; },
+    value => { value.executions[0].ticket.status = 'paused'; value.executions[0].wait.kind = 'paused'; },
+    value => { value.executions[0].wait = { kind: 'long-operation', expectedUntil: iso(epoch + 60000) }; },
+    value => { value.executions[0].modelEvidence.outputObservation = 'unknown'; },
+    value => { value.executions[0].modelEvidence.binding.fence = 2; },
+    value => { value.executions[0].modelEvidence.counts.results = 0; },
+    value => { value.executions[0].modelEvidence.events = []; },
+    value => { value.executions[0].modelEvidence.outputObservation.observations[1].sequence += 2; },
+  ]) {
+    const current = observedFiles(epoch); alter(current);
+    const f = await fixture(t, { readFacts: () => current, judge: () => assert.fail('insufficient output evidence must not trigger a candidate') });
+    await f.runtime.check(f.receipt()); assert.equal(f.calls.signals.length, 0);
+  }
+});
 
 async function fixture(t, { config: overrides = {}, readFacts, sendSignal, judge } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-watchdog-runtime-'));

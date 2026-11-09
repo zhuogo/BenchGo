@@ -5,13 +5,21 @@ import { createWorkerProgressJudge } from '../src/worker-progress-judgement.mjs'
 const facts = (watermark = 10, extra = {}) => ({
   ticketId: 'ticket', runId: 'run', instructionRevision: 1, watermark, observationStartedAt: 0,
   anomalies: ['repeated-activity'], target: '整理材料', acceptance: ['保存结果'],
-  facts: { projections: [{ ticketId: 'ticket', runId: 'run', instructionRevision: 1, complete: true,
+  facts: { observedAt: new Date(200_000).toISOString(), runtime: { assignment: { fence: 1 }, artifactCoverage: {
+    known: true, complete: true, lastSequence: watermark } },
+  projections: [{ ticketId: 'ticket', runId: 'run', instructionRevision: 1, complete: true,
     state: { status: 'running', activity: 'working', tools: { calls: watermark, results: watermark, errors: 0 } } }],
   entries: [{ ticketId: 'ticket', runId: 'run', instructionRevision: 1, seq: watermark, kind: 'tool/result',
-    data: { evidenceRefs: [{ sessionId: 'session', seq: watermark }] } }] }, ...extra,
+    data: { evidenceRefs: [{ sessionId: 'session', seq: watermark }] } },
+    ...[0, 1].map(index => ({ ticketId: 'ticket', runId: 'run', instructionRevision: 1, fence: 1,
+      seq: watermark - 2 + index, kind: 'artifact-observation', data: { sequence: watermark - 1 + index,
+        startedAt: new Date(index ? 199_000 : 0).toISOString(), completedAt: new Date(index ? 200_000 : 1000).toISOString(),
+        coverage: { kind: 'protected-workspace-files', complete: true, truncated: false, exclusionsVersion: 1 },
+        comparison: { beforeFiles: 1, afterFiles: 1, added: 0, modified: 0, deleted: 0, unchanged: 1, netChanged: false } } }))] }, ...extra,
 });
 const decision = (request, classification = 'no-progress') => ({ text: JSON.stringify({ classification,
-  reason: '观察到重复活动，尚无可核验的产出变化', evidenceRefs: request.input.evidenceRefs.slice(0, 1), uncertainty: 'medium' }) });
+  outputRelevance: 'relevant', reason: '覆盖文件无净变化',
+  evidenceRefs: request.input.evidenceRefs.filter(ref => ref.startsWith('execution:')).slice(-1), uncertainty: 'medium' }) });
 const judge = extra => createWorkerProgressJudge({ now: () => 200_000, config: { minIntervalMs: 0 }, requestText: async request => decision(request), ...extra });
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
@@ -39,7 +47,7 @@ test('two distinct, increasing observations make only a suspected signal eligibl
   const service = judge();
   const first = await service.evaluate(facts());
   assert.equal(first.status, 'judged'); assert.equal(first.hits, 1); assert.equal(first.signalEligible, false);
-  assert.equal(first.uncertainty, 'high'); assert.match(first.reason, /^疑似：/);
+  assert.equal(first.uncertainty, 'medium'); assert.match(first.reason, /^疑似：/);
   const duplicate = await service.evaluate(facts());
   assert.equal(duplicate.code, 'EVIDENCE_UNCHANGED'); assert.equal(duplicate.signalEligible, false);
   const next = await service.evaluate(facts(11));
@@ -56,6 +64,35 @@ test('a global cursor increase cannot count unchanged ticket evidence twice', as
   assert.equal(result.code, 'EVIDENCE_UNCHANGED'); assert.equal(calls, 1);
 });
 
+test('activity, unknown coverage, stale observations and unrelated outputs cannot substantiate no-progress', async () => {
+  for (const change of [
+    value => { value.facts.runtime.artifactCoverage.pending = 1; },
+    value => { value.facts.runtime.artifactCoverage.failed = 1; },
+    value => { value.facts.runtime.artifactCoverage.known = false; },
+    value => { value.facts.observedAt = new Date(500_000).toISOString(); },
+    value => { value.facts.entries = value.facts.entries.filter(row => row.kind !== 'artifact-observation'); },
+  ]) {
+    const value = facts(); change(value);
+    const service = judge({ requestText: async request => ({ text: JSON.stringify({ classification: 'no-progress', outputRelevance: 'relevant',
+      reason: '全任务没有产出', evidenceRefs: request.input.evidenceRefs.slice(0, 1), uncertainty: 'low' }) }) });
+    const result = await service.evaluate(value);
+    assert.equal(result.classification, 'insufficient-evidence'); assert.equal(result.signalEligible, false);
+  }
+  for (const outputRelevance of ['irrelevant', 'unknown', undefined]) {
+    const result = await judge({ requestText: async request => ({ text: JSON.stringify({ ...JSON.parse(decision(request).text), outputRelevance }) }) }).evaluate(facts());
+    assert.equal(result.classification, 'insufficient-evidence'); assert.equal(result.signalEligible, false);
+  }
+});
+
+test('new activity cannot count the same completed file observation twice', async () => {
+  let calls = 0;
+  const service = judge({ requestText: async request => { calls++; return decision(request); } });
+  await service.evaluate(facts());
+  const next = facts(); next.watermark++;
+  next.facts.projections[0].state.tools.calls++;
+  assert.equal((await service.evaluate(next)).code, 'EVIDENCE_UNCHANGED'); assert.equal(calls, 1);
+});
+
 test('normal observations, changed classification, and a new execution reset consecutive hits', async () => {
   let classification = 'no-progress';
   const service = judge({ requestText: async request => decision(request, classification) });
@@ -70,7 +107,7 @@ test('normal observations, changed classification, and a new execution reset con
   assert.equal((await service.evaluate(facts(15))).hits, 1);
   const revised = facts(16, { instructionRevision: 2 });
   revised.facts.projections[0].instructionRevision = 2;
-  revised.facts.entries[0].instructionRevision = 2;
+  for (const row of revised.facts.entries) row.instructionRevision = 2;
   assert.equal((await service.evaluate(revised)).hits, 1);
 });
 

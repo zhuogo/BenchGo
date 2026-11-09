@@ -47,6 +47,37 @@ test('model input is a bounded whitelist, including redaction of goal and accept
   assert.equal(redactExecutionText('密码：abc'), '密码：[秘密已隐藏]');
 });
 
+test('protected artifact observations retain counts and references without paths, hashes or tool payloads', () => {
+  const observation = sequence => ({ ticketId: 't', runId: 'r', instructionRevision: 2, fence: 3, seq: sequence + 1,
+    kind: 'artifact-observation', data: { sequence, directory: 'C:\\private\\raw-workspace', hash: 'a'.repeat(64), output: 'PRIVATE_OUTPUT',
+      startedAt: new Date(sequence * 1000).toISOString(), completedAt: new Date(sequence * 1000 + 900).toISOString(),
+      coverage: { kind: 'protected-workspace-files', complete: true, truncated: false, exclusionsVersion: 1 },
+      comparison: { beforeFiles: 2, afterFiles: 2, added: 0, deleted: 0, modified: 0, unchanged: 2, netChanged: false } } });
+  const original = { ticketId: 't', runId: 'r', instructionRevision: 2, watermark: 10, target: '修改 C:\\private\\file.txt 完成',
+    facts: { observedAt: new Date(3000).toISOString(), runtime: { assignment: { fence: 3 }, artifactCoverage: {
+      known: true, complete: true, lastSequence: 1 } }, entries: [observation(0), observation(1)], projections: [] } };
+  const safe = createExecutionSummaryInput(original);
+  assert.equal(safe.outputObservation.coverage.externalEffects, 'not-observed');
+  assert.equal(safe.outputObservation.comparison.netChanged, false);
+  assert.deepEqual(safe.evidenceRefs, ['execution:1', 'execution:2']);
+  assert.doesNotMatch(JSON.stringify(safe), /raw-workspace|private|PRIVATE_OUTPUT|aaaaa/);
+  const remote = createExecutionSummaryInput({ ...safe.binding, observedAt: original.facts.observedAt, modelEvidence: safe });
+  assert.deepEqual(remote.outputObservation, safe.outputObservation);
+  for (const change of [
+    value => { value.facts.runtime.artifactCoverage.pending = 1; },
+    value => { value.facts.runtime.artifactCoverage.failed = 1; },
+    value => { value.facts.runtime.artifactCoverage.restored = true; },
+    value => { value.facts.runtime.artifactCoverage.lastSequence = 2; },
+    value => { value.facts.entries[1].data.sequence = 3; },
+    value => { value.facts.entries[1].fence = 2; },
+    value => { value.facts.entries[1].instructionRevision = 1; },
+    value => { value.facts.observedAt = new Date(200_000).toISOString(); },
+  ]) {
+    const value = structuredClone(original); change(value);
+    assert.equal(createExecutionSummaryInput(value).outputObservation, 'unknown');
+  }
+});
+
 test('summary store rejects old runs/revisions/phases/watermarks and preserves audit safely', () => {
   const db = new DatabaseSync(':memory:'), store = installExecutionSummaryStore({ db });
   const b = { ticketId: 't', runId: 'r', instructionRevision: 2, watermark: 8, phase: 'running:none' };

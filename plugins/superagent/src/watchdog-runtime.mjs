@@ -1,5 +1,6 @@
 import { watchdogDigest } from './watchdog-store.mjs';
 import { inspectWatchdogFacts } from './watchdog-checks.mjs';
+import { createExecutionSummaryInput, zeroFileChangeWindow } from './execution-summary-input.mjs';
 
 const iso = value => new Date(value).toISOString();
 const clone = value => structuredClone(value);
@@ -8,6 +9,29 @@ const identityKey = 'host:identity';
 const judgeCodes = { EXECUTION_INACTIVE: 'worker-inactive', LEASE_EXPIRED: 'lease-expired',
   REQUEST_DEADLINE_EXCEEDED: 'request-overdue', STOP_UNCONFIRMED: 'stop-overdue', RECOVERY_NOT_CONVERGING: 'recovery-not-converging' };
 const safeCode = error => /^[A-Z][A-Z0-9_]{0,79}$/.test(error?.code || '') ? error.code : error?.name === 'TimeoutError' ? 'WATCHDOG_TIMEOUT' : 'WATCHDOG_PROBE_FAILED';
+
+function unchangedFileCandidate(execution, facts, config, now) {
+  if (facts.complete !== true || facts.truncated !== false || !Number.isFinite(Date.parse(facts.observedAt))
+    || Date.parse(facts.observedAt) > now || now - Date.parse(facts.observedAt) > config.observationWindowMs
+    || execution.ticket?.status !== 'open' || execution.assignment?.state !== 'claimed' || execution.run?.state !== 'running'
+    || execution.run.instructionRevision !== execution.ticket.instructionRevision || execution.wait?.kind !== 'none'
+    || execution.executionAlive?.status !== 'running' || execution.executionAlive.bootId !== facts.bootId
+    || !Number.isFinite(Date.parse(execution.executionAlive.observedAt)) || Date.parse(execution.executionAlive.observedAt) > now
+    || now - Date.parse(execution.executionAlive.observedAt) > config.observationWindowMs
+    || !execution.watermarks?.length || execution.watermarks.some(row => row.complete !== true)) return null;
+  let safe;
+  try { safe = createExecutionSummaryInput({ ticketId: execution.ticket.id, runId: execution.run.id,
+    instructionRevision: execution.ticket.instructionRevision, watermark: facts.currentCursor ?? facts.cursor,
+    observedAt: facts.observedAt, modelEvidence: execution.modelEvidence }); } catch { return null; }
+  if (safe.binding.fence !== execution.assignment.fence || !safe.evidenceComplete || !safe.counts.calls || !safe.counts.results
+    || !safe.events.some(row => ['tool/call', 'tool/result'].includes(row.kind) && row.count > 0)) return null;
+  const window = zeroFileChangeWindow(safe, config.observationWindowMs);
+  if (!window) return null;
+  const identity = { ticketId: execution.ticket.id, assignmentId: execution.assignment.id, runId: execution.run.id,
+    sessionId: execution.run.sessionId, fence: execution.assignment.fence, instructionRevision: execution.ticket.instructionRevision };
+  return { key: `observed-files:${watchdogDigest(Object.values(identity))}`, execution: identity,
+    evidenceCursor: facts.currentCursor ?? facts.cursor, firstObservedAt: window.startedAt, reasonCode: 'OBSERVED_FILES_UNCHANGED' };
+}
 
 async function bounded(operation, signal) {
   signal.throwIfAborted();
@@ -152,18 +176,24 @@ export function createWatchdogRuntime({ store, config, client, judge, now = Date
               || row.ticket?.instructionRevision !== incident.execution.instructionRevision
               || ['completed', 'failed', 'closed', 'cancelled'].includes(row.ticket?.status)
               || ['completed', 'failed', 'cancelled'].includes(row.run?.state)
-              || ['user', 'approval', 'paused'].includes(row.wait?.kind))) modelResolved.push(incident.conditionKey);
+              || ['user', 'approval', 'paused'].includes(row.wait?.kind)
+              || ['background-job', 'long-operation'].includes(row.wait?.kind) && Date.parse(row.wait.expectedUntil) > now()
+              || row.modelEvidence?.outputObservation?.comparison?.netChanged === true)) modelResolved.push(incident.conditionKey);
           }
           const judgeSignal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(config.probeTimeoutMs)]);
           let judged = 0;
           if (judge) for (const execution of facts.executions.slice(0, 1000)) {
             const relevant = findings.filter(row => row.execution?.runId === execution.run?.id && judgeCodes[row.reasonCode]);
+            const candidate = unchangedFileCandidate(execution, facts, config, now());
+            if (candidate) relevant.push(candidate); // A candidate alone never creates an incident or sends a signal.
             if (!relevant.length) continue;
             if (judgeSignal.aborted || judged >= 4) { degraded.push('MODEL_JUDGE_DEFERRED'); break; }
             judged++;
             const evidence = { ticketId: execution.ticket.id, runId: execution.run.id, instructionRevision: execution.ticket.instructionRevision,
               watermark: facts.currentCursor ?? facts.cursor, observationStartedAt: relevant[0].firstObservedAt,
-              anomalies: relevant.map(row => judgeCodes[row.reasonCode]), waiting: { kind: execution.wait?.kind || 'unknown', active: !['none', 'unknown'].includes(execution.wait?.kind),
+              anomalies: relevant.map(row => row.reasonCode === 'OBSERVED_FILES_UNCHANGED' ? 'no-output-change' : judgeCodes[row.reasonCode]),
+              observedAt: facts.observedAt, modelEvidence: execution.modelEvidence,
+              waiting: { kind: execution.wait?.kind || 'unknown', active: !['none', 'unknown'].includes(execution.wait?.kind),
                 ...(execution.wait?.expectedUntil ? { until: execution.wait.expectedUntil } : {}) }, facts: execution };
             try {
               const result = await bounded(() => judge({ evidence, signal: judgeSignal }), judgeSignal);

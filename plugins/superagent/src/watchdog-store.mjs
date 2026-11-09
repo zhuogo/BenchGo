@@ -24,6 +24,7 @@ function auxiliaryRecord(value) {
     startedAt: Number.isFinite(value.startedAt) ? value.startedAt : null,
     completedAt: Number.isFinite(value.completedAt) ? value.completedAt : null,
     result: { classification: classifications.has(result.classification) ? result.classification : 'insufficient-evidence',
+      outputRelevance: ['relevant', 'irrelevant'].includes(result.outputRelevance) ? result.outputRelevance : 'unknown',
       reason: redactExecutionText(String(result.reason || ''), 300), signalEligible: result.signalEligible === true,
       evidenceWatermark: count(result.evidenceWatermark, null),
       evidenceRefs: Array.isArray(result.evidenceRefs) ? result.evidenceRefs.filter(text).slice(0, 24) : [],
