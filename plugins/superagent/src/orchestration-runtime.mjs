@@ -236,9 +236,11 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   return {
     checkpoints,
     tick,
-    state({ newestFirst = false } = {}) {
+    state({ newestFirst = false, archived, ticketId, limit = 1000 } = {}) {
       const progress = executionProgress.batch();
-      return database.listTickets({ limit: 1000, newestFirst }).map(ticket => {
+      const boundedLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 1000;
+      const tickets = ticketId === undefined ? database.listTickets({ limit: boundedLimit, newestFirst, archived }) : [database.getTicket(ticketId)].filter(Boolean);
+      return tickets.map(ticket => {
         const assignments = database.assignments(ticket.id);
         const inputDiagnostics = (database.ticketInputs?.(ticket.id) || []).filter(input => input.snapshot?.executionInput?.outcome === 'failed')
           .map(input => ({ id: input.id, triggerId: input.triggerId, state: input.state, receivedAt: input.receivedAt,

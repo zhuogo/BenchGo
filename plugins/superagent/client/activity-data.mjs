@@ -2,6 +2,7 @@ import { ticketSnapshot, ticketWaiting } from './ticket-state.mjs';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
 
 export const terminalActivityStates = new Set(['completed', 'failed', 'cancelled', 'closed']);
+export const archivedActivityTicket = row => row.kind === 'ticket' && ['completed', 'failed', 'closed'].includes(row.status);
 // Paused/cancelling work remains in the history list, but it is no longer
 // actively executing. Keep this set shared by the trigger and drawer so a
 // paused or stopping ticket cannot leave the activity badge looking busy.
@@ -56,7 +57,7 @@ export function activityTask(row, kind) {
 export function groupHomeActivity(rows = []) {
   const sorted = [...rows].sort((a, b) => (Date.parse(b.time) || 0) - (Date.parse(a.time) || 0));
   return {
-    attention: sorted.filter(row => attentionActivityStates.has(row.status)).slice(0, 2),
+    attention: sorted.filter(row => !archivedActivityTicket(row) && attentionActivityStates.has(row.status)).slice(0, 2),
     active: sorted.filter(row => activeActivityStates(row.status)).slice(0, 3),
     completed: sorted.filter(row => row.status === 'completed').slice(0, 2),
   };
@@ -85,8 +86,15 @@ export function createActivityStore(api, environment = {}) {
     const controller = new AbortController(); request = controller;
     publish({ loading: true });
     try {
-      const [tickets, goals] = await Promise.all([api('tickets', {}, controller.signal), api('goalList', {}, controller.signal)]);
-      if (!controller.signal.aborted) publish({ rows: [...(tickets.tickets || []).map(row => activityTask(row, 'ticket')), ...(goals.goals || []).map(row => activityTask(row, 'goal'))], error: '', updated: new Date().toISOString() });
+      const [tickets, recent, goals] = await Promise.all([
+        api('tickets', { archived: false }, controller.signal),
+        api('tickets', { archived: true, limit: 2 }, controller.signal),
+        api('goalList', {}, controller.signal),
+      ]);
+      // Closed work is fetched only for the home's small recent-results section.
+      // Deduplicate the shared ledger if a ticket closes between the two reads.
+      const uniqueTickets = [...new Map([...(recent.tickets || []), ...(tickets.tickets || [])].map(row => [row.id, row])).values()];
+      if (!controller.signal.aborted) publish({ rows: [...uniqueTickets.map(row => activityTask(row, 'ticket')), ...(goals.goals || []).map(row => activityTask(row, 'goal'))], error: '', updated: new Date().toISOString() });
     } catch (cause) {
       if (!controller.signal.aborted) publish({ error: cause.message || '任务读取失败' });
     } finally {

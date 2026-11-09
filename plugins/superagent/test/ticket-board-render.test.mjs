@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -29,18 +29,19 @@ async function fixture() {
           createdAt:'2026-11-07T08:00:00Z',updatedAt:'2026-11-07T08:05:00Z',taskCanOrganize:false,...extra});
         const tasks=createTaskManagement({database:{meta:()=>undefined}});
         const rows=[sample('queued','准备周报','open',{updatedAt:'2026-11-01T08:00:00Z'}),sample('running','运行兼容测试','open',{updatedAt:'2026-11-09T08:00:00Z',assignments:[{state:'claimed'}],executionSession:{available:true,sessionId:'real-execution',ticketId:'running'}}),
-          sample('paused','确认发布范围','paused',{updatedAt:'2026-11-08T08:00:00Z'}),sample('done','交付设计稿','completed',{updatedAt:null,taskCanOrganize:true})];
+          sample('paused','确认发布范围','paused',{updatedAt:'2026-11-08T08:00:00Z'}),sample('stopped','已停止验证','cancelled',{updatedAt:null,taskCanOrganize:true}),
+          sample('done','交付设计稿','completed',{archived:true,updatedAt:null,taskCanOrganize:true,resultVersion:1,results:[{version:1,summary:'保留原始成果与审计证据',selfCheck:{summary:'逐项检查通过'},evidenceRefs:[]}]})];
         const api=async(action,input)=>{
           window.calls.push([action,input]);
           if(window.control.state==='loading')return new Promise(()=>{});
           if(window.control.state==='error')throw Error('连接暂不可用');
-          if(action==='tickets')return {tickets:window.control.state==='empty'?[]:tasks.project('ticket',rows)};
+          if(action==='tickets')return {tickets:window.control.state==='empty'?[]:tasks.project('ticket',rows.filter(row=>input.ticketId?row.id===input.ticketId:!!row.archived===input.archived))};
           if(action==='checkpointList')return {checkpoints:[]};
           if(action==='state')return {config:{revision:1,workerConcurrency:2}};
           return {queued:true};
         };
         root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main className='ba-studio-body' style={{padding:24,width:'100%',boxSizing:'border-box'}}>
-          <Tickets api={api} onCreateGoal={()=>window.calls.push(['createGoal'])} onSchedule={()=>window.calls.push(['openSchedule'])} onOpenExecution={async value=>{window.calls.push(['openExecution',value]);if(window.control.openError)throw Error('原会话尚未连接');}}/>
+          <Tickets api={api} requestedTicket={state==='archived-detail'?{ticketId:'done'}:undefined} onCreateGoal={()=>window.calls.push(['createGoal'])} onSchedule={()=>window.calls.push(['openSchedule'])} onOpenExecution={async value=>{window.calls.push(['openExecution',value]);if(window.control.openError)throw Error('原会话尚未连接');}}/>
         </main></div>);
       };
     ` },
@@ -53,7 +54,8 @@ async function fixture() {
   });
   const css = result.outputFiles.filter(file => file.path.endsWith('.css')).map(file => file.text).join('\n');
   const js = result.outputFiles.find(file => file.path.endsWith('.js')).text.replaceAll('</script', '<\\/script');
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>body{margin:0;font-family:Arial,sans-serif}${css}</style></head><body><div id="root"></div><script>${js}</script></body></html>`;
+  const theme = (await Promise.all(['base.css', 'design-platform.css', 'focus.css'].map(name => readFile(join(root, 'deepseek-harness/packages/client/ui-theme/src/styles', name), 'utf8')))).join('\n');
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>${theme}body{margin:0;font-family:Arial,sans-serif;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}${css}</style></head><body><div id="root"></div><script>${js}</script></body></html>`;
 }
 
 test('ticket board renders four states, filters, retains details and routes real controls on desktop and phone', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
@@ -70,11 +72,30 @@ test('ticket board renders four states, filters, retains details and routes real
     const shot = async name => { if (screenshots) await page.screenshot({ path: join(screenshots, name + '.png'), fullPage: true }); };
     for (const [state, title] of [['loading', '正在读取工单'], ['error', '工单暂时无法读取'], ['empty', '暂无工单']]) {
       await render(state); await page.getByText(title, { exact: true }).waitFor(); await shot(state);
+      assert(await page.getByRole('tab', { name: '已归档', exact: true }).isVisible(), 'archive navigation remains reachable in every resource state');
     }
+    await page.getByRole('tab', { name: '已归档', exact: true }).click();
+    await page.getByText('暂无归档工单', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '查看当前工单', exact: true }).click();
+    await page.getByText('暂无工单', { exact: true }).waitFor();
     await render('data');
     const list = page.locator('.ba-task-list > .ba-task-list-row');
     await list.first().waitFor();
-    assert.deepEqual(await list.locator('.ba-task-open > strong').allTextContents(), ['运行兼容测试', '确认发布范围', '交付设计稿', '准备周报']);
+    assert.deepEqual(await list.locator('.ba-task-open > strong').allTextContents(), ['运行兼容测试', '确认发布范围', '已停止验证', '准备周报']);
+    assert((await page.evaluate(() => window.calls)).some(([name, input]) => name === 'tickets' && input.archived === false));
+    await page.getByRole('tab', { name: '已归档', exact: true }).click();
+    await page.getByRole('button', { name: /交付设计稿.*已完成/ }).waitFor();
+    assert.equal(await list.count(), 1);
+    await page.getByRole('button', { name: /交付设计稿.*已完成/ }).click();
+    await page.getByRole('dialog').waitFor();
+    await page.getByText('查看结果与证据 · 要求版本 1', { exact: true }).click();
+    assert(await page.getByRole('dialog').getByText('保留原始成果与审计证据', { exact: true }).isVisible());
+    assert.equal(await page.getByRole('dialog').getByRole('button', { name: '继续工单', exact: true }).count(), 0);
+    await shot('archive-desktop');
+    await page.keyboard.press('Escape');
+    assert(!(await page.evaluate(() => window.calls)).some(([name]) => ['ticketResume', 'ticketStop', 'ticketChange'].includes(name)), 'browsing archives must not change or rerun the original task');
+    await page.getByRole('tab', { name: '当前工单', exact: true }).click();
+    await list.first().waitFor();
     await page.getByRole('tab', { name: '看板', exact: true }).click();
     const board = page.getByLabel('工单看板', { exact: true }); await board.waitFor();
     assert.equal(await board.locator('.ba-ticket-lane').count(), 4);
@@ -116,6 +137,16 @@ test('ticket board renders four states, filters, retains details and routes real
     await shot('board-mobile');
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'phone layout must not overflow horizontally');
     assert.equal(await board.locator('.ba-ticket-lane').count(), 4);
+    await page.getByRole('tab', { name: '已归档', exact: true }).click();
+    await board.getByRole('button', { name: /交付设计稿.*已完成/ }).waitFor();
+    await shot('archive-mobile');
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'archive tabs must fit narrow screens');
+    await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
+    await shot('archive-mobile-dark');
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'archive tabs must fit dark-theme narrow screens');
+    await render('archived-detail');
+    await page.getByRole('dialog', { name: '交付设计稿' }).waitFor();
+    assert((await page.evaluate(() => window.calls)).some(([name, input]) => name === 'tickets' && input.ticketId === 'done'), 'archived deep links retrieve the same ticket independently from active paging');
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

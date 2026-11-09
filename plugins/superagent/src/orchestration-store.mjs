@@ -26,6 +26,7 @@ const copy = value => structuredClone(value);
 const uuid = () => randomUUID();
 const timestamp = n => new Date(n).toISOString();
 const safeLimit = (value, fallback, max) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : fallback;
+const archivedTicketStates = new Set(['completed', 'failed', 'closed']);
 
 /**
  * Durable single-machine SuperAgent orchestration control plane.
@@ -131,7 +132,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   const candidateValue = row => row && ({ id: row.id, triggerId: row.trigger_id, threadId: row.thread_id, policyVersion: row.policy_version, gate: parse(row.gate), status: row.status, evalId: row.eval_id, retryCount: row.retry_count, handbackTicketId: row.handback_ticket_id, createdAt: row.created_at, updatedAt: row.updated_at });
   const evalValue = row => row && ({ id: row.id, threadId: row.thread_id, policyVersion: row.policy_version, candidateIds: parse(row.candidate_ids), owner: row.owner, attempt: row.attempt, status: row.status, deadline: row.deadline, createdAt: row.created_at, updatedAt: row.updated_at });
   const decisionValue = row => row && ({ id: row.id, candidateId: row.candidate_id, threadId: row.thread_id, outcome: row.outcome, assessment: parse(row.assessment), policyVersion: row.policy_version, ticketId: row.ticket_id, createdAt: row.created_at });
-  const ticketValue = row => row && ({ id: row.id, threadId: row.thread_id, title: normalizeTicketTitle(row.title, row.target), target: row.target, acceptance: row.acceptance, instructionRevision: row.instruction_revision, adjustmentOfTicketId: row.adjustment_of_ticket_id || null, liveSummary: ticketLiveSummary(row), status: row.status, pauseReason: row.pause_reason ? parse(row.pause_reason) : null, continuationWait: row.continuation_wait ? parse(row.continuation_wait) : null, mandate: { ...api.currentTicketMandate(row.id, parse(row.mandate)), target: row.target, acceptance: row.acceptance }, createdByDecision: row.created_by_decision, createdAt: row.created_at, updatedAt: row.updated_at, resultVersion: row.result_version });
+  const ticketValue = row => row && ({ id: row.id, threadId: row.thread_id, title: normalizeTicketTitle(row.title, row.target), target: row.target, acceptance: row.acceptance, instructionRevision: row.instruction_revision, adjustmentOfTicketId: row.adjustment_of_ticket_id || null, liveSummary: ticketLiveSummary(row), status: row.status, archived: archivedTicketStates.has(row.status), pauseReason: row.pause_reason ? parse(row.pause_reason) : null, continuationWait: row.continuation_wait ? parse(row.continuation_wait) : null, mandate: { ...api.currentTicketMandate(row.id, parse(row.mandate)), target: row.target, acceptance: row.acceptance }, createdByDecision: row.created_by_decision, createdAt: row.created_at, updatedAt: row.updated_at, resultVersion: row.result_version });
   function ticketLiveSummary(row) {
     const result = db.prepare('SELECT payload FROM sa_results WHERE ticket_id=? ORDER BY version DESC LIMIT 1').get(row.id);
     const saved = result ? parse(result.payload) : null;
@@ -476,10 +477,15 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         return api.getTicket(row.ticket_id);
       });
     },
-    listTickets({ threadId, status, projectId, ownerSessionId, ownerSessionIds, ownerThreadId, limit = 100, offset = 0, newestFirst = false } = {}) {
+    listTickets({ threadId, status, archived, projectId, ownerSessionId, ownerSessionIds, ownerThreadId, limit = 100, offset = 0, newestFirst = false } = {}) {
       const where = [], args = [];
       if (threadId) { where.push('thread_id=?'); args.push(id(threadId, 'threadId')); }
       if (status) { where.push('status=?'); args.push(id(status, 'ticket status')); }
+      if (archived !== undefined) {
+        if (typeof archived !== 'boolean') throw new Error('Invalid ticket archive scope');
+        where.push(`status ${archived ? 'IN' : 'NOT IN'} (${[...archivedTicketStates].map(() => '?').join(',')})`);
+        args.push(...archivedTicketStates);
+      }
       if (ownerSessionId !== undefined) { where.push("json_extract(mandate, '$.source.channel')='desktop' AND json_extract(mandate, '$.source.sessionId')=?"); args.push(id(ownerSessionId, 'ownerSessionId')); }
       if (ownerSessionIds !== undefined) {
         if (!Array.isArray(ownerSessionIds) || !ownerSessionIds.length || ownerSessionIds.length > 1000) throw new Error('Invalid owner session scope');

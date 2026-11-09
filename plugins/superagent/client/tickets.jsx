@@ -59,6 +59,8 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
   const [rows, setRows] = useState(null), [error, setError] = useState(''), [busy, setBusy] = useState(null), [generation, setGeneration] = useState(0);
   const [concurrency, setConcurrency] = useState(''), [configRevision, setConfigRevision] = useState(null), [settingsOpen, setSettingsOpen] = useState(false), [configError, setConfigError] = useState('');
   const [selectedId, setSelectedId] = useState(null), [changeId, setChangeId] = useState(null), [detailDirty, setDetailDirty] = useState(false);
+  const [selectedTicket, setSelectedTicket] = useState(null), [archiveScope, setArchiveScope] = useState('active');
+  const [loadedDetailId, setLoadedDetailId] = useState(null);
   useEffect(() => { if (requestedTicket?.ticketId) { setSelectedId(requestedTicket.ticketId); setChangeId(null); } }, [requestedTicket]);
   const [view, setView] = useState('list'), [query, setQuery] = useState('');
   const detailDirtyCallback = useRef(null);
@@ -81,12 +83,18 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
   useEffect(() => {
     const controller = new AbortController(); let timer;
     const load = async () => {
-      try { const value = await api('tickets', {}, controller.signal); if (!controller.signal.aborted) { setRows(value.tickets); setError(''); } }
+      try {
+        const [value, detail] = await Promise.all([
+          api('tickets', { archived: archiveScope === 'archived' }, controller.signal),
+          selectedId ? api('tickets', { ticketId: selectedId }, controller.signal) : null,
+        ]);
+        if (!controller.signal.aborted) { setRows(value.tickets); setSelectedTicket(detail?.tickets?.[0] || null); setLoadedDetailId(selectedId); setError(''); }
+      }
       catch (cause) { if (!controller.signal.aborted) setError(cause.message); }
       finally { if (!controller.signal.aborted) timer = setTimeout(load, 3000); }
     };
     void load(); return () => { controller.abort(); clearTimeout(timer); };
-  }, [api, generation]);
+  }, [api, generation, archiveScope, selectedId]);
   const stop = async row => {
     if (!window.confirm(`停止“${row.target}”？已发生的外部操作仍会保留，运行中的执行需要核实。`)) return;
     setBusy(row.id);
@@ -96,7 +104,10 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
   };
   const visibleRows = rows?.filter(row => !row.taskMeta?.deleted);
   const filteredRows = filterTickets(visibleRows || [], query);
-  const selectedRow = visibleRows?.find(row => row.id === selectedId);
+  const selectedRow = visibleRows?.find(row => row.id === selectedId) || (selectedTicket?.id === selectedId ? selectedTicket : null);
+  const switchArchiveScope = value => {
+    setRows(null); setError(''); setSelectedId(null); setSelectedTicket(null); setChangeId(null); setArchiveScope(value);
+  };
   const renderTicket = (row, detailOnly = false) => {
       const { result, delivery, safetyWait } = ticketSnapshot(row);
       const activity = activityTask(row, 'ticket'), status = activity.status;
@@ -135,12 +146,12 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
   };
   return <section className="ba-group ba-tasks" aria-label="工单"><style>{taskCss}</style><div className="ba-group-head"><div><h2>工单</h2><p>查看执行进展，确认结果与下一步。</p></div><div className="ba-task-actions">{onSchedule && <Button variant="ghost" type="button" className="ba-task-secondary" onClick={onSchedule}><UIIcon name="schedules" size={16} />定时任务</Button>}{onCreateGoal && <Button type="button" className="ba-primary" onClick={onCreateGoal}><UIIcon name="plus" size={16} />新建持续目标</Button>}<Button variant="ghost" type="button" className="ba-task-secondary" onClick={() => { setSettingsOpen(true); setConfigRevision(null); void loadConfig(); }}><UIIcon name="settings" size={16} />设置</Button></div></div>
     <Modal open={settingsOpen} onClose={closeSettings} title="工单设置" closeLabel="关闭" footer={<><Button variant="ghost" className="cmd-dialog-button" disabled={busy === 'configuration'} onClick={closeSettings}>取消</Button><Button className="cmd-dialog-button cmd-dialog-primary" type="submit" form="ba-worker-settings" disabled={configRevision === null || busy === 'configuration' || !Number.isInteger(Number(concurrency)) || Number(concurrency) < 1}>{busy === 'configuration' ? '保存中…' : '保存'}</Button></>}><form id="ba-worker-settings" className="cmd-rename-form ba-worker-settings" aria-label="并发执行设置" onSubmit={saveConcurrency}><div className="ba-worker-settings-intro"><UIIcon name="settings" size={22} /><div><strong>执行容量</strong><p id="ba-worker-concurrency-help">设置同时执行的工单数量，按设备性能与模型额度调整。</p></div></div><label htmlFor="ba-worker-concurrency">并发数</label><div className="ba-worker-settings-input"><input id="ba-worker-concurrency" aria-describedby="ba-worker-concurrency-help" autoFocus type="number" min="1" step="1" required value={concurrency} disabled={configRevision === null || busy === 'configuration'} onChange={event => setConcurrency(event.target.value)} /><span>项工单</span></div>{configRevision === null && !configError && <p className="ba-worker-settings-status" role="status"><UIIcon name="refresh" size={16} />正在读取执行设置…</p>}{configError && <p className="ba-worker-settings-error" role="alert"><UIIcon name="close" size={16} /><span>{configError}</span><Button variant="ghost" type="button" disabled={busy === 'configuration'} onClick={loadConfig}>重新读取</Button></p>}</form></Modal>
+    <TicketViewControls disabled={listDirty || detailDirty} view={view} onViewChange={setView} archiveScope={archiveScope} onArchiveScopeChange={switchArchiveScope} query={query} onQueryChange={setQuery} count={filteredRows.length} total={visibleRows?.length} />
     {error && (rows === null ? <ResourceState kind="error" title="工单暂时无法读取" description={error} onAction={() => setGeneration(value => value + 1)} /> : <div className="ba-task-feedback" role="alert"><UIIcon name="close" size={18} /><span>工单未能更新：{error}</span><Button variant="ghost" type="button" className="ba-quiet" onClick={() => setGeneration(value => value + 1)}>重试读取</Button></div>)}
     {rows === null && !error && <ResourceState kind="loading" title="正在读取工单" description="正在同步执行进展与交付结果。" />}
-    {rows !== null && selectedId && !visibleRows.some(row => row.id === selectedId) && <ResourceState kind="error" title="关联工单暂不可用" description="工单可能已移除，或尚未同步到当前列表。" actionLabel="重新读取" onAction={() => setGeneration(value => value + 1)} />}
-    {visibleRows?.length === 0 && !error && <ResourceState icon="box" title="暂无工单" description="在聊天中交办任务，或创建一个持续目标，执行进展会显示在这里。" actionLabel="新建持续目标" onAction={onCreateGoal} />}
+    {rows !== null && selectedId && !selectedRow && !error && (loadedDetailId !== selectedId ? <ResourceState kind="loading" title="正在读取工单详情" description="正在读取原工单、成果与执行记录。" /> : <ResourceState kind="error" title="关联工单暂不可用" description="工单可能已移除，或尚未同步。" actionLabel="重新读取" onAction={() => setGeneration(value => value + 1)} />)}
+    {visibleRows?.length === 0 && !error && <ResourceState icon="box" title={archiveScope === 'archived' ? '暂无归档工单' : '暂无工单'} description={archiveScope === 'archived' ? '工单确认送达并关闭后，会自动收进这里，成果与执行记录仍可查看。' : '在聊天中交办任务，或创建一个持续目标。已关单的记录可在“已归档”中查看。'} actionLabel={archiveScope === 'archived' ? '查看当前工单' : '新建持续目标'} onAction={archiveScope === 'archived' ? () => switchArchiveScope('active') : onCreateGoal} />}
     {visibleRows?.length > 0 && <>
-      <TicketViewControls disabled={listDirty} view={view} onViewChange={setView} query={query} onQueryChange={setQuery} count={filteredRows.length} total={visibleRows.length} />
       {!filteredRows.length ? <ResourceState icon="search" title="没有匹配的工单" description="换个关键词，或清除搜索查看全部工单。" actionLabel="清除搜索" onAction={() => setQuery('')} />
         : view === 'board' ? <TicketBoard rows={filteredRows} renderTicket={row => renderTicket(row)} />
         : <div className="ba-task-list">{filteredRows.map(row => renderTicket(row))}</div>}

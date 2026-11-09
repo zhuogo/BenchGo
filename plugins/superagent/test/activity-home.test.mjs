@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { activityTask, groupHomeActivity, createActivityStore, liveActivityStates, activeActivityStates } from '../client/activity-data.mjs';
+import { activityTask, groupHomeActivity, createActivityStore, liveActivityStates, activeActivityStates, archivedActivityTicket } from '../client/activity-data.mjs';
 
 test('paused and stopping tasks do not count as active activity', () => {
   assert.equal(liveActivityStates('claimed'), true);
@@ -29,6 +29,21 @@ test('home uses current instruction results and separates blocked work from comp
   assert.deepEqual(grouped.completed.map(row => row.key), ['done']);
 });
 
+test('archived tickets leave current activity while the home keeps a small completed review', () => {
+  const failed = activityTask({ id: 'failed', status: 'failed' }, 'ticket');
+  const done = activityTask({ id: 'done', status: 'completed' }, 'ticket');
+  const waiting = activityTask({ id: 'waiting', status: 'waiting' }, 'ticket');
+  const stopped = activityTask({ id: 'stopped', status: 'cancelled' }, 'ticket');
+  assert.equal(archivedActivityTicket(failed), true);
+  assert.equal(archivedActivityTicket(done), true);
+  assert.equal(archivedActivityTicket(waiting), false);
+  assert.equal(archivedActivityTicket(stopped), false);
+  assert.equal(archivedActivityTicket({ kind: 'goal', status: 'completed' }), false);
+  const grouped = groupHomeActivity([failed, done, waiting, stopped]);
+  assert.deepEqual(grouped.attention.map(row => row.id), ['waiting']);
+  assert.deepEqual(grouped.completed.map(row => row.id), ['done']);
+});
+
 test('saved results, recovery and real Worker questions have distinct states', () => {
   const base = { id: 't', status: 'waiting', instructionRevision: 2, resultVersion: 3,
     results: [{ instructionRevision: 2, version: 3, outcome: 'completed', summary: 'original result' }] };
@@ -54,20 +69,22 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 
 test('home and drawer share requests; background pages pause and last unsubscribe cleans up', async () => {
   const env = environment(), calls = [];
-  const store = createActivityStore(async (action, args, signal) => { calls.push({ action, signal }); return action === 'tickets' ? { tickets: [{ id: 't', status: 'open' }] } : { goals: [] }; }, env);
+  const store = createActivityStore(async (action, args, signal) => { calls.push({ action, args, signal }); return action === 'tickets' ? { tickets: args.archived ? [{ id: 'done', status: 'completed' }] : [{ id: 't', status: 'open' }] } : { goals: [] }; }, env);
   const stopHome = store.subscribe(() => {}), stopDrawer = store.subscribe(() => {});
   await flush();
-  assert.deepEqual(calls.map(call => call.action), ['tickets', 'goalList']);
-  assert.equal(store.getSnapshot().rows.length, 1);
+  assert.deepEqual(calls.map(call => call.action), ['tickets', 'tickets', 'goalList']);
+  assert.deepEqual(calls[0].args, { archived: false });
+  assert.deepEqual(calls[1].args, { archived: true, limit: 2 });
+  assert.equal(store.getSnapshot().rows.length, 2);
   assert.equal(env.timers.size, 1);
   env.document.hidden = true; env.document.dispatchEvent(new Event('visibilitychange'));
   assert.equal(env.timers.size, 0);
-  await store.refresh(); assert.equal(calls.length, 2);
+  await store.refresh(); assert.equal(calls.length, 3);
   env.document.hidden = false; env.document.dispatchEvent(new Event('visibilitychange')); await flush();
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 6);
   stopHome(); assert.equal(env.timers.size, 1);
   stopDrawer(); assert.equal(env.timers.size, 0);
-  env.document.dispatchEvent(new Event('visibilitychange')); assert.equal(calls.length, 4);
+  env.document.dispatchEvent(new Event('visibilitychange')); assert.equal(calls.length, 6);
 });
 
 test('a failed refresh keeps real prior data and exposes error, never a fake empty state', async () => {
@@ -86,7 +103,7 @@ test('late responses after unmount cannot overwrite a new subscription', async (
   const stopOld = store.subscribe(() => {}); stopOld();
   assert(pending.every(call => call.signal.aborted));
   const stopNew = store.subscribe(() => {});
-  pending.slice(2).forEach(call => call.resolve(call.action === 'tickets' ? { tickets: [{ id: 'new' }] } : { goals: [] })); await flush();
-  pending.slice(0, 2).forEach(call => call.resolve(call.action === 'tickets' ? { tickets: [{ id: 'old' }] } : { goals: [] })); await flush();
+  pending.slice(3).forEach(call => call.resolve(call.action === 'tickets' ? { tickets: [{ id: 'new' }] } : { goals: [] })); await flush();
+  pending.slice(0, 3).forEach(call => call.resolve(call.action === 'tickets' ? { tickets: [{ id: 'old' }] } : { goals: [] })); await flush();
   assert.equal(store.getSnapshot().rows[0].id, 'new'); stopNew();
 });

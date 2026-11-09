@@ -13,7 +13,7 @@ import { ResourceState } from './resource-state.jsx';
 import { petImageUrl } from './pet-state.mjs';
 import { assistantConfigSync } from './config-sync.mjs';
 import css from './activity-panel.css';
-import { activityLabels as labels, terminalActivityStates as terminal, liveActivityStates, activeActivityStates, attentionActivityStates } from './activity-data.mjs';
+import { activityLabels as labels, terminalActivityStates as terminal, liveActivityStates, activeActivityStates, attentionActivityStates, archivedActivityTicket } from './activity-data.mjs';
 import { useAssistantActivity } from './use-activity.jsx';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
 
@@ -158,7 +158,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources }) {
     catch (cause) { setActionError({ message: cause.message || '任务未能停止，请重试。', row }); } finally { setStopping(null); }
   };
   const selected = rows?.find(row => row.key === selectedKey);
-  const sorted = (rows || []).slice().sort((a, b) => (dateValue(b.time)?.getTime() || 0) - (dateValue(a.time)?.getTime() || 0));
+  const sorted = (rows || []).filter(row => !archivedActivityTicket(row)).sort((a, b) => (dateValue(b.time)?.getTime() || 0) - (dateValue(a.time)?.getTime() || 0));
   const active = sorted.filter(row => activeActivityStates(row.status));
   const attention = sorted.filter(row => attentionActivityStates.has(row.status));
   const rest = sorted.filter(row => !activeActivityStates(row.status));
@@ -166,8 +166,8 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources }) {
   const name = identity?.name || 'BenchGo';
   const modelEntry = identity?.models?.[0];
   const modelLabel = typeof modelEntry === 'string' ? modelEntry : modelEntry?.modelId || modelEntry?.id || modelEntry?.name || '';
-  const goalCount = (rows || []).filter(row => row.kind === 'goal').length;
-  const ticketCount = (rows || []).filter(row => row.kind === 'ticket').length;
+  const goalCount = sorted.filter(row => row.kind === 'goal').length;
+  const ticketCount = sorted.filter(row => row.kind === 'ticket').length;
   const activeTickets = active.filter(row => row.kind === 'ticket').length;
   const renderRow = row => <BoardRow key={row.key} row={row} onOpen={setSelectedKey} />;
   const syncState = error || identityError ? 'error' : rows === null || (!identity && identityLoading) ? 'loading' : 'ready';

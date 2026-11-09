@@ -67,6 +67,7 @@ test('persisted Router report completes only its state delivery, never closes th
 test('saved zero-file result is expressed by Router and closes only after original-source receipt', async t => {
   const app = await fixture(t, { send(delivery, db) {
     assert.equal(db.getTicket(delivery.ticketId).status, 'waiting');
+    assert.equal(db.getTicket(delivery.ticketId).archived, false, 'saved results are not archived before a trusted delivery receipt');
     assert.equal(delivery.payload.publication.origin, 'router');
     assert.equal(delivery.payload.text, '已完成，我整理好了结果。');
     assert.deepEqual(delivery.payload.source, app.source);
@@ -74,6 +75,11 @@ test('saved zero-file result is expressed by Router and closes only after origin
   } });
   await app.advance();
   assert.equal(app.db.getTicket(app.ticket.id).status, 'completed');
+  assert.equal(app.db.getTicket(app.ticket.id).archived, true);
+  assert.equal(app.runtime.state({ archived: false }).length, 0);
+  assert.equal(app.runtime.state({ archived: true })[0].id, app.ticket.id);
+  assert.equal(app.runtime.state({ ticketId: app.ticket.id })[0].results[0].summary, app.original, 'archived detail reads the same result and ticket');
+  assert.equal(app.runtime.state({ ticketId: 'missing-ticket' }).length, 0);
   assert.equal(app.db.results(app.ticket.id).length, 1);
   assert.equal(app.db.results(app.ticket.id)[0].summary, app.original);
   assert.deepEqual(app.counts(), { executions: 1, sends: 1 });

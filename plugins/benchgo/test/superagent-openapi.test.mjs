@@ -370,3 +370,17 @@ test('execution approval projection is a read-only origin link with an explicit 
   const { runId, ...missing } = origin;
   assert.equal(validate({ origins: [missing] }), false);
 });
+
+test('ticket archive scope and direct history lookup share the original ledger contract', () => {
+  valid(request, { action: 'tickets', archived: false });
+  valid(request, { action: 'tickets', archived: true, limit: 2 });
+  valid(request, { action: 'tickets', ticketId: 'closed-original' });
+  assert.equal(request({ action: 'tickets', archived: 'yes' }), false);
+  assert.equal(request({ action: 'tickets', ticketId: '' }), false);
+  assert.equal(request({ action: 'tickets', limit: 1001 }), false);
+  const ticket = compile({ $ref: '#/components/schemas/AssistantTicket' });
+  const original = { id: 'closed-original', status: 'completed', instructionRevision: 1, resultVersion: 1,
+    adjustmentOfTicketId: null, liveSummary: { goal: '检查文件', progress: '已交付', blocker: '', status: 'completed', updatedAt: '2026-11-09T00:00:00Z' } };
+  valid(ticket, { ...original, archived: true });
+  assert.equal(ticket({ ...original, archived: 'true' }), false);
+});

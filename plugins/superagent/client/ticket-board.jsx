@@ -5,14 +5,17 @@ import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { groupTickets } from './ticket-board.mjs';
 import css from './ticket-board.css';
 
-export function TicketViewControls({ view, onViewChange, query, onQueryChange, count, total, disabled = false }) {
+export function TicketViewControls({ view, onViewChange, archiveScope, onArchiveScopeChange, query, onQueryChange, count, total, disabled = false }) {
   return <div className="ba-ticket-view-controls"><style>{css}</style>
+    {onArchiveScopeChange && <SegmentedControl label="工单记录" value={archiveScope} onChange={onArchiveScopeChange} disabled={disabled} options={[
+      { value: 'active', label: '当前工单' }, { value: 'archived', label: '已归档' },
+    ]} />}
     <SegmentedControl label="工单视图" value={view} onChange={onViewChange} disabled={disabled} options={[
       { value: 'list', label: '列表' }, { value: 'board', label: '看板' },
     ]} />
     <label className="ba-ticket-search"><UIIcon name="search" size={16} /><input type="search" aria-label="搜索工单" placeholder="搜索名称、要求或来源" value={query} disabled={disabled} onChange={event => onQueryChange(event.target.value)} /></label>
     {query && <Button variant="ghost" type="button" disabled={disabled} onClick={() => onQueryChange('')}>清除搜索</Button>}
-    <span className="ba-ticket-count" role="status">{query ? `${count} / ${total} 项` : `${total} 项工单`}</span>
+    <span className="ba-ticket-count" role="status">{total == null ? '数量待同步' : query ? `${count} / ${total} 项` : `${total} 项工单`}</span>
   </div>;
 }
 

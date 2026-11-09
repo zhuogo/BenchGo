@@ -2396,6 +2396,10 @@
           "ownerSessionId": {
             "type": "string",
             "minLength": 1
+          },
+          "archived": {
+            "type": "boolean",
+            "description": "tickets: filter closed archived records before limit; omitted keeps both scopes."
           }
         },
         "additionalProperties": true,
@@ -2843,6 +2847,28 @@
                 "threadId": {
                   "type": "string",
                   "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "tickets"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "ticketId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
                 }
               }
             }
@@ -4624,6 +4650,10 @@
             "items": {
               "$ref": "#/components/schemas/AssistantAttentionResolution"
             }
+          },
+          "archived": {
+            "type": "boolean",
+            "description": "Derived from completed/failed/legacy closed; no separate archive record. Stopped/cancelled work remains unarchived."
           }
         },
         "additionalProperties": true,

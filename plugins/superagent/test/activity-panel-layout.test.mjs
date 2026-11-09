@@ -70,7 +70,7 @@ async function fixture() {
           if(name==='state') return {config};
           if(name==='ticketStop'){tickets.find(row=>row.id===args.ticketId).status='cancelled';return {};}
           if(name==='goalCancel'){goals.find(row=>row.id===args.id).status='cancelled';return {};}
-          if(name==='tickets') return {tickets:control.state==='empty'?[]:tickets};
+          if(name==='tickets') return {tickets:control.state==='empty'?[]:tickets.filter(row=>['completed','failed','closed'].includes(row.status)===args.archived).slice(0,args.limit||1000)};
           if(name==='goalList') return {goals:control.state==='empty'?[]:goals};
           return {};
         };
@@ -137,7 +137,8 @@ test('activity board renders honest states, keyboard navigation and responsive t
     assert(await oldButton.evaluate(node=>node.isConnected&&node===document.activeElement),'background polling preserves task DOM and focus');
     await page.evaluate(()=>{window.scenarioControl.fail=true;document.dispatchEvent(new Event('benchgo:assistant-changed'));});
     await panel.getByRole('alert').first().waitFor();
-    assert.equal(await panel.locator('[data-task-key]').count(),7,'failed refresh retains previously loaded tasks');
+    assert.equal(await panel.locator('[data-task-key]').count(),5,'failed refresh retains current work without archived tickets');
+    assert.equal(await panel.locator('[data-task-key="ticket:done"], [data-task-key="ticket:failed"]').count(),0,'closed tickets live in archives instead of the active drawer');
     assert(await panel.getByText('已保留上次的任务记录，请重试。',{exact:true}).isVisible());
     await page.evaluate(()=>{window.scenarioControl.fail=false;});
     await panel.getByRole('button',{name:'刷新看板',exact:true}).click();
@@ -160,7 +161,7 @@ test('activity board renders honest states, keyboard navigation and responsive t
         await shot(`${dark?'dark':'light'}-${width}-${{'任务':'tasks','身份':'identity'}[name]}`);
       }
     }
-    assert(await panel.getByText('6 条 · 进行中 1',{exact:true}).isVisible(),'active ticket count excludes the active goal');
+    assert(await panel.getByText('4 条 · 进行中 1',{exact:true}).isVisible(),'current ticket count excludes archived tickets and the active goal');
     assert(await panel.getByText('1 个',{exact:true}).isVisible(),'goal count is reported separately');
     await tab('任务').focus();await page.keyboard.press('ArrowRight');
     assert.equal(await tab('身份').getAttribute('aria-selected'),'true','arrow key changes the active tab');
@@ -196,14 +197,8 @@ test('activity board renders honest states, keyboard navigation and responsive t
     await page.waitForFunction(()=>window.apiCalls.some(([name,args])=>name==='ticketStop'&&args.ticketId==='running'));
     await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
     await panel.locator('[data-task-key="ticket:running"]').getByText('已停止',{exact:true}).waitFor();
-    await panel.locator('[data-task-key="ticket:done"] .ba-board-task-open').click();
-    const detail=page.getByRole('dialog');
-    assert(await detail.getByText('已完成 · 结果已交付',{exact:true}).isVisible());
-    assert(await detail.getByText('已归档工作记录，保留了相关文件与说明。',{exact:true}).isVisible());
-    assert.equal(await detail.getByRole('button',{name:/确认|完成|停止/}).count(),0,'completed tasks require no acknowledgement');
-    assert(!await page.evaluate(()=>window.apiCalls.some(([name])=>name==='taskUpdate')),'opening a result never changes completion');
-    if(captureDir)await page.screenshot({path:join(captureDir,'completed-detail.png')});
-    await page.keyboard.press('Escape');await detail.waitFor({state:'hidden'});
+    assert.equal(await panel.locator('[data-task-key="ticket:done"]').count(),0,'completed records remain accessible through task management archives');
+    assert(!await page.evaluate(()=>window.apiCalls.some(([name])=>name==='taskUpdate')),'activity polling never changes completion');
     await tab('身份').click();
     assert(await panel.getByText('provider/opaque-model@2026-11',{exact:true}).isVisible(),'model ID remains opaque and unchanged');
     for(const dark of [false,true])for(const state of ['empty','loading','error']){
@@ -300,6 +295,8 @@ test('activity board updates Worker and child execution in place without declari
     if(captureDir)await page.screenshot({path:join(captureDir,'verifying-detail.png')});
     await page.evaluate(()=>window.updateExecution('delivered'));
     await detail.getByText('已完成 · 结果已交付',{exact:true}).waitFor();
+    await row.waitFor({state:'hidden'});
+    assert(await detail.isVisible(),'a record closing in an open detail stays readable while leaving the active list');
     assert(await detail.getByText('已完成调研，来源与限制随结果交付。',{exact:true}).isVisible());
     assert.equal(await detail.getByRole('button',{name:'停止任务',exact:true}).count(),0);
     if(captureDir)await page.screenshot({path:join(captureDir,'delivered-detail.png')});

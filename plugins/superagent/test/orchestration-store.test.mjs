@@ -14,6 +14,41 @@ async function fixture(t) {
 }
 const input = key => ({ dedupeKey: key, thread: { id: 'thread', source: { type: 'feishu', id: 'chat' } }, source: { eventId: key }, actor: { id: 'owner' }, content: '原始指令', gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p1' });
 
+test('closed tickets archive automatically without changing state or hiding pending, paused and stopped work', async t => {
+  const db = await fixture(t);
+  db.createThread({ id: 'archive-thread', source: { type: 'desktop', id: 'owner' } });
+  for (const status of ['open', 'waiting', 'paused', 'cancelled', 'completed', 'failed', 'closed']) {
+    const ticket = db.createTicket({ id: `archive-${status}`, threadId: 'archive-thread', target: `target-${status}`, mandate: { scope: 'unchanged' } });
+    db.updateTicket(ticket.id, { status });
+  }
+  assert.deepEqual(db.listTickets({ archived: false }).map(row => row.status), ['open', 'waiting', 'paused', 'cancelled']);
+  assert.deepEqual(db.listTickets({ archived: true }).map(row => row.status), ['completed', 'failed', 'closed']);
+  assert(db.listTickets({ archived: true }).every(row => row.archived));
+  assert(db.listTickets({ archived: false }).every(row => !row.archived));
+  assert.equal(db.listTickets().length, 7, 'internal callers retain the complete ledger unless they request a scope');
+  const saved = db.getTicket('archive-failed');
+  assert.equal(saved.target, 'target-failed');
+  assert.equal(saved.mandate.scope, 'unchanged');
+  db.updateTicket(saved.id, { status: 'open' });
+  assert.equal(db.getTicket(saved.id).archived, false, 'resuming the same failed ticket restores its active visibility');
+  assert.equal(db.listTickets({ archived: true }).length, 2);
+  assert.equal(db.listTickets({ archived: false }).length, 5);
+  assert.throws(() => db.listTickets({ archived: 'false' }), /archive scope/);
+});
+
+test('archive scope and recent ordering are applied before paging the ticket ledger', async t => {
+  const db = await fixture(t);
+  db.createThread({ id: 'archive-paging', source: { type: 'desktop', id: 'owner' } });
+  for (const [id, status] of [['active-old', 'open'], ['closed-first', 'completed'], ['active-new', 'paused'], ['closed-last', 'failed']]) {
+    db.createTicket({ id, threadId: 'archive-paging', target: id, mandate: {} });
+    db.updateTicket(id, { status });
+  }
+  assert.equal(db.listTickets({ archived: false, newestFirst: true, limit: 1 })[0].id, 'active-new');
+  assert.equal(db.listTickets({ archived: false, newestFirst: true, limit: 1, offset: 1 })[0].id, 'active-old');
+  assert.equal(db.listTickets({ archived: true, newestFirst: true, limit: 1 })[0].id, 'closed-last');
+  assert.equal(db.listTickets({ archived: true, newestFirst: true, limit: 1, offset: 1 })[0].id, 'closed-first');
+});
+
 for (const code of ['WORKER_SELF_CHECK', 'WORKER_TURN_INCOMPLETE']) test(`${code} retains its controlled cause in the waiting publication`, async t => {
   const db = await fixture(t);
   db.createThread({ id: 'self-check-thread', source: { type: 'desktop', id: 'owner' } });
