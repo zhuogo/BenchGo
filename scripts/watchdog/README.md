@@ -2,7 +2,7 @@
 
 本封装只初始化、启动或查看 Watchdog；不操作主宿主进程，不提供重启策略。周期执行由官方 Harness Schedule 负责。运行前准备主侧观察接口的专用凭据文件，不能使用主人 Cookie。
 
-主系统的 `benchgo-plugin` 基础配置须由维护者设置 `watchdogTarget: { enabled: true, targetId, tokenFile }`，由其 SuperAgent 挂载本机观察接口；`targetId` 与下方 `--target-id` 完全一致，两个进程引用同一专用凭据。凭据为 32–256 字符的 base64url 文本，文件不得为符号链接。观察端的 `watchdog` 配置由 `init` 生成，两个入口职责不同。当前调度心跳、无法观测的请求 deadline、产出变化可能未知，状态摘要不能解释为完整健康证明。
+主系统的 `benchgo-plugin` 基础配置须由维护者设置 `watchdogTarget: { enabled: true, targetId, tokenFile }`，由其 SuperAgent 挂载本机观察接口；`targetId` 与下方 `--target-id` 完全一致，两个进程引用同一专用凭据。凭据为 32–256 字符的 base64url 文本，文件不得为符号链接。观察端的 `watchdog` 配置由 `init` 生成，两个入口职责不同。调度心跳取主侧实际完成周期；请求 deadline 或文件检查点覆盖缺失仍保持未知，状态摘要不能解释为完整健康证明。
 
 从仓库根运行，`--directory` 必须是不存在的绝对路径；父目录须已存在：
 
@@ -28,4 +28,4 @@ node --test plugins/superagent/test/watchdog-profile.test.mjs
 
 真实官方配置装配测试使用已构建 CLI 的 `--dump-config`，不启动宿主。当前工作树没有已构建 CLI 时，该项会明确跳过；可设置 `BENCHGO_WATCHDOG_TEST_CLI` 指向已核对版本的官方 `bin.js` 后执行同一测试。此检查不替代真实 Schedule、机械检查或信号投递验收。
 
-真实独立 profile 的安装启动和持续端到端运行尚待用户验收；此封装默认不改主配置，也不自动启动监督。
+独立 profile 已对安装版签名只读接口完成真实周期检查及停止隔离验证；故障与模型疑似场景的验收边界见[任务与执行](../../docs/06-superagent/任务与执行.md#外部-watchdog-监督)。此封装默认不改主配置，也不自动启动监督。

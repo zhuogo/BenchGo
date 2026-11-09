@@ -393,7 +393,7 @@
     </section>
 
     <section class="panel" id="permissions">
-      <p class="note">执行事实复用官方持久 Session、工单账和最小索引，列表与详情通过官方增量流共享；辅助摘要只用辅助模型，无可用模型时确定性降级。独立 Watchdog 使用独立宿主、profile 与官方 Schedule，只观察并向 Router 发信号，不改工单、不重启宿主。角色、流式连续性与监督的安装版适用验收仍需单独完成。权威契约见<a href="06-superagent/服务契约.md">服务契约</a>与<a href="06-superagent/任务与执行.md">任务与执行</a>。</p>
+      <p class="note">执行事实复用官方持久 Session、工单账和最小索引，列表与详情通过官方增量流共享；主聊和旁聊侧的任务列表均展示全部工单，后台重连保留内容、静默补偿。辅助摘要只用辅助模型，无可用模型时确定性降级；文件产出观察复用已允许工具的检查点，缺口保持未知。独立 Watchdog 使用独立宿主、profile 与官方 Schedule，只观察并向 Router 发信号，不改工单、不重启宿主；已完成对安装版的真实周期检查与停止隔离，实际故障及模型判断仍须分别验收。角色与最终流式交接的安装版适用验收不得由定向结果推定。权威契约见<a href="06-superagent/服务契约.md">服务契约</a>与<a href="06-superagent/任务与执行.md">任务与执行</a>；Router 的人格与表达统一见<a href="06-superagent/Router对话准则.md">Router 对话准则</a>。</p>
       <h2>四、权限继承与对外审批</h2>
       <div class="grid">
         <article class="card"><h3>内部继承与逐层裁剪</h3><p>用户指令是业务授权唯一源头。Router → 工单 → Worker → 一层子代理只能收窄，工具面逐层裁剪；每个主 Worker 可有多个并行子代理，子代理无凭据工具、禁止再委派。自有会话通过官方插槽隐藏档位入口，不显示角色或内部配置标签；普通会话保留官方预设。Agent preset、沙箱审批与模型路由分别核验，权限叠加宿主限制，不因隐藏选择器获得完全权限。</p></article>
