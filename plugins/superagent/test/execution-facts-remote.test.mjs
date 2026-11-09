@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire, registerHooks } from 'node:module';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runInNewContext } from 'node:vm';
 
 // Worktrees may share a built official dependency tree through node_modules.
 const checkout = fileURLToPath(new URL('../../../deepseek-harness/', import.meta.url));
@@ -24,6 +25,21 @@ const { Peer } = await load('@deepseek-ai/dsh-client-connection');
 const clientGateway = await load('@deepseek-ai/dsh-api-gateway/client');
 const { installExecutionFactsRemote } = await import('../src/execution-facts-remote.mjs');
 const { executionFactsRemoteContribution } = await import('../src/execution-facts-contract.mjs');
+const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+let activityEnvironment;
+function loadActivity(contribution = executionFactsRemoteContribution) {
+  const activityModule = { exports: {} };
+  runInNewContext(transformSync(readFileSync(new URL('../client/activity-remote.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code, {
+    module: activityModule, exports: activityModule.exports,
+    require: name => name.endsWith('use-activity.jsx') ? { configureAssistantActivity: (_api, environment) => { activityEnvironment = environment; } }
+      : name.endsWith('execution-facts-contract.mjs') ? { executionFactsRemoteContribution: contribution } : clientGateway,
+  });
+  return activityModule.exports;
+}
+const settle = async predicate => {
+  for (let index = 0; index < 100; index++) { if (predicate()) return; await new Promise(resolve => setImmediate(resolve)); }
+  assert(predicate(), 'expected Remote lifecycle transition');
+};
 test.after(() => hook.deregister());
 
 function factStore() {
@@ -234,4 +250,90 @@ test('the real Client Remote mount calls the same strict unary and stream defini
   assert.equal(b.facts.listeners.size, 0);
   await unmount();
   assert.equal(client.remote.benchgoExecutionFacts, undefined);
+});
+
+async function scopedActivity(t, options = {}) {
+  const { mountAssistantActivity } = loadActivity(options.contribution);
+  const b = await setup(t), client = new Context();
+  t.after(() => client.fiber.dispose());
+  await client.plugin(Registry);
+  client.provide('connection', { interactions: 'answer',
+    generation: { getSnapshot: () => undefined, subscribe: () => () => {} },
+    registerGenerationSource: () => () => {}, start: () => ({ stop() {} }), rpc: {
+    async *open(_channel, endpoint, payload, signal) {
+      if (options.openError) throw options.openError;
+      const [namespace, method] = endpoint.split('/');
+      yield* await b.ctx.typertGateway.stream({ namespace, method, args: payload.args, signal, peer: b.peer });
+    },
+  } });
+  await client.plugin(clientGateway);
+  let scope;
+  const owner = client.plugin({ inject: ['remote'], apply(ctx) { scope = ctx; mountAssistantActivity(ctx, () => {}); } });
+  await owner;
+  const received = [], failed = [];
+  const connect = () => activityEnvironment.connect({ replace: value => received.push(value), update: value => received.push(value), carrierFailed: error => failed.push(error), failed: error => failed.push(error) });
+  return { ...b, client, owner, scope, received, failed, connect };
+}
+
+test('activity follows from a real remote-only Cordis scope; restart, dispose and resubscribe release the injected follower', async t => {
+  const b = await scopedActivity(t);
+  const first = b.connect(); first.start(); first.start();
+  await settle(() => b.received.length === 1);
+  assert.equal(b.received[0].bootId, 'boot-1');
+  assert.equal(b.facts.listeners.size, 1);
+  assert.throws(() => b.scope.remote.benchgoExecutionFacts, /without inject/);
+  b.facts.append(); await settle(() => b.received.length === 2);
+  first.restart(); await settle(() => b.received.length === 3);
+  assert.equal(b.facts.listeners.size, 1);
+  await first.dispose(); await first.dispose();
+  assert.equal(b.facts.listeners.size, 0);
+  assert.equal(b.client.get('remote.benchgoExecutionFacts'), undefined);
+  const second = b.connect(); second.start(); await settle(() => b.received.length === 4);
+  await second.dispose();
+  assert.equal(b.facts.listeners.size, 0);
+  assert.equal(b.client.get('remote.benchgoExecutionFacts'), undefined);
+  assert.deepEqual(b.failed, []);
+});
+
+test('activity cancellation before mount resolves withdraws the late namespace and never opens a follower', async t => {
+  const b = await scopedActivity(t), control = b.connect();
+  control.start(); const stopped = control.dispose(); await stopped;
+  assert.equal(b.received.length, 0);
+  assert.equal(b.facts.listeners.size, 0);
+  assert.equal(b.client.get('remote.benchgoExecutionFacts'), undefined);
+  assert.deepEqual(b.failed, []);
+});
+
+test('activity terminal stream failure surfaces the error and releases its injection and mount', async t => {
+  const rejection = new Error('真实流启动失败');
+  const b = await scopedActivity(t, { openError: rejection }), control = b.connect();
+  control.start(); await settle(() => b.failed.length === 1);
+  await control.dispose();
+  assert.match(b.failed[0].message, /真实流启动失败/);
+  assert.equal(b.facts.listeners.size, 0);
+  assert.equal(b.client.get('remote.benchgoExecutionFacts'), undefined);
+});
+
+test('a real rejected Remote mount exposes its diagnostic and leaves no dynamic namespace', async t => {
+  const descriptor = executionFactsRemoteContribution.descriptors[0];
+  const b = await scopedActivity(t, { contribution: {
+    package: '@fixture/invalid-activity', descriptors: [{ ...descriptor,
+      parameters: descriptor.parameters.map(parameter => ({ ...parameter, codec: { mode: 'src-json' } })),
+    }],
+  } }), control = b.connect();
+  control.start(); await settle(() => b.failed.length === 1);
+  await control.dispose();
+  assert.match(b.failed[0].message, /schema|codec|parameter|manifest|descriptor/i);
+  assert.equal(b.facts.listeners.size, 0);
+  assert.equal(b.client.get('remote.benchgoExecutionFacts'), undefined);
+});
+
+test('disposing the owner scope releases its active official stream and dynamic namespace', async t => {
+  const b = await scopedActivity(t), control = b.connect(); control.start();
+  await settle(() => b.received.length === 1);
+  await b.owner.dispose();
+  assert.equal(b.facts.listeners.size, 0);
+  assert.equal(b.client.get('remote.benchgoExecutionFacts'), undefined);
+  await control.dispose();
+  assert.deepEqual(b.failed, []);
 });
