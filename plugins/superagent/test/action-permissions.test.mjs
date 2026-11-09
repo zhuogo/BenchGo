@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createActionPermissionStore, exactActionOrigin } from '../src/action-permissions.mjs';
 import { createExternalActionRegistry, createExternalActionService, createActionPermissionApi, createExternalActionHost, registerChannelExternalActions } from '../src/external-actions.mjs';
 import { prepareChannelExternalSend } from '../src/channel-policy.mjs';
+import { executionEffects } from '../src/execution-effects.mjs';
 
 const actor = { profileId: 'profile', id: 'desktop-owner', label: '主人' };
 const context = () => ({ profileId: 'profile', actorId: actor.id, ticketId: 'ticket', assignmentId: 'assignment', runId: 'run', authorizationVersion: 'a1', policyVersion: 'p1', principal: { kind: 'owner' } });
@@ -193,7 +194,7 @@ test('a channel action can be prepared from catalog contract alone, with actiona
   let reads = 0;
   const adapter = {
     capabilities: { externalActions: ['external-send'] },
-    prepareExternalSend: (input, options) => prepareChannelExternalSend(() => ({ revision: 1, config: { enabled: true, appId: 'bot' } }), id => { reads++; return id === 'trusted-trigger' ? { source } : null; }, 'test', input, options),
+    prepareExternalSend: (input, options) => prepareChannelExternalSend(() => ({ revision: 1, config: { enabled: true, appId: 'bot' } }), id => { reads++; return id === 'trigger:trusted-trigger' ? { source } : null; }, 'test', input, options),
     send: () => assert.fail('prepare/catalog must never send'),
   };
   registerChannelExternalActions(registry, { channelIds: ['test'], getAdapter: () => adapter });
@@ -206,13 +207,30 @@ test('a channel action can be prepared from catalog contract alone, with actiona
   }
   assert.equal(reads, 0);
   assert.equal(store.list(actor).audit.length, 0);
-  const values = { targetTriggerId: 'trusted-trigger', text: '完整正文' };
+  await assert.rejects(service.prepare({ adapterId: entry.id, requestId: 'missing-prefix', input: { targetTriggerId: 'trusted-trigger', text: '完整正文' } }, exec()),
+    error => error.code === 'ACTION_TARGET_NOT_FOUND' && /完整原始 ID/.test(error.message) && /不由保险库登记/.test(error.message));
+  assert.equal(store.list(actor).audit.length, 0, 'a missing target creates no action or approval');
+  const values = { targetTriggerId: 'trigger:trusted-trigger', text: '完整正文' };
   const input = Object.fromEntries(entry.inputSchema.required.map(key => [key, values[key]]));
   const action = await service.prepare({ adapterId: entry.id, requestId: 'valid', input }, exec());
   assert.equal(action.state, 'pending');
   assert.equal(action.content.text, '完整正文');
   assert.equal(action.target.conversationId, 'chat');
-  assert.equal(reads, 1);
+  assert.equal(reads, 2);
+});
+
+test('the real action service uncertain receipt blocks result delivery despite successful tool transport', async t => {
+  const store = open(t), registry = createExternalActionRegistry();
+  registry.register({ id: 'send', category: 'external-send', inputSchema, prepare: () => prepared,
+    submit: async () => { throw new Error('provider disconnected after submission'); } });
+  const service = createExternalActionService({ store, registry, getContext: async () => context(), requestApproval: async () => 'allowed-once' });
+  const action = await service.prepare({ adapterId: 'send', input: {}, requestId: 'unknown-receipt' }, exec());
+  const returned = await service.submit({ actionId: action.id }, exec());
+  assert.equal(returned.state, 'uncertain');
+  assert.deepEqual(executionEffects({ events: [
+    { type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'submit', name: 'assistant_external_action', arguments: JSON.stringify({ operation: 'submit', actionId: action.id }) }] } } },
+    { type: 'tool/result', data: { message: { toolCallId: 'submit', isError: false, content: [{ type: 'text', text: JSON.stringify(returned) }] } } },
+  ] }), { effectsVerified: false, unknownCallIds: ['submit'] });
 });
 
 test('aborting an approval wait cannot consume the action or submit even if a late approval returns', async t => {

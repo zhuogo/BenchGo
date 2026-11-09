@@ -58,7 +58,7 @@ export function prepareChannelExternalSend(readConnection, readTrigger, channel,
     throw Object.assign(new Error('外发参数无效。input 必须仅含 {"targetTriggerId":"真实来源记录的 Trigger ID","text":"完整最终正文"}，两项均为非空字符串。请按 catalog.inputSchema 填写；缺少可信目标时向用户询问，不猜字段或搜索安装源码。'), { code: 'ACTION_INPUT_INVALID' });
   }
   const trigger = readTrigger(input.targetTriggerId);
-  if (!trigger || trigger.source?.channel !== channel) throw new Error('外发目标没有可信渠道来源');
+  if (!trigger || trigger.source?.channel !== channel) throw Object.assign(new Error('外发目标没有可信渠道来源：targetTriggerId 必须是账本中已准入的完整原始 ID（保留 trigger: 等已有前缀），且属于当前渠道。渠道目标不由保险库登记；请核对可信来源，不补造绑定或改猜 ID。'), { code: 'ACTION_TARGET_NOT_FOUND' });
   authorizeChannelConnection(readConnection, channel, { operation: 'send', source: trigger.source });
   const source = structuredClone(trigger.source), text = input.text;
   return { origin: null, target: structuredClone(source), content: { text }, submission: { input: { targetTriggerId: input.targetTriggerId, text }, source, text } };

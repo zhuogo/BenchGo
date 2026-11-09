@@ -3,11 +3,27 @@ const readOnlyTools = new Set(['web_search', 'web_fetch', 'read', 'read_image', 
 /** Only host-known official identities establish read-only behavior. */
 export const isReadOnlyWorkerTool = name => readOnlyTools.has(name);
 
+const object = value => {
+  try { value = typeof value === 'string' ? JSON.parse(value) : value; } catch { return null; }
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+};
+const output = content => object((content || []).filter(block => block.type === 'text').map(block => block.text).join('\n'));
+
+/** This exact host tool separates local preparation from one-time submission. */
+function externalActionUnknown(call) {
+  const operation = object(call.arguments)?.operation, result = call.result;
+  if (result?.value?.requiresReconciliation === true || ['submitted', 'uncertain'].includes(result?.value?.state)) return true;
+  if (operation === 'catalog' || operation === 'prepare') return false;
+  if (operation !== 'submit') return true;
+  if (result?.code === 'ABORTED_BEFORE_DISPATCH') return false;
+  return !result || result.failed || !['completed', 'denied', 'handoff'].includes(result.value?.state);
+}
+
 /** Analyze the complete official log, including nested PTC dispatches. */
 export function executionEffects(log) {
   const calls = [], pending = new Map();
-  const addCall = (kind, id, name) => {
-    const call = { id: id ?? `unidentified:${kind}:${calls.length}`, name };
+  const addCall = (kind, id, name, args) => {
+    const call = { id: id ?? `unidentified:${kind}:${calls.length}`, name, arguments: args };
     calls.push(call);
     // Malformed calls cannot borrow another call's receipt.
     if (id !== undefined && id !== null) {
@@ -17,11 +33,12 @@ export function executionEffects(log) {
     }
     return call;
   };
-  const settle = (kind, id, result, name) => {
+  const settle = (kind, id, result, name, args) => {
     const key = `${kind}:${id}`, queue = id == null ? undefined : pending.get(key);
-    const call = queue?.shift() ?? (kind === 'ptc' ? addCall(kind, id, name) : undefined);
+    const call = queue?.shift() ?? (kind === 'ptc' ? addCall(kind, id, name, args) : undefined);
     if (call) {
-      call.result = result;
+      call.result = { failed: result.failed, code: result.code,
+        ...(call.name === 'assistant_external_action' ? { value: output(result.content) } : {}) };
       // A settled PTC event may exist without its start in a legacy log.
       if (pending.get(key)?.[0] === call) pending.get(key).shift();
     }
@@ -29,22 +46,24 @@ export function executionEffects(log) {
   for (const event of log.events || []) {
     const message = event.data?.message;
     if (event.type === 'assistant/message') for (const block of message?.content || []) {
-      if (block.type === 'tool-call') addCall('tool', block.id, block.name);
+      if (block.type === 'tool-call') addCall('tool', block.id, block.name, block.arguments);
     }
     if (event.type === 'tool/result') {
       const callId = message?.toolCallId ?? message?.source?.callId;
       settle('tool', callId, { failed: message?.isError === true || !!event.data?.error,
-        code: event.data?.error?.code ?? event.data?.error?.info?.code });
+        code: event.data?.error?.code ?? event.data?.error?.info?.code, content: message?.content });
     }
     if (event.type === 'tool/ptc-dispatch-start' || event.type === 'tool/ptc-dispatch') {
-      if (event.type === 'tool/ptc-dispatch-start') addCall('ptc', event.data.subCallId, event.data.name);
+      if (event.type === 'tool/ptc-dispatch-start') addCall('ptc', event.data.subCallId, event.data.name, event.data.arguments);
       else settle('ptc', event.data.subCallId, {
-        failed: event.data.isError === true || !!event.data.error, code: event.data.error?.code,
-      }, event.data.name);
+        failed: event.data.isError === true || !!event.data.error, code: event.data.error?.code, content: event.data.content,
+      }, event.data.name, event.data.arguments);
     }
   }
-  const unknownCallIds = [...new Set(calls.filter(({ name, result }) => {
+  const unknownCallIds = [...new Set(calls.filter(call => {
+    const { name, result } = call;
     if (isReadOnlyWorkerTool(name)) return false;
+    if (name === 'assistant_external_action') return externalActionUnknown(call);
     return !result || (result.failed && result.code !== 'ABORTED_BEFORE_DISPATCH');
   }).map(({ id }) => id))];
   return { effectsVerified: !unknownCallIds.length, unknownCallIds };
