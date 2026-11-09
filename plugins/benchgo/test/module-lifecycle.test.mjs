@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Context, Service } from '@deepseek-ai/cordis';
 import LlmRuntime from '@deepseek-ai/dsh-llm';
@@ -14,6 +16,9 @@ import * as Voice from '../../voice/src/plugin.mjs';
 import { mountLink } from '../../link/src/index.mjs';
 import { createSessionAdapter } from '../../link/src/session/adapter.mjs';
 import { createNativeAdapter } from '../../link/src/session/native.mjs';
+
+const requireGateway = createRequire(new URL('../../../deepseek-harness/packages/api/gateway/package.json', import.meta.url));
+const { default: TypertRegistry } = await import(pathToFileURL(requireGateway.resolve('@deepseek-ai/dsh-typert-registry')).href);
 
 const pauseUntil = async (predicate, message) => {
   const deadline = Date.now() + 8000;
@@ -47,7 +52,8 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
     create: async () => { throw new Error('Lifecycle fixture must not execute agents'); } });
   ctx.provide('sessions', { get: () => undefined,
     flush: async () => { throw new Error('Lifecycle fixture must not write sessions'); } });
-  ctx.provide('sessionQuery', { listSessions: async () => [], readSession: async () => ({ events: [] }) });
+  ctx.provide('sessionQuery', { listSessions: async () => [], readSession: async () => ({ events: [] }),
+    observeSession: async () => assert.fail('Lifecycle fixture has no execution sessions to observe') });
   const projectionRegistrations = new Map();
   // Preserve the official caller-scoped registration lifetime and handle shape.
   class FixtureSessionProjections extends Service {
@@ -63,6 +69,7 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
     }
   }
   await ctx.plugin(FixtureSessionProjections);
+  await ctx.plugin(TypertRegistry);
   ctx.provide('tokenMeter', {});
   ctx.provide('settings', { describe: () => [] });
   ctx.provide('credentials', { resolve: async () => undefined });

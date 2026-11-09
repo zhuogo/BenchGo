@@ -357,15 +357,21 @@ test('trusted execution-session and website-permission actions expose the curren
   valid(request, { action: 'review' }); // Background memory review remains independent.
 });
 
-test('execution approval projection is a read-only origin link with an explicit Router session', () => {
-  valid(request, { action: 'executionApprovalOrigins', ownerSessionId: 'router', threadId: 'main' });
-  assert.equal(request({ action: 'executionApprovalOrigins' }), false);
-  assert.equal(request({ action: 'executionApprovalOrigins', ownerSessionId: '' }), false);
-  const validate = response(path, 'executionApprovalOrigins');
+test('approval origins expose read-only Router and Worker links with scoped tool rechecks', () => {
+  valid(request, { action: 'approvalOrigins' });
+  valid(request, { action: 'approvalOrigins', sessionId: 'worker', toolName: 'assistant_external_action' });
+  for (const input of [{ action: 'executionApprovalOrigins', ownerSessionId: 'router' },
+    { action: 'approvalOrigins', toolName: 'assistant_external_action' },
+    { action: 'approvalOrigins', sessionId: '' },
+    { action: 'approvalOrigins', sessionId: 'worker', toolName: '' }]) assert.equal(request(input), false);
+  assert.equal(document.paths[path].post.responses['200']['x-action-schemas'].executionApprovalOrigins, undefined);
+  const validate = response(path, 'approvalOrigins');
   valid(validate, { origins: [] });
-  const origin = { ticketId: 'ticket', title: '发送准备稿', assignmentId: 'assignment', runId: 'run',
+  const router = { kind: 'router', title: '主聊天', sourceTitle: '主聊天',
+    sessionId: 'router', ownerSessionId: 'router', ownerThreadId: 'main' };
+  const origin = { kind: 'worker', sourceTitle: '主聊天', ticketId: 'ticket', title: '发送准备稿', assignmentId: 'assignment', runId: 'run',
     sessionId: 'worker', ownerSessionId: 'router', ownerThreadId: 'main' };
-  valid(validate, { origins: [origin] });
+  valid(validate, { origins: [router, origin] });
   assert.equal(validate({ origins: [{ ...origin, approvalToken: 'invented' }] }), false);
   const { runId, ...missing } = origin;
   assert.equal(validate({ origins: [missing] }), false);

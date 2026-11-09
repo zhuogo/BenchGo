@@ -100,6 +100,8 @@ test('shared feedback preserves official tooltip, cancellation, focus, reduced m
     assert.deepEqual(await page.evaluate(() => window.results), []);
     if (screenshots) await page.screenshot({ path: join(screenshots, 'confirmation-default-cancel.png'), animations: 'disabled' });
     await page.keyboard.press('Escape'); await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    // Radix restores focus in its deferred FocusScope unmount cleanup, after the dialog leaves the DOM.
+    await page.waitForFunction(node => node === document.activeElement, await opener.elementHandle());
     assert.deepEqual(await page.evaluate(() => window.results), [false]); assert(await opener.evaluate(node => node === document.activeElement));
     await opener.click(); await page.getByRole('button', { name: '删除', exact: true }).click(); await page.getByRole('dialog').waitFor({ state: 'hidden' });
     assert.deepEqual(await page.evaluate(() => window.results), [false, true]);
