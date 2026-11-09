@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
+import { LINK_DEFAULTS } from '../config.mjs';
 
 export const secret = () => randomBytes(32).toString('base64url');
 export const hash = value => createHash('sha256').update(value).digest('hex');
@@ -21,7 +22,7 @@ export async function openStore(directory) {
   const file = join(directory, 'devices.json');
   let saved = {};
   try { saved = JSON.parse(await readFile(file, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-  const state = { host: '0.0.0.0', port: 48721, publicUrl: '', ...saved, enabled: true };
+  const state = { ...LINK_DEFAULTS, ...saved, enabled: true };
   state.name = typeof saved.name === 'string' && saved.name.trim() ? text(saved.name, '设备名称', 100) : (hostname().trim().slice(0, 100) || `BenchGo-${randomBytes(3).toString('hex')}`);
   state.devices ??= [];
   const validSession = value => value && typeof value.digest === 'string' && /^[a-f0-9]{64}$/.test(value.digest)
