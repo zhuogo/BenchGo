@@ -44,6 +44,34 @@ test('archived tickets leave current activity while the home keeps a small compl
   assert.deepEqual(grouped.completed.map(row => row.id), ['done']);
 });
 
+test('cleanup metadata passes through activity projection and restoring display preserves terminal facts', () => {
+  const base = { id: 'stopped', status: 'cancelled', instructionRevision: 2, resultVersion: 3,
+    results: [{ instructionRevision: 2, version: 3, summary: '保留的执行结果' }] };
+  for (const metadata of [
+    { archived: true },
+    { cleanup: { id: 'cleanup-1', archivedAt: '2026-11-10T02:00:00Z', version: 5 } },
+    { taskMeta: { version: 5, archived: true, cleanupReceiptId: 'cleanup-1' } },
+  ]) {
+    const source = { ...base, ...metadata }, projected = activityTask(source, 'ticket');
+    assert.equal(archivedActivityTicket(projected), true);
+    assert.equal(projected.status, 'cancelled');
+    assert.equal(projected.domainStatus, 'cancelled');
+    assert.equal(projected.instructionRevision, 2);
+    assert.equal(projected.resultVersion, 3);
+    assert.strictEqual(projected.results, source.results);
+    for (const key of Object.keys(metadata)) assert.strictEqual(projected[key], source[key]);
+    assert.equal(archivedActivityTicket(activityTask(source, 'goal')), false);
+  }
+  const restored = activityTask({ ...base, archived: false, cleanup: null, taskMeta: { version: 6, archived: false } }, 'ticket');
+  assert.equal(archivedActivityTicket(restored), false);
+  assert.equal(restored.status, 'cancelled');
+  assert.equal(restored.instructionRevision, 2);
+  assert.strictEqual(restored.results, base.results);
+  const completed = activityTask({ ...restored, status: 'completed', domainStatus: 'completed' }, 'ticket');
+  assert.equal(archivedActivityTicket(completed), true);
+  assert.equal(activeActivityStates(completed.status), false);
+});
+
 test('saved results, recovery and real Worker questions have distinct states', () => {
   const base = { id: 't', status: 'waiting', instructionRevision: 2, resultVersion: 3,
     results: [{ instructionRevision: 2, version: 3, outcome: 'completed', summary: 'original result' }] };

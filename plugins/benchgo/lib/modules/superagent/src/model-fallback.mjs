@@ -26,7 +26,8 @@ export function isRouterQuery(name, args) {
   if (routerQueries.has(name)) return true;
   if (typeof args === 'string') { try { args = JSON.parse(args); } catch { return false; } }
   if (!args || typeof args !== 'object') return false;
-  if (name === 'assistant_config') return !args.patch;
+  if (name === 'assistant_settings') return ['catalog', 'read', 'history'].includes(args.op);
+  if (name === 'assistant_task_cleanup') return ['preview', 'history'].includes(args.op) || args.op === 'restore' && !args.requestId;
   if (name === 'assistant_memory') return !args.remove && !args.content;
   if (name === 'assistant_profile') return args.op !== 'update';
   if (name === 'assistant_pet') return args.op === 'catalog';

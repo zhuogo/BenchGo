@@ -3,7 +3,7 @@ import { requestAssistantApproval } from './approval.mjs';
 import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
 
-const validName = value => typeof value === 'string' && /^assistant_(?:config|profile|generate_image|pet)$/.test(value);
+const validName = value => typeof value === 'string' && /^assistant_(?:profile|generate_image|pet)$/.test(value);
 const validId = (value, name) => {
   if (typeof value !== 'string' || !value.trim() || value.length > 512) throw new Error(`Model action requires ${name}`);
   return value;

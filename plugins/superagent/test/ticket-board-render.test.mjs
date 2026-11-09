@@ -28,10 +28,12 @@ async function fixture() {
         window.calls=[];window.control={state};
         const sample=(id,title,status,extra={})=>({id,title,target:title+'：按要求完成并提供证据',status,instructionRevision:1,resultVersion:0,
           createdAt:'2026-11-07T08:00:00Z',updatedAt:'2026-11-07T08:05:00Z',taskCanOrganize:false,...extra});
-        const tasks=createTaskManagement({database:{meta:()=>undefined}});
+        const metadata=new Map(), manifests=new Map();
+        const tasks=createTaskManagement({database:{meta:key=>metadata.get(key)}});
         const rows=[sample('queued','准备周报','open',{updatedAt:'2026-11-01T08:00:00Z'}),sample('running','运行兼容测试','open',{updatedAt:'2026-11-09T08:00:00Z',assignments:[{state:'claimed'}],executionSession:{available:true,sessionId:'real-execution',ticketId:'running'}}),
           sample('paused','确认发布范围','paused',{updatedAt:'2026-11-08T08:00:00Z'}),sample('stopped','已停止验证','cancelled',{updatedAt:null,taskCanOrganize:true}),
           sample('done','交付设计稿','completed',{archived:true,updatedAt:null,taskCanOrganize:true,resultVersion:1,results:[{version:1,summary:'保留原始成果与审计证据',selfCheck:{summary:'逐项检查通过'},evidenceRefs:[]}]})];
+        if(state==='cleanup')rows.push(sample('stopped-two','另一项已停止工单','cancelled',{taskCanOrganize:true}),sample('closed','已关闭原始工单','closed',{taskCanOrganize:true}));
         if(state==='long')rows.push(...Array.from({length:35},(_,index)=>sample('extra-'+index,'历史工作 '+index,'open',{updatedAt:'2026-11-02T08:00:00Z'})));
         if(state==='uncertain')Object.assign(rows[1],{assignments:[{state:'uncertain'}]});
         if(state==='blocked')Object.assign(rows[1],{status:'blocked'});
@@ -40,7 +42,37 @@ async function fixture() {
           if(window.control.state==='loading')return new Promise(()=>{});
           if(window.control.state==='error')throw Error('连接暂不可用');
           if(action==='ticketPause'&&window.control.pauseError)throw Error('暂停未落账');
-          if(action==='tickets')return {tickets:window.control.state==='empty'?[]:tasks.project('ticket',rows.filter(row=>input.ticketId?row.id===input.ticketId:!!row.archived===input.archived))};
+          if(action==='tickets')return {tickets:window.control.state==='empty'?[]:tasks.project('ticket',rows).filter(row=>input.ticketId?row.id===input.ticketId:row.archived===input.archived)};
+          if(action==='taskCleanupPreview'||action==='taskCleanupRestorePreview'){
+            if(window.control.cleanupLoading)return new Promise(()=>{});
+            if(window.control.cleanupPreviewError)throw Error('归档清单暂未读取');
+            const restore=action==='taskCleanupRestorePreview',items=[],excluded=[];
+            for(const id of input.ticketIds){
+              const row=tasks.project('ticket',rows.filter(row=>row.id===id))[0];
+              if(!row||!['completed','failed','closed','cancelled'].includes(row.status)||window.control.cleanupEmpty||(restore?!row.cleanup?.id:!!row.cleanup?.id)){
+                excluded.push({id,title:row?.title,reason:'当前状态不可归档或恢复'});continue;
+              }
+              items.push({id,title:row.title,status:row.status,metaVersion:row.taskMeta.version,remainsAutomaticallyArchived:['completed','failed','closed'].includes(row.status)});
+            }
+            const preview={previewId:'preview-'+manifests.size,manifestHash:'manifest-'+manifests.size,items,excluded};
+            manifests.set(preview.previewId,{...preview,restore});return preview;
+          }
+          if(action==='taskCleanupCommit'||action==='taskCleanupRestore'){
+            if(window.control.cleanupCommitError)throw Error('工单状态已变化，请重新核对清单');
+            const preview=manifests.get(input.previewId);
+            if(!preview||input.manifestHash!==preview.manifestHash||input.selectedTicketIds.some(id=>!preview.items.some(item=>item.id===id)))throw Error('清单不匹配');
+            for(const id of input.selectedTicketIds){
+              const item=preview.items.find(item=>item.id===id),row=tasks.project('ticket',rows.filter(row=>row.id===id))[0];
+              if(item.metaVersion!==row.taskMeta.version||item.status!==row.status)throw Error('工单状态已变化，请重新核对清单');
+            }
+            for(const id of input.selectedTicketIds){
+              const key='task-presentation:ticket:'+id,prior=metadata.get(key)||{version:0};
+              metadata.set(key,{...prior,version:prior.version+1,archived:!preview.restore,archiveRevision:1,
+                cleanupReceiptId:preview.restore?null:'receipt-'+input.requestId,archivedAt:preview.restore?null:'2026-11-10T08:00:00Z'});
+              sink.update({type:'changes',cursor:++cursor,entries:[{seq:cursor,ticketId:id,kind:preview.restore?'taskCleanupRestore':'taskCleanup'}]});
+            }
+            return {receiptId:'receipt-'+input.requestId,items:input.selectedTicketIds.map(id=>({id}))};
+          }
           if(action==='goalList')return {goals:[]};
           if(action==='checkpointList')return {checkpoints:[]};
           if(action==='state')return {config:{revision:1,workerConcurrency:2}};
@@ -56,6 +88,7 @@ async function fixture() {
           };
           return {start(){queueMicrotask(snapshot);},restart:snapshot,dispose(){}};
         }});
+        window.ticketFacts=()=>tasks.project('ticket',rows);
         window.updateTicket=(id,patch)=>{Object.assign(rows.find(row=>row.id===id),patch);sink.update({type:'changes',cursor:++cursor,entries:[{seq:cursor,ticketId:id,kind:'execution'}]});};
         root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main className='ba-studio-body' style={{padding:24,width:'100%',height:'100vh',overflow:'auto',boxSizing:'border-box'}}>
           <Tickets api={api} requestedTicket={state==='archived-detail'?{ticketId:'done'}:undefined} onCreateGoal={()=>window.calls.push(['createGoal'])} onSchedule={()=>window.calls.push(['openSchedule'])} onOpenExecution={async value=>{window.calls.push(['openExecution',value]);if(window.control.openError)throw Error('原会话尚未连接');}}/>
@@ -240,5 +273,105 @@ test('incremental ticket details keep list nodes, filters, scroll and focus with
     assert.equal(await page.locator('.ba-studio-body').evaluate(node => node.scrollTop), scrollTop, 'return restores the original scroll position');
     assert.equal(await page.getByRole('tab', { name: '列表', exact: true }).getAttribute('aria-selected'), 'true');
     assert.equal(await page.locator('.ba-task-list-row').count(), 35, 'the search and full ledger remain intact');
+  } finally { await browser.close(); }
+});
+
+test('cleanup previews a subset before archiving, retains conflicts and restores presentation without execution', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html = await fixture(), browser = await chromium.launch({ headless: true, executablePath });
+  const screenshots = process.env.BENCHGO_TICKET_SCREENSHOTS;
+  if (screenshots) await mkdir(screenshots, { recursive: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' });
+    page.setDefaultTimeout(7000);
+    const errors = []; page.on('pageerror', error => errors.push(error.message));
+    await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort());
+    await page.goto('http://localhost/');
+    const render = async () => { await page.evaluate(() => window.renderScenario('cleanup')); await page.getByText('另一项已停止工单', { exact: true }).waitFor(); };
+    const shot = async name => { if (screenshots) await page.screenshot({ path: join(screenshots, name + '.png'), fullPage: true }); };
+    const detail = page.getByRole('region', { name: '任务详情', exact: true });
+    const mutations = () => page.evaluate(() => window.calls.filter(([action]) => ['taskCleanupCommit', 'taskCleanupRestore', 'ticketResume', 'taskUpdate'].includes(action)));
+    await render();
+    const original = await page.evaluate(() => window.ticketFacts().map(({ id, status, instructionRevision, results }) => ({ id, status, instructionRevision, results })));
+    await page.getByRole('button', { name: '归档已结束工单', exact: true }).click();
+    await detail.getByRole('region', { name: '归档清单', exact: true }).waitFor();
+    assert.equal(await page.getByRole('dialog').count(), 0);
+    assert.equal(await detail.getByRole('checkbox').count(), 2, 'only current terminal tickets enter this manifest');
+    assert.deepEqual(await mutations(), [], 'opening a preview never changes a ticket');
+    await detail.getByRole('checkbox', { name: /另一项已停止工单/ }).uncheck();
+    await detail.getByRole('button', { name: '确认归档 1 项', exact: true }).waitFor();
+    await shot('cleanup-data');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await shot('cleanup-mobile');
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
+    await shot('cleanup-mobile-dark');
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    await page.evaluate(() => window.control.cleanupCommitError = true);
+    await detail.getByRole('button', { name: '确认归档 1 项', exact: true }).click();
+    await detail.getByText('工单状态已变化，请重新核对清单', { exact: true }).waitFor();
+    assert.equal(await detail.getByRole('checkbox', { name: /另一项已停止工单/ }).isChecked(), false, 'failed confirmation retains the chosen subset');
+    assert.equal(await page.evaluate(() => window.ticketFacts().filter(row => row.cleanup).length), 0, 'conflicts do not pretend to archive rows');
+    await shot('cleanup-conflict');
+    await detail.getByRole('button', { name: '确认归档 1 项', exact: true }).click();
+    await detail.getByText('工单状态已变化，请重新核对清单', { exact: true }).waitFor();
+    const retries = (await mutations()).filter(([name]) => name === 'taskCleanupCommit');
+    assert.equal(retries[0][1].requestId, retries[1][1].requestId, 'retrying the same approved subset retains its idempotency key');
+    await page.evaluate(() => window.control.cleanupPreviewError = true);
+    await detail.getByRole('button', { name: '重新核对清单', exact: true }).click();
+    await detail.getByText('归档清单暂未读取', { exact: true }).waitFor();
+    assert(await detail.getByRole('button', { name: '确认归档 1 项', exact: true }).isDisabled(), 'failed revalidation cannot submit the previous manifest');
+    await page.evaluate(() => window.control.cleanupPreviewError = false);
+    await page.evaluate(() => window.control.cleanupCommitError = false);
+    await detail.getByRole('button', { name: '重新核对清单', exact: true }).click();
+    await detail.getByRole('button', { name: '确认归档 2 项', exact: true }).waitFor();
+    await detail.getByRole('checkbox', { name: /另一项已停止工单/ }).uncheck();
+    await detail.getByRole('button', { name: '确认归档 1 项', exact: true }).click();
+    await detail.waitFor({ state: 'hidden' });
+    assert.equal(await page.getByText('已停止验证', { exact: true }).count(), 0);
+    assert(await page.getByText('另一项已停止工单', { exact: true }).isVisible());
+    const committed = (await mutations()).filter(([name]) => name === 'taskCleanupCommit').at(-1)[1];
+    assert.deepEqual(committed.selectedTicketIds, ['stopped']);
+    assert(committed.previewId && committed.manifestHash && committed.requestId);
+    await page.getByRole('tab', { name: '已归档', exact: true }).click();
+    const archived = page.locator('.ba-task-list-row').filter({ has: page.getByText('已停止验证', { exact: true }) });
+    await archived.waitFor();
+    assert(await archived.getByText(/归档整理于/).isVisible());
+    await archived.getByRole('button', { name: /已停止验证.*已停止/ }).click();
+    await detail.getByRole('region', { name: '归档记录', exact: true }).waitFor();
+    await detail.getByRole('button', { name: '恢复展示', exact: true }).click();
+    await detail.getByRole('region', { name: '恢复展示清单', exact: true }).waitFor();
+    await detail.getByRole('button', { name: '确认恢复展示 1 项', exact: true }).click();
+    await detail.waitFor({ state: 'hidden' });
+    await page.getByRole('tab', { name: '当前工单', exact: true }).click();
+    await page.getByText('已停止验证', { exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.ticketFacts().map(({ id, status, instructionRevision, results }) => ({ id, status, instructionRevision, results }))), original);
+    assert.equal((await mutations()).some(([name]) => ['ticketResume', 'taskUpdate'].includes(name)), false, 'restoring presentation cannot reopen execution');
+
+    await page.getByRole('tab', { name: '已归档', exact: true }).click();
+    for (const title of ['交付设计稿', '已关闭原始工单']) {
+      const done = page.locator('.ba-task-list-row').filter({ has: page.getByText(title, { exact: true }) });
+      await done.getByRole('button', { name: '归档', exact: true }).click();
+      await detail.getByRole('button', { name: '确认归档 1 项', exact: true }).click();
+      await detail.waitFor({ state: 'hidden' });
+      await done.getByRole('button', { name: '恢复展示', exact: true }).click();
+      await detail.getByText('恢复展示标记后仍保留在“已归档”中', { exact: true }).waitFor();
+      await detail.getByRole('button', { name: '确认恢复展示 1 项', exact: true }).click();
+      await detail.waitFor({ state: 'hidden' });
+      assert(await done.isVisible(), 'completed and closed tickets remain automatically archived after restoration');
+      assert.equal(await done.getByRole('button', { name: '恢复展示', exact: true }).count(), 0);
+    }
+
+    for (const state of ['loading', 'error', 'empty']) {
+      await render();
+      await page.evaluate(state => { window.control.cleanupLoading = state === 'loading'; window.control.cleanupPreviewError = state === 'error'; window.control.cleanupEmpty = state === 'empty'; }, state);
+      await page.getByRole('button', { name: '归档已结束工单', exact: true }).click();
+      const title = { loading: '正在准备归档清单', error: '归档清单暂时无法读取', empty: '没有可归档的工单' }[state];
+      await detail.getByText(title, { exact: true }).waitFor();
+      if (state === 'empty') assert(await detail.getByRole('region', { name: '未纳入清单', exact: true }).isVisible());
+      assert.deepEqual(await mutations(), []);
+      await shot('cleanup-' + state);
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    }
+    assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

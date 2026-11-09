@@ -3,7 +3,7 @@ import { normalizeTicketTitle } from '../src/ticket-title.mjs';
 import { transientRefreshError } from './refresh-error.mjs';
 
 export const terminalActivityStates = new Set(['completed', 'failed', 'cancelled', 'closed']);
-export const archivedActivityTicket = row => row.kind === 'ticket' && ['completed', 'failed', 'closed'].includes(row.status);
+export const archivedActivityTicket = row => row.kind === 'ticket' && (row.archived === true || !!row.cleanup?.id || row.taskMeta?.archived === true || ['completed', 'failed', 'closed'].includes(row.domainStatus ?? row.status));
 // Paused/cancelling work remains in the history list, but it is no longer
 // actively executing. Keep this set shared by the trigger and drawer so a
 // paused or stopping ticket cannot leave the activity badge looking busy.

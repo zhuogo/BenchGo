@@ -2088,7 +2088,11 @@
           "action": {
             "type": "string",
             "enum": [
+              "actionPermissionCreate",
+              "actionPermissionRevoke",
+              "actionPermissions",
               "analyzeImage",
+              "approvalOrigins",
               "archiveThread",
               "artifacts",
               "bringToMain",
@@ -2104,16 +2108,19 @@
               "connectionCatalog",
               "connectionConfigure",
               "connectionCredential",
+              "connectionReplies",
               "connectionStatus",
               "connectionVerify",
               "connections",
               "createThread",
               "deleteArchivedThreads",
               "deleteThread",
+              "directReplyReconcile",
               "ensure",
               "evaluationDispose",
               "evaluationHistory",
               "evaluations",
+              "executionSessions",
               "goalAdvance",
               "goalBudgetGet",
               "goalCancel",
@@ -2133,11 +2140,14 @@
               "memoryLearning",
               "memorySave",
               "memorySearch",
+              "messageReaction",
               "notificationAck",
               "notificationDelivered",
+              "notificationOption",
               "notificationRead",
               "notificationSync",
               "notifications",
+              "outboxReconcile",
               "ownedSkillApprove",
               "ownedSkillAudit",
               "ownedSkillPin",
@@ -2158,33 +2168,34 @@
               "profileImport",
               "profileInfo",
               "renameThread",
-              "resetMain",
               "requestState",
+              "resetMain",
               "review",
               "reviewClaim",
               "reviewComplete",
               "reviewFail",
               "send",
               "sessionSearch",
+              "settingsCatalog",
+              "settingsCommit",
+              "settingsHistory",
+              "settingsPrepare",
+              "settingsRead",
+              "settingsRollback",
               "state",
               "summarize",
               "systemFiles",
+              "taskCleanupCommit",
+              "taskCleanupHistory",
+              "taskCleanupPreview",
+              "taskCleanupRestore",
+              "taskCleanupRestorePreview",
               "ticketAnswer",
               "ticketChange",
               "ticketPause",
               "ticketResume",
               "ticketStop",
-              "tickets",
-              "notificationOption",
-              "messageReaction",
-              "connectionReplies",
-              "directReplyReconcile",
-              "outboxReconcile",
-              "executionSessions",
-              "actionPermissions",
-              "actionPermissionCreate",
-              "actionPermissionRevoke",
-              "approvalOrigins"
+              "tickets"
             ]
           },
           "threadId": {
@@ -2434,6 +2445,62 @@
             "minLength": 1,
             "maxLength": 200,
             "description": "approvalOrigins: actual PendingApproval tool name; requires sessionId and rechecks current Worker tool scope."
+          },
+          "adapterId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "namespace": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "historyId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "digest": {
+            "type": "string",
+            "minLength": 1
+          },
+          "previewId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "manifestHash": {
+            "type": "string",
+            "minLength": 1
+          },
+          "ticketIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1000,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "selectedTicketIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1000,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "ops": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/ManagedSettingOperation"
+            }
           }
         },
         "additionalProperties": true,
@@ -2902,13 +2969,119 @@
                 ]
               }
             }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "settingsRead"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "adapterId",
+                "namespace"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "settingsPrepare"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "adapterId",
+                "namespace",
+                "ops",
+                "expectedRevision"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "settingsCommit"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "settingsRollback"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "historyId",
+                "expectedRevision"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "taskCleanupCommit",
+                    "taskCleanupRestore"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "previewId",
+                "manifestHash",
+                "selectedTicketIds",
+                "requestId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "taskCleanupRestorePreview"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "ticketIds"
+              ]
+            }
           }
         ],
         "x-deprecated-actions": [
           "memoryCandidates",
           "memoryCandidateAccept",
           "memoryCandidateReject"
-        ]
+        ],
+        "description": "主人管理接口。注册配置通过通用 schema/路径读写，页面与 Router 共用权威存储、CAS、脱敏审计和回滚。高风险确认绑定本次差异；工单清理须先持久预览，再确认精确子集，归档保留墓碑与成果，恢复不重开执行。"
       },
       "VaultEntry": {
         "type": "object",
@@ -4892,6 +5065,47 @@
         },
         "additionalProperties": true,
         "description": "持续目标及递归子目标只使用系统工作角色模型；不接受节点级 provider/model 覆盖。"
+      },
+      "ManagedSettingOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "op",
+          "path"
+        ],
+        "properties": {
+          "op": {
+            "enum": [
+              "set",
+              "unset"
+            ]
+          },
+          "path": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "value": {}
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "op": {
+                  "const": "set"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          }
+        ]
       }
     }
   }

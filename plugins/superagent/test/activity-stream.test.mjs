@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createActivityStore } from '../client/activity-data.mjs';
+import { archivedActivityTicket, createActivityStore } from '../client/activity-data.mjs';
 import { transientRefreshError } from '../client/refresh-error.mjs';
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function setup(api) {
@@ -25,6 +25,39 @@ test('official baseline supplies tickets directly; healthy streams never schedul
   assert.strictEqual(h.store.getSnapshot().rows[1], stable); assert.equal(h.store.getSnapshot().loading, false);
   h.sink.update({ cursor: 5, entries: [{ seq: 4, ticketId: 'a', kind: 'tool/call' }, { seq: 5, ticketId: 'a', kind: 'tool/result' }] });
   assert.equal(h.timers.size, 0); h.stop(); assert.equal(h.disposed, 1);
+});
+test('archive and restore presentation events refresh only the touched ticket without changing execution facts', async () => {
+  const base = { ...row('a'), status: 'cancelled', instructionRevision: 2, resultVersion: 3,
+    results: [{ instructionRevision: 2, version: 3, summary: '保留的执行结果' }], taskMeta: { version: 4 } };
+  let current = base;
+  const calls = [], h = setup(async (name, args) => {
+    calls.push([name, args]);
+    return name === 'goalList' ? { goals: [] } : { tickets: [current] };
+  });
+  try {
+    h.sink.replace({ cursor: 0, tickets: [base, row('b')] }); await flush();
+    const stable = h.store.getSnapshot().rows.find(value => value.id === 'b');
+    assert.equal(archivedActivityTicket(h.store.getSnapshot().rows[0]), false);
+    for (const [seq, metadata, archived] of [
+      [1, { archived: true, cleanup: { id: 'cleanup-1', version: 5 }, taskMeta: { version: 5, archived: true, cleanupReceiptId: 'cleanup-1' } }, true],
+      [2, { archived: false, cleanup: null, taskMeta: { version: 6, archived: false } }, false],
+    ]) {
+      current = { ...base, ...metadata };
+      h.sink.update({ cursor: seq, entries: [{ seq, ticketId: 'a', kind: 'presentation' }] }); h.run(80); await flush();
+      const projected = h.store.getSnapshot().rows.find(value => value.id === 'a');
+      assert.equal(archivedActivityTicket(projected), archived);
+      assert.deepEqual(projected.cleanup, current.cleanup);
+      assert.deepEqual(projected.taskMeta, current.taskMeta);
+      assert.equal(projected.status, 'cancelled');
+      assert.equal(projected.instructionRevision, base.instructionRevision);
+      assert.equal(projected.resultVersion, base.resultVersion);
+      assert.deepEqual(projected.results, base.results);
+      assert.strictEqual(h.store.getSnapshot().rows.find(value => value.id === 'b'), stable);
+      assert.equal(h.store.getSnapshot().error, '');
+      assert.equal(h.timers.size, 0);
+    }
+    assert.deepEqual(calls, [['goalList', {}], ['tickets', { ticketId: 'a' }], ['tickets', { ticketId: 'a' }]]);
+  } finally { h.stop(); }
 });
 test('gaps trigger one replacement snapshot and generations reject old ticket responses', async () => {
   const pending = [], h = setup((name, args) => name === 'goalList' ? Promise.resolve({ goals: [] }) : new Promise(resolve => pending.push({ args, resolve })));

@@ -1713,17 +1713,17 @@ test('model preparation failures exhaust the complete ordered queue', async t =>
 
 test('Router fallback blocks repeated dispatched effects and still permits repeated configuration reads', async t => {
   let effects = 0, reads = 0;
-  const tool = (id, name) => [{ type: 'block-start', index: 0, blockType: 'tool-call' },
-    { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: '{}' } }, { type: 'finish', reason: { kind: 'tool-calls' } }];
+  const tool = (id, name, args = {}) => [{ type: 'block-start', index: 0, blockType: 'tool-call' },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: JSON.stringify(args) } }, { type: 'finish', reason: { kind: 'tool-calls' } }];
   const f = await fixture(t, (_request, count) => {
     if (count === 1 || count === 4) return tool(`effect-${count}`, 'fallback_effect');
-    if (count === 2 || count === 5) return tool(`read-${count}`, 'assistant_config');
+    if (count === 2 || count === 5) return tool(`read-${count}`, 'assistant_settings', { op: 'read', adapterId: 'fixture', namespace: 'settings' });
     if (count === 3) return [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'unavailable' } } }];
     return text('Finished without repeating the action');
   }, { setupTools(scope) {
-    for (const name of ['fallback_effect', 'assistant_config']) scope.tools.register({ name, description: name,
-      parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
-      execute: () => name === 'assistant_config' ? `${++reads} reads` : `${++effects} effects` });
+    for (const name of ['fallback_effect', 'assistant_settings']) scope.tools.register({ name, description: name,
+      parameters: { type: 'object', properties: { op: { type: 'string' }, adapterId: { type: 'string' }, namespace: { type: 'string' } } }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      execute: () => name === 'assistant_settings' ? `${++reads} reads` : `${++effects} effects` });
   } });
   await f.engine.send({ text: 'Perform the action once' });
   const agent = await f.engine.ensureSession(); await agent.whenIdle();

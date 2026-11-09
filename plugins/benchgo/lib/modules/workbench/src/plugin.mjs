@@ -60,7 +60,7 @@ export async function mountWorkbench(ctx, { directory, loadSidebar = () => impor
         state[key] = { available: true, status: 'ready' };
         settle({ state: 'applied' });
         child.effect(() => () => { state[key] = { available: false, status: 'loading' }; });
-      } catch (error) { state[key] = { available: false, status: 'error', error: error.message }; settle({ state: 'failed', reason: error.message }); child.logger?.warn?.(`BenchGo ${key}: ${error.message}`); }
+      } catch (error) { state[key] = { available: false, status: 'error', error: error.message }; settle({ state: 'failed', reason: '原侧栏运行时挂载失败，配置已保存；请修正后重试' }); child.logger?.warn?.(`BenchGo ${key}: ${error.message}`); }
     });
     return { fiber, ready };
   };
@@ -84,7 +84,7 @@ export async function mountWorkbench(ctx, { directory, loadSidebar = () => impor
         return result;
       }
       finally { clearTimeout(timer); }
-    }).catch(error => ({ state: 'failed', reason: `配置已保存，侧栏重装失败：${error.message}` }));
+    }).catch(() => ({ state: 'failed', reason: '配置已保存，原侧栏作用域释放或重新挂载失败' }));
   });
   ctx.effect(() => () => { disposed = true; unsubscribePreferences(); return remounts; });
   ctx.inject(['benchgoSettings'], child => {
