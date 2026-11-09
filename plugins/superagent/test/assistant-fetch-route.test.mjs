@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { registerAssistantFetchRoute } from '../src/assistant-fetch-route.mjs';
 import { resolveApprovalOrigins } from '../src/execution-approval-origin.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
+import { channelSessionKey } from '../src/channel-policy.mjs';
 
 const requireBenchgo = createRequire(new URL('../../benchgo/package.json', import.meta.url));
 const { transformSync } = requireBenchgo('esbuild');
@@ -83,6 +84,36 @@ test('official shared Fetch dispatch reaches the registered assistant route with
     assert.equal(response.status, 403);
     assert.equal(await response.text(), 'forbidden');
     assert.equal(invocations.length, count);
+  });
+
+  await t.test('legacy cancelled channel records cannot turn the real profile review route into HTTP 400', async () => {
+    const source = { channel: 'feishu', sourceType: 'direct', appId: 'trusted-app', chatId: 'chat', conversationId: 'chat' };
+    state.threads.push({ id: 'channel', sessionId: 'router-channel', source, sourceKey: channelSessionKey(source) },
+      { id: 'broken', sessionId: 'router-broken', source: { channel: 'feishu' }, sourceKey: 'old-source-key' });
+    policy.connection = { enabled: true, appId: 'trusted-app', ownerOpenIds: ['channel-owner'] };
+    const mandate = { policyVersion: policy.version, source, actorId: 'channel-owner',
+      admission: 'explicit-owner', controlledActions: 'require-current-policy-and-harness-approval' };
+    // Production retained cancelled pre-unified-source tickets outside auto-archive.
+    const legacy = database.createTicket({ threadId: 'ledger-thread', target: 'historical channel task',
+      mandate: { ...mandate, source: { channel: 'feishu' } } });
+    database.updateTicket(legacy.id, { status: 'cancelled' });
+    database.createTicket({ threadId: 'ledger-thread', target: 'unverified current task', mandate: { ...mandate, source: undefined } });
+    const ticket = database.createTicket({ threadId: 'ledger-thread', target: 'valid channel task', mandate });
+    database.createAssignment(ticket.id, { executor: 'harness' });
+    const [assignment] = database.claimAssignments('channel-worker', { validateMandate: () => true });
+    const run = database.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence,
+      sessionId: 'worker-channel', directory: 'workspace' });
+    database.updateRun(run.id, { owner: assignment.owner, fence: assignment.fence, state: 'submitted' });
+    const response = await call({ action: 'approvalOrigins' });
+    assert.equal(response.status, 200);
+    const { origins } = await response.json();
+    assert.deepEqual(origins.filter(row => row.kind === 'worker').map(row => row.sessionId),
+      ['worker-main', 'worker-side', 'worker-channel']);
+    assert(!origins.some(row => row.sessionId === 'router-broken'));
+    const decision = await call({ action: 'approvalOrigins', sessionId: 'worker-channel', toolName: 'assistant_external_action' });
+    assert.equal(decision.status, 200);
+    assert.deepEqual((await decision.json()).origins.map(row => row.ticketId), [ticket.id]);
+    assert.deepEqual(database.getTicket(legacy.id).mandate.source, { channel: 'feishu' });
   });
 
   await t.test('JSON identity and Worker ids cannot override trusted owner or server-side origin projection', async () => {

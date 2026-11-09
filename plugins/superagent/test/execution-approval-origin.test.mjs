@@ -110,3 +110,39 @@ test('real claimed assignment and official-run identity project without another 
   const origins = executionApprovalOrigins({ database, ownerScope: main, ownerSessionId: 'router-main', policy });
   assert.equal(origins.length, 1); assert.equal(origins[0].runId, run.id); assert.equal(origins[0].sessionId, 'actual-worker');
 });
+
+test('incomplete historical channel tickets do not break or acquire identities in a mixed review inbox', async () => {
+  const f = fixture(); f.assignment.leaseUntil = Date.now() + 60000;
+  const source = { channel: 'feishu', appId: 'trusted-app', sourceType: 'direct', chatId: 'chat', conversationId: 'chat' };
+  const channelMandate = { ...mandate(), source, actorId: 'feishu-owner', policyVersion: policy.version, admission: 'explicit-owner' };
+  const valid = { ...f.ticket, id: 'channel-ticket', mandate: channelMandate };
+  const broken = [undefined, {}, { channel: 'feishu' }, { ...source, sourceType: 'private' }].flatMap((badSource, i) =>
+    ['cancelled', 'open', 'waiting'].map(status => ({ ...valid, id: `invalid-${i}-${status}`, status, mandate: { ...channelMandate, source: badSource } })));
+  f.database.listTickets = () => [...broken, f.ticket, valid];
+  const thread = { id: 'channel', sessionId: 'channel-router', source, sourceKey: channelSessionKey(source) };
+  const state = { mainSessionId: 'router-main', threads: [thread,
+    { id: 'bad-thread', sessionId: 'bad-router', sourceKey: 'channel:old', source: { channel: 'feishu' } },
+    { id: 'unmapped-channel', sessionId: 'bad-router', source }] };
+  const dependencies = { store: { getState: async () => state, orchestration: f.database },
+    engine: { ticketOwnerScope: async id => ({ threadId: id, sessionIds: [id === 'main' ? 'router-main' : 'channel-router'] }) },
+    readPolicy: async () => ({ ...policy, connection: { enabled: true, appId: 'trusted-app', ownerOpenIds: ['feishu-owner'] } }),
+    peer: { principal: { kind: 'owner' } } };
+  const result = await resolveApprovalOrigins(dependencies);
+  assert.deepEqual(result.origins.filter(row => row.kind === 'worker').map(row => [row.ticketId, row.ownerThreadId]),
+    [['ticket', 'main'], ['channel-ticket', 'channel']]);
+  assert(!result.origins.some(row => row.sessionId === 'bad-router'));
+  assert.equal(broken[0].mandate.source, undefined); // Never repair identities while reading.
+  assert.deepEqual(f.origins({ channelSource: { channel: 'feishu' } }), []);
+});
+
+test('channel source becoming incomplete during lookup invalidates only that source', async () => {
+  const f = fixture(); f.assignment.leaseUntil = Date.now() + 60000;
+  const source = { channel: 'feishu', sourceType: 'direct', conversationId: 'chat' };
+  const thread = { id: 'channel', sessionId: 'channel-router', source, sourceKey: channelSessionKey(source) };
+  const state = { mainSessionId: 'router-main', threads: [thread] };
+  const result = await resolveApprovalOrigins({ store: { getState: async () => state, orchestration: f.database },
+    engine: { ticketOwnerScope: async id => ({ threadId: id, sessionIds: [id === 'main' ? 'router-main' : 'channel-router'] }) },
+    readPolicy: async id => { if (id === 'channel') delete thread.source.sourceType; return policy; },
+    peer: { principal: { kind: 'owner' } } });
+  assert.deepEqual(result.origins.map(row => row.ownerThreadId), ['main', 'main']);
+});

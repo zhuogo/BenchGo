@@ -3,17 +3,31 @@ import { validateTicketMandate } from './assessment-policy.mjs';
 import { workerAppliedTicket } from './worker-permissions.mjs';
 import { channelSessionKey } from './channel-policy.mjs';
 
+// Historical or incomplete records are not an identity. Skip only that source;
+// never infer a missing type or let one invalid record break the whole inbox.
+function verifiedChannelKey(source) {
+  if (typeof source?.channel !== 'string' || !source.channel || source.channel === 'desktop') return null;
+  try { return channelSessionKey(source); }
+  catch { return null; }
+}
+function sourceStillMatches(thread) {
+  return thread.sourceKey ? thread.sourceKey === verifiedChannelKey(thread.source)
+    : !thread.source?.channel || thread.source.channel === 'desktop';
+}
+
 /** Read-only presentation links. The official Worker request remains the only approval. */
 export function executionApprovalOrigins({ database, ownerScope, ownerSessionId, policy, now = Date.now(), toolName = 'assistant_external_action', channelSource }) {
   if (!ownerSessionId || !ownerScope?.threadId || !ownerScope.sessionIds?.includes(ownerSessionId)) return [];
+  const channelKey = channelSource ? verifiedChannelKey(channelSource) : null;
+  if (channelSource && !channelKey) return [];
   const origins = [];
   for (let offset = 0; ; offset += 100) {
     const tickets = database.listTickets({ ...(!channelSource ? { ownerSessionIds: ownerScope.sessionIds, ownerThreadId: ownerScope.threadId } : {}),
       archived: false, limit: 100, offset });
     for (const ticket of tickets) {
-      const owned = ticket.mandate && (channelSource ? ticket.mandate.source?.channel !== 'desktop'
-        && channelSessionKey(ticket.mandate.source) === channelSessionKey(channelSource) : ownsDesktopTicket(ticket, ownerScope));
-      if (!['open', 'waiting'].includes(ticket.status) || !ticket.mandate || !owned
+      if (!['open', 'waiting'].includes(ticket.status) || !ticket.mandate) continue;
+      const owned = channelSource ? verifiedChannelKey(ticket.mandate.source) === channelKey : ownsDesktopTicket(ticket, ownerScope);
+      if (!owned
         || !validateTicketMandate(ticket.mandate, { policy })) continue;
       for (const assignment of database.assignments(ticket.id)) {
         if (assignment.state !== 'claimed' || !assignment.owner || !Number.isFinite(assignment.leaseUntil) || assignment.leaseUntil <= now) continue;
@@ -53,7 +67,7 @@ export async function resolveApprovalOrigins({ store, engine, input = {}, peer, 
     ...(state.threads || []).filter(thread => thread.id !== 'main' && thread.sessionId && !thread.archived),
   ];
   for (const source of sources) {
-    if (source.sourceKey && source.sourceKey !== channelSessionKey(source.source)) continue;
+    if (!sourceStillMatches(source)) continue;
     const sourceTitle = source.title || '旁聊';
     if (!input.sessionId || input.sessionId === source.sessionId) origins.push({ kind: 'router', title: sourceTitle,
       sourceTitle, sessionId: source.sessionId, ownerSessionId: source.sessionId, ownerThreadId: source.id });
@@ -69,5 +83,5 @@ export async function resolveApprovalOrigins({ store, engine, input = {}, peer, 
   return { origins: origins.filter(origin => origin.ownerThreadId === 'main'
     ? latest.mainSessionId === origin.ownerSessionId
     : (latest.threads || []).some(thread => !thread.archived && thread.id === origin.ownerThreadId
-      && thread.sessionId === origin.ownerSessionId && (!thread.sourceKey || thread.sourceKey === channelSessionKey(thread.source)))) };
+      && thread.sessionId === origin.ownerSessionId && sourceStillMatches(thread))) };
 }
