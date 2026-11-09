@@ -128,3 +128,9 @@
 .ba-board-refreshing{animation:ba-board-refresh 900ms linear infinite}
 @keyframes ba-board-refresh{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.ba-board-refreshing{animation:none}}
+
+.ba-board-task-meta[data-checking]{flex-wrap:wrap;gap:3px 8px}
+.ba-board-task-meta[data-checking] .ba-board-chip{white-space:normal}
+.ba-board-task-meta[data-checking] .ba-board-summary{flex-basis:100%;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.6}
+.ba-board-task-meta[data-checking] .ba-board-summary::before{content:none}
+.ba-board-verification{font-size:11px;line-height:1.6;color:var(--ba-muted);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}

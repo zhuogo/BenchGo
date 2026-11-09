@@ -68,6 +68,14 @@ async function fixture() {
           document.dispatchEvent(new Event('benchgo:assistant-changed'));
         };
         if(state==='dynamic'){tickets.splice(1);goals.splice(0);window.updateExecution('running');}
+        window.updateUncertainty = stopping => {
+          const row=tickets.find(row=>row.id==='uncertain');
+          Object.assign(row,{status:stopping?'cancelling':'uncertain',instructionRevision:1,updatedAt:at(0),
+            execution:{instructionRevision:1,stopRequestedAt:stopping?at(1):null,stopConfirmationOverdue:stopping,
+              uncertainty:stopping?null:{reason:'执行回合缺少完整结束记录',attempts:3,nextCheckAt:at(-1),escalated:true},
+              worker:{id:'uncertain-worker',label:'主 Worker',status:'running',activity:'停止前正在读取资料',updatedAt:at(1)}}});
+          document.dispatchEvent(new Event('benchgo:assistant-changed'));
+        };
         window.makeLongGoal=()=>{goals[0].target='长期任务目标：'+ '保持页面一致与执行可靠。'.repeat(30);goals[0].error='当前错误：'+ 'long-unbroken-error-'.repeat(60);document.dispatchEvent(new Event('benchgo:assistant-changed'));};
         const config={name:'',models:[{modelId:'provider/opaque-model@2026-11'}],cardMotion:false};
         const api=async(name,args)=>{
@@ -398,5 +406,34 @@ test('long activity details keep current work and actions reachable while finish
       if(captureDir)await page.screenshot({path:join(captureDir,`${dark?'dark':'light'}-${width}-long-title-error.png`)});
       await page.keyboard.press('Escape');await detail.waitFor({state:'hidden'});
     }
+  }finally{await browser.close();}
+});
+
+
+test('activity board keeps verification facts visible and distinguishes a stopped gate from unconfirmed executor exit', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
+  const html=await fixture();
+  const browser=await chromium.launch({headless:true,executablePath});
+  try{
+    const page=await browser.newPage({viewport:{width:390,height:960},reducedMotion:'reduce'});
+    await page.route('**/*',route=>route.request().url()==='http://localhost/'?route.fulfill({contentType:'text/html',body:html}):route.abort());
+    await page.goto('http://localhost/');
+    await page.getByRole('button',{name:'展开看板',exact:true}).click();
+    await page.evaluate(()=>window.updateUncertainty(false));
+    const row=page.locator('[data-task-key="ticket:uncertain"]');
+    await row.getByText('执行回合缺少完整结束记录',{exact:true}).waitFor();
+    await row.locator('.ba-board-verification').getByText(/自动核查已查 3 次.*下次/).waitFor();
+    assert(await row.locator('.ba-board-verification').isVisible(),'inspection facts are visible without opening details');
+    await row.getByText('执行异常 · 核查仍无结论',{exact:true}).waitFor();
+    if(captureDir)await page.screenshot({path:join(captureDir,'verification-visible-390.png'),fullPage:true});
+    await page.evaluate(()=>window.updateUncertainty(true));
+    await row.getByText('停止已生效 · 执行端未确认退出',{exact:true}).waitFor();
+    await row.getByRole('button').click();
+    const detail=page.getByRole('dialog');
+    await detail.getByText('等待执行端退出',{exact:true}).waitFor();
+    assert.equal(await detail.getByRole('button',{name:'停止工单',exact:true}).count(),0);
+    await detail.getByText(/后续动作已拦截，但执行端仍未确认退出/).waitFor();
+    assert.equal(await page.evaluate(()=>window.apiCalls.some(([name])=>['ticketStop','ticketResume'].includes(name))),false);
+    assert(await detail.evaluate(node=>node.scrollWidth<=node.clientWidth),'status detail fits the narrow dialog');
+    if(captureDir)await page.screenshot({path:join(captureDir,'stop-unconfirmed-390.png'),fullPage:true});
   }finally{await browser.close();}
 });

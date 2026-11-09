@@ -10,7 +10,7 @@ export const inactiveActivityStates = new Set(['paused', 'pausing', 'cancelling'
 export const attentionActivityStates = new Set(['waiting', 'delivery_pending', 'awaiting_user', 'continuation_wait', 'blocked', 'uncertain', 'failed']);
 export const liveActivityStates = status => !terminalActivityStates.has(status) && !inactiveActivityStates.has(status);
 export const activeActivityStates = status => liveActivityStates(status) && !attentionActivityStates.has(status);
-export const activityLabels = { open: '已接收', queued: '等待执行', claimed: '执行中', active: '进行中', verifying: '正在保存结果', completed: '已完成', waiting: '等待处理', awaiting_user: '等待你的答复', delivery_pending: '等待交付', continuation_wait: '等待恢复条件', paused: '已暂停', pausing: '正在暂停', resuming: '正在恢复', cancelling: '正在停止', cancelled: '已停止', failed: '执行失败', uncertain: '待核实', blocked: '受阻', closed: '已结束' };
+export const activityLabels = { open: '已接收', queued: '等待执行', claimed: '执行中', active: '进行中', verifying: '正在保存结果', completed: '已完成', waiting: '等待处理', awaiting_user: '等待你的答复', delivery_pending: '等待交付', continuation_wait: '等待恢复条件', paused: '已暂停', pausing: '正在暂停', resuming: '正在恢复', cancelling: '停止已生效 · 正在结束执行', cancelled: '已停止', failed: '执行失败', uncertain: '执行状态待同步', blocked: '受阻', closed: '已结束' };
 
 /** Runtime activity is evidence about an execution, never a replacement for Ticket state. */
 function currentExecution(row, assignment) {
@@ -51,7 +51,7 @@ export function activityTask(row, kind) {
     : assignment ? `执行阶段 · ${activityLabels[assignment.state] || assignment.state || '状态未知'}` : '已接收 · 等待分配';
   const progressing = ['open', 'claimed', 'verifying'].includes(status);
   const progressSummary = progressing ? status === 'verifying' ? phase : executionSummary(execution) : '';
-  return { ...row, execution, progressSummary, key: `${kind}:${row.id}`, kind, status, detail, phase, title: kind === 'ticket' ? normalizeTicketTitle(row.taskMeta?.title || row.title, row.target) : row.target || row.title || row.objective || '未命名任务', time: row.updatedAt || row.createdAt };
+  return { ...row, execution, stateLabel: waiting?.label || activityLabels[status] || status, executionNotice: waiting?.executionNotice, verificationSummary: waiting?.verificationSummary, progressSummary, key: `${kind}:${row.id}`, kind, status, detail, phase, title: kind === 'ticket' ? normalizeTicketTitle(row.taskMeta?.title || row.title, row.target) : row.target || row.title || row.objective || '未命名任务', time: row.updatedAt || row.createdAt };
 }
 
 export function groupHomeActivity(rows = []) {

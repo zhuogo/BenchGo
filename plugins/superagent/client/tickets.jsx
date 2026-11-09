@@ -19,7 +19,7 @@ import { normalizeTicketTitle } from '../src/ticket-title.mjs';
 import { activityTask } from './activity-data.mjs';
 import { TaskExecution } from './task-execution.jsx';
 
-const states = { open: '已开单', queued: '等待执行', claimed: '执行中', completed: '已完成', waiting: '等待处理', awaiting_user: '等待你的答复', delivery_pending: '等待交付', continuation_wait: '等待恢复条件', pausing: '正在暂停', paused: '已暂停', failed: '执行失败', cancelling: '正在停止 · 等待执行确认', cancelled: '已停止', uncertain: '执行待核实', blocked: '授权已变更' };
+const states = { open: '已开单', queued: '等待执行', claimed: '执行中', completed: '已完成', waiting: '等待处理', awaiting_user: '等待你的答复', delivery_pending: '等待交付', continuation_wait: '等待恢复条件', pausing: '正在暂停', paused: '已暂停', failed: '执行失败', cancelling: '停止已生效 · 正在结束执行', cancelled: '已停止', uncertain: '执行状态待同步', blocked: '授权已变更' };
 const deliveryStates = { queued: '等待交付', claimed: '正在交付', sent: '渠道已接收', uncertain: '发送结果待核实' };
 const terminalStates = ['completed', 'failed', 'cancelled', 'closed'];
 
@@ -50,7 +50,7 @@ export function TicketChange({ api, ticket, reload, onDirtyChange, startOpen = f
         <label className="ba-connection-field"><span>变更原因</span><textarea required maxLength={10000} rows={2} value={draft.reason} onChange={event => update({ reason: event.target.value })} /></label></fieldset>
       {ticket.instructionRevision !== draft.expectedInstructionRevision && <p role="status" className="ba-note">工单已有新版本。请保留所需内容，关闭表单后重新打开。</p>}
       {error && <p role="alert">{error}</p>}<div className="ba-row-actions"><Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={() => setDraft(null)}>取消</Button><Button type="submit" className="ba-primary" disabled={busy || pending || ticket.instructionRevision !== draft.expectedInstructionRevision || !draft.target.trim() || !draft.reason.trim()}>{busy ? '提交中…' : '保存并排队'}</Button></div>
-    </form> : <div><TaskIconButton icon={terminal ? 'refresh' : 'edit'} label={terminal ? '创建关联调整单' : '修订要求'} disabled={pending} onClick={open} />{pending && <p className="ba-note">正在核实停止或外部效果，请先确认当前状态。</p>}</div>}
+    </form> : <div><TaskIconButton icon={terminal ? 'refresh' : 'edit'} label={terminal ? '创建关联调整单' : '修订要求'} disabled={pending} onClick={open} />{pending && <p className="ba-note">系统正在自动核查停止状态或外部效果，核查结束后可调整要求。</p>}</div>}
     {!!ticket.revisions?.length && <Disclosure title={<>要求修订历史</>}><ol>{ticket.revisions.map(row => <li key={row.instructionRevision}><strong>版本 {row.instructionRevision} · {({ original: '原始要求', revise: '修订', adjustment: '关联调整' })[row.operation] || row.operation}</strong><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.target}</p>{row.acceptance && <p>验收条件：{row.acceptance}</p>}{row.reason && <p>原因：{row.reason}</p>}<small>{row.createdAt}</small></li>)}</ol></Disclosure>}
   </section>;
 }
@@ -100,7 +100,7 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
     void load(); return () => { controller.abort(); clearTimeout(timer); };
   }, [api, generation, archiveScope, selectedId]);
   const stop = async row => {
-    if (!await confirm({ title: `停止“${normalizeTicketTitle(row.taskMeta?.title || row.title, row.target)}”？`, description: '已发生的外部操作仍会保留，运行中的执行需要核实。', confirmLabel: '停止工单', destructive: true })) return;
+    if (!await confirm({ title: `停止“${normalizeTicketTitle(row.taskMeta?.title || row.title, row.target)}”？`, description: '停止后将拦截后续动作，并等待执行端结束当前执行；已发生的外部操作仍会保留。', confirmLabel: '停止工单', destructive: true })) return;
     setBusy(row.id);
     try { await api('ticketStop', { ticketId: row.id }); setGeneration(value => value + 1); }
     catch (cause) { setError(cause.message); }
@@ -116,7 +116,7 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
       const { result, delivery, safetyWait } = ticketSnapshot(row);
       const activity = activityTask(row, 'ticket'), status = activity.status;
       const waiting = ticketWaiting(row);
-      const stateLabel = safetyWait ? '待核实外部效果' : status === 'verifying' ? '正在保存结果' : states[status] || status;
+      const stateLabel = waiting?.label || (safetyWait ? '等待核实外部效果' : status === 'verifying' ? '正在保存结果' : states[status] || status);
       const recovery = continuationRecovery(row);
       const title = normalizeTicketTitle(row.taskMeta?.title || row.title, row.target);
       const summary = waiting?.reason || activity.progressSummary || activity.detail || activity.phase;
@@ -126,16 +126,16 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
         if (recovery) actions.push({ icon: 'play', label: recovery.label, onClick: () => lifecycle(row, 'ticketResume', recovery.input), disabled: busy !== null });
         else if (row.status === 'paused' && !safetyWait) actions.push({ icon: 'play', label: '继续工单', onClick: () => lifecycle(row, 'ticketResume'), disabled: busy !== null });
         else if (!['pausing', 'cancelling', 'uncertain', 'blocked'].includes(status)) actions.push({ icon: 'pause', label: '暂停工单', onClick: () => lifecycle(row, 'ticketPause'), disabled: busy !== null });
-        actions.push({ icon: 'stop', label: '停止工单', onClick: () => stop(row), disabled: busy !== null });
+        if (status !== 'cancelling') actions.push({ icon: 'stop', label: '停止工单', onClick: () => stop(row), disabled: busy !== null });
       } else actions.push({ icon: 'refresh', label: '创建关联调整单', onClick: () => { setChangeId(row.id); setSelectedId(row.id); }, disabled: busy !== null });
-      return <React.Fragment key={row.id}>{!detailOnly && <TaskListRow api={api} kind="ticket" row={row} title={title} summary={<><span className="ba-task-state" data-state={status}>{stateLabel}</span><Tooltip label={summary} onlyWhenClipped><span className="ba-task-summary" tabIndex={0}>{summary}</span></Tooltip>{updatedLabel && <time className="ba-task-updated" dateTime={row.updatedAt}>更新 {updatedLabel}</time>}</>} completed={row.status === 'completed'} completionLocked={row.status === 'completed' && !row.taskMeta?.completed} onChanged={() => setGeneration(value => value + 1)} onOpen={() => { setChangeId(null); setSelectedId(row.id); }} actions={actions} onDirtyChange={dirtyEditor(`rename:${row.id}`)} />}
+      return <React.Fragment key={row.id}>{!detailOnly && <TaskListRow api={api} kind="ticket" row={row} title={title} verification={waiting?.verificationSummary} summary={<><span className="ba-task-state" data-state={status}>{stateLabel}</span><Tooltip label={summary} onlyWhenClipped><span className="ba-task-summary" tabIndex={0}>{summary}</span></Tooltip>{updatedLabel && <time className="ba-task-updated" dateTime={row.updatedAt}>更新 {updatedLabel}</time>}</>} completed={row.status === 'completed'} completionLocked={row.status === 'completed' && !row.taskMeta?.completed} onChanged={() => setGeneration(value => value + 1)} onOpen={() => { setChangeId(null); setSelectedId(row.id); }} actions={actions} onDirtyChange={dirtyEditor(`rename:${row.id}`)} />}
       {detailOnly && <TaskDetail open title={<TaskStatusTitle title={title} status={status} label={stateLabel} />} dirty={detailDirty} onClose={() => { setSelectedId(null); setChangeId(null); }} footer={(row.executionSession?.available || (!terminalStates.includes(row.status) && !waiting)) && <div className="ba-row-actions">
         {row.executionSession?.available && <Button variant="ghost" disabled={!onOpenExecution || busy !== null} onClick={async () => {
           setBusy(`execution:${row.id}`); setError('');
           try { await onOpenExecution(row.executionSession); } catch (cause) { setError(`执行会话暂时无法打开：${cause.message || cause}`); }
           finally { setBusy(null); }
         }}>{busy === `execution:${row.id}` ? '正在打开执行会话…' : '查看执行会话'}</Button>}
-        {!terminalStates.includes(row.status) && !waiting && <Button variant="outline" disabled={busy !== null} onClick={() => stop(row)}>{busy === row.id ? '正在停止…' : '停止工单'}</Button>}
+        {!terminalStates.includes(row.status) && !waiting && <Button variant="outline" disabled={busy !== null} onClick={() => stop(row)}>{busy === row.id ? '正在提交停止…' : '停止工单'}</Button>}
       </div>}>
         {error && <p role="alert">{error}</p>}
         <TicketWaiting key={`${row.id}:${row.instructionRevision}:${row.resultVersion}`} api={api} ticket={row} onRefresh={() => setGeneration(value => value + 1)} onOpenResources={() => setChangeId(row.id)} showQuestion={false} />

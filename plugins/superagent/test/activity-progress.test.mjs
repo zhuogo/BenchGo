@@ -88,15 +88,27 @@ test('changes arriving during a fetch are coalesced into one follow-up refresh',
   const unsubscribe = store.subscribe(() => {});
   env.document.dispatchEvent(new Event('benchgo:assistant-changed'));
   env.document.dispatchEvent(new Event('benchgo:assistant-changed'));
-  assert.equal(pending.length, 2, 'no overlapping request pair');
+  assert.equal(pending.length, 3, 'one shared active/archive/goal request batch');
   pending.forEach(call => call.resolve(call.action === 'tickets' ? { tickets: [] } : { goals: [] }));
   await flush();
   assert.deepEqual([...env.timers.values()], [0], 'invalidate the potentially old response once');
   const [next] = env.timers.keys(); next();
-  assert.equal(pending.length, 4);
-  pending.slice(2).forEach(call => call.resolve(call.action === 'tickets' ? { tickets: [{ id: 'new', status: 'open' }] } : { goals: [] }));
+  assert.equal(pending.length, 6);
+  pending.slice(3).forEach(call => call.resolve(call.action === 'tickets' ? { tickets: [{ id: 'new', status: 'open' }] } : { goals: [] }));
   await flush();
   assert.equal(store.getSnapshot().rows[0].id, 'new');
   assert.deepEqual([...env.timers.values()], [10000]);
   unsubscribe();
+});
+
+
+test('task summaries retain verification facts and the stop fence without claiming executor exit', () => {
+  const row = ticket(); row.status = 'uncertain'; row.execution.uncertainty = { reason: '执行尚未完整结束', attempts: 3, nextCheckAt: 1794218400000, escalated: true };
+  const task = activityTask(row, 'ticket');
+  assert.equal(task.stateLabel, '执行异常 · 核查仍无结论');
+  assert.equal(task.detail, '执行尚未完整结束');
+  assert.match(task.verificationSummary, /已查 3 次.*下次/);
+  const stopping = activityTask({ ...row, status: 'cancelling', execution: { ...row.execution, stopRequestedAt: '2026-11-09T10:00:00Z', stopConfirmationOverdue: true } }, 'ticket');
+  assert.equal(stopping.stateLabel, '停止已生效 · 执行端未确认退出');
+  assert.equal(stopping.progressSummary, '');
 });

@@ -40,3 +40,5 @@
 
 .ba-task-instructions h3{margin:0 0 8px;font-size:14px;font-weight:600}
 .ba-task-instructions p{margin:0 0 16px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65}
+
+.ba-task-verification{font-size:12px;line-height:1.6;color:var(--cmd-muted,#85858a);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}

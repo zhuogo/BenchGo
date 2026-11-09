@@ -5,3 +5,10 @@
 .ba-ticket-waiting>.ba-row-actions{margin-top:4px}
 .ba-ticket-waiting .ba-ticket-attention{margin:0}
 .ba-ticket-waiting>[role=alert]{color:var(--dsw-alias-danger-default,#c14b45)}
+
+.ba-ticket-verification-facts{display:flex;flex-wrap:wrap;gap:8px 24px;margin:4px 0 0;padding:12px;border-radius:10px;background:var(--ba-hover);font-size:12px}
+.ba-ticket-verification-facts>div{display:flex;flex-wrap:wrap;gap:4px 10px;min-width:0}
+.ba-ticket-verification-facts dt{color:var(--ba-muted)}
+.ba-ticket-verification-facts dd{margin:0;overflow-wrap:anywhere;color:var(--dsw-alias-label-primary)}
+.ba-ticket-verification-facts .ba-ticket-verification-escalated,.ba-ticket-verification-facts .ba-ticket-verification-blocked{flex-basis:100%}
+.ba-ticket-waiting[data-state=cancelling]>strong{align-items:flex-start}

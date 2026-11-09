@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -26,6 +27,7 @@ async function fixture() {
       import { AssistantHome } from './plugins/superagent/client/home.jsx';
       import { Evaluations } from './plugins/superagent/client/evaluations.jsx';
       import css from './plugins/superagent/client/style.css';
+      import hostCss from './plugins/benchgo/client/style.css';
       const root = createRoot(document.getElementById('root')); let serial = 0;
       window.renderScenario = (surface, state='data', overrides={}) => {
         window.calls=[];
@@ -63,7 +65,7 @@ async function fixture() {
           const ctx={sessions:{retain(){if(control.state==='error')throw Error('test connection');return {ready:control.state==='loading'?new Promise(()=>{}):Promise.resolve(),release(){window.calls.push(['release']);}}}},uiConversation:{binding(){return {activate:view=>window.calls.push(['activate',view])}}}};
           content=<AssistantConversation ctx={ctx} sessionId='session' SessionProvider={({children})=><>{children}</>} renderSlot={()=><div data-connected=''>聊天已就绪</div>}/>;
         }
-        root.render(<div className='ba-root' key={++serial}><style>{css}</style><main style={{width:'100%',padding:24}}>{content}</main></div>);
+        root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main style={{width:'100%',padding:24}}>{content}</main></div>);
       };
     ` },
     bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-waiting-test-output'), format: 'iife', jsx: 'automatic',
@@ -75,7 +77,7 @@ async function fixture() {
   });
   const css = result.outputFiles.filter(file => file.path.endsWith('.css')).map(file => file.text).join('\n');
   const js = result.outputFiles.find(file => file.path.endsWith('.js')).text.replaceAll('</script', '<\\/script');
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>${css}</style></head><body><div id="root"></div><script>${js}</script></body></html>`;
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>:root{--dsw-alias-label-primary:#252528;--dsw-alias-label-secondary:#74747c;--dsw-alias-bg-base:#ffffff}html[data-theme=dark]{--dsw-alias-label-primary:#ededf1;--dsw-alias-label-secondary:#a7a7b2;--dsw-alias-bg-base:#1b1b20}body{margin:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:system-ui,sans-serif}${css}</style></head><body><div id="root"></div><script>${js}</script></body></html>`;
 }
 
 test('real waiting controls and chat/ticket connection states remain actionable and version-bound', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
@@ -94,12 +96,12 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     const button = name => page.getByRole('button', { name, exact: true });
     await scenario('waiting');
     assert.equal(await button('重试核验').count(), 0);
-    await button('刷新状态').click();
+    await button('刷新记录').click();
     assert.deepEqual((await calls()).slice(0, 1), [['refresh']]);
     await page.evaluate(() => window.control.fail = true);
     await button('停止工单').click();
     await page.getByRole('alert').waitFor();
-    assert.match(await page.getByRole('alert').innerText(), /先刷新状态/);
+    assert.match(await page.getByRole('alert').innerText(), /可刷新记录/);
     // Tickets parked by the execution-time gate removed on 2026-11-06 resume without added time.
     await scenario('waiting', 'data', { continuationWait: { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 3 } });
     assert.equal(await page.getByRole('button', { name: /增加10分钟|额度/ }).count(), 0);
@@ -111,13 +113,56 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     assert.match(await page.getByRole('alert').innerText(), /MANDATE_REVOKED/);
     for (const code of ['EXECUTION_EFFECTS_UNKNOWN', 'EXECUTION_NOT_VERIFIED', 'EXECUTION_STOP_UNCONFIRMED']) {
       await scenario('waiting', 'data', { continuationWait: { code, sourceResultVersion: 3 } });
-      await button('核实当前状态').waitFor();
+      await button('刷新记录').waitFor();
       assert.equal(await page.getByRole('button', { name: /继续|恢复|重试核验/ }).count(), 0);
-      await button('核实当前状态').click();
+      await button('刷新记录').click();
       assert.deepEqual(await calls(), [['refresh']]);
       await button('停止工单').click();
       assert((await calls()).some(([name, input]) => name === 'ticketStop' && input.ticketId === 'original'));
     }
+    const screenshots = process.env.BENCHGO_WAITING_SCREENSHOTS;
+    if (screenshots) await mkdir(screenshots, { recursive: true });
+    const uncertainty = { reasonCode: 'WORKER_TURN_INCOMPLETE', reason: '执行回合未提交完整结束记录。', attempts: 2, nextCheckAt: 1794218400000, escalated: false };
+    for (const theme of ['light', 'dark']) for (const width of [1440, 390]) {
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      await page.setViewportSize({ width, height: 960 });
+      for (const [name, overrides] of [
+        ['checking', { status: 'uncertain', execution: { uncertainty } }],
+        ['escalated', { status: 'uncertain', execution: { uncertainty: { ...uncertainty, attempts: 4, escalated: true } } }],
+        ['missing-evidence', { status: 'uncertain', execution: { uncertainty: { ...uncertainty, attempts: 0, nextCheckAt: null, automatic: false, recoveryBlocked: '缺少完整结束证据，不据此重跑。' } } }],
+        ['stopping', { status: 'cancelling', execution: { stopRequestedAt: 1794218300000, stopConfirmationOverdue: false } }],
+        ['stop-overdue', { status: 'cancelling', execution: { uncertainty, stopRequestedAt: 1794218300000, stopConfirmationOverdue: true } }],
+      ]) {
+        await scenario('waiting', 'data', overrides);
+        const waiting = page.getByLabel('工单等待状态');
+        await waiting.getByText(name.startsWith('stop') ? /后续动作已拦截/ : uncertainty.reason, { exact: !name.startsWith('stop') }).waitFor();
+        if (name === 'checking' || name === 'stop-overdue') await waiting.getByText('已查 2 次', { exact: true }).waitFor();
+        if (name === 'missing-evidence') {
+          await waiting.getByText('等待完整恢复证据后安排', { exact: true }).waitFor();
+          await waiting.getByText('缺少完整结束证据，不据此重跑。', { exact: true }).waitFor();
+          assert.equal(await waiting.getByText(/正在自动核查|继续自动核查/).count(), 0);
+        }
+        if (name === 'escalated') {
+          await waiting.getByText('已查 4 次', { exact: true }).waitFor();
+          await waiting.getByText('已提请 Router 跟进，系统继续自动核查。', { exact: true }).waitFor();
+        }
+        if (name === 'stop-overdue') await waiting.getByText(/执行端未确认退出/).waitFor();
+        if (name.startsWith('stop')) assert.equal(await button('停止工单').count(), 0, 'a stopping ticket cannot issue a second stop');
+        assert.equal(await waiting.getByText(/请先核实|核实当前状态/).count(), 0);
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name}/${width} fits viewport`);
+        assert.deepEqual(await calls(), [], 'status facts do not dispatch verification or repeat Worker work');
+        if (screenshots) await page.screenshot({ path: join(screenshots, `${name}-${theme}-${width}.png`), fullPage: true });
+      }
+    }
+    await page.evaluate(() => document.documentElement.dataset.theme = 'light');
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await scenario('tickets', 'data', { status: 'uncertain', execution: { instructionRevision: 2, uncertainty } });
+    const row = page.locator('.ba-task-list-row').first();
+    await row.locator('.ba-task-verification').getByText(/已查 2 次.*下次/).waitFor();
+    await row.locator('.ba-task-summary').getByText(uncertainty.reason, { exact: true }).waitFor();
+    await page.getByRole('tab', { name: '看板', exact: true }).click();
+    await page.locator('.ba-ticket-board .ba-task-verification').getByText(/已查 2 次.*下次/).waitFor();
+    assert.equal((await calls()).some(([name]) => ['ticketResume', 'ticketStop'].includes(name)), false);
     const question = { id: 'question', state: 'waiting', origin: 'worker', instructionRevision: 2, resultVersion: 3,
       question: { question: '请选择本次范围', options: [{ label: '全部' }] } };
     await scenario('chat', 'data', { attentions: [question] });
@@ -136,7 +181,7 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     assert((await calls()).some(([name, next]) => name === 'resources' && next === 'tasks'));
     await scenario('tickets');
     await page.locator('.ba-task-list').getByText('核验工作结果', { exact: true }).click();
-    await page.getByRole('dialog').getByRole('heading', { name: '核验工作结果', exact: true }).waitFor();
+    await page.getByRole('dialog').getByRole('heading').filter({ hasText: '核验工作结果' }).waitFor();
     await scenario('chat', 'empty');
     await page.locator('.ba-home').waitFor();
     for (const state of ['loading', 'error', 'data']) {
@@ -167,10 +212,10 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     await page.getByRole('dialog').waitFor();
     assert.equal(await page.getByRole('dialog').getByRole('button', { name: '停止工单', exact: true }).count(), 1);
     assert.equal(await button('重试核验').count(), 0);
-    assert(await button('刷新状态').isVisible());
+    assert(await button('刷新记录').isVisible());
     await scenario('tickets', 'linked');
     await page.getByRole('dialog').waitFor();
-    assert.equal(await page.getByRole('dialog').getByRole('heading', { name: '核验工作结果', exact: true }).count(), 1);
+    assert.equal(await page.getByRole('dialog').getByRole('heading').filter({ hasText: '核验工作结果' }).count(), 1);
     await scenario('tickets', 'missing');
     await page.getByText('关联工单暂不可用', { exact: true }).waitFor();
     assert(await button('重新读取').isVisible());
@@ -185,7 +230,8 @@ test('intake audit evaluations render loading, empty, error and original data at
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort());
     await page.goto('http://localhost/');
-    for (const width of [1440, 390]) {
+    for (const theme of ['light', 'dark']) for (const width of [1440, 390]) {
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
       await page.setViewportSize({ width, height: 900 });
       for (const [state, label] of [['loading', '正在读取评估'], ['empty', '暂无待处置评估'], ['error', '评估暂时无法读取'], ['data', '原始评估正文']]) {
         await page.evaluate(state => window.renderScenario('evaluations', state), state);
