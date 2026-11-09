@@ -85,6 +85,31 @@ test('file candidates exempt waits, stale identities, unknown or changed outputs
   }
 });
 
+test('an older positive file observation cannot resolve a newer model incident, while a new positive observation can', async t => {
+  let phase = 0, judged = 0;
+  const f = await fixture(t, { readFacts: api => {
+    const current = observedFiles(api.time, 20 + phase);
+    if (phase) {
+      const observation = current.executions[0].modelEvidence.outputObservation;
+      const changed = observation.observations[phase === 1 ? 0 : 1];
+      changed.comparison = { beforeFiles: 1, afterFiles: 1, added: 0, modified: 1, deleted: 0, unchanged: 0, netChanged: true };
+      observation.comparison = { added: 0, modified: 1, deleted: 0, netChanged: true };
+    }
+    return current;
+  }, judge: async () => { judged++; return { status: 'judged', classification: 'no-progress', signalEligible: true,
+    reason: '受保护文件检查点无净变化', evidenceWatermark: 20 }; } });
+  await f.runtime.check(f.receipt());
+  assert.equal(judged, 1); assert.equal(f.store.snapshot().incidents[0].active, true);
+  phase = 1; f.time += 60000;
+  await f.runtime.check(f.receipt());
+  assert.equal(f.store.snapshot().incidents[0].active, true);
+  assert.deepEqual(f.calls.signals.map(row => row.phase), ['opened']);
+  phase = 2; f.time += 60000;
+  await f.runtime.check(f.receipt());
+  assert.equal(judged, 1); assert.equal(f.store.snapshot().incidents[0].active, false);
+  assert.deepEqual(f.calls.signals.map(row => row.phase), ['opened', 'resolved']);
+});
+
 async function fixture(t, { config: overrides = {}, readFacts, sendSignal, judge } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-watchdog-runtime-'));
   let time = epoch, store, runtime;

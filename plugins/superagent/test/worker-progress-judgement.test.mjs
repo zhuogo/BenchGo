@@ -93,6 +93,29 @@ test('new activity cannot count the same completed file observation twice', asyn
   assert.equal((await service.evaluate(next)).code, 'EVIDENCE_UNCHANGED'); assert.equal(calls, 1);
 });
 
+test('no-progress cannot cite an older changed observation or incomplete session evidence', async () => {
+  for (const incomplete of [false, true]) {
+    const input = facts();
+    if (incomplete) input.facts.projections[0].complete = false;
+    else {
+      const changed = structuredClone(input.facts.entries[1]);
+      changed.seq = 7; changed.data.sequence = 8;
+      changed.data.completedAt = changed.data.startedAt;
+      changed.data.comparison = { beforeFiles: 1, afterFiles: 1, added: 0, modified: 1, deleted: 0, unchanged: 0, netChanged: true };
+      input.facts.entries.splice(1, 0, changed);
+    }
+    let requested = false;
+    const result = await judge({ requestText: async request => {
+      requested = true;
+      assert.ok(request.input.observation.unchangedFiles, 'the zero-change suffix itself must remain valid');
+      return { text: JSON.stringify({ ...JSON.parse(decision(request).text),
+        evidenceRefs: incomplete ? request.input.observation.unchangedFiles.evidenceRefs : ['execution:7'] }) };
+    } }).evaluate(input);
+    assert.equal(requested, true); assert.equal(result.status, 'judged');
+    assert.equal(result.classification, 'insufficient-evidence'); assert.equal(result.signalEligible, false); assert.equal(result.hits, 0);
+  }
+});
+
 test('normal observations, changed classification, and a new execution reset consecutive hits', async () => {
   let classification = 'no-progress';
   const service = judge({ requestText: async request => decision(request, classification) });
