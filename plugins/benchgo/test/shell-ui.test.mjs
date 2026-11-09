@@ -30,7 +30,7 @@ test('native desktop update and reconnect actions share a separate status seat a
   const css=await readFile(new URL('../client/style.css',import.meta.url),'utf8');
   assert(result.contents.indexOf('className="cmd-sidebar-status"') < result.contents.indexOf("{renderSlot('settings.launcher'"), 'keyboard order follows visual order');
   assert.match(css,/\.cmd-sidebar-status:empty\s*\{ display: none/);
-  assert.match(css,/\.cmd-projects\.cmd-narrow\)\s*> \[class\*="_regionArea"\]\s*\{[\s\S]*?display: flex;[\s\S]*?flex: none;[\s\S]*?order: 1;/);
+  assert.match(css,/\.cmd-shell-sidebar:has\(\.cmd-projects\) \[class\*="_regionArea"\]\s*\{ flex: 1; min-height: 0;/);
   assert.match(css,/.cmd-narrow \.cmd-sidebar-nav \{ flex-direction: column; padding: 36px 0 0;/);
-  assert.match(css,/\[class\*="_root"\]:has\(\.cmd-projects\) \[class\*="_panelList"\]\s*\{[^}]*order: 0;/);
+  assert.match(css,/\.cmd-shell-sidebar \.cmd-sidebar-panels\s*\{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);[^}]*order: 0;/);
 });

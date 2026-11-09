@@ -62,7 +62,6 @@ export function mountWorkbenchClient(ctx) {
   let version = { sidebar: false, ssh: false, error: '' }; const listeners = new Set();
   const runtime = { sidebar: null, snapshot: () => version, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); } };
   const update = patch => { version = { ...version, ...patch }; listeners.forEach(fn => fn()); };
-  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL, order: 35, label: () => '工作台' }, () => <UIIcon name="folder" size={16} />));
   ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL, inject: () => ({ host: ctx, runtime }) }, WorkbenchPage));
   if (!localPage(ctx)) return;
   ctx.inject(sidebar.inject, child => {

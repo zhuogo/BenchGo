@@ -162,7 +162,7 @@ function mountSidebarProjects(ctx, open, newSession) {
   }, Projects));
 }
 
-function Projects({ host, open, newSession, expandSidebar, renderSlot, wide = true }) {
+function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavigation, wide = true }) {
   const activePanel = useSyncExternalStore(listener => host.layout.panelInfo.subscribe(listener), () => host.layout.panelInfo.getSnapshot().activePanelId);
   const modules = useSyncExternalStore(moduleSource.subscribe, moduleSource.getSnapshot);
   const harness = useSyncExternalStore(fn => host.sessions.list.subscribe(fn), () => host.sessions.list.getSnapshot());
@@ -308,6 +308,7 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, wide = tr
       <Tooltip label="新聊天" delayMs={450} portal><button type="button" className="cmd-new-chat" onClick={() => newSession()} aria-label="创建新聊天"><UIIcon name="edit" size={16} /></button></Tooltip>
       <Tooltip label="搜索对话" delayMs={450} portal><button type="button" className="cmd-search-toggle" onClick={() => { if (!wide) expandSidebar?.(); if (wide && searching) setFilter(''); setSearching(!wide || !searching); }} aria-label="搜索对话" aria-expanded={searching} aria-pressed={searching}><UIIcon name="search" size={16} /></button></Tooltip>
     </nav>
+    {panelNavigation}
     {wide && searching && <div className="cmd-search-panel"><label className="cmd-search-field"><UIIcon name="search" size={16} /><input autoFocus className="cmd-search" placeholder="搜索对话…" aria-label="搜索对话内容" value={filter} onChange={e => setFilter(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') { setSearching(false); setFilter(''); } }} /><Hint label="关闭搜索"><button type="button" aria-label="关闭搜索" onClick={() => { setSearching(false); setFilter(''); }}><UIIcon name="plus" size={14} className="cmd-search-close" /></button></Hint></label></div>}
     {wide && <div className="cmd-sidebar-content">
     {showArchived && <div className="cmd-section-title cmd-archive-toolbar"><span>已归档</span><Hint label="清空归档"><button type="button" aria-label="清空归档" disabled={busy || (!rows.some(item => item.archived) && !archivedThreadCount)} onClick={() => setConfirmClearArchive(true)}><UIIcon name="trash" size={14} /></button></Hint></div>}

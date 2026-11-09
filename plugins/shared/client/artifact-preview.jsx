@@ -1,13 +1,37 @@
 import { Tooltip, IconDownloadOutlineRegular, IconCodeOutlineRegular, IconInspectOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { BINARY_LIMIT, TEXT_LIMIT, checkOfficeArchive, decodeText, fileUrl, frameDocument, pdfUrl, previewKind, readPreview, visibleRows } from './preview-model.mjs';
 import { CustomSelect } from './custom-select.jsx';
+import { Button } from './ui/button.jsx';
+import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import css from './artifact-preview.css';
 
 const asset = name => new URL(`api/benchgo/preview-assets/${name}.js`, document.baseURI).href;
 const load = name => import(/* @vite-ignore */ asset(name));
 const textKinds = ['text', 'markdown', 'json', 'html'];
-function Frame({ html, title }) { return <iframe className="bg-preview-frame" title={title} sandbox="" referrerPolicy="no-referrer" srcDoc={frameDocument(html)} />; }
+function Frame({ html, title }) {
+  const frame = useRef(null), [scheme, setScheme] = useState('light');
+  useLayoutEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const read = () => {
+      const style = getComputedStyle(frame.current), rgb = style.backgroundColor.match(/^rgba?\((\d+)[, ]+(\d+)[, ]+(\d+)/);
+      const dark = rgb ? Number(rgb[1]) * .2126 + Number(rgb[2]) * .7152 + Number(rgb[3]) * .0722 < 128 : style.colorScheme === 'dark' || (style.colorScheme.includes('dark') && media.matches);
+      setScheme(dark ? 'dark' : 'light');
+    };
+    const observer = new MutationObserver(read);
+    for (let node = frame.current?.parentElement; node; node = node.parentElement) observer.observe(node, { attributes: true, attributeFilter: ['class', 'style', 'data-theme', 'data-ds-dark-theme'] });
+    read(); media.addEventListener('change', read);
+    return () => { observer.disconnect(); media.removeEventListener('change', read); };
+  }, []);
+  return <iframe ref={frame} className="bg-preview-frame" title={title} sandbox="" referrerPolicy="no-referrer" srcDoc={frameDocument(html, scheme)} />;
+}
+
+function PreviewState({ title, description, loading = false, error = false, onRetry }) {
+  return <div className="bg-preview-state" role={error ? 'alert' : 'status'} aria-busy={loading}>
+    <span className="bg-preview-state-icon" aria-hidden="true"><UIIcon name={loading ? 'refresh' : error ? 'close' : 'box'} size={24} /></span>
+    <strong>{title}</strong>{description && <p>{description}</p>}{onRetry && <Button variant="outline" onClick={onRetry}>重试</Button>}
+  </div>;
+}
 
 function JsonNode({ name, value, depth = 0 }) {
   const [open, setOpen] = useState(depth === 0), [count, setCount] = useState(50);
@@ -88,8 +112,9 @@ function Content({ file, kind, converted, source }) {
     })().catch(cause => { if (alive && !controller.signal.aborted) setError(cause.message || '预览失败'); });
     return () => { alive = false; controller.abort(); };
   }, [file.url, kind, converted, revision]);
-  if (error) return <div className="bg-preview-state" role="alert"><p>{error}</p><button type="button" onClick={() => setRevision(v => v + 1)}>重试</button><p className="bg-preview-note">也可以下载原文件，使用对应应用打开。</p></div>;
-  if (!data) return <div className="bg-preview-state" role="status">正在打开文件…</div>;
+  if (error) return <PreviewState title="暂时无法预览" description={error} error onRetry={() => setRevision(v => v + 1)} />;
+  if (!data) return <PreviewState title="正在打开文件…" description="正在读取内容，请稍候。" loading />;
+  if (textKinds.includes(data.kind) && !data.text?.trim()) return <PreviewState title="这个文件还是空的" description="文件尚未写入内容，可以返回继续浏览。" />;
   if (data.kind === 'sheet') return <Sheet bytes={data.bytes} onRetry={() => setRevision(v => v + 1)} />;
   if (data.kind === 'pdf') return <Pdf bytes={data.bytes} onRetry={() => setRevision(v => v + 1)} />;
   return <>
@@ -106,13 +131,14 @@ export function ArtifactPreview({ file, onClose }) {
   try { url = fileUrl(file.url).href; const target = fileUrl(file.downloadUrl || file.url); target.searchParams.set('download', '1'); download = target.href; } catch { /* Invalid descriptors are not navigable. */ }
   const media = ['image', 'audio', 'video'].includes(kind);
   return <section className="bg-preview" aria-label="文件预览" onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose?.(); } }}><style>{css}</style>
-    <header className="bg-preview-header"><button ref={back} type="button" onClick={onClose}>← 返回</button><h2 title={file.name}>{file.name}</h2>{download && <Tooltip label="下载原文件" side="top" delayMs={350} portal><a className="bg-preview-download" href={download} download aria-label={`下载 ${file.name}`}><IconDownloadOutlineRegular size={18} /></a></Tooltip>}{url && ['markdown', 'json', 'html'].includes(kind) && <Tooltip label={source ? '查看预览' : '查看原文'} side="top" delayMs={350} portal><button type="button" className="bg-preview-mode" aria-label={source ? '查看预览' : '查看原文'} onClick={() => setSource(value => !value)}>{source ? <IconInspectOutlineRegular size={18} /> : <IconCodeOutlineRegular size={18} />}</button></Tooltip>}</header>
+    <header className="bg-preview-header"><Button ref={back} variant="ghost" className="bg-preview-back" onClick={onClose}>← 返回</Button><h2 title={file.name}>{file.name}</h2><div className="bg-preview-actions">{download && <Tooltip label="下载原文件" side="top" delayMs={350} portal><a className="bg-preview-download" href={download} download aria-label={`下载 ${file.name}`}><IconDownloadOutlineRegular size={18} /></a></Tooltip>}{url && ['markdown', 'json', 'html'].includes(kind) && <Tooltip label={source ? '查看预览' : '查看原文'} side="top" delayMs={350} portal><Button variant="ghost" className="bg-preview-mode" aria-label={source ? '查看预览' : '查看原文'} aria-pressed={source} onClick={() => setSource(value => !value)}>{source ? <IconInspectOutlineRegular size={18} /> : <IconCodeOutlineRegular size={18} />}</Button></Tooltip>}</div></header>
     {['docx', 'doc'].includes(file.name.split('.').at(-1)?.toLowerCase()) && <div className="bg-preview-tools"><button type="button" aria-pressed={converted} onClick={() => setConverted(v => !v)}>{converted ? '文档预览' : '尝试 PDF 预览'}</button></div>}
-    {!url ? <p role="alert">文件地址不可用</p> : media ? <Media kind={kind} url={url} name={file.name} /> : <Content key={file.url + converted} file={file} kind={kind} converted={converted} source={source} />}
+    {!url ? <PreviewState title="文件地址不可用" description="请返回列表刷新后重新打开。" error /> : media ? <Media key={url} kind={kind} url={url} name={file.name} /> : <Content key={file.url + converted} file={file} kind={kind} converted={converted} source={source} />}
   </section>;
 }
 function Media({ kind, url, name }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) return <p role="alert">浏览器无法预览此格式，请下载原文件查看。</p>;
-  return <div className="bg-preview-media">{kind === 'image' ? <img src={url} alt={name} onError={() => setFailed(true)} /> : kind === 'audio' ? <audio src={url} controls preload="metadata" onError={() => setFailed(true)} /> : <video src={url} controls preload="metadata" onError={() => setFailed(true)} />}</div>;
+  const [state, setState] = useState('loading'), [revision, setRevision] = useState(0);
+  if (state === 'error') return <PreviewState title="暂时无法预览" description="媒体加载失败或格式不受支持，也可以下载原文件查看。" error onRetry={() => { setState('loading'); setRevision(value => value + 1); }} />;
+  const ready = () => setState('ready'), failed = () => setState('error');
+  return <><div className="bg-preview-media" aria-busy={state === 'loading'} key={revision}>{kind === 'image' ? <img src={url} alt={name} onLoad={ready} onError={failed} /> : kind === 'audio' ? <audio src={url} controls preload="metadata" onLoadedMetadata={ready} onError={failed} /> : <video src={url} controls preload="metadata" onLoadedMetadata={ready} onError={failed} />}</div>{state === 'loading' && <PreviewState title="正在打开文件…" description="正在读取媒体内容。" loading />}</>;
 }
