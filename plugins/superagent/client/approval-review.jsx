@@ -1,10 +1,10 @@
-import React, { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from '../../shared/client/ui/button.jsx';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 import { ResourceState } from './resource-state.jsx';
 import { retainAssistantSession } from './session-retain.mjs';
-import { reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewSessionOpenError, reviewRequestKey, sameReviewOrigin } from './approval-review.mjs';
+import { reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewDisplayText, reviewSessionOpenError, reviewRequestKey, sameReviewOrigin } from './approval-review.mjs';
 import css from './approval-review.css';
 
 const ApprovalContext = createContext(null), EMPTY_STATUSES = new Map();
@@ -18,10 +18,10 @@ export function OfficialReviewApproval({ renderFactorySlot }) {
     pending, origin, value: reviewApprovalResponse({ pending, origin, readOrigins, isCurrent }),
   };
   const responder = response.current.value, details = reviewActionDetails(pending);
-  const answer = async outcome => { try { onError(''); await responder.answer(outcome); } catch (error) { onError(error.message); throw error; } };
+  const answer = async outcome => { try { onError(''); await responder.answer(outcome); } catch (error) { onError(reviewConnectionError(error)); throw error; } };
   return renderFactorySlot('conversation.approval.card', {
     requestKey: pending.key, callId: pending.callId,
-    title: details ? '允许执行这一次外部动作？' : pending.displayReason?.zh || pending.reason || pending.displayReason?.en || '是否允许本次操作？',
+    title: details ? '允许执行这一次外部动作？' : reviewDisplayText(pending.displayReason?.zh || pending.reason || pending.displayReason?.en || '是否允许本次操作？'),
     description: '批准仅覆盖当前请求，不会授予后续动作权限。',
     canAnswer: responder.canAnswer, onAllow: () => answer('allowed-once'), onReject: () => answer('rejected'),
   });
@@ -32,11 +32,11 @@ function ApprovalDetail({ entry, api, current, SessionProvider, renderSlot }) {
   const { origin, pending, reference } = entry;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, [pending]);
   const details = reviewActionDetails(pending), target = details?.target;
-  const source = origin.sourceTitle || (origin.ownerThreadId === 'main' ? '主聊天' : '旁聊');
+  const source = reviewDisplayText(origin.sourceTitle || (origin.ownerThreadId === 'main' ? '主聊天' : '旁聊'));
   const readOrigins = async () => (await api('approvalOrigins', { sessionId: origin.sessionId, toolName: pending.toolName })).origins || [];
   const content = details?.content?.text ?? (details ? JSON.stringify(details.content, null, 2) : null);
   return <article className="ba-review-detail" aria-label="审核详情">
-    <header><span className="ba-review-eyebrow">{source} · {origin.kind === 'worker' ? '任务操作' : '对话操作'}</span><h3>{origin.title || '待授权操作'}</h3></header>
+    <header><span className="ba-review-eyebrow">{source} · {origin.kind === 'worker' ? '任务操作' : '对话操作'}</span><h3>{reviewDisplayText(origin.title || '待授权操作')}</h3></header>
     {details && <section className="ba-review-action" aria-label="本次动作对象与内容"><dl>
       <div><dt>动作</dt><dd>{({ 'external-send': '对外发送与分享', payment: '支付购买', 'password-change': '修改密码', 'account-delete': '删除账号' })[details.category] || details.category}</dd></div>
       <div><dt>对象</dt><dd>{target.channel && <span className="ba-review-target-channel">{target.channel}</span>}{target.chatId || target.conversationId || (typeof target === 'string' ? target : JSON.stringify(target, null, 2))}</dd></div>
@@ -52,7 +52,7 @@ function ApprovalDetail({ entry, api, current, SessionProvider, renderSlot }) {
 
 function ConnectionErrors({ items }) {
   return <section className="ba-review-connection-errors" aria-label="会话连接详情"><header><p>以下会话尚未连接，无法确认其中的待审核操作。</p></header><ul>{items.map(item => <li key={item.origin.sessionId}>
-    <strong>{item.origin.sourceTitle || (item.origin.ownerThreadId === 'main' ? '主聊天' : '旁聊')}{item.origin.title ? ` · ${item.origin.title}` : ''}</strong>
+    <strong>{reviewDisplayText(item.origin.sourceTitle || (item.origin.ownerThreadId === 'main' ? '主聊天' : '旁聊'))}{item.origin.title ? ` · ${reviewDisplayText(item.origin.title)}` : ''}</strong>
     <span>{({ ensure: '准备对话', retain: '保留会话', open: '打开会话' })[item.stage]}（{item.stage}）</span><pre>{item.error}</pre>
   </li>)}</ul></section>;
 }
@@ -60,12 +60,26 @@ function ConnectionErrors({ items }) {
 function releaseConnection(item) { item.controller.abort(); item.unsubscribe?.(); item.reference?.release(); }
 
 /** One owner-scoped index; requests and answers remain in official Session scopes. */
-export function ApprovalReview({ ctx, api, SessionProvider, renderSlot }) {
+export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact = false, active = true, onCountChange }) {
   const [origins, setOrigins] = useState(null), [error, setError] = useState(''), [generation, setGeneration] = useState(0);
   const [connections, setConnections] = useState(new Map()), [selectedKey, setSelectedKey] = useState(null);
   const source = ctx.uiSession?.sessionStatus;
   const statuses = useSyncExternalStore(listener => source?.subscribe(listener) || (() => {}), () => source?.getSnapshot() || EMPTY_STATUSES);
-  const retained = useRef(new Map()), current = useRef([]);
+  const retained = useRef(new Map()), current = useRef([]), back = useRef(null), navigation = useRef(null);
+  const openDetail = (key, event) => {
+    const positions = [];
+    for (let node = event.currentTarget.parentElement; node; node = node.parentElement) positions.push([node, node.scrollLeft, node.scrollTop]);
+    navigation.current = { opener: event.currentTarget, positions };
+    setSelectedKey(key);
+  };
+  useLayoutEffect(() => {
+    if (selectedKey) { back.current?.focus({ preventScroll: true }); return; }
+    const saved = navigation.current;
+    if (!saved) return;
+    for (const [node, left, top] of saved.positions) if (node.isConnected) { node.scrollLeft = left; node.scrollTop = top; }
+    if (saved.opener.isConnected) saved.opener.focus({ preventScroll: true });
+    navigation.current = null;
+  }, [selectedKey]);
   const retry = () => { for (const item of retained.current.values()) releaseConnection(item); retained.current.clear(); setConnections(new Map()); setOrigins(null); setError(''); setGeneration(value => value + 1); };
   useEffect(() => {
     const controller = new AbortController(); let timer, inFlight = false, dirty = false;
@@ -74,7 +88,7 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot }) {
       if (controller.signal.aborted || document.hidden) return;
       if (inFlight) { dirty = true; return; } inFlight = true;
       try { const response = await api('approvalOrigins', {}, controller.signal); if (!controller.signal.aborted) { setOrigins(response.origins || []); setError(''); } }
-      catch (cause) { if (!controller.signal.aborted) { setOrigins(null); setError(cause.message); } }
+      catch (cause) { if (!controller.signal.aborted) { setOrigins(null); setError(reviewConnectionError(cause)); } }
       finally { inFlight = false; if (dirty && !controller.signal.aborted) { dirty = false; schedule(); } }
     };
     const unsubscribe = source?.subscribe(schedule);
@@ -123,17 +137,31 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot }) {
       ? [{ origin, pending, reference: connection.reference, key: reviewRequestKey(origin, pending) }] : [];
   });
   current.current = error ? [] : entries;
-  const selected = entries.find(entry => entry.key === selectedKey) || entries[0];
+  const selected = entries.find(entry => entry.key === selectedKey);
   const connectionErrors = [...connections.values()].filter(item => item.error), connecting = origins?.some(origin => !connections.get(origin.sessionId)?.ready && !connections.get(origin.sessionId)?.error);
-  return <section className="ba-approval-review" aria-label="审核"><style>{css}</style>
-    <header className="ba-review-heading"><div><h2>审核 <span>{origins === null || (!entries.length && (connecting || connectionErrors.length > 0)) ? '—' : entries.length}</span></h2><p>查看待授权的操作，决定这一次是否执行。</p></div><Button type="button" variant="ghost" onClick={retry}><UIIcon name="refresh" size={16} />刷新</Button></header>
-    {!error && connectionErrors.length > 0 && <ConnectionErrors items={connectionErrors} />}
-    {error ? <ResourceState kind="error" title="审核列表暂时无法读取" description={error} />
+  const selectedConnectionError = connectionErrors.find(item => {
+    const pending = statuses.get(item.origin.sessionId)?.pendingInteraction;
+    return pending && reviewRequestKey(item.origin, pending) === selectedKey;
+  });
+  const count = error || origins === null || connecting || connectionErrors.length ? null : entries.length;
+  useEffect(() => { onCountChange?.(count); }, [count, onCountChange]);
+  return <section className={`ba-approval-review${compact ? ' is-compact' : ''}`} aria-label="审核" hidden={!active} onKeyDown={event => {
+    if (selectedKey && event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); setSelectedKey(null); }
+  }}><style>{css}</style>
+    <header className="ba-review-heading"><div>{selectedKey ? <Button ref={back} type="button" variant="ghost" onClick={() => setSelectedKey(null)}><UIIcon name="chevronLeft" size={16} />返回审核列表</Button> : <><h2>审核 <span>{count ?? (entries.length ? `${entries.length}+` : '—')}</span></h2><p>查看待授权的操作，决定这一次是否执行。</p></>}</div><Button type="button" variant="ghost" aria-label="刷新审核" onClick={retry}><UIIcon name="refresh" size={16} />刷新</Button></header>
+    <div hidden={!!selectedKey} className="ba-review-overview">
+    {!selectedKey && !error && connectionErrors.length > 0 && <ConnectionErrors items={connectionErrors} />}
+    {error ? !selectedKey && <ResourceState kind="error" title="审核列表暂时无法读取" description={error} />
       : origins === null || (!entries.length && connecting) ? <ResourceState kind="loading" title="正在同步待审核操作" description="正在连接真实会话，读取仍可答复的授权请求。" />
       : !entries.length && connectionErrors.length ? <ResourceState kind="error" title="部分会话暂未连接" description="暂时无法确认这些会话是否有待审核操作。" />
       : !entries.length ? <ResourceState icon="check" title="没有待审核的操作" description="需要你授权时，Router 会在原聊天里提醒；你可以到这里查看对象与内容。" />
-      : <><div className="ba-review-layout"><nav className="ba-review-list" aria-label="待审核操作">{entries.map(entry => <button type="button" className="ba-review-row" key={entry.key} aria-current={entry.key === selected?.key ? 'true' : undefined} onClick={() => setSelectedKey(entry.key)}><span className="ba-review-row-icon"><ResourceIcon name="key" size={18} /></span><span className="ba-review-row-copy"><strong>{entry.origin.title || '待授权操作'}</strong><span>{entry.origin.sourceTitle || (entry.origin.ownerThreadId === 'main' ? '主聊天' : '旁聊')} · {entry.origin.kind === 'worker' ? '任务操作' : '对话操作'}</span><small>等待你的决定</small></span><span className="ba-review-row-arrow"><UIIcon name="chevronLeft" size={16} /></span></button>)}</nav>
-          {selected && <ApprovalDetail key={selected.key} entry={selected} api={api} current={current} SessionProvider={SessionProvider} renderSlot={renderSlot} />}</div></>}
+      : <nav className="ba-review-list" aria-label="待审核操作">{entries.map(entry => <button type="button" className="ba-review-row" key={entry.key} onClick={event => openDetail(entry.key, event)}><span className="ba-review-row-icon"><ResourceIcon name="key" size={18} /></span><span className="ba-review-row-copy"><strong>{reviewDisplayText(entry.origin.title || '待授权操作')}</strong><span>{reviewDisplayText(entry.origin.sourceTitle || (entry.origin.ownerThreadId === 'main' ? '主聊天' : '旁聊'))} · {entry.origin.kind === 'worker' ? '任务操作' : '对话操作'}</span><small>等待你的决定</small></span><span className="ba-review-row-arrow"><UIIcon name="chevronLeft" size={16} /></span></button>)}</nav>}
+    </div>
+    {selectedKey && (error ? <ResourceState kind="error" title="审核列表暂时无法读取" description={error} />
+      : selected ? <ApprovalDetail key={selected.key} entry={selected} api={api} current={current} SessionProvider={SessionProvider} renderSlot={renderSlot} />
+      : selectedConnectionError ? <ResourceState kind="error" title="此审核所属会话暂未连接" description={selectedConnectionError.error} />
+      : origins === null || connecting ? <ResourceState kind="loading" title="正在核对审核状态" />
+      : <ResourceState icon="check" title="此审核已处理或失效" description="原请求已不可答复。返回列表查看仍需你决定的操作。" />)}
   </section>;
 }
 

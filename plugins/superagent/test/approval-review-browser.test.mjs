@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -29,7 +29,7 @@ async function fixture() {
       return <div data-session-scope={sessionId}><ApprovalCard {...props} t={key=>labels[key]||key} renderSlot={(_name,{callId})=><pre data-call-id={callId}>原会话工具调用详情</pre>}/></div>;
     }}/>;}
     window.renderScenario=(mode='data')=>{
-      window.answers=[];window.calls=[];window.retains=[];window.releases=[];window.trace=[];window.mode=mode;const listeners=new Set();
+      window.answers=[];window.calls=[];window.retains=[];window.releases=[];window.trace=[];window.reviewCounts=[];window.mode=mode;const listeners=new Set();
       const controller=new AbortController();
       const frozen={category:'external-send',origin:null,target:{channel:'feishu',chatId:'private-chat'},content:{text:'BENCHGO_APPROVAL_ONCE'}};
       const worker=new PendingApproval('worker-session',{toolName:'assistant_external_action',callId:'call-original',reason:'批准本次具体外部动作（仅本次有效）：\\n'+JSON.stringify(frozen),signal:controller.signal});
@@ -42,6 +42,7 @@ async function fixture() {
       const origin={kind:'worker',ticketId:'ticket',title:'发送飞书验证消息',sourceTitle:'主聊天',assignmentId:'assignment',runId:'run',sessionId:'worker-session',ownerThreadId:'main',ownerSessionId:'router-main'};
       const routerOrigin={kind:'router',title:'扩展调研范围',sourceTitle:'客户研究旁聊',sessionId:'router-side',ownerSessionId:'router-side',ownerThreadId:'side'};
       let origins=[origin,routerOrigin,{kind:'router',title:'普通提问',sessionId:'question-session',ownerSessionId:'question-session',ownerThreadId:'question'}];
+      window.addReviewCopies=()=>{for(let index=0;index<24;index++){const sessionId='extra-'+index;const pending=new PendingApproval(sessionId,{toolName:'assistant_external_action',reason:'受控验证动作 '+index});pending.result.catch(()=>{});statuses.set(sessionId,{pendingInteraction:pending});origins.push({...origin,title:'受控验证动作 '+index,sessionId,runId:'run-'+index});}statuses=new Map(statuses);publish();document.dispatchEvent(new Event('benchgo:assistant-changed'));};
       window.stop=()=>{origins=origins.filter(item=>item!==origin);controller.abort(Error('工单已停止'));statuses=new Map(statuses);statuses.delete(worker.sessionId);publish();document.dispatchEvent(new Event('benchgo:assistant-changed'));};
       window.answerElsewhere=()=>worker.answer('rejected');window.removeRouter=()=>{origins=origins.filter(item=>item!==routerOrigin);document.dispatchEvent(new Event('benchgo:assistant-changed'));};
       const opened=new Map();window.failOpened=(id)=>{const entry=opened.get(id);entry.state={openState:'error',openError:Error('会话已断开',{cause:Error('原始日志无法读取')})};for(const listener of entry.listeners)listener();};
@@ -52,7 +53,9 @@ async function fixture() {
           return {sessionId:input.threadId==='side'?(window.mode==='replacement'?'router-new':'router-side'):'question-session'};}
         if(window.mode==='loading')return new Promise(()=>{});if(window.mode==='error')throw Error('审核服务暂时不可用');
         return {origins:window.mode==='empty'?[]:input.sessionId?origins.filter(origin=>origin.sessionId===input.sessionId):origins};};
-      root.render(<div key={++serial} className='ba-root'><style>{hostCss}{css}</style><main style={{padding:24,maxWidth:1120,margin:'auto',boxSizing:'border-box'}}><ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={()=> <CardSlot/>}/></main></div>);
+      let active=true;const scenarioKey=++serial;const counts=value=>window.reviewCounts.push(value);
+      const render=()=>root.render(<div key={scenarioKey} className='ba-root'><style>{hostCss}{css}</style><main style={{padding:24,maxWidth:1120,margin:'auto',boxSizing:'border-box'}}><ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={()=> <CardSlot/>} compact={mode==='compact'} active={active} onCountChange={counts}/>{mode==='double'&&<ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={()=> <CardSlot/>}/>}</main></div>);
+      window.setReviewActive=value=>{active=value;render();};render();
     };
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-review-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
@@ -60,9 +63,10 @@ async function fixture() {
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.woff2': 'dataurl', '.woff': 'dataurl', '.ttf': 'dataurl' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   const script = bundle.outputFiles.find(file => file.path.endsWith('.js')).text;
   const styles = bundle.outputFiles.filter(file => file.path.endsWith('.css')).map(file => file.text).join('\n');
+  const theme = (await Promise.all(['base.css', 'design-platform.css', 'focus.css'].map(name => readFile(join(root, 'deepseek-harness/packages/client/ui-theme/src/styles', name), 'utf8')))).join('\n');
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
-    body{margin:0;font-family:Arial,sans-serif;background:#fafafa;color:#202124}.ba-root{height:auto!important;min-width:0!important}
-    :root{--dsw-radius-xl:12px;--dsw-alias-state-warn-secondary:#ddd4bb;--dsw-specific-input-major:white;--dsw-alias-state-warn-tertiary:#fff9eb;--dsw-alias-state-warn-primary:#88641c;--dsw-alias-label-primary:#202124}
+    ${theme}
+    body{margin:0;font:14px/1.6 var(--dsw-font-family);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}.ba-root{height:auto!important;min-width:0!important}
     ${styles}</style></head><body><div id="root"></div><script>${script.replaceAll('</script', '<\\/script')}</script></body></html>`;
 }
 
@@ -73,6 +77,7 @@ test('review Tab renders official Worker and Router approvals in four states; de
   try {
     const page = await browser.newPage(), errors = [];
     page.setDefaultTimeout(6000); page.on('pageerror', error => errors.push(error.message));
+    const openWorker = async () => { await page.getByRole('button', { name: /发送飞书验证消息 主聊天/ }).click(); await page.getByRole('button', { name: '允许本次', exact: true }).waitFor(); };
     const html = await fixture();
     await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort());
     await page.goto('http://localhost/');
@@ -80,13 +85,14 @@ test('review Tab renders official Worker and Router approvals in four states; de
       await page.setViewportSize({ width, height: 960 });
       for (const [mode, text] of [['loading', '正在同步待审核操作'], ['empty', '没有待审核的操作'], ['error', '审核列表暂时无法读取'], ['data', 'BENCHGO_APPROVAL_ONCE']]) {
         await page.evaluate(mode => window.renderScenario(mode), mode);
+        if (mode === 'data') await page.getByRole('button', { name: /发送飞书验证消息 主聊天/ }).click();
         await page.getByText(text, { exact: true }).first().waitFor();
         if (mode === 'data') await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();
         else assert.equal(await page.locator('[data-approval-key]').count(), 0, mode);
         assert.equal(await page.getByText('始终允许', { exact: true }).count(), 0);
         assert.equal(await page.getByText('不得出现的无来源审批', { exact: true }).count(), 0);
         assert.equal(await page.getByText('普通提问', { exact: true }).count(), 0);
-        assert.equal(await page.getByRole('button', { name: '刷新', exact: true }).count(), 1);
+        assert.equal(await page.getByRole('button', { name: '刷新审核', exact: true }).count(), 1);
         assert.equal(await page.getByRole('button', { name: /^(刷新列表|重新读取|重新连接)$/ }).count(), 0);
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${mode}/${width} overflow`);
         if (screenshots) await page.screenshot({ path: join(screenshots, `${mode}-${width}.png`), fullPage: true });
@@ -107,33 +113,34 @@ test('review Tab renders official Worker and Router approvals in four states; de
     await page.waitForFunction(() => window.answers.length === 1);
     assert.deepEqual(await page.evaluate(() => window.answers), [{ sessionId: 'router-side', value: 'rejected' }]);
     await page.evaluate(() => window.renderScenario('data'));
-    await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();
+    await openWorker();
     await page.evaluate(() => window.stop());
     await page.waitForFunction(() => !document.querySelector('[data-session-scope="worker-session"]'));
     assert.deepEqual(await page.evaluate(() => window.answers), []);
     await page.evaluate(() => window.renderScenario('data'));
-    await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();
+    await openWorker();
     await page.evaluate(() => window.answerElsewhere());
     await page.waitForFunction(() => !document.querySelector('[data-session-scope="worker-session"]'));
     assert.deepEqual(await page.evaluate(() => window.answers), [{ sessionId: 'worker-session', value: 'rejected' }]);
     await page.evaluate(() => window.renderScenario('data'));
-    await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();
+    await openWorker();
     await page.evaluate(() => { window.mode = 'error'; document.dispatchEvent(new Event('benchgo:assistant-changed')); });
     await page.getByText('审核列表暂时无法读取', { exact: true }).waitFor();
     await page.waitForFunction(() => window.releases.includes('worker-session') && window.releases.includes('router-side'));
     assert.equal(await page.locator('[data-approval-key]').count(), 0);
     await page.evaluate(() => window.renderScenario('error'));
-    await page.getByRole('button', { name: '刷新', exact: true }).waitFor();
+    await page.getByRole('button', { name: '刷新审核', exact: true }).waitFor();
     await page.evaluate(() => { window.mode = 'data'; });
-    await page.getByRole('button', { name: '刷新', exact: true }).click();
-    await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();
+    await page.getByRole('button', { name: '刷新审核', exact: true }).click();
+    await openWorker();
     await page.evaluate(() => window.renderScenario('replacement'));
-    await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();
+    await openWorker();
     await page.waitForFunction(() => window.calls.some(call => call.action === 'ensure' && call.input.threadId === 'side'));
     assert(!(await page.evaluate(() => window.retains.includes('router-side'))));
     assert.equal(await page.getByRole('button', { name: /扩展调研范围 客户研究旁聊/ }).count(), 0);
     await page.evaluate(() => window.renderScenario('ensure-error'));
-    await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();
+    await openWorker();
+    await page.getByRole('button', { name: '返回审核列表', exact: true }).click();
     await page.getByText('以下会话尚未连接，无法确认其中的待审核操作。', {exact:true}).waitFor();
     await page.getByText('对话准备失败', {exact:true}).waitFor();
     await page.getByText('准备对话（ensure）', {exact:true}).waitFor();
@@ -159,12 +166,69 @@ test('review Tab renders official Worker and Router approvals in four states; de
       if(screenshots)await page.screenshot({path:join(screenshots,mode+'.png'),fullPage:true});
     }
     await page.evaluate(()=>window.renderScenario('data'));
-    await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();
+    await openWorker();
     await page.evaluate(()=>window.failOpened('worker-session'));
     await page.getByText('会话已断开；原因：原始日志无法读取', { exact: true }).waitFor();
-    assert.equal(await page.getByRole('button', { name: '允许本次', exact: true }).count(), 1); // Only the unrelated, still-open Router request remains.
+    assert.equal(await page.getByRole('button', { name: '允许本次', exact: true }).count(), 0); // A stale detail never automatically switches to another approval.
     assert.equal(await page.locator('[data-session-scope="worker-session"]').count(), 0);
     assert.deepEqual(await page.evaluate(()=>window.answers), []);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('review preserves its list through compact detail navigation and shares one approval across both mounted views', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 900 }, reducedMotion: 'reduce' }), errors = [];
+    page.setDefaultTimeout(6000); page.on('pageerror', error => errors.push(error.message));
+    const html = await fixture();
+    await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort());
+    await page.goto('http://localhost/');
+    await page.evaluate(() => window.renderScenario('compact'));
+    await page.waitForFunction(() => window.reviewCounts.at(-1) === 2);
+    assert.equal(await page.getByRole('button', { name: '允许本次', exact: true }).count(), 0, 'list does not open an approval implicitly');
+    await page.evaluate(() => window.addReviewCopies());
+    await page.waitForFunction(() => window.reviewCounts.at(-1) === 26);
+    const last = page.getByRole('button', { name: /受控验证动作 23 主聊天/ });
+    await last.scrollIntoViewIfNeeded(); await last.focus();
+    const node = await last.elementHandle(), scroll = await page.evaluate(() => document.documentElement.scrollTop);
+    await last.click();
+    await page.getByRole('button', { name: '返回审核列表', exact: true }).waitFor();
+    assert.equal(await page.getByRole('dialog').count(), 0, 'detail stays inside the review container');
+    assert(await node.evaluate(element => element.isConnected), 'the hidden list keeps its original rows');
+    assert.equal(await page.evaluate(() => document.activeElement.textContent.trim()), '返回审核列表');
+    await page.keyboard.press('Escape');
+    assert.equal(await last.evaluate(element => document.activeElement === element), true, 'return restores the original trigger focus');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollTop), scroll, 'return restores the list scroll position');
+    await page.getByRole('button', { name: /发送飞书验证消息 主聊天/ }).click();
+    let lightBackground;
+    for (const dark of [false, true]) {
+      await page.evaluate(dark => document.body.toggleAttribute('data-ds-dark-theme', dark), dark);
+      const background = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+      if (dark) assert.notEqual(background, lightBackground, 'the actual official dark theme is applied'); else lightBackground = background;
+      assert(await page.locator('.ba-approval-review').evaluate(element => element.scrollWidth <= element.clientWidth), 'compact detail fits its container');
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      if (process.env.BENCHGO_REVIEW_SCREENSHOTS) await page.screenshot({ path: join(process.env.BENCHGO_REVIEW_SCREENSHOTS, `${dark ? 'dark' : 'light'}-compact-detail.png`), fullPage: true });
+    }
+    await page.evaluate(() => window.setReviewActive(false));
+    await page.locator('.ba-approval-review').waitFor({ state: 'hidden' });
+    await page.evaluate(() => window.answerElsewhere());
+    await page.waitForFunction(() => window.reviewCounts.at(-1) === 25);
+    await page.evaluate(() => window.setReviewActive(true));
+    await page.getByText('此审核已处理或失效', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '允许本次', exact: true }).count(), 0, 'a hidden, settled card cannot revive');
+    await page.evaluate(() => window.renderScenario('double'));
+    const views = page.locator('.ba-approval-review');
+    await views.nth(0).getByRole('button', { name: /发送飞书验证消息 主聊天/ }).click();
+    await views.nth(1).getByRole('button', { name: /发送飞书验证消息 主聊天/ }).click();
+    await page.evaluate(() => {
+      const buttons = [...document.querySelectorAll('[data-approval-key] button')].filter(button => button.textContent.trim() === '允许本次');
+      buttons.forEach(button => button.click());
+    });
+    await page.waitForFunction(() => window.answers.length === 1);
+    assert.deepEqual(await page.evaluate(() => window.answers), [{ sessionId: 'worker-session', value: 'allowed-once' }], 'simultaneous review entries consume the official pending once');
+    await page.waitForFunction(() => [...document.querySelectorAll('.ba-approval-review')].every(element => element.textContent.includes('此审核已处理或失效')));
+    assert.equal(await page.getByRole('button', { name: '允许本次', exact: true }).count(), 0);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

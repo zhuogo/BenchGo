@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewSessionOpenError, sameReviewOrigin } from '../client/approval-review.mjs';
+import { reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewDisplayText, reviewDisplayValue, reviewSessionOpenError, sameReviewOrigin } from '../client/approval-review.mjs';
 
 const worker = { kind: 'worker', ticketId: 'ticket', assignmentId: 'assignment', runId: 'run', sessionId: 'worker', ownerSessionId: 'router', ownerThreadId: 'main' };
 const router = { kind: 'router', sessionId: 'router', ownerSessionId: 'router', ownerThreadId: 'main' };
@@ -62,4 +62,15 @@ test('settled ready still requires an actually open official Session and preserv
   state = { openState: 'open', openError: null }; assert.equal(reviewSessionOpenError(reference), '');
   const recursive = new Error('循环原因'); recursive.cause = recursive;
   assert.equal(reviewConnectionError(recursive), '循环原因');
+});
+
+test('review redacts credentials for display without mutating the frozen approval payload', () => {
+  const original = { target: { endpoint: 'https://name:secret@example.test/action', authorization: 'secret-auth', chatId: 'opaque-target-id', token: 'private-token-value' },
+    content: { text: 'Send this exact body\napi_key=private-value\nBearer private-token', password: 'private-password', nested: [{ refresh_token: 'private-refresh' }] } };
+  const before = JSON.stringify(original), value = reviewDisplayValue(original), display = JSON.stringify(value);
+  for (const secret of ['name:secret', 'secret-auth', 'private-value', 'private-token', 'private-password', 'private-refresh']) assert(!display.includes(secret), secret);
+  assert.equal(value.target.chatId, 'opaque-target-id', 'opaque business identifiers are not rewritten');
+  assert(value.content.text.startsWith('Send this exact body\n'));
+  assert.equal(JSON.stringify(original), before, 'redaction never changes the pending request or authority binding');
+  assert.equal(reviewDisplayText('-----BEGIN PRIVATE KEY-----\nprivate\n-----END PRIVATE KEY-----'), '[凭据已隐藏]');
 });

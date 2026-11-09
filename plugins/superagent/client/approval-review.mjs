@@ -28,8 +28,26 @@ export function reviewActionDetails(pending) {
   try {
     const value = JSON.parse(reason.slice(reason.indexOf('\n') + 1));
     if (!value || typeof value !== 'object' || !value.target || !value.content) return null;
-    return { category: value.category, origin: value.origin, target: value.target, content: value.content };
+    return reviewDisplayValue({ category: value.category, origin: value.origin, target: value.target, content: value.content });
   } catch { return null; }
+}
+
+/** Display-only redaction; the official request and its frozen action stay untouched. */
+export function reviewDisplayText(value = '') {
+  return String(value)
+    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gu, '[凭据已隐藏]')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9+/=_\-.]+/giu, '$1 [凭据已隐藏]')
+    .replace(/((?:password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization|cookie|密码|密钥)\s*[=:：]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&}\]]+)/giu, '$1[凭据已隐藏]')
+    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/giu, '$1[凭据已隐藏]@');
+}
+
+export function reviewDisplayValue(value) {
+  if (typeof value === 'string') return reviewDisplayText(value);
+  if (Array.isArray(value)) return value.map(reviewDisplayValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key,
+    /^(?:password|passwd|secret|credential|credentials|token|apikey|accesstoken|refreshtoken|clientsecret|privatekey|authorization|cookie|setcookie|密码|密钥)$/iu.test(key.replace(/[_\-\s]/gu, ''))
+      ? '[凭据已隐藏]' : reviewDisplayValue(entry)]));
 }
 
 export function reviewRequestKey(origin, pending) { return `${origin.kind}:${origin.sessionId}:${pending.key}`; }
@@ -39,7 +57,7 @@ export function reviewConnectionError(cause) {
   const messages = [], seen = new Set();
   for (let current = cause; current != null && !seen.has(current); current = current?.cause) {
     seen.add(current);
-    const message = typeof current?.message === 'string' ? current.message : String(current);
+    const message = reviewDisplayText(typeof current?.message === 'string' ? current.message : String(current));
     if (!messages.includes(message)) messages.push(message);
   }
   return messages.join('；原因：');
