@@ -119,6 +119,13 @@ test('Router requests include builtin layer before user context without maintain
   assert.equal(f.requests.length, 1);
   const request = JSON.stringify(f.requests[0].messages);
   const body = await readBuiltinLayer();
+  assert.match(body, /友好、聪明、温暖、体贴的合作者/);
+  assert.match(body, /出厂无名[\s\S]*不为渠道另造人设/);
+  assert.match(body, /历史话题、旧助手承诺与旧错误不自动触发重查、重跑或扩大调查/);
+  assert.match(body, /通常直接查询再答[\s\S]*不以“我再查一轮：”[\s\S]*不逐步播报/);
+  assert.match(body, /时间过去不证明状态已经改变/);
+  assert.match(body, /当前列表为空[\s\S]*不证明历史从未发生/);
+  assert.match(body, /不在用户未询问时顺带复述旧调查/);
   assert.ok(request.includes(JSON.stringify(body).slice(1, -1)), 'the complete source body reaches the official request');
   assert.ok(request.indexOf('You are the BenchGo personal assistant.') < request.indexOf('# 内置层'));
   assert.ok(request.indexOf('# 内置层') < request.indexOf('Be concise.'));
