@@ -73,28 +73,55 @@ test('Router streaming message keeps its mounted identity through official settl
     const page = await browser.newPage({ reducedMotion:'reduce' }), errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.setContent(html);
-    for (const kind of ['text', 'assistant_reply']) {
+    if(captureDir) await mkdir(captureDir,{recursive:true});
+    for (const width of [1440,390]) for (const kind of ['text', 'assistant_reply']) {
+      await page.setViewportSize({width,height:500});
       await page.evaluate(kind => window.renderHandoff('stream', kind), kind);
       const message = page.locator('[data-chat-key="message:reply:human"]');
       await message.getByText('同一条完整回复',{exact:true}).waitFor();
+      await page.evaluate(() => window.handoffLayout = () => {
+        const feed=document.querySelector('.ba-chat-feed');
+        const row=feed.querySelector('[data-chat-key="message:reply:human"]');
+        const box=node=>{const r=node.getBoundingClientRect();return {left:r.left,top:r.top+feed.scrollTop,width:r.width,height:r.height}};
+        return {scrollHeight:feed.scrollHeight,scrollTop:feed.scrollTop,row:box(row),body:box(row.querySelector('.ba-chat-body')),content:box(row.querySelector('.ba-chat-content'))};
+      });
+      const baseline=await page.evaluate(()=>window.handoffLayout()), frames=[{phase:'stream',...baseline}];
+      assert.equal(await message.locator('.ba-message-toolbar').getByRole('button').count(),0,'streaming controls stay inaccessible until the reply settles');
       await page.evaluate(() => {
         window.streamMessage = document.querySelector('[data-chat-key="message:reply:human"]');
+        window.streamParagraph = window.streamMessage.querySelector('p');
+        window.streamToolbar = window.streamMessage.querySelector('.ba-message-toolbar');
         window.removedStream = false;
         window.handoffObserver = new MutationObserver(records => {
           if (records.some(record => [...record.removedNodes].some(node => node === window.streamMessage || node.contains?.(window.streamMessage)))) window.removedStream = true;
         });
         window.handoffObserver.observe(document.querySelector('.ba-chat-feed'),{childList:true,subtree:true});
       });
+      if(captureDir) await page.screenshot({path:join(captureDir,`handoff-${width}-${kind}-stream.png`),fullPage:true});
       for (const phase of ['settled', 'completed', 'history']) {
-        await page.evaluate(({phase,kind}) => window.renderHandoff(phase,kind),{phase,kind});
+        const phaseFrames=await page.evaluate(async ({phase,kind}) => {
+          window.renderHandoff(phase,kind);
+          const frames=[];
+          for(let frame=0;frame<4;frame++) {
+            await new Promise(requestAnimationFrame);
+            frames.push({phase,frame,...window.handoffLayout(),sameParagraph:window.streamParagraph===window.streamMessage.querySelector('p'),sameToolbar:window.streamToolbar===window.streamMessage.querySelector('.ba-message-toolbar')});
+          }
+          return frames;
+        },{phase,kind});
         await message.getByText('同一条完整回复',{exact:true}).waitFor();
         assert.equal(await message.count(),1);
         assert(await message.evaluate(node=>node===window.streamMessage),`${kind}/${phase}: same mounted article`);
         assert.equal(await page.evaluate(()=>window.removedStream),false,`${kind}/${phase}: message never disappears`);
         assert.equal(await page.getByText('PRIVATE',{exact:true}).count(),0);
+        frames.push(...phaseFrames);
+        if(captureDir) await writeFile(join(captureDir,`handoff-${width}-${kind}-frames.json`),JSON.stringify(frames,null,2));
+        for(const {phase:_,frame,sameParagraph,sameToolbar,...layout} of phaseFrames) {
+          assert(sameParagraph&&sameToolbar,`${width}/${kind}/${phase}/${frame}: paragraph and action nodes stay mounted`);
+          assert.deepEqual(layout,baseline,`${width}/${kind}/${phase}/${frame}: identical content must retain its body width, height and scroll position`);
+        }
         if(captureDir) {
           await mkdir(captureDir,{recursive:true});
-          await page.screenshot({path:join(captureDir,`handoff-${kind}-${phase}.png`),fullPage:true});
+          await page.screenshot({path:join(captureDir,`handoff-${width}-${kind}-${phase}.png`),fullPage:true});
         }
       }
       await page.evaluate(()=>window.handoffObserver.disconnect());
@@ -208,9 +235,9 @@ async function fixture() {
         root.render(<div className="ba-root ba-official-conversation" data-assistant-chat=""><div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll=""><QuietChat home={home} session={{running:!ended}} chat={{legacy,timeline}} /></div></div></div>);
       };
       window.renderHandoff = (phase, kind) => {
-        const text = '同一条完整回复';
+        const text = '同一条完整回复\\n\\n'+'这是一段完整的长回复，用于核对最终接管前后相同内容的折行与滚动位置。'.repeat(8)+'\\n\\n~~~js\\nconst message = "BenchGo keeps your messages readable";\\nconsole.log(message);\\n~~~\\n\\n| 项目 | 结果 |\\n| --- | --- |\\n| 暗主题 | 文字和气泡清晰可辨 |\\n| 操作 | 复制、表情、用量 |';
         const user = { id:'human', role:'user', seq:8, text:'请回复', time:1793808000000 };
-        const reply = { id:'reply:human', requestId:'human', role:'assistant', kind:'final', text, time:1793808001000 };
+        const reply = { id:'reply:human', requestId:'human', role:'assistant', kind:'final', text, time:1793808060000 };
         const running = ['stream','settled'].includes(phase);
         const end = running ? undefined : {seq:12,time:1793808001000,data:{reason:{kind:['aborted','error'].includes(phase)?phase:'completed'}}};
         const turn = {turn:2,start:{seq:7},...(end?{end}:{})};
@@ -326,11 +353,16 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
       const measurements=await page.locator('.ba-chat-message').evaluateAll(nodes=>nodes.map(node=>{
         const rect=target=>{const r=target.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width}};
         const content=node.querySelector('.ba-chat-content'), toolbar=node.querySelector('.ba-message-toolbar');
-        return {role:node.dataset.role,body:rect(node.querySelector('.ba-chat-body')),content:rect(content),toolbar:rect(toolbar),feed:rect(node.closest('.ba-chat-feed')),buttons:[...toolbar.querySelectorAll('button')].map(button=>rect(button).width),color:getComputedStyle(content).color,background:getComputedStyle(content).backgroundColor};
+        return {key:node.dataset.chatKey,role:node.dataset.role,body:rect(node.querySelector('.ba-chat-body')),content:rect(content),toolbar:rect(toolbar),feed:rect(node.closest('.ba-chat-feed')),buttons:[...toolbar.querySelectorAll('button')].map(button=>rect(button).width),color:getComputedStyle(content).color,background:getComputedStyle(content).backgroundColor};
       }));
       for(const row of measurements){
-        assert(row.role==='user'?row.toolbar.right<=row.body.left:row.toolbar.left>=row.body.right,`${scenario}: ${row.role} toolbar must stay on its fixed side`);
-        assert(row.toolbar.top<row.content.bottom&&row.toolbar.bottom>row.content.top,`${scenario}: tools must remain beside the text, never below it`);
+        if((containerWidth||width)<=700) {
+          assert(row.toolbar.top>=row.content.bottom,`${scenario}: narrow containers keep controls below the full-width bubble`);
+          if(['message:long','message:code'].includes(row.key)) assert(row.body.width>=300,`${scenario}: long replies retain at least 300px of reading width`);
+        } else {
+          assert(row.role==='user'?row.toolbar.right<=row.body.left:row.toolbar.left>=row.body.right,`${scenario}: ${row.role} toolbar must stay on its fixed side`);
+          assert(row.toolbar.top<row.content.bottom&&row.toolbar.bottom>row.content.top,`${scenario}: wide containers keep tools beside the text`);
+        }
         assert(row.toolbar.left>=row.feed.left&&row.toolbar.right<=row.feed.right,`${scenario}: toolbar outside chat container`);
         assert(row.buttons.every(size=>size>=32),`${scenario}: toolbar buttons must not shrink`);
         if(row.role==='user') {
@@ -412,8 +444,8 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
     await touch.locator('.ba-message-toolbar').first().waitFor();
     const targets=await touch.locator('.ba-message-toolbar button').evaluateAll(nodes=>nodes.map(node=>({width:node.getBoundingClientRect().width,height:node.getBoundingClientRect().height,opacity:getComputedStyle(node.parentElement).opacity})));
     assert(targets.every(node=>node.width>=44&&node.height>=44&&node.opacity==='1'),'touch targets are visible and 44px');
-    const touchSides=await touch.locator('.ba-chat-message').evaluateAll(nodes=>nodes.map(node=>{const body=node.querySelector('.ba-chat-body').getBoundingClientRect(),tools=node.querySelector('.ba-message-toolbar').getBoundingClientRect();return {side:node.dataset.role==='user'?tools.right<=body.left:tools.left>=body.right,inside:tools.left>=0&&tools.right<=innerWidth}}));
-    assert(touchSides.every(row=>row.side&&row.inside),'touch tools also remain on the sides without overflow');
+    const touchSides=await touch.locator('.ba-chat-message').evaluateAll(nodes=>nodes.map(node=>{const body=node.querySelector('.ba-chat-body').getBoundingClientRect(),tools=node.querySelector('.ba-message-toolbar').getBoundingClientRect();return {below:tools.top>=body.bottom,inside:tools.left>=0&&tools.right<=innerWidth}}));
+    assert(touchSides.every(row=>row.below&&row.inside),'touch tools remain below readable bubbles without overflow');
     await shot(touch,'touch-390');
     assert.deepEqual(errors,[],'no browser runtime errors');
   } finally { await browser.close(); }

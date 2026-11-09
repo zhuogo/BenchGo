@@ -59,7 +59,7 @@ export function QuietChat({ home, session, chat }) {
         instructionRevision: row.currentInstructionRevision, results: row.currentResult ? [row.currentResult] : [] }).safetyWait;
       const attention = row.attention || row.currentAttention;
       const showAttention = attention && !verificationOnly && !rows.slice(index + 1).some(later => (later.attention || later.currentAttention)?.id === attention.id);
-      return <article className="ba-chat-message" data-chat-key={row.key} data-role={row.role} key={row.key}>
+      return <article className="ba-chat-message" data-chat-key={row.key} data-role={row.role} data-streaming={row.streaming ? 'true' : undefined} key={row.key}>
       <div className="ba-chat-body">
       <div className="ba-chat-content" aria-label={row.role === 'system' ? '消息状态' : row.kind === 'question-reply' ? '你的选择' : row.role === 'user' ? '你' : home.assistantName || 'BenchGo'}>
       {row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : row.role === 'assistant' ? <InteractiveReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={session.running || !!row.provisional} onSubmit={async (text, request) => { await sendInteractive(home.ctx.sessions, home.sessionId, text, request); void Promise.resolve(home.onRefresh?.()).catch(() => {}); }} /> : <div className="ba-chat-status" role="alert">
@@ -72,7 +72,7 @@ export function QuietChat({ home, session, chat }) {
       {showAttention && <TicketAttention key={attention.id} api={api} attention={attention} showQuestion={!row.attention} ticket={{ id: row.ticketId, status: row.ticketStatus, instructionRevision: row.currentInstructionRevision ?? row.instructionRevision, resultVersion: row.currentResultVersion ?? row.resultVersion, mandate: { source: { channel: 'desktop' } } }} onAnswered={home.onRefresh} />}
       {row.notification && row.role !== 'system' && !row.attention && row.eventId && row.options?.length > 0 && <div className="ba-chat-options" aria-label="回复选项（不代表审批）">{row.options.map(option => <Button variant="ghost" type="button" className="ba-quiet" key={option} disabled={busy || session.running || !!chosen[row.eventId]} onClick={() => run(async () => { await api('notificationOption', { eventId: row.eventId, threadId, text: option }); setChosen(value => ({ ...value, [row.eventId]: option })); await home.onRefresh?.(); })}>{option}{chosen[row.eventId] === option ? ' · 已发送' : ''}</Button>)}</div>}
       </div>
-      {!row.streaming && row.role !== 'system' && <MessageActions row={row} home={home} />}
+      {row.role !== 'system' && <MessageActions row={row} home={home} />}
     </article>; })}
     {!reply && awaitingChoice && <div className="ba-chat-work ba-chat-await" role="status">在下方选项卡中作答后继续</div>}
     {!reply && !awaitingChoice && (session.running || session.pendingSubmissions?.some(row => row.placement === 'transcript')) && <div className="ba-chat-work" role="status" aria-label="加载中"><span className="ba-loading-dots" aria-hidden="true"><i/><i/><i/></span></div>}

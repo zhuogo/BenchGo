@@ -68,7 +68,7 @@ export function projectReplyStream({ history = {}, chat, sessionId, running = fa
   const users = new Map(messages.filter(row => row.role === 'user').map(row => [row.id, row]));
   const make = (requestId, text, streaming, time) => ({
     id: `reply:${requestId}`, key: `message:reply:${requestId}`, requestId,
-    role: 'assistant', kind: 'final', text, content: [{ type: 'text', text }], streaming, time,
+    role: 'assistant', kind: 'final', text, content: [{ type: 'text', text }], streaming, time: time ?? users.get(requestId)?.time,
   });
   // Executed publication is authoritative, even when history is one refresh behind.
   for (const call of [...(rows.nodes || [])].reverse()) {

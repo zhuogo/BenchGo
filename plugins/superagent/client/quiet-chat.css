@@ -42,13 +42,16 @@
 .ba-message-actions{display:contents}
 .ba-message-toolbar{grid-column:var(--ba-tools-column);grid-row:1;align-self:center;position:relative;z-index:6;display:flex;align-items:center;gap:2px;box-sizing:border-box;width:max-content;padding:2px 4px;border:1px solid var(--dsw-alias-border-l3,#ddd);border-radius:999px;background:var(--dsw-alias-button-floating-fill,#fff);color:var(--dsw-alias-label-secondary,#666);box-shadow:0 3px 10px #0001;opacity:0;pointer-events:none;transition:opacity .15s ease}
 .ba-chat-message:hover .ba-message-toolbar,.ba-chat-message:focus-within .ba-message-toolbar,.ba-message-actions[data-open=true] .ba-message-toolbar{opacity:1;pointer-events:auto}
+/* Keep the settled action geometry throughout streaming; hidden controls cannot receive focus. */
+.ba-chat-message[data-streaming=true] .ba-message-actions{visibility:hidden}
+.ba-chat-message[data-streaming=true] .ba-message-toolbar{opacity:0;pointer-events:none}
 .ba-message-toolbar button,.ba-reaction-chip,.ba-action-popover button{display:inline-flex;align-items:center;justify-content:center;flex:none;border:0;background:transparent;color:inherit;border-radius:999px;cursor:pointer;min-width:32px;min-height:32px;padding:6px}
 .ba-message-toolbar button{border-radius:10px;transition:background .15s ease,color .15s ease}
 .ba-message-toolbar button:hover,.ba-message-toolbar button[aria-expanded=true],.ba-message-toolbar button[data-copied=true],.ba-action-popover button:hover{background:var(--dsw-alias-button-floating-hover,#eee);color:var(--dsw-alias-label-primary,#222)}
 .ba-message-toolbar button:active{background:var(--dsw-specific-bubble,#f3f3f3)}
 .ba-message-toolbar button:focus-visible,.ba-message-toolbar time:focus-visible,.ba-reaction-chip:focus-visible,.ba-action-popover:focus-visible,.ba-action-popover button:focus-visible{outline:2px solid var(--dsw-alias-label-secondary,#666);outline-offset:2px}
 .ba-message-toolbar svg{display:block;width:18px;height:18px}
-.ba-message-toolbar time{display:inline-flex;align-items:center;justify-content:center;flex:none;min-height:32px;box-sizing:border-box;font-size:12px;white-space:nowrap;padding:0 8px;margin-left:4px;border-left:1px solid var(--dsw-alias-border-l3,#ddd);border-radius:0;font-variant-numeric:tabular-nums;line-height:16px}
+.ba-message-toolbar time{display:inline-flex;align-items:center;justify-content:center;flex:none;width:96px;min-height:32px;box-sizing:border-box;font-size:12px;white-space:nowrap;padding:0 8px;margin-left:4px;border-left:1px solid var(--dsw-alias-border-l3,#ddd);border-radius:0;font-variant-numeric:tabular-nums;line-height:16px}
 .ba-message-toolbar .ba-message-time-icon{display:none}
 .ba-reaction-chip{grid-column:var(--ba-body-column);grid-row:2;justify-self:start;min-width:24px;min-height:24px;padding:3px;margin-top:4px;background:var(--dsw-specific-bubble,#f3f3f3);color:var(--dsw-alias-label-primary,#222);font-size:15px;animation:ba-reaction-in .18s ease-out}
 .ba-chat-message[data-role=user] .ba-reaction-chip{justify-self:end}
@@ -74,6 +77,6 @@
 .ba-chat-sr{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 @keyframes ba-loading{0%,70%,100%{opacity:.3;transform:translateY(0)}35%{opacity:1;transform:translateY(-3px)}}
 @keyframes ba-reaction-in{from{transform:scale(.8)}to{transform:scale(1)}}
-@container ba-chat (max-width:700px){.ba-quiet-chat{padding-left:16px;padding-right:16px}.ba-message-time-label{display:none}.ba-message-toolbar .ba-message-time-icon{display:block}.ba-message-toolbar time{width:32px;padding:0;margin-left:2px}}
+@container ba-chat (max-width:700px){.ba-quiet-chat{padding-left:16px;padding-right:16px}.ba-chat-message,.ba-chat-message[data-role=user]{--ba-body-column:1;--ba-tools-column:1;grid-template-columns:minmax(0,1fr);column-gap:0}.ba-message-toolbar{grid-row:3;justify-self:start;margin-top:6px}.ba-chat-message[data-role=user] .ba-message-toolbar{justify-self:end}.ba-action-error{grid-row:4}.ba-message-time-label{display:none}.ba-message-toolbar .ba-message-time-icon{display:block}.ba-message-toolbar time{width:32px;padding:0;margin-left:2px}}
 @media(hover:none),(pointer:coarse){.ba-message-toolbar{opacity:1;pointer-events:auto}.ba-message-toolbar button,.ba-message-toolbar time,.ba-action-popover button,.ba-reaction-chip,.ba-chat-bottom-button{min-width:44px;min-height:44px}}
 @media(prefers-reduced-motion:reduce){.ba-loading-dots i,.ba-reaction-chip{animation:none}.ba-message-toolbar,.ba-message-toolbar button,.ba-action-popover button,.ba-action-popover button span,.ba-chat-bottom,.ba-chat-bottom-button{transition:none;transform:none}.ba-action-popover button:hover span,.ba-chat-bottom-button:active{transform:none}}
