@@ -6,6 +6,35 @@ import { join } from 'node:path';
 import { createAssistantStore } from '../src/store.mjs';
 import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
 import { readAssessmentPolicy } from '../src/assessment-policy.mjs';
+import { installRoleHost, loadRolePackage } from './role-host-fixture.mjs';
+
+const loadHost = name => loadRolePackage('core/agent-loop', name);
+const { Context } = await loadHost('@deepseek-ai/cordis');
+const { createScope } = await loadHost('@deepseek-ai/dsh-scope');
+// Keep execution/transcript controls local while composing the real upstream role services.
+async function installExecutionRoleHost(t, ctx) {
+  const host = new Context();
+  t.after(() => host.fiber.dispose());
+  for (const name of ['session', 'session-projection', 'system-prompt', 'tools', 'agent'])
+    await host.plugin((await loadHost(`@deepseek-ai/dsh-${name}`)).default);
+  await installRoleHost(host);
+  for (const name of ['agentPresets', 'permissionPresets', 'sandboxPolicy', 'approval']) ctx[name] = host[name];
+  ctx.on ??= (...args) => host.on(...args);
+  ctx.agents.turnBoundaryOf = session => host.agents.turnBoundaryOf(session);
+  const create = ctx.agents.create;
+  ctx.agents.create = input => create({ ...input, setup: async (fixture, agent) => {
+    const scope = createScope(host, {});
+    t.after(() => scope.dispose());
+    const snapshotEvents = agent.session?.snapshotEvents;
+    agent.id ??= input.sessionId;
+    agent.session = host.sessions.create(agent.id, { meta: input.meta });
+    if (snapshotEvents) agent.session.snapshotEvents = snapshotEvents;
+    agent.model ??= { current: () => null, select() {} };
+    fixture.tools.schemas = value => host.get('tools').schemas(value);
+    agent.ctx = scope.ctx.extend({ ...fixture, get: name => fixture.get?.(name) ?? scope.ctx.get(name) });
+    await input.setup(agent.ctx, agent);
+  } });
+}
 
 test('production runtime protects dispatched Worker files and exposes authorized rollback', async t => {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-checkpoint-executor-'));
@@ -44,6 +73,7 @@ test('production runtime protects dispatched Worker files and exposes authorized
       },
     },
   };
+  await installExecutionRoleHost(t, ctx);
   runtime = createOrchestrationRuntime({ ctx, store,
     prepareTicketReply: async delivery => {
       assert.equal(db.getTicket(ticket.id).status, 'waiting');
