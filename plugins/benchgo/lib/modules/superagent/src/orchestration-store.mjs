@@ -14,6 +14,7 @@ import { systemStateDelivery } from './result-delivery.mjs';
 import { retireContentReview } from './retire-content-review.mjs';
 import { installLearningSourceStore } from './learning-source-store.mjs';
 import { installWorkerExecutionStore } from './worker-execution-store.mjs';
+import { installInterruptedContinuationStore } from './interrupted-continuation-store.mjs';
 import { installRouterQuestionStore } from './router-question-store.mjs';
 import { normalizeTicketTitle } from './ticket-title.mjs';
 
@@ -410,6 +411,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           const payload = { ...parse(row.payload), pauseContinuation: { runId: run.id } };
           delete payload.attentionContinuation;
           delete payload.contextContinuation;
+          delete payload.interruptedContinuation;
           delete payload.verificationOnly;
           db.prepare("UPDATE sa_assignments SET state='queued',payload=?,updated_at=? WHERE id=?").run(json(payload), at, row.id);
         }
@@ -458,7 +460,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (payload.executionStopped?.owner !== run.owner || payload.executionStopped?.fence !== row.fence) return unavailable('EXECUTION_STOP_UNCONFIRMED');
         if (saved.waitingExecutionBudget.effectsVerified !== true || saved.executionEffects?.effectsVerified === false) return unavailable('EXECUTION_EFFECTS_UNKNOWN');
         payload.pauseContinuation = { runId: run.id, kind: 'execution-budget' };
-        for (const key of ['attentionContinuation', 'contextContinuation', 'verificationOnly']) delete payload[key];
+        for (const key of ['attentionContinuation', 'contextContinuation', 'interruptedContinuation', 'verificationOnly']) delete payload[key];
         db.prepare("UPDATE sa_assignments SET state='queued',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?")
           .run(json(payload), timestamp(now), row.id);
         db.prepare("UPDATE sa_tickets SET status='open',pause_reason=NULL,continuation_wait=NULL,updated_at=? WHERE id=?").run(timestamp(now), ticketId);
@@ -562,12 +564,19 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           }
           const fence = row.fence + 1;
           const payload = parse(row.payload);
-          if (payload.attentionContinuation || payload.pauseContinuation || payload.contextContinuation) {
-            const continuation = payload.contextContinuation || payload.pauseContinuation || payload.attentionContinuation;
+          if (payload.attentionContinuation || payload.pauseContinuation || payload.contextContinuation || payload.interruptedContinuation) {
+            const continuation = payload.interruptedContinuation || payload.contextContinuation || payload.pauseContinuation || payload.attentionContinuation;
             const run = db.prepare('SELECT * FROM sa_runs WHERE id=? AND assignment_id=? AND fence=?').get(continuation.runId, row.id, row.fence);
             const saved = run && parse(run.payload).evidence;
             const currentTicket = api.getTicket(row.ticket_id);
-            const ready = payload.contextContinuation
+            const ready = payload.interruptedContinuation
+              ? run?.state === 'uncertain' && saved?.interrupted === true && saved.checkpoint?.manifestHash
+                && saved.executionEffects?.effectsVerified === true && !payload.stopRequest
+                && continuation.instructionRevision === currentTicket.instructionRevision
+                && continuation.observation?.hash === saved.transcript?.hash
+                && continuation.observation?.lastSeq === saved.transcript?.lastSeq
+                && !!api.getWorkerExecutionState(run.id)?.models?.length
+              : payload.contextContinuation
               ? ['verifying', 'uncertain'].includes(run?.state) && saved?.checkpoint && !saved.waitingPause && !saved.waitingAttention
               : run?.state === 'waiting' && (payload.pauseContinuation ? saved?.waitingPause : saved?.waitingAttention)
                 && (!payload.pauseContinuation || !saved?.waitingExecutionBudget || saved.waitingExecutionBudget.effectsVerified === true);
@@ -717,6 +726,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         }
         delete payload.attentionContinuation;
         delete payload.pauseContinuation;
+        delete payload.interruptedContinuation;
         payload.verificationAttempts = (payload.verificationAttempts || 0) + 1;
         payload.verificationAfter = now + Math.min(900000, 30000 * 2 ** Math.min(payload.verificationAttempts - 1, 5));
         db.prepare("UPDATE sa_assignments SET state='queued',payload=?,updated_at=? WHERE id=?").run(json(payload), timestamp(now), assignmentId);
@@ -784,7 +794,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       });
     },
     updateRun(runId, { owner, fence, state, evidence, now = Date.now() } = {}) {
-      const transitions = { prepared: ['submitted', 'cancelled'], submitted: ['running', 'verifying', 'uncertain'], running: ['verifying', 'uncertain'], verifying: ['completed', 'failed', 'uncertain'], uncertain: [], completed: [], failed: [], cancelled: [] };
+      const transitions = { prepared: ['submitted', 'cancelled', 'uncertain'], submitted: ['running', 'verifying', 'uncertain'], running: ['verifying', 'uncertain'], verifying: ['completed', 'failed', 'uncertain'], uncertain: [], completed: [], failed: [], cancelled: [] };
       return tx(() => {
         const row = db.prepare('SELECT * FROM sa_runs WHERE id=?').get(id(runId));
         if (!row) throw fail('RUN_NOT_FOUND', 'Run does not exist');
@@ -793,6 +803,14 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (!transitions[row.state]?.includes(state)) throw fail('RUN_TRANSITION', 'Invalid execution transition');
         if (['verifying', 'completed', 'failed'].includes(state) && !record(evidence)) throw new Error('Observed execution evidence is required');
         const payload = { ...parse(row.payload), ...(evidence ? { evidence: copy(evidence) } : {}) };
+        if (state === 'submitted') {
+          const assignment = db.prepare('SELECT payload FROM sa_assignments WHERE id=?').get(row.assignment_id);
+          const assignmentPayload = parse(assignment.payload);
+          if (assignmentPayload.interruptedContinuation) {
+            delete assignmentPayload.interruptedContinuation;
+            db.prepare('UPDATE sa_assignments SET payload=? WHERE id=?').run(json(assignmentPayload), row.assignment_id);
+          }
+        }
         db.prepare('UPDATE sa_runs SET state=?,payload=?,updated_at=? WHERE id=?').run(state, json(payload), timestamp(now), runId);
         return runValue(db.prepare('SELECT * FROM sa_runs WHERE id=?').get(runId));
       });
@@ -1143,6 +1161,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   const directReplyStore = installDirectReplyStore({ db, tx });
   Object.assign(api, directReplyStore.api);
   Object.assign(api, installWorkerExecutionStore({ db, tx, api }));
+  Object.assign(api, installInterruptedContinuationStore({ db, tx, api }));
   Object.assign(api, installRouterQuestionStore({ db, tx, api }));
   retireContentReview({ db, tx });
   Object.assign(api, installLearningSourceStore({ db, tx, api }));

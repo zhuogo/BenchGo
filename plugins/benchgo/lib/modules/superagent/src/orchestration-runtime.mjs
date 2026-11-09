@@ -12,11 +12,14 @@ import { commitWorkerResult } from './result-commit.mjs';
 import { knownNotSent } from './channels/delivery-outcome.mjs';
 import { createTaskExecutionProgress } from './task-execution-progress.mjs';
 import { archiveClosedExecutionSessions, executionSessionProjection } from './execution-session.mjs';
+import { executionUncertainty, executionStopConfirmation } from './execution-uncertainty.mjs';
+import { requestInterruptedContinuation } from './interrupted-continuation.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
-export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, prepareTicketReply, notifyExecutionInput, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
+export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, prepareTicketReply, notifyExecutionInput, notifyExecutionRecovery, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
   const database = store.orchestration, owner = `delivery:${randomUUID()}`, shutdown = new AbortController();
   const archived = new Set(), archiveRetry = new Map();
+  const requestedChecks = new Map();
   const finishDelivery = (id, options) => database.finishOutbox(id, { now: now(), ...options });
   const mirrored = new Set(), mirrorRetry = new Map();
   async function mirrorDelivered(row) {
@@ -74,7 +77,54 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   async function recoverPending() {
     shutdown.signal.throwIfAborted();
     if (!recoveryStorage(ctx)?.open || !ctx.agents?.get) return;
-    for (const { assignment, run } of database.pauseRecoveryCandidates()) {
+    const immediate = new Map(requestedChecks); requestedChecks.clear();
+    for (const identity of immediate.values()) {
+      if (!['resume-interrupted', 'inspect'].includes(identity.operation)) continue;
+      const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(15000)]);
+      const assignment = database.getAssignment(identity.assignmentId), ticket = assignment && database.getTicket(assignment.ticketId);
+      const run = database.runs(identity.assignmentId).find(row => row.fence === identity.fence);
+      if (!assignment || assignment.fence !== identity.fence || ticket?.instructionRevision !== identity.instructionRevision || !run) continue;
+      try {
+        if (identity.operation === 'resume-interrupted') {
+          await requestInterruptedContinuation({ ctx, database, ...identity, readPolicy, checkpoints: checkpointStore, signal });
+          continue;
+        }
+        let observed, code;
+        const fact = executionUncertainty(database, ticket, { now: now() });
+        if (fact?.automatic) {
+          await (ticket.status === 'pausing' ? withRecoveredPause : withRecoveredEvidence)({ ctx, run, signal }, (saved, observation) => {
+            if (saved.executionEffects?.effectsVerified === false)
+              throw Object.assign(new Error('External effects remain unknown'), { code: 'EXECUTION_EFFECTS_UNKNOWN' });
+            observed = observation; code = ticket.status === 'pausing' ? 'VERIFIED_PAUSED' : 'VERIFIED_COMPLETED';
+          });
+        } else {
+          const inspected = await requestInterruptedContinuation({ ctx, database, ...identity, inspectOnly: true,
+            readPolicy, checkpoints: checkpointStore, signal });
+          observed = inspected.observation; code = 'VERIFIED_INTERRUPTED';
+        }
+        const policy = await readPolicy(); signal.throwIfAborted();
+        if (!validateTicketMandate(database.getTicket(ticket.id)?.mandate, { policy }))
+          throw Object.assign(new Error('Recovery authorization changed'), { code: 'MANDATE_REVOKED' });
+        database.recordExecutionInspection(identity.assignmentId, { ...identity, runId: run.id,
+          id: randomUUID(), status: 'verified', code, observation: observed, now: now() });
+      } catch (error) {
+        try { database.recordExecutionInspection(identity.assignmentId, { ...identity, runId: run.id,
+          id: randomUUID(), status: 'blocked', code: error.code || 'EVIDENCE_UNVERIFIED', now: now() }); }
+        catch { /* A simultaneous user stop or changed execution wins over the obsolete inspection. */ }
+      }
+    }
+    const forced = [...immediate.values()].map(identity => {
+      if (['resume-interrupted', 'inspect'].includes(identity.operation)) return null;
+      const assignment = database.getAssignment(identity.assignmentId), ticket = assignment && database.getTicket(assignment.ticketId);
+      if (!assignment || assignment.fence !== identity.fence || ticket?.instructionRevision !== identity.instructionRevision) return null;
+      const run = database.runs(assignment.id).find(row => row.fence === assignment.fence);
+      return run && { assignment, ticket, run };
+    }).filter(Boolean);
+    const pauseCandidates = database.pauseRecoveryCandidates({ now: now() });
+    for (const candidate of forced.filter(row => row.ticket.status === 'pausing' && row.run.evidence?.waitingPause
+      && (row.assignment.state === 'uncertain' || row.assignment.state === 'claimed' && row.assignment.leaseUntil <= now())))
+      if (!pauseCandidates.some(row => row.assignment.id === candidate.assignment.id)) pauseCandidates.push(candidate);
+    for (const { assignment, run } of pauseCandidates) {
       shutdown.signal.throwIfAborted();
       const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(60000)]);
       try {
@@ -87,7 +137,11 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         database.deferPauseRecovery(assignment.id, { fence: assignment.fence });
       }
     }
-    for (const { assignment, run } of database.verificationCandidates()) {
+    const verificationCandidates = database.verificationCandidates({ now: now() });
+    for (const candidate of forced.filter(row => row.ticket.status === 'open' && row.assignment.state === 'uncertain'
+      && executionUncertainty(database, row.ticket, { now: now() })?.automatic))
+      if (!verificationCandidates.some(row => row.assignment.id === candidate.assignment.id)) verificationCandidates.push(candidate);
+    for (const { assignment, run } of verificationCandidates) {
       shutdown.signal.throwIfAborted();
       const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(run.environment ? 60000 : 15000)]);
       try {
@@ -96,19 +150,26 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
           const policy = await readPolicy();
           signal.throwIfAborted();
           database.queueVerification(assignment.id, { fence: assignment.fence, runId: run.id, observation,
+            ownerRetry: immediate.has(assignment.id), now: now(),
             validateMandate: mandate => validateTicketMandate(mandate, { policy }) });
         });
       } catch (error) {
         // Persist inspection backoff so one busy/invalid session cannot starve
         // other candidates or restart a tight polling loop after a process restart.
-        database.deferVerification(assignment.id, { fence: assignment.fence, reason: error.code || 'EVIDENCE_UNVERIFIED' });
+        database.deferVerification(assignment.id, { fence: assignment.fence, now: now(), reason: error.code || 'EVIDENCE_UNVERIFIED' });
       }
     }
   }
 
-  let timer, running, recovery;
+  let timer, running, recovery, recoveryNotifications;
   async function cycle() {
     const policy = await readPolicy();
+    // The existing Router inbox owns delivery and prioritizes human messages.
+    // Notification work must not wait for log locks or occupy this cycle.
+    if (notifyExecutionRecovery) recoveryNotifications ||= (async () => {
+      for (const ticket of database.listTickets({ limit: 1000 })) await notifyExecutionRecovery({ ticketId: ticket.id });
+    })().catch(error => ctx.logger?.warn?.(`SuperAgent 恢复提醒待重试：${error.code || error.name}`))
+      .finally(() => { recoveryNotifications = undefined; });
     if (onDelivered) {
       for (const ticket of database.listTickets({ limit: 1000 })) for (const row of database.deliveries(ticket.id)) await mirrorDelivered(row);
       for (const row of database.directReplies?.({ state: 'sent', limit: 1000 }) || []) await mirrorDelivered(row);
@@ -236,6 +297,44 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   return {
     checkpoints,
     tick,
+    async manageExecution({ ticketId, assignmentId, fence, instructionRevision, operation }) {
+      const ticket = database.getTicket(ticketId), policy = await readPolicy();
+      if (!ticket || ticket.instructionRevision !== instructionRevision || !validateTicketMandate(ticket.mandate, { policy }))
+        throw Object.assign(new Error('恢复处置的授权或要求已变化'), { code: 'MANDATE_REVOKED' });
+      const fact = executionUncertainty(database, ticket, { now: now() });
+      if (!fact || fact.assignmentId !== assignmentId || fact.fence !== fence)
+        return { status: 'blocked', reason: '执行身份或核查状态已变化，请重新读取事实' };
+      if (operation === 'wait') return { status: 'waiting', uncertainty: fact };
+      if (!['check-now', 'resume', 'fail'].includes(operation)) throw new Error('未知恢复处置');
+      const assignment = database.getAssignment(assignmentId), run = database.runs(assignmentId).find(row => row.fence === fence);
+      if (!recoveryStorage(ctx)?.open || !ctx.agents?.get) return { status: 'blocked', reason: '官方原会话核查接缝暂不可用', uncertainty: fact };
+      if (operation === 'check-now') {
+        if (!run?.sessionId) return { status: 'blocked', reason: '缺少原执行会话，无法核对真实记录', uncertainty: fact };
+        if (fact.lastInspection && now() - Date.parse(fact.lastInspection.at) < 30_000)
+          return { status: 'waiting', reason: '刚完成一次核查，先按已有事实决定处置，避免相同原因的紧密重复核查', uncertainty: fact };
+        requestedChecks.set(assignment.id, { assignmentId, fence, instructionRevision, operation: 'inspect' });
+        void tick();
+        return { status: 'scheduled', action: 'inspect-only', reason: '已异步安排一次只读复核，结果将回到 Router；不会续跑或重发', uncertainty: fact };
+      }
+      if (operation === 'resume' && (fact.reasonCode === 'external-effects-unknown' || ticket.status !== 'open'))
+        return { status: 'blocked', reason: '外部效果未核清或用户暂停尚未解除，只能核查，不能续跑', uncertainty: fact };
+      if (operation === 'resume' && !fact.automatic) {
+        if (!run?.sessionId || assignment.stopRequest || assignment.retiredExecution)
+          return { status: 'blocked', reason: '原执行会话缺失或已停止，不能安全续接', uncertainty: fact };
+        requestedChecks.set(assignment.id, { assignmentId, fence, instructionRevision, operation: 'resume-interrupted' });
+        void tick();
+        return { status: 'scheduled', action: 'inspect-interrupted-continuation',
+          reason: '正在异步核查原会话写锁、全部工具回执与外部效果；安全证据通过后才续接原会话，不新建执行', uncertainty: fact };
+      }
+      if (!fact.automatic) return { status: 'blocked', reason: fact.recoveryBlocked, uncertainty: fact };
+      if (operation === 'fail' && (fact.reasonCode === 'external-effects-unknown' || run?.evidence?.outcome !== 'failed'
+        || !run.evidence.selfCheck?.summary || !run.evidence.failure?.attempted || !run.evidence.failure?.cause || !run.evidence.failure?.resumeConditions))
+        return { status: 'blocked', reason: '没有已保存的结构性失败证据与自检说明，不得凭空报失败或关单', uncertainty: fact };
+      requestedChecks.set(assignment.id, { assignmentId, fence, instructionRevision });
+      void tick();
+      return { status: 'scheduled', action: 'inspect-saved-evidence',
+        reason: '已排入现有只读核查；只有可信结束证据确认后才走原有收尾，不重跑外部动作', uncertainty: fact };
+    },
     state({ newestFirst = false, archived, ticketId, limit = 1000 } = {}) {
       const progress = executionProgress.batch();
       const boundedLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 1000;
@@ -245,7 +344,15 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         const inputDiagnostics = (database.ticketInputs?.(ticket.id) || []).filter(input => input.snapshot?.executionInput?.outcome === 'failed')
           .map(input => ({ id: input.id, triggerId: input.triggerId, state: input.state, receivedAt: input.receivedAt,
             code: input.snapshot.executionInput.code, reason: input.snapshot.executionInput.reason }));
-        return { ...ticket, inputDiagnostics, revisions: database.ticketRevisions(ticket.id), assignments, attentions: database.attentions(ticket.id), attentionResolutions: database.attentionResolutions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id), executionSession: executionSessionProjection(database, ticket.id), execution: progress(ticket, assignments) };
+        const uncertainty = executionUncertainty(database, ticket, { now: now() });
+        const execution = progress(ticket, assignments);
+        const stopping = executionStopConfirmation(database, ticket, { now: now() });
+        const stoppedAssignment = stopping.stopRequestedAt && assignments.find(row => row.stopRequest?.at === stopping.stopRequestedAt);
+        const projected = execution || (uncertainty || stoppedAssignment ? { assignmentId: uncertainty?.assignmentId || stoppedAssignment.id,
+          runId: uncertainty ? uncertainty.runId : database.runs(stoppedAssignment.id).find(row => row.fence === stoppedAssignment.fence)?.id,
+          instructionRevision: ticket.instructionRevision } : null);
+        return { ...ticket, inputDiagnostics, revisions: database.ticketRevisions(ticket.id), assignments, attentions: database.attentions(ticket.id), attentionResolutions: database.attentionResolutions(ticket.id), results: database.results(ticket.id), deliveries: database.deliveries(ticket.id), executionSession: executionSessionProjection(database, ticket.id),
+          execution: projected ? { ...projected, uncertainty, ...stopping } : null };
       });
     },
     start() { if (timer || shutdown.signal.aborted) return; timer = setInterval(tick, intervalMs); timer.unref?.(); void tick(); },
@@ -254,7 +361,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       executionProgress.dispose();
       const stopped = worker.stop();
       await running;
-      await Promise.allSettled([recovery, stopped, directReplies.stop()]);
+      await Promise.allSettled([recovery, recoveryNotifications, stopped, directReplies.stop()]);
     },
   };
 }
