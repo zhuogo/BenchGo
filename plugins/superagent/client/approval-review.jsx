@@ -4,7 +4,7 @@ import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 import { ResourceState } from './resource-state.jsx';
 import { retainAssistantSession } from './session-retain.mjs';
-import { reviewActionDetails, reviewApprovalResponse, reviewRequestKey, sameReviewOrigin } from './approval-review.mjs';
+import { reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewSessionOpenError, reviewRequestKey, sameReviewOrigin } from './approval-review.mjs';
 import css from './approval-review.css';
 
 const ApprovalContext = createContext(null), EMPTY_STATUSES = new Map();
@@ -50,6 +50,15 @@ function ApprovalDetail({ entry, api, current, SessionProvider, renderSlot }) {
   </article>;
 }
 
+function ConnectionErrors({ items, retry }) {
+  return <section className="ba-review-connection-errors" aria-label="会话连接详情"><header><p>以下会话尚未连接，无法确认其中的待审核操作。</p><Button type="button" variant="ghost" onClick={retry}>重新连接</Button></header><ul>{items.map(item => <li key={item.origin.sessionId}>
+    <strong>{item.origin.sourceTitle || (item.origin.ownerThreadId === 'main' ? '主聊天' : '旁聊')}{item.origin.title ? ` · ${item.origin.title}` : ''}</strong>
+    <span>{({ ensure: '准备对话', retain: '保留会话', open: '打开会话' })[item.stage]}（{item.stage}）</span><pre>{item.error}</pre>
+  </li>)}</ul></section>;
+}
+
+function releaseConnection(item) { item.controller.abort(); item.unsubscribe?.(); item.reference?.release(); }
+
 /** One owner-scoped index; requests and answers remain in official Session scopes. */
 export function ApprovalReview({ ctx, api, SessionProvider, renderSlot }) {
   const [origins, setOrigins] = useState(null), [error, setError] = useState(''), [generation, setGeneration] = useState(0);
@@ -57,7 +66,7 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot }) {
   const source = ctx.uiSession?.sessionStatus;
   const statuses = useSyncExternalStore(listener => source?.subscribe(listener) || (() => {}), () => source?.getSnapshot() || EMPTY_STATUSES);
   const retained = useRef(new Map()), current = useRef([]);
-  const retry = () => { for (const item of retained.current.values()) { item.controller.abort(); item.reference?.release(); } retained.current.clear(); setConnections(new Map()); setOrigins(null); setError(''); setGeneration(value => value + 1); };
+  const retry = () => { for (const item of retained.current.values()) releaseConnection(item); retained.current.clear(); setConnections(new Map()); setOrigins(null); setError(''); setGeneration(value => value + 1); };
   useEffect(() => {
     const controller = new AbortController(); let timer, inFlight = false, dirty = false;
     const schedule = () => { clearTimeout(timer); timer = setTimeout(tick, 150); };
@@ -78,12 +87,12 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot }) {
     const ids = new Set(origins?.map(origin => origin.sessionId) || []);
     const sources = new Map(origins?.map(origin => [origin.sessionId, origin]) || []);
     const publish = () => setConnections(new Map(retained.current));
-    for (const [id, item] of retained.current) if (!ids.has(id)) { item.controller.abort(); item.reference?.release(); retained.current.delete(id); }
+    for (const [id, item] of retained.current) if (!ids.has(id)) { releaseConnection(item); retained.current.delete(id); }
     for (const id of ids) if (!retained.current.has(id)) {
-      const item = { controller: new AbortController(), reference: null, ready: false, error: '' }; retained.current.set(id, item);
+      const origin = sources.get(id);
+      const item = { origin, stage: origin.kind === 'router' ? 'ensure' : 'retain', controller: new AbortController(), reference: null, ready: false, error: '' }; retained.current.set(id, item);
       void (async () => {
         try {
-          const origin = sources.get(id);
           // Retaining a cold Router can resume its official writer. BenchGo must
           // configure the owning logical conversation before that can happen.
           if (origin.kind === 'router') {
@@ -91,15 +100,23 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot }) {
             item.controller.signal.throwIfAborted();
             if (ensured.sessionId !== id) throw new Error('对话已切换，请刷新审核列表');
           }
+          item.stage = 'retain';
           const reference = await retainAssistantSession(ctx.sessions, id, item.controller.signal);
-          if (item.controller.signal.aborted) { reference.release(); return; } item.reference = reference; await reference.ready;
-          if (!item.controller.signal.aborted) { item.ready = true; publish(); }
-        } catch (cause) { if (!item.controller.signal.aborted) { item.error = cause.message; publish(); } }
+          if (item.controller.signal.aborted) { reference.release(); return; } item.reference = reference; item.stage = 'open'; await reference.ready;
+          if (!item.controller.signal.aborted) {
+            const update = () => {
+              if (item.controller.signal.aborted) return;
+              const error = reviewSessionOpenError(reference), ready = !error;
+              if (item.error !== error || item.ready !== ready) { item.error = error; item.ready = ready; publish(); }
+            };
+            item.unsubscribe = reference.binding.session.subscribe(update); update();
+          }
+        } catch (cause) { if (!item.controller.signal.aborted) { item.ready = false; item.error = reviewConnectionError(cause); publish(); } }
       })();
     }
     publish();
   }, [ctx, api, sessionKey, generation]);
-  useEffect(() => () => { for (const item of retained.current.values()) { item.controller.abort(); item.reference?.release(); } retained.current.clear(); }, [ctx]);
+  useEffect(() => () => { for (const item of retained.current.values()) releaseConnection(item); retained.current.clear(); }, [ctx]);
   const entries = (origins || []).flatMap(origin => {
     const pending = statuses.get(origin.sessionId)?.pendingInteraction, connection = connections.get(origin.sessionId);
     return connection?.ready && pending?.kind === 'approval' && pending.sessionId === origin.sessionId && pending.answerable
@@ -109,13 +126,13 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot }) {
   const selected = entries.find(entry => entry.key === selectedKey) || entries[0];
   const connectionErrors = [...connections.values()].filter(item => item.error), connecting = origins?.some(origin => !connections.get(origin.sessionId)?.ready && !connections.get(origin.sessionId)?.error);
   return <section className="ba-approval-review" aria-label="审核"><style>{css}</style>
-    <header className="ba-review-heading"><div><h2>审核 <span>{origins === null || (!entries.length && connecting) ? '—' : entries.length}</span></h2><p>查看待授权的操作，决定这一次是否执行。</p></div><Button type="button" variant="ghost" onClick={retry}><UIIcon name="refresh" size={16} />刷新</Button></header>
+    <header className="ba-review-heading"><div><h2>审核 <span>{origins === null || (!entries.length && (connecting || connectionErrors.length > 0)) ? '—' : entries.length}</span></h2><p>查看待授权的操作，决定这一次是否执行。</p></div><Button type="button" variant="ghost" onClick={retry}><UIIcon name="refresh" size={16} />刷新</Button></header>
+    {!error && connectionErrors.length > 0 && <ConnectionErrors items={connectionErrors} retry={retry} />}
     {error ? <ResourceState kind="error" title="审核列表暂时无法读取" description={error} actionLabel="重新读取" onAction={retry} />
       : origins === null || (!entries.length && connecting) ? <ResourceState kind="loading" title="正在同步待审核操作" description="正在连接真实会话，读取仍可答复的授权请求。" />
-      : !entries.length && connectionErrors.length ? <ResourceState kind="error" title="部分会话暂未连接" description="暂时无法确认这些会话是否有待审核操作，请重新连接。" actionLabel="重新连接" onAction={retry} />
+      : !entries.length && connectionErrors.length ? <ResourceState kind="error" title="部分会话暂未连接" description="暂时无法确认这些会话是否有待审核操作。" />
       : !entries.length ? <ResourceState icon="check" title="没有待审核的操作" description="需要你授权时，Router 会在原聊天里提醒；你可以到这里查看对象与内容。" actionLabel="刷新列表" onAction={retry} />
-      : <>{connectionErrors.length > 0 && <p className="ba-review-sync-note" role="status">部分会话暂未连接，当前仅展示已核实的审批。<Button type="button" variant="ghost" onClick={retry}>重新连接</Button></p>}
-        <div className="ba-review-layout"><nav className="ba-review-list" aria-label="待审核操作">{entries.map(entry => <button type="button" className="ba-review-row" key={entry.key} aria-current={entry.key === selected?.key ? 'true' : undefined} onClick={() => setSelectedKey(entry.key)}><span className="ba-review-row-icon"><ResourceIcon name="key" size={18} /></span><span className="ba-review-row-copy"><strong>{entry.origin.title || '待授权操作'}</strong><span>{entry.origin.sourceTitle || (entry.origin.ownerThreadId === 'main' ? '主聊天' : '旁聊')} · {entry.origin.kind === 'worker' ? '任务操作' : '对话操作'}</span><small>等待你的决定</small></span><span className="ba-review-row-arrow"><UIIcon name="chevronLeft" size={16} /></span></button>)}</nav>
+      : <><div className="ba-review-layout"><nav className="ba-review-list" aria-label="待审核操作">{entries.map(entry => <button type="button" className="ba-review-row" key={entry.key} aria-current={entry.key === selected?.key ? 'true' : undefined} onClick={() => setSelectedKey(entry.key)}><span className="ba-review-row-icon"><ResourceIcon name="key" size={18} /></span><span className="ba-review-row-copy"><strong>{entry.origin.title || '待授权操作'}</strong><span>{entry.origin.sourceTitle || (entry.origin.ownerThreadId === 'main' ? '主聊天' : '旁聊')} · {entry.origin.kind === 'worker' ? '任务操作' : '对话操作'}</span><small>等待你的决定</small></span><span className="ba-review-row-arrow"><UIIcon name="chevronLeft" size={16} /></span></button>)}</nav>
           {selected && <ApprovalDetail key={selected.key} entry={selected} api={api} current={current} SessionProvider={SessionProvider} renderSlot={renderSlot} />}</div></>}
   </section>;
 }

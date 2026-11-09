@@ -43,7 +43,8 @@ async function fixture() {
       let origins=[origin,routerOrigin,{kind:'router',title:'普通提问',sessionId:'question-session',ownerSessionId:'question-session',ownerThreadId:'question'}];
       window.stop=()=>{origins=origins.filter(item=>item!==origin);controller.abort(Error('工单已停止'));statuses=new Map(statuses);statuses.delete(worker.sessionId);publish();document.dispatchEvent(new Event('benchgo:assistant-changed'));};
       window.answerElsewhere=()=>worker.answer('rejected');window.removeRouter=()=>{origins=origins.filter(item=>item!==routerOrigin);document.dispatchEvent(new Event('benchgo:assistant-changed'));};
-      const ctx={uiSession:{sessionStatus:{subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn);},getSnapshot:()=>statuses}},sessions:{retain:(id)=>{window.retains.push(id);window.trace.push('retain:'+id);if(window.mode==='connection-error')throw Error('断开连接');return {id,ready:Promise.resolve(),release(){window.releases.push(id);}};}}};
+      const opened=new Map();window.failOpened=(id)=>{const entry=opened.get(id);entry.state={openState:'error',openError:Error('会话已断开',{cause:Error('原始日志无法读取')})};for(const listener of entry.listeners)listener();};
+      const ctx={uiSession:{sessionStatus:{subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn);},getSnapshot:()=>statuses}},sessions:{retain:(id)=>{window.retains.push(id);window.trace.push('retain:'+id);if(window.mode==='connection-error')throw Error('断开连接');const entry={listeners:new Set(),state:{openState:window.mode==='open-error'?'error':'open',openError:window.mode==='open-error'?Error('读取会话失败',{cause:Error('system event must be first')}):null}};opened.set(id,entry);const binding={session:{getSnapshot:()=>entry.state,subscribe:fn=>{entry.listeners.add(fn);return()=>entry.listeners.delete(fn);}}};return {id,sessionId:id,binding,ready:window.mode==='open-reject'?Promise.reject(Error('打开请求被拒绝')):Promise.resolve(binding),release(){window.releases.push(id);}};}}};
       const api=async(action,input,signal)=>{window.calls.push({action,input});if(!['approvalOrigins','ensure'].includes(action))throw Error('obsolete API');
         if(action==='ensure'){window.trace.push('ensure:'+input.threadId);if(input.threadId==='side'&&window.mode==='ensure-error')throw Error('对话准备失败');
           if(input.threadId==='side'&&window.mode==='ensure-wait')return new Promise(resolve=>{window.completeEnsure=resolve;signal?.addEventListener('abort',()=>window.trace.push('abort-ensure:side'),{once:true});});
@@ -130,7 +131,9 @@ test('review Tab renders official Worker and Router approvals in four states; de
     assert.equal(await page.getByRole('button', { name: /扩展调研范围 客户研究旁聊/ }).count(), 0);
     await page.evaluate(() => window.renderScenario('ensure-error'));
     await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();
-    await page.getByText(/部分会话暂未连接，当前仅展示已核实的审批/).waitFor();
+    await page.getByText('以下会话尚未连接，无法确认其中的待审核操作。', {exact:true}).waitFor();
+    await page.getByText('对话准备失败', {exact:true}).waitFor();
+    await page.getByText('准备对话（ensure）', {exact:true}).waitFor();
     assert(!(await page.evaluate(() => window.retains.includes('router-side'))));
     await page.evaluate(() => window.renderScenario('ensure-wait'));
     await page.waitForFunction(() => typeof window.completeEnsure === 'function');
@@ -141,6 +144,24 @@ test('review Tab renders official Worker and Router approvals in four states; de
     await page.evaluate(() => window.renderScenario('connection-error'));
     await page.getByText('部分会话暂未连接', { exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '允许本次', exact: true }).count(), 0);
+    await page.getByText('保留会话（retain）', { exact: true }).first().waitFor();
+    await page.getByText('断开连接', { exact: true }).first().waitFor();
+    assert.equal(await page.getByText('没有待审核的操作', { exact: true }).count(), 0);
+    for(const mode of ['open-error','open-reject']) {
+      await page.evaluate(mode=>window.renderScenario(mode),mode);
+      await page.getByText('打开会话（open）', { exact: true }).first().waitFor();
+      await page.getByText(mode==='open-error'?'读取会话失败；原因：system event must be first':'打开请求被拒绝', { exact: true }).first().waitFor();
+      assert.equal(await page.getByRole('button', { name: '允许本次', exact: true }).count(), 0);
+      assert.equal(await page.getByText('没有待审核的操作', { exact: true }).count(), 0);
+      if(screenshots)await page.screenshot({path:join(screenshots,mode+'.png'),fullPage:true});
+    }
+    await page.evaluate(()=>window.renderScenario('data'));
+    await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();
+    await page.evaluate(()=>window.failOpened('worker-session'));
+    await page.getByText('会话已断开；原因：原始日志无法读取', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '允许本次', exact: true }).count(), 1); // Only the unrelated, still-open Router request remains.
+    assert.equal(await page.locator('[data-session-scope="worker-session"]').count(), 0);
+    assert.deepEqual(await page.evaluate(()=>window.answers), []);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

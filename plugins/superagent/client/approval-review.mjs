@@ -33,3 +33,20 @@ export function reviewActionDetails(pending) {
 }
 
 export function reviewRequestKey(origin, pending) { return `${origin.kind}:${origin.sessionId}:${pending.key}`; }
+
+/** Preserve the reported cause chain without replacing it with an empty state. */
+export function reviewConnectionError(cause) {
+  const messages = [], seen = new Set();
+  for (let current = cause; current != null && !seen.has(current); current = current?.cause) {
+    seen.add(current);
+    const message = typeof current?.message === 'string' ? current.message : String(current);
+    if (!messages.includes(message)) messages.push(message);
+  }
+  return messages.join('；原因：');
+}
+
+/** Official ready settles an opening attempt, including an unsuccessful one. */
+export function reviewSessionOpenError(reference) {
+  const state = reference.binding.session.getSnapshot();
+  return state.openState === 'open' ? '' : reviewConnectionError(state.openError ?? new Error(`会话尚未打开（${state.openState}）`));
+}

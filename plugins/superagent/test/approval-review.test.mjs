@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reviewActionDetails, reviewApprovalResponse, sameReviewOrigin } from '../client/approval-review.mjs';
+import { reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewSessionOpenError, sameReviewOrigin } from '../client/approval-review.mjs';
 
 const worker = { kind: 'worker', ticketId: 'ticket', assignmentId: 'assignment', runId: 'run', sessionId: 'worker', ownerSessionId: 'router', ownerThreadId: 'main' };
 const router = { kind: 'router', sessionId: 'router', ownerSessionId: 'router', ownerThreadId: 'main' };
@@ -51,4 +51,15 @@ test('review formats exact frozen-action reason for reading and never treats oth
   assert.deepEqual(reviewActionDetails({ toolName: 'assistant_external_action', reason: '批准本次具体外部动作（仅本次有效）：\n' + JSON.stringify(details) }), details);
   for (const pending of [{ toolName: 'other', reason: JSON.stringify(details) }, { toolName: 'assistant_external_action', reason: JSON.stringify(details) },
     { toolName: 'assistant_external_action', reason: '批准本次具体外部动作（仅本次有效）：\n{broken' }]) assert.equal(reviewActionDetails(pending), null);
+});
+
+test('settled ready still requires an actually open official Session and preserves causal errors', () => {
+  let state = { openState: 'error', openError: new Error('读取渠道会话失败', { cause: new Error('system event must be first') }) };
+  const reference = { binding: { session: { getSnapshot: () => state } } };
+  assert.equal(reviewSessionOpenError(reference), '读取渠道会话失败；原因：system event must be first');
+  state = { openState: 'opening', openError: null };
+  assert.equal(reviewSessionOpenError(reference), '会话尚未打开（opening）');
+  state = { openState: 'open', openError: null }; assert.equal(reviewSessionOpenError(reference), '');
+  const recursive = new Error('循环原因'); recursive.cause = recursive;
+  assert.equal(reviewConnectionError(recursive), '循环原因');
 });
