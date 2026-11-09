@@ -260,3 +260,45 @@ test('notification work waits independently while delivery and Router-facing sta
     assert.deepEqual(app.counts(), { executions: 1, sends: 1 });
   } finally { release(); }
 });
+
+for (const externalUnknown of [false, true]) test(`check-now inspects an interrupted original session asynchronously without dispatch (${externalUnknown ? 'unknown external effect' : 'settled local work'})`, async t => {
+  let release, reads = 0, app;
+  const gate = new Promise(resolve => { release = resolve; });
+  const log = { events: [{ seq: 0, type: 'turn/start', time: 1000, data: { turn: 1 } },
+    { seq: 1, type: 'step/start', time: 1000, data: { turn: 1, step: 1 } }] };
+  if (externalUnknown) log.events.push({ seq: 2, type: 'assistant/message', time: 1000, data: { turn: 1, step: 1,
+    message: { content: [{ type: 'tool-call', id: 'send-unknown', name: 'assistant_external_action', arguments: { operation: 'submit' } }] } } });
+  app = await fixture(t, { ctx: { agents: { get: () => undefined, resume() { throw new Error('inspection must not resume an Agent'); } },
+    sessionPersistence: { async open(id, access) { return { id, access, async read() { reads++; await gate; return log; }, async close() {} }; } } },
+    execute(assignment, _context, db) {
+      const identity = { owner: assignment.owner, fence: assignment.fence };
+      const run = db.prepareRun(assignment.id, { ...identity, sessionId: 'original-interrupted', directory: app.store.paths.workspace });
+      db.freezeWorkerModelRoute({ ...identity, assignmentId: assignment.id, runId: run.id,
+        models: [{ providerId: 'original', modelId: 'opaque/frozen' }], index: 0 });
+      db.updateRun(run.id, { ...identity, state: 'submitted' }); db.updateRun(run.id, { ...identity, state: 'uncertain' });
+      throw Object.assign(new Error('interrupted'), { code: 'WORKER_TURN_INCOMPLETE' });
+    } });
+  try {
+    await app.advance();
+    const ticket = app.db.getTicket(app.ticket.id), assignment = app.db.getAssignment('work');
+    const accepted = await app.runtime.manageExecution({ ticketId: ticket.id, assignmentId: assignment.id, fence: assignment.fence,
+      instructionRevision: ticket.instructionRevision, operation: 'check-now' });
+    assert.equal(accepted.action, 'inspect-only'); assert.equal(accepted.status, 'scheduled');
+    await app.runtime.tick(); assert.equal(app.db.getAssignment('work').lastInspection, undefined);
+    release();
+    for (let attempt = 0; attempt < 50 && !app.db.getAssignment('work').lastInspection; attempt++) {
+      await app.runtime.tick(); await new Promise(resolve => setTimeout(resolve, 2));
+    }
+    const inspected = app.db.getAssignment('work').lastInspection;
+    assert.ok(reads > 0); assert.equal(inspected.status, externalUnknown ? 'blocked' : 'verified');
+    assert.equal(inspected.code, externalUnknown ? 'EXECUTION_EFFECTS_UNKNOWN' : 'VERIFIED_INTERRUPTED');
+    assert.equal(app.runtime.state({ ticketId: ticket.id })[0].execution.uncertainty.lastInspection.id, inspected.id);
+    const second = await app.runtime.manageExecution({ ticketId: ticket.id, assignmentId: assignment.id, fence: assignment.fence,
+      instructionRevision: ticket.instructionRevision, operation: 'check-now' });
+    assert.equal(second.status, 'waiting', 'a completed inspection must not trigger a tight internal notification loop');
+    if (externalUnknown) assert.equal((await app.runtime.manageExecution({ ticketId: ticket.id, assignmentId: assignment.id,
+      fence: assignment.fence, instructionRevision: ticket.instructionRevision, operation: 'resume' })).status, 'blocked');
+    assert.equal(app.db.getAssignment('work').state, 'uncertain'); assert.equal(app.counts().executions, 1);
+    assert.equal(app.db.results(ticket.id).length, 0); assert.equal(app.db.runs('work').length, 1);
+  } finally { release(); }
+});

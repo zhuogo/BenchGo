@@ -2120,8 +2120,8 @@ async function approvalReminderFixture(t, script) {
 
 test('execution uncertainty proactively becomes one natural Router message using original inbox and bounded coordination tools', async t => {
   const f = await stateReportFixture(t, () => text('AI 获客项目的资料整理中断了，我正在核对已保存的内容，现在不用你操作。'), {
-    setupTools(scope) { for (const name of ['assistant_execution_manage', 'assistant_tickets', 'assistant_delegate']) scope.tools.register({
-      name, description: name, parameters: { type: 'object' }, output: { schema: { type: 'string' }, render: (_a, value) => [{ type: 'text', text: value }] }, execute: () => 'ok' }); },
+    setupTools(scope, { toolEnabled }) { for (const name of ['assistant_execution_manage', 'assistant_tickets', 'assistant_delegate']) scope.tools.register({
+      name, description: name, parameters: { type: 'object' }, output: { schema: { type: 'string' }, render: (_a, value) => [{ type: 'text', text: value }] }, execute: () => 'ok' }, { when: () => toolEnabled(name) }); },
   });
   await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id });
   for (let i = 0; i < 100 && !f.requests.length; i++) await new Promise(resolve => setTimeout(resolve, 5));
@@ -2151,6 +2151,14 @@ for (const change of ['stopped', 'revoked', 'fence']) test(`execution recovery s
   await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id });
   for (let i = 0; i < 100 && !f.requests.length; i++) await new Promise(resolve => setTimeout(resolve, 5));
   await f.agent.whenIdle();
+  assert.deepEqual((await f.engine.history()).messages, []);
+});
+
+test('execution recovery notices cannot leave their original desktop owner conversation', async t => {
+  const f = await stateReportFixture(t, () => text('MUST NOT PUBLISH'));
+  f.ticket.mandate.source.sessionId = 'foreign-owner-session';
+  assert.equal((await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id })).status, 'suppressed');
+  assert.equal(f.requests.length, 0);
   assert.deepEqual((await f.engine.history()).messages, []);
 });
 

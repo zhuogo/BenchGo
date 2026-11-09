@@ -452,11 +452,11 @@ export async function mountAssistant(ctx, commander, providers) {
     const submitted = structuredClone(patch);
     return store.updateConfig(submitted, { revision });
   };
-  const setupTools = (scope, { threadId, agent: ownerAgent }) => {
+  const setupTools = (scope, { threadId, agent: ownerAgent, toolEnabled = () => true }) => {
     const register = (name, description, properties, required, execute) => scope.tools.register({
       name, description, parameters: { type: 'object', properties, required, additionalProperties: false }, output,
       async execute(args, exec) { exec.signal?.throwIfAborted(); assertRouterMemoryTool({ name, args, agent: exec.agent, ownerAgent }); return execute(args, exec); },
-    });
+    }, { when: () => toolEnabled(name) });
     register('assistant_execution_manage', 'Coordinate recovery within an existing original authorization only. wait keeps automatic inspection; check-now schedules one read-only inspection without blocking chat; resume requests only a verified safe continuation supported by the existing evidence seam, never blindly reruns; fail is allowed only with saved structural-failure evidence and a real self-check record. External effects unknown: inspect only, never resend. Never override a user pause or stop. Read returned facts and explain actual disposition naturally.', {
       ticketId: string, operation: { type: 'string', enum: ['wait', 'check-now', 'resume', 'fail'] },
     }, ['ticketId', 'operation'], async ({ ticketId, operation }, exec) => {

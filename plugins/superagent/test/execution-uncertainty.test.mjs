@@ -75,3 +75,32 @@ test('recovery instruction requires natural proactive explanation, constrained m
   assert.match(text, /主动用你自己的话/); assert.match(text, /不重跑或重发/);
   assert.match(text, /assistant_execution_manage/); assert.match(text, /不能扩大原有授权/);
 });
+
+test('only a verified same-session recovery receipt bridges the original signal across the next fence', () => {
+  const f = fixture(); f.run.sessionId = 'same-session';
+  const first = executionRecoverySignal(f.database, f.ticket);
+  f.assignment.state = 'claimed'; f.assignment.fence++; f.run.fence++;
+  assert.equal(executionRecoverySignal(f.database, f.ticket, { previous: first }), null);
+  f.run.interruptedRecoveries = [{ fromFence: first.fence, instructionRevision: 2, sessionId: 'same-session', observation: { hash: 'hash', lastSeq: 5 } }];
+  const resolved = executionRecoverySignal(f.database, f.ticket, { previous: first });
+  assert.equal(resolved.disposition, 'verified-interrupted-continuation');
+  assert.equal(resolved.recoveredFromFence, first.fence); assert.equal(resolved.fence, first.fence + 1);
+  assert.ok(currentExecutionRecoverySignal(f.database, resolved));
+  f.run.sessionId = 'replacement'; assert.equal(currentExecutionRecoverySignal(f.database, resolved), null);
+  f.run.sessionId = 'same-session'; f.run.interruptedRecoveries[0].instructionRevision++;
+  assert.equal(currentExecutionRecoverySignal(f.database, resolved), null);
+});
+
+test('manual inspection publishes one separate result identity and never upgrades incomplete evidence to automatic completion', () => {
+  const f = fixture(); f.run.sessionId = 'session'; f.run.evidence = undefined;
+  const first = executionRecoverySignal(f.database, f.ticket);
+  f.assignment.lastInspection = { id: 'inspection', at: '2026-11-09T00:00:00Z', status: 'verified', code: 'VERIFIED_INTERRUPTED',
+    attempts: 1, runId: f.run.id, sessionId: f.run.sessionId, instructionRevision: 2, fence: f.assignment.fence };
+  const inspected = executionRecoverySignal(f.database, f.ticket);
+  assert.equal(inspected.phase, 'inspection-completed'); assert.equal(inspected.automatic, false);
+  assert.notEqual(inspected.eventKey, first.eventKey); assert.equal(inspected.attempts, 1);
+  assert.equal(currentExecutionRecoverySignal(f.database, first), null);
+  assert.ok(currentExecutionRecoverySignal(f.database, inspected));
+  f.assignment.verificationInspectionAttempts = 5;
+  assert.equal(executionRecoverySignal(f.database, f.ticket).phase, 'escalated');
+});

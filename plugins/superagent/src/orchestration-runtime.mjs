@@ -13,6 +13,7 @@ import { knownNotSent } from './channels/delivery-outcome.mjs';
 import { createTaskExecutionProgress } from './task-execution-progress.mjs';
 import { archiveClosedExecutionSessions, executionSessionProjection } from './execution-session.mjs';
 import { executionUncertainty, executionStopConfirmation } from './execution-uncertainty.mjs';
+import { requestInterruptedContinuation } from './interrupted-continuation.mjs';
 
 /** One local control plane for Ticket and Goal execution. */
 export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, prepareTicketReply, notifyExecutionInput, notifyExecutionRecovery, onDelivered, execute, intervalMs = 1000, now = Date.now }) {
@@ -77,7 +78,43 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     shutdown.signal.throwIfAborted();
     if (!recoveryStorage(ctx)?.open || !ctx.agents?.get) return;
     const immediate = new Map(requestedChecks); requestedChecks.clear();
+    for (const identity of immediate.values()) {
+      if (!['resume-interrupted', 'inspect'].includes(identity.operation)) continue;
+      const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(15000)]);
+      const assignment = database.getAssignment(identity.assignmentId), ticket = assignment && database.getTicket(assignment.ticketId);
+      const run = database.runs(identity.assignmentId).find(row => row.fence === identity.fence);
+      if (!assignment || assignment.fence !== identity.fence || ticket?.instructionRevision !== identity.instructionRevision || !run) continue;
+      try {
+        if (identity.operation === 'resume-interrupted') {
+          await requestInterruptedContinuation({ ctx, database, ...identity, readPolicy, checkpoints: checkpointStore, signal });
+          continue;
+        }
+        let observed, code;
+        const fact = executionUncertainty(database, ticket, { now: now() });
+        if (fact?.automatic) {
+          await (ticket.status === 'pausing' ? withRecoveredPause : withRecoveredEvidence)({ ctx, run, signal }, (saved, observation) => {
+            if (saved.executionEffects?.effectsVerified === false)
+              throw Object.assign(new Error('External effects remain unknown'), { code: 'EXECUTION_EFFECTS_UNKNOWN' });
+            observed = observation; code = ticket.status === 'pausing' ? 'VERIFIED_PAUSED' : 'VERIFIED_COMPLETED';
+          });
+        } else {
+          const inspected = await requestInterruptedContinuation({ ctx, database, ...identity, inspectOnly: true,
+            readPolicy, checkpoints: checkpointStore, signal });
+          observed = inspected.observation; code = 'VERIFIED_INTERRUPTED';
+        }
+        const policy = await readPolicy(); signal.throwIfAborted();
+        if (!validateTicketMandate(database.getTicket(ticket.id)?.mandate, { policy }))
+          throw Object.assign(new Error('Recovery authorization changed'), { code: 'MANDATE_REVOKED' });
+        database.recordExecutionInspection(identity.assignmentId, { ...identity, runId: run.id,
+          id: randomUUID(), status: 'verified', code, observation: observed, now: now() });
+      } catch (error) {
+        try { database.recordExecutionInspection(identity.assignmentId, { ...identity, runId: run.id,
+          id: randomUUID(), status: 'blocked', code: error.code || 'EVIDENCE_UNVERIFIED', now: now() }); }
+        catch { /* A simultaneous user stop or changed execution wins over the obsolete inspection. */ }
+      }
+    }
     const forced = [...immediate.values()].map(identity => {
+      if (['resume-interrupted', 'inspect'].includes(identity.operation)) return null;
       const assignment = database.getAssignment(identity.assignmentId), ticket = assignment && database.getTicket(assignment.ticketId);
       if (!assignment || assignment.fence !== identity.fence || ticket?.instructionRevision !== identity.instructionRevision) return null;
       const run = database.runs(assignment.id).find(row => row.fence === assignment.fence);
@@ -269,10 +306,27 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         return { status: 'blocked', reason: '执行身份或核查状态已变化，请重新读取事实' };
       if (operation === 'wait') return { status: 'waiting', uncertainty: fact };
       if (!['check-now', 'resume', 'fail'].includes(operation)) throw new Error('未知恢复处置');
-      if (!fact.automatic) return { status: 'blocked', reason: fact.recoveryBlocked, uncertainty: fact };
       const assignment = database.getAssignment(assignmentId), run = database.runs(assignmentId).find(row => row.fence === fence);
+      if (!recoveryStorage(ctx)?.open || !ctx.agents?.get) return { status: 'blocked', reason: '官方原会话核查接缝暂不可用', uncertainty: fact };
+      if (operation === 'check-now') {
+        if (!run?.sessionId) return { status: 'blocked', reason: '缺少原执行会话，无法核对真实记录', uncertainty: fact };
+        if (fact.lastInspection && now() - Date.parse(fact.lastInspection.at) < 30_000)
+          return { status: 'waiting', reason: '刚完成一次核查，先按已有事实决定处置，避免相同原因的紧密重复核查', uncertainty: fact };
+        requestedChecks.set(assignment.id, { assignmentId, fence, instructionRevision, operation: 'inspect' });
+        void tick();
+        return { status: 'scheduled', action: 'inspect-only', reason: '已异步安排一次只读复核，结果将回到 Router；不会续跑或重发', uncertainty: fact };
+      }
       if (operation === 'resume' && (fact.reasonCode === 'external-effects-unknown' || ticket.status !== 'open'))
         return { status: 'blocked', reason: '外部效果未核清或用户暂停尚未解除，只能核查，不能续跑', uncertainty: fact };
+      if (operation === 'resume' && !fact.automatic) {
+        if (!run?.sessionId || assignment.stopRequest || assignment.retiredExecution)
+          return { status: 'blocked', reason: '原执行会话缺失或已停止，不能安全续接', uncertainty: fact };
+        requestedChecks.set(assignment.id, { assignmentId, fence, instructionRevision, operation: 'resume-interrupted' });
+        void tick();
+        return { status: 'scheduled', action: 'inspect-interrupted-continuation',
+          reason: '正在异步核查原会话写锁、全部工具回执与外部效果；安全证据通过后才续接原会话，不新建执行', uncertainty: fact };
+      }
+      if (!fact.automatic) return { status: 'blocked', reason: fact.recoveryBlocked, uncertainty: fact };
       if (operation === 'fail' && (fact.reasonCode === 'external-effects-unknown' || run?.evidence?.outcome !== 'failed'
         || !run.evidence.selfCheck?.summary || !run.evidence.failure?.attempted || !run.evidence.failure?.cause || !run.evidence.failure?.resumeConditions))
         return { status: 'blocked', reason: '没有已保存的结构性失败证据与自检说明，不得凭空报失败或关单', uncertainty: fact };
