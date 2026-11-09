@@ -2579,3 +2579,28 @@ test('verified Router actions do not create a second reminder expression', async
   assert.deepEqual(await f.engine.prepareTicketReply(f.delivery), { status: 'suppressed', reason: 'router-action-already-replied' });
   assert.equal(f.requests.length, 0);
 });
+
+test('automatic continuation budget exhaustion reaches the existing Router inbox once and speaks naturally', async t => {
+  const f = await stateReportFixture(t, (_request, count) => text(count === 1
+    ? '我在核对工作台建议的保存记录，暂时不用你操作。'
+    : '工作台建议连续两次没能安全继续，我已停止自动尝试，保存的内容会保留，等你决定下一步。'));
+  const run = { id: 'bounded-recovery', fence: f.assignment.fence, state: 'uncertain', sessionId: 'original-worker',
+    interruptedRecoveries: [] };
+  f.store.orchestration.runs = () => [run];
+  await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id });
+  for (let i = 0; i < 100 && !f.requests.length; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  await f.agent.whenIdle();
+  assert.equal(f.requests.length, 1);
+  run.interruptedRecoveries = [1, 2].map(index => ({ fromFence: f.assignment.fence, instructionRevision: 1,
+    sessionId: run.sessionId, automatic: true, queued: false, code: 'SESSION_UNAVAILABLE', at: new Date(index * 30000).toISOString() }));
+  await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id });
+  for (let i = 0; i < 100 && f.requests.length < 2; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  await f.agent.whenIdle();
+  const events = (await f.store.getState()).requests.filter(row => row.ticketReply?.kind === 'recovery');
+  assert.equal(events.at(-1).ticketReply.phase, 'escalated');
+  assert.equal(events.at(-1).ticketReply.continuationRetry.exhausted, true);
+  const history = await f.engine.history();
+  assert.match(history.messages.at(-1).text, /停止自动尝试/);
+  await f.engine.notifyExecutionRecovery({ ticketId: f.ticket.id }); await f.agent.whenIdle();
+  assert.equal(f.requests.length, 2, 'the same exhausted budget cannot create another Router reminder');
+});

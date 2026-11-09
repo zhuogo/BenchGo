@@ -9,6 +9,7 @@ import { requestInterruptedContinuation, assertInterruptedToolsSettled, verifyIn
 import { executionEvidence } from '../src/execution-evidence.mjs';
 import { executionEffects } from '../src/execution-effects.mjs';
 import { createAssignmentExecutor } from '../src/assignment-executor.mjs';
+import { executionUncertainty, executionRecoverySignal } from '../src/execution-uncertainty.mjs';
 
 const call = (id = 'read-1', name = 'read', args = { path: 'saved.txt' }) => ({ type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'tool-call', id, name, arguments: args }] } } });
 const result = (id = 'read-1', text = 'saved') => ({ type: 'tool/result', surfaceOp: 'append', data: { turn: 1, step: 1, message: { toolCallId: id, source: { kind: 'tool', callId: id }, content: [{ type: 'text', text }] } } });
@@ -16,9 +17,10 @@ const events = () => [
   { type: 'turn/start', data: { turn: 1 } }, { type: 'step/start', data: { turn: 1, step: 1 } }, call(), result(),
 ].map((event, seq) => ({ ...event, seq, time: 1000 }));
 
-async function fixture(t) {
+async function fixture(t, { persistent = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-interrupted-'));
-  const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+  const filename = persistent ? join(directory, 'ledger.sqlite') : ':memory:';
+  const database = createAssistantOrchestrationStore({ filename });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   const work = join(directory, 'original'); await mkdir(work); await writeFile(join(work, 'saved.txt'), 'saved');
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'main' } });
@@ -42,7 +44,7 @@ async function fixture(t) {
   const policy = { desktopVersion: 'd1', workerModels: [{ providerId: 'ChangedProvider', modelId: 'Changed/New' }] };
   const input = { ctx, database, assignmentId: assignment.id, fence: assignment.fence, instructionRevision: 1,
     readPolicy: async () => policy, signal: new AbortController().signal };
-  return { directory, work, database, ticket, assignment, run, models, log, ctx, policy, input, locked: () => locked, closed: () => closed, reads: () => reads };
+  return { directory, work, filename, database, ticket, assignment, run, models, log, ctx, policy, input, locked: () => locked, closed: () => closed, reads: () => reads };
 }
 
 test('official writer inspection queues the original run and freezes its identity, fence and model', async t => {
@@ -54,7 +56,7 @@ test('official writer inspection queues the original run and freezes its identit
   assert.equal(claimed.id, f.assignment.id); assert.equal(claimed.fence, f.assignment.fence + 1);
   assert.equal(run.id, f.run.id); assert.equal(run.sessionId, 'original-session'); assert.equal(run.state, 'prepared');
   assert.deepEqual(run.interruptedRecoveries, [{ fromFence: f.assignment.fence, instructionRevision: 1,
-    sessionId: 'original-session', observation: executionEvidence(f.log).transcript, at: run.interruptedRecoveries[0].at }]);
+    sessionId: 'original-session', observation: executionEvidence(f.log).transcript, automatic: true, at: run.interruptedRecoveries[0].at }]);
   assert.deepEqual(f.database.getWorkerExecutionState(run.id).models, f.models);
   assert.equal(f.database.getTicket(f.ticket.id).resultVersion, 0);
   const repaired = [...f.log.events, ...interruptedTurnClosers(f.log.events)];
@@ -213,4 +215,97 @@ test('inspection audit requires the original run/fence/version and can observe p
   assert.equal(f.database.getTicket(f.ticket.id).status, 'pausing'); assert.equal(f.database.getAssignment(f.assignment.id).state, 'uncertain');
   f.database.cancelTicket(f.ticket.id);
   assert.throws(() => f.database.recordExecutionInspection(f.assignment.id, { ...input, id: 'after-stop' }), { code: 'FENCING_CONFLICT' });
+});
+
+test('automatic continuation is bounded across fences and durable reopen, and human continuation never resets its budget', async t => {
+  const f = await fixture(t, { persistent: true }), start = Date.now() + 100;
+  const failAgain = at => {
+    const [claimed] = f.database.claimAssignments('retry-owner', { assignmentId: f.assignment.id, now: at, validateMandate: () => true });
+    assert.ok(claimed);
+    f.database.updateRun(f.run.id, { owner: claimed.owner, fence: claimed.fence, state: 'submitted', now: at });
+    f.database.updateRun(f.run.id, { owner: claimed.owner, fence: claimed.fence, state: 'uncertain', now: at + 100 });
+    f.database.renewAssignment(claimed.id, { owner: claimed.owner, fence: claimed.fence, now: at + 100, validateMandate: () => false });
+    f.input.fence = claimed.fence;
+    return claimed;
+  };
+  await requestInterruptedContinuation({ ...f.input, now: start });
+  failAgain(start);
+  const pending = executionUncertainty(f.database, f.database.getTicket(f.ticket.id), { now: start + 101 });
+  assert.equal(pending.continuationRetry.attempts, 1); assert.equal(pending.continuationRetry.exhausted, false);
+  assert.equal(pending.continuationRetry.nextAttemptAt, new Date(start + 30100).toISOString());
+  await assert.rejects(requestInterruptedContinuation({ ...f.input, now: start + 30099 }), { code: 'CONTINUATION_BACKOFF' });
+  const request = f.database.deferInterruptedContinuation(f.assignment.id, { fence: f.input.fence, instructionRevision: 1, now: start + 101 });
+  assert.equal(request.nextAt, start + 30100);
+  const reopened = createAssistantOrchestrationStore({ filename: f.filename });
+  try {
+  assert.equal(reopened.takeInterruptedContinuationRequests({ now: start + 30099 }).length, 0);
+  assert.equal(reopened.takeInterruptedContinuationRequests({ now: start + 30100 }).length, 1);
+  assert.equal(reopened.takeInterruptedContinuationRequests({ now: start + 30100 }).length, 0, 'a deferred request is consumed once');
+  await requestInterruptedContinuation({ ...f.input, database: reopened, now: start + 30100 });
+  failAgain(start + 30100);
+  const signal = executionRecoverySignal(reopened, reopened.getTicket(f.ticket.id), { now: start + 30201 });
+  assert.equal(signal.phase, 'escalated'); assert.equal(signal.continuationRetry.exhausted, true);
+  assert.match(signal.recoveryBlocked, /自动续接已达上限/);
+  assert.equal(signal.continuationRetry.nextAttemptAt, null);
+  await assert.rejects(requestInterruptedContinuation({ ...f.input, database: reopened, now: start + 999999 }), { code: 'CONTINUATION_LIMIT' });
+  assert.equal(reopened.getAssignment(f.assignment.id).state, 'uncertain');
+  await requestInterruptedContinuation({ ...f.input, database: reopened, inspectOnly: true, now: start + 30201 });
+  assert.equal(reopened.getAssignment(f.assignment.id).state, 'uncertain', 'inspection does not dispatch');
+  await requestInterruptedContinuation({ ...f.input, database: reopened, automatic: false, now: start + 30201 });
+  const run = reopened.runs(f.assignment.id)[0];
+  assert.equal(run.interruptedRecoveries.filter(row => row.automatic !== false).length, 2);
+  assert.equal(run.interruptedRecoveries.at(-1).automatic, false);
+  assert.equal(run.id, f.run.id); assert.equal(run.sessionId, f.run.sessionId);
+  assert.deepEqual(reopened.getWorkerExecutionState(run.id).models, f.models);
+  } finally { reopened.close(); }
+});
+
+test('pending delayed continuation is discarded by a pause instead of resuming after reopening', async t => {
+  const f = await fixture(t), at = Date.now() + 100;
+  await requestInterruptedContinuation({ ...f.input, now: at });
+  const [claimed] = f.database.claimAssignments('retry-owner', { assignmentId: f.assignment.id, now: at, validateMandate: () => true });
+  f.database.updateRun(f.run.id, { owner: claimed.owner, fence: claimed.fence, state: 'submitted', now: at });
+  f.database.updateRun(f.run.id, { owner: claimed.owner, fence: claimed.fence, state: 'uncertain', now: at + 100 });
+  f.database.renewAssignment(claimed.id, { owner: claimed.owner, fence: claimed.fence, now: at + 100, validateMandate: () => false });
+  f.database.deferInterruptedContinuation(claimed.id, { fence: claimed.fence, instructionRevision: 1, now: at + 101 });
+  f.database.pauseTicket(f.ticket.id, { now: at + 102 });
+  assert.equal(f.database.takeInterruptedContinuationRequests({ now: at + 999999 }).length, 0);
+  assert.equal(f.database.getAssignment(claimed.id).interruptedContinuationRequest, undefined);
+});
+
+test('a consumed deferred continuation with an unavailable official writer leaves bounded failure receipts and retry progress', async t => {
+  const f = await fixture(t), at = Date.now() + 100;
+  f.ctx.sessionPersistence.open = async () => { throw Object.assign(new Error('private writer-lock failure'), { code: 'SESSION_UNAVAILABLE' }); };
+  await assert.rejects(requestInterruptedContinuation({ ...f.input, now: at }), { code: 'SESSION_UNAVAILABLE' });
+  const originalUpdatedAt = f.database.runs(f.assignment.id)[0].updatedAt;
+  let fact = executionUncertainty(f.database, f.database.getTicket(f.ticket.id), { now: at });
+  assert.equal(fact.continuationRetry.attempts, 1); assert.equal(fact.continuationRetry.nextAttemptAt, new Date(at + 30000).toISOString());
+  f.database.deferInterruptedContinuation(f.assignment.id, { fence: f.input.fence, instructionRevision: 1, now: at + 1 });
+  // Read-only checks do not mutate the original execution time or retry deadline.
+  f.database.recordExecutionInspection(f.assignment.id, { fence: f.input.fence, runId: f.run.id, instructionRevision: 1,
+    id: 'lock-inspection', status: 'blocked', code: 'SESSION_UNAVAILABLE', now: at + 1000 });
+  assert.equal(f.database.runs(f.assignment.id)[0].updatedAt, originalUpdatedAt);
+  fact = executionUncertainty(f.database, f.database.getTicket(f.ticket.id), { now: at + 1000 });
+  assert.equal(fact.continuationRetry.nextAttemptAt, new Date(at + 30000).toISOString());
+  const [request] = f.database.takeInterruptedContinuationRequests({ now: at + 30000 });
+  assert.ok(request);
+  await assert.rejects(requestInterruptedContinuation({ ...f.input, ...request, now: at + 30000 }), { code: 'SESSION_UNAVAILABLE' });
+  const run = f.database.runs(f.assignment.id)[0];
+  assert.equal(run.interruptedRecoveries.length, 2); assert.ok(run.interruptedRecoveries.every(row => row.queued === false));
+  assert.equal(executionRecoverySignal(f.database, f.database.getTicket(f.ticket.id)).phase, 'escalated');
+  await assert.rejects(requestInterruptedContinuation({ ...f.input, now: at + 999999 }), { code: 'CONTINUATION_LIMIT' });
+  assert.equal(f.database.getAssignment(f.assignment.id).state, 'uncertain');
+});
+
+for (const intervention of ['revoked', 'revision', 'paused', 'stopped']) test(`user intervention ${intervention} does not consume automatic continuation budget`, async t => {
+  const f = await fixture(t);
+  f.input.readPolicy = async () => {
+    if (intervention === 'revoked') f.policy.desktopVersion = 'new-policy';
+    if (intervention === 'revision') f.database.updateTicket(f.ticket.id, { target: 'new version' }, { expectedInstructionRevision: 1 });
+    if (intervention === 'paused') f.database.pauseTicket(f.ticket.id);
+    if (intervention === 'stopped') f.database.cancelTicket(f.ticket.id);
+    return f.policy;
+  };
+  await assert.rejects(requestInterruptedContinuation(f.input));
+  assert.equal(f.database.runs(f.assignment.id)[0].interruptedRecoveries, undefined);
 });

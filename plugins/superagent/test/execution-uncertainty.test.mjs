@@ -104,3 +104,21 @@ test('manual inspection publishes one separate result identity and never upgrade
   f.assignment.verificationInspectionAttempts = 5;
   assert.equal(executionRecoverySignal(f.database, f.ticket).phase, 'escalated');
 });
+
+test('bounded continuation exhaustion emits a stable Router escalation and never removes the external-effect red line', () => {
+  const f = fixture(); f.run.sessionId = 'same'; f.run.evidence = { interrupted: true };
+  f.run.interruptedRecoveries = [{ fromFence: 1, automatic: true, at: new Date(1000).toISOString() }];
+  f.run.updatedAt = new Date(2000).toISOString();
+  const first = executionRecoverySignal(f.database, f.ticket, { now: 2001 });
+  assert.equal(first.phase, 'entered'); assert.equal(first.continuationRetry.nextAttemptAt, new Date(32000).toISOString());
+  f.run.interruptedRecoveries.push({ fromFence: 2, automatic: true, at: new Date(32000).toISOString() });
+  const limited = executionRecoverySignal(f.database, f.ticket, { now: 33000 });
+  assert.equal(limited.phase, 'escalated'); assert.notEqual(limited.eventKey, first.eventKey);
+  assert.equal(limited.continuationRetry.exhausted, true); assert.equal(limited.continuationRetry.nextAttemptAt, null);
+  assert.equal(executionRecoverySignal(f.database, f.ticket, { now: 999999 }).eventKey, limited.eventKey);
+  const instruction = ticketReplyInstruction(limited);
+  assert.match(instruction, /不得再自行 resume/); assert.match(instruction, /退避/);
+  f.run.evidence.executionEffects = { effectsVerified: false };
+  const external = executionRecoverySignal(f.database, f.ticket);
+  assert.equal(external.reasonCode, 'external-effects-unknown'); assert.match(external.recoveryBlocked, /不得续跑或重发/);
+});
