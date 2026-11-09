@@ -6,6 +6,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
+import { DatabaseSync } from 'node:sqlite';
 import { publicConfig } from '../../voice/src/config.mjs';
 import { createSettingsManagement } from '../../benchgo/src/settings-management.mjs';
 import { installRoleHost } from './role-host-fixture.mjs';
@@ -306,6 +307,12 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal(app.store.orchestration.getTicket(formTicket.id).status, 'cancelled');
   const cleanupIds = [queryTicket.id, formTicket.id];
   const beforeCleanup = cleanupIds.map(id => app.store.orchestration.getTicket(id));
+  const readCleanupDomain = () => {
+    const db = new DatabaseSync(app.store.orchestration.path, { readOnly: true });
+    try { return db.prepare('SELECT * FROM sa_tickets WHERE id IN (?,?) ORDER BY id').all(...cleanupIds); }
+    finally { db.close(); }
+  };
+  const beforeCleanupDomain = readCleanupDomain();
   for (const action of ['taskCleanupPreview', 'taskCleanupCommit', 'taskCleanupHistory', 'taskCleanupRestorePreview', 'taskCleanupRestore']) {
     assert.equal((await call({ action, ticketIds: cleanupIds }, undefined)).status, 403, action);
     assert.equal((await call({ action, ticketIds: cleanupIds }, { principal: { kind: 'device' } })).status, 403, action);
@@ -324,7 +331,9 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal(cleanupReceipt.operation, 'archive');
   assert.deepEqual(cleanupReceipt.items.map(row => row.id), [queryTicket.id]);
   assert.deepEqual((await (await call(cleanupInput)).json()), cleanupReceipt, 'page retries reuse the durable archive receipt');
-  assert.deepEqual(cleanupIds.map(id => app.store.orchestration.getTicket(id)), beforeCleanup, 'archive preserves requirements and domain state');
+  assert.deepEqual(cleanupIds.map(id => app.store.orchestration.getTicket(id)),
+    beforeCleanup.map(row => row.id === queryTicket.id ? { ...row, archived: true } : row), 'authoritative projection reflects only the approved archive subset');
+  assert.deepEqual(readCleanupDomain(), beforeCleanupDomain, 'archive preserves every stored Ticket domain column');
   assert.equal(app.store.orchestration.listTickets({ archived: true }).some(row => row.id === queryTicket.id), true);
   assert.equal(app.store.orchestration.listTickets({ archived: false }).some(row => row.id === queryTicket.id), false);
   assert.equal(app.store.orchestration.listTickets({ archived: false }).some(row => row.id === formTicket.id), true);
@@ -344,6 +353,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.deepEqual(restoredReceipt.items.map(row => row.id), [queryTicket.id]);
   assert.deepEqual((await (await call(restoreInput)).json()), restoredReceipt);
   assert.deepEqual(cleanupIds.map(id => app.store.orchestration.getTicket(id)), beforeCleanup, 'restore only changes presentation');
+  assert.deepEqual(readCleanupDomain(), beforeCleanupDomain, 'restore preserves every stored Ticket domain column');
   assert.equal(app.store.orchestration.listTickets({ archived: false }).some(row => row.id === queryTicket.id), true);
   assert.equal(app.store.orchestration.listTickets({ archived: true }).some(row => row.id === queryTicket.id), false);
   assert.deepEqual((await (await call({ action: 'taskCleanupHistory', ticketId: queryTicket.id })).json()).history,
