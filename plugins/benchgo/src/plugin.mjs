@@ -30,9 +30,9 @@ export async function apply(ctx, config = {}) {
   ctx.provide('benchgo', { config, directory });
   // The optional observer runs in its own official profile; it needs no
   // commander/assistant instance and adds no installed plugin entry.
-  if (config.watchdog !== undefined) ctx.inject(['agents', 'sessions', 'sessionPersistence', 'agentPresets', 'permissionPresets', 'agentDefaultModel', 'schedule'], async child => {
+  if (config.watchdog !== undefined) ctx.inject(['agents', 'sessions', 'sessionPersistence', 'agentPresets', 'permissionPresets', 'agentDefaultModel', 'schedule', ...(config.watchdogAuxiliary ? ['llm'] : [])], async child => {
     const { mountWatchdog } = await import('../lib/modules/superagent/src/watchdog-plugin.mjs');
-    await mountWatchdog(child, { directory, config: config.watchdog });
+    await mountWatchdog(child, { directory, config: config.watchdog, auxiliary: config.watchdogAuxiliary });
   });
   mountInteractivePrompt(ctx);
   ctx.inject(['connection', 'webServer'], async child => { await mountWorkbench(child, { directory }); });
