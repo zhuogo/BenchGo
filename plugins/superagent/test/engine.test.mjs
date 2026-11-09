@@ -1485,6 +1485,33 @@ test('native prompt keeps exact messages and freezes each queued model before of
   assert.equal(actual.source.rpcId, request.requestId);
 });
 
+test('Router corrects a denied tool call without leaving a conversation failure', async t => {
+  let dispatched = 0, removeDefinition;
+  const definition = () => ({ name: 'ops_discover_tools', description: 'Fixture execution discovery', parameters: { type: 'object', properties: {} },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: () => { dispatched++; return 'must not run'; } });
+  const f = await fixture(t, (_request, count) => count === 1 ? [
+    { type: 'block-start', index: 0, blockType: 'tool-call' },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'denied-discovery', name: 'ops_discover_tools', arguments: '{}' } },
+    { type: 'finish', reason: { kind: 'tool-calls' } },
+  ] : text('我目前无法确认实时连接数，已授权设备也不代表正在连接。'), { setupTools(scope) { removeDefinition = scope.tools.register(definition()); } });
+  const agent = await f.engine.ensureSession();
+  // Re-registration cannot inherit the captured definition's trust.
+  removeDefinition();
+  agent.ctx.tools.register(definition());
+  await f.engine.send({ text: '有其他设备连接我们这台机器吗？' });
+  await agent.whenIdle();
+  const events = agent.session.snapshotEvents();
+  assert.equal(dispatched, 0);
+  const refusal = events.find(event => event.type === 'tool/result' && event.data.message?.toolCallId === 'denied-discovery');
+  assert.equal(refusal?.data.message.isError, true);
+  assert.match(JSON.stringify(refusal), /Router 不直接执行 ops_discover_tools/);
+  assert.equal(events.findLast(event => event.type === 'turn/end').data.reason.kind, 'completed');
+  const history = await f.engine.history();
+  assert.ok(!history.error, history.error);
+  assert.equal(history.messages.at(-1).text, '我目前无法确认实时连接数，已授权设备也不代表正在连接。');
+  assert.ok(f.requests[1].messages.some(message => message.role === 'tool'));
+});
+
 test('permission denial remains terminal and configuration changes apply to next turn', async t => {
   const f = await fixture(t, (_request, count) => count === 1 ? [{ type: 'finish', reason: { kind: 'error', failure: { code: 'AUTH', status: 403, message: 'denied' } } }] : text('Done'), { contextWindow: 131072 });
   await f.engine.send({ text: 'Denied' });
