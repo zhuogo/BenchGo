@@ -53,6 +53,8 @@ test('official writer inspection queues the original run and freezes its identit
   const [run] = f.database.runs(f.assignment.id);
   assert.equal(claimed.id, f.assignment.id); assert.equal(claimed.fence, f.assignment.fence + 1);
   assert.equal(run.id, f.run.id); assert.equal(run.sessionId, 'original-session'); assert.equal(run.state, 'prepared');
+  assert.deepEqual(run.interruptedRecoveries, [{ fromFence: f.assignment.fence, instructionRevision: 1,
+    sessionId: 'original-session', observation: executionEvidence(f.log).transcript, at: run.interruptedRecoveries[0].at }]);
   assert.deepEqual(f.database.getWorkerExecutionState(run.id).models, f.models);
   assert.equal(f.database.getTicket(f.ticket.id).resultVersion, 0);
   const repaired = [...f.log.events, ...interruptedTurnClosers(f.log.events)];
@@ -133,6 +135,7 @@ test('executor uses official resume and followup in the original session with it
   assert.equal(selected[0].provider, 'ExactProvider'); assert.equal(selected[0].model, 'Exact/Original');
   assert.equal(result.runId, f.run.id); assert.equal(result.sessionId, 'original-session'); assert.equal(result.summary, 'continued result'); assert.equal(disposed, true);
   assert.equal(f.database.getAssignment(assignment.id).interruptedContinuation, undefined, 'dispatch consumes only the queued continuation marker');
+  assert.equal(f.database.runs(assignment.id)[0].interruptedRecoveries[0].fromFence, f.assignment.fence, 'the observed continuation receipt survives execution updates');
 });
 
 test('filesystem changes after queueing prevent official continuation from dispatching', async t => {
@@ -159,4 +162,55 @@ test('pause or authorization changes between queuing and claim cannot resume wor
   assert.equal(f.database.claimAssignments('other', { validateMandate: () => true }).length, 0);
   f.database.resumeTicket(f.ticket.id);
   assert.equal(f.database.claimAssignments('other', { validateMandate: () => false }).length, 0);
+});
+
+test('inspectOnly reads official evidence and artifacts without queueing, storing evidence or creating a run', async t => {
+  const f = await fixture(t), before = f.database.getAssignment(f.assignment.id), runBefore = f.database.runs(f.assignment.id)[0];
+  const observed = await requestInterruptedContinuation({ ...f.input, inspectOnly: true });
+  assert.equal(observed.state, 'verified-interrupted'); assert.equal(observed.runId, f.run.id);
+  assert.deepEqual(observed.observation, { sessionId: 'original-session', ...executionEvidence(f.log).transcript });
+  assert.deepEqual(f.database.getAssignment(f.assignment.id), before);
+  assert.deepEqual(f.database.runs(f.assignment.id), [runBefore]);
+  assert.equal(f.closed(), 1); assert.equal(f.locked(), false);
+});
+
+for (const invalid of ['pending', 'revoked', 'paused-during-read']) test(`inspectOnly does not accept ${invalid} and never queues execution`, async t => {
+  const f = await fixture(t);
+  if (invalid === 'pending') f.log.events.pop();
+  if (invalid === 'revoked') f.policy.desktopVersion = 'd2';
+  if (invalid === 'paused-during-read') f.input.readPolicy = async () => { f.database.pauseTicket(f.ticket.id); return f.policy; };
+  await assert.rejects(requestInterruptedContinuation({ ...f.input, inspectOnly: true }));
+  assert.equal(f.database.runs(f.assignment.id).length, 1);
+  assert.equal(f.database.runs(f.assignment.id)[0].interruptedRecoveries, undefined);
+  assert.notEqual(f.database.getAssignment(f.assignment.id).state, 'queued');
+});
+
+test('inspection audit persists a bounded idempotent receipt without changing execution ownership', async t => {
+  const f = await fixture(t);
+  const observed = await requestInterruptedContinuation({ ...f.input, inspectOnly: true });
+  const input = { fence: f.assignment.fence, runId: f.run.id, instructionRevision: 1, id: 'manual-check-1',
+    status: 'verified', code: 'VERIFIED_INTERRUPTED', observation: observed.observation };
+  const receipt = f.database.recordExecutionInspection(f.assignment.id, input);
+  assert.equal(receipt.attempts, 1); assert.equal(receipt.runId, f.run.id); assert.equal(receipt.fence, f.assignment.fence);
+  assert.deepEqual(f.database.recordExecutionInspection(f.assignment.id, input), receipt);
+  const blocked = f.database.recordExecutionInspection(f.assignment.id, { ...input, id: 'manual-check-2', status: 'blocked', code: 'private raw failure text', observation: undefined });
+  assert.equal(blocked.attempts, 2); assert.equal(blocked.code, 'EVIDENCE_UNVERIFIED'); assert.equal(blocked.observation, undefined);
+  assert.equal(f.database.getAssignment(f.assignment.id).state, 'uncertain');
+  assert.equal(f.database.getAssignment(f.assignment.id).verificationError, undefined);
+  assert.equal(f.database.runs(f.assignment.id)[0].evidence, undefined);
+  assert.throws(() => f.database.recordExecutionInspection(f.assignment.id, { ...input, id: 'manual-check-2' }), { code: 'INSPECTION_CONFLICT' });
+});
+
+test('inspection audit requires the original run/fence/version and can observe pausing without resuming', async t => {
+  const f = await fixture(t), observation = { sessionId: 'original-session', ...executionEvidence(f.log).transcript };
+  const input = { fence: f.assignment.fence, runId: f.run.id, instructionRevision: 1, id: 'manual-check', status: 'verified', code: 'VERIFIED_PAUSED', observation };
+  assert.throws(() => f.database.recordExecutionInspection(f.assignment.id, { ...input, fence: input.fence + 1 }), { code: 'FENCING_CONFLICT' });
+  assert.throws(() => f.database.recordExecutionInspection(f.assignment.id, { ...input, runId: 'another' }), { code: 'FENCING_CONFLICT' });
+  assert.throws(() => f.database.recordExecutionInspection(f.assignment.id, { ...input, instructionRevision: 2 }), { code: 'INSTRUCTION_REVISION_CONFLICT' });
+  assert.throws(() => f.database.recordExecutionInspection(f.assignment.id, { ...input, observation: { ...observation, sessionId: 'another' } }), { code: 'EVIDENCE_MISMATCH' });
+  f.database.pauseTicket(f.ticket.id);
+  assert.equal(f.database.recordExecutionInspection(f.assignment.id, input).code, 'VERIFIED_PAUSED');
+  assert.equal(f.database.getTicket(f.ticket.id).status, 'pausing'); assert.equal(f.database.getAssignment(f.assignment.id).state, 'uncertain');
+  f.database.cancelTicket(f.ticket.id);
+  assert.throws(() => f.database.recordExecutionInspection(f.assignment.id, { ...input, id: 'after-stop' }), { code: 'FENCING_CONFLICT' });
 });

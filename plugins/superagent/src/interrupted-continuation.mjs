@@ -48,7 +48,7 @@ export function verifyInterruptedTranscript(events, saved) {
 }
 
 /** Lock the original official session, inspect it, then queue the same run; no Agent executes here. */
-export async function requestInterruptedContinuation({ ctx, database, assignmentId, fence, instructionRevision, readPolicy, checkpoints, signal }) {
+export async function requestInterruptedContinuation({ ctx, database, assignmentId, fence, instructionRevision, readPolicy, checkpoints, signal, inspectOnly = false }) {
   signal.throwIfAborted();
   const assignment = database.getAssignment(assignmentId), ticket = assignment && database.getTicket(assignment.ticketId);
   const run = database.runs(assignmentId).find(item => item.fence === fence);
@@ -80,6 +80,18 @@ export async function requestInterruptedContinuation({ ctx, database, assignment
     await verifyArtifactCheckpoint(directory, checkpoint, { signal });
     const policy = await readPolicy();
     signal.throwIfAborted();
+    if (inspectOnly) {
+      const current = database.getAssignment(assignmentId), currentTicket = current && database.getTicket(current.ticketId);
+      const currentRun = database.runs(assignmentId).find(item => item.id === run.id && item.fence === fence);
+      if (!current || current.state !== 'uncertain' || current.fence !== fence || current.stopRequest || current.retiredExecution
+        || !currentRun || currentRun.state !== 'uncertain' || currentRun.sessionId !== run.sessionId) throw fail('FENCING_CONFLICT', 'Original execution changed during inspection');
+      if (currentTicket?.status !== 'open' || !validateTicketMandate(currentTicket.mandate, { policy })
+        || JSON.stringify(currentTicket.mandate) !== JSON.stringify(ticket.mandate)) throw fail('MANDATE_REVOKED', 'Original execution authorization changed during inspection');
+      if (currentTicket.instructionRevision !== instructionRevision || current.instructionRevision !== instructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Original execution requirements changed during inspection');
+      if (!database.getWorkerExecutionState(run.id)?.models?.length) throw fail('WORKER_MODEL_ROUTE', 'Original frozen Worker model is unavailable');
+      return { state: 'verified-interrupted', runId: run.id, sessionId: run.sessionId, instructionRevision,
+        observation: { sessionId: run.sessionId, ...evidence.transcript } };
+    }
     const result = database.queueInterruptedContinuation(assignmentId, { fence, runId: run.id, instructionRevision,
       evidence, mandate: ticket.mandate, validateMandate: mandate => validateTicketMandate(mandate, { policy }) });
     return { state: 'queued', assignment: result };
