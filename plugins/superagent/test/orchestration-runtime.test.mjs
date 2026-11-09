@@ -42,6 +42,36 @@ test('execution evidence remains readable before a Ticket has an Assignment', as
   assert.equal(app.runtime.executionFacts.evidenceSnapshot().executions.find(row => row.ticket.id === ticket.id).stop.confirmedAt, null);
 });
 
+test('scheduler heartbeat advances only after a real successful control cycle, never on reads or failed/hung cycles', async t => {
+  let clock = Date.now();
+  const app = await fixture(t, { now: () => clock });
+  const snapshot = () => app.runtime.executionFacts.evidenceSnapshot();
+  assert.equal(snapshot().schedulerHeartbeat, null);
+  await app.runtime.tick();
+  const first = snapshot().schedulerHeartbeat;
+  assert.deepEqual(first, { at: new Date(clock).toISOString(), bootId: snapshot().bootId });
+  clock += 180000;
+  first.at = 'mutated caller copy';
+  assert.equal(snapshot().schedulerHeartbeat.at, new Date(clock - 180000).toISOString());
+
+  const getConfig = app.store.getConfig;
+  let release;
+  const config = await getConfig();
+  app.store.getConfig = () => new Promise(resolve => { release = () => resolve(config); });
+  const pending = app.runtime.tick();
+  await Promise.resolve();
+  assert.equal(snapshot().schedulerHeartbeat.at, new Date(clock - 180000).toISOString());
+  release(); await pending;
+  assert.equal(snapshot().schedulerHeartbeat.at, new Date(clock).toISOString());
+
+  clock += 180000;
+  app.store.getConfig = async () => { throw new Error('policy unavailable'); };
+  try {
+    await app.runtime.tick();
+    assert.equal(snapshot().schedulerHeartbeat.at, new Date(clock - 180000).toISOString());
+  } finally { app.store.getConfig = getConfig; }
+});
+
 test('Router state reporting leaves the outbox pending without emitting a fixed error block or rerunning work', async t => {
   let reports = 0;
   const app = await fixture(t, { execute() { throw Object.assign(new Error('not public'), { code: 'NETWORK' }); },

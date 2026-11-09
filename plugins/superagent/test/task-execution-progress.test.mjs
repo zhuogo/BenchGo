@@ -240,3 +240,40 @@ test('runtime evidence uses the shared source and domain commit signals without 
     assert.equal(runtime.executionFacts.snapshot({ ticketId: f.ticket.id }).tickets[0].execution.watermark.sessionSeq, session.seq - 1);
   } finally { await runtime.stop(); }
 });
+
+test('official live jobs prove only execution-owned background work, without inventing deadlines or artifact progress', async t => {
+  const f = await fixture(t);
+  await f.progress.dispose();
+  const Jobs = await import(pathToFileURL(join(official, 'packages/jobs/jobs-local/lib/index.js')).href);
+  await f.host.ctx.plugin(Jobs.default || Jobs);
+  f.host.ctx.jobs.attachController('execution-facts-test');
+  const { createOrchestrationRuntime } = await import('../src/orchestration-runtime.mjs');
+  const runtime = createOrchestrationRuntime({ ctx: f.host.ctx,
+    store: { orchestration: f.database, paths: { workspace: f.directory }, getConfig: async () => ({ workerConcurrency: 1 }) },
+    execute: async () => { throw new Error('Evidence reads must not execute a Worker'); } });
+  function start(owner) {
+    const done = Promise.withResolvers();
+    const id = f.host.ctx.jobs.start({ kind: 'bash', label: 'PRIVATE COMMAND', ...(owner ? { owner } : {}),
+      run(job) { job.append('PRIVATE OUTPUT'); job.updateProgress('PRIVATE PROGRESS');
+        return { done: done.promise, cancel() { done.resolve({ status: 'killed' }); } }; } });
+    return { id, async settle() { done.resolve({ status: 'completed' }); await done.promise; await Promise.resolve(); } };
+  }
+  const read = () => runtime.executionFacts.evidence({ ticketId: f.ticket.id }).runtime;
+  try {
+    await runtime.executionFacts.ready;
+    start(); // Official list(owner) includes this unowned job: explicitly exclude it.
+    const foreign = await f.createAgent('foreign'); start(foreign.agent.id);
+    assert.equal(read().wait.kind, 'none');
+    const own = start(f.run.sessionId), expectedSince = new Date(f.host.ctx.jobs.get(own.id, f.run.sessionId).startedAt).toISOString();
+    assert.deepEqual(read().wait, { kind: 'background-job', since: expectedSince, expectedUntil: null });
+    assert.equal(read().request.deadline, null); assert.equal(read().outputChanges, null);
+    assert.doesNotMatch(JSON.stringify(read()), /PRIVATE|label|progress|spillPaths/);
+    await own.settle();
+    assert.equal(read().wait.kind, 'none');
+    const child = await f.createAgent('job-child', { origin: 'subagent', parentSession: f.run.sessionId, delegationDepth: 1 });
+    catalog(f.worker.agent.session, child.agent.id); start(child.agent.id);
+    assert.equal(read().wait.kind, 'background-job');
+    f.database.updateTicket(f.ticket.id, { status: 'paused' });
+    assert.equal(read().wait.kind, 'paused', 'explicit waits retain priority over background work');
+  } finally { await runtime.stop(); }
+});

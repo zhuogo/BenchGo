@@ -170,7 +170,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     }
   }
 
-  let timer, running, recovery, recoveryNotifications;
+  let timer, running, recovery, recoveryNotifications, schedulerHeartbeat = null;
   async function cycle() {
     const policy = await readPolicy();
     // The existing Router inbox owns delivery and prioritizes human messages.
@@ -300,7 +300,11 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   function tick() {
     if (shutdown.signal.aborted) return Promise.resolve();
     const replies = directReplies.tick().catch(() => { if (!shutdown.signal.aborted) ctx.logger?.warn?.('SuperAgent 渠道回复交付待重试'); });
-    running ||= cycle().catch(error => { if (!shutdown.signal.aborted) ctx.logger?.warn?.(`SuperAgent 编排未完成：${error.message}`); }).finally(() => { running = undefined; });
+    running ||= cycle().then(() => {
+      // This control-plane cycle really completed. Reading evidence, a timer
+      // firing, or an unfinished/failed cycle must not manufacture liveness.
+      if (!shutdown.signal.aborted) schedulerHeartbeat = { at: timestamp(now()), bootId: executionProgress.bootId };
+    }).catch(error => { if (!shutdown.signal.aborted) ctx.logger?.warn?.(`SuperAgent 编排未完成：${error.message}`); }).finally(() => { running = undefined; });
     return Promise.all([running, replies]);
   }
   const runtime = {
@@ -401,9 +405,17 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     const gateway = ctx.get?.('typertGateway');
     const pending = run && gateway?.getPendingRemoteEvents ? gateway.getPendingRemoteEvents().filter(row => String(row.agentId) === run.sessionId
       || projections.some(source => source.parentSessionId === run.sessionId && source.sessionId === String(row.agentId))) : [];
+    const owners = new Set(run ? [run.sessionId, ...projections.filter(row => row.parentSessionId === run.sessionId).map(row => row.sessionId)] : []);
+    // Official list(caller) also includes unowned jobs. They do not prove
+    // anything about this execution, and labels/progress/output stay private.
+    const jobs = ctx.get?.('jobs') || ctx.jobs;
+    const backgroundJobs = jobs?.list ? [...owners].flatMap(owner => jobs.list(owner)
+      .filter(job => job.owner === owner && ['running', 'stopping'].includes(job.status))
+      .map(job => ({ startedAt: timestamp(job.startedAt) }))) : [];
     const waitKind = ['paused', 'pausing'].includes(ticket.status) ? 'paused' : pending.some(row => row.event === 'approval/request') ? 'approval'
       : attention || pending.some(row => row.event === 'user-questions/request') ? 'user'
-      : ticket.continuationWait ? 'continuation' : ['waiting', 'uncertain'].includes(assignment?.state) ? 'unknown' : 'none';
+      : ticket.continuationWait ? 'continuation' : backgroundJobs.length && agent?.status !== 'running' ? 'background-job'
+        : ['waiting', 'uncertain'].includes(assignment?.state) ? 'unknown' : 'none';
     const inspected = uncertainty?.lastInspection;
     return {
       evidenceCursor: database.executionTicketCursor(ticket.id),
@@ -413,7 +425,8 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       run: run ? { id: run.id, state: run.state, sessionId: run.sessionId, instructionRevision: run.instructionRevision ?? assignment.instructionRevision ?? 1, updatedAt: run.updatedAt } : null,
       executionAlive: { status: !run || !ctx.agents?.get ? 'unknown' : agent?.status === 'running' ? 'running' : agent?.status === 'idle' ? 'idle' : 'absent',
         observedAt: timestamp(now()), bootId: executionProgress.bootId },
-      request, wait: { kind: waitKind, since: timestamp(attention?.createdAt || ticket.pauseReason?.at || ticket.continuationWait?.at), expectedUntil: null },
+      request, wait: { kind: waitKind, since: waitKind === 'background-job' ? backgroundJobs.map(job => job.startedAt).filter(Boolean).sort()[0] || null
+        : timestamp(attention?.createdAt || ticket.pauseReason?.at || ticket.continuationWait?.at), expectedUntil: null },
       stop: { requestedAt: stopping.stopRequestedAt || assignment?.stopRequest?.at || null,
         confirmedAt: assignment?.executionStopped && assignment.executionStopped.fence === assignment.fence ? assignment.executionStopped.at : null,
         confirmationOverdue: stopping.stopConfirmationOverdue },
@@ -458,7 +471,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       const cursor = database.executionFactCursor();
       return { cursor, currentCursor: cursor, observedAt: timestamp(now()), bootId: executionProgress.bootId, executions,
         complete: !truncated && executions.every(row => !row.run || row.watermarks.length > 0 && row.watermarks.every(source => source.complete)),
-        truncated, schedulerHeartbeat: null };
+        truncated, schedulerHeartbeat: schedulerHeartbeat && { ...schedulerHeartbeat } };
     },
   };
   return runtime;
