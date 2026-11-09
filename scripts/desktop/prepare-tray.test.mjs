@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile, copyFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile, copyFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
@@ -64,9 +65,18 @@ test('application menu uses BenchGo branding and the managed restart path', asyn
 test('the actual main bundle preserves show, quit, relabel and disposal through package mapping', async t => {
   const output = await mkdtemp(join(tmpdir(), 'benchgo-tray-'));
   t.after(() => rm(output, { recursive: true, force: true }));
-  const officialMain = join(root, 'deepseek-harness/apps/desktop/lib/main.js');
-  const originals = await Promise.all([readFile(trayPath), readFile(officialMain)]);
-  const built = await prepareDesktopTray(root, join(output, 'compiled'));
+  const localEngine = await realpath(join(root, 'deepseek-harness'));
+  // A worktree may share an already built dependency installation. Rolldown
+  // resolves package lib/ files itself, outside Node's test resolution hooks.
+  const engine = dirname(await realpath(join(localEngine, 'node_modules')));
+  if (engine !== localEngine) {
+    const pin = directory => execFileSync('git', ['-C', directory, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    assert.equal(pin(engine), pin(localEngine), 'shared official build must match the worktree engine pin');
+  }
+  const officialTray = join(engine, 'apps/desktop/lib/types/tray.js');
+  const officialMain = join(engine, 'apps/desktop/lib/main.js');
+  const originals = await Promise.all([readFile(officialTray), readFile(officialMain)]);
+  const built = await prepareDesktopTray(dirname(engine), join(output, 'compiled'));
   const code = await readFile(built, 'utf8');
   verifyTrayBundle(code);
   assert.match(code, /About BenchGo/);
@@ -97,12 +107,12 @@ test('the actual main bundle preserves show, quit, relabel and disposal through 
   assert.equal(nativeTray.menu[0].label, 'Main Window');
   assert.equal(nativeTray.menu[2].label, 'Quit');
   tray.dispose(); assert.equal(nativeTray.destroyed, true);
-  assert.deepEqual(await Promise.all([readFile(trayPath), readFile(officialMain)]), originals);
+  assert.deepEqual(await Promise.all([readFile(officialTray), readFile(officialMain)]), originals);
   // Exercise the same staged file mapping and ASAR extraction as the installer.
   const app = join(output, 'app');
   await mkdir(join(app, 'lib'), { recursive: true });
   await writeFile(join(app, 'lib/main.js'), code);
-  const require = createRequire(join(root, 'deepseek-harness/apps/desktop/package.json'));
+  const require = createRequire(join(engine, 'apps/desktop/package.json'));
   const { createPackage, extractFile } = createRequire(require.resolve('app-builder-lib'))('@electron/asar');
   await createPackage(app, join(output, 'app.asar'));
   verifyTrayBundle(extractFile(join(output, 'app.asar'), 'lib/main.js').toString('utf8'));
