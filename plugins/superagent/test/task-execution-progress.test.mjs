@@ -28,13 +28,13 @@ const Query = await import(pathToFileURL(requireQuery.resolve('@deepseek-ai/dsh-
 const { createTaskExecutionProgress } = await import('../src/task-execution-progress.mjs');
 const { createAssistantOrchestrationStore } = await import('../src/orchestration-store.mjs');
 
-async function fixture(t, { begin = true } = {}) {
+async function fixture(t, { begin = true, target = 'PRIVATE TARGET', acceptance = 'PRIVATE ACCEPTANCE' } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-execution-observation-'));
   let database = createAssistantOrchestrationStore({ directory }), host, progress, eventObserver;
   const source = { channel: 'desktop', sessionId: 'owner', messageId: 'first', threadId: 'main' };
   const mandate = { actorId: 'desktop-owner', source, instruction: 'first', policyVersion: 'current', admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval' };
   const { trigger } = database.ingest({ dedupeKey: 'first', thread: { id: 'desktop:owner', source: { type: 'desktop', id: 'owner' } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: 'first', mode: 'direct' });
-  const ticket = database.createTicket({ threadId: trigger.threadId, target: 'PRIVATE TARGET', acceptance: 'PRIVATE ACCEPTANCE', mandate });
+  const ticket = database.createTicket({ threadId: trigger.threadId, target, acceptance, mandate });
   database.createAssignment(ticket.id, { id: 'assignment', text: ticket.target });
   const [assignment] = database.claimAssignments('test-owner', { validateMandate: () => true });
   const ownership = { owner: assignment.owner, fence: assignment.fence };
@@ -211,8 +211,8 @@ test('cold interrupted-turn repair is observation evidence and never a completed
   assert.equal(f.host.ctx.agents.list().length, 0);
 });
 
-test('runtime evidence uses the shared source and domain commit signals without exposing requirements', async t => {
-  const f = await fixture(t), session = f.worker.agent.session;
+test('runtime evidence uses the shared source and domain commit signals with redacted requirements', async t => {
+  const f = await fixture(t, { target: '检查执行 token=PRIVATE_TARGET', acceptance: '验证结果 api_key=PRIVATE_ACCEPTANCE' }), session = f.worker.agent.session;
   turn(session); call(session); result(session); end(session); await f.progress.dispose();
   const { createOrchestrationRuntime } = await import('../src/orchestration-runtime.mjs');
   const runtime = createOrchestrationRuntime({ ctx: f.host.ctx,
@@ -226,7 +226,12 @@ test('runtime evidence uses the shared source and domain commit signals without 
     assert.equal(evidence.ticket.id, f.ticket.id); assert.equal(evidence.run.id, f.run.id);
     assert.equal(evidence.assignment.fence, f.assignment.fence); assert.equal(typeof evidence.assignment.leaseUntil, 'number');
     assert.equal(evidence.executionAlive.status, 'idle'); assert.equal(evidence.request.state, 'unknown');
-    assert.equal(evidence.request.deadline, null); assert.equal(evidence.outputChanges, null);
+    assert.equal(evidence.request.deadline, null);
+    assert.equal(evidence.modelEvidence.outputObservation, 'unknown', 'tool activity alone does not prove observed artifact changes');
+    assert.deepEqual(evidence.modelEvidence.outputChanges, []);
+    assert.equal(evidence.artifactCoverage.known, false); assert.equal(evidence.artifactCoverage.complete, false);
+    assert.equal(evidence.modelEvidence.target, '检查执行 token=[秘密已隐藏]');
+    assert.deepEqual(evidence.modelEvidence.acceptance, ['验证结果 api_key=[秘密已隐藏]']);
     assert.equal(evidence.watermarks[0].sourceSeq, session.seq - 1);
     assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE|arguments|opaque-provider|opaque\/model/);
     assert.throws(() => runtime.executionFacts.evidence({ ticketId: f.ticket.id, runId: 'foreign-run' }), { code: 'EXECUTION_FACT_BINDING' });
@@ -242,7 +247,7 @@ test('runtime evidence uses the shared source and domain commit signals without 
 });
 
 test('official live jobs prove only execution-owned background work, without inventing deadlines or artifact progress', async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, { target: '检查执行 token=PRIVATE_TARGET', acceptance: '验证结果 api_key=PRIVATE_ACCEPTANCE' });
   await f.progress.dispose();
   const Jobs = await import(pathToFileURL(join(official, 'packages/jobs/jobs-local/lib/index.js')).href);
   await f.host.ctx.plugin(Jobs.default || Jobs);
@@ -266,7 +271,11 @@ test('official live jobs prove only execution-owned background work, without inv
     assert.equal(read().wait.kind, 'none');
     const own = start(f.run.sessionId), expectedSince = new Date(f.host.ctx.jobs.get(own.id, f.run.sessionId).startedAt).toISOString();
     assert.deepEqual(read().wait, { kind: 'background-job', since: expectedSince, expectedUntil: null });
-    assert.equal(read().request.deadline, null); assert.equal(read().outputChanges, null);
+    const evidence = read();
+    assert.equal(evidence.request.deadline, null);
+    assert.equal(evidence.modelEvidence.outputObservation, 'unknown', 'an owned background job does not prove observed artifact changes');
+    assert.deepEqual(evidence.modelEvidence.outputChanges, []);
+    assert.equal(evidence.artifactCoverage.known, false); assert.equal(evidence.artifactCoverage.complete, false);
     assert.doesNotMatch(JSON.stringify(read()), /PRIVATE|label|progress|spillPaths/);
     await own.settle();
     assert.equal(read().wait.kind, 'none');

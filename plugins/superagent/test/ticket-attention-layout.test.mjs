@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { officialUiEntries, officialUiLoaders } from '../../link/scripts/official-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const webRequire = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
@@ -44,8 +45,8 @@ async function fixture() {
     ` },
     bundle:true,write:false,outdir:join(root,'artifacts','unused-question-test-output'),format:'iife',jsx:'automatic',
     nodePaths:[join(root,'plugins/benchgo/node_modules'),join(root,'deepseek-harness/apps/web/node_modules')],
-    alias:{react:dirname(webRequire.resolve('react/package.json')),'react-dom':dirname(webRequire.resolve('react-dom/package.json'))},
-    loader:{'.css':'text','.svg':'text'},plugins:[sharedUiStyles()],define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent',
+    alias:{...await officialUiEntries(),react:dirname(webRequire.resolve('react/package.json')),'react-dom':dirname(webRequire.resolve('react-dom/package.json'))},
+    loader:{...officialUiLoaders,'.css':'text','.svg':'text'},plugins:[sharedUiStyles()],define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent',
   });
   const themeRoot=join(root,'deepseek-harness/packages/client/ui-theme/src/styles');
   const theme=(await Promise.all(['base.css','design-platform.css','focus.css'].map(name=>readFile(join(themeRoot,name),'utf8')))).join('\n');

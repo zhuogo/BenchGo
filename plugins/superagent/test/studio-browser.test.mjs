@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -9,6 +9,10 @@ import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
+// Reuse the pinned official ESM client when this worktree shares its built dependency tree.
+const checkout = join(root, 'deepseek-harness');
+const official = existsSync(join(checkout, 'packages/api/gateway/lib/client.node.js')) ? checkout : dirname(realpathSync(join(checkout, 'node_modules')));
+const requireOfficial = createRequire(join(official, 'packages/api/gateway/package.json'));
 const { chromium } = require('playwright');
 const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
@@ -32,7 +36,8 @@ async function fixture() {
     createRoot(document.getElementById('root')).render(<App/>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-studio-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
-    alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
+    alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')),
+      '@deepseek-ai/dsh-api-gateway/client': requireOfficial.resolve('@deepseek-ai/dsh-api-gateway/client') },
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.woff2': 'dataurl', '.woff': 'dataurl', '.ttf': 'dataurl' }, plugins: [{ name: 'official-studio-primitives-source', setup(build) {
       // Use the pinned official components directly when workspace lib outputs are absent.
       build.onResolve({ filter: /^@deepseek-ai\/dsh-client-ui-primitives$/ }, () => ({ path: 'primitives', namespace: 'official-source' }));
