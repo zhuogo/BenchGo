@@ -1,7 +1,7 @@
 import { validatePetProfile } from './pet-profile.mjs';
-import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write';
 import { resolve, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { ASSISTANT_DOCUMENTS, createAssistantDocuments, documentHash } from './documents.mjs';
 import { createAssistantMemory } from './memory.mjs';
 import { createAssistantReview } from './review.mjs';
@@ -110,9 +110,7 @@ async function json(path, fallback) {
   try { return JSON.parse(await readFile(path, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return copy(fallback); throw error; }
 }
 async function atomic(path, content) {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try { await writeFile(temporary, content, { encoding: 'utf8', mode: 0o600 }); await rename(temporary, path); }
-  finally { await unlink(temporary).catch((error) => { if (error.code !== 'ENOENT') throw error; }); }
+  await writeFileAtomic(path, content, { mode: 0o600 });
 }
 function serialize(key, operation) {
   const previous = queues.get(key) || Promise.resolve();

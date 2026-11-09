@@ -2404,6 +2404,46 @@ test('confirmed failed expression retries after backoff without replaying the Wo
   assert.deepEqual((await f.engine.history()).messages, []);
 });
 
+test('an internal result expression blocked before processing persistence retries only its never-dispatched message after backoff', async t => {
+  let clock = Date.now(), injected = false;
+  const f = await stateReportFixture(t, () => text('你要的内容已整理好。'), { workerResult: true, now: () => clock,
+    beforeStateWrite(patch) {
+      if (!injected && patch.requests?.some(row => row.ticketReply && row.status === 'processing')) {
+        injected = true; throw Object.assign(new Error('EPERM: injected state rename refusal'), { code: 'EPERM' });
+      }
+    } });
+  assert.equal((await f.settle()).status, 'failed');
+  const original = (await f.store.getState()).requests.find(row => row.ticketReply);
+  assert.equal(original.sessionId, undefined); assert.equal(f.requests.length, 0);
+  assert.equal(original.retryAt, clock + 30_000);
+  clock += 31_000;
+  const retries = await Promise.all([f.engine.prepareTicketReply(f.delivery), f.engine.prepareTicketReply(f.delivery)]);
+  assert.ok(retries.some(receipt => receipt.status === 'pending'));
+  assert.equal((await f.settle()).status, 'ready');
+  const restored = (await f.store.getState()).requests.find(row => row.ticketReply);
+  assert.equal(restored.requestId, original.requestId); assert.equal(restored.ticketReply.eventKey, original.ticketReply.eventKey);
+  assert.notEqual(restored.messageId, original.messageId); assert.equal(restored.attempt, 2);
+  assert.equal(f.requests.length, 1, 'only the Router expression starts; the original Worker is not involved');
+});
+
+for (const boundary of ['prepared-record', 'uncertain', 'cancelled']) test(`missing session identity does not permit expression replay across ${boundary}`, async t => {
+  let clock = Date.now(), injected = false;
+  const f = await stateReportFixture(t, () => text('MUST NOT RUN'), { workerResult: true, now: () => clock,
+    beforeStateWrite(patch) {
+      if (!injected && patch.requests?.some(row => row.ticketReply && row.status === 'processing')) {
+        injected = true; throw Object.assign(new Error('EPERM: injected state rename refusal'), { code: 'EPERM' });
+      }
+    } });
+  assert.equal((await f.settle()).status, 'failed');
+  const row = (await f.store.getState()).requests.find(item => item.ticketReply);
+  if (boundary === 'prepared-record') modules[0].appendPluginRecord(f.agent.session, 'plugin:benchgo-plugin/prepared-expression-test', { requestId: row.messageId });
+  else await f.store.updateState({ requests: (await f.store.getState()).requests.map(item => item.requestId === row.requestId ? { ...item, status: boundary } : item) });
+  clock += 31_000;
+  assert.equal((await f.engine.prepareTicketReply(f.delivery)).status, boundary === 'cancelled' ? 'suppressed' : 'failed');
+  assert.equal(f.requests.length, 0);
+  assert.equal((await f.store.getState()).requests.find(item => item.requestId === row.requestId).messageId, row.messageId);
+});
+
 
 test('verified Router actions do not create a second reminder expression', async t => {
   const f = await stateReportFixture(t, () => text('must not run'));

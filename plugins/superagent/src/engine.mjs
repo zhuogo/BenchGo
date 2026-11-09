@@ -126,6 +126,28 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     return validateTicketMandate(store.orchestration.currentTicketMandate(ticket.id, ticket.mandate),
       { policy: await readAssessmentPolicy(store, ctx.workspaceRegistry, threadId) });
   }
+  async function definitelyUnstartedExpression(threadId, row) {
+    if (row.status !== 'failed' || row.sessionId || row.suppressed || !row.messageId
+      || !['result', 'state'].includes(row.ticketReply?.kind) || row.message?.id !== row.messageId
+      || row.message.source?.kind !== ticketReplySource || row.message.source.eventKey !== row.ticketReply.eventKey) return false;
+    // The inbox persists processing+session identity before followup. Legacy
+    // failures without that identity also need absence from every original
+    // Router session (including live, unflushed events), never a guessed replay.
+    const owner = await ticketOwnerScope(threadId), sessions = await ctx.sessionQuery.listSessions();
+    for (const sessionId of owner.sessionIds) {
+      const live = ctx.sessions.get(sessionId);
+      let events;
+      if (live) events = live.snapshotEvents();
+      else if (sessions.some(session => session.header.id === sessionId)) {
+        try { events = (await ctx.sessionQuery.readSession(sessionId)).events; }
+        catch { return false; }
+      } else continue;
+      if (events.some(event => event.type === 'user/message' && event.data?.id === row.messageId
+        || event.data?.messageId === row.messageId || event.data?.requestId === row.messageId)) return false;
+    }
+    const current = ((await store.getState()).requests || []).find(item => item.requestId === row.requestId);
+    return current?.messageId === row.messageId && current.status === 'failed' && !current.sessionId && !current.suppressed;
+  }
   async function prepareRouterMessage(agent, message, { recovery = false } = {}) {
     const config = await store.getConfig();
     let candidates = copy(config.models);
@@ -683,11 +705,11 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       }
       // A settled failed turn has no external effect: retry only expression,
       // under the same event identity. Ambiguous/cancelled turns never replay.
-      if (['failed', 'processed'].includes(row.status) && row.sessionId) {
+      if (row.status === 'failed' || row.status === 'processed' && row.sessionId) {
         const retryAt = row.retryAt ?? Date.parse(row.updatedAt || row.createdAt) + Math.min(300_000, 30_000 * 2 ** Math.min(4, (row.attempt || 1) - 1));
         if (row.retryAt === undefined) await updateState(state => ({ requests: state.requests.map(item => item.requestId === row.requestId
           && item.messageId === row.messageId ? { ...item, retryAt } : item) }));
-        if (now() >= retryAt) {
+        if (now() >= retryAt && (row.sessionId || await definitelyUnstartedExpression(threadId, row))) {
           await inbox.enqueueTicketReply({ threadId, signal, retry: true });
           return { status: 'pending' };
         }
