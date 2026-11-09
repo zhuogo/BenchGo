@@ -22,7 +22,7 @@ function fixture({ api, refresh = async () => {}, entries = [] }) {
     require: id => id === 'react' ? react : id.endsWith('time-groups.mjs') ? { groupByDay } : id.endsWith('button.jsx') ? { Button: 'button' } : id.endsWith('collapsible.jsx') ? { Disclosure: 'disclosure' } : {},
   });
   const render = () => { cursor = 0; return walk(module.exports.MemoryFeed({ api, refresh, entries, threadId: 'main' })); };
-  const button = label => render().find(node => node.type === 'button' && node.children.includes(label));
+  const button = label => render().find(node => node.type === 'button' && walk(node).some(child => child.children.includes(label)));
   return {
     render, button, confirmations: () => confirmations,
     draft: () => render().find(node => node.type === 'textarea').props.value,
@@ -103,6 +103,21 @@ test('memory timeline exposes original sources and version references with local
   assert.ok(times.every(node => !node.children.includes(node.props.dateTime)));
   assert.ok(nodes.some(node => node.type === 'li' && node.children.includes(1)));
   const old = fixture({ api: async () => {}, entries: [{ ...entry, source: { messageId: 'old-message' }, versionChain: [] }] });
-  assert.ok(old.render().some(node => node.type === 'p' && node.children.includes('此记录未保存来源原文。')));
+  assert.equal(old.render().some(node => node.type === 'p' && node.children.includes('此记录未保存来源原文。')), false);
   assert.equal(old.render().filter(node => node.type === 'disclosure').length, 1);
+  const noSource = fixture({ api: async () => {}, entries: [{ ...entry, source: {}, versionChain: [] }] });
+  assert.equal(noSource.render().filter(node => node.type === 'disclosure').length, 0);
+});
+
+test('failed deletion preserves the editing draft and observed revision', async () => {
+  const entry = { id: 'memory-delete', content: '原记忆', revision: 4, document: 'MEMORY.md' };
+  let request;
+  const f = fixture({ entries: [entry], api: async (action, input) => { request = { action, input }; throw new Error('删除失败'); } });
+  f.button('编辑').props.onClick();
+  f.write('尚未保存的编辑内容');
+  await f.button('忘记').props.onClick();
+  assert.equal(f.draft(), '尚未保存的编辑内容');
+  assert.equal(request.action, 'memoryDelete');
+  assert.equal(request.input.revision, 4);
+  assert.equal(f.button('保存修改').props.disabled, false);
 });

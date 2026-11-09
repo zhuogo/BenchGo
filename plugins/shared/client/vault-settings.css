@@ -8,18 +8,17 @@
   max-width: 880px; margin: 0 auto; color: var(--vault-ink); font-size: 14px; line-height: 1.6;
 }
 .bg-vault * { box-sizing: border-box; }
-.bg-vault h2 { display: flex; align-items: center; gap: 9px; margin: 0; font-size: 15px; font-weight: 600; }
-.bg-vault h2 > span { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; border-radius: 7px; background: var(--vault-soft); color: var(--vault-muted); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.bg-vault h1 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -.025em; line-height: 1.35; }
+.bg-vault h1 > span { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; border-radius: 7px; background: var(--vault-soft); color: var(--vault-muted); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.bg-vault h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .bg-vault h3 { margin: 0; font-size: 15px; font-weight: 600; }
 .bg-vault p { margin: 4px 0 0; color: var(--vault-muted); font-size: 13px; }
 .bg-vault small, .bg-vault time { color: var(--vault-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.bg-vault-intro { display: flex; align-items: center; gap: 14px; padding: 18px 20px; margin-bottom: 24px; border: 1px solid color-mix(in srgb, var(--vault-accent) 14%, var(--vault-line)); border-radius: 12px; background: color-mix(in srgb, var(--vault-accent) 4%, var(--vault-surface)); }
-.bg-vault-intro > svg { color: var(--vault-accent); }
-.bg-vault-intro strong { font-size: 14px; font-weight: 600; }
 .bg-vault-toolbar, .bg-vault-actions { display: flex; align-items: center; gap: 8px; }
-.bg-vault-toolbar { justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.bg-vault-toolbar { justify-content: space-between; gap: 16px; margin-bottom: 24px; }
 .bg-vault-actions { flex-wrap: wrap; }
-.bg-vault button, .bg-vault input { min-height: 40px; padding: 8px 12px; font: inherit; color: inherit; border: 1px solid transparent; border-radius: 8px; }
+.bg-vault button, .bg-vault input { min-height: 36px; padding: 8px 12px; font: inherit; color: inherit; border: 1px solid transparent; border-radius: 8px; }
+.bg-vault .bg-ui-button { font-size: 13px; }
 .bg-vault button { cursor: pointer; white-space: nowrap; background: transparent; }
 .bg-vault input, .bg-vault button.dowork-select { width: 100%; min-width: 0; border-color: var(--vault-line); background: var(--vault-surface); }
 .bg-vault button:hover:not(:disabled) { background: var(--vault-soft); }
@@ -30,19 +29,21 @@
 .bg-vault .bg-vault-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--vault-accent) 90%, #000); }
 .bg-vault .bg-vault-quiet, .bg-vault .bg-vault-remove { color: var(--vault-muted); }
 .bg-vault .bg-vault-remove:hover:not(:disabled) { color: var(--dsw-alias-status-error, #b44137); background: color-mix(in srgb, #b44137 6%, var(--vault-surface)); }
-.bg-vault-empty, .bg-vault-loading { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 12px; padding: 36px 24px; border: 1px solid var(--vault-line); border-radius: 12px; background: var(--vault-surface); }
-.bg-vault-empty-icon { display: grid; place-items: center; width: 60px; height: 60px; margin-bottom: 4px; border-radius: 18px; background: color-mix(in srgb, var(--vault-accent) 7%, var(--vault-surface)); color: var(--vault-accent); }
+.bg-vault-empty, .bg-vault-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 280px; text-align: center; gap: 12px; padding: 28px 24px; }
+.bg-vault-empty-icon { display: grid; place-items: center; width: 52px; height: 52px; margin-bottom: 4px; border-radius: 14px; background: color-mix(in srgb, var(--vault-accent) 7%, transparent); color: var(--vault-accent); }
 .bg-vault-empty strong { font-size: 15px; font-weight: 600; }
 .bg-vault-empty p { max-width: 340px; margin: -4px 0 4px; }
-.bg-vault-loading { align-items: stretch; padding: 20px; text-align: left; }
+.bg-vault-loading { width: min(100%, 520px); margin-inline: auto; align-items: stretch; padding: 20px; }
 .bg-vault-loading > span { font-size: 13px; color: var(--vault-muted); }
-.bg-vault-skeleton-row { display: flex; align-items: center; gap: 14px; min-height: 64px; }
+.bg-vault-skeleton-row { display: flex; align-items: center; gap: 14px; min-height: 48px; }
 .bg-vault-skeleton-row > i { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--vault-soft); }
 .bg-vault-skeleton-row > div { display: grid; flex: 1; gap: 10px; }
 .bg-vault-skeleton-row b { height: 10px; width: 60%; border-radius: 4px; background: var(--vault-soft); }
 .bg-vault-skeleton-row b + b { width: 85%; }
-.bg-vault-list { display: grid; gap: 12px; list-style: none; padding: 0; margin: 0; }
-.bg-vault-list li { display: flex; align-items: flex-start; gap: 14px; padding: 20px; border: 1px solid var(--vault-line); border-radius: 12px; background: var(--vault-surface); }
+.bg-vault-list { display: grid; list-style: none; padding: 0; margin: 0; }
+.bg-vault-list li { display: flex; align-items: center; gap: 14px; padding: 18px 0; border-bottom: 1px solid var(--vault-line); }
+.bg-vault-list li:first-child { padding-top: 0; }
+.bg-vault-list li:last-child { border-bottom: 0; }
 .bg-vault-entry-icon { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: 10px; background: var(--vault-soft); color: var(--vault-muted); }
 .bg-vault-entry-content { flex: 1; min-width: 0; }
 .bg-vault-entry-title { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 7px; }
@@ -61,12 +62,13 @@
 .bg-vault-error > div { flex: 1; min-width: 0; }
 .bg-vault-error strong { font-size: 14px; font-weight: 600; }
 .bg-vault-error p { overflow-wrap: anywhere; }
-.bg-vault .bg-vault-error-empty { flex-direction: column; align-items: center; text-align: center; padding: 32px 24px; }
+.bg-vault .bg-vault-error-empty { flex-direction: column; align-items: center; justify-content: center; min-height: 280px; text-align: center; padding: 28px 24px; }
+.bg-vault .bg-vault-error-empty > div { flex: none; }
 .bg-vault .bg-vault-notice { display: flex; align-items: center; gap: 8px; margin: 14px 0; padding: 12px 16px; border-radius: 8px; background: color-mix(in srgb, var(--vault-accent) 6%, var(--vault-surface)); color: var(--vault-ink); }
 .bg-vault-notice > span { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--vault-accent); }
-.bg-vault-editor { margin-top: 20px; padding: 24px; border: 1px solid var(--vault-line); border-radius: 12px; background: var(--vault-surface); }
-.bg-vault-editor-heading { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 24px; }
-.bg-vault-editor-heading > svg { color: var(--vault-accent); margin-top: 3px; }
+.bg-vault-editor { margin-top: 20px; padding: 20px 0; border-top: 1px solid var(--vault-line); }
+.bg-vault-editor-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.bg-vault-editor-heading > svg { color: var(--vault-accent); }
 .bg-vault-group { min-width: 0; margin: 0; padding: 16px 0 24px; border: 0; }
 .bg-vault-group + .bg-vault-group { border-top: 1px solid var(--vault-line); padding-top: 22px; }
 .bg-vault-group legend { padding: 0; font-size: 13px; font-weight: 600; }
@@ -77,19 +79,16 @@
 .bg-vault-editor-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-top: 20px; border-top: 1px solid var(--vault-line); }
 .bg-vault-editor-footer > span { color: var(--vault-muted); font-size: 12px; }
 @media (max-width: 600px) {
-  .bg-vault-intro { align-items: flex-start; padding: 16px; margin-bottom: 20px; }
-  .bg-vault-intro > svg { margin-top: 2px; }
+  .bg-vault h1 { font-size: 22px; }
   .bg-vault-toolbar { flex-wrap: wrap; gap: 12px; }
   .bg-vault-toolbar > .bg-vault-actions { margin-left: auto; }
-  .bg-vault-list li { flex-wrap: wrap; gap: 12px; padding: 16px; }
+  .bg-vault-list li { flex-wrap: wrap; gap: 12px; padding: 16px 0; }
   .bg-vault-list li > .bg-vault-actions { justify-content: flex-end; width: 100%; }
   .bg-vault-list li > .bg-vault-actions button, .bg-vault button, .bg-vault input { min-height: 44px; }
   .bg-vault-fields { grid-template-columns: 1fr; gap: 16px; }
   .bg-vault-wide { grid-column: auto; }
-  .bg-vault-editor { padding: 18px 16px; }
+  .bg-vault-editor { padding: 18px 0; }
   .bg-vault-editor-footer { align-items: stretch; flex-direction: column; }
   .bg-vault-editor-footer > .bg-vault-actions { justify-content: flex-end; }
   .bg-vault .bg-vault-error { flex-wrap: wrap; }
-  .bg-vault .bg-vault-error > button { margin-left: auto; }
-  .bg-vault .bg-vault-error-empty > button { margin-left: 0; }
 }

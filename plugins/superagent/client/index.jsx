@@ -2,7 +2,7 @@ import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
 import { ModelSettings } from './model-settings.jsx';
 import { retainAssistantSession } from './session-retain.mjs';
-import { identityConfigPatch } from './model-settings.mjs';
+import { identityConfigPatch, validateModelSettings } from './model-settings.mjs';
 import React, { useEffect, useRef, useState, useId, useSyncExternalStore } from 'react';
 import { Tooltip, Modal, Menu, IconPinOutlineMedium, IconPinFillMedium, IconArchiveOutlineMedium, IconArchiveOffOutlineMedium, IconEllipsisOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives';
 import { UIIcon as BaseIcon } from '../../benchgo/client/iconsax.jsx';
@@ -183,13 +183,42 @@ function RetainedPane({ active, children }) {
   if (active) visited.current = true;
   return visited.current ? <div style={{ display: active ? 'contents' : 'none' }} hidden={!active}>{children}</div> : null;
 }
-function Studio({ snapshot, ctx, execute, refresh, threadId, SessionProvider, renderSlot, active = true, initialSection = 'identity', initialIdentityTab = 'info', requestedTab, requestedTicket }) {
-  const [section, setSection] = useState(initialSection), [dirtySections, setDirtySections] = useState([]), [taskTab, setTaskTab] = useState('tasks');
+function Studio({ snapshot, ctx, refresh, threadId, SessionProvider, renderSlot, initialSection = 'identity', initialIdentityTab = 'info', requestedTab, requestedTicket, active = true }) {
+  const [section, setSection] = useState(initialIdentityTab === 'models' ? 'models' : initialSection), [dirtySections, setDirtySections] = useState([]), [taskTab, setTaskTab] = useState('tasks');
+  const [systemPreview, setSystemPreview] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(initialSection === 'system-files');
+  const body = useRef(null), scrollPositions = useRef(new Map()), restoringScroll = useRef(false);
+  useEffect(() => {
+    const node = body.current;
+    if (!node) return;
+    const target = scrollPositions.current.get(section) || 0;
+    let observer, deadline;
+    restoringScroll.current = target > 0;
+    const stop = () => { restoringScroll.current = false; observer?.disconnect(); clearTimeout(deadline); };
+    const restore = () => {
+      node.scrollTop = target;
+      if (Math.abs(node.scrollTop - target) < 1) stop();
+    };
+    // A revisited list may still be loading. Restore once its content arrives,
+    // and yield immediately when the user chooses to scroll elsewhere.
+    restore();
+    if (restoringScroll.current) {
+      observer = new ResizeObserver(restore);
+      for (const child of node.children) observer.observe(child);
+      deadline = setTimeout(stop, 5000);
+    }
+    const navigate = event => { if (['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(event.key)) stop(); };
+    node.addEventListener('wheel', stop, { passive: true });
+    node.addEventListener('touchstart', stop, { passive: true });
+    node.addEventListener('keydown', navigate);
+    return () => { stop(); node.removeEventListener('wheel', stop); node.removeEventListener('touchstart', stop); node.removeEventListener('keydown', navigate); };
+  }, [section]);
   useEffect(() => {
     if (['tasks', 'memory'].includes(requestedTab)) setSection(requestedTab);
     if (requestedTab === 'goals') { setSection('tasks'); setTaskTab('goals'); setCreatingGoal(false); }
     if (requestedTab === 'approvals') { setSection('tasks'); setTaskTab('approvals'); setCreatingGoal(false); }
-    if (['models', 'pet'].includes(requestedTab)) setSection('identity');
+    if (requestedTab === 'models') setSection('models');
+    if (requestedTab === 'pet') setSection('identity');
   }, [requestedTab]);
   useEffect(() => {
     if (requestedTicket?.ticketId) { setSection('tasks'); setTaskTab('tasks'); setCreatingGoal(false); }
@@ -205,26 +234,26 @@ function Studio({ snapshot, ctx, execute, refresh, threadId, SessionProvider, re
     return () => window.removeEventListener('beforeunload', guard);
   }, [dirty]);
   const groups = [
-    { id: 'configuration', label: '配置', items: [['identity', '身份', 'userlib'], ['documents', '档案', 'document']] },
+    { id: 'configuration', label: '配置', items: [['identity', '身份', 'userlib'], ['models', '模型', 'atom'], ['documents', '档案', 'document']] },
     { id: 'workspace', label: '工作区', items: [['tasks', '任务', 'experiment'], ['memory', '记忆', 'bulb'], ['artifacts', '产物', 'picture']] },
-    { id: 'integrations', label: '接入', items: [['connections', '多平台', 'category'], ['vault', '保险库', 'lock'], ['permissions', '授权管理', 'lock']] },
-    { id: 'system', label: '系统', items: [['system-files', '系统文件', 'code']] },
+    { id: 'integrations', label: '接入', items: [['connections', '多平台', 'devices'], ['vault', '保险库', 'key'], ['permissions', '授权管理', 'shield']] },
+    { id: 'system', label: '高级', items: [['system-files', '系统文件', 'code']] },
   ];
   const items = groups.flatMap(group => group.items);
   const current = items.find(([id]) => id === section) || items[0];
   const descriptions = {
-    identity: '设定名字、形象与模型，让助手更懂你的工作方式。',
+    identity: '设定名字与形象，让助手更懂你的工作方式。',
+    models: '设置身份、工作与辅助模型，按优先顺序调用。',
     documents: '整理关于你和助手的档案，作为每次协作的共同背景。',
     tasks: '跟进工单与持续目标，在审核中集中处理待授权操作。',
     memory: '留下值得记住的偏好、决定与经验。',
-    artifacts: '查看、预览和管理助手交付的文件。',
     connections: '把助手接入常用平台，在熟悉的地方继续对话。',
-    vault: '集中保管凭据，按需提供给指定工具。',
-    permissions: '查看网站许可与动作记录，按需撤销授权。',
     'system-files': '浏览助手的运行文件与目录，查看原始记录。',
   };
   const choose = next => {
     if (next === section) return;
+    if (body.current) scrollPositions.current.set(section, body.current.scrollTop);
+    if (next === 'system-files') setAdvancedOpen(true);
     setSection(next);
   };
   useEffect(() => {
@@ -235,16 +264,31 @@ function Studio({ snapshot, ctx, execute, refresh, threadId, SessionProvider, re
     document.addEventListener('benchgo:assistant-open-identity', openIdentity);
     return () => document.removeEventListener('benchgo:assistant-open-identity', openIdentity);
   }, [section]);
-  return <div className="ba-studio"><aside className="ba-studio-nav"><div className="ba-studio-nav-title"><BrandLogo size={30} decorative /><div><strong>SuperAgent</strong><span>资源与设置</span></div></div><nav aria-label="资源分区">{groups.map(group => <div className="ba-studio-nav-group" key={group.id}><span className="ba-studio-nav-group-label">{group.label}</span>{group.items.map(([id, label, icon]) => <Button variant="ghost" type="button" key={id} aria-current={section === id ? 'page' : undefined} onClick={() => choose(id)}>{id === 'documents' ? <ResourceIcon name="document" size={16} /> : id === 'vault' ? <ResourceIcon name="key" size={16} /> : id === 'system-files' ? <ResourceIcon name="code" size={16} /> : <UIIcon name={icon} size={16} />}<span><b>{label}{dirtySections.includes(id) && <span className="ba-draft-dot" aria-label="未保存" title="未保存">●</span>}</b></span></Button>)}</div>)}</nav></aside><div className="ba-studio-mobile-nav"><label htmlFor="ba-studio-section">资源分区</label><CustomSelect id="ba-studio-section" aria-label="资源分区" value={section} onChange={choose} options={groups.flatMap(group => group.items.map(([id, label]) => ({ value: id, label: `${group.label} · ${label}${dirtySections.includes(id) ? ' · 未保存' : ''}` })))} /></div><div className="ba-studio-body"><header className="ba-studio-heading"><div><h1>{current[1]}</h1><p>{descriptions[section]}</p></div>{dirtySections.includes(section) && <span className="ba-studio-draft" role="status"><span aria-hidden="true" />草稿已保留</span>}</header>
-    <div hidden={section !== 'identity'} style={section !== 'identity' ? { display: 'none' } : undefined}>{(section === 'identity' || dirtySections.includes('identity')) && <Identity snapshot={snapshot} execute={execute} refresh={refresh} onDirtyChange={dirtyEditor('identity')} initialTab={initialIdentityTab} requestedTab={requestedTab} onDesign={() => { petDesignIntent.request(threadId); openAssistantThread(ctx, threadId); }} />}</div>
+  const navigationItem = ([id, label, icon]) => <Button variant="ghost" type="button" key={id} aria-current={section === id ? 'page' : undefined} onClick={() => choose(id)}>
+    {['documents', 'vault', 'system-files', 'permissions'].includes(id) ? <ResourceIcon name={icon} size={16} /> : <UIIcon name={icon} size={16} />}
+    <span><b>{label}{dirtySections.includes(id) && <span className="ba-draft-dot" aria-label="未保存" title="未保存">●</span>}</b></span>
+  </Button>;
+  const panelSource = ctx?.layout?.panelInfo;
+  const panelInfo = useSyncExternalStore(listener => panelSource?.subscribe(listener) || (() => {}), () => panelSource?.getSnapshot() || null);
+  const visible = active && (!panelInfo || panelInfo.activePanelId === PANEL);
+  return <div className="ba-studio"><aside className="ba-studio-nav">
+    <div className="ba-studio-nav-title"><BrandLogo size={30} decorative /><div><strong>BenchGo</strong><span>资源与设置</span></div></div>
+    <nav aria-label="资源分区">{groups.map(group => group.id === 'system'
+      ? <Disclosure key={group.id} className="ba-studio-advanced" title="高级" open={advancedOpen} onOpenChange={setAdvancedOpen}>{group.items.map(navigationItem)}</Disclosure>
+      : <div className="ba-studio-nav-group" key={group.id}><span className="ba-studio-nav-group-label">{group.label}</span>{group.items.map(navigationItem)}</div>)}</nav>
+  </aside><div className="ba-studio-mobile-nav"><label htmlFor="ba-studio-section">资源分区</label><CustomSelect id="ba-studio-section" aria-label="资源分区" value={section} onChange={choose} options={groups.flatMap(group => group.items.map(([id, label]) => ({ value: id, label: `${group.label} · ${label}${dirtySections.includes(id) ? ' · 未保存' : ''}` })))} /></div>
+  <div className="ba-studio-body" ref={body} onScroll={event => { if (!restoringScroll.current) scrollPositions.current.set(section, event.currentTarget.scrollTop); }} data-section={section}>
+    {!['artifacts', 'vault', 'permissions'].includes(section) && !(section === 'system-files' && systemPreview) && <header className="ba-studio-heading"><div><h1>{current[1]}</h1><p>{descriptions[section]}</p></div>{dirtySections.includes(section) && <span className="ba-studio-draft" role="status"><span aria-hidden="true" />草稿已保留</span>}</header>}
+    <div hidden={section !== 'identity'} style={section !== 'identity' ? { display: 'none' } : undefined}>{(section === 'identity' || dirtySections.includes('identity')) && <Identity snapshot={snapshot} refresh={refresh} onDirtyChange={dirtyEditor('identity')} initialTab={initialIdentityTab === 'models' ? 'info' : initialIdentityTab} requestedTab={requestedTab} onDesign={() => { petDesignIntent.request(threadId); openAssistantThread(ctx, threadId); }} />}</div>
+    <div hidden={section !== 'models'} style={section !== 'models' ? { display: 'none' } : undefined}>{(section === 'models' || dirtySections.includes('models')) && <Identity modelsOnly snapshot={snapshot} refresh={refresh} onDirtyChange={dirtyEditor('models')} />}</div>
     <div hidden={section !== 'documents'} style={section !== 'documents' ? { display: 'none' } : undefined}>{(section === 'documents' || dirtySections.includes('documents')) && <AssistantDocuments api={api} refresh={refresh} onDirtyChange={dirtyEditor('documents')} />}</div>
-    <div hidden={section !== 'tasks'} style={section !== 'tasks' ? { display: 'none' } : undefined}>{(section === 'tasks' || dirtySections.includes('tasks')) && <section className="ba-group"><ResourceTabs tabs={[["tickets", "工单"], ["approvals", "审核"], ["goals", "持续目标"], ["evaluations", "待处置评估"]]} value={taskTab === 'tasks' ? 'tickets' : taskTab} onChange={next => { if (next !== taskTab && (!dirtySections.includes('tasks') || window.confirm('切换分类会放弃未保存的目标。'))) { setCreatingGoal(false); setTaskTab(next === 'tickets' ? 'tasks' : next); } }} label="工作分类" id={taskTabsId} /><div id={taskTabsId + '-panel'} role="tabpanel" aria-labelledby={taskTabsId + '-' + (taskTab === 'tasks' ? 'tickets' : taskTab)}>{taskTab === 'tasks' ? <Tickets api={api} onOpenExecution={execution => openExecutionSession(ctx, execution)} onSchedule={() => ctx.layout.selectPanel('schedules')} requestedTicket={requestedTicket} onDirtyChange={dirtyEditor('tasks')} onCreateGoal={() => { setCreatingGoal(true); setTaskTab('goals'); }} /> : taskTab === 'approvals' ? (active ? <ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} /> : null) : taskTab === 'goals' ? <Goals api={api} refresh={refresh} onDirtyChange={dirtyEditor('tasks')} initialCreating={creatingGoal} onViewTickets={() => { setCreatingGoal(false); setTaskTab('tasks'); }} /> : <Evaluations api={api} onDirtyChange={dirtyEditor('tasks')} />}</div></section>}</div>
+    <div hidden={section !== 'tasks'} style={section !== 'tasks' ? { display: 'none' } : undefined}>{(section === 'tasks' || dirtySections.includes('tasks')) && <section className="ba-group"><ResourceTabs tabs={[["tickets", "工单"], ["approvals", "审核"], ["goals", "持续目标"], ["evaluations", "待处置评估"]]} value={taskTab === 'tasks' ? 'tickets' : taskTab} onChange={next => { if (next !== taskTab && (!dirtySections.includes('tasks') || window.confirm('切换分类会放弃未保存的目标。'))) { setCreatingGoal(false); setTaskTab(next === 'tickets' ? 'tasks' : next); } }} label="工作分类" id={taskTabsId} /><div id={taskTabsId + '-panel'} role="tabpanel" aria-labelledby={taskTabsId + '-' + (taskTab === 'tasks' ? 'tickets' : taskTab)}>{taskTab === 'tasks' ? <Tickets api={api} onOpenExecution={execution => openExecutionSession(ctx, execution)} onSchedule={() => ctx.layout.selectPanel('schedules')} requestedTicket={requestedTicket} onDirtyChange={dirtyEditor('tasks')} onCreateGoal={() => { setCreatingGoal(true); setTaskTab('goals'); }} /> : taskTab === 'approvals' ? (visible ? <ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} /> : null) : taskTab === 'goals' ? <Goals api={api} refresh={refresh} onDirtyChange={dirtyEditor('tasks')} initialCreating={creatingGoal} onViewTickets={() => { setCreatingGoal(false); setTaskTab('tasks'); }} /> : <Evaluations api={api} onDirtyChange={dirtyEditor('tasks')} />}</div></section>}</div>
     <div hidden={section !== 'memory'} style={section !== 'memory' ? { display: 'none' } : undefined}>{(section === 'memory' || dirtySections.includes('memory')) && <MemoryPage api={api} refresh={refresh} onDirtyChange={dirtyEditor('memory')} entries={snapshot.memories || []} threadId={threadId} />}</div>
     <div hidden={section !== 'artifacts'} style={section !== 'artifacts' ? { display: 'none' } : undefined}>{(section === 'artifacts' || dirtySections.includes('artifacts')) && <Artifacts api={api} />}</div>
-    <div hidden={section !== 'connections'} style={section !== 'connections' ? { display: 'none' } : undefined}>{(section === 'connections' || dirtySections.includes('connections')) && <Connections api={api} onDirtyChange={dirtyEditor('connections')} />}</div>
+    <div hidden={section !== 'connections'} style={section !== 'connections' ? { display: 'none' } : undefined}>{(section === 'connections' || dirtySections.includes('connections')) && <Connections api={api} active={visible && section === 'connections'} onDirtyChange={dirtyEditor('connections')} />}</div>
     {section === 'permissions' && <ActionPermissions api={api} />}
     <div hidden={section !== 'vault'} style={section !== 'vault' ? { display: 'none' } : undefined}>{(section === 'vault' || dirtySections.includes('vault')) && <VaultSettingsSection onDirtyChange={dirtyEditor('vault')} />}</div>
-    <div hidden={section !== 'system-files'} style={section !== 'system-files' ? { display: 'none' } : undefined}>{(section === 'system-files' || dirtySections.includes('system-files')) && <SystemFiles api={api} />}</div>
+    <div hidden={section !== 'system-files'} style={section !== 'system-files' ? { display: 'none' } : undefined}>{(section === 'system-files' || dirtySections.includes('system-files')) && <SystemFiles api={api} onPreviewChange={setSystemPreview} />}</div>
   </div></div>;
 }
 
@@ -333,31 +377,37 @@ function Picker({ label, value, options, placeholder = '选择', allowCustom = f
   const items = options.map(item => typeof item === 'string' ? { value: item, label: item } : item);
   return <div className="ba-field"><label htmlFor={id}>{label}</label><CustomSelect id={id} aria-label={label} value={value} options={items.map(item => ({ ...item, searchText: item.label + ' ' + item.value }))} placeholder={placeholder} searchable allowCustom={allowCustom} onChange={onChange} /></div>;
 }
-function ModelFields({ value = {}, onChange }) {
+function ModelFields({ value = {}, onChange, onStatusChange }) {
   const [catalog, setCatalog] = useState({ providers: [], models: [] }), [error, setError] = useState(''), [revision, setRevision] = useState(0);
   const [loading, setLoading] = useState(true);
+  useEffect(() => { onStatusChange?.({ loading, error }); }, [loading, error, onStatusChange]);
   useEffect(() => { let active = true; setLoading(true); loadCatalog().then(next => { if (active) { setCatalog(next); setError(''); } }).catch(cause => { if (active) setError(cause.message); }).finally(() => { if (active) setLoading(false); }); return () => { active = false; }; }, [revision]);
   const providers = catalog.providers.map(provider => ({ value: provider.id, label: (provider.name || provider.id) + (provider.available === false ? ' · 不可用' : '') }));
   const models = catalog.models.filter(model => !value.providerId || model.provider === value.providerId).map(model => ({ value: model.id, label: model.name || model.id }));
   return <><div className="ba-model-fields"><Picker label="供应商" value={value.providerId || ''} options={providers} placeholder="选择供应商" allowCustom onChange={providerId => onChange({ ...value, providerId })} /><Picker label="模型" value={value.modelId || ''} options={models} placeholder="选择模型" allowCustom onChange={modelId => onChange({ ...value, modelId })} /></div>{loading ? <p className="ba-model-feedback" role="status"><UIIcon name="refresh" size={15} /><span>正在读取模型目录…</span></p> : error ? <p className="ba-model-feedback" data-error="true" role="alert"><span>模型目录加载失败：{error}。可手动填写完整 ID。</span><Button variant="ghost" type="button" className="ba-quiet" onClick={() => { catalogRequest = null; setRevision(value => value + 1); }}>重试</Button></p> : !providers.length && <p className="ba-model-feedback" role="status"><UIIcon name="server" size={15} /><span>目录中还没有供应商。可先在模型设置中配置，或填写已有供应商与模型的完整 ID。</span></p>}</>;
 }
-function Identity({ snapshot, execute, refresh, onDirtyChange, initialTab = 'info', onDesign, requestedTab }) {
+function Identity({ snapshot, refresh, onDirtyChange, initialTab = 'info', onDesign, requestedTab, modelsOnly = false }) {
   const [config, setConfig] = useState(snapshot.config), [baseConfig, setBaseConfig] = useState(snapshot.config);
-  const [busy, setBusy] = useState(false), [saved, setSaved] = useState(''), [tab, setTab] = useState(initialTab);
+  const [busy, setBusy] = useState(false), [saved, setSaved] = useState(''), [tab, setTab] = useState(modelsOnly ? 'models' : initialTab);
   const tabsId = useId();
   const [editorReset, setEditorReset] = useState(0);
-  useEffect(() => { if (['models', 'pet'].includes(requestedTab)) setTab(requestedTab); }, [requestedTab]);
+  const [saveError, setSaveError] = useState(null);
+  const errorMessage = useRef(null);
+  useEffect(() => { if (saveError) { errorMessage.current?.focus({ preventScroll: true }); errorMessage.current?.scrollIntoView({ block: 'nearest' }); } }, [saveError]);
+  useEffect(() => { if (!modelsOnly && requestedTab === 'pet') setTab('pet'); }, [requestedTab, modelsOnly]);
   const patch = identityConfigPatch(config, baseConfig);
   const dirty = Object.keys(patch).length > 0;
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
   useEffect(() => {
     if (!dirty) { setConfig(snapshot.config); setBaseConfig(snapshot.config); }
   }, [snapshot.config, snapshot.profile?.identity]);
-  const change = update => { setConfig(value => ({ ...value, ...update })); setSaved(''); };
+  const change = update => { setConfig(value => ({ ...value, ...update })); setSaved(''); setSaveError(null); };
   async function save(event) {
     event?.preventDefault(); if (busy || !dirty) return;
-    setBusy(true); setSaved('');
-    try { await execute(async () => {
+    const invalid = (modelsOnly || tab === 'models') && validateModelSettings(config);
+    if (invalid) { setSaveError(invalid); return; }
+    setBusy(true); setSaved(''); setSaveError(null);
+    try {
       if (Object.keys(patch).length) {
         const response = await saveConfigPatch(api, baseConfig, patch);
         const next = response.config || response; setConfig(next); setBaseConfig(next);
@@ -366,11 +416,17 @@ function Identity({ snapshot, execute, refresh, onDirtyChange, initialTab = 'inf
       // The config response already updates every subscriber; a state refresh is
       // independent, so a later network failure cannot turn a successful save into failure.
       void refresh().catch(cause => setSaved('已保存；刷新失败：' + cause.message));
-    }); } finally { setBusy(false); }
+    } catch (cause) { setSaveError({ message: cause.message || '保存未完成，请重试。' }); }
+    finally { setBusy(false); }
   }
-  return <form className="ba-identity-pane" onSubmit={save}><ResourceTabs tabs={[['info', '信息'], ['pet', '形象'], ['models', '模型']]} value={tab} onChange={setTab} label="身份分类" id={tabsId} /><fieldset disabled={busy} id={tabsId + '-panel'} role="tabpanel" aria-labelledby={tabsId + '-' + tab} className="ba-identity-panel" data-tab={tab}>
-    {tab === 'info' ? <><section className="ba-identity-info"><div className="ba-identity-name"><div className="ba-settings-section-heading"><h2>如何称呼你的助手</h2><p>这个名字会显示在名片和对话中。</p></div><Field label="名字"><input placeholder="未命名（可选）" maxLength={100} value={config.name || ''} onChange={event => change({ name: event.target.value })} /></Field></div><IdentityCardEditor key={`${baseConfig.revision}:${editorReset}`} config={config} onChange={change} defaultName={DEFAULT_NAME} /></section></> : tab === 'pet' ? <PetSettings api={api} config={snapshot.config} onChanged={refresh} onDesign={onDesign} /> : <ModelSettings config={config} onChange={change} ModelFields={ModelFields} IconButton={IconButton} />}
-  </fieldset>{(tab !== 'pet' || dirty) && <footer className="ba-identity-save" data-dirty={dirty}><span role="status"><UIIcon name={dirty ? 'edit' : 'check'} size={16} />{saved || (dirty ? '有未保存的修改' : '修改后保存生效')}</span><div className="ba-row-actions">{dirty && <Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={() => { if (!window.confirm('取消会放弃未保存的身份修改。')) return; const latest = assistantConfigSync.getSnapshot() || snapshot.config; setConfig(latest); setBaseConfig(latest); setEditorReset(value => value + 1); setSaved(''); }}>取消修改</Button>}<Button variant="default" type="submit" className="ba-primary" disabled={busy || !dirty}>{busy ? '保存中…' : '保存更改'}</Button></div></footer>}</form>;
+  return <form className="ba-identity-pane" onSubmit={save}>{!modelsOnly && <ResourceTabs tabs={[['info', '信息'], ['pet', '形象']]} value={tab} onChange={setTab} label="身份分类" id={tabsId} />}<fieldset disabled={busy} id={tabsId + '-panel'} role={modelsOnly ? undefined : 'tabpanel'} aria-label={modelsOnly ? '模型设置' : undefined} aria-labelledby={modelsOnly ? undefined : tabsId + '-' + tab} className="ba-identity-panel" data-tab={tab}>
+    {tab === 'info' ? <><section className="ba-identity-info"><div className="ba-identity-name"><div className="ba-settings-section-heading"><h2>如何称呼你的助手</h2><p>这个名字会显示在名片和对话中。</p></div><Field label="名字"><input placeholder="未命名（可选）" maxLength={100} value={config.name || ''} onChange={event => change({ name: event.target.value })} /></Field></div><IdentityCardEditor key={`${baseConfig.revision}:${editorReset}`} config={config} onChange={change} defaultName={DEFAULT_NAME} /></section></> : tab === 'pet' ? <PetSettings api={api} config={snapshot.config} onChanged={refresh} onDesign={onDesign} /> : <ModelSettings config={config} validationError={saveError} onChange={change} ModelFields={ModelFields} IconButton={IconButton} />}
+  </fieldset>{saveError && <div className="ba-identity-error" role="alert" tabIndex={-1} ref={errorMessage}><UIIcon name="close" size={16} /><span>{saveError.message}</span></div>}
+    {(tab !== 'pet' || dirty) && (dirty || saved || busy || saveError) && <footer className="ba-identity-save" data-dirty={dirty}>
+      <span role="status"><UIIcon name={busy ? 'refresh' : dirty ? 'edit' : 'check'} size={16} />{busy ? '正在保存…' : saved || '有未保存的修改'}</span>
+      <div className="ba-row-actions">{dirty && <Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={() => { if (!window.confirm('取消会放弃未保存的修改。')) return; const latest = assistantConfigSync.getSnapshot() || snapshot.config; setConfig(latest); setBaseConfig(latest); setEditorReset(value => value + 1); setSaved(''); setSaveError(null); }}>取消修改</Button>}<Button variant="default" type="submit" className="ba-primary" disabled={busy || !dirty}>{busy ? '保存中…' : saveError ? '重试保存' : '保存更改'}</Button></div>
+    </footer>}
+  </form>;
 }
 
 function Images({ images = [] }) {
@@ -475,22 +531,32 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
     return () => { void registration.dispose(); };
   }, [ctx]);
   useEffect(() => {
-    let disposed = false, timer; const controller = new AbortController();
+    let disposed = false, timer, inFlight;
+    const visible = () => !document.hidden && (!ctx?.layout?.panelInfo || ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL);
     const tick = async () => {
-      const active = !document.hidden && (!ctx?.layout?.panelInfo || ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL);
-      if (active) try {
+      clearTimeout(timer);
+      if (disposed || inFlight || !visible()) return;
+      const controller = new AbortController(); inFlight = controller;
+      try {
         await refresh(controller.signal);
         if (!disposed && tab === 'chat') await refreshHistory(threadId, controller.signal);
-      } catch (cause) { if (!disposed) setError(cause.message); }
-      if (!disposed) timer = setTimeout(tick, 1500);
+      } catch (cause) { if (!disposed && !controller.signal.aborted) setError(cause.message); }
+      finally {
+        inFlight = null;
+        if (!disposed && visible()) timer = setTimeout(tick, controller.signal.aborted ? 0 : tab === 'chat' ? 1500 : 5000);
+      }
     };
-    tick(); return () => { disposed = true; controller.abort(); clearTimeout(timer); };
+    const wake = () => { clearTimeout(timer); if (visible()) void tick(); else inFlight?.abort(); };
+    const unsubscribe = ctx?.layout?.panelInfo?.subscribe(wake);
+    document.addEventListener('visibilitychange', wake);
+    void tick();
+    return () => { disposed = true; inFlight?.abort(); clearTimeout(timer); unsubscribe?.(); document.removeEventListener('visibilitychange', wake); };
   }, [threadId, tab, ctx]);
   const select = (id) => { const next = id || 'main'; selectedAssistantThread = next; setTab('chat'); if (current.current === next) return; epoch.current++; current.current = next; setThreadId(next); replaceHistory({ messages: [], running: false }); };
   const threads = snapshot?.state?.threads || [];
   const selected = threads.find(thread => thread.id === threadId);
   const view = tab === 'chat' ? 'chat' : 'studio';
-  return <ActivityProvider><div className="ba-root"><main className="ba-main">{error && snapshot && <div className="ba-error" role="alert"><span>{error}</span><Button variant="ghost" type="button" onClick={retryLoad}>重试加载</Button><IconButton icon="close" label="关闭错误" onClick={() => setError('')} /></div>}{snapshot && <PendingInteractions ctx={ctx} currentSessionId={tab === 'chat' ? history.sessionId : undefined} threads={[...(snapshot.state.mainSessionId && !threads.some(thread => thread.id === 'main') ? [{ id: 'main', title: '主聊天', sessionId: snapshot.state.mainSessionId }] : []), ...threads.filter(thread => thread.sessionId), ...(!threads.some(thread => thread.sessionId === history.sessionId) && history.sessionId ? [{ id: threadId, title: selected?.title, sessionId: history.sessionId }] : [])]} />}{!snapshot ? <div className="ba-resource-initial"><ResourceState kind={error ? 'error' : 'loading'} title={error ? '暂时无法加载助手' : '正在准备助手'} description={error || '正在读取配置与资源，请稍候。'} onAction={error ? retryLoad : undefined} /></div> : <><RetainedPane active={view === 'studio'}><Studio active={view === 'studio'} requestedTab={tab} requestedTicket={requestedTicket} initialSection={['tasks', 'memory'].includes(tab) ? tab : 'identity'} initialIdentityTab={['models', 'pet'].includes(tab) ? tab : 'info'} snapshot={snapshot} ctx={ctx} execute={execute} refresh={refresh} threadId={threadId} SessionProvider={SessionProvider} renderSlot={renderSlot} /></RetainedPane>{view === 'chat' && <>{!snapshot.config.models?.length && <ModelSetupNotice onOpen={() => { selectedAssistantTab = 'models'; setTab('models'); }} />}<HistoryNotice history={history} threadId={threadId} onClear={clearMain} />{history.sessionId ? <AssistantConversation onOpenExecution={execution => openExecutionSession(ctx, execution)} key={threadId} ctx={ctx} sessionId={history.sessionId} threadId={threadId} history={history} onLoadEarlier={loadEarlier} onRefresh={() => refreshHistory(threadId)} SessionProvider={SessionProvider} renderSlot={renderSlot} api={api} assistantName={snapshot.config.name} assistantConfig={snapshot.config} petExpression={snapshot.petExpression} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} /> : <div className="ba-empty" role="status">正在打开{threadId === 'main' ? '主聊天' : '旁聊'}…</div>}<Images images={history.images} /></>}</>}</main>{snapshot && tab === 'chat' && <ActivityPanel api={api} assistantConfig={snapshot.config} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} />}</div></ActivityProvider>;
+  return <ActivityProvider><div className="ba-root"><main className="ba-main">{error && snapshot && <div className="ba-error" role="alert"><span>{error}</span><Button variant="ghost" type="button" onClick={retryLoad}>重试加载</Button><IconButton icon="close" label="关闭错误" onClick={() => setError('')} /></div>}{snapshot && <PendingInteractions ctx={ctx} currentSessionId={tab === 'chat' ? history.sessionId : undefined} threads={[...(snapshot.state.mainSessionId && !threads.some(thread => thread.id === 'main') ? [{ id: 'main', title: '主聊天', sessionId: snapshot.state.mainSessionId }] : []), ...threads.filter(thread => thread.sessionId), ...(!threads.some(thread => thread.sessionId === history.sessionId) && history.sessionId ? [{ id: threadId, title: selected?.title, sessionId: history.sessionId }] : [])]} />}{!snapshot ? <div className="ba-resource-initial"><ResourceState kind={error ? 'error' : 'loading'} title={error ? '暂时无法加载助手' : '正在准备助手'} description={error || '正在读取配置与资源，请稍候。'} onAction={error ? retryLoad : undefined} /></div> : <><RetainedPane active={view === 'studio'}><Studio active={view === 'studio'} requestedTab={tab} requestedTicket={requestedTicket} initialSection={['tasks', 'memory'].includes(tab) ? tab : 'identity'} initialIdentityTab={['models', 'pet'].includes(tab) ? tab : 'info'} snapshot={snapshot} ctx={ctx} refresh={refresh} threadId={threadId} SessionProvider={SessionProvider} renderSlot={renderSlot} /></RetainedPane>{view === 'chat' && <>{!snapshot.config.models?.length && <ModelSetupNotice onOpen={() => { selectedAssistantTab = 'models'; setTab('models'); }} />}<HistoryNotice history={history} threadId={threadId} onClear={clearMain} />{history.sessionId ? <AssistantConversation onOpenExecution={execution => openExecutionSession(ctx, execution)} key={threadId} ctx={ctx} sessionId={history.sessionId} threadId={threadId} history={history} onLoadEarlier={loadEarlier} onRefresh={() => refreshHistory(threadId)} SessionProvider={SessionProvider} renderSlot={renderSlot} api={api} assistantName={snapshot.config.name} assistantConfig={snapshot.config} petExpression={snapshot.petExpression} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} /> : <div className="ba-empty" role="status">正在打开{threadId === 'main' ? '主聊天' : '旁聊'}…</div>}<Images images={history.images} /></>}</>}</main>{snapshot && tab === 'chat' && <ActivityPanel api={api} assistantConfig={snapshot.config} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} />}</div></ActivityProvider>;
 }
 export function mountAssistant(ctx) {
   mountAssistantConversation(ctx);
