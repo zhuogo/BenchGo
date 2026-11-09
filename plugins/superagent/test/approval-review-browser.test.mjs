@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { officialUiEntries } from '../../link/scripts/official-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
@@ -55,7 +56,7 @@ async function fixture() {
     };
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-review-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
-    alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
+    alias: { ...await officialUiEntries(), react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.woff2': 'dataurl', '.woff': 'dataurl', '.ttf': 'dataurl' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   const script = bundle.outputFiles.find(file => file.path.endsWith('.js')).text;
   const styles = bundle.outputFiles.filter(file => file.path.endsWith('.css')).map(file => file.text).join('\n');
@@ -85,6 +86,8 @@ test('review Tab renders official Worker and Router approvals in four states; de
         assert.equal(await page.getByText('始终允许', { exact: true }).count(), 0);
         assert.equal(await page.getByText('不得出现的无来源审批', { exact: true }).count(), 0);
         assert.equal(await page.getByText('普通提问', { exact: true }).count(), 0);
+        assert.equal(await page.getByRole('button', { name: '刷新', exact: true }).count(), 1);
+        assert.equal(await page.getByRole('button', { name: /^(刷新列表|重新读取|重新连接)$/ }).count(), 0);
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${mode}/${width} overflow`);
         if (screenshots) await page.screenshot({ path: join(screenshots, `${mode}-${width}.png`), fullPage: true });
       }
@@ -120,9 +123,9 @@ test('review Tab renders official Worker and Router approvals in four states; de
     await page.waitForFunction(() => window.releases.includes('worker-session') && window.releases.includes('router-side'));
     assert.equal(await page.locator('[data-approval-key]').count(), 0);
     await page.evaluate(() => window.renderScenario('error'));
-    await page.getByRole('button', { name: '重新读取', exact: true }).waitFor();
+    await page.getByRole('button', { name: '刷新', exact: true }).waitFor();
     await page.evaluate(() => { window.mode = 'data'; });
-    await page.getByRole('button', { name: '重新读取', exact: true }).click();
+    await page.getByRole('button', { name: '刷新', exact: true }).click();
     await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();
     await page.evaluate(() => window.renderScenario('replacement'));
     await page.getByRole('button', { name: '允许本次', exact: true }).waitFor();

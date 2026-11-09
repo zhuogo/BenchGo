@@ -50,8 +50,8 @@ function ApprovalDetail({ entry, api, current, SessionProvider, renderSlot }) {
   </article>;
 }
 
-function ConnectionErrors({ items, retry }) {
-  return <section className="ba-review-connection-errors" aria-label="会话连接详情"><header><p>以下会话尚未连接，无法确认其中的待审核操作。</p><Button type="button" variant="ghost" onClick={retry}>重新连接</Button></header><ul>{items.map(item => <li key={item.origin.sessionId}>
+function ConnectionErrors({ items }) {
+  return <section className="ba-review-connection-errors" aria-label="会话连接详情"><header><p>以下会话尚未连接，无法确认其中的待审核操作。</p></header><ul>{items.map(item => <li key={item.origin.sessionId}>
     <strong>{item.origin.sourceTitle || (item.origin.ownerThreadId === 'main' ? '主聊天' : '旁聊')}{item.origin.title ? ` · ${item.origin.title}` : ''}</strong>
     <span>{({ ensure: '准备对话', retain: '保留会话', open: '打开会话' })[item.stage]}（{item.stage}）</span><pre>{item.error}</pre>
   </li>)}</ul></section>;
@@ -127,11 +127,11 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot }) {
   const connectionErrors = [...connections.values()].filter(item => item.error), connecting = origins?.some(origin => !connections.get(origin.sessionId)?.ready && !connections.get(origin.sessionId)?.error);
   return <section className="ba-approval-review" aria-label="审核"><style>{css}</style>
     <header className="ba-review-heading"><div><h2>审核 <span>{origins === null || (!entries.length && (connecting || connectionErrors.length > 0)) ? '—' : entries.length}</span></h2><p>查看待授权的操作，决定这一次是否执行。</p></div><Button type="button" variant="ghost" onClick={retry}><UIIcon name="refresh" size={16} />刷新</Button></header>
-    {!error && connectionErrors.length > 0 && <ConnectionErrors items={connectionErrors} retry={retry} />}
-    {error ? <ResourceState kind="error" title="审核列表暂时无法读取" description={error} actionLabel="重新读取" onAction={retry} />
+    {!error && connectionErrors.length > 0 && <ConnectionErrors items={connectionErrors} />}
+    {error ? <ResourceState kind="error" title="审核列表暂时无法读取" description={error} />
       : origins === null || (!entries.length && connecting) ? <ResourceState kind="loading" title="正在同步待审核操作" description="正在连接真实会话，读取仍可答复的授权请求。" />
       : !entries.length && connectionErrors.length ? <ResourceState kind="error" title="部分会话暂未连接" description="暂时无法确认这些会话是否有待审核操作。" />
-      : !entries.length ? <ResourceState icon="check" title="没有待审核的操作" description="需要你授权时，Router 会在原聊天里提醒；你可以到这里查看对象与内容。" actionLabel="刷新列表" onAction={retry} />
+      : !entries.length ? <ResourceState icon="check" title="没有待审核的操作" description="需要你授权时，Router 会在原聊天里提醒；你可以到这里查看对象与内容。" />
       : <><div className="ba-review-layout"><nav className="ba-review-list" aria-label="待审核操作">{entries.map(entry => <button type="button" className="ba-review-row" key={entry.key} aria-current={entry.key === selected?.key ? 'true' : undefined} onClick={() => setSelectedKey(entry.key)}><span className="ba-review-row-icon"><ResourceIcon name="key" size={18} /></span><span className="ba-review-row-copy"><strong>{entry.origin.title || '待授权操作'}</strong><span>{entry.origin.sourceTitle || (entry.origin.ownerThreadId === 'main' ? '主聊天' : '旁聊')} · {entry.origin.kind === 'worker' ? '任务操作' : '对话操作'}</span><small>等待你的决定</small></span><span className="ba-review-row-arrow"><UIIcon name="chevronLeft" size={16} /></span></button>)}</nav>
           {selected && <ApprovalDetail key={selected.key} entry={selected} api={api} current={current} SessionProvider={SessionProvider} renderSlot={renderSlot} />}</div></>}
   </section>;
