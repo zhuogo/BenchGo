@@ -415,7 +415,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         observedAt: timestamp(now()), bootId: executionProgress.bootId },
       request, wait: { kind: waitKind, since: timestamp(attention?.createdAt || ticket.pauseReason?.at || ticket.continuationWait?.at), expectedUntil: null },
       stop: { requestedAt: stopping.stopRequestedAt || assignment?.stopRequest?.at || null,
-        confirmedAt: assignment?.executionStopped?.fence === assignment?.fence ? assignment.executionStopped.at : null,
+        confirmedAt: assignment?.executionStopped && assignment.executionStopped.fence === assignment.fence ? assignment.executionStopped.at : null,
         confirmationOverdue: stopping.stopConfirmationOverdue },
       recovery: uncertainty ? { reasonCode: uncertainty.reasonCode, attempts: uncertainty.attempts, nextCheckAt: uncertainty.nextCheckAt,
         automatic: uncertainty.automatic, escalated: uncertainty.escalated,

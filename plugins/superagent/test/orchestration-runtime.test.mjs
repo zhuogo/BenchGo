@@ -32,6 +32,16 @@ async function fixture(t, { send, execute, onDelivered, prepareTicketReply, noti
   return { runtime, db, store, ticket, source, original, advance, counts: () => ({ executions, sends }) };
 }
 
+test('execution evidence remains readable before a Ticket has an Assignment', async t => {
+  const app = await fixture(t);
+  const ticket = app.db.createTicket({ threadId: 'thread', title: '等待安排', target: '尚未开始执行', mandate: app.ticket.mandate });
+  const evidence = app.runtime.executionFacts.evidence({ ticketId: ticket.id });
+  assert.equal(evidence.runtime.assignment, null);
+  assert.equal(evidence.runtime.run, null);
+  assert.equal(evidence.runtime.stop.confirmedAt, null);
+  assert.equal(app.runtime.executionFacts.evidenceSnapshot().executions.find(row => row.ticket.id === ticket.id).stop.confirmedAt, null);
+});
+
 test('Router state reporting leaves the outbox pending without emitting a fixed error block or rerunning work', async t => {
   let reports = 0;
   const app = await fixture(t, { execute() { throw Object.assign(new Error('not public'), { code: 'NETWORK' }); },
