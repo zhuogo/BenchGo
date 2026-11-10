@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>BenchGo · 实时语音架构</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f5f7fb; --paper: #fff; --ink: #202124; --muted: #606a7b;
+      --line: #dce2ec; --blue: #315be8; --soft: #edf2ff;
+      --green: #21653f; --green-bg: #eaf6ee; --amber: #865512; --amber-bg: #fff4df;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #15171c; --paper: #1e2128; --ink: #ededee; --muted: #a8b0bf;
+        --line: #383e4b; --blue: #9ab3ff; --soft: #242e49;
+        --green: #9cdbb2; --green-bg: #21372a; --amber: #e8c17d; --amber-bg: #392f20;
+      }
+    }
+    * { box-sizing: border-box; }
+    html { scroll-padding-top: 20px; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.7 system-ui, "Microsoft YaHei", sans-serif; }
+    main { max-width: 1180px; margin: auto; padding: 34px 24px 48px; }
+    a { color: var(--blue); text-underline-offset: 4px; }
+    a:focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
+    .skip { position: absolute; top: -100px; left: 16px; padding: 8px; background: var(--paper); }
+    .skip:focus { top: 8px; }
+    header { margin-bottom: 22px; }
+    .eyebrow { color: var(--blue); font-size: 12px; letter-spacing: .1em; font-weight: 650; }
+    h1 { font-size: clamp(27px, 4vw, 40px); line-height: 1.3; margin: 8px 0 12px; letter-spacing: -.03em; }
+    h2 { font-size: 22px; line-height: 1.45; margin: 0 0 10px; }
+    h3 { font-size: 17px; margin: 0 0 8px; }
+    p { margin: 0 0 12px; }
+    .muted, .hint { color: var(--muted); }
+    .hint { font-size: 13px; margin: 10px 0 0; }
+    .links { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 16px; }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0; }
+    nav a { display: inline-flex; align-items: center; min-height: 38px; padding: 6px 14px; border: 1px solid var(--line); border-radius: 8px; text-decoration: none; background: var(--paper); }
+    nav a:hover { background: var(--soft); }
+    section { margin-top: 18px; padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); }
+    .section-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 10px; }
+    .badge { display: inline-block; padding: 2px 9px; border-radius: 6px; font-size: 12px; white-space: nowrap; font-weight: 650; }
+    .current { color: var(--green); background: var(--green-bg); }
+    .planned { color: var(--amber); background: var(--amber-bg); }
+    .media-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
+    .card { border: 1px solid var(--line); border-radius: 12px; padding: 18px; min-width: 0; }
+    .path { font-weight: 600; line-height: 2; }
+    .node { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); min-width: 0; }
+    .node strong { display: block; }
+    .node small { display: block; color: var(--muted); font-size: 13px; }
+    .focus { border-color: var(--blue); background: var(--soft); }
+    .gateway { max-width: 680px; margin: 20px auto; text-align: center; }
+    .branches { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .route { border: 1px solid var(--line); border-radius: 12px; padding: 20px; min-width: 0; }
+    .down { text-align: center; color: var(--muted); font-size: 20px; line-height: 1; margin: 10px 0; }
+    .event { margin: 12px 0; padding: 10px 12px; border-left: 3px solid var(--blue); color: var(--muted); background: var(--soft); font-size: 13px; }
+    .join { text-align: center; margin: 20px auto 0; max-width: 680px; }
+    .sequence { display: grid; grid-template-columns: 70px minmax(0, 1fr) minmax(0, 1fr); gap: 0 14px; margin-top: 20px; }
+    .sequence > div { min-width: 0; padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .sequence .label { color: var(--muted); font-size: 13px; }
+    .sequence .column { color: var(--blue); font-weight: 650; }
+    .sequence p { margin: 0; }
+    .sequence small { color: var(--muted); display: block; }
+    .examples { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 20px; }
+    .quote { font-weight: 650; }
+    .rule { border-left: 3px solid var(--blue); padding: 8px 14px; margin-top: 18px; background: var(--soft); }
+    footer { margin-top: 22px; color: var(--muted); font-size: 13px; }
+    code { font-size: .9em; overflow-wrap: anywhere; }
+    @media (max-width: 700px) {
+      main { padding: 24px 14px 36px; }
+      section { padding: 18px 14px; }
+      .media-grid, .branches, .examples { grid-template-columns: 1fr; }
+      .route { padding: 16px; }
+      .sequence { grid-template-columns: 46px minmax(0, 1fr) minmax(0, 1fr); gap: 0 10px; font-size: 13px; }
+      .sequence .label { font-size: 12px; }
+    }
+    @media print {
+      body { background: white; color: black; }
+      main { max-width: none; padding: 0; }
+      nav, .skip { display: none; }
+      section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#media">跳到媒体路径</a>
+  <main>
+    <header>
+      <div class="eyebrow">BENCHGO / VOICE</div>
+      <h1>语音负责沟通，原 Agent 负责工作</h1>
+      <p class="muted">实时通话按会话能力接入：已有对话层就复用，普通工作区可增加轻量交互模型。媒体能力共用，执行模型保持原有能力。</p>
+      <div class="links">
+        <a href="设计.md">板块入口</a><a href="实时通话.md">通话交互正文</a><a href="媒体管线.md">媒体管线正文</a><a href="../总架构.html#modules">总架构</a>
+      </div>
+    </header>
+    <nav aria-label="语音架构章节">
+      <a href="#media">三项媒体能力</a><a href="#routes">两种通话接入</a><a href="#handoff">交接与回传</a><a href="#boundary">职责与实现边界</a>
+    </nav>
+
+    <section id="media" aria-labelledby="media-title">
+      <div class="section-head"><h2 id="media-title">共用媒体，各自独立</h2><span class="badge current">媒体管线已实现</span></div>
+      <p class="muted">当前通话仍直通原 Agent。下面的新交互层仅作用于实时通话。</p>
+      <div class="media-grid">
+        <article class="card"><h3>语音输入</h3><p class="path">麦克风 → ASR → 可编辑草稿</p><p class="hint">用户决定发送，不调用交互 LLM。</p></article>
+        <article class="card"><h3>朗读回复</h3><p class="path">既有回复 → 流式 TTS → 播放</p><p class="hint">消费原正文，不改写、不调用交互 LLM。</p></article>
+        <article class="card"><h3>实时通话</h3><p class="path">最终转录 → 会话交互 → 流式 TTS</p><p class="hint">目标按可信身份选择下面的接入路径。</p></article>
+      </div>
+      <p class="hint">采集共用浏览器回声消除、RNNoise、语音检测与流式 ASR。SSE 为分段上传后的文字流，不等于原生持续音频输入。<a href="媒体管线.md">查看协议与设备验收边界</a></p>
+    </section>
+
+    <section id="routes" aria-labelledby="routes-title">
+      <div class="section-head"><h2 id="routes-title">按会话能力分流</h2><span class="badge planned">已定设计 · 待实施</span></div>
+      <div class="node gateway"><strong>宿主确认当前会话身份与接入能力</strong><small>绑定原 session 和本次通话；模块启用、会话标题都不能替代可信归属。</small></div>
+      <div class="branches">
+        <article class="route">
+          <h3>SuperAgent 主聊 / 旁聊</h3>
+          <p class="hint">已有 Router 对话层，复用原路径。</p>
+          <div class="down" aria-hidden="true">↓</div>
+          <div class="node"><strong>最终转录</strong><small>进入原有用户对话入口</small></div>
+          <div class="down" aria-hidden="true">↓</div>
+          <div class="node focus"><strong>原 SuperAgent 对话层</strong><small>已有主模型负责沟通与交付</small></div>
+          <div class="down" aria-hidden="true">↕</div>
+          <div class="node"><strong>原有执行机制</strong><small>由 SuperAgent 自身管理，Voice 不复制</small></div>
+          <p class="event">原对话层的可见回复 → TTS。Voice 不增加第二个交互模型。</p>
+        </article>
+        <article class="route">
+          <h3>普通 Harness 工作区会话</h3>
+          <p class="hint">配置可用交互模型后启用增强路径。</p>
+          <div class="down" aria-hidden="true">↓</div>
+          <div class="node"><strong>最终转录</strong><small>保留用户原话与必要上下文</small></div>
+          <div class="down" aria-hidden="true">↓</div>
+          <div class="node focus"><strong>Voice 轻量交互模型</strong><small>寒暄直答；任务按需交接；统一通话表达</small></div>
+          <div class="down" aria-hidden="true">↕</div>
+          <div class="node"><strong>原会话执行 Agent</strong><small>保留原模型、思考、工具、工作区与审批</small></div>
+          <p class="event">明确交接向下，执行事件向上。进度静默更新，需表达的结果触发回复。</p>
+        </article>
+      </div>
+      <div class="node join"><strong>同一套流式合成与有序播放</strong><small>普通增强通话只播放交互模型的表达，避免执行原文与转述重复抢播。</small></div>
+      <p class="hint">SuperAgent Worker 不等于 Router。普通会话未配置交互模型时保留明确标注的直通模式；身份未知或适配不足时不能猜测接入。<a href="实时通话.md">查看接入规则</a></p>
+    </section>
+
+    <section id="handoff" aria-labelledby="handoff-title">
+      <div class="section-head"><h2 id="handoff-title">明确交接，事件回传</h2><span class="badge planned">普通会话增强目标</span></div>
+      <p class="muted">不让快模型轮询慢模型，也不把每一步执行计划变成语音播报。</p>
+      <div class="sequence" role="group" aria-label="查询热点的交接时序，按行从左到右阅读">
+        <div class="column">步骤</div><div class="column">交互模型 / 用户</div><div class="column">原 Agent / 执行桥</div>
+        <div class="label">01 需求</div><div><p>“帮我查今天的热点。”</p><small>识别为需要查询的请求</small></div><div>等待明确交接</div>
+        <div class="label">02 交接</div><div><p>交接原话与必要上下文 →</p><small>可同时说“我来查一下”</small></div><div><p>接收一次，返回真实回执</p><small>请求关联、权限与重复提交校验</small></div>
+        <div class="label">03 工作</div><div><p>可继续寒暄或回答进度追问</p><small>普通进度不自动触发发言</small></div><div><p>查询、推理、调用工具</p><small>← 推送真实进度，静默合并上下文</small></div>
+        <div class="label">04 结果</div><div><p>← 收到可表达结果，流式讲给用户</p><small>原始执行记录仍可查看</small></div><div><p>发布阶段成果或最终结论</p><small>失败、需确认也作为真实事件回传</small></div>
+      </div>
+      <div class="examples">
+        <article class="card"><p class="quote">“你好”</p><p>快模型直接回应，不启动执行。</p></article>
+        <article class="card"><p class="quote">“现在怎么样了？”</p><p>读取已有进度，不重复派发任务。</p></article>
+        <article class="card"><p class="quote">“先别做了”</p><p>关联原请求发停止指令；确认执行已退出后，才说已停止。</p></article>
+        <article class="card"><p class="quote">用户再次开口</p><p>先停播放，再理解新话语；闲聊不等于停止工作。</p></article>
+      </div>
+      <p class="hint">原话、交接、事件、通话发言与播放事实保持关联；原始思考链不进入通话播报。<a href="实时通话.md">查看事件、上下文与取消合同</a></p>
+    </section>
+
+    <section id="boundary" aria-labelledby="boundary-title">
+      <h2 id="boundary-title">复用执行能力，限定 Voice 的职责</h2>
+      <p>Voice 内集中媒体、轻量沟通与交接协调；执行仍在当前会话，设置复用共享供应商和凭据。保持五个 Cordis 入口与唯一安装包，不修改官方引擎、不引入语音工单系统。</p>
+      <div class="rule">当前已有媒体管线与原会话回复桥；会话身份分流、独立交互 LLM、交接与执行事件协调尚待开发。本图描述目标结构，不表示双模型路径已经可用。</div>
+      <p class="hint">分阶段衡量首句与结果延迟。快速接话不能替代工作完成，也不能保证每个交互模型都能关闭思考。验收以<a href="实时通话.md">实时通话正文</a>和<a href="媒体管线.md">媒体管线正文</a>为准。</p>
+    </section>
+    <footer>本图只描述实时语音板块。全局板块关系维护在<a href="../总架构.html#modules">总架构</a>；Pipecat / LiveKit 的参考版本与采纳边界见<a href="实时通话.md">通话交互正文</a>。</footer>
+  </main>
+</body>
+</html>
