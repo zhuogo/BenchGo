@@ -14,6 +14,37 @@ async function fixture(t) {
 }
 const input = key => ({ dedupeKey: key, thread: { id: 'thread', source: { type: 'feishu', id: 'chat' } }, source: { eventId: key }, actor: { id: 'owner' }, content: '原始指令', gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p1' });
 
+test('completed and stopped Tickets stay visible until an explicit manual archive choice', async t => {
+  const db = await fixture(t);
+  db.createThread({ id: 'archive-thread', source: { type: 'desktop', id: 'owner' } });
+  for (const status of ['running', 'waiting', 'completed']) db.createTicket({ id: status, threadId: 'archive-thread', target: status, status, mandate: {} });
+  const stopped = db.createTicket({ id: 'stopped', threadId: 'archive-thread', target: 'stopped', mandate: {} });
+  db.cancelTicket(stopped.id);
+  assert.equal(db.listTickets({ archived: false }).length, 4);
+  assert.deepEqual(db.listTickets({ archived: true }), []);
+  const raw = new DatabaseSync(db.path);
+  raw.prepare('INSERT INTO task_meta VALUES (?,?)').run('task-presentation:ticket:completed', JSON.stringify({ archived: true, archiveRevision: 1 }));
+  raw.close();
+  assert.deepEqual(db.listTickets({ archived: true }).map(row => row.id), ['completed']);
+  assert.equal(db.listTickets({ archived: false }).length, 3);
+  assert.equal(db.getTicket('completed').archived, true);
+  assert.equal(db.getTicket('stopped').archived, false);
+  assert.throws(() => db.listTickets({ archived: 'false' }), /archive scope/);
+});
+
+test('explicit archive scope is applied before paging and never implicitly hides success', async t => {
+  const db = await fixture(t);
+  db.createThread({ id: 'archive-paging', source: { type: 'desktop', id: 'owner' } });
+  for (const [id, status] of [['first', 'waiting'], ['second', 'completed'], ['third', 'completed'], ['fourth', 'completed']]) db.createTicket({ id, status, threadId: 'archive-paging', target: id, mandate: {} });
+  const raw = new DatabaseSync(db.path);
+  for (const id of ['second', 'fourth']) raw.prepare('INSERT INTO task_meta VALUES (?,?)').run(`task-presentation:ticket:${id}`, JSON.stringify({ archived: true, archiveRevision: 1 }));
+  raw.close();
+  assert.equal(db.listTickets({ archived: false, newestFirst: true, limit: 1 })[0].id, 'third');
+  assert.equal(db.listTickets({ archived: false, newestFirst: true, limit: 1, offset: 1 })[0].id, 'first');
+  assert.equal(db.listTickets({ archived: true, newestFirst: true, limit: 1 })[0].id, 'fourth');
+  assert.equal(db.listTickets({ archived: true, newestFirst: true, limit: 1, offset: 1 })[0].id, 'second');
+});
+
 for (const code of ['WORKER_SELF_CHECK', 'WORKER_TURN_INCOMPLETE']) test(`${code} retains its controlled cause in the waiting publication`, async t => {
   const db = await fixture(t);
   db.createThread({ id: 'self-check-thread', source: { type: 'desktop', id: 'owner' } });
@@ -137,6 +168,10 @@ test('existing database migrates Ticket requirements without rewriting legacy As
   const filename = db.path;
   db.close();
   const old = new DatabaseSync(filename);
+  // This schema predates the execution-fact journal and its column-bound triggers.
+  for (const { name } of old.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name GLOB 'sa_execution_fact_*'").all())
+    old.exec(`DROP TRIGGER "${name.replaceAll('"', '""')}"`);
+  old.exec('DROP TABLE sa_execution_facts; DROP TABLE sa_execution_projection');
   old.exec('ALTER TABLE sa_tickets DROP COLUMN instruction_revision; ALTER TABLE sa_tickets DROP COLUMN acceptance');
   old.prepare('UPDATE sa_assignments SET payload=? WHERE id=?').run('{}', 'legacy');
   old.close();
@@ -145,6 +180,9 @@ test('existing database migrates Ticket requirements without rewriting legacy As
     assert.equal(reopened.getTicket(ticket.id).target, 'preserved');
     assert.equal(reopened.getTicket(ticket.id).instructionRevision, 1);
     assert.equal(reopened.getTicket(ticket.id).acceptance, 'preserved acceptance');
+    const migrated = new DatabaseSync(filename);
+    try { assert.equal(migrated.prepare('SELECT payload FROM sa_assignments WHERE id=?').get('legacy').payload, '{}'); }
+    finally { migrated.close(); }
     const [assignment] = reopened.claimAssignments('worker', { validateMandate: () => true, now: 0 });
     reopened.commitResult(ticket.id, { assignment, result: { summary: 'legacy complete' }, uniqueKey: 'legacy-result', now: 1 });
     assert.equal(reopened.getTicket(ticket.id).status, 'waiting');

@@ -1,6 +1,8 @@
 import { assertTicketStatus, ticketExecutionBlocked, ticketStopped } from './ticket-lifecycle.mjs';
 import { migrateTicketStates } from './ticket-state-migration.mjs';
 import { DatabaseSync } from 'node:sqlite';
+import { ticketArchiveSql, ticketIsArchived, ticketPresentationKey } from './ticket-archive.mjs';
+import { initializeTicketCleanup } from './task-cleanup-store.mjs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -16,8 +18,11 @@ import { systemStateDelivery } from './result-delivery.mjs';
 import { retireContentReview } from './retire-content-review.mjs';
 import { installLearningSourceStore } from './learning-source-store.mjs';
 import { installWorkerExecutionStore } from './worker-execution-store.mjs';
+import { installInterruptedContinuationStore } from './interrupted-continuation-store.mjs';
 import { installRouterQuestionStore } from './router-question-store.mjs';
 import { normalizeTicketTitle } from './ticket-title.mjs';
+import { installExecutionFactsStore } from './execution-facts-store.mjs';
+import { installExecutionSummaryStore } from './execution-summary-store.mjs';
 
 const json = value => JSON.stringify(value);
 const parse = value => JSON.parse(value);
@@ -120,13 +125,15 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   if (!ticketColumns.has('adjustment_of_ticket_id')) db.exec('ALTER TABLE sa_tickets ADD COLUMN adjustment_of_ticket_id TEXT REFERENCES sa_tickets(id)');
   if (!ticketColumns.has('acceptance')) db.exec(`ALTER TABLE sa_tickets ADD COLUMN acceptance TEXT NOT NULL DEFAULT '';
     UPDATE sa_tickets SET acceptance=json_extract(mandate,'$.acceptance') WHERE json_type(mandate,'$.acceptance')='text';`);
-  let closed = false;
+  let closed = false, executionFacts;
   const tx = fn => {
     if (closed) throw new Error('Orchestration store is closed');
     db.exec('BEGIN IMMEDIATE');
-    try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
+    try { const result = fn(); db.exec('COMMIT'); executionFacts?.flushExecutionFactChanges(); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
   };
   migrateTicketStates({ db, tx });
+  initializeTicketCleanup({ db, transaction: tx });
+  const ticketMetadata = db.prepare('SELECT value FROM task_meta WHERE key=?');
   const threadRow = threadId => db.prepare('SELECT * FROM sa_threads WHERE id=?').get(threadId);
   const triggerRow = triggerId => db.prepare('SELECT * FROM sa_triggers WHERE id=?').get(triggerId);
   const threadValue = row => row && ({ id: row.id, source: { type: row.source_type, id: row.source_id }, metadata: parse(row.metadata), createdAt: row.created_at });
@@ -134,7 +141,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   const candidateValue = row => row && ({ id: row.id, triggerId: row.trigger_id, threadId: row.thread_id, policyVersion: row.policy_version, gate: parse(row.gate), status: row.status, evalId: row.eval_id, retryCount: row.retry_count, handbackTicketId: row.handback_ticket_id, createdAt: row.created_at, updatedAt: row.updated_at });
   const evalValue = row => row && ({ id: row.id, threadId: row.thread_id, policyVersion: row.policy_version, candidateIds: parse(row.candidate_ids), owner: row.owner, attempt: row.attempt, status: row.status, deadline: row.deadline, createdAt: row.created_at, updatedAt: row.updated_at });
   const decisionValue = row => row && ({ id: row.id, candidateId: row.candidate_id, threadId: row.thread_id, outcome: row.outcome, assessment: parse(row.assessment), policyVersion: row.policy_version, ticketId: row.ticket_id, createdAt: row.created_at });
-  const ticketValue = row => row && ({ id: row.id, threadId: row.thread_id, title: normalizeTicketTitle(row.title, row.target), target: row.target, acceptance: row.acceptance, instructionRevision: row.instruction_revision, adjustmentOfTicketId: row.adjustment_of_ticket_id || null, liveSummary: ticketLiveSummary(row), status: row.status, executionControl: parse(row.execution_control || '{}'), pauseReason: row.pause_reason ? parse(row.pause_reason) : null, continuationWait: row.continuation_wait ? parse(row.continuation_wait) : null, mandate: { ...api.currentTicketMandate(row.id, parse(row.mandate)), target: row.target, acceptance: row.acceptance }, createdByDecision: row.created_by_decision, createdAt: row.created_at, updatedAt: row.updated_at, resultVersion: row.result_version });
+  const ticketValue = row => row && ({ id: row.id, threadId: row.thread_id, title: normalizeTicketTitle(row.title, row.target), target: row.target, acceptance: row.acceptance, instructionRevision: row.instruction_revision, adjustmentOfTicketId: row.adjustment_of_ticket_id || null, liveSummary: ticketLiveSummary(row), status: row.status, executionControl: parse(row.execution_control || '{}'), archived: ticketIsArchived({ status: row.status, instructionRevision: row.instruction_revision, executionControl: parse(row.execution_control || '{}') }, parse(ticketMetadata.get(ticketPresentationKey(row.id))?.value || '{}')), pauseReason: row.pause_reason ? parse(row.pause_reason) : null, continuationWait: row.continuation_wait ? parse(row.continuation_wait) : null, mandate: { ...api.currentTicketMandate(row.id, parse(row.mandate)), target: row.target, acceptance: row.acceptance }, createdByDecision: row.created_by_decision, createdAt: row.created_at, updatedAt: row.updated_at, resultVersion: row.result_version });
   function ticketLiveSummary(row) {
     const result = db.prepare('SELECT payload FROM sa_results WHERE ticket_id=? ORDER BY version DESC LIMIT 1').get(row.id);
     const saved = result ? parse(result.payload) : null;
@@ -402,14 +409,23 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     cancelTicket(ticketId) {
       return tx(() => cancelTicketInternal(ticketId));
     },
-    pauseTicket(ticketId, { reason = { kind: 'manual' } } = {}) {
+    pauseTicket(ticketId, { reason = { kind: 'manual' }, triggerId } = {}) {
       if (!record(reason) || reason.kind !== 'manual') throw fail('INVALID_PAUSE_REASON', 'Invalid pause reason');
       return tx(() => {
         const ticket = api.getTicket(ticketId);
         if (!ticket) throw fail('TICKET_NOT_FOUND', 'Ticket does not exist');
-        if (ticket.status === 'completed' || ticketStopped(ticket) || ticket.executionControl?.paused) return ticket;
+        if (ticket.status === 'completed' || ticketStopped(ticket)) return ticket;
+        if (triggerId) api.recordTicketInputInTransaction({ ticketId, triggerId, kind: 'pause', idempotencyKey: `trigger:${triggerId}` });
+        // Pausing also withdraws delayed recovery intent in this transaction;
+        // a later scheduler tick must not revive work the user just paused.
+        db.prepare("UPDATE sa_assignments SET payload=json_remove(payload,'$.interruptedContinuationRequest') WHERE ticket_id=? AND json_type(payload,'$.interruptedContinuationRequest') IS NOT NULL").run(ticketId);
+        if (ticket.executionControl?.paused) {
+          if (triggerId) api.applyTicketPauseInputInTransaction(ticketId, triggerId);
+          return ticket;
+        }
         const pending = api.assignments(ticketId).some(row => ['claimed', 'uncertain'].includes(row.state));
         db.prepare("UPDATE sa_tickets SET status='waiting',execution_control=?,pause_reason=?,updated_at=? WHERE id=?").run(json({ pauseRequested: pending, paused: !pending }), json(reason), new Date().toISOString(), ticketId);
+        if (triggerId) api.applyTicketPauseInputInTransaction(ticketId, triggerId);
         return api.getTicket(ticketId);
       });
     },
@@ -427,6 +443,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           const payload = { ...parse(row.payload), pauseContinuation: { runId: run.id } };
           delete payload.attentionContinuation;
           delete payload.contextContinuation;
+          delete payload.interruptedContinuation;
           delete payload.verificationOnly;
           db.prepare("UPDATE sa_assignments SET state='queued',payload=?,updated_at=? WHERE id=?").run(json(payload), at, row.id);
         }
@@ -478,7 +495,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (payload.executionStopped?.owner !== run.owner || payload.executionStopped?.fence !== row.fence) return unavailable('EXECUTION_STOP_UNCONFIRMED');
         if (saved.waitingExecutionBudget.effectsVerified !== true || saved.executionEffects?.effectsVerified === false) return unavailable('EXECUTION_EFFECTS_UNKNOWN');
         payload.pauseContinuation = { runId: run.id, kind: 'execution-budget' };
-        for (const key of ['attentionContinuation', 'contextContinuation', 'verificationOnly']) delete payload[key];
+        for (const key of ['attentionContinuation', 'contextContinuation', 'interruptedContinuation', 'verificationOnly']) delete payload[key];
         db.prepare("UPDATE sa_assignments SET state='queued',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?")
           .run(json(payload), timestamp(now), row.id);
         db.prepare("UPDATE sa_tickets SET status='waiting',pause_reason=NULL,continuation_wait=NULL,updated_at=? WHERE id=?").run(timestamp(now), ticketId);
@@ -522,10 +539,14 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         return api.getTicket(row.ticket_id);
       });
     },
-    listTickets({ threadId, status, projectId, ownerSessionId, ownerSessionIds, ownerThreadId, limit = 100, offset = 0, newestFirst = false } = {}) {
+    listTickets({ threadId, status, archived, projectId, ownerSessionId, ownerSessionIds, ownerThreadId, limit = 100, offset = 0, newestFirst = false } = {}) {
       const where = [], args = [];
       if (threadId) { where.push('thread_id=?'); args.push(id(threadId, 'threadId')); }
       if (status) { where.push('status=?'); args.push(assertTicketStatus(status)); }
+      if (archived !== undefined) {
+        if (typeof archived !== 'boolean') throw new Error('Invalid ticket archive scope');
+        where.push(`${archived ? '' : 'NOT '}${ticketArchiveSql()}`);
+      }
       if (ownerSessionId !== undefined) { where.push("json_extract(mandate, '$.source.channel')='desktop' AND json_extract(mandate, '$.source.sessionId')=?"); args.push(id(ownerSessionId, 'ownerSessionId')); }
       if (ownerSessionIds !== undefined) {
         if (!Array.isArray(ownerSessionIds) || !ownerSessionIds.length || ownerSessionIds.length > 1000) throw new Error('Invalid owner session scope');
@@ -605,11 +626,19 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           }
           const fence = row.fence + 1;
           const payload = parse(row.payload);
-          if (payload.attentionContinuation || payload.pauseContinuation || payload.contextContinuation) {
-            const continuation = payload.contextContinuation || payload.pauseContinuation || payload.attentionContinuation;
+          if (payload.attentionContinuation || payload.pauseContinuation || payload.contextContinuation || payload.interruptedContinuation) {
+            const continuation = payload.interruptedContinuation || payload.contextContinuation || payload.pauseContinuation || payload.attentionContinuation;
             const run = db.prepare('SELECT * FROM sa_runs WHERE id=? AND assignment_id=? AND fence=?').get(continuation.runId, row.id, row.fence);
             const saved = run && parse(run.payload).evidence;
-            const ready = payload.contextContinuation
+            const currentTicket = api.getTicket(row.ticket_id);
+            const ready = payload.interruptedContinuation
+              ? run?.state === 'uncertain' && saved?.interrupted === true && saved.checkpoint?.manifestHash
+                && saved.executionEffects?.effectsVerified === true && !payload.stopRequest
+                && continuation.instructionRevision === currentTicket.instructionRevision
+                && continuation.observation?.hash === saved.transcript?.hash
+                && continuation.observation?.lastSeq === saved.transcript?.lastSeq
+                && !!api.getWorkerExecutionState(run.id)?.models?.length
+              : payload.contextContinuation
               ? ['verifying', 'uncertain', 'completed'].includes(run?.state) && saved?.checkpoint && !saved.waitingPause && !saved.waitingAttention
               : run?.state === 'waiting' && (payload.pauseContinuation ? saved?.waitingPause : saved?.waitingAttention)
                 && (!payload.pauseContinuation || !saved?.waitingExecutionBudget || saved.waitingExecutionBudget.effectsVerified === true);
@@ -723,7 +752,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const previous = parse(row.payload);
         const runOwner = db.prepare('SELECT owner FROM sa_runs WHERE assignment_id=? AND fence=?').get(assignmentId, fence)?.owner;
         if (row.owner !== owner && previous.revokedOwner !== owner && runOwner !== owner) return false;
-        const safeCodes = ['AUXILIARY_QUALITY', 'NO_ADAPTER', 'RATE_LIMIT', 'HTTP', 'NETWORK', 'TIMEOUT', 'ABORTED', 'FENCING_CONFLICT', 'MANDATE_REVOKED', 'EXECUTION_PAUSE_UNVERIFIED', 'EXECUTION_EFFECTS_UNKNOWN', 'WORKER_SELF_CHECK', 'WORKER_TURN_INCOMPLETE'];
+        const safeCodes = ['AUXILIARY_QUALITY', 'NO_ADAPTER', 'RATE_LIMIT', 'HTTP', 'NETWORK', 'TIMEOUT', 'ABORTED', 'FENCING_CONFLICT', 'MANDATE_REVOKED', 'EXECUTION_PAUSE_UNVERIFIED', 'EXECUTION_EFFECTS_UNKNOWN', 'WORKER_SELF_CHECK', 'WORKER_TURN_INCOMPLETE', 'EXECUTION_INPUT_ASSESSMENT_FAILED', 'EXECUTION_INPUT_ROUTER_UNAVAILABLE'];
         const safePhases = ['setup', 'resume', 'create', 'submit', 'attention-answer', 'completion', 'evidence'];
         const payload = { ...parse(row.payload), lastFailure: { stage: stage === 'result' ? 'result' : 'execution',
           code: safeCodes.includes(code) ? code : 'UNAVAILABLE', ...(stage !== 'result' && safePhases.includes(phase) ? { phase } : {}), at: timestamp(now) } };
@@ -734,7 +763,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           code: payload.lastFailure.code, stage: payload.lastFailure.stage });
         db.prepare("INSERT OR IGNORE INTO sa_outbox(id,unique_key,ticket_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
           .run(uuid(), uniqueKey, ticket.id, json({ type: 'ticket.result', ticketId: ticket.id, source: ticket.mandate.source,
-            instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion,
+            instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion, assignmentId, fence,
             publication, text: publication.text }), now, timestamp(now), timestamp(now));
         return true;
       });
@@ -762,6 +791,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         }
         delete payload.attentionContinuation;
         delete payload.pauseContinuation;
+        delete payload.interruptedContinuation;
         payload.verificationAttempts = (payload.verificationAttempts || 0) + 1;
         payload.verificationAfter = now + Math.min(900000, 30000 * 2 ** Math.min(payload.verificationAttempts - 1, 5));
         db.prepare("UPDATE sa_assignments SET state='queued',payload=?,updated_at=? WHERE id=?").run(json(payload), timestamp(now), assignmentId);
@@ -831,7 +861,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       });
     },
     updateRun(runId, { owner, fence, state, evidence, now = Date.now() } = {}) {
-      const transitions = { prepared: ['submitted', 'cancelled'], submitted: ['running', 'verifying', 'uncertain'], running: ['verifying', 'uncertain'], verifying: ['completed', 'failed', 'uncertain'], uncertain: [], completed: [], failed: [], cancelled: [] };
+      const transitions = { prepared: ['submitted', 'cancelled', 'uncertain'], submitted: ['running', 'verifying', 'uncertain'], running: ['verifying', 'uncertain'], verifying: ['completed', 'failed', 'uncertain'], uncertain: [], completed: [], failed: [], cancelled: [] };
       return tx(() => {
         const row = db.prepare('SELECT * FROM sa_runs WHERE id=?').get(id(runId));
         if (!row) throw fail('RUN_NOT_FOUND', 'Run does not exist');
@@ -840,6 +870,14 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (!transitions[row.state]?.includes(state)) throw fail('RUN_TRANSITION', 'Invalid execution transition');
         if (['verifying', 'completed', 'failed'].includes(state) && !record(evidence)) throw new Error('Observed execution evidence is required');
         const payload = { ...parse(row.payload), ...(evidence ? { evidence: copy(evidence) } : {}) };
+        if (state === 'submitted') {
+          const assignment = db.prepare('SELECT payload FROM sa_assignments WHERE id=?').get(row.assignment_id);
+          const assignmentPayload = parse(assignment.payload);
+          if (assignmentPayload.interruptedContinuation) {
+            delete assignmentPayload.interruptedContinuation;
+            db.prepare('UPDATE sa_assignments SET payload=? WHERE id=?').run(json(assignmentPayload), row.assignment_id);
+          }
+        }
         db.prepare('UPDATE sa_runs SET state=?,payload=?,updated_at=? WHERE id=?').run(state, json(payload), timestamp(now), runId);
         if (state === 'uncertain') db.prepare("UPDATE sa_tickets SET status='waiting',updated_at=? WHERE id=(SELECT ticket_id FROM sa_assignments WHERE id=?) AND status!='completed'").run(timestamp(now), row.assignment_id);
         return runValue(db.prepare('SELECT * FROM sa_runs WHERE id=?').get(runId));
@@ -961,8 +999,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         db.prepare("UPDATE sa_tickets SET status=?,result_version=?,continuation_wait=NULL,updated_at=? WHERE id=?")
           .run('waiting', version, at, ticketId);
         const payload = outboxPayload ?? { type: 'ticket.result', ticketId, source: ticket.mandate.source, instructionRevision: resultRevision, resultVersion: version,
-          outcome: result.outcome || 'completed', text: result.finalSummary ?? result.summary,
-          publication: result.delivery || { action: 'deliver', origin: 'worker', text: result.finalSummary ?? result.summary } };
+          outcome: result.outcome || 'completed', replyState: 'pending' };
         const outboxId = uuid();
         db.prepare("INSERT INTO sa_outbox(id,unique_key,ticket_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
           .run(outboxId, uniqueKey, ticketId, json(payload), now, at, at);
@@ -974,9 +1011,38 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       id(owner, 'outbox owner');
       return tx(() => {
         db.prepare("UPDATE sa_outbox SET state='uncertain',owner=NULL,lease_until=NULL,updated_at=? WHERE state='claimed' AND lease_until<=?").run(timestamp(now), now);
-        const rows = db.prepare("SELECT * FROM sa_outbox WHERE state='queued' AND next_at<=? AND (ticket_id NOT IN (SELECT id FROM sa_tickets WHERE json_extract(execution_control,'$.pauseRequested')=1 OR json_extract(execution_control,'$.paused')=1) OR (json_extract(payload,'$.publication.origin')='system' AND json_extract(payload,'$.publication.systemState.stage')='execution')) ORDER BY created_at,id LIMIT ?").all(now, safeLimit(limit, 20, 200));
-        for (const row of rows) db.prepare("UPDATE sa_outbox SET state='claimed',owner=?,lease_until=?,attempts=attempts+1,updated_at=? WHERE id=?").run(owner, now + leaseMs, timestamp(now), row.id);
+        const rows = db.prepare("SELECT * FROM sa_outbox WHERE state='queued' AND next_at<=? AND (ticket_id NOT IN (SELECT id FROM sa_tickets WHERE json_extract(execution_control,'$.pauseRequested')=1 OR json_extract(execution_control,'$.paused')=1) OR (json_extract(payload,'$.publication.origin')='system' AND json_extract(payload,'$.publication.systemState.stage')='execution') OR json_extract(payload,'$.stateSignal.stage')='execution') ORDER BY created_at,id LIMIT ?").all(now, safeLimit(limit, 20, 200));
+        for (const row of rows) {
+          const payload = parse(row.payload);
+          // Old, unsent Worker drafts become completion signals in the same
+          // ledger entry. Sent/uncertain history is never replayed or rewritten.
+          if (payload.type === 'ticket.result' && payload.replyState !== 'suppressed' && !['router', 'system'].includes(payload.publication?.origin)) {
+            delete payload.publication; delete payload.text; payload.replyState = 'pending';
+            db.prepare('UPDATE sa_outbox SET payload=? WHERE id=?').run(json(payload), row.id);
+          }
+          db.prepare("UPDATE sa_outbox SET state='claimed',owner=?,lease_until=?,attempts=attempts+1,updated_at=? WHERE id=?").run(owner, now + leaseMs, timestamp(now), row.id);
+        }
         return rows.map(row => parseOutbox(db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(row.id)));
+      });
+    },
+    saveOutboxReply(outboxId, { owner, publication, messageId, now = Date.now() } = {}) {
+      if (!record(publication) || publication.origin !== 'router' || publication.action !== 'deliver'
+        || typeof publication.text !== 'string' || !publication.text.trim() || publication.systemState !== undefined) throw new Error('Router reply requires natural text');
+      return tx(() => {
+        const row = db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(id(outboxId, 'outboxId'));
+        if (!row || row.state !== 'claimed' || row.owner !== owner || row.lease_until <= now) throw fail('OUTBOX_LEASE_CONFLICT', 'Outbox lease is no longer owned');
+        const payload = parse(row.payload);
+        if (payload.type !== 'ticket.result') throw new Error('Router reply requires a Ticket delivery');
+        if (payload.publication?.origin === 'router') {
+          if (payload.publication.text !== publication.text) throw fail('OUTBOX_CONFLICT', 'Saved Router reply is immutable');
+          return parseOutbox(row);
+        }
+        const stateSignal = payload.publication?.origin === 'system' ? payload.publication.systemState : payload.stateSignal;
+        const saved = { ...payload, ...(stateSignal ? { stateSignal } : {}), replyState: 'ready',
+          publication: { action: 'deliver', origin: 'router', text: publication.text }, text: publication.text,
+          ...(typeof messageId === 'string' && messageId ? { routerMessageId: messageId } : {}) };
+        db.prepare('UPDATE sa_outbox SET payload=?,updated_at=? WHERE id=?').run(json(saved), timestamp(now), outboxId);
+        return parseOutbox(db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(outboxId));
       });
     },
     finishOutbox(outboxId, { owner, sent = false, uncertain = false, receipt, error = null, retryMs = 5000, now = Date.now() } = {}) {
@@ -1022,13 +1088,13 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     },
     pendingOutbox(now = Date.now(), limit = 100) { return db.prepare("SELECT * FROM sa_outbox WHERE state='queued' AND next_at<=? ORDER BY created_at,id LIMIT ?").all(now, safeLimit(limit, 100, 1000)).map(parseOutbox); },
     deliveries(ticketId) { return db.prepare('SELECT * FROM sa_outbox WHERE ticket_id=? ORDER BY created_at,id').all(id(ticketId)).map(parseOutbox); },
-    close() { if (!closed) { closed = true; db.close(); } },
+    close() { if (!closed) { closed = true; executionFacts?.disposeExecutionFacts(); db.close(); } },
   };
 
   function closeDeliveredTicket(row, receipt, now) {
     const payload = parse(row.payload), ticket = api.getTicket(row.ticket_id);
     if (receipt?.status !== 'accepted' || typeof receipt.messageId !== 'string' || !receipt.messageId.trim()
-      || payload.type !== 'ticket.result' || payload.publication?.origin !== 'worker'
+      || payload.type !== 'ticket.result' || payload.publication?.origin !== 'router'
       || !['completed', 'failed'].includes(payload.outcome) || !ticket || ticket.status !== 'waiting'
       || payload.resultVersion !== ticket.resultVersion || payload.instructionRevision !== ticket.instructionRevision
       || json(payload.source) !== json(ticket.mandate.source)) return;
@@ -1171,8 +1237,12 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   const directReplyStore = installDirectReplyStore({ db, tx });
   Object.assign(api, directReplyStore.api);
   Object.assign(api, installWorkerExecutionStore({ db, tx, api }));
+  Object.assign(api, installInterruptedContinuationStore({ db, tx, api }));
   Object.assign(api, installRouterQuestionStore({ db, tx, api }));
   retireContentReview({ db, tx });
   Object.assign(api, installLearningSourceStore({ db, tx, api }));
+  executionFacts = installExecutionFactsStore({ db, tx, api });
+  Object.assign(api, executionFacts);
+  Object.assign(api, installExecutionSummaryStore({ db, tx }));
   return api;
 }

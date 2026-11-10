@@ -51,6 +51,7 @@ test('failure delivery waits without automatic rerun, a fresh authorized revisio
   db.confirmExecutionStopped(assignment.id, assignment);
   const committed = db.commitResult(ticket.id, { result, assignment, uniqueKey: 'failure' });
   const [outbox] = db.claimOutbox('delivery');
+  db.saveOutboxReply(outbox.id, { owner: 'delivery', publication: { origin: 'router', action: 'deliver', text: '已核实当前结果与恢复条件' } });
   db.finishOutbox(outbox.id, { owner: 'delivery', sent: true, receipt: { status: 'accepted', messageId: 'receipt' } });
   assert.equal(db.getTicket(ticket.id).status, 'waiting');
   assert.equal(db.getTicket(ticket.id).continuationWait.code, 'EXECUTION_FAILED');
@@ -84,6 +85,7 @@ for (const outcome of ['completed', 'failed']) test(`late ${outcome} delivery pr
   if (outcome === 'completed') db.pauseTicket(ticket.id);
   else db.cancelTicket(ticket.id);
   const before = db.getTicket(ticket.id).executionControl;
+  db.saveOutboxReply(outbox.id, { owner: 'delivery', publication: { origin: 'router', action: 'deliver', text: '已核实当前结果与恢复条件' } });
   db.finishOutbox(outbox.id, { owner: 'delivery', sent: true, receipt: { status: 'accepted', messageId: 'received' } });
   assert.equal(db.getTicket(ticket.id).status, 'waiting');
   assert.deepEqual(db.getTicket(ticket.id).executionControl, before);

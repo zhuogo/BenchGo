@@ -15,6 +15,6 @@ export const buttonVariants = cva('bg-ui-button bg:inline-flex bg:items-center b
 
 export const Button = React.forwardRef(function Button({ className, variant, size, asChild = false, type = 'button', title, ...props }, ref) {
   const Component = asChild ? Slot : 'button';
-  const button = <Component ref={ref} type={asChild ? undefined : type} className={cn(buttonVariants({ variant, size }), className)} {...props} />;
+  const button = <Component ref={ref} type={asChild ? undefined : type} className={cn(buttonVariants({ variant, size }), className)} {...props} aria-label={props['aria-label'] ?? title} />;
   return <><UiStyles />{title ? <Tooltip label={title}>{button}</Tooltip> : button}</>;
 });

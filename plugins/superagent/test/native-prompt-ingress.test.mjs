@@ -4,6 +4,8 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol';
 import { registerNativePromptIngress } from '../src/native-prompt-ingress.mjs';
+import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
+import { installRoleHost } from './role-host-fixture.mjs';
 
 const prompt = extra => ({ sessionId: 'assistant/session:原样', requestId: 'request/opaque:原样', mode: 'queue',
   content: [{ type: 'text', text: '保留原文\n / model:x.y ' }], clientTimeZone: 'Asia/Shanghai', ...extra });
@@ -220,11 +222,13 @@ test('real assistant engine selects image admission models and preserves busy fi
   const { default: TokenMeter } = await loadPackage('llm/token-meter', '@deepseek-ai/dsh-token-meter');
   const NativeTools = await loadPackage('core/tool-executor-native', '@deepseek-ai/dsh-tool-executor-native');
   const ctx = new Context();
+  const orchestration = createAssistantOrchestrationStore({ filename: ':memory:' });
   let engine, release, hold;
-  t.after(async () => { release?.(); await engine?.dispose(); await ctx.fiber.dispose(); });
+  t.after(async () => { release?.(); await engine?.dispose(); await ctx.fiber.dispose(); orchestration.close(); });
   await ctx.plugin(LlmRuntime);
   for (let i = 0; i < modules.length; i++) await ctx.plugin(modules[i].default, i === modules.length - 1 ? { agents: [] } : undefined);
   await ctx.plugin(TokenMeter); await ctx.plugin(NativeTools);
+  await installRoleHost(ctx);
   for (const plugin of [Registry, Access, Gateway]) await ctx.plugin(plugin.default);
   ctx.typert.register(TYPERT);
   const requests = [];
@@ -262,7 +266,7 @@ test('real assistant engine selects image admission models and preserves busy fi
   await ctx.plugin(Controller.default);
   let state = { revision: 0, mainSessionId: null, threads: [], tasks: [] };
   let model = 'text/opaque';
-  const store = { paths: { workspace: process.cwd() }, getState: async () => structuredClone(state),
+  const store = { orchestration, paths: { workspace: process.cwd() }, getState: async () => structuredClone(state),
     updateState: async (patch, { revision }) => { assert.equal(revision, state.revision); state = { ...state, ...structuredClone(patch), revision: revision + 1 }; return state; },
     getConfig: async () => ({ models: [{ providerId: 'native/test', modelId: model }] }), getProfile: async () => ({}), listMemories: async () => [],
   };

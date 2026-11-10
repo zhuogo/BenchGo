@@ -4,9 +4,12 @@ import { join } from 'node:path';
 import { assertSameOrigin, readJson, HttpError } from '../../../../shared/http.mjs';
 import { mountOps, OPS_VERSION, OPS_PRESETS } from './ops.mjs';
 import { mountCompaction, COMPACTION_VERSION } from './compaction.mjs';
+import { applySettingsOps, assertSettingsExpected, normalizeSettingsOps, notifySettings, settingsSnapshot } from '../../../../shared/settings-adapter-utils.mjs';
+import { createEfficiencySettingsAdapter } from './settings-adapter.mjs';
+import { EFFICIENCY_CONFIG_SCHEMA } from './config-schema.mjs';
 
 const defaults = () => ({ revision: 0, features: { ops: { enabled: true, shell: false }, compaction: { enabled: true } } });
-const names = ['ops', 'compaction'];
+const names = Object.keys(EFFICIENCY_CONFIG_SCHEMA.properties.features.properties);
 const requirements = { ops: ['tools', 'agentPresets', 'agents', 'sessionProjections', 'systemPrompt', 'sandboxPolicy', 'subprocess'], compaction: ['tools'] };
 const mounts = { ops: mountOps, compaction: mountCompaction };
 
@@ -17,7 +20,7 @@ export function mergeEfficiencyConfig(current, input) {
   const next = structuredClone(current);
   for (const [name, patch] of Object.entries(input.features)) {
     if (!names.includes(name) || !patch || typeof patch !== 'object' || Array.isArray(patch)) throw new HttpError('未知增强能力');
-    const keys = name === 'ops' ? ['enabled', 'shell'] : ['enabled'];
+    const keys = Object.keys(EFFICIENCY_CONFIG_SCHEMA.properties.features.properties[name].properties);
     for (const [key, value] of Object.entries(patch)) {
       if (!keys.includes(key) || typeof value !== 'boolean') throw new HttpError(`增强配置 ${name}.${key} 无效`);
       next.features[name][key] = value;
@@ -44,7 +47,8 @@ export async function mountEfficiency(ctx, { directory, config, adapters = mount
   let initial = defaults();
   if (config) { initial = mergeEfficiencyConfig(initial, { revision: 0, features: config.features ?? config }); initial.revision = 0; }
   let saved = await loadConfig(path, initial), disposed = false, writes = Promise.resolve();
-  const handles = new Map(), states = new Map();
+  const handles = new Map(), states = new Map(), listeners = new Set();
+  const configurationSnapshot = () => settingsSnapshot({ features: saved.features }, saved.revision, { base: { features: defaults().features } });
 
   const snapshot = () => ({
     revision: saved.revision, scope: 'official-harness',
@@ -94,15 +98,22 @@ export async function mountEfficiency(ctx, { directory, config, adapters = mount
   };
   for (const name of names) start(name);
 
-  const update = input => {
+  const update = (input, options = {}) => {
     const task = writes.then(async () => {
       if (disposed) throw new HttpError('增强服务已停止', 503);
+      if (options.expected || options.ops) assertSettingsExpected(configurationSnapshot(), options.expected, options.signal);
+      if (options.ops) {
+        const value = applySettingsOps({ features: saved.features }, options.ops), fallback = defaults();
+        for (const name of names) value.features = { ...value.features, [name]: { ...fallback.features[name], ...value.features?.[name] } };
+        input = { revision: saved.revision, features: value.features };
+      }
       const next = mergeEfficiencyConfig(saved, input);
       const changed = names.filter(name => JSON.stringify(next.features[name]) !== JSON.stringify(saved.features[name]));
       const temp = `${path}.${randomUUID()}.tmp`;
       try { await writeFile(temp, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 }); await rename(temp, path); }
       finally { await rm(temp, { force: true }); }
       saved = next;
+      notifySettings(listeners, { namespace: 'benchgo-efficiency' });
       for (const name of changed) {
         try { await stop(name); start(name); }
         catch (error) { states.set(name, { state: 'unavailable', available: false, error: `配置已保存，重载失败：${error.message}` }); }
@@ -126,7 +137,14 @@ export async function mountEfficiency(ctx, { directory, config, adapters = mount
 
   let cleanup;
   const service = {
-    snapshot, update, fetch,
+    snapshot, update, fetch, configurationSnapshot,
+    normalizeSettingsOps(ops, current) {
+      const revision = current.backendRevision ?? current.revision;
+      const submitted = applySettingsOps(current.value, ops, { base: current.base });
+      const actual = mergeEfficiencyConfig({ revision, features: current.value.features }, { revision, features: submitted.features });
+      return normalizeSettingsOps(current.value, ops, { features: actual.features }, { base: current.base });
+    },
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     contextTools: () => handles.get('compaction')?.adapter?.contextTools?.() ?? [],
     async diagnose(agent) {
       const result = snapshot();
@@ -144,6 +162,7 @@ export async function mountEfficiency(ctx, { directory, config, adapters = mount
     },
   };
   ctx.provide('benchgoEfficiency', service);
+  ctx.inject(['benchgoSettings'], child => { const manager = child.get?.('benchgoSettings'); if (manager) child.effect(() => manager.register(createEfficiencySettingsAdapter(service))); });
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/benchgo/efficiency', methods: ['GET', 'POST'], requestBody: 'buffered', fetch }));
   ctx.effect(() => () => service.dispose());
   return service;

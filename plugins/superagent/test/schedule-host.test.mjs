@@ -11,6 +11,7 @@ import { createAssistantEngine } from '../src/engine.mjs';
 import { createScheduleBridge } from '../src/schedule-bridge.mjs';
 import { createAssessmentRunner } from '../src/assessment-runner.mjs';
 import { authorizeAssessment, readAssessmentPolicy } from '../src/assessment-policy.mjs';
+import { installRoleHost } from './role-host-fixture.mjs';
 
 const load = (directory, name) => import(pathToFileURL(createRequire(new URL(`../../../deepseek-harness/packages/${directory}/package.json`, import.meta.url)).resolve(name)).href);
 const { Context } = await load('core/agent-loop', '@deepseek-ai/cordis');
@@ -27,6 +28,7 @@ test('official Host Schedule persists a due reminder and enters SuperAgent Eval 
   });
   await ctx.plugin(LlmRuntime);
   for (let i = 0; i < core.length; i++) await ctx.plugin(core[i].default, i === core.length - 1 ? { agents: [] } : undefined);
+  await installRoleHost(ctx);
   await ctx.plugin((await load('llm/token-meter', '@deepseek-ai/dsh-token-meter')).default);
   await ctx.plugin(await load('session/session-persistence-jsonl', '@deepseek-ai/dsh-session-persistence-jsonl'), { root: join(directory, 'sessions'), compression: 'none' });
   await ctx.plugin((await load('storage/storage', '@deepseek-ai/dsh-storage')).default);
@@ -41,7 +43,7 @@ test('official Host Schedule persists a due reminder and enters SuperAgent Eval 
   ctx.provide('sessionQuery', { listSessions: () => ctx.sessionPersistence.list() });
   let requests = 0;
   class Adapter extends LlmAdapter {
-    async resolveModel(provider, id) { return { provider, id, name: id }; }
+    async resolveModel(provider, id) { return { provider, id, name: id, context: { contextWindow: 131072 } }; }
     async *stream() { requests++; yield { type: 'finish', reason: { kind: 'stop' } }; }
   }
   ctx.llm.registerAdapter(['schedule-test'], new Adapter());
@@ -50,7 +52,7 @@ test('official Host Schedule persists a due reminder and enters SuperAgent Eval 
   const readPolicy = () => readAssessmentPolicy(store, { list: () => [] });
   // Match the plugin's injecting scope, so optional service visibility is tested.
   let mounted;
-  await ctx.plugin({ inject: ['agents', 'llm', 'sessionQuery', 'sessionProjections', 'tokenMeter'], async apply(scope) {
+  await ctx.plugin({ inject: ['agents', 'llm', 'sessions', 'sessionQuery', 'sessionProjections', 'tokenMeter', 'agentPresets', 'permissionPresets', 'sandboxPolicy', 'approval'], async apply(scope) {
     bridge = createScheduleBridge({ ctx: scope, store, readPolicy });
     mounted = bridge.available();
     engine = await createAssistantEngine({ ctx: scope, store, scheduleBridge: bridge, compactionPlugin: (await load('compaction/compaction-basic', '@deepseek-ai/dsh-compaction-basic')).default });

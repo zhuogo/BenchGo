@@ -10,6 +10,9 @@ import { createCloudAccess } from './cloud-access.mjs';
 import { createCloudDeviceGateway } from './devices/cloud-gateway.mjs';
 import { createRelayHost } from './transport/relay-host.mjs';
 import { testRelayConnection } from './transport/relay-probe.mjs';
+import { defaultLinkTransport, LINK_TRANSPORT_SCHEMA, LINK_RELAY_SCHEMA, normalizeLinkRelayPool } from './config.mjs';
+import { createLinkSettingsAdapter, LINK_TRANSPORT_NAMESPACE, LINK_RELAY_NAMESPACE } from './settings-adapter.mjs';
+import { settingsSnapshot, settingsFingerprint, assertSettingsExpected, applySettingsOps, notifySettings } from '../../benchgo/shared/settings-adapter-utils.mjs';
 
 /** Owner admin uses Harness Connection; remote devices get a distinct TLS carrier. */
 export async function mountLink(ctx, config = {}) {
@@ -41,6 +44,21 @@ export async function mountLink(ctx, config = {}) {
     return result;
   };
   let listener, identity, workbench, error = '', closed = false, closing, changes = Promise.resolve();
+  const settingsListeners = new Set(), transportDefaults = defaultLinkTransport();
+  const transportValue = () => Object.fromEntries(Object.keys(LINK_TRANSPORT_SCHEMA.properties).map(key => [key, store.state[key]]));
+  const configurationSnapshot = namespace => {
+    if (closed) throw new Error('Link 已关闭');
+    if (namespace === LINK_TRANSPORT_NAMESPACE) return settingsSnapshot(transportValue(), undefined, { base: transportDefaults });
+    if (namespace === LINK_RELAY_NAMESPACE) {
+      const nodes = relayPool.map(({ token, ...node }, index) => ({ ...node, id: node.id || `relay-${index + 1}`, priority: Number.isInteger(node.priority) ? node.priority : index, enabled: node.enabled !== false }));
+      return settingsSnapshot({ nodes }, undefined, {
+        fingerprint: settingsFingerprint(relayPool),
+        secrets: relayPool.map((node, index) => ({ path: ['nodes', String(index), 'token'], set: !!node.token })),
+      });
+    }
+    throw new Error('未知 Link 设置');
+  };
+  const notifyConfiguration = () => notifySettings(settingsListeners, { namespace: null });
   const webRoot = config.webRoot ?? new URL('../dist/web/', import.meta.url);
   const connectRelays = async () => {
     if (!listener || !relayEnabled || !relayPool.length) return;
@@ -71,6 +89,65 @@ export async function mountLink(ctx, config = {}) {
     relay: { configured: Boolean(relayPool.length || relayUrl), enabled: relayEnabled, url: selectedRelay?.url ?? relayUrl, nodes: relayPool.map((node, index) => { const runtime = relayNodes.get(node.id || `relay-${index + 1}`); const { token, instance, ...publicNode } = node; return { ...publicNode, id: node.id || `relay-${index + 1}`, ...(runtime?.instance?.status() ?? { connected: false, lastError: relayError || null }) }; }), ...(selectedRelay?.runtime.instance.status() ?? { connected: false, lastError: relayNodes.values().next().value?.instance.status().lastError || relayError || null }) },
     };
   };
+  const serializeChange = operation => {
+    const task = changes.then(operation);
+    changes = task.catch(() => {}); return task;
+  };
+  const configureTransport = (input, transaction) => serializeChange(async () => {
+    if (closed) throw new Error('Link 已关闭');
+    if (transaction) {
+      assertSettingsExpected(configurationSnapshot(LINK_TRANSPORT_NAMESPACE), transaction.expected, transaction.signal);
+      const candidate = applySettingsOps(transportValue(), transaction.ops, { blockedPaths: [['enabled']] });
+      if (Object.keys(candidate).some(key => !Object.hasOwn(LINK_TRANSPORT_SCHEMA.properties, key))) throw new Error('未知 Link 设置字段');
+      input = { ...transportDefaults, ...candidate };
+    }
+    const value = validateConfig(input, store.state), previous = transportValue();
+    if (transaction && Object.keys(input).some(key => input[key] !== value[key])) throw new Error('请使用规范化的设备名称和 HTTPS origin');
+    const restart = !listener || !['host', 'port', 'publicUrl'].every(key => value[key] === store.state[key]);
+    if (restart) { store.clearPairings(); await stopRelay(); await listener?.close(); listener = undefined; await sessions.close(); }
+    Object.assign(store.state, value);
+    try {
+      if (restart && value.enabled) await start();
+      transaction?.signal?.throwIfAborted();
+      await store.persist();
+    } catch (reason) {
+      Object.assign(store.state, previous);
+      if (restart) {
+        await stopRelay(); await listener?.close(); listener = undefined;
+        try { await start(); } catch (recovery) { error = recovery.message; }
+      }
+      throw reason;
+    }
+    notifyConfiguration();
+    return transaction ? { ...configurationSnapshot(LINK_TRANSPORT_NAMESPACE), application: { state: 'applied' } } : status();
+  });
+  const configureRelayPool = (inputNodes, transaction) => serializeChange(async () => {
+    if (closed) throw new Error('Link 已关闭');
+    if (transaction) {
+      assertSettingsExpected(configurationSnapshot(LINK_RELAY_NAMESPACE), transaction.expected, transaction.signal);
+      // Whole-node writes contain credentials; only existing public fields use this seam.
+      const publicFields = new Set(Object.keys(LINK_RELAY_SCHEMA.properties.nodes.items.properties).filter(key => key !== 'token'));
+      if (!Array.isArray(transaction.ops) || transaction.ops.some(op => op.path?.length !== 3 || op.path[0] !== 'nodes' || !publicFields.has(op.path[2]))) throw Object.assign(new Error('中继节点与密钥请使用安全入口'), { code: 'SETTINGS_PATH_BLOCKED' });
+      inputNodes = applySettingsOps({ nodes: relayPool }, transaction.ops).nodes;
+    }
+    const normalized = normalizeLinkRelayPool(inputNodes, relayPool);
+    if (transaction && settingsFingerprint(normalized) !== settingsFingerprint(inputNodes)) throw new Error('请使用规范化的中继节点字段');
+    if (relayPool.some(node => node.enabled !== false && !normalized.some(next => next.id === node.id))) throw new Error('请先停用中继，再删除');
+    const previous = store.state.relayPool, previousRelay = store.state.relay;
+    store.state.relayPool = normalized;
+    store.state.relay = normalized[0] ? { url: normalized[0].url, token: normalized[0].token, enabled: normalized[0].enabled } : { url: '', token: '', enabled: false };
+    try { await store.persist(); } catch (reason) { store.state.relayPool = previous; store.state.relay = previousRelay; throw reason; }
+    await stopRelay();
+    relayPool.splice(0, relayPool.length, ...normalized);
+    relayUrl = normalized[0]?.url || ''; relayToken = normalized[0]?.token || '';
+    relayEnabled = normalized.some(node => node.enabled); relayError = '';
+    if (relayEnabled && !listener) { store.state.enabled = true; try { await start(); } catch (reason) { error = reason.message; } }
+    else if (relayEnabled && listener) await connectRelays();
+    notifyConfiguration();
+    return transaction ? { ...configurationSnapshot(LINK_RELAY_NAMESPACE), application: relayEnabled && !connectedRelay()
+      ? { state: 'pending', reason: '中继配置已保存，连接状态尚未就绪，请查看设备页面实时状态' }
+      : { state: 'applied' } } : status();
+  });
   const admin = async input => {
     if (closed) throw new Error('Link 已关闭');
     const action = text(input?.action, '操作');
@@ -81,33 +158,7 @@ export async function mountLink(ctx, config = {}) {
       return testRelayConnection({ url: input.url ?? previous?.url, token: input.token || previous?.token }, config.relayTestOptions);
     }
     if (action === 'relay-pool-configure') {
-      const nodes = input.nodes;
-      if (!Array.isArray(nodes) || nodes.length > 8) throw new Error('中继池节点数量无效');
-      const previousNodes = Array.isArray(store.state.relayPool) ? store.state.relayPool : [];
-      const normalized = nodes.map((node, index) => {
-        const previous = previousNodes.find(item => item.id === node.id);
-        const url = text(node.url || previous?.url, '中继地址', 2048), token = text(node.token || previous?.token, '中继主机密钥', 256);
-        let parsed; try { parsed = new URL(url); } catch { throw new Error('中继地址无效'); }
-        if (parsed.protocol !== 'https:' || parsed.origin !== url || parsed.username || parsed.password) throw new Error('中继必须使用独立 HTTPS origin');
-        if (token.length < 6) throw new Error('中继主机密钥至少需要 6 个字符');
-        return { id: text(node.id || `relay-${index + 1}`, '中继 ID', 128), url, token, priority: Number.isInteger(node.priority) ? node.priority : index, enabled: node.enabled !== false };
-      });
-      const task = changes.then(async () => {
-        if (closed) throw new Error('Link 已关闭');
-        if (relayPool.some(node => node.enabled !== false && !normalized.some(next => next.id === node.id))) throw new Error('请先停用中继，再删除');
-        const previous = store.state.relayPool, previousRelay = store.state.relay;
-        store.state.relayPool = normalized;
-        store.state.relay = normalized[0] ? { url: normalized[0].url, token: normalized[0].token, enabled: normalized[0].enabled } : { url: '', token: '', enabled: false };
-        try { await store.persist(); } catch (error) { store.state.relayPool = previous; store.state.relay = previousRelay; throw error; }
-        await stopRelay();
-        relayPool.splice(0, relayPool.length, ...normalized);
-        relayUrl = normalized[0]?.url || ''; relayToken = normalized[0]?.token || '';
-        relayEnabled = normalized.some(node => node.enabled); relayError = '';
-        if (relayEnabled && !listener) { store.state.enabled = true; await start(); await store.persist(); }
-        else if (relayEnabled && listener) await connectRelays();
-        return status();
-      });
-      changes = task.catch(() => {}); return task;
+      return configureRelayPool(input.nodes);
     }
     if (action === 'relay-configure') {
       const task = changes.then(async () => {
@@ -135,26 +186,12 @@ export async function mountLink(ctx, config = {}) {
             await connectRelays();
           }
         }
-        return status();
+        notifyConfiguration(); return status();
       });
       changes = task.catch(() => {}); return task;
     }
     if (action === 'configure') {
-      const task = changes.then(async () => {
-        if (closed) throw new Error('Link 已关闭');
-        const value = validateConfig(input, store.state);
-        if (input.name !== undefined) value.name = text(input.name, '设备名称', 100);
-        if (listener && ['host', 'port', 'publicUrl'].every(key => value[key] === store.state[key])) {
-          Object.assign(store.state, value);
-          await store.persist(); return status();
-        }
-        store.clearPairings(); await stopRelay(); await listener?.close(); listener = undefined; await sessions.close();
-        Object.assign(store.state, value);
-        try { if (value.enabled) await start(); }
-        catch (e) { error = e.message; await store.persist(); throw e; }
-        await store.persist(); return status();
-      });
-      changes = task.catch(() => {}); return task;
+      return configureTransport(input);
     }
     if (action === 'pairing') {
       if (!listener) throw new Error(error || '设备连接服务暂不可用，请检查监听地址和端口');
@@ -241,5 +278,15 @@ export async function mountLink(ctx, config = {}) {
       catch (e) { return Response.json({ error: e.message }, { status: 400, headers: { 'cache-control': 'no-store' } }); }
     },
   }));
-  return { admin, status, close };
+  const service = {
+    admin, status, close, configurationSnapshot,
+    configureSettings(namespace, transaction) {
+      if (namespace === LINK_TRANSPORT_NAMESPACE) return configureTransport({}, transaction);
+      if (namespace === LINK_RELAY_NAMESPACE) return configureRelayPool(undefined, transaction);
+      throw new Error('未知 Link 设置');
+    },
+    subscribe(fn) { settingsListeners.add(fn); return () => settingsListeners.delete(fn); },
+  };
+  ctx.inject?.(['benchgoSettings'], child => child.effect(() => child.get('benchgoSettings').register(createLinkSettingsAdapter(service))));
+  return service;
 }

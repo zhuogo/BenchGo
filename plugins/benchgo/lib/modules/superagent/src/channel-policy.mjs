@@ -1,6 +1,14 @@
 import { createHash } from 'node:crypto';
 
 export const sourceTypes = Object.freeze(['direct', 'group', 'topic', 'system']);
+export const channelExternalSendInputSchema = Object.freeze({
+  type: 'object', additionalProperties: false,
+  properties: Object.freeze({
+    targetTriggerId: Object.freeze({ type: 'string', minLength: 1, description: '已准入且属于目标渠道的真实 Trigger ID；从可信任务上下文取得，不得编造或用会话 ID 代替。' }),
+    text: Object.freeze({ type: 'string', minLength: 1, description: '此次另行发送的完整最终正文；审批只覆盖这段确切内容。' }),
+  }),
+  required: Object.freeze(['targetTriggerId', 'text']),
+});
 const id = value => typeof value === 'string' && value.length > 0;
 export function channelGroupMode(config, conversationId) {
   if (config.groups == null) return !config.chatIds?.length || config.chatIds.includes(conversationId) ? 'all' : 'disabled';
@@ -45,9 +53,12 @@ export function channelSessionKey(source) {
 }
 export function prepareChannelExternalSend(readConnection, readTrigger, channel, input, { principal } = {}) {
   if (principal?.kind !== 'owner') throw new Error('渠道外发需要已认证主人');
-  if (!input || Object.keys(input).some(key => !['targetTriggerId', 'text'].includes(key)) || typeof input.text !== 'string' || !input.text.trim()) throw new Error('外发需要真实来源记录及完整正文');
+  if (!input || Array.isArray(input) || Object.keys(input).some(key => !Object.hasOwn(channelExternalSendInputSchema.properties, key))
+    || typeof input.targetTriggerId !== 'string' || !input.targetTriggerId.trim() || typeof input.text !== 'string' || !input.text.trim()) {
+    throw Object.assign(new Error('外发参数无效。input 必须仅含 {"targetTriggerId":"真实来源记录的 Trigger ID","text":"完整最终正文"}，两项均为非空字符串。请按 catalog.inputSchema 填写；缺少可信目标时向用户询问，不猜字段或搜索安装源码。'), { code: 'ACTION_INPUT_INVALID' });
+  }
   const trigger = readTrigger(input.targetTriggerId);
-  if (!trigger || trigger.source?.channel !== channel) throw new Error('外发目标没有可信渠道来源');
+  if (!trigger || trigger.source?.channel !== channel) throw Object.assign(new Error('外发目标没有可信渠道来源：targetTriggerId 必须是账本中已准入的完整原始 ID（保留 trigger: 等已有前缀），且属于当前渠道。渠道目标不由保险库登记；请核对可信来源，不补造绑定或改猜 ID。'), { code: 'ACTION_TARGET_NOT_FOUND' });
   authorizeChannelConnection(readConnection, channel, { operation: 'send', source: trigger.source });
   const source = structuredClone(trigger.source), text = input.text;
   return { origin: null, target: structuredClone(source), content: { text }, submission: { input: { targetTriggerId: input.targetTriggerId, text }, source, text } };

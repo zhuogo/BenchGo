@@ -16,6 +16,7 @@ function harness(overrides = {}, failure) {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value != null && value !== false) }),
     useState: initial => { const i = cursor++; if (!(i in state)) state[i] = initial; return [state[i], value => { state[i] = typeof value === 'function' ? value(state[i]) : value; }]; },
     useRef: initial => refs[refCursor++] ||= { current: initial },
+    useId: () => 'question-test',
   };
   runInNewContext(code, { module, exports: module.exports, crypto: { randomUUID }, require: id => id === 'react' ? react : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('ticket-state.mjs') ? ticketState : '' });
   const ticket = { id: 'original', status: 'waiting', instructionRevision: 2, resultVersion: 3, mandate: { source: { channel: 'desktop' } } };
@@ -39,7 +40,7 @@ test('free text answers the durable original Worker question and refreshes after
   assert(!h.render().some(node => node.type === 'form'));
 });
 
-test('changed applied requirements and closed tickets cannot submit old questions', () => {
+test('changed applied requirements and stopped or completed tickets cannot submit old questions', () => {
   for (const patch of [{ instructionRevision: 3 }, { executionControl: { stopped: true } }, { status: 'completed' }]) {
     const h = harness(); Object.assign(h.props.ticket, patch);
     assert(!h.render().some(node => node.type === 'form'));
@@ -51,7 +52,8 @@ test('failed answer keeps the same request identity on retry and exposes the sys
   const h = harness({}, '答复尚未保存');
   h.render().find(node => node.type === 'textarea').props.onChange({ target: { value: '国内外' } });
   await h.render().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
-  assert(h.render().some(node => node.props.role === 'alert' && node.children.includes('答复尚未保存')));
+  const alert = h.render().find(node => node.props.role === 'alert');
+  assert(walk(alert).some(node => node.children.includes('答复尚未保存')));
   await h.render().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
   assert.equal(h.calls[0][1].requestId, h.calls[1][1].requestId);
 });

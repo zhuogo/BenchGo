@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -9,6 +9,10 @@ import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
+// Reuse the pinned official ESM client when this worktree shares its built dependency tree.
+const checkout = join(root, 'deepseek-harness');
+const official = existsSync(join(checkout, 'packages/api/gateway/lib/client.node.js')) ? checkout : dirname(realpathSync(join(checkout, 'node_modules')));
+const requireOfficial = createRequire(join(official, 'packages/api/gateway/package.json'));
 const { chromium } = require('playwright');
 const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
@@ -32,11 +36,26 @@ async function fixture() {
     createRoot(document.getElementById('root')).render(<App/>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-studio-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
-    alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
-    loader: { '.css': 'text', '.svg': 'text' }, plugins: [{ name: 'studio-test-export', setup(build) {
+    alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')),
+      '@deepseek-ai/dsh-api-gateway/client': requireOfficial.resolve('@deepseek-ai/dsh-api-gateway/client') },
+    loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.woff2': 'dataurl', '.woff': 'dataurl', '.ttf': 'dataurl' }, plugins: [{ name: 'official-studio-primitives-source', setup(build) {
+      // Use the pinned official components directly when workspace lib outputs are absent.
+      build.onResolve({ filter: /^@deepseek-ai\/dsh-client-ui-primitives$/ }, () => ({ path: 'primitives', namespace: 'official-source' }));
+      build.onLoad({ filter: /.*/, namespace: 'official-source' }, () => ({ loader: 'ts', resolveDir: root, contents: `
+        export {Tooltip} from './deepseek-harness/packages/client/ui-primitives/src/Tooltip.tsx';
+        export {Modal} from './deepseek-harness/packages/client/ui-primitives/src/Modal.tsx';
+        export {Menu} from './deepseek-harness/packages/client/ui-primitives/src/Menu.tsx';
+        export {Switch} from './deepseek-harness/packages/client/ui-primitives/src/Switch.tsx';
+        export {MarkdownText} from './deepseek-harness/packages/client/ui-primitives/src/markdown/MarkdownText.tsx';
+        export {writeClipboard} from './deepseek-harness/packages/client/ui-primitives/src/clipboard.ts';
+        export * from './deepseek-harness/packages/client/ui-primitives/src/icons/index.tsx';
+      ` }));
+    } }, { name: 'studio-test-export', setup(build) {
       build.onLoad({ filter: /superagent[\\/]client[\\/]index\.jsx$/ }, async ({ path }) => ({ contents: `${await readFile(path, 'utf8')}\nexport { Studio };`, loader: 'jsx', resolveDir: dirname(path) }));
     } }, sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;font-family:var(--dsw-font-family,Arial,sans-serif);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}#root{height:100vh}.ba-root{min-width:0!important}</style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text.replaceAll('</script', '<\\/script')}</script></body></html>`;
+  const script = bundle.outputFiles.find(file => file.path.endsWith('.js')).text;
+  const styles = bundle.outputFiles.filter(file => file.path.endsWith('.css')).map(file => file.text).join('\n');
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${styles}body{margin:0;font-family:var(--dsw-font-family,Arial,sans-serif);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}#root{height:100vh}.ba-root{min-width:0!important}</style></head><body><div id="root"></div><script>${script.replaceAll('</script', '<\\/script')}</script></body></html>`;
 }
 
 test('Studio preserves drafts and scroll, validates collapsed models, recovers saves and offers focused themed navigation', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {

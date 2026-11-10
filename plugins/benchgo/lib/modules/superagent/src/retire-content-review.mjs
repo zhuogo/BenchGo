@@ -18,7 +18,8 @@ export function retireContentReview({ db, tx }) {
     // Old publication decisions cannot become a new Worker result or restart a review.
     db.prepare(`UPDATE sa_outbox SET state='cancelled',owner=NULL,lease_until=NULL,last_error='legacy-content-review-retired',updated_at=?
       WHERE state IN ('queued','claimed') AND (json_extract(payload,'$.type')='ticket.result'
-        AND COALESCE(json_extract(payload,'$.publication.origin'),'')!='worker'
+        AND COALESCE(json_extract(payload,'$.publication.origin'),'') NOT IN ('worker','router','system')
+        AND COALESCE(json_extract(payload,'$.replyState'),'') NOT IN ('pending','ready','suppressed')
         OR id IN (SELECT outbox_id FROM sa_attentions WHERE json_extract(question_key,'$[3]')='review'))`).run(at);
     for (const row of db.prepare("SELECT t.* FROM sa_tickets t WHERE COALESCE(json_extract(t.execution_control,'$.stopped'),0)=0 AND COALESCE(json_extract(t.execution_control,'$.stopRequested'),0)=0 AND EXISTS (SELECT 1 FROM sa_results r WHERE r.ticket_id=t.id AND r.version=t.result_version AND json_type(r.payload,'$.review')='object')").all()) {
       const sent = db.prepare("SELECT 1 FROM sa_outbox WHERE ticket_id=? AND state='sent' AND json_extract(payload,'$.type')='ticket.result' AND json_extract(payload,'$.resultVersion')=?").get(row.id, row.result_version);

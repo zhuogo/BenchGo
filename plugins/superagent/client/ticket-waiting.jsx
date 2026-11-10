@@ -9,6 +9,9 @@ import css from './ticket-waiting.css';
 export function TicketWaiting({ api, ticket, onRefresh, onOpenResources, showQuestion = true }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const waiting = ticketWaiting(ticket);
+  const notice = waiting?.executionNotice;
+  const date = value => { const parsed = new Date(value); return value != null && Number.isFinite(parsed.getTime()) ? parsed : null; };
+  const nextCheck = date(notice?.nextCheckAt), stopRequested = date(notice?.stopRequestedAt);
   if (!waiting) return null;
   async function act(action) {
     if (busy) return;
@@ -27,11 +30,19 @@ export function TicketWaiting({ api, ticket, onRefresh, onOpenResources, showQue
     <style>{css}</style>
     <strong><UIIcon name="schedules" size={16} />系统状态 · {waiting.label}</strong>
     <p>{waiting.reason}</p>
+    {notice && <dl className="ba-ticket-verification-facts">
+      {notice.attempts !== null && <div><dt>自动核查</dt><dd>已查 {notice.attempts} 次</dd></div>}
+      {nextCheck && <div><dt>下次核查</dt><dd><time dateTime={nextCheck.toISOString()}>{nextCheck.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</time></dd></div>}
+      {!nextCheck && notice.automatic === false && <div><dt>下次核查</dt><dd>等待完整恢复证据后安排</dd></div>}
+      {notice.recoveryBlocked && <div className="ba-ticket-verification-blocked"><dt>核查条件</dt><dd>{notice.recoveryBlocked}</dd></div>}
+      {stopRequested && <div><dt>停止生效</dt><dd><time dateTime={stopRequested.toISOString()}>{stopRequested.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</time></dd></div>}
+      {(notice.escalated || notice.automatic === false) && <div className="ba-ticket-verification-escalated"><dt>异常跟进</dt><dd>{notice.automatic === false ? '已提请 Router 跟进恢复条件。' : '已提请 Router 跟进，系统继续自动核查。'}</dd></div>}
+    </dl>}
     {showQuestion && waiting.attention && <TicketAttention key={`${waiting.attention.id}:${ticket.instructionRevision}:${ticket.resultVersion}`} api={api} ticket={ticket} attention={waiting.attention} onAnswered={onRefresh} />}
     <div className="ba-row-actions">{waiting.actions.map(action => <Button key={action.kind} variant="ghost" type="button"
       disabled={busy || (action.kind === 'tasks' ? !onOpenResources : action.kind === 'refresh' ? !onRefresh : !api)}
       onClick={() => act(action)}>{action.label}</Button>)}</div>
     {busy && <p role="status">正在处理，请稍候…</p>}
-    {error && <p role="alert">操作未完成：{error}。请先刷新状态，再选择下一步。</p>}
+    {error && <p role="alert">操作未完成：{error}。已有记录保留，可刷新记录后重试。</p>}
   </section>;
 }

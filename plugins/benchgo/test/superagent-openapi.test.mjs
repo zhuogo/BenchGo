@@ -320,8 +320,12 @@ test('delegation rejects per-ticket model overrides and completed changes return
   db.ingest({ dedupeKey: 'original', thread, source, actor, content: '原任务', mode: 'direct' });
   const ticket = db.createTicket({ threadId: thread.id, target: '原任务', mandate: { source, actorId: actor.id } });
   db.commitResult(ticket.id, { result: { summary: '原成果' }, uniqueKey: 'original-result' });
-  for (const delivery of db.claimOutbox('test-delivery')) db.finishOutbox(delivery.id,
-    { owner: 'test-delivery', sent: true, receipt: { status: 'accepted', messageId: `sent:${delivery.id}` } });
+  assert.equal(db.getTicket(ticket.id).status, 'waiting');
+  for (const delivery of db.claimOutbox('test-delivery')) {
+    db.saveOutboxReply(delivery.id, { owner: 'test-delivery', publication: { action: 'deliver', origin: 'router', text: '原任务已完成，成果已整理。' } });
+    assert.equal(db.getTicket(ticket.id).status, 'waiting');
+    db.finishOutbox(delivery.id, { owner: 'test-delivery', sent: true, receipt: { status: 'accepted', messageId: `sent:${delivery.id}` } });
+  }
   assert.equal(db.getTicket(ticket.id).status, 'completed');
   const before = db.getTicket(ticket.id), results = db.results(ticket.id);
   const nextSource = { ...source, messageId: 'adjustment' };
@@ -351,4 +355,38 @@ test('trusted execution-session and website-permission actions expose the curren
   const result = compile({ $ref: '#/components/schemas/AssistantCurrentResult' });
   assert.equal(result({ version: 1, instructionRevision: 1, review: { verdict: 'passed' } }), false);
   valid(request, { action: 'review' }); // Background memory review remains independent.
+});
+
+test('approval origins expose read-only Router and Worker links with scoped tool rechecks', () => {
+  valid(request, { action: 'approvalOrigins' });
+  valid(request, { action: 'approvalOrigins', sessionId: 'worker', toolName: 'assistant_external_action' });
+  for (const input of [{ action: 'executionApprovalOrigins', ownerSessionId: 'router' },
+    { action: 'approvalOrigins', toolName: 'assistant_external_action' },
+    { action: 'approvalOrigins', sessionId: '' },
+    { action: 'approvalOrigins', sessionId: 'worker', toolName: '' }]) assert.equal(request(input), false);
+  assert.equal(document.paths[path].post.responses['200']['x-action-schemas'].executionApprovalOrigins, undefined);
+  const validate = response(path, 'approvalOrigins');
+  valid(validate, { origins: [] });
+  const router = { kind: 'router', title: '主聊天', sourceTitle: '主聊天',
+    sessionId: 'router', ownerSessionId: 'router', ownerThreadId: 'main' };
+  const origin = { kind: 'worker', sourceTitle: '主聊天', ticketId: 'ticket', title: '发送准备稿', assignmentId: 'assignment', runId: 'run',
+    sessionId: 'worker', ownerSessionId: 'router', ownerThreadId: 'main' };
+  valid(validate, { origins: [router, origin] });
+  assert.equal(validate({ origins: [{ ...origin, approvalToken: 'invented' }] }), false);
+  const { runId, ...missing } = origin;
+  assert.equal(validate({ origins: [missing] }), false);
+});
+
+test('ticket archive scope and direct history lookup share the original ledger contract', () => {
+  valid(request, { action: 'tickets', archived: false });
+  valid(request, { action: 'tickets', archived: true, limit: 2 });
+  valid(request, { action: 'tickets', ticketId: 'closed-original' });
+  assert.equal(request({ action: 'tickets', archived: 'yes' }), false);
+  assert.equal(request({ action: 'tickets', ticketId: '' }), false);
+  assert.equal(request({ action: 'tickets', limit: 1001 }), false);
+  const ticket = compile({ $ref: '#/components/schemas/AssistantTicket' });
+  const original = { id: 'closed-original', status: 'completed', instructionRevision: 1, resultVersion: 1,
+    adjustmentOfTicketId: null, liveSummary: { goal: '检查文件', progress: '已交付', blocker: '', status: 'completed', updatedAt: '2026-11-09T00:00:00Z' } };
+  valid(ticket, { ...original, archived: true });
+  assert.equal(ticket({ ...original, archived: 'true' }), false);
 });

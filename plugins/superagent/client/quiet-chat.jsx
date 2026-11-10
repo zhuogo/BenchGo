@@ -1,6 +1,6 @@
+import typographyCss from '../../shared/client/chat-typography.css';
 import { Button } from '../../shared/client/ui/button.jsx';
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives';
 import { quietChatRows } from './quiet-chat.mjs';
 import { isChatUserMessage } from '../src/question-reply.mjs';
 import css from './quiet-chat.css';
@@ -10,30 +10,14 @@ import { createPortal } from 'react-dom';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { useChatScroll } from './use-chat-scroll.jsx';
 import { TicketAttention } from './ticket-attention.jsx';
-import { TicketWaiting } from './ticket-waiting.jsx';
 import { ticketSnapshot } from './ticket-state.mjs';
 import { InteractiveReply } from '../../interactive/client/reply.jsx';
+import { InlineApproval, useApprovalIndex } from './approval-review.jsx';
+import { approvalReminderNavigation } from './approval-flow.mjs';
 import { sendInteractive } from '../../interactive/client/send.mjs';
-import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
-import typographyCss from '../../shared/client/chat-typography.css';
 
 const labels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' };
 const NO_STATUSES = new Map();
-
-export function ScheduleLifecycle({ row, onOpenResources, onOpenExecution }) {
-  const event = row.schedule;
-  const phases = { created: '已创建', triggered: '已触发执行', completed: '已完成', failed: '执行失败' };
-  const time = event.at || row.createdAt || row.time;
-  const date = time && new Date(time);
-  return <section className="ba-schedule-lifecycle" aria-label="定时任务状态" data-phase={event.phase}>
-    <strong><UIIcon name="schedules" size={18} />{event.title || '定时任务'}</strong>
-    <p><span className="ba-schedule-phase">{phases[event.phase] || '状态待同步'}</span>{date && Number.isFinite(date.getTime()) && <> · <time dateTime={date.toISOString()}>{date.toLocaleString('zh-CN')}</time></>}</p>
-    {row.text && <p>{row.text}</p>}
-    {row.executionSession?.available && onOpenExecution
-      ? <Button variant="ghost" type="button" onClick={() => onOpenExecution(row.executionSession)}>查看执行会话</Button>
-      : event.ticketId && onOpenResources && <Button variant="ghost" type="button" onClick={() => onOpenResources('tasks', { ticketId: event.ticketId })}>查看关联工单</Button>}
-  </section>;
-}
 
 /** Mirrors the official answered-question bubble: muted question, the chosen answer below. */
 export function QuestionReply({ row }) {
@@ -64,7 +48,52 @@ export function QuietChat({ home, session, chat }) {
   const rows = quietChatRows(history, threadId, session, chat);
   const reply = projectReplyStream({ history, chat, sessionId: home.sessionId, running: session.running });
   if (reply && !rows.some(row => row.key === reply.key)) rows.push(reply);
+  const approvalIndex = useApprovalIndex({ ctx: home.ctx, api, ownerThreadId: threadId,
+    enabled: rows.some(row => !!row.approval) });
+  const approvalTarget = useSyncExternalStore(approvalReminderNavigation.subscribe, approvalReminderNavigation.getSnapshot);
+  const locatingApproval = useRef(null), [locationRevision, setLocationRevision] = useState(0);
   const scroll = useChatScroll(rows, `${home.sessionId || ''}:${threadId}`);
+  useEffect(() => () => clearTimeout(locatingApproval.current?.timer), []);
+  useEffect(() => {
+    if (!approvalTarget || approvalTarget.threadId !== threadId) return;
+    if (locatingApproval.current?.target !== approvalTarget) {
+      clearTimeout(locatingApproval.current?.timer);
+      locatingApproval.current = { target: approvalTarget, pages: 0, loading: null, visited: new Set() };
+    }
+    const location = locatingApproval.current;
+    const fail = message => {
+      if (locatingApproval.current !== location || approvalReminderNavigation.getSnapshot() !== approvalTarget) return;
+      clearTimeout(location.timer); setError(message); approvalReminderNavigation.clear(approvalTarget);
+    };
+    const article = [...(scroll.root.current?.querySelectorAll('[data-approval-event]') || [])]
+      .find(node => node.dataset.approvalEvent === approvalTarget.eventKey && node.dataset.approvalRequest === approvalTarget.requestId);
+    if (article) {
+      clearTimeout(location.timer);
+      article.scrollIntoView({ block: 'center', behavior: 'auto' }); article.focus({ preventScroll: true });
+      approvalReminderNavigation.clear(approvalTarget); return;
+    }
+    const messages = history.messages || [];
+    const watermark = JSON.stringify([history.nextBefore ?? null, messages.length, messages[0]?.id ?? messages[0]?.seq, messages.at(-1)?.id ?? messages.at(-1)?.seq]);
+    if (location.loading) {
+      // Completion of the fetch is not completion of React's history commit.
+      // Do not read the same cursor again while the previous page is pending.
+      if (!location.loading.settled || location.loading.watermark === watermark) return;
+      clearTimeout(location.timer); location.loading = null;
+    }
+    const pageKey = history.nextBefore == null ? watermark : `cursor:${history.nextBefore}`;
+    if (!history.hasMore || location.pages >= 20 || location.visited.has(pageKey) || !onLoadEarlier) {
+      fail('暂未找到这次审批对应的对话提醒。请返回审核页重试。'); return;
+    }
+    location.pages++; location.visited.add(pageKey);
+    const loading = { watermark, settled: false }; location.loading = loading;
+    Promise.resolve().then(() => onLoadEarlier()).then(() => {
+      if (locatingApproval.current !== location || location.loading !== loading || approvalReminderNavigation.getSnapshot() !== approvalTarget) return;
+      loading.settled = true;
+      // A missing/unchanged page fails once, without repeating its request.
+      location.timer = setTimeout(() => fail('历史记录未继续加载，请返回审核页重试。'), 1500);
+      setLocationRevision(value => value + 1);
+    }).catch(cause => fail(cause.message || String(cause)));
+  }, [approvalTarget, threadId, history, onLoadEarlier, locationRevision]);
   async function run(operation) {
     setBusy(true); setError('');
     try { await operation(); } catch (cause) { setError(cause.message || String(cause)); } finally { setBusy(false); }
@@ -75,38 +104,31 @@ export function QuietChat({ home, session, chat }) {
       const verificationOnly = row.currentExecutionControl?.stopRequested || row.currentExecutionControl?.stopped || ticketSnapshot({ status: row.ticketStatus, executionControl: row.currentExecutionControl,
         resultVersion: row.currentResultVersion, continuationWait: row.currentContinuationWait ?? row.continuationWait,
         instructionRevision: row.currentInstructionRevision, results: row.currentResult ? [row.currentResult] : [] }).safetyWait;
-      const currentTicket = row.ticketId && !rows.slice(index + 1).some(later => later.ticketId === row.ticketId)
-        ? { id: row.ticketId, status: row.ticketStatus, executionControl: row.currentExecutionControl, instructionRevision: row.currentInstructionRevision,
-          resultVersion: row.currentResultVersion, continuationWait: row.currentContinuationWait ?? row.continuationWait,
-          pauseReason: row.currentPauseReason, results: row.currentResult ? [row.currentResult] : [],
-          attentions: row.currentAttention ? [row.currentAttention] : row.attention ? [row.attention] : [],
-          mandate: { source: { channel: 'desktop' } } } : null;
-      return <article className="ba-chat-message" data-chat-key={row.key} data-role={row.role} key={row.key}>
+      const attention = row.attention || row.currentAttention;
+      const showAttention = attention && !verificationOnly && !rows.slice(index + 1).some(later => (later.attention || later.currentAttention)?.id === attention.id);
+      return <article className="ba-chat-message" data-approval-event={row.approval?.eventKey} data-approval-request={row.approval ? row.requestId : undefined} tabIndex={row.approval ? -1 : undefined} data-chat-key={row.key} data-role={row.role} data-streaming={row.streaming ? 'true' : undefined} key={row.key}>
       <div className="ba-chat-body">
-      <div className="ba-chat-content" aria-label={row.role === 'system' ? '系统状态' : row.kind === 'question-reply' ? '你的选择' : row.role === 'user' ? '你' : (home.assistantConfig?.name ?? home.assistantName) || '未命名'}>
-      {row.role === 'system' && <div className="ba-chat-system-label">系统状态</div>}
-      {row.type === 'schedule.lifecycle' && row.schedule ? <ScheduleLifecycle row={row} onOpenResources={home.onOpenResources} onOpenExecution={home.onOpenExecution} /> : row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : row.role === 'assistant' ? <InteractiveReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={session.running || !!row.provisional} onSubmit={async (text, request) => { await sendInteractive(home.ctx.sessions, home.sessionId, text, request); void Promise.resolve(home.onRefresh?.()).catch(() => {}); }} /> : <MarkdownText text={row.text || ''} labels={labels} />}
+      <div className="ba-chat-content" aria-label={row.role === 'system' ? '消息状态' : row.kind === 'question-reply' ? '你的选择' : row.role === 'user' ? '你' : home.assistantName || 'BenchGo'}>
+      {row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : row.role === 'assistant' ? <InteractiveReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={session.running || !!row.provisional} onSubmit={async (text, request) => { await sendInteractive(home.ctx.sessions, home.sessionId, text, request); void Promise.resolve(home.onRefresh?.()).catch(() => {}); }} /> : <div className="ba-chat-status" role="alert">
+        {row.title && <strong>{row.title}</strong>}<span>{row.text}</span>
+        {row.requestId && home.onRefresh && <Button variant="link" size="sm" className="ba-chat-status-link" type="button" disabled={busy} onClick={() => run(home.onRefresh)}>重新核实</Button>}
+      </div>}
       {row.role === 'user' && (row.content || []).filter(block => ['image', 'file'].includes(block.type)).map((block, index) => <span className="ba-chat-attachment" key={index}>{block.type === 'image' ? '已附图片' : `已附文件${block.name ? `：${block.name}` : ''}`}</span>)}
       </div>
       </div><div className="ba-chat-followup">
-      {row.type === 'ticket.attention' && row.attention && !verificationOnly && <TicketAttention key={row.attention.id} api={api} attention={row.attention} showQuestion={false} ticket={{ id: row.ticketId, status: row.ticketStatus, executionControl: row.currentExecutionControl, instructionRevision: row.currentInstructionRevision ?? row.instructionRevision, resultVersion: row.currentResultVersion ?? row.resultVersion, mandate: { source: { channel: 'desktop' } } }} onAnswered={home.onRefresh} />}
-      {currentTicket && <TicketWaiting key={`${currentTicket.id}:${currentTicket.instructionRevision}:${currentTicket.resultVersion}`} api={api} ticket={currentTicket} onRefresh={home.onRefresh} onOpenResources={home.onOpenResources} showQuestion={!rows.some(item => item.attention && item.attention.id === (row.currentAttention || row.attention)?.id)} />}
-      {currentTicket && home.onOpenExecution && <div className="ba-chat-options" aria-label="工单执行会话" aria-busy={busy || undefined}>
-        {row.executionSession?.available && row.executionSession.sessionId
-          ? <Button variant="ghost" type="button" disabled={busy} onClick={() => run(() => home.onOpenExecution(row.executionSession))}>查看执行会话</Button>
-          : <><span>{row.executionSession ? '执行会话暂不可用' : '执行会话状态待同步'}</span><Button variant="ghost" type="button" disabled={busy || !home.onRefresh} onClick={() => run(home.onRefresh)}>刷新状态</Button></>}
-      </div>}
-      {row.notification && !row.attention && row.eventId && row.options?.length > 0 && <div className="ba-chat-options" aria-label="回复选项（不代表审批）">{row.options.map(option => <Button variant="ghost" type="button" className="ba-quiet" key={option} disabled={busy || session.running || !!chosen[row.eventId]} onClick={() => run(async () => { await api('notificationOption', { eventId: row.eventId, threadId, text: option }); setChosen(value => ({ ...value, [row.eventId]: option })); await home.onRefresh?.(); })}>{option}{chosen[row.eventId] === option ? ' · 已发送' : ''}</Button>)}</div>}
+      {row.approval && <InlineApproval row={row} index={approvalIndex} api={api} SessionProvider={home.SessionProvider} renderSlot={home.renderSlot} />}
+      {showAttention && <TicketAttention key={attention.id} api={api} attention={attention} showQuestion={!row.attention} ticket={{ id: row.ticketId, status: row.ticketStatus, executionControl: row.currentExecutionControl, instructionRevision: row.currentInstructionRevision ?? row.instructionRevision, resultVersion: row.currentResultVersion ?? row.resultVersion, mandate: { source: { channel: 'desktop' } } }} onAnswered={home.onRefresh} />}
+      {row.notification && row.role !== 'system' && !row.attention && row.eventId && row.options?.length > 0 && <div className="ba-chat-options" aria-label="回复选项（不代表审批）">{row.options.map(option => <Button variant="ghost" type="button" className="ba-quiet" key={option} disabled={busy || session.running || !!chosen[row.eventId]} onClick={() => run(async () => { await api('notificationOption', { eventId: row.eventId, threadId, text: option }); setChosen(value => ({ ...value, [row.eventId]: option })); await home.onRefresh?.(); })}>{option}{chosen[row.eventId] === option ? ' · 已发送' : ''}</Button>)}</div>}
       </div>
-      {!row.streaming && row.role !== 'system' && <MessageActions row={row} home={home} />}
+      {row.role !== 'system' && <MessageActions row={row} home={home} />}
     </article>; })}
     {!reply && awaitingChoice && <div className="ba-chat-work ba-chat-await" role="status">在下方选项卡中作答后继续</div>}
     {!reply && !awaitingChoice && (session.running || session.pendingSubmissions?.some(row => row.placement === 'transcript')) && <div className="ba-chat-work" role="status" aria-label="加载中"><span className="ba-loading-dots" aria-hidden="true"><i/><i/><i/></span></div>}
     {error && <p className="ba-error" role="alert">{error}</p>}
   </div>{scroll.host && createPortal(<div className="ba-chat-bottom" data-visible={scroll.visible ? 'true' : 'false'}>
-    <Tooltip label="回到底部"><Button variant="ghost" type="button" className="ba-chat-bottom-button" onClick={scroll.returnToBottom} aria-label={scroll.unread ? '有新回复，回到最新消息' : '回到底部'} tabIndex={scroll.visible ? 0 : -1} aria-hidden={!scroll.visible}>
+    <Button variant="ghost" type="button" className="ba-chat-bottom-button" onClick={scroll.returnToBottom} aria-label={scroll.unread ? '有新回复，回到最新消息' : '回到底部'} title="回到底部" tabIndex={scroll.visible ? 0 : -1} aria-hidden={!scroll.visible}>
       {scroll.unread && <span>有新回复</span>}<UIIcon name="chevronDown" size={20} />
-    </Button></Tooltip>
+    </Button>
     <span className="ba-chat-sr" role="status">{scroll.visible && scroll.unread ? '有新回复' : ''}</span>
   </div>, scroll.host)}</section>;
 }

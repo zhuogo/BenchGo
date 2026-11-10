@@ -8,12 +8,13 @@ const { transformSync } = createRequire(new URL('../../benchgo/package.json', im
 const code = transformSync(readFileSync(new URL('../client/tickets.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 const walk = node => node && typeof node === 'object' && node.props ? [node, ...(node.children || []).flatMap(walk)] : [];
 function harness({ fail = false } = {}) {
-  const state = [[]], refs = [], calls = [], module = { exports: {} }; let cursor = 0, refCursor = 0, opened = 0;
+  const state = [], refs = [], calls = [], module = { exports: {} }; let cursor = 0, refCursor = 0, opened = 0;
   const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value != null && value !== false) }),
     useState: value => { const at = cursor++; if (!(at in state)) state[at] = value; return [state[at], next => { state[at] = typeof next === 'function' ? next(state[at]) : next; }]; },
-    useRef: value => refs[refCursor++] ||= { current: value }, useCallback: fn => fn, useId: () => 'ticket-view', useEffect() {} };
+    useId: () => 'task-test', useRef: value => refs[refCursor++] ||= { current: value }, useCallback: fn => fn, useMemo: fn => fn(), useEffect() {}, useLayoutEffect() {} };
   const Modal = () => null;
-  runInNewContext(code, { module, exports: module.exports, require: name => name.endsWith('confirmation.jsx') ? { useConfirmation: () => [async () => true, null] } : name.endsWith('ticket-board.mjs') ? ticketBoard : name.endsWith('/ui/button.jsx') ? { Button: 'button' } : name.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : name === 'react' ? react : { Modal, useDirtyRegistry: () => () => () => {} } });
+  const activity = { rows: [], error: '', refresh: async () => {}, refreshTickets: async () => {} };
+  runInNewContext(code, { module, exports: module.exports, require: name => name.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => true, null] } : name.endsWith('use-activity.jsx') ? { useAssistantActivity: () => activity } : name.endsWith('ticket-board.mjs') ? ticketBoard : name.endsWith('/ui/button.jsx') ? { Button: 'button' } : name.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : name === 'react' ? react : { Modal, useDirtyRegistry: () => () => () => {} } });
   const props = { onCreateGoal: () => opened++, api: async (action, args) => {
     calls.push({ action, args });
     if (action === 'state') return { config: { revision: 7, workerConcurrency: 2 } };

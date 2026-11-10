@@ -12,6 +12,8 @@ import { mountSkills } from './skills.mjs';
 import { mountEfficiency } from '../lib/modules/efficiency/src/plugin.mjs';
 import { mountInteractivePrompt } from '../lib/modules/interactive/src/prompt.mjs';
 import { mountWorkbench } from '../lib/modules/workbench/src/plugin.mjs';
+import { createSettingsManagement } from './settings-management.mjs';
+import { createOfficialSettingsAdapter } from './settings-official.mjs';
 
 export const name = 'benchgo';
 
@@ -28,6 +30,21 @@ export async function apply(ctx, config = {}) {
   const directory = config.dataDir ?? await prepareDefaultDataDirectory();
   await mkdir(directory, { recursive: true, mode: 0o700 });
   ctx.provide('benchgo', { config, directory });
+  const management = createSettingsManagement({ directory });
+  ctx.provide('benchgoSettings', management);
+  ctx.effect(() => () => management.close());
+  // Native Settings and profile configuration remain the source of truth.
+  // Optional modules register their own existing stores through this registry.
+  ctx.inject(['settings', 'configEditor', 'profileContext', 'loader'], child => {
+    const unregister = management.register(createOfficialSettingsAdapter(child));
+    child.effect(() => unregister);
+  });
+  // The optional observer runs in its own official profile; it needs no
+  // commander/assistant instance and adds no installed plugin entry.
+  if (config.watchdog !== undefined) ctx.inject(['agents', 'sessions', 'sessionPersistence', 'agentPresets', 'permissionPresets', 'agentDefaultModel', 'schedule', ...(config.watchdogAuxiliary ? ['llm'] : [])], async child => {
+    const { mountWatchdog } = await import('../lib/modules/superagent/src/watchdog-plugin.mjs');
+    await mountWatchdog(child, { directory, config: config.watchdog, auxiliary: config.watchdogAuxiliary });
+  });
   mountInteractivePrompt(ctx);
   ctx.inject(['connection', 'webServer'], async child => { await mountWorkbench(child, { directory }); });
   ctx.inject(['connection'], async child => { await mountEfficiency(child, { directory }); });

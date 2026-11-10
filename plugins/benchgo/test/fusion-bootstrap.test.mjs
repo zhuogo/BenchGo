@@ -7,6 +7,7 @@ import { Context } from '@deepseek-ai/cordis';
 
 test('base composition keeps optional service objects out of Cordis disposer collection', async () => {
   const ctx = new Context(), live = new Set(), errors = [];
+  let managementClosed = 0;
   ctx.on('internal/error', error => errors.push(error));
   ctx.provide('connection', { fetch: { register: () => () => {} } });
   ctx.provide('webServer', {});
@@ -18,6 +19,7 @@ test('base composition keeps optional service objects out of Cordis disposer col
   const noop = () => {};
   const imports = {
     mkdir: async () => {}, mountInteractivePrompt: noop,
+    createSettingsManagement: () => ({ register: () => () => {}, close: async () => { managementClosed++; } }),
     mountWorkbench: mockMount('benchgoWorkbench'), mountEfficiency: mockMount('benchgoEfficiency'),
     mountSkills: noop, mountPreviewAssets: noop, mountUsage: noop, mountUpdates: noop,
   };
@@ -31,5 +33,6 @@ test('base composition keeps optional service objects out of Cordis disposer col
     assert.deepEqual([...live].sort(), ['benchgoEfficiency', 'benchgoWorkbench']);
     assert.deepEqual(errors, []);
     await fiber.dispose(); assert.equal(live.size, 0);
+    assert.equal(managementClosed, 1, 'the base awaits its owned management journal disposal');
   } finally { await ctx.fiber.dispose(); }
 });

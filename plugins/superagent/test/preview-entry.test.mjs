@@ -8,9 +8,9 @@ const walk = node => node && typeof node === 'object' && node.props ? [node, ...
 function harness(file, initial) {
   let cursor = 0; const hooks = [...initial];
   const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }), useId: () => 'test', useEffect() {}, useRef(value) { const at = cursor++; return hooks[at] ||= { current: value }; }, useState(value) { const at = cursor++; if (!(at in hooks)) hooks[at] = typeof value === 'function' ? value() : value; return [hooks[at], next => { hooks[at] = typeof next === 'function' ? next(hooks[at]) : next; }]; } };
-  const module = { exports: {} }, ArtifactPreview = () => null;
+  const module = { exports: {} }, ArtifactPreview = () => null, calls = [];
   runInNewContext(transformSync(readFileSync(new URL('../client/' + file, import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code, { module, exports: module.exports, requestAnimationFrame: callback => callback(), require: id => id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id === 'react' ? react : { ArtifactPreview } });
-  return { render(name) { cursor = 0; return walk(module.exports[name]({ api() {} })); }, ArtifactPreview };
+  return { render(name) { cursor = 0; return walk(module.exports[name]({ api(...args) { calls.push(args); } })); }, ArtifactPreview, calls };
 }
 test('artifact names open the shared preview and returning restores the trigger', () => {
   const file = { name: 'report.docx', url: 'api/file', bytes: 42 }, page = { artifacts: [file], total: 1 };
@@ -28,7 +28,9 @@ test('artifact names open the shared preview and returning restores the trigger'
 test('system file selection reuses preview without a second text-read request', () => {
   const file = { name: 'report.xlsx', path: 'report.xlsx', url: 'api/system-file', type: 'file', bytes: 42 };
   const h = harness('system-files.jsx', ['', 0, { entries: [file] }, '']);
-  const entry = h.render('SystemFiles').find(node => node.props.className === 'ba-system-entry');
-  entry.props.onOpen(file, { focus() {} });
+  const row = h.render('SystemFiles').find(node => node.type?.name === 'SystemFileRow' && node.props.entry === file);
+  const entry = walk(row.type(row.props)).find(node => node.type === 'button' && node.props.className === 'ba-system-trigger');
+  entry.props.onClick({ stopPropagation() {}, currentTarget: { focus() {} } });
   assert.equal(h.render('SystemFiles').find(node => node.type === h.ArtifactPreview).props.file, file);
+  assert.deepEqual(h.calls, [], 'opening an already listed file delegates reading to the shared preview without another API request');
 });

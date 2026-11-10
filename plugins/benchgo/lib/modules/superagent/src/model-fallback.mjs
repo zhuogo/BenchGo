@@ -21,12 +21,13 @@ export function dispatchedCallSignatures(events) {
 // Exact Router tool contracts from service.mjs; no prefix or model annotations.
 const routerQueries = new Set(['assistant_context', 'assistant_tickets', 'assistant_projects', 'assistant_sessions', 'assistant_history',
   'assistant_session_search', 'assistant_ledger_read', 'assistant_capabilities', 'assistant_models', 'assistant_memory_search',
-  'assistant_summarize', 'assistant_analyze_image', 'schedule_list']);
+  'assistant_summarize', 'assistant_analyze_image', 'assistant_device_status', 'schedule_list']);
 export function isRouterQuery(name, args) {
   if (routerQueries.has(name)) return true;
   if (typeof args === 'string') { try { args = JSON.parse(args); } catch { return false; } }
   if (!args || typeof args !== 'object') return false;
-  if (name === 'assistant_config') return !args.patch;
+  if (name === 'assistant_settings') return ['catalog', 'read', 'history'].includes(args.op);
+  if (name === 'assistant_task_cleanup') return ['preview', 'history'].includes(args.op) || args.op === 'restore' && !args.requestId;
   if (name === 'assistant_memory') return !args.remove && !args.content;
   if (name === 'assistant_profile') return args.op !== 'update';
   if (name === 'assistant_pet') return args.op === 'catalog';

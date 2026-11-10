@@ -25,7 +25,7 @@ export function installLearningSourceStore({ db, tx }) {
     if (result.outcome !== ticket.status || result.instructionRevision !== ticket.instruction_revision) return null;
     const outbox = db.prepare(`SELECT o.* FROM sa_outbox o JOIN sa_delivery_receipts r ON r.outbox_id=o.id
       WHERE o.ticket_id=? AND o.state='sent' AND json_extract(o.payload,'$.type')='ticket.result'
-      AND json_extract(o.payload,'$.publication.origin')='worker'
+      AND json_extract(o.payload,'$.publication.origin') IN ('router','worker')
       AND json_extract(o.payload,'$.resultVersion')=? AND json_extract(o.payload,'$.instructionRevision')=?
       AND json_extract(o.payload,'$.outcome')=? AND json_extract(r.payload,'$.status')='accepted'
       AND length(trim(json_extract(r.payload,'$.messageId')))>0 ORDER BY o.sent_at,o.id LIMIT 1`)

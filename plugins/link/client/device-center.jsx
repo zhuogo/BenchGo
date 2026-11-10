@@ -439,7 +439,7 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     <div className="dc-surface" hidden={!showDevices}>
       <section className="dc-content">
         <ErrorLine error={error} />
-        {!loaded && <DeviceLoading label="正在读取设备…" skeleton />}
+        {!loaded && <DeviceLoading label="正在读取设备…" />}
         {loaded && data.capabilities?.hostAdmin && <section id="dc-panel-connection" className="dc-connection-panel" aria-label="连接">
           <div className="dc-section-heading"><h1>连接</h1></div><LinkSettings embedded management={runtime.hostCall} refreshToken={relayRevision} detailsTarget={detailsTarget} />
         </section>}
@@ -462,7 +462,7 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     </div>
     <div className="dc-workbenches" hidden={showDevices} aria-busy={!!busy || !!(activeId && !readyFrames.includes(activeId))}>
       {frames.map(frame => <iframe key={frame.id} ref={element => { if (element) frameElements.current.set(frame.id, element); else frameElements.current.delete(frame.id); }} onLoad={() => frameLoaded(frame)} src={frame.url} title={frame.name + '工作台'} hidden={activeId !== frame.id} allow="clipboard-read; clipboard-write; microphone" referrerPolicy="no-referrer" />)}
-      {!showDevices && !error && (!!busy || (activeId && !readyFrames.includes(activeId))) && <div className="dc-workbench-loading"><DeviceLoading label={busy ? '正在连接设备…' : '正在加载工作台…'} skeleton /></div>}
+      {!showDevices && !error && (!!busy || (activeId && !readyFrames.includes(activeId))) && <div className="dc-workbench-loading"><DeviceLoading label={busy ? '正在连接设备…' : '正在加载工作台…'} /></div>}
     </div>
     {!showDevices && error && <div className="dc-workbench-error"><ErrorLine error={error} /><Button onClick={() => setShowDevices(true)}>返回设备</Button></div>}
     {modal && <Sheet title={modal.type === 'add' ? '添加设备' : modal.type === 'relay' ? '添加中继' : modal.device.name} onClose={closeModal} busy={!!busy}>{modal.type === 'relay' ? <RelayWizard initialTab={modal.progress ? 'deploy' : 'connect'} runtime={runtime} onClose={closeModal} job={relayJob} setJob={setRelayJob} onChanged={async () => { relayChanged(); setDirectoryTab('relay'); setModal(null); setShowDevices(true); }} /> : modal.type === 'add' ? <AddDevice runtime={runtime} onAdded={added} sshAvailable={data.capabilities?.ssh !== false} /> : <ManageDevice device={modal.device} runtime={runtime} onChanged={refresh} onOpenWorkbench={select} onCloseWorkbench={(runtime.isNative() || frames.some(frame => frame.id === modal.device.id)) && modal.device.kind !== 'local' ? () => { if (runtime.isNative()) { void runtime.call('closeWorkbench', { deviceId: modal.device.id }).catch(reason => setError(reason.message)); } setFrames(items => items.filter(frame => frame.id !== modal.device.id)); if (activeId === modal.device.id) { setActiveId(null); setShowDevices(true); } setModal(null); } : undefined} onRemoved={id => { setFrames(items => items.filter(frame => frame.id !== id)); if (activeId === id) { setActiveId(null); setShowDevices(true); } setModal(null); void refresh().catch(reason => setError(reason.message)); }} />}</Sheet>}

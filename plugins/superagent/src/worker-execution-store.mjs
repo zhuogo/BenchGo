@@ -1,3 +1,4 @@
+import { installSessionRoleStore } from './session-role-store.mjs';
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const json = value => JSON.stringify(value);
 
@@ -20,6 +21,7 @@ export function installWorkerExecutionStore({ db, tx, api }) {
     return { assignment, run };
   };
   return {
+    ...installSessionRoleStore({ db, tx, api }),
     getWorkerExecutionState: state,
     freezeWorkerModelRoute(input) {
       return tx(() => {

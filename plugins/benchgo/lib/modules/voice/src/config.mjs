@@ -4,12 +4,21 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { prepareVoiceDataDirectory } from '../../../../src/data-directory.mjs';
+import { applySettingsOps, assertSettingsExpected, normalizeSettingsOps, notifySettings, settingsSnapshot } from '../../../../shared/settings-adapter-utils.mjs';
 
 export class VoiceError extends HttpError {}
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 // OpenAI multipart streaming is the default; model IDs remain user-owned.
 export const DEFAULT_TTS_SPEED = 1.2;
 const TTS_SPEED_MIN = 0.25, TTS_SPEED_MAX = 4;
+const routingString = maxLength => ({ type: 'string', maxLength, pattern: '^[^\\u0000-\\u001f\\u007f]*$' });
+const providerProperties = { providerId: routingString(200), baseURL: routingString(2048), apiKey: { ...routingString(4096), writeOnly: true }, model: routingString(200) };
+export const VOICE_CONFIG_SCHEMA = { type: 'object', additionalProperties: false, properties: {
+  dictation: { type: 'boolean', default: false }, readAloud: { type: 'boolean', default: false }, call: { type: 'boolean', default: false },
+  asr: { type: 'object', additionalProperties: false, properties: { ...providerProperties, protocol: { type: 'string', enum: ['transcriptions', 'transcriptions-sse', 'openai-websocket'] }, realtime: { type: 'object', additionalProperties: false, properties: { url: routingString(2048), query: { type: 'object', maxProperties: 32, additionalProperties: routingString(512) } } } } },
+  tts: { type: 'object', additionalProperties: false, properties: { ...providerProperties, protocol: { type: 'string', enum: ['speech'] }, voice: routingString(200), speed: { type: 'number', minimum: TTS_SPEED_MIN, maximum: TTS_SPEED_MAX, multipleOf: 0.01, default: DEFAULT_TTS_SPEED }, stream: { type: 'boolean', default: true } } },
+} };
+export const VOICE_SENSITIVE_PATHS = [['asr', 'apiKey'], ['tts', 'apiKey']];
 const defaults = () => ({ dictation: false, readAloud: false, call: false, asr: { baseURL: '', apiKey: '', model: '', protocol: 'transcriptions-sse' }, tts: { baseURL: '', apiKey: '', model: '', protocol: 'speech', voice: '', speed: DEFAULT_TTS_SPEED, stream: true } });
 const string = (value, label, limit) => {
   if (typeof value !== 'string' || value.length > limit || /[\u0000-\u001f\u007f]/u.test(value)) throw new VoiceError(`Invalid ${label}`);
@@ -61,7 +70,7 @@ export function normalizeTtsSpeed(value) {
 }
 export function updateConfig(current, patch, { loading = false } = {}) {
   if (!object(patch)) throw new VoiceError('Expected config object');
-  if (Object.keys(patch).some(key => !['dictation', 'readAloud', 'call', 'asr', 'tts'].includes(key))) throw new VoiceError('Unknown config field');
+  if (Object.keys(patch).some(key => !Object.hasOwn(VOICE_CONFIG_SCHEMA.properties, key))) throw new VoiceError('Unknown config field');
   const next = structuredClone(current);
   if (next.tts && !Object.hasOwn(next.tts, 'stream')) next.tts.stream = true;
   if (next.tts && !Object.hasOwn(next.tts, 'speed')) next.tts.speed = DEFAULT_TTS_SPEED;
@@ -74,7 +83,7 @@ export function updateConfig(current, patch, { loading = false } = {}) {
     for (const [key, value] of Object.entries(patch[kind])) {
       // Read-only metadata may be round-tripped by settings forms.
       if (['configured', 'apiKeyConfigured', 'apiKeyMasked', 'unavailableReason'].includes(key)) continue;
-      if (!['providerId', 'baseURL', 'apiKey', 'model', 'protocol', ...(kind === 'tts' ? ['voice', 'speed', 'stream'] : ['realtime'])].includes(key)) throw new VoiceError(`Unknown ${kind} field`);
+      if (!Object.hasOwn(VOICE_CONFIG_SCHEMA.properties[kind].properties, key)) throw new VoiceError(`Unknown ${kind} field`);
       if (kind === 'tts' && key === 'stream') { if (typeof value !== 'boolean') throw new VoiceError('Invalid TTS stream'); next.tts.stream = value; continue; }
       if (key === 'realtime') { next.asr.realtime = validateRealtime(value); continue; }
       if (kind === 'tts' && key === 'speed') { next.tts.speed = normalizeTtsSpeed(value); continue; }
@@ -107,11 +116,22 @@ export function publicConfig(config) {
     return [key, { ...safe, configured: !!((value.providerId || value.baseURL) && value.model), apiKeyConfigured: !!apiKey, apiKeyMasked: apiKey ? '••••••••' : '' }];
   }));
 }
+function managedConfig(current, ops) {
+  const submitted = applySettingsOps(current, ops, { sensitivePaths: VOICE_SENSITIVE_PATHS, base: defaults() });
+  const next = updateConfig(current, submitted), fallback = defaults();
+  for (const key of ['dictation', 'readAloud', 'call']) if (!Object.hasOwn(submitted, key)) next[key] = fallback[key];
+  for (const kind of ['asr', 'tts']) for (const key of Object.keys(next[kind])) if (!Object.hasOwn(submitted[kind] || {}, key)) {
+    if (Object.hasOwn(fallback[kind], key)) next[kind][key] = fallback[kind][key]; else delete next[kind][key];
+  }
+  if (VOICE_SENSITIVE_PATHS.some(([kind, key]) => next[kind][key] !== current[kind][key])) throw Object.assign(new VoiceError('该供应商变更会删除现有凭据，请先通过安全输入入口处理凭据', 409), { code: 'SETTINGS_PATH_BLOCKED' });
+  return next;
+}
+function managedPublic(config) { const value = structuredClone(config); for (const [kind, key] of VOICE_SENSITIVE_PATHS) delete value[kind][key]; return value; }
 export class VoiceConfig {
   constructor({ dataDir } = {}) {
     this.defaultDataDirectory = dataDir === undefined;
     dataDir ??= join(homedir(), '.benchgo', 'voice');
-    this.directory = dataDir; this.path = join(dataDir, 'config.json'); this.value = defaults(); this.writes = Promise.resolve(); this.listeners = new Set();
+    this.directory = dataDir; this.path = join(dataDir, 'config.json'); this.value = defaults(); this.writes = Promise.resolve(); this.listeners = new Set(); this.settingsEpoch = randomUUID(); this.settingsRevision = 0;
   }
   async open() {
     if (this.defaultDataDirectory) await prepareVoiceDataDirectory();
@@ -121,15 +141,23 @@ export class VoiceConfig {
     return this;
   }
   snapshot() { return publicConfig(this.value); }
+  settingsSnapshot() {
+    const value = structuredClone(this.value), secrets = VOICE_SENSITIVE_PATHS.map(path => ({ path, set: !!value[path[0]][path[1]] }));
+    for (const [kind, key] of VOICE_SENSITIVE_PATHS) delete value[kind][key];
+    return settingsSnapshot(value, `${this.settingsEpoch}:${this.settingsRevision}`, { secrets, base: managedPublic(defaults()) });
+  }
+  normalizeSettingsOps(ops, current) { return normalizeSettingsOps(current.value, ops, managedPublic(managedConfig(this.value, ops)), { base: current.base }); }
   subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
-  configure(patch) {
+  configure(patch, options = {}) {
     const operation = this.writes.then(async () => {
-      const next = updateConfig(this.value, patch);
+      if (options.expected || options.ops) assertSettingsExpected(this.settingsSnapshot(), options.expected, options.signal);
+      // Ops start from the original private object, preserving credentials without exposing them.
+      const next = options.ops ? managedConfig(this.value, options.ops) : updateConfig(this.value, patch);
       if (JSON.stringify(next) === JSON.stringify(this.value)) return this.snapshot();
       const temp = `${this.path}.${randomUUID()}.tmp`;
       try { await writeFile(temp, JSON.stringify(next, null, 2), { mode: 0o600 }); await rename(temp, this.path); }
       finally { await rm(temp, { force: true }); }
-      this.value = next; for (const listener of this.listeners) listener(); return this.snapshot();
+      this.value = next; this.settingsRevision++; notifySettings(this.listeners); return this.snapshot();
     });
     this.writes = operation.catch(() => {}); return operation;
   }

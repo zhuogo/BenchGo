@@ -25,7 +25,8 @@ export function workerAppliedTicket(database, assignment, execution) {
 /** Install on a single Harness worker scope; never use frozen prompt context as authority. */
 export function installWorkerPermissionGate(scope, { database, assignment, readPolicy, authorizeAction, withCheckpoint, priorToolEvents = [], leaseMs = 60000 }) {
   const previousCalls = new Set(priorToolEvents.flatMap(event => event.type === 'assistant/message'
-    ? (event.data?.message?.content || []).filter(block => block.type === 'tool-call').map(block => signature(block.name, block.arguments)) : []));
+    ? (event.data?.message?.content || []).filter(block => block.type === 'tool-call').map(block => signature(block.name, block.arguments))
+    : event.type === 'tool/ptc-dispatch-start' ? [signature(event.data.name, event.data.arguments)] : []));
   const previousEffects = executionEffects({ events: priorToolEvents });
   scope.systemPrompt?.section({ name: 'benchgo-external-action-boundary', order: -109, interpolate: false,
     text: 'Open terminal, scripts and browser tools remain available for normal work and preparation. Never submit payment/purchase, password changes, account deletion or additional external sending through these open tools, scripts or aliases. Submit these four categories only through a registered assistant_external_action adapter with exact frozen recipient/object/content and a fresh one-time approval. If no adapter is registered, prepare up to the final step and return a clear human handoff; never claim submission or approval. Public reading and normal authenticated replies/progress/questions/results to the original source use their existing owned paths. Tool-level checks cannot prove arbitrary commands or natural-language browser actions free of high-risk effects.' });
@@ -37,7 +38,7 @@ export function installWorkerPermissionGate(scope, { database, assignment, readP
     if (previousEffects.effectsVerified === false && !isReadOnlyWorkerTool(execution.name)) {
       throw Object.assign(new Error('Previous external effects remain unverified; only read-only verification is permitted'), { code: 'EXECUTION_EFFECTS_UNKNOWN' });
     }
-    if ((assignment.pauseContinuation?.kind === 'execution-budget') && !isReadOnlyWorkerTool(execution.name)
+    if ((assignment.pauseContinuation?.kind === 'execution-budget' || assignment.interruptedContinuation) && !isReadOnlyWorkerTool(execution.name)
       && previousCalls.has(signature(execution.name, execution.arguments))) {
       throw Object.assign(new Error('A previously dispatched action cannot be replayed during correction; inspect its saved outcome before proceeding'), { code: 'ACTION_REPLAY_BLOCKED' });
     }

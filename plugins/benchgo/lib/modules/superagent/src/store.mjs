@@ -1,7 +1,7 @@
 import { validatePetProfile } from './pet-profile.mjs';
-import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write';
 import { resolve, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { ASSISTANT_DOCUMENTS, createAssistantDocuments, documentHash } from './documents.mjs';
 import { createAssistantMemory } from './memory.mjs';
 import { createAssistantReview } from './review.mjs';
@@ -12,6 +12,8 @@ import { createAssistantConnections } from './connections.mjs';
 import { loadChannelModules } from './channel-catalog.mjs';
 import { createAssistantOrchestrationStore } from './orchestration-store.mjs';
 import { createAssistantIdentity, identityName, withIdentityName } from './identity.mjs';
+import { applySettingsOps, assertSettingsExpected, notifySettings, settingsSnapshot } from '../../../../shared/settings-adapter-utils.mjs';
+import { ASSISTANT_BLOCKED_PATHS, ASSISTANT_CONFIG_SCHEMA } from './settings-schema.mjs';
 
 // Windows keeps an open SQLite handle from being removed during test/profile
 // replacement. Keep one live store per data directory and release the previous
@@ -44,7 +46,7 @@ function validateModel(value) {
   for (const key of ['providerId', 'modelId']) if (value[key].length > 512 || value[key] !== value[key].trim() || /[\u0000-\u001f\u007f]/u.test(value[key])) throw new Error(`Invalid ${key}`);
 }
 export function validateAssistantModels(models) {
-  if (!Array.isArray(models) || models.length > 32) throw new Error('Invalid model queue');
+  if (!Array.isArray(models) || models.length > ASSISTANT_CONFIG_SCHEMA.properties.models.maxItems) throw new Error('Invalid model queue');
   noSecrets(models);
   const seen = new Set();
   for (const model of models) {
@@ -60,7 +62,7 @@ export function validateAssistantModels(models) {
     seen.add(key);
   }
 }
-export const ASSISTANT_AUXILIARY_CAPABILITIES = Object.freeze(['vision', 'compression', 'summary', 'review']);
+export const ASSISTANT_AUXILIARY_CAPABILITIES = Object.freeze([...ASSISTANT_CONFIG_SCHEMA.properties.auxiliary.anyOf[1].properties.capabilities.items.enum]);
 export function validateAssistantAuxiliary(value) {
   if (value === null) return;
   if (!object(value) || Object.keys(value).some(key => !['models', 'capabilities'].includes(key))) throw new Error('Invalid auxiliary model configuration');
@@ -110,9 +112,7 @@ async function json(path, fallback) {
   try { return JSON.parse(await readFile(path, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return copy(fallback); throw error; }
 }
 async function atomic(path, content) {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try { await writeFile(temporary, content, { encoding: 'utf8', mode: 0o600 }); await rename(temporary, path); }
-  finally { await unlink(temporary).catch((error) => { if (error.code !== 'ENOENT') throw error; }); }
+  await writeFileAtomic(path, content, { mode: 0o600 });
 }
 function serialize(key, operation) {
   const previous = queues.get(key) || Promise.resolve();
@@ -169,6 +169,7 @@ export async function createAssistantStore({ dataDirectory } = {}) {
     }
   });
   const documents = await createAssistantDocuments({ directory });
+  const configListeners = new Set();
   const readConfig = () => readVersioned(paths.config, defaults, validateConfig);
   const identityService = createAssistantIdentity({ documents });
   async function getConfig() {
@@ -183,7 +184,17 @@ export async function createAssistantStore({ dataDirectory } = {}) {
       if (Object.hasOwn(patch, 'keyPools') && (!Array.isArray(patch.keyPools) || patch.keyPools.length)) throw Object.assign(new Error('凭据路由池已移除，请使用首选和备用模型'), { code: 'KEY_POOL_REMOVED', status: 400 });
       const current = await readConfig();
       checkRevision(current, options.revision);
-      const next = merge(current, patch);
+      if (options.expected || options.settingsOps) assertSettingsExpected(await configurationSnapshot(), options.expected, options.signal);
+      let next;
+      if (options.settingsOps) {
+        const projected = configurationValue(await getConfig());
+        const base = copy(defaults); validateConfig(base);
+        const submitted = applySettingsOps(projected, options.settingsOps, { blockedPaths: ASSISTANT_BLOCKED_PATHS, base: configurationValue(base) });
+        if (Object.keys(submitted).some(key => !Object.hasOwn(ASSISTANT_CONFIG_SCHEMA.properties, key))) throw new Error('未知总助手配置字段');
+        next = { ...copy(defaults), ...submitted, schemaVersion: current.schemaVersion, revision: current.revision };
+        patch = Object.fromEntries(options.settingsOps.map(operation => [operation.path[0], next[operation.path[0]]]));
+        if (Object.hasOwn(patch, 'name') && patch.name === undefined) patch.name = '';
+      } else next = merge(current, patch);
       if (options.petWrite && Object.hasOwn(patch, 'pet')) { next.pet = copy(patch.pet); next.petPrevious = copy(current.pet); next.petHasPrevious = true; }
       next.revision = current.revision + 1;
       validateConfig(next);
@@ -191,9 +202,11 @@ export async function createAssistantStore({ dataDirectory } = {}) {
       if (Object.hasOwn(patch, 'name')) await identityService.rename(patch.name, { expectedHash: options.expectedHash });
       next.name = current.name;
       await atomic(paths.config, JSON.stringify(next, null, 2) + '\n');
-      return getConfig();
+      const result = await getConfig(); notifySettings(configListeners, { namespace: 'superagent' }); return result;
     });
   }
+  function configurationValue(config) { const { schemaVersion, revision, ...value } = config; return value; }
+  async function configurationSnapshot() { const config = await getConfig(), base = copy(defaults); validateConfig(base); return settingsSnapshot(configurationValue(config), config.revision, { base: configurationValue(base) }); }
   let memory;
   try { memory = await createAssistantMemory({ directory, documents }); }
   catch (error) { documents.close(); throw error; }
@@ -317,6 +330,8 @@ export async function createAssistantStore({ dataDirectory } = {}) {
     ownedSkills,
     getConfig,
     updateConfig,
+    configurationSnapshot,
+    subscribeConfig(listener) { configListeners.add(listener); return () => configListeners.delete(listener); },
     getState: () => readVersioned(paths.state, initialState, validateState),
     updateState: (patch, options) => update(paths.state, initialState, validateState, patch, options),
     getProfile,

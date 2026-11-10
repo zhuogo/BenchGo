@@ -5,6 +5,35 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAssignmentExecutor } from '../src/assignment-executor.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
+import { installRoleHost, loadRolePackage } from './role-host-fixture.mjs';
+
+const loadHost = name => loadRolePackage('core/agent-loop', name);
+const { Context } = await loadHost('@deepseek-ai/cordis');
+const { createScope } = await loadHost('@deepseek-ai/dsh-scope');
+// Keep execution/transcript controls local while composing the real upstream role services.
+async function installExecutionRoleHost(t, ctx) {
+  const host = new Context();
+  t.after(() => host.fiber.dispose());
+  for (const name of ['session', 'session-projection', 'system-prompt', 'tools', 'agent'])
+    await host.plugin((await loadHost(`@deepseek-ai/dsh-${name}`)).default);
+  await installRoleHost(host);
+  for (const name of ['agentPresets', 'permissionPresets', 'sandboxPolicy', 'approval']) ctx[name] = host[name];
+  ctx.on ??= (...args) => host.on(...args);
+  ctx.agents.turnBoundaryOf = session => host.agents.turnBoundaryOf(session);
+  const create = ctx.agents.create;
+  ctx.agents.create = input => create({ ...input, setup: async (fixture, agent) => {
+    const scope = createScope(host, {});
+    t.after(() => scope.dispose());
+    const snapshotEvents = agent.session?.snapshotEvents;
+    agent.id ??= input.sessionId;
+    agent.session = host.sessions.create(agent.id, { meta: input.meta });
+    if (snapshotEvents) agent.session.snapshotEvents = snapshotEvents;
+    agent.model ??= { current: () => null, select() {} };
+    fixture.tools.schemas = value => host.get('tools').schemas(value);
+    agent.ctx = scope.ctx.extend({ ...fixture, get: name => fixture.get?.(name) ?? scope.ctx.get(name) });
+    await input.setup(agent.ctx, agent);
+  } });
+}
 
 for (const selection of ['worker', 'explicit']) test(`Worker ignores ${selection} assignment selection and uses its ordered work-role queue`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-worker-models-'));
@@ -48,6 +77,7 @@ for (const selection of ['worker', 'explicit']) test(`Worker ignores ${selection
       return { agent, dispose: async () => {} };
     } },
   };
+  await installExecutionRoleHost(t, ctx);
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: router, models: [router], workerModels: workers }), authorizeAction: async () => ({ allowed: true }), captureCheckpoint: async () => ({ version: 1, manifestHash: 'checkpoint' }) });
   await executor(assignment, { ticket, signal, renew: async () => {} });
   assert.deepEqual(seen, expected.map(model => [model.providerId, model.modelId, model.options.maxTokens]));
@@ -98,6 +128,7 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
       return { agent, dispose: async () => { disposed = true; } };
     } },
   };
+  await installExecutionRoleHost(t, ctx);
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readSourceContext: async () => ({ status: 'available', messages: [{ text: 'Earlier discussion' }] }), readPolicy: async () => ({ version: 'p1', projects: [project], workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }), captureCheckpoint: async input => { assert.deepEqual(input, projectMode ? environment : meta.cwd); return { version: 1, manifestHash: 'mock-checkpoint' }; } });
   const signal = new AbortController().signal;
   if (ending === 'max-tokens') {
@@ -141,9 +172,14 @@ test('elapsed time never interrupts execution; an explicit abort keeps its submi
   t.after(() => clearInterval(keepAlive));
   const ctx = {
     sessionQuery: { readSession: async () => { throw new Error('must not read a successful transcript'); } },
-    agents: { create: async () => ({ agent: { followup() {}, cancel() { interrupted++; } }, dispose: async () => { disposed++; } }) },
+    agents: { create: async input => {
+      const agent = { followup() {}, cancel() { interrupted++; } };
+      await input.setup({ tools: { register() {} }, systemPrompt: { section() {}, context() {} }, on() {} }, agent);
+      return { agent, dispose: async () => { disposed++; } };
+    } },
   };
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 20, executionPauseGraceMs: 20 });
+  await installExecutionRoleHost(t, ctx);
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 20, executionPauseGraceMs: 20 });
   const controller = new AbortController();
   const execution = executor(assignment, { ticket, signal: controller.signal, renew: async () => {} });
   execution.catch(() => {});
@@ -169,8 +205,13 @@ for (const cleanupFails of [false, true]) test(`cancel waits for confirmed host 
   const started = new Promise(resolve => { submitted = resolve; });
   const cleanupStarted = new Promise(resolve => { disposing = resolve; });
   const cleanup = new Promise(resolve => { release = resolve; });
-  const ctx = { sessionQuery: { readSession: async () => assert.fail('cancel must not read result') }, agents: { create: async () => ({ agent: { followup() { submitted(); }, cancel() {} }, dispose: async () => { disposing(); await cleanup; if (cleanupFails) throw new Error('cleanup failed'); } }) } };
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+  const ctx = { sessionQuery: { readSession: async () => assert.fail('cancel must not read result') }, agents: { create: async input => {
+    const agent = { followup() { submitted(); }, cancel() {} };
+    await input.setup({ tools: { register() {} }, systemPrompt: { section() {}, context() {} }, on() {} }, agent);
+    return { agent, dispose: async () => { disposing(); await cleanup; if (cleanupFails) throw new Error('cleanup failed'); } };
+  } } };
+  await installExecutionRoleHost(t, ctx);
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }) });
   const controller = new AbortController();
   const work = executor(assignment, { ticket, signal: controller.signal, renew: async () => {} });
   const rejected = assert.rejects(work, cleanupFails ? /cleanup failed/ : /requested stop/);

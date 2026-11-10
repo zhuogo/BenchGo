@@ -9,23 +9,54 @@ const replyText = call => {
 
 // History can be one request behind the official live view. Only a host-admitted
 // user node tied to a persisted message/receipt may bridge that refresh window.
-function activeIdentity(history, rows, turn, users) {
-  if (!Number.isSafeInteger(turn) || rows.turnEnds?.has(turn)) return null;
+function activeIdentity(history, rows, turn, users, boundary) {
+  if (!Number.isSafeInteger(turn) || (!boundary && rows.turnEnds?.has(turn))) return null;
   const active = history.activeReply;
-  if (active) return active.turn === turn && users.has(active.requestId) ? active : null;
-  const node = [...(rows.nodes || [])].reverse().find(item => ['user', 'steering'].includes(item.kind) && isChatUserMessage(item));
-  if (!node || !Number.isFinite(node.seq)) return null;
+  if (active && !boundary) return active.turn === turn && users.has(active.requestId)
+    ? { ...active, seq: users.get(active.requestId).seq } : null;
+  if (active && active.turn !== turn) return null;
+  const node = [...(rows.nodes || [])].reverse().find(item => ['user', 'steering'].includes(item.kind)
+    && (!boundary || item.seq > boundary.start.seq && item.seq < (boundary.end?.seq ?? Infinity)));
+  if (!isChatUserMessage(node) || !Number.isFinite(node.seq)) return null;
   const priorEnd = Math.max(-1, ...[...(rows.turnEnds || [])].filter(([ended]) => ended < turn).map(([, seq]) => seq));
   if (node.seq <= priorEnd) return null;
   const question = readAdmittedQuestionReply(node);
   if (node.source.kind === 'user-question-reply' && !question) return null;
   const rpcId = node.source.rpcId || node.source.requestId;
-  const user = [...users.values()].find(item => item.seq === node.seq || (rpcId && item.rpcId === rpcId) || (question && item.callId === question.callId));
-  if (user) return { turn, requestId: user.id };
+  const user = [...users.values()].find(item => (node.messageId && item.id === node.messageId) || item.seq === node.seq || (rpcId && item.rpcId === rpcId) || (question && item.callId === question.callId));
+  if (user) return !active || active.requestId === user.id ? { turn, requestId: user.id, seq: node.seq } : null;
   const receipt = (history.requests || []).find(item => ((rpcId && item.requestId === rpcId) || (question && item.questionReply?.callId === question.callId))
     && item.sessionId === history.sessionId && typeof item.messageId === 'string'
     && ['processing', 'prepared'].includes(item.status));
-  return receipt ? { turn, requestId: receipt.messageId } : null;
+  return receipt && (!active || active.requestId === receipt.messageId) ? { turn, requestId: receipt.messageId, seq: node.seq } : null;
+}
+
+const publicText = blocks => (blocks || []).filter(block => block.kind === 'text' && typeof block.text === 'string').map(block => block.text).join('\n');
+
+// Each official step settles independently. Derive the whole request from those
+// nodes plus its current step, never from a second cache of streamed reply text.
+function ordinaryReply(history, chat, users, published, running, make) {
+  const rows = chat.legacy;
+  const turn = chat.timeline?.turns.get(chat.timeline.turnOrder.at(-1));
+  if (chat.timeline && !turn?.start) return null;
+  if (turn?.end ? turn.end.data?.reason?.kind !== 'completed' : !running) return null;
+  const active = activeIdentity(history, rows, turn?.turn ?? rows.partial?.turn, users, turn);
+  if (!active || published.has(active.requestId)) return null;
+  const nodes = (rows.nodes || []).filter(node => node.kind === 'assistant' && node.turn === active.turn
+    && node.messageId && !node.interrupted && !node.parentCallId && Number.isFinite(node.seq)
+    && node.seq > (active.seq ?? turn?.start?.seq ?? Infinity) && node.seq < (turn?.end?.seq ?? Infinity));
+  const parts = nodes.map(node => publicText(node.blocks)).filter(text => text.trim());
+  const partial = rows.partial;
+  const step = turn?.steps?.at(-1);
+  if (running && !turn?.end && partial?.turn === active.turn && !partial.parentCallId
+    && (!step || partial.step === step.step && !step.end)
+    // A delayed partial must not duplicate or revive an already settled step.
+    && !nodes.some(node => Number.isSafeInteger(partial.step) && node.step >= partial.step)) {
+    const text = publicText(partial.blocks);
+    if (text.trim()) parts.push(text);
+  }
+  const text = parts.join('\n\n');
+  return text.trim() ? make(active.requestId, text, !turn?.end, turn?.end?.time || users.get(active.requestId)?.time) : null;
 }
 
 /** Router text is public conversation; reasoning and tool payloads stay private. */
@@ -37,7 +68,7 @@ export function projectReplyStream({ history = {}, chat, sessionId, running = fa
   const users = new Map(messages.filter(row => row.role === 'user').map(row => [row.id, row]));
   const make = (requestId, text, streaming, time) => ({
     id: `reply:${requestId}`, key: `message:reply:${requestId}`, requestId,
-    role: 'assistant', kind: 'final', text, content: [{ type: 'text', text }], streaming, time,
+    role: 'assistant', kind: 'final', text, content: [{ type: 'text', text }], streaming, time: time ?? users.get(requestId)?.time,
   });
   // Executed publication is authoritative, even when history is one refresh behind.
   for (const call of [...(rows.nodes || [])].reverse()) {
@@ -49,18 +80,17 @@ export function projectReplyStream({ history = {}, chat, sessionId, running = fa
     const text = replyText(call);
     if (text) return make(result.requestId, text.trim(), false, call.time);
   }
-  if (!running) return null;
+  if (!running) return ordinaryReply(history, chat, users, published, running, make);
   // Explicit publication takes precedence when the model chooses it. Streaming
   // ordinary public text must not depend on that optional model tool choice.
   for (const call of [...(rows.runningCalls || [])].reverse()) {
     if (call.name !== 'assistant_reply' || call.parentCallId) continue;
-    const active = activeIdentity(history, rows, call.turn, users), text = replyText(call);
+    const turn = chat.timeline?.turns.get(chat.timeline.turnOrder.at(-1));
+    if (turn && (turn.turn !== call.turn || turn.end)) continue;
+    const step = turn?.steps?.at(-1);
+    if (step && (call.step !== step.step || step.end)) continue;
+    const active = activeIdentity(history, rows, call.turn, users, turn), text = replyText(call);
     if (active && !published.has(active.requestId) && text) return make(active.requestId, text, true, call.time || users.get(active.requestId)?.time);
   }
-  const partial = rows.partial;
-  if (!partial || partial.parentCallId) return null;
-  const active = activeIdentity(history, rows, partial.turn, users);
-  if (!active || published.has(active.requestId)) return null;
-  const text = (partial.blocks || []).filter(block => block.kind === 'text' && typeof block.text === 'string').map(block => block.text).join('\n');
-  return text.trim() ? make(active.requestId, text, true, users.get(active.requestId)?.time) : null;
+  return ordinaryReply(history, chat, users, published, running, make);
 }

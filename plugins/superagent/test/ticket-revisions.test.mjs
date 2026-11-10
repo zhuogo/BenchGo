@@ -28,8 +28,12 @@ async function fixture(t) {
 }
 
 function deliverCommitted(database) {
-  for (const delivery of database.claimOutbox('test-delivery')) database.finishOutbox(delivery.id,
-    { owner: 'test-delivery', sent: true, receipt: { status: 'accepted', messageId: `sent:${delivery.id}` } });
+  for (const delivery of database.claimOutbox('test-delivery')) {
+    database.saveOutboxReply(delivery.id, { owner: 'test-delivery',
+      publication: { action: 'deliver', origin: 'router', text: '这项工作已经完成。' } });
+    database.finishOutbox(delivery.id,
+      { owner: 'test-delivery', sent: true, receipt: { status: 'accepted', messageId: `sent:${delivery.id}` } });
+  }
 }
 
 function hostRevision(f, requestExpansion) {
@@ -339,7 +343,7 @@ test('host revision preserves its run model and rejects per-Ticket model fields 
   assert.deepEqual(f.db.assignments(f.ticket.id).at(-1).model, f.input.model);
 });
 
-test('a linked adjustment Ticket executes and directly delivers the fresh adjustment while the original stays historical', async t => {
+test('a linked adjustment Ticket saves new work and delivers its Router reply while the original stays historical', async t => {
   const f = await fixture(t);
   const store = { orchestration: f.db, paths: { workspace: f.directory }, getConfig: async () => ({ models: [] }), connections: { read: () => ({ revision: 0, config: { enabled: false } }) }, documents: { read: async () => ({ hash: 'rules', content: '' }) } };
   const policy = await readAssessmentPolicy(store);
@@ -349,7 +353,13 @@ test('a linked adjustment Ticket executes and directly delivers the fresh adjust
   let executions = 0, freshDelivery = false;
   const runtime = createOrchestrationRuntime({ ctx: {}, store,
     execute: async (assignment, { ticket }) => { executions++; assert.equal(assignment.instructionRevision, 1); assert.equal(ticket.adjustmentOfTicketId, f.ticket.id); assert.equal(ticket.mandate.policyVersion, policy.desktopVersion); return { summary: 'fresh', evidenceRefs: [], selfCheck: { summary: 'new checks completed', instructionRevision: 1 } }; },
-    deliverDesktop: async delivery => { if (delivery.payload.text?.includes('fresh')) { freshDelivery = true; assert.equal(delivery.payload.source.messageId, 'revision'); } return { status: 'accepted', messageId: delivery.id }; },
+    prepareTicketReply: async delivery => {
+      assert.equal(delivery.payload.text, undefined);
+      assert.equal(delivery.payload.publication, undefined);
+      assert.equal(f.db.results(delivery.ticketId).at(-1).summary, 'fresh');
+      return { status: 'ready', text: '调整后的工作已完成。' };
+    },
+    deliverDesktop: async delivery => { freshDelivery = true; assert.equal(delivery.payload.text, '调整后的工作已完成。'); assert.equal(delivery.payload.publication.origin, 'router'); assert.equal(delivery.payload.source.messageId, 'revision'); return { status: 'accepted', messageId: delivery.id }; },
   });
   t.after(() => runtime.stop());
   for (let i = 0; i < 40 && !freshDelivery; i++) { await runtime.tick(); await new Promise(resolve => setTimeout(resolve, 5)); }

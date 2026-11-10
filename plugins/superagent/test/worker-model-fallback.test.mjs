@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { createAssignmentExecutor } from '../src/assignment-executor.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { modelFallbackSource } from '../src/model-fallback.mjs';
+import { installRoleHost } from './role-host-fixture.mjs';
 
 const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
 const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
@@ -30,17 +31,30 @@ async function fixture(t, script, { install, models = [primary, backup], persist
   await ctx.plugin(LlmRuntime);
   for (let i = 0; i < modules.length; i++) await ctx.plugin(modules[i].default, i === modules.length - 1 ? { agents: [] } : undefined);
   await ctx.plugin(NativeToolExecutor);
+  await installRoleHost(ctx);
   if (persistent) await ctx.plugin(await loadPackage('session/session-persistence-jsonl', '@deepseek-ai/dsh-session-persistence-jsonl'), { root: join(directory, 'sessions'), compression: 'none' });
   const requests = [], selections = [], logs = new Map();
   class Adapter extends LlmAdapter {
     async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: 131072 }, reasoning: { efforts: [{ id: 'high', name: 'High' }] } }; }
-    async *stream(request) { requests.push(request); yield* await script(request, requests.length); }
+    async *stream(request) {
+      requests.push(request);
+      const events = await script(request, requests.length);
+      // The scripted Worker signs its own self-check before final completion.
+      // Injecting it from readSession is too late and forces a repair turn.
+      if (events.some(event => event.type === 'finish' && event.reason?.kind === 'stop')) {
+        const agent = ctx.agents.get(request.sessionId);
+        const batch = await agent.ctx.tools.execute({ agent, signal: new AbortController().signal,
+          calls: [{ type: 'tool-call', id: `fixture-self-check:${requests.length}`, name: 'assistant_task_result',
+            arguments: JSON.stringify({ selfCheck: { summary: 'Verified fixture transcript', checks: ['Scripted output matches the saved evidence'] }, outcome: 'completed' }) }] });
+        assert.equal(batch.results[0].result.isError, false, JSON.stringify(batch.results));
+      }
+      yield* events;
+    }
   }
   ctx.llm.registerAdapter(['test'], new Adapter());
   ctx.provide('sessionQuery', { readSession: async id => {
     const agent = ctx.agents.get(id);
     if (agent) {
-      await agent.ctx.tools.execute({ agent, signal: new AbortController().signal, calls: [{ type: 'tool-call', id: 'fixture-self-check', name: 'assistant_task_result', arguments: JSON.stringify({ selfCheck: { summary: 'Verified fixture transcript' } }) }] });
       const log = { events: agent.session.snapshotEvents() }; logs.set(id, log); return log;
     }
     if (!persistent) return logs.get(id);
@@ -101,13 +115,12 @@ test('Worker fallback clears effort, rebuilds model tools and prompt, and never 
   });
   const result = await f.executor(f.assignment, f.context);
   assert.equal(result.finalSummary, 'Complete from saved evidence');
-  // This fixture records its self-check only when the finished log is read.
-  // The Host therefore asks the same Worker to supplement it once before closure.
-  assert.deepEqual(f.requests.map(request => request.model), [primary.modelId, primary.modelId, backup.modelId, backup.modelId, backup.modelId]);
+  assert.deepEqual(f.requests.map(request => request.model), [primary.modelId, primary.modelId, backup.modelId, backup.modelId]);
   assert.equal(f.requests[0].reasoningEffort, 'high');
   assert.equal(f.requests[2].reasoningEffort, undefined);
   assert.equal(f.requests[2].maxTokens, undefined);
   assert.equal(effects, 1);
+  assert.ok(f.requests.every(request => request.sessionId === result.sessionId), 'all requests belong to the same Worker, never a Router expression');
   assert.equal(result.executionEffects.effectsVerified, true);
   assert.ok(!f.requests[0].tools.some(tool => tool.name === 'backup_only'));
   assert.ok(f.requests[2].tools.some(tool => tool.name === 'backup_only'));
@@ -115,12 +128,6 @@ test('Worker fallback clears effort, rebuilds model tools and prompt, and never 
   const events = f.logs.get(result.sessionId).events;
   assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-instruction').length, 1);
   assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === modelFallbackSource).length, 1);
-  const selfCheckPrompts = events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-self-check');
-  assert.equal(selfCheckPrompts.length, 1, 'one same-session self-check supplement explains the extra model request');
-  assert.equal(selfCheckPrompts[0].data.source.runId, result.runId);
-  assert.equal(selfCheckPrompts[0].data.source.ticketId, f.ticket.id);
-  assert.equal(f.database.runs(f.assignment.id).length, 1, 'self-check does not start another execution');
-  assert.equal(f.database.runs(f.assignment.id)[0].sessionId, result.sessionId);
   assert.equal(f.database.getWorkerExecutionState(result.runId).fallbackPlan.index, 1);
   assert.ok(events.some(event => event.type === 'tool/result' && JSON.stringify(event.data).includes('prior model already dispatched')));
   assert.ok(f.selections.some(selection => selection.model === backup.modelId && selection.reasoningEffort === undefined));
@@ -134,17 +141,12 @@ test('Worker preparation failure re-admits the original unlogged identity once a
     return prepare(request, signal);
   };
   const result = await f.executor(f.assignment, f.context);
-  assert.deepEqual(f.requests.map(request => request.model), [backup.modelId, backup.modelId]);
+  assert.deepEqual(f.requests.map(request => request.model), [backup.modelId]);
+  assert.equal(f.requests[0].sessionId, result.sessionId);
   const events = f.logs.get(result.sessionId).events;
   const users = events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-instruction');
   assert.equal(users.length, 1);
   assert.equal(users[0].data.content[0].text, f.ticket.target);
-  const selfCheckPrompts = events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-self-check');
-  assert.equal(selfCheckPrompts.length, 1, 'the second backup request only supplements the missing self-check');
-  assert.equal(selfCheckPrompts[0].data.source.runId, result.runId);
-  assert.equal(selfCheckPrompts[0].data.source.ticketId, f.ticket.id);
-  assert.equal(f.database.runs(f.assignment.id).length, 1);
-  assert.equal(f.database.runs(f.assignment.id)[0].sessionId, result.sessionId);
   const plan = f.database.getWorkerExecutionState(result.runId).fallbackPlan;
   assert.equal(plan.unadmitted[0].id, users[0].data.id);
   assert.equal(plan.requestId, users[0].data.id);

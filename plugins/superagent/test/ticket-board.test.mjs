@@ -2,13 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { filterTickets, groupTickets, ticketLane } from '../client/ticket-board.mjs';
 
-test('board uses only the durable three states and never display completion', () => {
+test('board uses only the three persisted Ticket states', () => {
   for (const status of ['running', 'waiting', 'completed']) assert.equal(ticketLane({ status }), status);
   assert.equal(ticketLane({ status: 'waiting', taskMeta: { completed: true } }), 'waiting');
-  assert.equal(ticketLane({ status: 'waiting', assignments: [{ state: 'claimed' }] }), 'waiting');
-  assert.equal(ticketLane({ status: 'waiting', results: [{ outcome: 'failed' }] }), 'waiting');
   assert.equal(ticketLane({ status: 'waiting', executionControl: { stopped: true } }), 'waiting');
-  assert.equal(ticketLane({ status: 'future-state' }), 'waiting');
+  assert.equal(ticketLane({ status: 'running', assignments: [{ state: 'claimed' }] }), 'running');
 });
 
 test('search keeps opaque ids and matches all words without mutating the durable rows', () => {

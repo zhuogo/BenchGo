@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile, writeFile, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 import { createAssistantStore } from '../src/store.mjs';
 
 async function fixture(t) {
@@ -68,6 +69,26 @@ test('concurrent stores serialize edits and reject stale revisions without parti
   await assert.rejects(store.updateConfig({ models: [{ providerId: 'p', modelId: 'm', options: { temperature: 1 } }] }), /不支持/);
   assert.equal((await store.getConfig()).image.modelId, 'image');
   assert.ok(!(await readdir(store.paths.directory)).some((name) => name.endsWith('.tmp')));
+});
+
+test('Windows temporary target sharing refusal is handled by the official atomic writer without partial state', { skip: process.platform !== 'win32' }, async t => {
+  const { store } = await fixture(t), before = await store.getState();
+  const quoted = store.paths.state.replaceAll("'", "''");
+  const reader = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    `$held = [IO.File]::Open('${quoted}', [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite); try { [Console]::WriteLine('LOCKED'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 200 } finally { $held.Dispose() }`],
+  { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => { if (reader.exitCode === null) reader.kill(); });
+  const exited = new Promise((resolve, reject) => { reader.once('error', reject); reader.once('exit', code => code === 0 ? resolve() : reject(new Error(`fixture reader exited ${code}`))); });
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('fixture reader did not acquire state sharing handle')), 10_000);
+    reader.stdout.on('data', chunk => { if (String(chunk).includes('LOCKED')) { clearTimeout(timeout); resolve(); } });
+    reader.once('error', error => { clearTimeout(timeout); reject(error); });
+  });
+  const saved = await store.updateState({ mainSessionId: 'atomic-shared-target' }, { revision: before.revision });
+  await exited;
+  assert.equal(saved.revision, before.revision + 1);
+  assert.equal((await store.getState()).mainSessionId, 'atomic-shared-target');
+  assert.ok(!(await readdir(store.paths.directory)).some(name => name.endsWith('.tmp')));
 });
 
 test('HTML name cards survive reload independently of names and opaque model settings', async t => {

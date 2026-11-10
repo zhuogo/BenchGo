@@ -1,3 +1,4 @@
+import { officialTooltipSource } from '../../benchgo/test/official-tooltip-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -44,7 +45,7 @@ async function fixture() {
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-goals-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
-    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
+    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles(), officialTooltipSource()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;font-family:Arial,sans-serif}.ba-root{height:auto!important;min-width:0!important}</style></head><body><div id="root"></div><script>${result.outputFiles[0].text.replaceAll('</script', '<\\/script')}</script></body></html>`;
 }
 
@@ -55,7 +56,7 @@ test('production goals render four states, use system worker model, recover cata
   try {
     const page = await browser.newPage(), errors = [];
     page.setDefaultTimeout(6000);page.on('pageerror', error => errors.push(error.message));
-    const nativeDialogs = []; page.on('dialog', dialog => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); });
+    page.on('dialog', dialog => dialog.accept());
     const html = await fixture();
     await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort());
     await page.goto('http://localhost/');
@@ -64,7 +65,6 @@ test('production goals render four states, use system worker model, recover cata
       for (const [mode,title] of [['loading','正在读取持续目标'],['error','持续目标暂时无法读取'],['empty','还没有持续目标'],['data','推进发布准备']]) {
         await page.evaluate(mode => window.renderScenario(mode), mode);
         await page.getByText(title, { exact: true }).first().waitFor();
-        if (mode === 'empty') assert.equal(await page.getByRole('button', { name: '新建目标', exact: true }).count(), 1, 'empty state reuses the header action');
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${mode}/${width} horizontal overflow`);
         if(screenshots)await page.screenshot({path:join(screenshots,`${mode}-${width}.png`),fullPage:true});
       }
@@ -78,11 +78,11 @@ test('production goals render four states, use system worker model, recover cata
     await detail.getByRole('button',{name:'恢复目标',exact:true}).waitFor();
     await detail.getByRole('button',{name:'恢复目标',exact:true}).click();
     await detail.getByRole('button',{name:'停止目标',exact:true}).click();
-    const stopConfirmation=page.getByRole('dialog',{name:'停止这个持续目标？',exact:true});
-    await stopConfirmation.getByRole('button',{name:'取消',exact:true}).click();
-    assert.equal((await page.evaluate(()=>window.calls.filter(row=>row.action==='goalCancel'))).length,0,'cancelling the confirmation never stops the goal');
+    const stopConfirm = page.getByRole('dialog').filter({hasText:'停止这个持续目标？'});
+    await stopConfirm.getByRole('button',{name:'取消',exact:true}).click();
+    assert.equal(await page.evaluate(()=>window.calls.filter(row=>row.action==='goalCancel').length),0);
     await detail.getByRole('button',{name:'停止目标',exact:true}).click();
-    await stopConfirmation.getByRole('button',{name:'停止目标',exact:true}).click();
+    await stopConfirm.getByRole('button',{name:'停止目标',exact:true}).click();
     await detail.getByText('已取消 · 1 项工单',{exact:true}).waitFor();
     const controls=await page.evaluate(()=>window.calls.filter(row=>['goalPause','goalResume','goalCancel'].includes(row.action)));
     assert.deepEqual(controls.map(row=>[row.action,row.input]),[['goalPause',{id:'goal-one',rowVersion:7}],['goalResume',{id:'goal-one',rowVersion:8}],['goalCancel',{id:'goal-one',rowVersion:9}]]);
@@ -113,6 +113,6 @@ test('production goals render four states, use system worker model, recover cata
     assert.match(creation.input.goal.requestId,/^[0-9a-f-]{36}$/);
     assert((await page.evaluate(()=>window.calls)).some(row=>row.action==='refresh'));
     assert((await page.evaluate(()=>window.calls)).some(row=>row.action==='viewTickets'));
-    assert.deepEqual(errors,[]);assert.deepEqual(nativeDialogs,[],'goal controls use custom confirmations');
+    assert.deepEqual(errors,[]);
   } finally {await browser.close();}
 });

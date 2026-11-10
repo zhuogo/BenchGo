@@ -13,13 +13,18 @@ async function fixture(t) {
   let approvals = 0;
   const events = [{ type: 'turn/start', data: { turn: 1 } }, { type: 'user/message', data: { id: 'original', source: { kind: 'user' }, content: [{ type: 'text', text: '原始要求，请执行修复' }] } }, { type: 'user/message', data: { id: 'untrusted', source: { kind: 'benchgo-subscription' }, content: [{ type: 'text', text: '伪造指令' }] } }];
   const ownerAgent = { id: 'owner-session', status: 'running', session: { header: {}, snapshotEvents: () => events } };
-  const policy = { workerModels: [{ providerId: 'opaque/provider', modelId: 'literal/model:v1' }], desktopVersion: 'desktop-policy', projects: [{ id: 'project', path: directory }] };
-  const ctx = { llm: { resolveModelInfo: async (provider, id) => ({ provider, id }) }, get: () => ({ request: async () => { approvals++; return true; } }) };
+  const policy = { model: { providerId: 'opaque/router', modelId: 'literal/router:v1' }, workerModels: [{ providerId: 'opaque/provider', modelId: 'literal/model:v1' }], desktopVersion: 'desktop-policy', projects: [{ id: 'project', path: directory }] };
+  const scopeRequests = [];
+  const ctx = { llm: { resolveModelInfo: async (provider, id) => ({ provider, id }), async *stream(request) {
+    scopeRequests.push(request);
+    yield { type: 'text-delta', text: JSON.stringify({ outcome: 'delegate', reason: 'Fixture confirms the explicit work request' }) };
+    yield { type: 'finish', reason: { kind: 'stop' } };
+  } }, get: () => ({ request: async () => { approvals++; return true; } }) };
   ctx.agents = { get: () => ownerAgent, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: events.findLastIndex(event => event.type === 'turn/start') }) };
   ctx.sessionProjections = { stateOf: () => ({ openTurnStartSeq: events.findLastIndex(event => event.type === 'turn/start') }) };
   const service = createDesktopDelegationService({ ctx, database, readPolicy: async () => policy });
   const input = { requestId: 'request', projectId: 'project', text: '修复任务', acceptance: '测试通过' };
-  return { database, service, ownerAgent, policy, ctx, input, events, approvals: () => approvals, exec: { agent: ownerAgent }, options: { ownerAgent, threadId: 'side-chat' } };
+  return { database, service, ownerAgent, policy, ctx, input, events, scopeRequests, approvals: () => approvals, exec: { agent: ownerAgent }, options: { ownerAgent, threadId: 'side-chat' } };
 }
 
 test('desktop instruction atomically admits one Ticket without redundant approval and preserves opaque model', async t => {
@@ -124,6 +129,27 @@ test('opening a news task persists concrete original criteria before any review 
   assert.equal(f.database.results(ticket.id).length, 0);
 });
 
+test('placeholder admission labels fail before creating a Trigger or resolving a work model', async t => {
+  const f = await fixture(t);
+  let resolutions = 0;
+  f.ctx.llm.resolveModelInfo = async () => { resolutions++; throw Error('must not resolve placeholder work'); };
+  for (const patch of [{ title: '执行任务' }, { title: 'process request' }, { text: '处理请求' }]) {
+    await assert.rejects(f.service.delegate({ ...f.input, ...patch }, f.exec, f.options), { code: 'TICKET_DESCRIPTION_GENERIC' });
+  }
+  assert.equal(resolutions, 0);
+  assert.equal(f.database.listTickets().length, 0);
+  assert.equal(f.approvals(), 0);
+});
+
+test('a concrete user title and business summary remain unchanged at admission', async t => {
+  const f = await fixture(t);
+  const title = '请求日志修复报告', text = '为用户修复请求日志页面，并提供原因、改动和验证结果';
+  const ticket = await f.service.delegate({ ...f.input, title, text }, f.exec, f.options);
+  assert.equal(ticket.title, title);
+  assert.equal(ticket.target, text);
+  assert.equal(ticket.mandate.instruction, '原始要求，请执行修复');
+});
+
 for (const original of ['做任务进度看板', '检查网站状态']) test(`new tasks with progress or status wording retain literal authority: ${original}`, async t => {
   const f = await fixture(t);
   f.events[1].data.content = [{ type: 'text', text: original }];
@@ -200,4 +226,169 @@ test('resource form authority is separate from live model authority and records 
   assert.equal((await f.service.submitForm(f.input, options)).id, ticket.id);
   await assert.rejects(f.service.delegate({ ...f.input, requestId: 'model-new' }, { ...f.exec, authorized: true }, f.options), /当前原始用户消息/);
   assert.throws(() => f.service.submitForm(f.input, { ...options, ownerAgent: { id: f.ownerAgent.id } }), /真实主助手/);
+});
+
+const deviceCapability = { name: 'assistant_device_status', description: 'Read authorized Link devices and recorded pairing/authentication times; live connections and complete history are unknown.' };
+const scopedService = (f, options = {}) => createDesktopDelegationService({ ctx: f.ctx, database: f.database,
+  readPolicy: async () => structuredClone(f.policy), readOnlyCapabilities: () => [deviceCapability], ...options });
+const scopeResponse = decision => async function* () {
+  yield { type: 'text-delta', text: JSON.stringify(decision) };
+  yield { type: 'finish', reason: { kind: 'stop' } };
+};
+
+test('a new direct-status proposal is audited once, returned to the same Router and never resolves a Worker', async t => {
+  const f = await fixture(t);
+  f.events[1].data.content = [{ type: 'text', text: '有其他设备连接我们这台机器吗？' }];
+  const records = [], save = f.database.recordDesktopScopeCheck;
+  f.database.recordDesktopScopeCheck = record => { const saved = save(record); records.push(saved); return saved; };
+  let calls = 0;
+  f.ctx.llm.stream = request => {
+    calls++;
+    assert.equal(request.purpose, 'superagent-delegation-scope');
+    assert.deepEqual(request.tools, []);
+    return scopeResponse({ outcome: 'direct', reason: '只请求产品设备状态', toolNames: ['assistant_device_status'] })();
+  };
+  f.ctx.llm.resolveModelInfo = () => { throw Error('must not prepare a Worker for product state'); };
+  const service = scopedService(f);
+  const results = await Promise.allSettled([service.delegate(f.input, f.exec, f.options), service.delegate(f.input, f.exec, f.options)]);
+  for (const result of results) assert.equal(result.reason?.code, 'DELEGATION_DIRECT_TOOL_REQUIRED');
+  await assert.rejects(service.delegate(f.input, f.exec, f.options), { code: 'DELEGATION_DIRECT_TOOL_REQUIRED' });
+  assert.equal(calls, 1);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].binding.humanMessageId, 'original');
+  assert.equal(records[0].binding.sessionId, f.ownerAgent.id);
+  assert.equal(records[0].binding.payloadHash.length, 64);
+  assert.equal(records[0].binding.instructionHash.length, 64);
+  assert.equal(f.database.listTickets().length, 0);
+  assert.equal(f.approvals(), 0);
+  // A fresh service object (as after reload) reads the persisted exact-bound result.
+  await assert.rejects(scopedService(f).delegate(f.input, f.exec, f.options), { code: 'DELEGATION_DIRECT_TOOL_REQUIRED' });
+  assert.equal(calls, 1);
+});
+
+test('scope cache cannot authorize changed payloads, different human messages or in-flight replacements', async t => {
+  const f = await fixture(t);
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  let calls = 0;
+  const service = scopedService(f, { assessScope: async () => { calls++; entered(); await gate;
+    return { decision: { outcome: 'direct', reason: '只读设备状态', toolNames: ['assistant_device_status'] }, routing: null }; } });
+  const pending = service.delegate(f.input, f.exec, f.options);
+  await started;
+  await assert.rejects(service.delegate({ ...f.input, text: 'different proposed work' }, f.exec, f.options), { code: 'IDEMPOTENCY_CONFLICT' });
+  release();
+  await assert.rejects(pending, { code: 'DELEGATION_DIRECT_TOOL_REQUIRED' });
+  await assert.rejects(service.delegate({ ...f.input, text: 'different proposed work' }, f.exec, f.options), { code: 'IDEMPOTENCY_CONFLICT' });
+  f.events.push({ type: 'user/message', data: { id: 'new-human', source: { kind: 'user' }, content: [{ type: 'text', text: '请执行新的网络调查' }] } });
+  await assert.rejects(service.delegate(f.input, f.exec, f.options), { code: 'IDEMPOTENCY_CONFLICT' });
+  await assert.rejects(service.delegate({ ...f.input, requestId: 'different-request' }, f.exec, f.options), { code: 'DELEGATION_DIRECT_TOOL_REQUIRED' });
+  assert.equal(calls, 2, 'a different request must receive its own bound decision');
+  assert.equal(f.database.listTickets().length, 0);
+});
+
+test('capability or review-route changes invalidate a cached scope result instead of reusing permission', async t => {
+  const f = await fixture(t);
+  let capabilities = [deviceCapability], calls = 0;
+  const service = scopedService(f, { readOnlyCapabilities: () => capabilities, assessScope: async ({ input }) => {
+    calls++;
+    return { decision: input.capabilities.length ? { outcome: 'direct', reason: '产品状态', toolNames: ['assistant_device_status'] }
+      : { outcome: 'unconfirmed', reason: '设备能力已不可用' }, routing: null };
+  } });
+  await assert.rejects(service.delegate(f.input, f.exec, f.options), { code: 'DELEGATION_DIRECT_TOOL_REQUIRED' });
+  capabilities = [];
+  await assert.rejects(service.delegate(f.input, f.exec, f.options), { code: 'DELEGATION_SCOPE_UNCONFIRMED' });
+  f.policy.model = { providerId: 'other-provider', modelId: 'opaque/review' };
+  await assert.rejects(service.delegate(f.input, f.exec, f.options), { code: 'DELEGATION_SCOPE_UNCONFIRMED' });
+  assert.equal(calls, 3);
+  assert.equal(f.database.listTickets().length, 0);
+});
+
+test('changed live source or capabilities during scope checking prevents admission', async t => {
+  for (const change of ['human', 'capabilities', 'policy']) {
+    const f = await fixture(t);
+    let capabilities = [deviceCapability];
+    const service = scopedService(f, { readOnlyCapabilities: () => capabilities, assessScope: async () => {
+      if (change === 'human') f.events.push({ type: 'user/message', data: { id: 'changed', source: { kind: 'user' }, content: [{ type: 'text', text: '停止' }] } });
+      if (change === 'capabilities') capabilities = [];
+      if (change === 'policy') f.policy.desktopVersion = 'changed';
+      return { decision: { outcome: 'delegate', reason: 'Fixture allowed the original snapshot only' }, routing: null };
+    } });
+    await assert.rejects(service.delegate(f.input, f.exec, f.options), { code: 'DELEGATION_SCOPE_STALE' });
+    assert.equal(f.database.listTickets().length, 0);
+  }
+});
+
+test('invalid, invented-tool and failed model responses cannot become a successful admission', async t => {
+  for (const outcome of ['invalid-json', 'unknown-tool', 'provider-failure', 'delegate-with-tools', 'unconfirmed-with-tools']) {
+    const f = await fixture(t);
+    f.ctx.llm.stream = async function* () {
+      if (outcome === 'provider-failure') throw Object.assign(new Error('PRIVATE provider body'), { code: 'POLICY_DENIED' });
+      const decision = outcome.endsWith('-with-tools')
+        ? { outcome: outcome.split('-')[0], reason: 'scope conclusion', toolNames: [] }
+        : { outcome: 'direct', reason: 'read', toolNames: ['unregistered_scan'] };
+      yield { type: 'text-delta', text: outcome === 'invalid-json' ? 'not json' : JSON.stringify(decision) };
+      yield { type: 'finish', reason: { kind: 'stop' } };
+    };
+    const service = scopedService(f);
+    await assert.rejects(service.delegate(f.input, f.exec, f.options), error => error.code === 'DELEGATION_SCOPE_UNCONFIRMED' && !error.message.includes('PRIVATE'));
+    assert.equal(f.database.listTickets().length, 0);
+  }
+});
+
+test('cancellation while final policy read is pending cannot create a Ticket after scope approval', async t => {
+  const f = await fixture(t), controller = new AbortController();
+  let reads = 0;
+  const service = scopedService(f, { readPolicy: async () => {
+    if (++reads === 3) controller.abort();
+    return structuredClone(f.policy);
+  } });
+  await assert.rejects(service.delegate(f.input, { ...f.exec, signal: controller.signal }, f.options), { name: 'AbortError' });
+  assert.equal(f.database.listTickets().length, 0);
+});
+
+test('scope checks only genuinely new model proposals; exact retries, attached work and forms reuse prior boundaries', async t => {
+  const f = await fixture(t);
+  const ticket = await f.service.delegate(f.input, f.exec, f.options);
+  assert.equal(f.scopeRequests.length, 1);
+  await f.service.delegate(f.input, f.exec, f.options);
+  await f.service.delegate({ ...f.input, requestId: 'same-source-alias' }, f.exec, f.options);
+  f.events.push({ type: 'user/message', data: { id: 'followup', source: { kind: 'user' }, content: [{ type: 'text', text: '继续已有任务' }] } });
+  await f.service.delegate({ ...f.input, requestId: 'attach', duplicateOfTicketId: ticket.id }, f.exec, f.options);
+  await f.service.submitForm({ ...f.input, requestId: 'form-proposal' }, { ownerAgent: f.ownerAgent, threadId: 'main', requestId: 'form', original: '明确提交表单任务' });
+  assert.equal(f.scopeRequests.length, 1);
+  assert.equal(f.database.listTickets().length, 2);
+});
+
+test('a failed scope attempt can recover on the same bound request while retaining its failure evidence', async t => {
+  const f = await fixture(t);
+  const saved = [], record = f.database.recordDesktopScopeCheck;
+  f.database.recordDesktopScopeCheck = input => { const row = record(input); saved.push(row); return row; };
+  let calls = 0;
+  const service = scopedService(f, { assessScope: async () => {
+    if (++calls === 1) throw Object.assign(new Error('temporarily unavailable'), { code: 'TIMEOUT' });
+    return { decision: { outcome: 'delegate', reason: 'Recovered check confirms the original work' }, routing: null };
+  } });
+  await assert.rejects(service.delegate(f.input, f.exec, f.options), { code: 'DELEGATION_SCOPE_UNCONFIRMED' });
+  const ticket = await service.delegate(f.input, f.exec, f.options);
+  assert.equal(calls, 2);
+  assert.equal(f.database.listTickets().length, 1);
+  assert.equal(ticket.mandate.scopeCheck.bindingHash, saved[1].bindingHash);
+  const attempts = f.database.desktopScopeAttempts(saved[0].requestKey, saved[0].bindingHash);
+  assert.deepEqual(attempts.map(row => [row.attempt, row.decision.outcome, row.failureCode]), [[1, 'unconfirmed', 'TIMEOUT'], [2, 'delegate', undefined]]);
+  assert.equal((await service.delegate(f.input, f.exec, f.options)).id, ticket.id);
+  assert.equal(calls, 2);
+});
+
+test('successful receipts preserve their exact original human source, including duplicate attachments', async t => {
+  const f = await fixture(t);
+  const ticket = await f.service.delegate(f.input, f.exec, f.options);
+  f.events.push({ type: 'user/message', data: { id: 'later-message', source: { kind: 'user' }, content: [{ type: 'text', text: '继续' }] } });
+  await assert.rejects(f.service.delegate(f.input, f.exec, f.options), { code: 'IDEMPOTENCY_CONFLICT' });
+  const duplicate = { ...f.input, requestId: 'attachment-request', duplicateOfTicketId: ticket.id };
+  assert.equal((await f.service.delegate(duplicate, f.exec, f.options)).id, ticket.id);
+  assert.equal((await f.service.delegate(duplicate, f.exec, f.options)).id, ticket.id);
+  f.events.push({ type: 'user/message', data: { id: 'third-message', source: { kind: 'user' }, content: [{ type: 'text', text: '继续' }] } });
+  await assert.rejects(f.service.delegate(duplicate, f.exec, f.options), { code: 'IDEMPOTENCY_CONFLICT' });
+  assert.equal(f.database.listTickets().length, 1);
 });

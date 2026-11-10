@@ -115,7 +115,7 @@ export function AssistantConversation({ ctx, sessionId, SessionProvider, renderS
   if (error) return <ResourceState kind="error" title="聊天暂未连接" description={error} actionLabel="重新连接" onAction={() => setRetry(value => value + 1)} />;
   if (!retained || retained.sessionId !== sessionId) return <ResourceState kind="loading" title="正在连接聊天" description="正在读取会话与聊天记录，请稍候。" />;
   return <div className="ba-official-conversation" data-assistant-chat="" style={{ display: 'flex', flex: '1 1 0', minHeight: 0, minWidth: 0, flexDirection: 'column' }}>
-    <HomeContext.Provider value={api ? { ctx, api, assistantName, assistantConfig, petExpression, onOpenResources, onOpenExecution, threadId, history, onLoadEarlier, onRefresh, sessionStatus: ctx.uiSession?.sessionStatus, sessionId } : null}><SessionProvider session={retained.reference}>
+    <HomeContext.Provider value={api ? { ctx, api, SessionProvider, renderSlot, assistantName, assistantConfig, petExpression, onOpenResources, onOpenExecution, threadId, history, onLoadEarlier, onRefresh, sessionStatus: ctx.uiSession?.sessionStatus, sessionId } : null}><SessionProvider session={retained.reference}>
       {renderSlot(ASSISTANT_CONVERSATION_SLOT, {})}
     </SessionProvider></HomeContext.Provider>
   </div>;

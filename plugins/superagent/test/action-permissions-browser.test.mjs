@@ -1,3 +1,4 @@
+import { officialTooltipSource } from '../../benchgo/test/official-tooltip-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -48,7 +49,7 @@ async function fixture() {
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-permission-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
-    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
+    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles(), officialTooltipSource()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;font-family:Arial,sans-serif}.ba-root{height:auto!important;min-width:0!important}body[data-ds-dark-theme]{--dsw-alias-label-primary:#ededee;--dsw-alias-label-secondary:#a3a3a8;--dsw-alias-bg-base:#19191b;--dsw-alias-state-business-primary:#7d9dff;background:#19191b;color:#ededee}</style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text.replaceAll('</script', '<\\/script')}</script></body></html>`;
 }
 
@@ -58,6 +59,11 @@ test('authorization management renders four states and preserves exact permissio
   if (screenshots) await mkdir(screenshots, { recursive: true });
   try {
     const page = await browser.newPage(), errors = [];
+    const waitForRestoredFocus = async trigger => {
+      const element = await trigger.elementHandle();
+      try { await page.waitForFunction(target => target === document.activeElement, element); }
+      finally { await element.dispose(); }
+    };
     await page.emulateMedia({ reducedMotion: 'reduce' });
     page.setDefaultTimeout(6000); page.on('pageerror', error => errors.push(error.message));
     const html = await fixture();
@@ -97,12 +103,14 @@ test('authorization management renders four states and preserves exact permissio
     await page.getByText('已创建站点许可', { exact: true }).waitFor();
     await page.keyboard.press('Escape');
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    await waitForRestoredFocus(page.getByRole('button', { name: '授权与动作记录', exact: true }));
     assert(await page.getByRole('button', { name: '授权与动作记录', exact: true }).evaluate(element => element === document.activeElement));
     await page.getByRole('button', { name: '新建站点许可', exact: true }).click();
     await page.getByRole('dialog', { name: '新建站点许可', exact: true }).waitFor();
     assert.equal(await page.getByRole('dialog').getByText(/支付或购买、修改密码、删除账号、另行对外发送始终逐次审批/).count(), 1);
     await page.getByRole('button', { name: '取消', exact: true }).click();
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    await waitForRestoredFocus(page.getByRole('button', { name: '新建站点许可', exact: true }));
     assert(await page.getByRole('button', { name: '新建站点许可', exact: true }).evaluate(element => element === document.activeElement));
     await page.getByRole('button', { name: '新建站点许可', exact: true }).click();
     await page.getByLabel('精确站点', { exact: true }).fill('https://new.example/path');
@@ -120,6 +128,7 @@ test('authorization management renders four states and preserves exact permissio
     await page.getByRole('button', { name: '保存许可', exact: true }).click();
     await page.getByText('站点许可已保存。高风险动作仍需逐次审批。', { exact: true }).waitFor();
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    await waitForRestoredFocus(page.getByRole('button', { name: '新建站点许可', exact: true }));
     assert(await page.getByRole('button', { name: '新建站点许可', exact: true }).evaluate(element => element === document.activeElement));
     const calls = await page.evaluate(() => window.calls.filter(row => row.action === 'actionPermissionCreate'));
     assert.equal(calls.length, 2); assert.deepEqual(calls[0], calls[1]);
@@ -209,6 +218,7 @@ test('authorization management renders four states and preserves exact permissio
       if (screenshots) await page.screenshot({ path: join(screenshots, `mixed-audit-${width}-${colorScheme}.png`), fullPage: true });
       await page.keyboard.press('Escape');
       await dialog.waitFor({ state: 'hidden' });
+      await waitForRestoredFocus(recordTrigger);
       assert(await recordTrigger.evaluate(element => element === document.activeElement));
 
       await page.getByRole('button', { name: '新建站点许可', exact: true }).click();
@@ -219,6 +229,7 @@ test('authorization management renders four states and preserves exact permissio
       if (screenshots) await page.screenshot({ path: join(screenshots, `mixed-create-${width}-${colorScheme}.png`), fullPage: true });
       await createDialog.getByRole('button', { name: '关闭许可表单', exact: true }).click();
       await createDialog.waitFor({ state: 'hidden' });
+      await waitForRestoredFocus(page.getByRole('button', { name: '新建站点许可', exact: true }));
       assert(await page.getByRole('button', { name: '新建站点许可', exact: true }).evaluate(element => element === document.activeElement));
     }
     assert.deepEqual(errors, []);

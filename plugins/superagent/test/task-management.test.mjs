@@ -6,6 +6,29 @@ import { join } from 'node:path';
 import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
 import { createTaskManagement } from '../src/task-management.mjs';
 
+test('task lists show recent activity first with creation fallback and stable ties', () => {
+  const tasks = createTaskManagement({ database: { meta: () => undefined } });
+  const rows = [
+    { id: 'old', updatedAt: '2026-11-01T00:00:00Z', createdAt: '2026-11-08T00:00:00Z' },
+    { id: 'recent', updatedAt: '2026-11-09T00:00:00Z', createdAt: '2026-10-01T00:00:00Z' },
+    { id: 'created', createdAt: '2026-11-08T00:00:00Z' },
+    { id: 'invalid-update', updatedAt: 'invalid', createdAt: '2026-11-08T00:00:00Z' },
+    { id: 'numeric', updatedAt: Date.parse('2026-11-07T00:00:00Z') },
+    { id: 'epoch', updatedAt: 0, createdAt: '2026-11-09T00:00:00Z' },
+    { id: 'unknown', updatedAt: 'invalid' },
+    { id: 'also-unknown' },
+  ];
+  const before = structuredClone(rows);
+  for (const kind of ['ticket', 'goal', 'evaluation']) {
+    const projected = tasks.project(kind, rows);
+    assert.deepEqual(projected.map(row => row.id), ['recent', 'created', 'invalid-update', 'numeric', 'old', 'epoch', 'unknown', 'also-unknown']);
+    assert.deepEqual(tasks.project(kind, rows).map(row => row.id), projected.map(row => row.id));
+  }
+  assert.deepEqual(rows, before);
+  rows[0].updatedAt = '2026-11-10T00:00:00Z';
+  assert.equal(tasks.project('ticket', rows)[0].id, 'old', 'an older ticket moves to the top after new activity');
+});
+
 test('task organization persists without rewriting execution state and detects stale writes', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-task-management-'));
   let database = createAssistantRuntimeStore({ directory });
@@ -22,8 +45,9 @@ test('task organization persists without rewriting execution state and detects s
   assert.equal(tasks.project('ticket', [rows.ticket])[0].taskMeta.title, 'My title');
   assert.notEqual(tasks.project('ticket', [rows.ticket])[0].taskMeta.completed, true);
   assert.equal(rows.ticket.status, 'waiting');
-  tasks.update({ kind: 'ticket', id: 't', operation: 'delete', version: 1 });
-  assert.deepEqual(tasks.project('ticket', [rows.ticket]), []);
+  assert.throws(() => tasks.update({ kind: 'ticket', id: 't', operation: 'delete', version: 1 }), { code: 'CLEANUP_PREVIEW_REQUIRED' });
+  assert.equal(tasks.project('ticket', [rows.ticket], { archived: true }).length, 0);
+  assert.equal(tasks.project('ticket', [rows.ticket], { archived: false }).length, 1);
   for (const kind of ['goal', 'evaluation']) {
     tasks.update({ kind, id: rows[kind].id, operation: 'complete', version: 0 });
     assert.equal(tasks.project(kind, [rows[kind]])[0].taskMeta.completed, true);
@@ -36,8 +60,8 @@ test('active work cannot be hidden or marked completed; metadata writes validate
   const row = { id: 'active', status: 'running' };
   const database = { transaction: fn => fn(), meta: key => metadata.get(key), setMeta: (key, value) => metadata.set(key, value) };
   const tasks = createTaskManagement({ database, orchestration: { getTicket: id => id === row.id && row, getEvaluation: () => ({ status: 'queued' }) }, scheduler: { getGoal: () => ({ status: 'paused' }) } });
-  for (const kind of ['ticket', 'goal', 'evaluation']) for (const operation of ['complete', 'delete']) {
-    assert.throws(() => tasks.update({ kind, id: 'active', operation, version: 0 }), { code: kind === 'ticket' && operation === 'complete' ? 'TICKET_COMPLETION_MANAGED' : 'EXECUTION_PENDING' });
+  for (const kind of ['ticket', 'goal', 'evaluation']) for (const operation of kind === 'ticket' ? ['complete'] : ['complete', 'delete']) {
+    assert.throws(() => tasks.update({ kind, id: 'active', operation, version: 0 }), { code: kind === 'ticket' ? 'TICKET_COMPLETION_MANAGED' : 'EXECUTION_PENDING' });
   }
   assert.equal(tasks.project('ticket', [row])[0].taskCanOrganize, false);
   assert.equal(tasks.project('goal', [{ id: 'g', status: 'cancelled' }])[0].taskCanOrganize, true);
@@ -47,16 +71,19 @@ test('active work cannot be hidden or marked completed; metadata writes validate
   assert.equal(metadata.size, 0);
 });
 
-test('a new execution does not inherit a prior deletion marker', () => {
+test('a new execution does not inherit manual archive or legacy completion markers', () => {
   const saved = new Map();
   const row = { id: 't', status: 'waiting', executionControl: { stopped: true }, instructionRevision: 1 };
   const database = { transaction: fn => fn(), meta: key => saved.get(key), setMeta: (key, value) => saved.set(key, value) };
   const tasks = createTaskManagement({ database, orchestration: { getTicket: () => row } });
-  tasks.update({ kind: 'ticket', id: 't', operation: 'delete', version: 0 });
-  assert.equal(tasks.project('ticket', [row]).length, 0);
+  database.setMeta('task-presentation:ticket:t', { version: 2, completed: true, executionRevision: 1, archived: true, archiveRevision: 1 });
+  assert.equal(tasks.project('ticket', [row], { archived: true }).length, 1);
   row.status = 'running'; row.executionControl = {}; row.instructionRevision = 2;
-  assert.equal(tasks.project('ticket', [row]).length, 1);
-  tasks.update({ kind: 'ticket', id: 't', operation: 'rename', title: 'New execution', version: 1 });
+  assert.equal(tasks.project('ticket', [row], { archived: false }).length, 1);
+  assert.equal(tasks.project('ticket', [row])[0].taskMeta.completed, false);
+  row.status = 'waiting'; row.executionControl = { stopped: true };
+  assert.equal(tasks.project('ticket', [row], { archived: false }).length, 1, 'old archive revision cannot hide a new execution');
+  tasks.update({ kind: 'ticket', id: 't', operation: 'rename', title: 'New execution', version: 2 });
   assert.equal(tasks.project('ticket', [row])[0].taskMeta.title, 'New execut');
 });
 

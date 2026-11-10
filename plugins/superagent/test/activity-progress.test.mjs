@@ -57,7 +57,7 @@ function environment() {
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-test('only an open board with live work requests rapid updates; hidden views and errors back off', async () => {
+test('fallback reads stay bounded regardless of open views and back off after errors', async () => {
   const env = environment(); let state = 'running', fail = false;
   const store = createActivityStore(async action => {
     if (fail) throw new Error('offline');
@@ -65,19 +65,19 @@ test('only an open board with live work requests rapid updates; hidden views and
   }, env);
   const unsubscribe = store.subscribe(() => {}); await flush();
   assert.deepEqual([...env.timers.values()], [10000]);
-  const close = store.retainLive(); await flush();
-  assert.deepEqual([...env.timers.values()], [2000]);
-  const closeSecond = store.retainLive(); await flush(); closeSecond();
-  assert.deepEqual([...env.timers.values()], [2000], 'a second view shares the one polling timer');
+  await flush();
+  assert.deepEqual([...env.timers.values()], [10000]);
+  await flush();
+  assert.deepEqual([...env.timers.values()], [10000], 'a second view shares the one polling timer');
   env.document.hidden = true; env.document.dispatchEvent(new Event('visibilitychange'));
   assert.equal(env.timers.size, 0);
   env.document.hidden = false; env.document.dispatchEvent(new Event('visibilitychange')); await flush();
   fail = true; await store.refresh();
   assert.equal(store.getSnapshot().rows.length, 1, 'failed refresh retains the last observation');
-  assert.deepEqual([...env.timers.values()], [10000]);
+  assert.deepEqual([...env.timers.values()], [20000]);
   fail = false; state = 'completed'; await store.refresh();
   assert.deepEqual([...env.timers.values()], [10000]);
-  state = 'running'; await store.refresh(); close();
+  state = 'running'; await store.refresh();
   assert.deepEqual([...env.timers.values()], [10000]);
   unsubscribe(); assert.equal(env.timers.size, 0);
 });
@@ -88,15 +88,27 @@ test('changes arriving during a fetch are coalesced into one follow-up refresh',
   const unsubscribe = store.subscribe(() => {});
   env.document.dispatchEvent(new Event('benchgo:assistant-changed'));
   env.document.dispatchEvent(new Event('benchgo:assistant-changed'));
-  assert.equal(pending.length, 2, 'no overlapping request pair');
+  assert.equal(pending.length, 3, 'one shared active/archive/goal request batch');
   pending.forEach(call => call.resolve(call.action === 'tickets' ? { tickets: [] } : { goals: [] }));
   await flush();
   assert.deepEqual([...env.timers.values()], [0], 'invalidate the potentially old response once');
   const [next] = env.timers.keys(); next();
-  assert.equal(pending.length, 4);
-  pending.slice(2).forEach(call => call.resolve(call.action === 'tickets' ? { tickets: [{ id: 'new', status: 'running' }] } : { goals: [] }));
+  assert.equal(pending.length, 6);
+  pending.slice(3).forEach(call => call.resolve(call.action === 'tickets' ? { tickets: [{ id: 'new', status: 'running' }] } : { goals: [] }));
   await flush();
   assert.equal(store.getSnapshot().rows[0].id, 'new');
   assert.deepEqual([...env.timers.values()], [10000]);
   unsubscribe();
+});
+
+
+test('task summaries retain verification facts and the stop fence without claiming executor exit', () => {
+  const row = ticket(); row.status = 'waiting'; row.execution.uncertainty = { reason: '执行尚未完整结束', attempts: 3, nextCheckAt: 1794218400000, escalated: true };
+  const task = activityTask(row, 'ticket');
+  assert.equal(task.stateLabel, '等待');
+  assert.equal(task.detail, '执行尚未完整结束');
+  assert.match(task.verificationSummary, /已查 3 次.*下次/);
+  const stopping = activityTask({ ...row, status: 'waiting', executionControl: { stopRequested: true }, execution: { ...row.execution, stopRequestedAt: '2026-11-09T10:00:00Z', stopConfirmationOverdue: true } }, 'ticket');
+  assert.equal(stopping.stateLabel, '等待');
+  assert.equal(stopping.progressSummary, '');
 });

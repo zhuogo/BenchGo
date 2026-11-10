@@ -1,10 +1,29 @@
 import { isChatUserMessage, readAdmittedQuestionReply } from '../src/question-reply.mjs';
 
+const eventKey = row => row.ticketStateEventKey || row.eventKey || row.eventId || row.id;
+const publicText = row => typeof row.text === 'string' && !!row.text.trim();
+function conversationalNotification(row) {
+  if (row.type === 'ticket.attention') return !!(row.attention || row.currentAttention)?.question?.question;
+  if ([row.origin, row.publication?.origin].some(origin => ['system', 'worker'].includes(origin))) return false;
+  if (row.type === 'schedule.lifecycle') return false;
+  if (row.type === 'ticket.result') return (row.origin === 'router' || row.publication?.origin === 'router')
+    && (!row.publication || ['deliver', 'ask'].includes(row.publication.action));
+  if (row.type === 'ticket.accepted') return row.origin === 'router'
+    && typeof row.ticketId === 'string' && !!row.ticketId
+    && typeof row.requestId === 'string' && !!row.requestId && row.text.length <= 6000;
+  // Older ordinary replies and interactive publications have no origin field.
+  // Their absence is not evidence that a real user question should disappear.
+  return true;
+}
+
 /** Defence in depth: only the server publication projection can supply assistant rows. */
 export function quietChatRows(history = {}, threadId = 'main', session = {}, chat) {
   const rows = (history.messages || []).filter(row => !row.streaming &&
-    (row.role === 'user' || (row.role === 'assistant' && row.kind === 'final')))
+    (row.role === 'user' || (row.role === 'assistant' && row.kind === 'final'
+      && ![row.origin, row.publication?.origin].some(origin => ['system', 'worker'].includes(origin)))))
     .map(row => ({ ...row, key: `message:${row.id}` }));
+  const publishedEvents = new Set(rows.filter(row => row.role === 'assistant' && publicText(row))
+    .map(eventKey).filter(Boolean));
   // Use the host's synchronous submission echo, then its admitted user events.
   // Never project assistant/tool/context nodes from this unrestricted view.
   const seenSeq = new Set(rows.filter(row => row.role === 'user').map(row => row.seq).filter(Number.isFinite));
@@ -51,6 +70,7 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
     }
     if (['failed', 'uncertain'].includes(request.status)) {
       rows.push({ key: `request-state:${request.requestId}`, requestId: request.requestId, origin: 'system', role: 'system', kind: 'system_state',
+        title: request.status === 'failed' ? '消息处理失败' : '消息处理结果待核实',
         text: request.error || (request.status === 'failed' ? '消息处理失败' : '消息处理结果待核实'), time: request.updatedAt || request.createdAt });
     }
   }
@@ -60,9 +80,11 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
       content: (pending.attachments || []).map(block => ({ type: block.type, name: block.value?.name })), provisional: true });
   }
   for (const row of history.notifications || []) {
-    if (row.threadId !== threadId || typeof row.text !== 'string' || !row.text.trim()) continue;
-    const system = row.origin === 'system' || row.publication?.origin === 'system';
-    rows.push({ ...row, role: system ? 'system' : 'assistant', kind: system ? 'system_state' : 'delivery', key: `notification:${row.eventId || row.id}`,
+    if (row.threadId !== threadId || !publicText(row) || !conversationalNotification(row)) continue;
+    const key = eventKey(row);
+    if (key && publishedEvents.has(key)) continue;
+    if (key) publishedEvents.add(key);
+    rows.push({ ...row, role: 'assistant', kind: 'delivery', key: `notification:${row.eventId || row.id}`,
       time: row.createdAt || row.time, notification: true });
   }
   return [...new Map(rows.map(row => [row.key, row])).values()]

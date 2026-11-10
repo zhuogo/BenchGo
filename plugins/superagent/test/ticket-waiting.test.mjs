@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ticketWaiting } from '../client/ticket-state.mjs';
+import { ticketWaiting, ticketExecutionNotice } from '../client/ticket-state.mjs';
 
 const ticket = { id: 'original', status: 'waiting', instructionRevision: 2, resultVersion: 3,
   results: [{ instructionRevision: 2, version: 3, outcome: 'completed', summary: '原文结果', selfCheck: { summary: '已自检' } }] };
@@ -17,17 +17,17 @@ test('saved current result is pending delivery without any content review action
 });
 test('unknown external effects allow verification and stopping without resuming or retrying', () => {
   for (const code of ['EXECUTION_EFFECTS_UNKNOWN', 'EXECUTION_NOT_VERIFIED', 'EXECUTION_STOP_UNCONFIRMED']) {
-    for (const executionControl of [{}, { paused: true }, { stopped: true }]) {
-      const waiting = ticketWaiting({ ...ticket, executionControl, continuationWait: { code, sourceResultVersion: 3 } });
+    for (const status of ['waiting']) {
+      const waiting = ticketWaiting({ ...ticket, status, continuationWait: { code, sourceResultVersion: 3 } });
       assert.equal(waiting.label, '等待');
-      assert(!waiting.actions.some(action => action.kind === 'resume'));
-      assert.equal(waiting.actions.find(action => action.kind === 'refresh').label, '核实当前状态');
+      assert.deepEqual(waiting.actions.map(action => action.kind), ['refresh', 'stop']);
+      assert.equal(waiting.actions[0].label, '刷新记录');
     }
   }
 });
 test('manual and legacy quota pauses both resume directly; next steps never offer quota or added time', () => {
-  assert.equal(ticketWaiting({ ...ticket, executionControl: { paused: true }, pauseReason: { kind: 'manual' } }).actions[0].kind, 'resume');
-  const legacy = ticketWaiting({ ...ticket, executionControl: { paused: true }, pauseReason: { kind: 'budget', reason: 'tokens' } });
+  assert.equal(ticketWaiting({ ...ticket, status: 'waiting', executionControl: { paused: true }, pauseReason: { kind: 'manual' } }).actions[0].kind, 'resume');
+  const legacy = ticketWaiting({ ...ticket, status: 'waiting', executionControl: { paused: true }, pauseReason: { kind: 'budget', reason: 'tokens' } });
   assert.equal(legacy.actions[0].kind, 'resume');
   assert.doesNotMatch(JSON.stringify(legacy), /额度|goals|additionalExecutionMs/);
 });
@@ -47,19 +47,62 @@ test('current unanswered attention leads while stale attention never supplies a 
   assert.equal(ticketWaiting({ ...ticket, status: 'completed' }), null);
 });
 
-test('failed outcomes stay waiting with a short reason and require an explicit revision', () => {
-  const waiting = ticketWaiting({ ...ticket, continuationWait: { code: 'EXECUTION_FAILED', sourceResultVersion: 3, reason: '部署失败；请补充权限。' } });
-  assert.equal(waiting.status, 'waiting');
-  assert.match(waiting.reason, /补充权限/);
-  assert(!waiting.actions.some(action => action.kind === 'resume'));
-  assert(waiting.actions.some(action => action.kind === 'tasks'));
+
+test('automatic verification exposes real reason, counted attempts and scheduled check without user investigation', () => {
+  const execution = { uncertainty: { reasonCode: 'WORKER_TURN_INCOMPLETE', reason: '执行回合未提交完整结束记录。', attempts: 2, nextCheckAt: 1794218400000, escalated: false } };
+  const waiting = ticketWaiting({ ...ticket, status: 'waiting', execution });
+  assert.equal(waiting.label, '等待');
+  assert.equal(waiting.reason, execution.uncertainty.reason);
+  assert.equal(waiting.executionNotice.attempts, 2);
+  assert.equal(waiting.executionNotice.nextCheckAt, 1794218400000);
+  assert.doesNotMatch(JSON.stringify(waiting), /请先核实|核实当前状态/);
+  assert.deepEqual(waiting.actions.map(action => action.kind), ['refresh', 'stop']);
+  assert.equal(ticketExecutionNotice({ ...ticket, status: 'completed', execution }), null);
 });
 
-test('failure cause, recovery condition and next step fit one short paragraph', () => {
-  const waiting = ticketWaiting({ ...ticket, results: [{ instructionRevision: 2, version: 3, outcome: 'failed', failure: { cause: '原因'.repeat(200), resumeConditions: '补充权限'.repeat(200) } }], continuationWait: { code: 'EXECUTION_FAILED', sourceResultVersion: 3 } });
-  assert(waiting.reason.length <= 240);
-  assert.match(waiting.reason, /原因/);
-  assert.match(waiting.reason, /补充权限/);
+test('escalated verification is abnormal rather than a pending user decision', () => {
+  const waiting = ticketWaiting({ ...ticket, status: 'waiting', execution: { uncertainty: { reason: '宿主两次均未返回执行状态。', attempts: 4, escalated: true } } });
+  assert.equal(waiting.label, '等待');
+  assert.equal(waiting.executionNotice.escalated, true);
+  assert.equal(waiting.executionNotice.nextCheckAt, null);
+  assert.equal(waiting.attention, null);
+});
+
+test('stopping distinguishes the action fence from executor exit and trusts only the server threshold', () => {
+  const execution = { stopRequestedAt: 1, stopConfirmationOverdue: false };
+  const waiting = ticketWaiting({ ...ticket, status: 'waiting', executionControl: { stopRequested: true }, execution });
+  assert.equal(waiting.label, '等待');
+  assert.match(waiting.reason, /后续动作已拦截/);
+  assert.equal(waiting.executionNotice.stopRequestedAt, 1);
+  assert.deepEqual(waiting.actions.map(action => action.kind), ['refresh']);
+  const overdue = ticketWaiting({ ...ticket, status: 'waiting', executionControl: { stopRequested: true }, execution: { ...execution, stopConfirmationOverdue: true } });
+  assert.equal(overdue.label, '等待');
+  assert.match(overdue.reason, /仍未确认退出/);
+  assert.equal(overdue.executionNotice.escalated, true);
+  assert.equal(ticketExecutionNotice({ ...ticket, status: 'waiting' }), null, 'missing facts do not invent attempts or deadlines');
+  assert.equal(ticketWaiting({ ...ticket, status: 'waiting' }).label, '等待');
+});
+
+
+test('missing recovery evidence is not advertised as a scheduled automatic check or a user task', () => {
+  const row = { ...ticket, status: 'waiting', execution: { uncertainty: { reason: '执行会话中断', attempts: 0, nextCheckAt: null, automatic: false, recoveryBlocked: '缺少完整结束证据' } } };
+  const waiting = ticketWaiting(row);
+  assert.equal(waiting.label, '等待');
+  assert.equal(waiting.executionNotice.automatic, false);
+  assert.equal(waiting.executionNotice.recoveryBlocked, '缺少完整结束证据');
+  assert.equal(waiting.executionNotice.nextCheckAt, null);
+  assert.equal(ticketExecutionNotice({ ...row, execution: { uncertainty: { ...row.execution.uncertainty, instructionRevision: 1 } } }), null);
+});
+
+
+test('failed execution waits with a concise reason and a concrete next step instead of blind resume', () => {
+  const failed = { ...ticket, results: [{ instructionRevision: 2, version: 3, outcome: 'failed', failure: { cause: '服务拒绝请求。'.repeat(100), resumeConditions: '修改有效授权。'.repeat(100) } }], continuationWait: { code: 'EXECUTION_FAILED', sourceResultVersion: 3 } };
+  const waiting = ticketWaiting(failed);
+  assert.equal(waiting.status, 'waiting');
+  assert(Array.from(waiting.reason).length <= 240);
   assert.match(waiting.reason, /调整要求后继续/);
-  assert(!waiting.reason.includes('\n'));
+  assert(waiting.actions.some(action => action.kind === 'tasks'));
+  assert(!waiting.actions.some(action => action.kind === 'resume'));
+  const stopped = ticketWaiting({ ...ticket, executionControl: { stopped: true } });
+  assert(!stopped.actions.some(action => action.kind === 'resume' || action.kind === 'stop'));
 });

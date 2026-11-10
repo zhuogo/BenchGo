@@ -1,8 +1,8 @@
 import { Loading } from '../../shared/client/ui/loading.jsx';
 import { Button } from '../../shared/client/ui/index.jsx';
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { LinkIconMedium, Modal } from '@deepseek-ai/dsh-client-ui-primitives';
-import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
+import { LinkIconMedium, Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives';
+import { Tooltip as BubbleTooltip } from '../../shared/client/ui/tooltip.jsx';
 import { UIIcon } from './iconsax.jsx';
 
 /** Browsing selects host folders; an Electron chooser is only offered by the desktop bridge. */
@@ -45,18 +45,18 @@ export function ProjectPicker({ api, onClose, onSelected }) {
         <button type="button" role="tab" id={`${id}-github-tab`} aria-controls={`${id}-github-panel`} aria-selected={tab === 'github'} tabIndex={tab === 'github' ? 0 : -1} onKeyDown={tabKeys} onClick={() => changeTab('github')} disabled={busy}><LinkIconMedium kind="url" href="https://github.com" size={16} />GitHub</button>
       </div>
       {tab === 'browse' ? <div className="cmd-folder-browser" role="tabpanel" id={`${id}-browse-panel`} aria-labelledby={`${id}-browse-tab`}>
-        {roots.length > 0 && <div className="cmd-folder-roots" role="group" aria-label="磁盘"><span>磁盘</span>{roots.map(root => <Tooltip key={root.path} label={root.path} portal><button type="button" className="cmd-folder-root" aria-label={`打开磁盘 ${root.name}`} disabled={loading || busy} onClick={() => void browse(root.path)}>{root.name}</button></Tooltip>)}</div>}
+        {roots.length > 0 && <div className="cmd-folder-roots" role="group" aria-label="磁盘"><span>磁盘</span>{roots.map(root => <BubbleTooltip key={root.path} label={root.path} portal><button type="button" className="cmd-folder-root" aria-label={`打开磁盘 ${root.name}`} disabled={loading || busy} onClick={() => void browse(root.path)}>{root.name}</button></BubbleTooltip>)}</div>}
         <div className="cmd-folder-location">
           <Tooltip label="上一级" portal><button type="button" className="cmd-project-icon-button" aria-label="上一级" disabled={!listing?.parent || loading || busy} onClick={() => void browse(listing.parent)}><UIIcon name="chevronLeft" size={16} /></button></Tooltip>
-          <Tooltip label={listing?.path} portal><span aria-label="当前目录" tabIndex={listing ? 0 : undefined}>{listing?.path ?? '选择文件夹'}</span></Tooltip>
+          <BubbleTooltip label={listing?.path} portal><span aria-label="当前目录" tabIndex={listing ? 0 : undefined}>{listing?.path ?? '选择文件夹'}</span></BubbleTooltip>
           {desktop && <Tooltip label="系统选择文件夹" portal><button type="button" className="cmd-project-icon-button" aria-label="系统选择文件夹" onClick={() => void pick()} disabled={busy}><UIIcon name="external" size={16} /></button></Tooltip>}
         </div>
         <label className="cmd-folder-search"><UIIcon name="search" size={16} /><input type="search" data-modal-autofocus aria-label="搜索文件夹" placeholder="搜索文件夹" value={query} onChange={e => setQuery(e.target.value)} disabled={busy || loading || !listing} /></label>
         <div className="cmd-folder-entries" aria-label="文件夹列表" aria-busy={loading}>
-          {loading ? <Loading className="cmd-folder-empty" label="正在读取…" /> : browseError ? <div className="cmd-folder-empty" role="alert"><span>无法读取目录</span><span className="cmd-folder-error-detail">{browseError}</span><button type="button" className="cmd-folder-retry" onClick={() => void browse(browseTarget.current)} disabled={busy}>重试</button></div> : entries.length ? entries.map(entry => <Tooltip key={entry.path} label={entry.name} portal><button type="button" disabled={busy} onClick={() => void browse(entry.path)}><UIIcon name="folder" size={17} /><span>{entry.name}</span><UIIcon name="chevronDown" size={12} className="cmd-folder-next" /></button></Tooltip>) : <div className="cmd-folder-empty" role="status">{query.trim() ? '未找到文件夹' : '此目录没有子文件夹'}</div>}
+          {loading ? <Loading className="cmd-folder-empty" label="正在读取…" /> : browseError ? <div className="cmd-folder-empty" role="alert"><span>无法读取目录</span><span className="cmd-folder-error-detail">{browseError}</span><button type="button" className="cmd-folder-retry" onClick={() => void browse(browseTarget.current)} disabled={busy}>重试</button></div> : entries.length ? entries.map(entry => <BubbleTooltip key={entry.path} label={entry.name} portal><button type="button" disabled={busy} onClick={() => void browse(entry.path)}><UIIcon name="folder" size={17} /><span>{entry.name}</span><UIIcon name="chevronDown" size={12} className="cmd-folder-next" /></button></BubbleTooltip>) : <div className="cmd-folder-empty" role="status">{query.trim() ? '未找到文件夹' : '此目录没有子文件夹'}</div>}
         </div>
         {error && <div className="cmd-project-error" role="alert">{error}</div>}
-        <div className="cmd-project-submit"><Tooltip label={listing?.path} portal><div className="cmd-project-selection" tabIndex={listing ? 0 : undefined}><span>当前文件夹</span><strong>{listing ? folderName : '尚未选择'}</strong></div></Tooltip><Button type="button" className="cmd-dialog-button cmd-dialog-primary" disabled={!listing || loading || busy} onClick={() => void select()}>{busy ? '添加中…' : '添加项目'}</Button></div>
+        <div className="cmd-project-submit"><BubbleTooltip label={listing?.path} portal><div className="cmd-project-selection" tabIndex={listing ? 0 : undefined}><span>当前文件夹</span><strong>{listing ? folderName : '尚未选择'}</strong></div></BubbleTooltip><Button type="button" className="cmd-dialog-button cmd-dialog-primary" disabled={!listing || loading || busy} onClick={() => void select()}>{busy ? '添加中…' : '添加项目'}</Button></div>
       </div> : <form className="cmd-github-form" role="tabpanel" id={`${id}-github-panel`} aria-labelledby={`${id}-github-tab`} onSubmit={clone}>
         <label htmlFor={`${id}-repo`}>仓库地址</label><input id={`${id}-repo`} type="url" required placeholder="https://github.com/owner/repo" aria-describedby={`${id}-github-hint`} value={url} onChange={e => setUrl(e.target.value)} disabled={busy} />
         <p id={`${id}-github-hint`}>私有仓库需配置 Git 凭据。</p>

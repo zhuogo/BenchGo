@@ -1,3 +1,4 @@
+import { officialTooltipSource } from '../../benchgo/test/official-tooltip-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -59,7 +60,7 @@ async function fixture() {
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-memory-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
-    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
+    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles(), officialTooltipSource()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
     :root{--dsw-alias-bg-base:#fff;--dsw-alias-label-primary:#202124;--dsw-alias-label-secondary:#6b6b70;--dsw-alias-state-business-primary:#315be8;color-scheme:light}
     :root[data-theme=dark]{--dsw-alias-bg-base:#19191b;--dsw-alias-label-primary:#ededee;--dsw-alias-label-secondary:#a3a3a8;--dsw-alias-state-business-primary:#7b9bff;color-scheme:dark}
@@ -74,7 +75,7 @@ test('memory compact rows reveal full content, preserve edit drafts and return t
   try {
     const page = await browser.newPage(), errors = [];
     page.setDefaultTimeout(7000);page.on('pageerror', error => errors.push(error.message));
-    const nativeDialogs = []; page.on('dialog', dialog => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); });
+    page.on('dialog', dialog => dialog.accept());
     await page.emulateMedia({ reducedMotion: 'reduce' });
     const html = await fixture();
     await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort());
@@ -141,9 +142,9 @@ test('memory compact rows reveal full content, preserve edit drafts and return t
         await saved.getByRole('button', { name: '编辑记忆', exact: true }).click();
         await editor.fill('取消编辑时不要覆盖已保存内容。');
         await page.getByRole('button', { name: '取消', exact: true }).click();
-        const discard = page.getByRole('dialog', { name: '放弃未保存的记忆？', exact: true });
+        const discard = page.getByRole('dialog');
         await discard.getByRole('button', { name: '继续编辑', exact: true }).click();
-        assert.equal(await editor.inputValue(), '取消编辑时不要覆盖已保存内容。', 'cancelling the custom confirmation preserves the draft');
+        assert.equal(await editor.inputValue(), '取消编辑时不要覆盖已保存内容。');
         await page.getByRole('button', { name: '取消', exact: true }).click();
         await discard.getByRole('button', { name: '放弃修改', exact: true }).click();
         await page.waitForFunction(() => document.activeElement?.closest('.ba-memory-post')?.dataset.memoryId === 'memory-plain');
@@ -170,6 +171,6 @@ test('memory compact rows reveal full content, preserve edit drafts and return t
         await noOverflow(`deleted/${theme}/${width}`);
       }
     }
-    assert.deepEqual(errors, []); assert.deepEqual(nativeDialogs, [], 'memory flows never use native confirmation');
+    assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

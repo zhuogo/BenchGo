@@ -66,3 +66,24 @@ export function connectionConfig(channel, input = {}) {
   }
   return config;
 }
+
+/** Same field registrations/defaults interpreted by connectionConfig, never sampled state. */
+export function connectionSettingsSchema(channel) {
+  const definition = channelDefinition(channel), fields = new Map(definition.fields.map(item => [item.key, item]));
+  const properties = {};
+  for (const key of new Set(['enabled', ...Object.keys(definition.defaults), ...fields.keys()])) {
+    const descriptor = fields.get(key) || {}, fallback = definition.defaults[key];
+    let schema;
+    if (key === 'groups' && channel === 'feishu') schema = { anyOf: [{ type: 'null' }, { type: 'array', maxItems: 1000, items: { type: 'object', additionalProperties: false, required: ['chatId', 'mode'], properties: { chatId: { type: 'string', minLength: 1, maxLength: 512 }, name: { type: 'string', maxLength: 512 }, mode: { type: 'string', enum: ['mentions', 'all', 'disabled'] } } } }] };
+    else if (Array.isArray(fallback) || ['list', 'array', 'ids', 'string[]'].includes(descriptor.type)) schema = { type: 'array', maxItems: 1000, uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: channel === 'feishu' ? 512 : 2048, pattern: '^[^\\u0000-\\u001f\\u007f]*$' } };
+    else if (typeof fallback === 'boolean' || descriptor.type === 'boolean' || key === 'enabled') schema = { type: 'boolean' };
+    else if (typeof fallback === 'number' || descriptor.type === 'number') schema = { type: 'number', ...(descriptor.min === undefined ? {} : { minimum: descriptor.min }), ...(descriptor.max === undefined ? {} : { maximum: descriptor.max }) };
+    else schema = { type: 'string', maxLength: channel === 'feishu' ? 512 : 4096, pattern: '^[^\\u0000-\\u001f\\u007f]*$' };
+    if (descriptor.options) schema.enum = descriptor.options.map(option => typeof option === 'string' ? option : option.value);
+    if (descriptor.label) schema.title = descriptor.label;
+    if (descriptor.help) schema.description = descriptor.help;
+    if (fallback !== undefined) schema.default = structuredClone(fallback);
+    properties[key] = schema;
+  }
+  return { type: 'object', additionalProperties: false, properties };
+}

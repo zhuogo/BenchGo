@@ -87,6 +87,29 @@ export function createTicketRevisionService({ ctx, store, database = store.orche
   }
   return {
     change: (input, exec, options) => change(input, exec, options),
+    async changeExecutionInput({ triggerId, assignmentId, runId, sessionId, owner, fence, decision, policy }) {
+      const assignment = database.getAssignment(assignmentId), run = assignment && database.runs(assignmentId).find(row => row.id === runId);
+      const trigger = database.getTrigger(triggerId), ticket = assignment && database.getTicket(assignment.ticketId);
+      if (!assignment || assignment.state !== 'claimed' || assignment.owner !== owner || assignment.fence !== fence || assignment.leaseUntil <= Date.now()
+        || !run || run.owner !== owner || run.fence !== fence || run.sessionId !== sessionId
+        || trigger?.actor.kind !== 'human' || trigger.actor.id !== 'desktop-owner' || trigger.source?.channel !== 'desktop'
+        || trigger.source.executionSessionId !== sessionId || trigger.source.sessionId !== sessionId || !trigger.source.executionMessageId
+        || trigger.source.messageId !== trigger.source.executionMessageId) throw Object.assign(new Error('执行输入不属于当前真实执行'), { code: 'FENCING_CONFLICT' });
+      if (decision.outcome !== 'revise' || decision.withinMandate !== true || decision.ticketId !== ticket.id
+        || decision.projectId !== undefined && decision.projectId !== ticket.mandate.project?.id) throw Object.assign(new Error('执行输入需要 Router 核实授权范围'), { code: 'MANDATE_EXPANSION_REQUIRED' });
+      const current = await readPolicy();
+      if (current.desktopVersion !== policy.desktopVersion || current.version !== policy.version
+        || !validateTicketMandate(database.currentTicketMandate(ticket.id, ticket.mandate), { policy: current })) throw Object.assign(new Error('执行输入分诊期间授权规则已变化'), { code: 'MANDATE_REVOKED' });
+      // No await between this final fence check and the synchronous transaction.
+      const live = database.getAssignment(assignmentId);
+      if (live.state !== 'claimed' || live.owner !== owner || live.fence !== fence || live.leaseUntil <= Date.now()) throw Object.assign(new Error('执行输入已失去当前执行归属'), { code: 'FENCING_CONFLICT' });
+      const mandate = { ...database.currentTicketMandate(ticket.id, ticket.mandate), actorId: trigger.actor.id, source: trigger.source,
+        instruction: trigger.content, policyVersion: current.desktopVersion, admission: 'desktop-approved-delegation' };
+      return database.changeTicket(ticket.id, { operation: 'revise', expectedInstructionRevision: decision.expectedInstructionRevision,
+        target: decision.target ?? ticket.target, acceptance: decision.acceptance ?? ticket.acceptance, reason: decision.reason,
+        requestKey: `execution-input:${triggerId}`, triggerId, mandate, model: assignment.model,
+        validateMandate: value => validateTicketMandate(value, { policy: current }) });
+    },
     submitForm(input, options) {
       text(input.requestId, '表单请求标识', 200);
       text(options.original, '表单主人原文');

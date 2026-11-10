@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
-import { normalizeTicketTitle, TICKET_TITLE_MAX_CHARS } from '../src/ticket-title.mjs';
+import { assertSpecificTicketDescription, normalizeTicketTitle, TICKET_TITLE_MAX_CHARS } from '../src/ticket-title.mjs';
 
 test('ticket titles retain the AI label and cap it at ten Unicode characters', () => {
   assert.equal(TICKET_TITLE_MAX_CHARS, 10);
@@ -29,6 +29,20 @@ test('legacy missing titles use a short display fallback without changing task r
 test('ticket titles collapse whitespace and remove control characters before limiting', () => {
   assert.equal(normalizeTicketTitle(' \t今日\n新闻\u0000摘要\u007f '), '今日 新闻 摘要');
   assert.equal(normalizeTicketTitle(123, '  任务\r\n进展  '), '任务 进展');
+});
+
+test('admission rejects exact placeholder labels without guessing or rewriting concrete descriptions', () => {
+  for (const title of ['执行任务', ' 处理请求。 ', 'New Task', 'process request']) {
+    assert.throws(() => assertSpecificTicketDescription({ title, target: '为用户调研AI获客项目并交付带来源的清单' }), { code: 'TICKET_DESCRIPTION_GENERIC', field: 'title' });
+  }
+  for (const target of ['执行任务', '处理用户请求！', 'Execute Task']) {
+    assert.throws(() => assertSpecificTicketDescription({ title: '获客项目清单', target }), { code: 'TICKET_DESCRIPTION_GENERIC', field: 'target' });
+  }
+  const concrete = { title: '处理请求日志', target: '修复处理请求页面，并给出故障原因与验证结果' };
+  const before = structuredClone(concrete);
+  assert.doesNotThrow(() => assertSpecificTicketDescription(concrete));
+  assert.deepEqual(concrete, before, 'business text containing these words remains literal and unchanged');
+  assert.equal(normalizeTicketTitle('执行任务'), '执行任务', 'historical display normalization remains independent from new admission validation');
 });
 
 test('persisted titles stay separate from full target and acceptance, including legacy rows', async t => {

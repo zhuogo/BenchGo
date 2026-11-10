@@ -138,7 +138,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
           const triage = triageRow ? JSON.parse(triageRow.resolution) : null;
           if (triage && triage.route !== 'user') throw new Error('Automatically resolved Attention cannot open a human question');
           // Preserve wording, detail and labels; no model rephrases the question.
-          const text = attentionText(ticket.mandate.source, attentionId, [triage?.systemState ? triage.basis : undefined, question.question, question.detail, ...(question.options || []).map(option =>
+          const text = attentionText(ticket.mandate.source, attentionId, [question.question, question.detail, ...(question.options || []).map(option =>
             option.label + (option.description ? `：${option.description}` : ''))].filter(part => part !== undefined).join('\n'));
           const payload = { type: 'ticket.attention', attentionId, ticketId: ticket.id, source: ticket.mandate.source,
             instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion, text,

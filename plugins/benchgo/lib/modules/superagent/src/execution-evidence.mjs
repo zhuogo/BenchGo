@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { verifyArtifactCheckpoint } from './worker-artifact-checkpoint.mjs';
 import { executionEffects } from './execution-effects.mjs';
 
+const mismatch = message => Object.assign(new Error(message), { code: 'EVIDENCE_MISMATCH' });
+
 const LEGACY_EXECUTION_BUDGET_HOOK = 'benchgo-execution-budget-exhausted';
 
 /**
@@ -20,8 +22,9 @@ export async function verifyExecutionArtifacts(run, result, signal) {
   if (!result?.checkpoint) throw new Error('Project execution recovery requires a verified artifact checkpoint');
   if (JSON.stringify(run.environment) !== JSON.stringify(result.environment)
     || JSON.stringify(run.evidence?.checkpoint) !== JSON.stringify(result.checkpoint)
-    || result.directory !== run.environment.path || result.runId !== run.id || result.sessionId !== run.sessionId) throw new Error('Artifact evidence belongs to another execution');
-  return verifyArtifactCheckpoint(run.environment, result.checkpoint, { signal });
+    || result.directory !== run.environment.path || result.runId !== run.id || result.sessionId !== run.sessionId) throw mismatch('Artifact evidence belongs to another execution');
+  try { return await verifyArtifactCheckpoint(run.environment, result.checkpoint, { signal }); }
+  catch (error) { if (signal?.aborted) throw error; throw mismatch(error.message); }
 }
 
 export function executionEvidence(log) {
@@ -155,10 +158,10 @@ async function inspectRecoveredExecution({ ctx, run, signal }, action, paused) {
     const log = await handle.read(undefined, undefined, { signal });
     const observed = executionEvidence(log), observedEffects = executionEffects(log), saved = run.evidence;
     if (!saved || saved.runId !== run.id || saved.sessionId !== run.sessionId || !Number.isSafeInteger(saved.transcript?.lastSeq)
-      || saved.transcript.lastSeq !== observed.transcript.lastSeq || saved.transcript.hash !== observed.transcript.hash || saved.summary !== observed.summary) throw new Error('Persisted execution evidence does not match the official transcript');
-    if (saved.finalSummary !== undefined && saved.finalSummary !== observed.finalSummary) throw new Error('Persisted final result does not match the official transcript');
-    if (saved.toolEvidence && JSON.stringify(saved.toolEvidence) !== JSON.stringify(observed.toolEvidence)) throw new Error('Persisted tool evidence does not match the official transcript');
-    if (saved.executionEffects !== undefined && JSON.stringify(saved.executionEffects) !== JSON.stringify(observedEffects)) throw new Error('Persisted execution effects do not match the official transcript');
+      || saved.transcript.lastSeq !== observed.transcript.lastSeq || saved.transcript.hash !== observed.transcript.hash || saved.summary !== observed.summary) throw mismatch('Persisted execution evidence does not match the official transcript');
+    if (saved.finalSummary !== undefined && saved.finalSummary !== observed.finalSummary) throw mismatch('Persisted final result does not match the official transcript');
+    if (saved.toolEvidence && JSON.stringify(saved.toolEvidence) !== JSON.stringify(observed.toolEvidence)) throw mismatch('Persisted tool evidence does not match the official transcript');
+    if (saved.executionEffects !== undefined && JSON.stringify(saved.executionEffects) !== JSON.stringify(observedEffects)) throw mismatch('Persisted execution effects do not match the official transcript');
     let terminal;
     for (const event of log.events) {
       if (['turn/start', 'step/start', 'assistant/message', 'tool/result', 'user/message'].includes(event.type)) terminal = undefined;
@@ -168,8 +171,9 @@ async function inspectRecoveredExecution({ ctx, run, signal }, action, paused) {
     if (paused && saved.waitingPause !== true) throw new Error('Execution has no saved explicit pause');
     if (run.environment) await verifyExecutionArtifacts(run, saved, signal);
     else if (paused) {
-      if (saved.directory !== run.directory) throw new Error('Pause directory changed');
-      await verifyArtifactCheckpoint(run.directory, saved.checkpoint, { signal });
+      if (saved.directory !== run.directory) throw mismatch('Pause directory changed');
+      try { await verifyArtifactCheckpoint(run.directory, saved.checkpoint, { signal }); }
+      catch (error) { if (signal?.aborted) throw error; throw mismatch(error.message); }
     }
     signal.throwIfAborted();
     return await action({ ...saved, finalSummary: observed.finalSummary, toolEvidence: observed.toolEvidence, executionEffects: observedEffects }, { sessionId: run.sessionId, completed: !paused, paused, ...observed.transcript });

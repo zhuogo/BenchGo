@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
 import { isIP } from 'node:net';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+export { validateLinkTransport as validateConfig } from '../config.mjs';
 
 export const localAddresses = () => [...new Set(Object.values(networkInterfaces()).flatMap(items => (items ?? []).filter(x => !x.internal && !x.address.includes('%')).map(x => x.address)))];
 
@@ -35,23 +36,6 @@ export function connectionAddresses(host = '::', interfaces = networkInterfaces(
   return [...[...ipv4].filter(privateIpv4), ...[...ipv4].filter(address => !privateIpv4(address)), ...ipv6];
 }
 export const authority = (address, port) => `${isIP(address) === 6 ? `[${address}]` : address}:${port}`;
-
-export function validateConfig(input, prior) {
-  const value = { ...prior };
-  for (const key of ['enabled', 'host', 'port', 'publicUrl']) if (input[key] !== undefined) value[key] = input[key];
-  if (typeof value.enabled !== 'boolean') throw new Error('启用状态必须是布尔值');
-  value.enabled = true;
-  if (!isIP(value.host) && value.host !== 'localhost') throw new Error('监听地址必须是 IP 或 localhost');
-  if (!Number.isInteger(value.port) || value.port < 0 || value.port > 65535) throw new Error('端口必须在 0 至 65535 之间');
-  if (typeof value.publicUrl !== 'string') throw new Error('公网地址无效');
-  value.publicUrl = value.publicUrl.trim().replace(/\/$/, '');
-  if (value.publicUrl) {
-    const url = new URL(value.publicUrl);
-    if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('请输入 HTTPS 公网地址，例如 https://desk.example.com，不包含子路径');
-    value.publicUrl = url.origin;
-  }
-  return value;
-}
 
 const headers = {
   'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer',

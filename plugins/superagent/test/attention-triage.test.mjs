@@ -153,6 +153,38 @@ test('Attention stores host resolutions separately and assembles mixed batches w
   assert.ok(database.attentionResolutions(ticket.id).every(row => !row.answerTriggerId));
 });
 
+for (const channel of ['desktop', 'feishu']) test(`failed Attention triage keeps ${channel} questions unchanged and preserves diagnostics`, async t => {
+  const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+  t.after(() => database.close());
+  database.createThread({ id: 'thread', source: { type: channel, id: 'owner' } });
+  const source = { channel, sessionId: 'owner', chatId: 'origin-chat' };
+  const ticket = database.createTicket({ threadId: 'thread', target: 'Choose format', mandate: { instruction, actorId: 'desktop-owner', source } });
+  database.createAssignment(ticket.id, { model: policy.models[0] });
+  const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
+  const ownership = { owner: assignment.owner, fence: assignment.fence };
+  const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'worker-session', directory: '/fixture' });
+  database.updateRun(run.id, { ...ownership, state: 'submitted' });
+  const question = { id: 'format', question: '交付用列表还是短句？', detail: '请按阅读习惯选择。',
+    options: [{ label: '列表', description: '逐项阅读' }, { label: '短句' }] };
+  const llm = { async *stream() { yield { type: 'finish', reason: { kind: 'error' } }; } };
+  const decisions = await triageWorkerQuestions({ llm, database, ticket, questions: [question], policy });
+  assert.deepEqual(decisions, [{ questionId: question.id, route: 'user', basis: 'Router 自动核对未完成，需用户补充', systemState: 'triage-unavailable' }]);
+  const batch = { ...ownership, sessionId: run.sessionId, callId: 'failed-triage', questions: [question] };
+  database.saveAttentionResolutions(assignment.id, { ...batch, decisions });
+  const [attention] = database.openAttention(assignment.id, batch);
+  const [delivery] = database.claimOutbox('sender');
+  const text = '交付用列表还是短句？\n请按阅读习惯选择。\n列表：逐项阅读\n短句';
+  assert.equal(delivery.payload.text, channel === 'desktop' ? text
+    : `${text}\n\n问题编号：${attention.id}\n可引用这条消息回答，或发送 /answer ${attention.id} 你的回答`);
+  assert.deepEqual(delivery.payload.options, ['列表', '短句']);
+  assert.deepEqual(delivery.payload.source, source);
+  assert.deepEqual(delivery.payload.triage, decisions[0]);
+  assert.deepEqual(database.attentionResolutions(ticket.id).map(({ questionId, route, basis, systemState }) => ({ questionId, route, basis, systemState })), decisions);
+  assert.deepEqual(attention.question, question);
+  assert.equal(attention.state, 'waiting');
+  assert.equal(attention.answerTriggerId, null);
+});
+
 test('parking one Attention assignment does not block another assignment on the same Ticket', t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());

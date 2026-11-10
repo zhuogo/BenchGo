@@ -271,12 +271,18 @@ test('authorized device remarks save through owner management and retain edits o
   } });
   view.status.devices = [{ id: 'phone', name: '手机原名' }];
   view.render(); const cleanup = view.effects[1](); await new Promise(resolve => setImmediate(resolve));
-  const edit = nodes(view.render()).find(node => node.props['aria-label'] === '编辑设备备注');
-  assert.equal(edit.props.title, undefined, 'native title is removed'); assert(nodes(view.render()).some(node => node.props.label === '编辑备注'), 'edit action uses the shared tooltip'); assert.equal(textOf(edit), ''); edit.props.onClick();
+  const initial = view.render(), edit = nodes(initial).find(node => node.props['aria-label'] === '编辑设备备注');
+  assert.equal(edit.props.title, undefined);
+  assert(nodes(initial).some(node => node.props.label === '编辑备注' && nodes(node).includes(edit)));
+  assert.equal(textOf(edit), ''); edit.props.onClick();
   let tree = view.render();
   const form = () => nodes(tree).find(node => node.props.className === 'link-device-rename');
   assert.equal(nodes(tree).find(node => node.props.className === 'link-authorized-device-info').children[0], form());
-  for (const [label, bubble] of [['取消修改设备备注', '取消修改'], ['保存设备备注', '保存备注']]) { assert(nodes(form()).some(node => node.props['aria-label'] === label && !node.props.title)); assert(nodes(form()).some(node => node.props.label === bubble)); }
+  for (const [label, hint] of [['取消修改设备备注', '取消修改'], ['保存设备备注', '保存备注']]) {
+    const action = nodes(form()).find(node => node.props['aria-label'] === label);
+    assert.equal(action.props.title, undefined);
+    assert(nodes(form()).some(node => node.props.label === hint && nodes(node).includes(action)));
+  }
   nodes(form()).find(node => node.type === 'input').props.onChange({ target: { value: '随身手机' } });
   tree = view.render(); await form().props.onSubmit({ preventDefault() {} }); tree = view.render();
   assert(form()); assert.match(textOf(tree), /保存失败/);

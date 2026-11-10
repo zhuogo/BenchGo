@@ -1,3 +1,4 @@
+import { officialTooltipSource } from './official-tooltip-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -28,20 +29,21 @@ test('shared bubbles and confirmations preserve anchors, cancel safely and fit n
       <Button id="shared-button" title="共享按钮说明" onClick={()=>window.sharedClick=true}>共享按钮</Button><Button id="shared-disabled" title="等待连接" disabled>暂不可用</Button>
       {child&&<Child/>}{confirmation}</>;
     }createRoot(document.getElementById('app')).render(<App/>);
-  ` }, bundle: true, write: false, format: 'iife', jsx: 'automatic', nodePaths: [join(root, 'plugins/benchgo/node_modules')], alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) }, loader: { '.css': 'text' }, plugins: [sharedUiStyles()], logLevel: 'silent' });
+  ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-feedback-test'), format: 'iife', jsx: 'automatic', nodePaths: [join(root, 'plugins/benchgo/node_modules')], alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) }, loader: { '.css': 'text', '.module.css': 'local-css' }, plugins: [officialTooltipSource(), sharedUiStyles()], logLevel: 'silent' });
   const browser = await chromium.launch({ executablePath, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 760 } });
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.setContent('<!doctype html><html><body style="margin:0;font-family:Arial"><div id="app"></div></body></html>');
-    await page.addScriptTag({ content: result.outputFiles[0].text });
+    await page.addStyleTag({ content: result.outputFiles.filter(file=>file.path.endsWith('.css')).map(file=>file.text).join('\n') });
+    await page.addScriptTag({ content: result.outputFiles.find(file=>file.path.endsWith('.js')).text });
     assert.equal(await page.locator('#tip').getAttribute('title'), null);
     await page.locator('#tip').hover(); await page.getByRole('tooltip').waitFor();
     assert.equal(await page.getByRole('tooltip').innerText(), '不可用原因');
     await page.evaluate(() => window.setLabel('新说明')); await page.getByRole('tooltip').getByText('新说明').waitFor();
-    await page.keyboard.press('Escape'); await page.getByRole('tooltip').waitFor({ state: 'hidden' });
+    await page.mouse.move(0, 200); await page.getByRole('tooltip').waitFor({ state: 'hidden' });
     await page.locator('#tip').click(); assert.equal(await page.evaluate(() => window.clicks), 1);
-    await page.locator('.bg-tooltip-disabled-anchor').filter({has: page.locator('#disabled')}).focus(); await page.getByRole('tooltip').waitFor();
+    await page.keyboard.press('Tab'); await page.locator('#disabled').locator('..').focus(); await page.getByRole('tooltip').waitFor();
     const bounds = await page.getByRole('tooltip').boundingBox(); assert(bounds.x >= 12 && bounds.x + bounds.width <= 378.1);
     await page.keyboard.press('Enter'); assert.equal(await page.evaluate(() => window.disabledClick), undefined);
     await page.keyboard.press('Escape');
@@ -61,10 +63,10 @@ test('shared bubbles and confirmations preserve anchors, cancel safely and fit n
     await page.evaluate(() => window.removeChild()); await page.getByRole('dialog').waitFor({ state: 'hidden' });
     assert.equal(await page.evaluate(() => window.result), false);
     assert.equal(await page.locator('#shared-button').getAttribute('title'), null);
-    await page.locator('#shared-button').focus(); await page.getByRole('tooltip').getByText('共享按钮说明').waitFor();
+    await page.keyboard.press('Tab'); await page.locator('#shared-button').focus(); await page.getByRole('tooltip').getByText('共享按钮说明').waitFor();
     await page.locator('#shared-button').click(); assert.equal(await page.evaluate(() => window.sharedClick), true);
     assert.equal(await page.locator('#shared-disabled').getAttribute('title'), null);
-    await page.locator('.bg-tooltip-disabled-anchor').filter({has: page.locator('#shared-disabled')}).focus();
+    await page.keyboard.press('Tab'); await page.locator('#shared-disabled').locator('..').focus();
     await page.getByRole('tooltip').getByText('等待连接').waitFor();
     await page.keyboard.press('Escape');
     assert.deepEqual(errors, []);

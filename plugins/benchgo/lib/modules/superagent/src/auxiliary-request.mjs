@@ -31,14 +31,14 @@ async function* boundedStream(llm, options) {
 export const auxiliaryFailureDiagnostic = error => error instanceof Error ? failureDiagnostics.get(error) : undefined;
 export const auxiliaryFailureRouting = error => error instanceof Error ? failureRoutes.get(error) : undefined;
 /** A read-only operation may retry before publishing anything, never replay tools. */
-export async function collectAuxiliaryText({ llm, config, capability, model, request, validate }) {
+export async function collectAuxiliaryText({ llm, config, capability, model, request, validate, routePolicy = 'router-fallback' }) {
   const frozen = structuredClone(config), main = structuredClone(model);
   const auxiliary = frozen.auxiliary?.capabilities?.includes(capability) ? frozen.auxiliary : null;
-  const routes = auxiliaryModels(main, frozen, capability);
+  const routes = auxiliaryModels(main, frozen, capability, routePolicy);
   let routeIndex = 0, selected = routes[0], switched = false;
-  if (!selected?.providerId || !selected?.modelId) throw new Error('辅助任务模型未配置');
+  if (!selected?.providerId || !selected?.modelId) throw Object.assign(new Error('辅助任务模型未配置'), { code: 'AUXILIARY_UNCONFIGURED' });
   const attempts = [];
-  const routing = () => ({ configRevision: frozen.revision ?? null, capability, auxiliary: !!auxiliary,
+  const routing = () => ({ configRevision: frozen.revision ?? null, capability, auxiliary: !!auxiliary, routePolicy,
     switched: switched, attempts: structuredClone(attempts) });
   for (;;) {
     for (let retry = 0; ; retry++) {
@@ -85,7 +85,7 @@ export async function collectAuxiliaryText({ llm, config, capability, model, req
         const failure = error.failure ?? error;
         if (canFallback(failure) && isTransientFailure(failure) && retry === 0) continue;
         if ((!canFallback(failure) && !['AUXILIARY_QUALITY', 'NO_ADAPTER'].includes(error.code))) throw error;
-        const nextIndex = error.code === 'AUXILIARY_QUALITY'
+        const nextIndex = error.code === 'AUXILIARY_QUALITY' && routePolicy !== 'auxiliary-only'
           ? routes.findIndex(route => route.providerId === main.providerId && route.modelId === main.modelId)
           : routeIndex + 1;
         if (nextIndex <= routeIndex || !routes[nextIndex]) throw error;

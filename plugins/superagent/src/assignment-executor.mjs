@@ -8,10 +8,12 @@ import { installWorkerPermissionGate } from './worker-permissions.mjs';
 import { installWorkerSubagents } from './worker-subagents.mjs';
 import { installWorkerVault } from './worker-vault.mjs';
 import { installSubscriptionInbox } from './subscription-inbox.mjs';
+import { createExecutionTicketInputService } from './execution-ticket-input.mjs';
 import { continueWorkerContext } from './worker-context-continuation.mjs';
 import { workerWorktrees } from './worker-worktree.mjs';
 import { installProjectRules } from './project-rules.mjs';
 import { executionEvidence } from './execution-evidence.mjs';
+import { verifyInterruptedTranscript } from './interrupted-continuation.mjs';
 import { executionEffects, isReadOnlyWorkerTool } from './execution-effects.mjs';
 import { attentionBatchAnswers, installWorkerAttention } from './worker-attention.mjs';
 import { captureArtifactCheckpoint, verifyArtifactCheckpoint } from './worker-artifact-checkpoint.mjs';
@@ -23,17 +25,19 @@ import { workerModelQueueType, selectWorkerModel as selectModel, workerModelRout
 import { installWorkerSelfCheck, workerSelfCheckRequirement } from './worker-self-check.mjs';
 import { attachExecutionSession } from './execution-session.mjs';
 import { modelFallbackType, modelFallbackSource, fallbackCallSignature as toolSignature } from './model-fallback.mjs';
+import { createSessionRoleAssembly } from './session-role-assembly.mjs';
 
 /** Uses the host agent lifecycle and transcript; no separate model/tool loop. */
-export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readSourceContext, checkpoints, captureCheckpoint = captureArtifactCheckpoint }) {
+export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readSourceContext, notifyExecutionInput, checkpoints, captureCheckpoint = captureArtifactCheckpoint }) {
   if (!ctx?.agents?.create || !ctx?.sessionQuery?.readSession) throw new Error('Harness execution services unavailable');
   if (typeof authorizeAction !== 'function') throw new Error('Worker requires a current action authorizer');
   const root = resolve(workspaceRoot);
+  const processExecutionInput = createExecutionTicketInputService({ ctx, database, readPolicy, notifyRouter: notifyExecutionInput });
   return async (assignment, { ticket, signal, renew }) => {
     signal.throwIfAborted();
     if (assignment.reviewRepair || assignment.reviewContinuation) throw new Error('Legacy content-review continuation is unsupported');
     const previous = database.runs(assignment.id);
-    const continuation = assignment.contextContinuation || assignment.attentionContinuation || assignment.pauseContinuation;
+    const continuation = assignment.interruptedContinuation || assignment.contextContinuation || assignment.attentionContinuation || assignment.pauseContinuation;
     const resumed = continuation && previous.find(item => item.id === continuation.runId && item.state === 'prepared' && item.fence === assignment.fence && item.owner === assignment.owner);
     if (previous.length && !resumed) throw new Error('Previous execution requires reconciliation before resubmission');
     if (continuation && !resumed) throw new Error('Original continuation identity is unavailable');
@@ -67,8 +71,8 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       let modelIndex = 0, pendingFallback, claimedMessages = [], currentTurn, savedQueue;
       const modelFailures = [];
       const priorFallbackCalls = new Set();
-      const presets = ctx.get?.('agentPresets');
-      const preset = presets ? await presets.resolve(assignment.agentPreset) : undefined;
+      const role = await createSessionRoleAssembly({ ctx, database, identity: { role: 'worker', sessionId,
+        ticketId: ticket.id, assignmentId: assignment.id, runId: run.id } });
       const setup = async (scope, agent) => {
         scope.provide?.('benchgoWorkerExecution', Object.freeze({ ticketId: ticket.id, assignmentId: assignment.id,
           runId: run.id, sessionId, owner: assignment.owner, fence: assignment.fence }));
@@ -83,18 +87,26 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         installGoalBudgetUsage(scope, agent, { database, ticketId: ticket.id });
         if (resumed) {
           const events = agent.session.snapshotEvents(), saved = resumed.evidence;
-          const prefix = events.filter(event => event.seq <= saved?.transcript?.lastSeq);
-          const suffix = events.filter(event => event.seq > saved?.transcript?.lastSeq);
-          const observed = executionEvidence({ events: prefix });
-          if (saved.executionEffects !== undefined && JSON.stringify(saved.executionEffects) !== JSON.stringify(executionEffects({ events: prefix }))) throw new Error('Execution effects changed before continuation');
-          // The official loader adds its seed boundary before setup; no tool,
-          // user message or crash-repair event may extend the saved pause.
-          const contextContinuation = !!assignment.contextContinuation;
-          if ((contextContinuation ? saved?.waitingAttention || saved?.waitingPause : !saved?.waitingAttention && !saved?.waitingPause) || observed.transcript.hash !== saved.transcript?.hash
-            || suffix.length > 1 || suffix.some(event => event.type !== 'session/end-seed')
-            || prefix.at(-1)?.type !== 'turn/end' || (contextContinuation ? prefix.at(-1).data?.reason?.kind !== 'completed' : !isVerifiedPauseEnding(prefix.at(-1).data?.reason, saved))) throw new Error('Execution transcript changed before continuation');
+          if (assignment.interruptedContinuation) {
+            verifyInterruptedTranscript(events, saved);
+            if (!database.getWorkerExecutionState(run.id)?.models?.length) throw new Error('Original frozen Worker model is unavailable');
+          } else {
+            const prefix = events.filter(event => event.seq <= saved?.transcript?.lastSeq);
+            const suffix = events.filter(event => event.seq > saved?.transcript?.lastSeq);
+            const observed = executionEvidence({ events: prefix });
+            if (saved.executionEffects !== undefined && JSON.stringify(saved.executionEffects) !== JSON.stringify(executionEffects({ events: prefix }))) throw new Error('Execution effects changed before continuation');
+            // The official loader adds its seed boundary before setup; no tool,
+            // user message or crash-repair event may extend the saved pause.
+            const contextContinuation = !!assignment.contextContinuation;
+            if ((contextContinuation ? saved?.waitingAttention || saved?.waitingPause : !saved?.waitingAttention && !saved?.waitingPause) || observed.transcript.hash !== saved.transcript?.hash
+              || suffix.length > 1 || suffix.some(event => event.type !== 'session/end-seed')
+              || prefix.at(-1)?.type !== 'turn/end' || (contextContinuation ? prefix.at(-1).data?.reason?.kind !== 'completed' : !isVerifiedPauseEnding(prefix.at(-1).data?.reason, saved))) throw new Error('Execution transcript changed before continuation');
+          }
           await verifyArtifactCheckpoint(environment || directory, resumed.evidence.checkpoint, { signal });
         }
+        // Verify the saved recovery boundary first, then role, before any model
+        // selection is appended to an incompatible legacy session.
+        await role.mount(scope, agent);
         savedQueue = database.getWorkerExecutionState(run.id);
         // Read old queue records only for additive migration; new records live in BenchGo's ledger.
         let legacyFallback;
@@ -111,8 +123,6 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         modelIndex = frozen.index;
         if (legacyFallback) database.recordWorkerFallback({ assignmentId: assignment.id, runId: run.id, ...ownership, plan: legacyFallback });
         selectModel(agent, models[modelIndex]);
-        // Official durable policy representation (user-approval setApprovalPolicy).
-        agent.session?.append?.('approval/policy', { policy: 'ask' });
         const priorFallback = database.getWorkerExecutionState(run.id)?.fallbackPlan;
         if (priorFallback) for (const event of agent.session.snapshotEvents()) {
           if (event.type !== 'assistant/message') continue;
@@ -139,7 +149,6 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
           pendingFallback = plan;
           return true;
         };
-        if (preset) await presets.mount(scope, preset.id);
         installProjectRules(scope, agent);
         if (project && !resumed) {
           const worktrees = await workerWorktrees(scope);
@@ -151,7 +160,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         }
         scope.systemPrompt.section({ name: 'deployment:persona-prefix', order: -1000, interpolate: false, text: 'You are a BenchGo task worker.' });
         scope.systemPrompt.section({ name: 'deployment:persona-suffix', order: 1000, interpolate: false, text: '' });
-        const inbox = installSubscriptionInbox(scope, agent, { database, assignment, run });
+        const inbox = installSubscriptionInbox(scope, agent, { database, assignment, run, processExecutionInput, signal });
         if (inbox.inputGateInstalled) scope.provide?.('benchgoWorkerInputGate', Object.freeze({ ticketId: ticket.id,
           assignmentId: assignment.id, runId: run.id, sessionId, owner: assignment.owner, fence: assignment.fence }));
         const currentSnapshot = () => inbox.currentSnapshot?.() || { target: ticket.target, acceptance: ticket.acceptance, mandate: ticket.mandate, context: [], instructionRevision: ticket.instructionRevision };
@@ -177,16 +186,19 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         scope.systemPrompt.section({ name: 'benchgo-task-time', order: -99, interpolate: false,
           text: JSON.stringify({ currentTime: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, originalRequestTime: ticket.createdAt })
             + '\nInterpret relative dates such as today against the original request time and timezone. Verify dates using source timestamps; do not ask the user to supply the system date.' });
+        const withCheckpoint = checkpoints && ((execution, dispatch) => {
+          // Freeze the applied requirements before checkpoint IO. The after-state
+          // must never be attributed to a revision that arrived during the tool.
+          const instructionRevision = currentSnapshot().instructionRevision;
+          return checkpoints.protect({ runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory,
+            callId: execution.callId, fence: assignment.fence, instructionRevision }, dispatch);
+        });
         installWorkerPermissionGate(scope, { database, assignment, readPolicy, authorizeAction,
           ...(resumed ? { priorToolEvents: agent.session.snapshotEvents() } : {}),
-          ...(checkpoints ? { withCheckpoint: (execution, dispatch) => checkpoints.protect({
-            runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory, callId: execution.callId,
-          }, dispatch) } : {}),
+          ...(withCheckpoint ? { withCheckpoint } : {}),
         });
-        installWorkerSubagents(scope, agent, { ctx, database, assignment, readPolicy, authorizeAction, models, currentModel: () => models[modelIndex],
-          ...(checkpoints ? { withCheckpoint: (execution, dispatch) => checkpoints.protect({
-            runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory, callId: execution.callId,
-          }, dispatch) } : {}),
+        installWorkerSubagents(scope, agent, { ctx, database, assignment, readPolicy, authorizeAction, models, currentModel: () => models[modelIndex], parentRole: role,
+          ...(withCheckpoint ? { withCheckpoint } : {}),
         });
         selfCheck = installWorkerSelfCheck(scope, agent, { database, assignment, run, renew,
           isWaiting: () => !!attention?.waiting() || waitingPause });
@@ -230,16 +242,20 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       executionPhase = resumed ? 'resume' : 'create';
       handle = resumed
         ? await ctx.agents.resume({ resumeSessionId: sessionId, signal, setup })
-        : await ctx.agents.create({ sessionId, meta: { cwd: project?.path || directory, ...(preset ? { agentPreset: preset.id } : {}) }, setup });
+        : await ctx.agents.create({ sessionId, meta: { cwd: project?.path || directory, agentPreset: role.expected.agentPreset }, setup });
+      await role.reconcile();
       await attachExecutionSession(ctx, handle.agent, { ticket, run });
       await renew();
       signal.throwIfAborted();
+      await role.reconcile();
       // Persist submission intent before entering the host. A crash here is ambiguous,
       // so recovery inspects the official transcript instead of replaying the prompt.
       executionPhase = 'submit';
       database.updateRun(run.id, { ...ownership, state: 'submitted' });
       if (selfCheck) database.recordWorkerSelfCheck({ assignmentId: assignment.id, runId: run.id, ...ownership, value: null });
-      if (assignment.contextContinuation) {
+      if (assignment.interruptedContinuation) {
+        handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Continue this interrupted work in its original session and mandate from the verified saved transcript and current artifacts. Inspect completed tool results first; never repeat completed actions. Preserve all original requirements, apply pending user input at the next safe boundary, and perform the required lightweight self-check before reporting completion.' }], source: { kind: 'benchgo-interrupted-continuation', ticketId: ticket.id, runId: run.id } }));
+      } else if (assignment.contextContinuation) {
         handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Consider pending source context using the saved transcript. Stay within the original Ticket mandate; do not repeat completed actions.' }], source: { kind: 'benchgo-context-continuation', ticketId: ticket.id, runId: run.id } }));
       } else if (resumed?.evidence.waitingPause) {
         handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Resume the paused Ticket from the saved transcript. Continue only its original mandate; do not repeat completed actions.' }], source: { kind: 'benchgo-resume', ticketId: ticket.id, runId: run.id } }));
@@ -315,7 +331,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
     } catch (error) {
       try { if (error && typeof error === 'object') error.executionPhase = executionPhase; } catch { /* Preserve immutable host errors. */ }
       const current = database.runs(assignment.id).find(item => item.id === run.id);
-      if (current && ['submitted', 'running', 'verifying'].includes(current.state)) {
+      if (current && (['submitted', 'running', 'verifying'].includes(current.state) || assignment.interruptedContinuation && current.state === 'prepared')) {
         try { database.updateRun(run.id, { ...ownership, state: 'uncertain' }); } catch { /* Lease loss is handled by reconciliation. */ }
       }
       throw error;

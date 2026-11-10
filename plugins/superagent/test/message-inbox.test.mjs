@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMessageInbox, messageReceiptFromEvents } from '../src/message-inbox.mjs';
+import { ticketReplySource } from '../src/ticket-reply.mjs';
 
 function fixture(initial = {}, options = {}) {
   let state = { requests: [], ...structuredClone(initial) }, chain = Promise.resolve();
@@ -38,6 +39,20 @@ test('duplicate pending IDs are acknowledged and mismatched content is rejected'
   assert.equal(receipt.duplicate, true);
   assert.equal(f.sent.length, 1);
   await assert.rejects(f.inbox.enqueue({ text: 'B', requestId: 'same' }), /请求标识/);
+});
+
+test('a durable execution notice retains internal source identity, hides from the human queue and reconciles without replay', async () => {
+  const f = fixture();
+  const args = { text: 'PRIVATE HOST INPUT', requestId: 'execution-input:native', hostExecutionInput: { ticketId: 'ticket', triggerId: 'native' } };
+  await f.inbox.enqueue(args);
+  assert.equal(f.sent[0].source.kind, 'benchgo-execution-input');
+  assert.deepEqual(await f.inbox.state(), []);
+  assert.equal((await f.inbox.enqueue(args)).duplicate, true);
+  await f.finish({ kind: 'completed' });
+  const restored = fixture(JSON.parse(JSON.stringify(f.state())), { events: f.events });
+  await restored.inbox.recover(); await restored.inbox.enqueue(args);
+  assert.equal(restored.sent.length, 0);
+  assert.equal(restored.state().requests[0].status, 'processed');
 });
 
 test('notification replies persist the authoritative question and reject changed associations under the same request id', async () => {
@@ -93,4 +108,163 @@ test('transcript matching uses the exact message ID and records processing error
   assert.equal(messageReceiptFromEvents(request, [{ type: 'user/message', data: { id: 'other' } }, { type: 'turn/end', data: { reason: { kind: 'stop' } } }]).status, 'uncertain');
   const result = messageReceiptFromEvents(request, [{ type: 'user/message', data: { id: 'actual' } }, { type: 'turn/end', data: { reason: { kind: 'error', error: { message: 'model unavailable' } } } }]);
   assert.deepEqual(result, { status: 'failed', error: 'model unavailable' });
+});
+
+const ticketSignal = { kind: 'state', eventKey: 'notice:1', ticketId: 'ticket', title: '整理资料', status: 'running', instructionRevision: 1,
+  resultVersion: 0, state: 'continuation_wait', code: 'WORKER_TURN_INCOMPLETE', stage: 'execution', assignmentId: 'assignment', fence: 1 };
+
+test('approval reminders wait behind in-flight and queued user messages, retain source chat and deduplicate by official ask', async () => {
+  const f = fixture();
+  const signal = { kind: 'approval', eventKey: 'approval:worker:official-id', ticketId: 'ticket',
+    source: { channel: 'desktop', threadId: 'main', sessionId: 'router' }, approvalId: 'official-id' };
+  f.agent.status = 'running';
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal });
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal });
+  await f.inbox.enqueue({ threadId: 'main', text: '先回答我', requestId: 'human-next' });
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.state().requests.filter(row => row.ticketReply).length, 1);
+  f.agent.status = 'idle'; await f.inbox.settle('main');
+  assert.equal(f.sent[0].source.kind, 'user');
+  await f.finish();
+  assert.deepEqual(f.sent[1].source, { kind: ticketReplySource, replyKind: 'approval', eventKey: signal.eventKey, ticketId: 'ticket' });
+  assert.match(f.sent[1].content[0].text, /任务 → 审核/);
+  await f.finish(); await f.inbox.enqueueTicketReply({ threadId: 'main', signal });
+  assert.equal(f.sent.length, 2, 'the same official approval cannot create another reminder turn');
+});
+
+test('a decided queued approval is suppressed at dispatch without interrupting a user turn', async () => {
+  let pending = true;
+  const f = fixture({}, { beforeDispatch: request => !request.ticketReply || pending });
+  f.agent.status = 'running';
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal: { kind: 'approval', eventKey: 'approval:worker:ask', ticketId: 'ticket' } });
+  pending = false; f.agent.status = 'idle'; await f.inbox.settle('main');
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.state().requests[0].suppressed, true);
+});
+
+test('host approval binding survives queued restart and uses the actual owner thread instead of signal lookalikes', async () => {
+  const signal = { kind: 'approval', eventKey: 'approval:worker:official-id', ticketId: 'ticket',
+    sessionId: 'worker', approvalId: 'official-id', callId: 'call', actionId: 'action', assignmentId: 'assignment', runId: 'run',
+    ownerThreadId: 'forged-thread', approval: { actionId: 'FORGED_NESTED_ACTION' }, privateValue: 'PRIVATE' };
+  const first = fixture(); first.agent.status = 'running';
+  const queued = await first.inbox.enqueueTicketReply({ threadId: 'main', signal });
+  const restored = fixture(JSON.parse(JSON.stringify(first.state())));
+  await restored.inbox.recover(); await restored.inbox.settle('main');
+  const expected = { sessionId: 'worker', callId: 'call', approvalId: 'official-id', actionId: 'action',
+    ticketId: 'ticket', assignmentId: 'assignment', runId: 'run', ownerThreadId: 'main', eventKey: signal.eventKey };
+  assert.equal(restored.sent.length, 1);
+  assert.equal(restored.sent[0].id, queued.messageId);
+  assert.deepEqual(restored.sent[0].source.approval, expected);
+  assert.doesNotMatch(JSON.stringify(restored.sent[0].source), /FORGED|PRIVATE|forged-thread/);
+  await restored.finish({ kind: 'completed' });
+  await restored.inbox.enqueueTicketReply({ threadId: 'main', signal });
+  assert.equal(restored.sent.length, 1, 'restoring a reminder must not replay or create an approval');
+});
+
+test('queued human messages take priority over state notices, which stay out of the user inbox', async () => {
+  const f = fixture();
+  f.agent.status = 'running';
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal: ticketSignal });
+  await f.inbox.enqueue({ text: '先回答我的问题', requestId: 'human' });
+  assert.deepEqual((await f.inbox.state('main')).map(row => row.requestId), ['human']);
+  assert.equal(f.sent.length, 0);
+  f.agent.status = 'idle';
+  await f.inbox.settle('main');
+  assert.equal(f.sent[0].source.kind, 'user');
+  assert.equal(f.sent[0].content[0].text, '先回答我的问题');
+  await f.finish();
+  assert.equal(f.sent[1].source.kind, ticketReplySource);
+  assert.deepEqual(f.sent[1].source, { kind: ticketReplySource, replyKind: 'state', eventKey: ticketSignal.eventKey, ticketId: ticketSignal.ticketId });
+  assert.match(f.sent[1].content[0].text, /不是用户新指令/);
+  assert.match(f.sent[1].content[0].text, /本回合仅能使用 assistant_reply 或自然正文/);
+  assert.ok(f.sent[1].content[0].text.endsWith(JSON.stringify(ticketSignal)));
+  await f.finish();
+  assert.deepEqual((await f.inbox.state('main')).map(row => row.requestId), ['human']);
+});
+
+test('a state notice waits for the current human turn instead of stealing its response', async () => {
+  const f = fixture();
+  await f.inbox.enqueue({ text: '请先回答这个问题', requestId: 'human-active' });
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal: ticketSignal });
+  await f.inbox.settle('main');
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].source.requestId, 'human-active');
+  assert.equal(f.state().requests.find(row => row.ticketReply).status, 'queued');
+  await f.finish();
+  assert.equal(f.sent.length, 2);
+  assert.equal(f.sent[1].source.kind, ticketReplySource);
+  assert.equal(f.state().requests.find(row => row.requestId === 'human-active').status, 'processed');
+  await f.finish();
+});
+
+test('state notices retain one durable identity while refreshing queued facts and reject conflicting ownership', async () => {
+  const f = fixture();
+  f.agent.status = 'running';
+  const first = await f.inbox.enqueueTicketReply({ threadId: 'main', signal: ticketSignal });
+  const duplicate = await f.inbox.enqueueTicketReply({ threadId: 'main', signal: structuredClone(ticketSignal) });
+  assert.equal(first.messageId, duplicate.messageId);
+  assert.equal(f.state().requests.length, 1);
+  const refreshedSignal = { ...ticketSignal, title: '整理最新资料', status: 'waiting' };
+  const refreshed = await f.inbox.enqueueTicketReply({ threadId: 'main', signal: refreshedSignal });
+  assert.equal(refreshed.messageId, first.messageId);
+  assert.deepEqual(refreshed.ticketReply, refreshedSignal);
+  assert.ok(refreshed.message.content[0].text.endsWith(JSON.stringify(refreshedSignal)));
+  await assert.rejects(f.inbox.enqueueTicketReply({ threadId: 'main', signal: { ...ticketSignal, ticketId: 'other-ticket' } }), /回复标识冲突/);
+  await assert.rejects(f.inbox.enqueueTicketReply({ threadId: 'other', signal: ticketSignal }), /回复标识冲突/);
+  f.agent.status = 'idle';
+  await f.inbox.settle('main');
+  await f.finish();
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal: ticketSignal });
+  await f.inbox.settle('main');
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.state().requests[0].status, 'processed');
+  assert.deepEqual(await f.inbox.state('main'), []);
+});
+
+test('revalidation suppresses a stale queued notice without dispatching or exposing a user bubble', async () => {
+  const checked = [], f = fixture({}, { beforeDispatch: row => { checked.push(row.ticketReply); return false; } });
+  f.agent.status = 'running';
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal: ticketSignal });
+  f.agent.status = 'idle';
+  await f.inbox.settle('main');
+  assert.deepEqual(checked, [ticketSignal]);
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.state().requests[0].status, 'processed');
+  assert.equal(f.state().requests[0].suppressed, true);
+  assert.deepEqual(await f.inbox.state('main'), []);
+});
+
+test('recovery notices refresh queued inspection facts, yield to humans and keep one durable execution identity', async () => {
+  const f = fixture(); f.agent.status = 'running';
+  const signal = { kind: 'recovery', eventKey: 'recovery:a:2:entered', ticketId: 't', assignmentId: 'a', fence: 2,
+    instructionRevision: 1, source: { channel: 'desktop', sessionId: 'owner' }, phase: 'entered', attempts: 0, nextCheckAt: null };
+  const first = await f.inbox.enqueueTicketReply({ threadId: 'main', signal });
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal: { ...signal, attempts: 1, nextCheckAt: '2026-11-09T00:01:00Z' } });
+  await assert.rejects(f.inbox.enqueueTicketReply({ threadId: 'main', signal: { ...signal, fence: 3 } }), /冲突/);
+  await f.inbox.enqueue({ text: '先聊别的', requestId: 'human-priority' });
+  f.agent.status = 'idle'; await f.inbox.settle('main');
+  assert.equal(f.sent[0].source.kind, 'user'); await f.finish();
+  assert.equal(f.sent[1].id, first.messageId); assert.equal(f.sent[1].source.replyKind, 'recovery');
+  assert.match(f.sent[1].content[0].text, /"attempts":1/);
+  assert.deepEqual((await f.inbox.state('main')).map(row => row.requestId), ['human-priority']);
+});
+
+test('a delayed retry cannot replay a newer recovery expression that has already settled', async () => {
+  let unavailable = true, f;
+  f = fixture({}, { getAgent: () => unavailable ? undefined : f.agent, ensureSession: async () => {
+    if (unavailable) throw new Error('session startup unavailable');
+    return f.agent;
+  } });
+  const signal = { kind: 'recovery', eventKey: 'recovery:startup', ticketId: 't', phase: 'entered' };
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal }); await f.inbox.settle('main');
+  const original = structuredClone(f.state().requests[0]);
+  assert.equal(original.status, 'failed'); unavailable = false;
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal, retry: true, retryMessageId: original.messageId });
+  await f.inbox.settle('main'); await f.finish();
+  const restored = structuredClone(f.state().requests[0]);
+  assert.equal(restored.status, 'processed'); assert.notEqual(restored.messageId, original.messageId);
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal, retry: true, retryMessageId: original.messageId });
+  await f.inbox.settle('main');
+  assert.equal(f.sent.length, 1); assert.equal(f.state().requests[0].messageId, restored.messageId);
+  assert.equal(f.state().requests[0].attempt, 2);
 });

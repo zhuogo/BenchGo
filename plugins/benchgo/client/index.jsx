@@ -151,10 +151,19 @@ function mountBaseUi(ctx) {
   for (const [id, name] of [['plugins','plugins'], ['schedules','schedules']]) ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id, priority: -10, order: id === 'plugins' ? 0 : 10, label: () => id === 'plugins' ? '工具' : '自动化任务' }, ({ active }) => <UIIcon name={name} size={16} selected={active} />));
   const theme = createThemeSource(ctx);
   ctx.slots.inject('settings.launcher', () => ctx.slots.register({ name: 'settings.launcher', priority: -10, inject: () => ({ host: ctx, theme }) }, SettingsLauncher));
-  ctx.slots.inject('sidebar.workspaces', () => ctx.slots.register({ name: 'sidebar.workspaces', priority: -10, inject: () => ({ host: ctx, open, newSession }) }, Projects));
+  mountSidebarProjects(ctx, open, newSession);
 }
 
-function Projects({ host, open, newSession, expandSidebar, panelNavigation, wide = true }) {
+/** The custom sidebar owns its extension slot without changing official entries. */
+function mountSidebarProjects(ctx, open, newSession) {
+  return ctx.slots.inject('sidebar.workspaces', () => ctx.slots.register({
+    name: 'sidebar.workspaces', priority: -10,
+    children: { 'benchgo.sidebar.session.row.trailing': { kind: 'list', scope: 'root', inline: true } },
+    inject: () => ({ host: ctx, open, newSession }),
+  }, Projects));
+}
+
+function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavigation, wide = true }) {
   const activePanel = useSyncExternalStore(listener => host.layout.panelInfo.subscribe(listener), () => host.layout.panelInfo.getSnapshot().activePanelId);
   const modules = useSyncExternalStore(moduleSource.subscribe, moduleSource.getSnapshot);
   const harness = useSyncExternalStore(fn => host.sessions.list.subscribe(fn), () => host.sessions.list.getSnapshot());
@@ -209,9 +218,14 @@ function Projects({ host, open, newSession, expandSidebar, panelNavigation, wide
   const activeHarnessId = Object.keys(harness.byId).find(id => (harness.byId[id].retainedBy?.mainView ?? 0) > 0);
   const nativeFor = id => d.sessions.filter(s => s.ownerSessionId === id && (!s.parentId || s.harnessAdopted)).sort((a,b) => Number(b.updatedAt)-Number(a.updatedAt))[0];
   const matches = row => !filter || `${row.title} ${row.provider} ${row.model || ''}`.toLowerCase().includes(filter.toLowerCase());
+  const members = workspaceProjects.flatMap(p => p.sessionIds.map(id => ({ id, projectId: p.id })));
+  const accounted = new Set(members.map(member => member.id));
+  // Match the official Ungrouped bucket; Recent also presents these rows without
+  // attaching their immutable execution cwd to the default Workspace.
+  const ungrouped = harness.ids.filter(id => harness.byId[id] && !accounted.has(id)).map(id => ({ id, ungrouped: true }));
   const rows = [
     ...d.sessions.filter(s => (!harness.byId[s.ownerSessionId] || (s.parentId && !s.harnessAdopted)) && (s.title || ['running', 'waiting', 'connecting', 'failed'].includes(s.status)) && (showArchived ? s.archived : !s.archived)).map(s => ({ ...s, status: sidebarSessionStatus(undefined, statuses.get(s.id), s), native: true })),
-    ...workspaceProjects.flatMap(p => p.sessionIds.filter(id => harness.byId[id] && !harness.byId[id].blank && !(d.deletedHarnessIds ?? []).includes(id) && archivedIds.has(id) === showArchived).map(id => ({ id, archived: archivedIds.has(id), nativeId: nativeFor(id)?.id, projectId: p.id, title: harness.byId[id].displayTitle || harness.byId[id].title || '新对话', provider: nativeFor(id)?.provider ?? 'deepseek', model: nativeFor(id)?.model, status: sidebarSessionStatus(harness.byId[id], statuses.get(id), nativeFor(id)), updatedAt: harness.byId[id].updatedAt }))),
+    ...[...members, ...ungrouped].filter(({ id }) => harness.byId[id] && !harness.byId[id].blank && !(d.deletedHarnessIds ?? []).includes(id) && archivedIds.has(id) === showArchived).map(member => { const { id } = member; return { ...member, archived: archivedIds.has(id), nativeId: nativeFor(id)?.id, title: harness.byId[id].displayTitle || harness.byId[id].title || '新对话', provider: nativeFor(id)?.provider ?? 'deepseek', model: nativeFor(id)?.model, status: sidebarSessionStatus(harness.byId[id], statuses.get(id), nativeFor(id)), updatedAt: harness.byId[id].updatedAt }; }),
   ].filter(matches).sort((a, b) => Number(workspaces.pinnedSessionIds?.includes(b.id) ?? false) - Number(workspaces.pinnedSessionIds?.includes(a.id) ?? false)
     || (Number(b.updatedAt) || Date.parse(b.updatedAt) || 0) - (Number(a.updatedAt) || Date.parse(a.updatedAt) || 0));
   // Workspace activity includes collapsed projects and every live native delegate.
@@ -220,7 +234,8 @@ function Projects({ host, open, newSession, expandSidebar, panelNavigation, wide
     ...Object.values(harness.byId).filter(s => !archivedIds.has(s.id) && !(d.deletedHarnessIds ?? []).includes(s.id) && (statuses.get(s.id)?.pendingInteraction || (statuses.get(s.id)?.running ?? s.running)) && !nativeFor(s.id)).map(s => ({ ...s, provider: 'deepseek', status: statuses.get(s.id)?.pendingInteraction ? 'waiting' : 'running' })),
   ];
   const projects = projectWorkspaces(workspaceProjects);
-  const recents = recentRows(rows, workspaceProjects);
+  const recentIds = new Set(recentRows(rows, workspaceProjects).map(row => row.id));
+  const recents = rows.filter(row => row.ungrouped || recentIds.has(row.id));
   const recentActivity = workspaceActivity(workspaceProjects.find(p => p.isDefault), live);
   const currentActionSession = actionSession && (rows.find(session => session.id === actionSession.id) || actionSession);
   const forkAccess = host.get?.('remoteAccess')?.source('session', currentActionSession?.id || '', 'session/fork') || NO_FORK_ACCESS;
@@ -278,7 +293,7 @@ function Projects({ host, open, newSession, expandSidebar, panelNavigation, wide
   const row = s => {
     const selected = activePanel == null && isSidebarSessionSelected(s, activeHarnessId);
     return <div key={s.id} className={`cmd-session-row ${showArchived ? 'is-archived' : ''} ${selected ? 'is-selected' : ''}`}>
-    <button type="button" aria-label={wide ? undefined : `${names[s.provider]} · ${s.title || "对话"}`} className={`cmd-session ${liveStates.has(s.status) ? 'cmd-is-active' : ''} ${selected ? 'cmd-selected' : ''}`} aria-current={selected ? 'page' : undefined} onClick={() => { setActionSession(null); if(s.native) open(s.id).catch(e => setError(e.message)); else { update({ selected: null, projectId: s.projectId }); host.uiWorkspace.openSession(s.id); } }}><SessionIcon provider={s.provider} status={s.status} />{wide && <span onDoubleClick={event => { event.stopPropagation(); if (!s.native) setRenameTarget(s); }}>{s.title || names[s.provider]}</span>}</button>
+    <button type="button" aria-label={wide ? undefined : `${names[s.provider]} · ${s.title || "对话"}`} className={`cmd-session ${liveStates.has(s.status) ? 'cmd-is-active' : ''} ${selected ? 'cmd-selected' : ''}`} aria-current={selected ? 'page' : undefined} onClick={() => { setActionSession(null); if(s.native) open(s.id).catch(e => setError(e.message)); else { update({ selected: null, projectId: s.projectId }); host.uiWorkspace.openSession(s.id); } }}><SessionIcon provider={s.provider} status={s.status} />{wide && <span onDoubleClick={event => { event.stopPropagation(); if (!s.native) setRenameTarget(s); }}>{s.title || names[s.provider]}{!s.native && <small style={{ marginInlineStart: 6, color: 'var(--cmd-muted)' }}>{renderSlot('benchgo.sidebar.session.row.trailing', { sessionId: s.id })}</small>}</span>}</button>
     {wide && <div className="cmd-session-quick-actions">
       {!showArchived && <Hint label={workspaces.pinnedSessionIds?.includes(s.id) ? '取消置顶' : '置顶'}><button type="button" className="cmd-session-quick" aria-label={workspaces.pinnedSessionIds?.includes(s.id) ? '取消置顶' : '置顶会话'} onClick={event => { event.stopPropagation(); void togglePin(s); }}>{workspaces.pinnedSessionIds?.includes(s.id) ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />}</button></Hint>}
       <Hint label={showArchived ? '取消归档' : '归档'}><button type="button" className="cmd-session-quick" aria-label={showArchived ? '取消归档对话' : '归档对话'} disabled={busy} onClick={event => { event.stopPropagation(); void operate(s, 'archive'); }}><UIIcon name={showArchived ? 'unarchive' : 'archive'} size={14} /></button></Hint>
@@ -305,11 +320,11 @@ function Projects({ host, open, newSession, expandSidebar, panelNavigation, wide
     <ErrorLine message={d.error || error || sidebarCapabilityWarning(d.capabilities)} />
     <div id="cmd-project-section" className="cmd-section-body" data-open={!wide || sections.projects} inert={wide && !sections.projects ? '' : undefined}><div className="cmd-section-inner">
     {!projectsLoaded && wide && <p className="cmd-sidebar-empty">正在读取项目…</p>}
-    {projects.filter(p => !showArchived || rows.some(s => s.projectId === p.id || s.cwd === p.path)).map(p => {
+    {projects.filter(p => !showArchived || rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))).map(p => {
       const activity = workspaceActivity(p, live);
-      return <div className="cmd-project" key={p.id}><div className="cmd-project-name"><button aria-label={wide ? undefined : activity ? `${p.title}，${states[activity]}` : p.title} aria-expanded={!!expanded[p.id]} onClick={() => { if (!wide) expandSidebar?.(); setExpanded(v => ({ ...v, [p.id]: !wide || !v[p.id] })); }}><UIIcon name="folder" size={16} selected={!!expanded[p.id]} />{wide && <span>{p.title}</span>}{activity && <Activity status={activity} className="cmd-project-activity" />}{wide && <UIIcon name="chevronDown" className={expanded[p.id] ? 'cmd-project-chevron cmd-rotated' : 'cmd-project-chevron'} size={12} />}</button>{!showArchived && <Hint label="新聊天"><button className="cmd-project-new" onClick={() => newSession(p.id)} aria-label={`在 ${p.title} 新聊天`}><UIIcon name="plus" size={16} /></button></Hint>}{!showArchived && wide && !p.isDefault && <Hint label="删除项目"><button type="button" className="cmd-project-delete" aria-label={`删除项目 ${p.title}`} onClick={() => setConfirmProjectDelete(p)}><UIIcon name="trash" size={14} /></button></Hint>}</div>{wide && (showArchived || expanded[p.id]) && <div className="cmd-project-children">{rows.filter(s => s.projectId === p.id || s.cwd === p.path).map(row)}{!rows.some(s => s.projectId === p.id || s.cwd === p.path) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档对话' : '还没有对话'}</p>}</div>}</div>;
+      return <div className="cmd-project" key={p.id}><div className="cmd-project-name"><button aria-label={wide ? undefined : activity ? `${p.title}，${states[activity]}` : p.title} aria-expanded={!!expanded[p.id]} onClick={() => { if (!wide) expandSidebar?.(); setExpanded(v => ({ ...v, [p.id]: !wide || !v[p.id] })); }}><UIIcon name="folder" size={16} selected={!!expanded[p.id]} />{wide && <span>{p.title}</span>}{activity && <Activity status={activity} className="cmd-project-activity" />}{wide && <UIIcon name="chevronDown" className={expanded[p.id] ? 'cmd-project-chevron cmd-rotated' : 'cmd-project-chevron'} size={12} />}</button>{!showArchived && <Hint label="新聊天"><button className="cmd-project-new" onClick={() => newSession(p.id)} aria-label={`在 ${p.title} 新聊天`}><UIIcon name="plus" size={16} /></button></Hint>}{!showArchived && wide && !p.isDefault && <Hint label="删除项目"><button type="button" className="cmd-project-delete" aria-label={`删除项目 ${p.title}`} onClick={() => setConfirmProjectDelete(p)}><UIIcon name="trash" size={14} /></button></Hint>}</div>{wide && (showArchived || expanded[p.id]) && <div className="cmd-project-children">{rows.filter(s => s.projectId === p.id || (p.path && s.cwd === p.path)).map(row)}{!rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path)) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档对话' : '还没有对话'}</p>}</div>}</div>;
     })}
-    {wide && projectsLoaded && !(showArchived ? projects.some(p => rows.some(s => s.projectId === p.id || s.cwd === p.path)) : projects.length) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档项目' : '暂无项目'}</p>}
+    {wide && projectsLoaded && !(showArchived ? projects.some(p => rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))) : projects.length) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档项目' : '暂无项目'}</p>}
     </div></div>
     <div className="cmd-section-title cmd-recent-title">{wide && <button type="button" className="cmd-section-toggle" aria-expanded={sections.recent} aria-controls="cmd-recent-section" onClick={() => toggleSection('recent')}><span className="cmd-section-label">{showArchived ? '已归档最近' : '最近'}{!showArchived && recentActivity && <Activity status={recentActivity} />}</span><UIIcon name="chevronDown" size={12} /></button>}{!showArchived && <Hint label="新聊天"><button type="button" aria-label="最近新聊天" onClick={() => newSession()}><UIIcon name="plus" size={16} /></button></Hint>}</div>
     <div id="cmd-recent-section" className="cmd-section-body" data-open={!wide || sections.recent} inert={wide && !sections.recent ? '' : undefined}><div className="cmd-section-inner"><div className="cmd-recents" data-transition={archivePhase}>{wide && recents.map(row)}{wide && d.loaded && !recents.length && (filter || showArchived) && <p className="cmd-sidebar-empty">{filter ? '没有找到对话' : '暂无归档对话'}</p>}</div></div></div>

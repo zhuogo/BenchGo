@@ -36,7 +36,17 @@ async function fixture() {
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-files-navigation'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
-    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
+    loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text' }, plugins: [{ name: 'official-files-primitives-source', setup(build) {
+      // Isolated checkouts may lack generated official lib/. Exercise the same
+      // upstream components directly, without substituting or modifying them.
+      build.onResolve({ filter: /^@deepseek-ai\/dsh-client-ui-primitives$/ }, () => ({ path: 'files-primitives', namespace: 'official-source' }));
+      build.onLoad({ filter: /.*/, namespace: 'official-source' }, () => ({ loader: 'ts', resolveDir: root, contents: `
+        export { Tooltip } from './deepseek-harness/packages/client/ui-primitives/src/Tooltip.tsx';
+        export { Modal } from './deepseek-harness/packages/client/ui-primitives/src/Modal.tsx';
+        export { Menu } from './deepseek-harness/packages/client/ui-primitives/src/Menu.tsx';
+        export { IconDownloadOutlineRegular, IconCodeOutlineRegular, IconInspectOutlineRegular, ICON_SYMBOLS } from './deepseek-harness/packages/client/ui-primitives/src/icons/index.tsx';
+      ` }));
+    } }, sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;font:13px/1.5 Arial,sans-serif}.ba-root{height:100dvh!important;min-width:0!important}.ba-studio-body{box-sizing:border-box;height:100%;max-width:1100px;margin:auto!important}[data-theme=dark]{--dsw-alias-bg-base:#19191b;--dsw-alias-label-primary:#ededee;--dsw-alias-label-secondary:#a3a3a8;--ba-muted:#a3a3a8;--ba-line:#ffffff24;--ba-hover:#ffffff0c;--ba-surface:#ffffff08;color-scheme:dark;background:#19191b;color:#ededee}</style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text.replaceAll('</script', '<\\/script')}</script></body></html>`;
 }
 

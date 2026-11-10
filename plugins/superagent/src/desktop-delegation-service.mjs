@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { readAssessmentPolicy } from './assessment-policy.mjs';
-import { normalizeTicketTitle } from './ticket-title.mjs';
+import { assertSpecificTicketDescription, normalizeTicketTitle } from './ticket-title.mjs';
 import { configuredWorkModel, rejectModelOverride } from './work-role-policy.mjs';
+import { assessDesktopDelegationScope, assertDelegationScope, delegationExplicitReference, delegationScopeFailure, delegationScopeVersion, snapshotDelegationCapabilities } from './desktop-delegation-scope.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export function currentHumanInstruction(ctx, agent) {
@@ -21,10 +22,13 @@ const required = (value, name, max = 100000) => {
 };
 
 /** Local owner entry point. Authority comes from the mounted root Agent, never tool arguments. */
-export function createDesktopDelegationService({ ctx, store, database = store.orchestration, readPolicy = () => readAssessmentPolicy(store, ctx.workspaceRegistry) }) {
+export function createDesktopDelegationService({ ctx, store, database = store.orchestration,
+  readPolicy = () => readAssessmentPolicy(store, ctx.workspaceRegistry), readOnlyCapabilities = () => [], assessScope = assessDesktopDelegationScope }) {
   const pending = new Map();
-  async function admit(input, exec, { ownerAgent, threadId = 'main', budgetGoalId, goalLeaf } = {}, form) {
+  async function admit(input, exec, { ownerAgent, threadId = 'main', ownerScope, budgetGoalId, goalLeaf } = {}, form) {
     rejectModelOverride(input);
+    input = structuredClone(input);
+    ownerScope = structuredClone(ownerScope);
     if (!ownerAgent || exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可委派桌面工单');
     if (goalLeaf !== undefined) required(goalLeaf, '目标子项路径', 512);
     const sessionId = required(ownerAgent.id, '会话标识');
@@ -33,24 +37,32 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
     const duplicateOfTicketId = input.duplicateOfTicketId === undefined ? undefined : required(input.duplicateOfTicketId, '重复工单标识', 512);
     const target = required(input.text, '任务内容');
     const title = normalizeTicketTitle(input.title, target);
+    assertSpecificTicketDescription({ title: input.title ?? title, target });
     const acceptance = input.acceptance ?? '';
     if (typeof acceptance !== 'string' || acceptance.length > 100000) throw new Error('无效验收条件');
     const requestKey = JSON.stringify([sessionId, requestId]);
     const fingerprint = digest([projectId, target, acceptance, ...(input.title !== undefined ? [title] : []), ...(budgetGoalId ? [budgetGoalId] : []), ...(duplicateOfTicketId ? [duplicateOfTicketId] : [])]);
+    const instruction = structuredClone(form || currentHumanInstruction(ctx, ownerAgent));
+    const message = instruction?.message;
+    const instructionFingerprint = digest(instruction);
+    if (!message?.id) throw new Error('桌面委派缺少当前原始用户消息');
+    const source = { channel: 'desktop', sessionId, messageId: goalLeaf === undefined || goalLeaf === 'root' ? message.id : `${message.id}#goal:${goalLeaf}`, threadId };
     const prior = () => {
       const existing = database.desktopRequest(requestKey);
       if (existing && existing.fingerprint !== fingerprint) throw new Error('请求标识已用于不同任务');
+      if (existing && (existing.source?.sessionId !== sessionId || existing.source?.messageId !== source.messageId
+        || (existing.source?.threadId || 'main') !== threadId)) throw Object.assign(new Error('请求标识已用于其他用户消息或会话'), { code: 'IDEMPOTENCY_CONFLICT' });
       return existing?.ticket;
     };
     const existing = prior();
     if (existing) return existing;
-    if (pending.has(requestKey)) { await pending.get(requestKey); return prior(); }
+    const inflight = pending.get(requestKey);
+    if (inflight) {
+      if (inflight.fingerprint !== fingerprint || inflight.instructionFingerprint !== instructionFingerprint) throw Object.assign(new Error('请求标识已用于不同用户指令或拟派任务'), { code: 'IDEMPOTENCY_CONFLICT' });
+      return inflight.promise;
+    }
     const run = (async () => {
       exec.signal?.throwIfAborted();
-      const instruction = form || currentHumanInstruction(ctx, ownerAgent);
-      const message = instruction?.message;
-      const instructionFingerprint = digest(instruction);
-      if (!message?.id) throw new Error('桌面委派缺少当前原始用户消息');
       const original = (message.content || []).filter(block => block.type === 'text').map(block => block.text || '').join('\n');
       if (!original.trim()) throw new Error('桌面委派缺少原始用户文字指令');
       // The original requirements remain an authoritative part of the task
@@ -61,27 +73,64 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       const policy = structuredClone(await readPolicy());
       const project = projectId === undefined ? undefined : policy.projects.find(item => item.id === projectId);
       if (projectId !== undefined && !project) throw new Error('项目不存在');
+      // Direct desktop ingress still skips candidate Eval. Only a proposed NEW
+      // model-owned Ticket receives this bounded scope check, in the same tool call.
+      const { trigger } = database.ingest({ dedupeKey: `desktop-message:${digest([sessionId, source.messageId])}`, thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' });
+      let scopeCheck;
+      if (!form && !duplicateOfTicketId && !database.desktopTriggerTicket(trigger.id)) {
+        const capabilities = snapshotDelegationCapabilities(readOnlyCapabilities({ agent: ownerAgent, threadId }));
+        const explicitReference = delegationExplicitReference(database, instruction, { sessionId, threadId, ownerScope });
+        const routingHash = digest([policy.model, policy.models, policy.routingConfig]);
+        const binding = { version: delegationScopeVersion, sessionId, threadId, messageId: source.messageId, humanMessageId: message.id,
+          turn: instruction.turn, requestId, payloadHash: fingerprint, instructionHash: instructionFingerprint,
+          policyVersion: policy.desktopVersion, routingHash, capabilitiesHash: digest(capabilities), referenceHash: digest(explicitReference) };
+        const bindingHash = digest(binding);
+        const requestHash = digest([sessionId, threadId, message.id, instructionFingerprint, fingerprint]);
+        scopeCheck = database.desktopScopeCheck(requestKey, bindingHash, requestHash);
+        if (!scopeCheck || scopeCheck.failureCode) {
+          let result;
+          try {
+            result = await assessScope({ llm: ctx.llm, policy, signal: exec.signal,
+              input: { currentRequest: { messageId: message.id, text: original }, explicitReference,
+                proposal: { title, target, acceptance: taskAcceptance, ...(projectId ? { projectId } : {}) }, capabilities } });
+          } catch (error) { result = delegationScopeFailure(error); }
+          scopeCheck = database.recordDesktopScopeCheck({ requestKey, bindingHash, requestHash, triggerId: trigger.id, binding, ...result });
+        }
+        exec.signal?.throwIfAborted();
+        const checkedPolicy = await readPolicy();
+        if (digest(currentHumanInstruction(ctx, ownerAgent)) !== instructionFingerprint
+          || checkedPolicy.desktopVersion !== policy.desktopVersion
+          || digest([checkedPolicy.model, checkedPolicy.models, checkedPolicy.routingConfig]) !== routingHash
+          || digest(snapshotDelegationCapabilities(readOnlyCapabilities({ agent: ownerAgent, threadId }))) !== binding.capabilitiesHash
+          || digest(delegationExplicitReference(database, instruction, { sessionId, threadId, ownerScope })) !== binding.referenceHash) {
+          throw Object.assign(new Error('范围校验期间当前指令、引用、能力或策略已变化；未创建工单'), { code: 'DELEGATION_SCOPE_STALE' });
+        }
+        assertDelegationScope(scopeCheck.decision);
+      }
       const selectedModel = configuredWorkModel(policy);
       const { providerId, modelId } = selectedModel;
       const info = await ctx.llm.resolveModelInfo(providerId, modelId, exec.signal);
       if (info?.id !== modelId || info?.provider !== providerId) throw new Error('模型解析改变了显式标识，无法委派');
       exec.signal?.throwIfAborted();
       const current = await readPolicy();
+      exec.signal?.throwIfAborted();
       const latest = form || currentHumanInstruction(ctx, ownerAgent);
       if (!latest || digest(latest) !== instructionFingerprint) throw new Error('派工期间当前用户指令已变化，请重试');
       if (current.desktopVersion !== policy.desktopVersion || (project && !current.projects.some(item => item.id === projectId && item.path === project.path))) throw new Error('派工期间项目或授权规则已变化，请重试');
       if (digest(configuredWorkModel(current)) !== digest(selectedModel)) throw new Error('派工期间工作角色模型已变化，请重试');
-      // Each approved Goal leaf is its own Trigger over the same original instruction,
-      // so one Trigger still opens exactly one Ticket. Host-supplied, never a model argument.
-      const source = { channel: 'desktop', sessionId, messageId: goalLeaf === undefined || goalLeaf === 'root' ? message.id : `${message.id}#goal:${goalLeaf}`, threadId };
-      const { trigger } = database.ingest({ dedupeKey: `desktop-message:${digest([sessionId, source.messageId])}`, thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' });
+      if (scopeCheck && (digest([current.model, current.models, current.routingConfig]) !== scopeCheck.binding.routingHash
+        || digest(snapshotDelegationCapabilities(readOnlyCapabilities({ agent: ownerAgent, threadId }))) !== scopeCheck.binding.capabilitiesHash
+        || digest(delegationExplicitReference(database, instruction, { sessionId, threadId, ownerScope })) !== scopeCheck.binding.referenceHash)) {
+        throw Object.assign(new Error('派工前范围校验依据已变化；未创建工单'), { code: 'DELEGATION_SCOPE_STALE' });
+      }
       return database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, budgetGoalId, duplicateOfTicketId, model: selectedModel, mandate: {
         actorId: 'desktop-owner', source, instruction: original, policyVersion: policy.desktopVersion,
         target, acceptance: taskAcceptance,
+        ...(scopeCheck ? { scopeCheck: { requestId, bindingHash: scopeCheck.bindingHash } } : {}),
         admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval', ...(project ? { project: { id: project.id, path: project.path } } : {}),
       } });
     })();
-    pending.set(requestKey, run);
+    pending.set(requestKey, { fingerprint, instructionFingerprint, promise: run });
     try { return await run; } finally { pending.delete(requestKey); }
   }
   return {

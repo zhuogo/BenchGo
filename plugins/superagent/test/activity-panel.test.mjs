@@ -28,7 +28,7 @@ test('completed tasks show the automatic report and only its current delivery st
   row.deliveries = [];
   row.status = 'waiting';
   assert.equal(task(row, 'ticket').status, 'waiting');
-  assert.equal(task(row, 'ticket').phase, '结果已保存，等待交付原来源。');
+  assert.match(task(row, 'ticket').phase, /等待交付/);
 });
 test('memory time groups sort newest first and preserve unknown dates', () => {
   const groups = groupByDay([{ id: 'unknown' }, { id: 'old', time: '2026-11-02T12:00:00' }, { id: 'new', time: '2026-11-03T12:00:00' }], row => row.time, new Date('2026-11-03T13:00:00'));

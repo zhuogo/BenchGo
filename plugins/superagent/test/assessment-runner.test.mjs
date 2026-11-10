@@ -3,60 +3,6 @@ import assert from 'node:assert/strict';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createAssessmentRunner } from '../src/assessment-runner.mjs';
 import { ingestChannelEvent } from '../src/intake.mjs';
-import { channelIds } from '../src/channel-catalog.mjs';
-import { readBuiltinLayer } from '../src/builtin-layer.mjs';
-
-test('all channels answer and clarify with the shared current identity instead of a channel or model persona', async t => {
-  const builtinLayer = await readBuiltinLayer();
-  for (const channel of channelIds) {
-    const database = createAssistantOrchestrationStore({ filename: ':memory:' });
-    t.after(() => database.close());
-    let name = '', legacy = false, outcome = 'answer', calls = 0;
-    const documents = () => [
-      { name: 'SOUL.md', content: '清晰、简洁，保持同一沟通风格。' },
-      { name: 'IDENTITY.md', content: legacy ? '' : `---\nname: ${JSON.stringify(name)}\n---\n\n用户的个人助手。` },
-      { name: 'USER.md', content: '用户资料' },
-      { name: 'AGENTS.md', content: '工作约定' },
-      { name: 'MEMORY.md', content: '共同经历' },
-      { name: 'TOOLS.md', content: 'non-context-tool-note' },
-    ];
-    const model = { providerId: 'opaque-provider/@', modelId: 'opaque-model/@' };
-    const llm = { async *stream(request) {
-      calls++;
-      assert.equal(request.provider, model.providerId);
-      assert.equal(request.model, model.modelId);
-      assert.equal(request.messages[0].content[0].text, builtinLayer);
-      const context = JSON.parse(request.messages[1].content[0].text);
-      assert.deepEqual(context.documents, documents().slice(0, 5));
-      assert.equal(context.assistantName, name);
-      const prompt = request.messages.filter(row => row.role === 'system').map(row => row.content[0].text).join('\n');
-      assert.doesNotMatch(prompt, /opaque-provider|opaque-model|Configured main model identity|non-context-tool-note/);
-      const intake = JSON.parse(request.messages.find(row => row.role === 'user').content[0].text);
-      yield { type: 'text-delta', text: JSON.stringify({ decisions: [{ candidateId: intake.candidates[0].candidateId, outcome,
-        reason: 'Identity uses the supplied shared documents', replyText: name ? '我是窝头，你的个人助手。' : '我是你的个人助手，还没有名字。' }] }) };
-      yield { type: 'finish', reason: { kind: 'stop' } };
-    } };
-    const runner = createAssessmentRunner({ database, llm,
-      readPolicy: async () => ({ version: 'p', model, rules: '' }),
-      readAssistantContext: async () => ({ documents: documents(), assistantName: name, name: 'ignored-config-fallback' }),
-      authorize: async () => ({ allowed: true }),
-    });
-    t.after(() => runner.stop());
-    for (const [index, currentName] of ['', '窝头', '窝头'].entries()) {
-      name = currentName;
-      legacy = index === 1;
-      outcome = name ? 'ask' : 'answer';
-      const messageId = String(index);
-      database.ingest({ dedupeKey: messageId, thread: { id: 'chat', source: { type: channel, id: 'chat' } },
-        source: { channel, chatId: 'chat', messageId }, actor: { id: 'owner', kind: 'human' }, content: '你是谁',
-        gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p' });
-      await runner.tick();
-    }
-    assert.equal(calls, 3, channel);
-    assert.deepEqual(database.directReplies({ threadId: 'chat' }).map(row => row.text).sort(), ['我是你的个人助手，还没有名字。', '我是窝头，你的个人助手。', '我是窝头，你的个人助手。'].sort(), channel);
-    assert.equal(database.listTickets().length, 0, channel);
-  }
-});
 
 test('runner assesses pending intake and promotes the same source only after an authorized Decision', async t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });

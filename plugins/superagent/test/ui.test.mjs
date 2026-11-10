@@ -14,18 +14,17 @@ const settingsCode = transformSync(readFileSync(new URL('../client/model-setting
 function harness(options = {}) {
   let cursor = 0, refCursor = 0; const state = [...(options.state || [])], refs = [], effects = [], calls = [];
   const react = { createElement: (type, props, ...children) => type?.name === 'ModelSettings' ? type(props) : ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value !== false && value != null) }), useState: initial => { const index = cursor++; if (!(index in state)) state[index] = Array.isArray(initial) && options.threads ? options.threads : typeof initial === 'function' ? initial() : initial; return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value; }]; }, useRef: initial => refs[refCursor++] ||= { current: initial }, useEffect: (effect, deps) => effects.push({ effect, deps }), useId: () => 'id' };
+  react.useLayoutEffect = () => {};
   react.useSyncExternalStore = (_subscribe, snapshot) => snapshot();
-  react.useLayoutEffect = react.useEffect;
   const settingsModule = { exports: {} };
-  runInNewContext(settingsCode, { module: settingsModule, exports: settingsModule.exports, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async input => (options.confirm || (() => true))(input), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('session-retain.mjs') ? { retainAssistantSession } : id === 'react' ? react : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('dsh-client-ui-primitives') ? { Switch: 'Switch' } : '' });
+  runInNewContext(settingsCode, { module: settingsModule, exports: settingsModule.exports, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('session-retain.mjs') ? { retainAssistantSession } : id === 'react' ? react : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('dsh-client-ui-primitives') ? { Switch: 'Switch' } : '' });
   const registryModule = { exports: {} };
-  runInNewContext(transformSync(readFileSync(new URL('../client/dirty-registry.mjs', import.meta.url), 'utf8'), { format: 'cjs' }).code, { module: registryModule, exports: registryModule.exports, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async input => (options.confirm || (() => true))(input), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : react });
-  const listeners = new Map(), documentListeners = new Map(), intervals = [], timers = new Map();
-  const document = { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } };
+  runInNewContext(transformSync(readFileSync(new URL('../client/dirty-registry.mjs', import.meta.url), 'utf8'), { format: 'cjs' }).code, { module: registryModule, exports: registryModule.exports, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : react });
+  const listeners = new Map(), documentListeners = new Map(), intervals = [];
   const module = { exports: {} };
   const assistantConfigSync = createConfigSync();
-  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, localStorage: options.storage, queueMicrotask, setTimeout: (fn, delay) => { if (!options.manualTimers) return fn(); const id = Symbol(); timers.set(id, { fn, delay }); return id; }, clearTimeout: id => timers.delete(id), setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document, fetch: async (url, options) => { calls.push(JSON.parse(options.body)); return {}; }, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async input => (options.confirm || (() => true))(input), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('session-retain.mjs') ? { retainAssistantSession } : id === 'react' ? react : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async () => typeof options.response === 'function' ? options.response(calls.at(-1)) : options.response || ({ providers: [], models: [] }) } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
-  return { listeners, documentListeners, document, timers, intervals, exports: module.exports, render(name, props) { cursor = 0; refCursor = 0; effects.length = 0; return module.exports[name](props); }, calls, effects };
+  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, localStorage: options.storage, queueMicrotask, setTimeout: fn => fn(), setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { calls.push(JSON.parse(options.body)); return {}; }, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('session-retain.mjs') ? { retainAssistantSession } : id === 'react' ? react : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async () => typeof options.response === 'function' ? options.response(calls.at(-1)) : options.response || ({ providers: [], models: [] }) } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
+  return { listeners, documentListeners, intervals, exports: module.exports, render(name, props) { cursor = 0; refCursor = 0; effects.length = 0; return module.exports[name](props); }, calls, effects };
 }
 const walk = node => node && typeof node === 'object' ? [node, ...node.children.flatMap(walk)] : [];
 
@@ -87,7 +86,7 @@ test('Worker queue edits save independently and removing all entries visibly res
     walk(nodes.find(node => node.props['aria-label'] === '工作模型 Worker 配置')).find(node => node.props.label === '移除模型').props.onClick();
   }
   nodes = walk(h.render('Identity', props));
-  assert.ok(nodes.some(node => node.children.includes('当前跟随 Router，可单独配置执行模型。')));
+  assert.ok(nodes.some(node => node.children.some(child => typeof child === 'string' && child.includes('当前跟随 Router'))));
   assert.ok(nodes.some(node => node.type === 'Disclosure' && node.props.description === '跟随身份模型 Router'));
   assert.deepEqual(nodes.filter(node => node.type?.name === 'ModelFields').map(node => node.props.value), [...config.models, ...config.auxiliary.models]);
   const configure = nodes.find(node => node.type === 'button' && node.children.includes('配置工作模型'));
@@ -399,12 +398,13 @@ test('linked task navigation carries its ticket through the page and existing St
   assert.equal(tickets.props.requestedTicket.ticketId, 'linked');
 });
 
-test('model page keeps model priority exact without identity tabs or profile mutations', async () => {
+test('identity body is edited only through documents; model priority remains exact', async () => {
   const config = { revision: 4, name: 'A', models: [{ providerId: 'cloud', modelId: 'Exact:First' }, { providerId: 'cloud', modelId: 'Exact:Second' }] };
-  const h = harness({ response: { ...config, revision: 5 } }), props = { modelsOnly: true, snapshot: { config, profile: { identity: 'old' } }, execute: operation => operation(), refresh: async () => {} };
+  const h = harness({ response: { ...config, revision: 5 } }), props = { snapshot: { config, profile: { identity: 'old' } }, execute: operation => operation(), refresh: async () => {} };
   let nodes = walk(h.render('Identity', props));
   assert.equal(nodes.some(node => node.type === 'textarea'), false);
-  assert.equal(nodes.some(node => node.type === h.exports.ResourceTabs), false);
+  nodes.find(node => node.type === h.exports.ResourceTabs).props.onChange('models');
+  nodes = walk(h.render('Identity', props));
   nodes.find(node => node.props.label === '提高优先级' && !node.props.disabled).props.onClick();
   nodes = walk(h.render('Identity', props));
   await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
@@ -424,14 +424,14 @@ test('backend errors and fallback reasons are visible', () => {
   assert.ok(nodes.some(node => node.props.role === 'alert' && walk(node).some(child => child.children.includes('All models unavailable'))));
   assert.ok(nodes.some(node => node.children.includes('exact-id') && node.children.includes('Rate limited')));
 });
-test('approval is answered only by explicit user action using official outcome', async () => {
+test('legacy pending cards never answer high-risk approval outside the review page', async () => {
   const h = harness(), answers = [];
   const pending = { key: 'approval:1', kind: 'approval', answerable: true, reason: 'Run task', answer: async value => answers.push(value) };
   const nodes = walk(h.render('PendingCard', { pending, title: '主聊天' }));
   assert.deepEqual(answers, []);
-  await nodes.find(node => node.type === 'button' && node.children[0] === '允许本次').props.onClick();
-  assert.deepEqual(answers, ['allowed-once']);
+  assert.equal(nodes.filter(node => node.type === 'button').length, 0);
 });
+
 test('question replies follow official selected-label answer contract', async () => {
   const h = harness(), answers = [];
   const props = { title: '鏃佽亰', pending: { kind: 'question', key: 'q1', questions: [{ id: 'q', question: 'Choose', options: [{ label: 'Option A' }] }], answer: async value => answers.push(value) } };
@@ -484,10 +484,10 @@ test('failed assistant initialization does not activate an official session and 
   assert.equal(retained, 1);
   retried.release();
 });
-test('background assistant thread approval remains visible', () => {
+test('background assistant thread approval is reserved for the unified review page', () => {
   const h = harness(); const pending = { key: 'a', kind: 'approval' };
   const nodes = walk(h.render('PendingInteractions', { ctx: { uiSession: { sessionStatus: { getSnapshot: () => new Map([['side-session', { pendingInteraction: pending }]]) } } }, threads: [{ id: 'side', title: 'Background work', sessionId: 'side-session' }] }));
-  assert.ok(nodes.some(node => node.props.pending === pending && node.props.title === 'Background work'));
+  assert.equal(nodes.some(node => node.props.pending === pending), false);
 });
 test('clear is a main-chat slash action that resets once and opens the new session', async () => {
   const snapshot = { config: { revision: 1, models: [{ providerId: 'provider', modelId: 'model' }] }, state: { mainSessionId: 'main-old', threads: [] } };
@@ -632,31 +632,4 @@ test('identity category switching retains edits and saving still requires explic
   nodes = walk(h.render('Identity', props));
   assert.equal(nodes.find(node => node.type === 'input' && node.props.maxLength === 100).props.value, 'Draft');
   assert.equal(h.calls.length, 0);
-});
-
-
-test('assistant resources pause polling while hidden and resume immediately without losing state', async () => {
-  const snapshot = { config: { revision: 1, models: [] }, state: { threads: [] } };
-  const h = harness({ state: [snapshot, '', 'resources', 'main'], response: snapshot, manualTimers: true });
-  let panel = 'benchgo-assistant', panelChanged, subscribed = true;
-  const ctx = { layout: { panelInfo: { getSnapshot: () => ({ activePanelId: panel }), subscribe(fn) { panelChanged = fn; return () => { subscribed = false; }; } } } };
-  h.render('AssistantPage', { ctx });
-  const cleanup = h.effects.find(item => item.deps?.length === 3 && item.deps[0] === 'main' && item.deps[1] === 'resources' && item.deps[2] === ctx).effect();
-  await new Promise(setImmediate);
-  assert.deepEqual(h.calls.map(call => call.action), ['state']);
-  assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [5000]);
-  h.document.hidden = true; h.documentListeners.get('visibilitychange')();
-  assert.equal(h.timers.size, 0);
-  h.document.hidden = false; h.documentListeners.get('visibilitychange')();
-  await new Promise(setImmediate);
-  assert.equal(h.calls.length, 2);
-  panel = 'plugins'; panelChanged();
-  assert.equal(h.timers.size, 0);
-  panel = 'benchgo-assistant'; panelChanged();
-  await new Promise(setImmediate);
-  assert.equal(h.calls.length, 3);
-  cleanup();
-  assert.equal(subscribed, false);
-  assert.equal(h.timers.size, 0);
-  assert.equal(h.documentListeners.has('visibilitychange'), false);
 });

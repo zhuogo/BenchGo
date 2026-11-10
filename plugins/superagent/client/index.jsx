@@ -18,6 +18,8 @@ import { petDesignIntent, petActionForSession, petExpressionForAction } from './
 import { IdentityCardEditor } from './identity-card-editor.jsx';
 import { assistantConfigSync, saveConfigPatch } from './config-sync.mjs';
 import { AssistantConversation, assistantConversationChildren, mountAssistantConversation } from './conversation.jsx';
+import { mountSessionRoleControls } from './session-role-controls.jsx';
+import { ApprovalReview, reviewApprovalChildren, mountApprovalReview } from './approval-review.jsx';
 import { AssistantDocuments } from './documents.jsx';
 import { Artifacts } from './artifacts.jsx';
 import { SystemFiles } from './system-files.jsx';
@@ -29,8 +31,10 @@ import { Goals } from './goals.jsx';
 import { Tickets } from './tickets.jsx';
 import { ActionPermissions } from './action-permissions.jsx';
 import { registerExecutionSessionRows, openExecutionSession } from './execution-session.jsx';
+import { registerExecutionSessionDiscovery } from './execution-session-navigation.mjs';
 import { registerChannelSessionRows } from './channel-session.jsx';
 import { ActivityPanel, ActivityProvider } from './activity-panel.jsx';
+import { mountAssistantActivity } from './activity-remote.jsx';
 import { Evaluations } from './evaluations.jsx';
 import { useDirtyRegistry } from './dirty-registry.mjs';
 import { Connections } from './connections.jsx';
@@ -183,7 +187,7 @@ function RetainedPane({ active, children }) {
   if (active) visited.current = true;
   return visited.current ? <div style={{ display: active ? 'contents' : 'none' }} hidden={!active}>{children}</div> : null;
 }
-function Studio({ snapshot, ctx, refresh, threadId, initialSection = 'identity', initialIdentityTab = 'info', requestedTab, requestedTicket, active = true }) {
+function Studio({ snapshot, ctx, refresh, threadId, SessionProvider, renderSlot, initialSection = 'identity', initialIdentityTab = 'info', requestedTab, requestedTicket, active = true }) {
   const [confirm, confirmation] = useConfirmation();
   const [section, setSection] = useState(initialIdentityTab === 'models' ? 'models' : initialSection), [dirtySections, setDirtySections] = useState([]), [taskTab, setTaskTab] = useState('tasks');
   const [systemPreview, setSystemPreview] = useState(false);
@@ -217,6 +221,7 @@ function Studio({ snapshot, ctx, refresh, threadId, initialSection = 'identity',
   useEffect(() => {
     if (['tasks', 'memory'].includes(requestedTab)) setSection(requestedTab);
     if (requestedTab === 'goals') { setSection('tasks'); setTaskTab('goals'); setCreatingGoal(false); }
+    if (requestedTab === 'approvals') { setSection('tasks'); setTaskTab('approvals'); setCreatingGoal(false); }
     if (requestedTab === 'models') setSection('models');
     if (requestedTab === 'pet') setSection('identity');
   }, [requestedTab]);
@@ -245,7 +250,7 @@ function Studio({ snapshot, ctx, refresh, threadId, initialSection = 'identity',
     identity: '设定名字与形象，让助手更懂你的工作方式。',
     models: '设置身份、工作与辅助模型，按优先顺序调用。',
     documents: '整理关于你和助手的档案，作为每次协作的共同背景。',
-    tasks: '跟进工单、持续目标与评估，掌握每一步进展。',
+    tasks: '跟进工单与持续目标，在审核中集中处理待授权操作。',
     memory: '留下值得记住的偏好、决定与经验。',
     connections: '把助手接入常用平台，在熟悉的地方继续对话。',
     'system-files': '浏览助手的运行文件与目录，查看原始记录。',
@@ -282,7 +287,7 @@ function Studio({ snapshot, ctx, refresh, threadId, initialSection = 'identity',
     <div hidden={section !== 'identity'} style={section !== 'identity' ? { display: 'none' } : undefined}>{(section === 'identity' || dirtySections.includes('identity')) && <Identity snapshot={snapshot} refresh={refresh} onDirtyChange={dirtyEditor('identity')} initialTab={initialIdentityTab === 'models' ? 'info' : initialIdentityTab} requestedTab={requestedTab} onDesign={() => { petDesignIntent.request(threadId); openAssistantThread(ctx, threadId); }} />}</div>
     <div hidden={section !== 'models'} style={section !== 'models' ? { display: 'none' } : undefined}>{(section === 'models' || dirtySections.includes('models')) && <Identity modelsOnly snapshot={snapshot} refresh={refresh} onDirtyChange={dirtyEditor('models')} />}</div>
     <div hidden={section !== 'documents'} style={section !== 'documents' ? { display: 'none' } : undefined}>{(section === 'documents' || dirtySections.includes('documents')) && <AssistantDocuments api={api} refresh={refresh} onDirtyChange={dirtyEditor('documents')} />}</div>
-    <div hidden={section !== 'tasks'} style={section !== 'tasks' ? { display: 'none' } : undefined}>{(section === 'tasks' || dirtySections.includes('tasks')) && <section className="ba-group"><ResourceTabs tabs={[["tickets", "工单"], ["goals", "持续目标"], ["evaluations", "待处置评估"]]} value={taskTab === 'tasks' ? 'tickets' : taskTab} onChange={async next => { if (next !== taskTab && (!dirtySections.includes('tasks') || await confirm({ title: '放弃未保存的目标？', description: '切换分类会放弃未保存的目标。', confirmLabel: '放弃并切换', cancelLabel: '继续编辑', destructive: true }))) { setCreatingGoal(false); setTaskTab(next === 'tickets' ? 'tasks' : next); } }} label="工作分类" id={taskTabsId} /><div id={taskTabsId + '-panel'} role="tabpanel" aria-labelledby={taskTabsId + '-' + (taskTab === 'tasks' ? 'tickets' : taskTab)}>{taskTab === 'tasks' ? <Tickets api={api} onOpenExecution={execution => openExecutionSession(ctx, execution)} onSchedule={() => ctx.layout.selectPanel('schedules')} requestedTicket={requestedTicket} onDirtyChange={dirtyEditor('tasks')} onCreateGoal={() => { setCreatingGoal(true); setTaskTab('goals'); }} /> : taskTab === 'goals' ? <Goals api={api} refresh={refresh} onDirtyChange={dirtyEditor('tasks')} initialCreating={creatingGoal} onViewTickets={() => { setCreatingGoal(false); setTaskTab('tasks'); }} /> : <Evaluations api={api} onDirtyChange={dirtyEditor('tasks')} />}</div></section>}</div>
+    <div hidden={section !== 'tasks'} style={section !== 'tasks' ? { display: 'none' } : undefined}>{(section === 'tasks' || dirtySections.includes('tasks')) && <section className="ba-group"><ResourceTabs tabs={[["tickets", "工单"], ["approvals", "审核"], ["goals", "持续目标"], ["evaluations", "待处置评估"]]} value={taskTab === 'tasks' ? 'tickets' : taskTab} onChange={async next => { if (next !== taskTab && (!dirtySections.includes('tasks') || await confirm({ title: '放弃未保存的目标？', description: '切换分类会放弃未保存的目标。', confirmLabel: '放弃并切换', cancelLabel: '继续编辑', destructive: true }))) { setCreatingGoal(false); setTaskTab(next === 'tickets' ? 'tasks' : next); } }} label="工作分类" id={taskTabsId} /><div id={taskTabsId + '-panel'} role="tabpanel" aria-labelledby={taskTabsId + '-' + (taskTab === 'tasks' ? 'tickets' : taskTab)}>{taskTab === 'tasks' ? <Tickets api={api} onOpenExecution={execution => openExecutionSession(ctx, execution)} onSchedule={() => ctx.layout.selectPanel('schedules')} requestedTicket={requestedTicket} onDirtyChange={dirtyEditor('tasks')} onCreateGoal={() => { setCreatingGoal(true); setTaskTab('goals'); }} /> : taskTab === 'approvals' ? (visible ? <ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} onOpenReminder={id => openAssistantThread(ctx, id)} /> : null) : taskTab === 'goals' ? <Goals api={api} refresh={refresh} onDirtyChange={dirtyEditor('tasks')} initialCreating={creatingGoal} onViewTickets={() => { setCreatingGoal(false); setTaskTab('tasks'); }} /> : <Evaluations api={api} onDirtyChange={dirtyEditor('tasks')} />}</div></section>}</div>
     <div hidden={section !== 'memory'} style={section !== 'memory' ? { display: 'none' } : undefined}>{(section === 'memory' || dirtySections.includes('memory')) && <MemoryPage api={api} refresh={refresh} onDirtyChange={dirtyEditor('memory')} entries={snapshot.memories || []} threadId={threadId} />}</div>
     <div hidden={section !== 'artifacts'} style={section !== 'artifacts' ? { display: 'none' } : undefined}>{(section === 'artifacts' || dirtySections.includes('artifacts')) && <Artifacts api={api} />}</div>
     <div hidden={section !== 'connections'} style={section !== 'connections' ? { display: 'none' } : undefined}>{(section === 'connections' || dirtySections.includes('connections')) && <Connections api={api} active={visible && section === 'connections'} onDirtyChange={dirtyEditor('connections')} />}</div>
@@ -327,10 +332,9 @@ function PendingCard({ pending, title }) {
     if (busy) return; setBusy(true); setError('');
     try { await pending.answer(value); } catch (cause) { setError(cause.message); setBusy(false); }
   }
-  const isApproval = pending.kind === 'approval';
   const questions = pending.questions || [];
   const ready = questions.every(question => answers[question.id]?.selected?.length || answers[question.id]?.custom?.trim());
-  return <section className="ba-pending" aria-label="等待你的决定"><strong>{title} · {isApproval ? '需要授权' : '需要回答'}</strong>{isApproval ? <><p>{pending.reason || pending.displayReason?.zh || pending.displayReason?.en || pending.toolName}</p><div className="ba-row-actions"><Button variant="ghost" disabled={busy || pending.answerable === false} onClick={() => respond('rejected')}>拒绝</Button><Button variant="ghost" disabled={busy || pending.answerable === false} onClick={() => respond('allowed-once')}>允许本次</Button></div></> : ['question', 'plan-review'].includes(pending.kind) ? <>{questions.map(question => <fieldset key={question.id}><legend>{question.question}</legend>{question.detail && <p>{question.detail}</p>}{(question.options || []).map(option => <label className="ba-checkbox" key={option.label}><input type={question.multiSelect ? 'checkbox' : 'radio'} name={`${pending.key}-${question.id}`} checked={(answers[question.id]?.selected || []).includes(option.label)} onChange={event => { pending.engage?.(); const prior = answers[question.id]?.selected || []; const selected = question.multiSelect ? event.target.checked ? [...prior, option.label] : prior.filter(label => label !== option.label) : [option.label]; setAnswers({ ...answers, [question.id]: { ...answers[question.id], selected } }); }} />{option.label}{option.description && <small>{option.description}</small>}</label>)}<textarea aria-label={`${question.question} 补充回答`} rows={2} value={answers[question.id]?.custom || ''} onChange={event => { pending.engage?.(); setAnswers({ ...answers, [question.id]: { ...answers[question.id], custom: event.target.value } }); }} /></fieldset>)}<Button variant="ghost" disabled={busy || !ready} onClick={() => respond({ answers: questions.map(question => ({ id: question.id, selected: answers[question.id]?.selected || [], ...(answers[question.id]?.custom ? { custom: answers[question.id].custom } : {}) })) })}>提交回答</Button></> : <p>此交互暂不支持，请在原会话中处理。</p>}{error && <p role="alert">{error}</p>}</section>;
+  return <section className="ba-pending" aria-label="等待你的决定"><strong>{title} · 需要回答</strong>{['question', 'plan-review'].includes(pending.kind) ? <>{questions.map(question => <fieldset key={question.id}><legend>{question.question}</legend>{question.detail && <p>{question.detail}</p>}{(question.options || []).map(option => <label className="ba-checkbox" key={option.label}><input type={question.multiSelect ? 'checkbox' : 'radio'} name={`${pending.key}-${question.id}`} checked={(answers[question.id]?.selected || []).includes(option.label)} onChange={event => { pending.engage?.(); const prior = answers[question.id]?.selected || []; const selected = question.multiSelect ? event.target.checked ? [...prior, option.label] : prior.filter(label => label !== option.label) : [option.label]; setAnswers({ ...answers, [question.id]: { ...answers[question.id], selected } }); }} />{option.label}{option.description && <small>{option.description}</small>}</label>)}<textarea aria-label={`${question.question} 补充回答`} rows={2} value={answers[question.id]?.custom || ''} onChange={event => { pending.engage?.(); setAnswers({ ...answers, [question.id]: { ...answers[question.id], custom: event.target.value } }); }} /></fieldset>)}<Button variant="ghost" disabled={busy || !ready} onClick={() => respond({ answers: questions.map(question => ({ id: question.id, selected: answers[question.id]?.selected || [], ...(answers[question.id]?.custom ? { custom: answers[question.id].custom } : {}) })) })}>提交回答</Button></> : <p>此交互暂不支持，请在原会话中处理。</p>}{error && <p role="alert">{error}</p>}</section>;
 }
 const EMPTY_STATUSES = new Map();
 const EMPTY_SESSIONS = { byId: {} };
@@ -339,7 +343,7 @@ function PendingInteractions({ ctx, threads, currentSessionId }) {
   const statuses = useSyncExternalStore(listener => source?.subscribe(listener) || (() => {}), () => source?.getSnapshot() || EMPTY_STATUSES);
   return <div className="ba-pending-list">{threads.filter(thread => thread.sessionId !== currentSessionId).map(thread => {
     const pending = statuses.get(thread.sessionId)?.pendingInteraction;
-    return pending ? <PendingCard key={pending.key} pending={pending} title={thread.id === 'main' ? '主聊天' : thread.title || '旁聊'} /> : null;
+    return pending && pending.kind !== 'approval' ? <PendingCard key={pending.key} pending={pending} title={thread.id === 'main' ? '主聊天' : thread.title || '旁聊'} /> : null;
   })}</div>;
 }
 function UIIcon({ name, ...props }) {
@@ -558,18 +562,23 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
   const threads = snapshot?.state?.threads || [];
   const selected = threads.find(thread => thread.id === threadId);
   const view = tab === 'chat' ? 'chat' : 'studio';
-  return <ActivityProvider><div className="ba-root"><main className="ba-main">{error && snapshot && <div className="ba-error" role="alert"><span>{error}</span><Button variant="ghost" type="button" onClick={retryLoad}>重试加载</Button><IconButton icon="close" label="关闭错误" onClick={() => setError('')} /></div>}{snapshot && <PendingInteractions ctx={ctx} currentSessionId={tab === 'chat' ? history.sessionId : undefined} threads={[...(snapshot.state.mainSessionId && !threads.some(thread => thread.id === 'main') ? [{ id: 'main', title: '主聊天', sessionId: snapshot.state.mainSessionId }] : []), ...threads.filter(thread => thread.sessionId), ...(!threads.some(thread => thread.sessionId === history.sessionId) && history.sessionId ? [{ id: threadId, title: selected?.title, sessionId: history.sessionId }] : [])]} />}{!snapshot ? <div className="ba-resource-initial"><ResourceState kind={error ? 'error' : 'loading'} title={error ? '暂时无法加载助手' : '正在准备助手'} description={error || '正在读取配置与资源，请稍候。'} onAction={error ? retryLoad : undefined} /></div> : <><RetainedPane active={view === 'studio'}><Studio active={view === 'studio'} requestedTab={tab} requestedTicket={requestedTicket} initialSection={['tasks', 'memory'].includes(tab) ? tab : 'identity'} initialIdentityTab={['models', 'pet'].includes(tab) ? tab : 'info'} snapshot={snapshot} ctx={ctx} refresh={refresh} threadId={threadId} /></RetainedPane>{view === 'chat' && <>{!snapshot.config.models?.length && <ModelSetupNotice onOpen={() => { selectedAssistantTab = 'models'; setTab('models'); }} />}<HistoryNotice history={history} threadId={threadId} onClear={clearMain} />{history.sessionId ? <AssistantConversation onOpenExecution={execution => openExecutionSession(ctx, execution)} key={threadId} ctx={ctx} sessionId={history.sessionId} threadId={threadId} history={history} onLoadEarlier={loadEarlier} onRefresh={() => refreshHistory(threadId)} SessionProvider={SessionProvider} renderSlot={renderSlot} api={api} assistantName={snapshot.config.name} assistantConfig={snapshot.config} petExpression={snapshot.petExpression} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} /> : <Loading label={`正在打开${threadId === 'main' ? '主聊天' : '旁聊'}`} />}<Images images={history.images} /></>}</>}</main>{snapshot && tab === 'chat' && <ActivityPanel api={api} assistantConfig={snapshot.config} ctx={ctx} reviewThreads={[...(snapshot.state.mainSessionId && !threads.some(thread => thread.id === 'main') ? [{ id: 'main', title: '主聊天', sessionId: snapshot.state.mainSessionId }] : []), ...threads.filter(thread => thread.sessionId)]} onOpenReview={thread => openAssistantThread(ctx, thread.id)} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} />}</div></ActivityProvider>;
+  return <ActivityProvider><div className="ba-root"><main className="ba-main">{error && snapshot && <div className="ba-error" role="alert"><span>{error}</span><Button variant="ghost" type="button" onClick={retryLoad}>重试加载</Button><IconButton icon="close" label="关闭错误" onClick={() => setError('')} /></div>}{snapshot && <PendingInteractions ctx={ctx} currentSessionId={tab === 'chat' ? history.sessionId : undefined} threads={[...(snapshot.state.mainSessionId && !threads.some(thread => thread.id === 'main') ? [{ id: 'main', title: '主聊天', sessionId: snapshot.state.mainSessionId }] : []), ...threads.filter(thread => thread.sessionId), ...(!threads.some(thread => thread.sessionId === history.sessionId) && history.sessionId ? [{ id: threadId, title: selected?.title, sessionId: history.sessionId }] : [])]} />}{!snapshot ? <div className="ba-resource-initial"><ResourceState kind={error ? 'error' : 'loading'} title={error ? '暂时无法加载助手' : '正在准备助手'} description={error || '正在读取配置与资源，请稍候。'} onAction={error ? retryLoad : undefined} /></div> : <><RetainedPane active={view === 'studio'}><Studio active={view === 'studio'} requestedTab={tab} requestedTicket={requestedTicket} initialSection={['tasks', 'memory'].includes(tab) ? tab : 'identity'} initialIdentityTab={['models', 'pet'].includes(tab) ? tab : 'info'} snapshot={snapshot} ctx={ctx} refresh={refresh} threadId={threadId} SessionProvider={SessionProvider} renderSlot={renderSlot} /></RetainedPane>{view === 'chat' && <>{!snapshot.config.models?.length && <ModelSetupNotice onOpen={() => { selectedAssistantTab = 'models'; setTab('models'); }} />}<HistoryNotice history={history} threadId={threadId} onClear={clearMain} />{history.sessionId ? <AssistantConversation onOpenExecution={execution => openExecutionSession(ctx, execution)} key={threadId} ctx={ctx} sessionId={history.sessionId} threadId={threadId} history={history} onLoadEarlier={loadEarlier} onRefresh={() => refreshHistory(threadId)} SessionProvider={SessionProvider} renderSlot={renderSlot} api={api} assistantName={snapshot.config.name} assistantConfig={snapshot.config} petExpression={snapshot.petExpression} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} /> : <Loading label={`正在打开${threadId === 'main' ? '主聊天' : '旁聊'}`} />}<Images images={history.images} /></>}</>}</main>{snapshot && tab === 'chat' && <ActivityPanel onOpenReminder={id => openAssistantThread(ctx, id)} api={api} ctx={ctx} sessionId={history.sessionId} SessionProvider={SessionProvider} renderSlot={renderSlot} onOpenExecution={execution => openExecutionSession(ctx, execution)} assistantConfig={snapshot.config} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} />}</div></ActivityProvider>;
 }
 export function mountAssistant(ctx) {
+  mountAssistantActivity(ctx, api);
+  mountSessionRoleControls(ctx, api);
   mountAssistantConversation(ctx);
-  registerExecutionSessionRows(ctx, async signal => (await api('executionSessions', {}, signal)).sessions || []);
+  mountApprovalReview(ctx);
+  const loadExecutionSessions = async signal => (await api('executionSessions', {}, signal)).sessions || [];
+  registerExecutionSessionDiscovery(ctx, loadExecutionSessions);
+  registerExecutionSessionRows(ctx, loadExecutionSessions);
   registerChannelSessionRows(ctx);
   ctx.effect(() => () => {
     if (ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL) ctx.layout.selectPanel(null);
   });
   ctx.effect(() => { const style = document.createElement('style'); style.textContent = css + '\n' + documentsCss; document.head.append(style); return () => style.remove(); });
   ctx.slots.inject('main', () => {
-    const dispose = ctx.slots.register({ name: 'main', key: PANEL, children: assistantConversationChildren, inject: () => ({ ctx }) }, AssistantPage);
+    const dispose = ctx.slots.register({ name: 'main', key: PANEL, children: { ...assistantConversationChildren, ...reviewApprovalChildren }, inject: () => ({ ctx }) }, AssistantPage);
     if (!initialPanelSelected) {
       initialPanelSelected = true;
       openAssistantThread(ctx, 'main');
