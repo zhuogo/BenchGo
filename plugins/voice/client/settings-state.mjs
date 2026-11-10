@@ -3,7 +3,7 @@ const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 export function voiceSettingsPatch(draft, original, clearKeys = {}) {
   const patch = {};
   for (const kind of ['asr', 'tts']) {
-    const protocols = kind === 'asr' ? ['transcriptions-sse', 'transcriptions', 'openai-websocket'] : ['speech'];
+    const protocols = kind === 'asr' ? ['transcriptions-sse', 'transcriptions', 'openai-websocket'] : ['speech', 'speech-stream'];
     if (draft[kind]?.protocol && !protocols.includes(draft[kind].protocol)) throw Error(`${kind.toUpperCase()} 当前协议已不支持，请显式选择 OpenAI 兼容协议后保存。`);
   }
   for (const key of ['dictation', 'readAloud', 'call']) if (draft[key] !== original[key]) patch[key] = draft[key];

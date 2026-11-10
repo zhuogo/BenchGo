@@ -16,7 +16,7 @@ const providerProperties = { providerId: routingString(200), baseURL: routingStr
 export const VOICE_CONFIG_SCHEMA = { type: 'object', additionalProperties: false, properties: {
   dictation: { type: 'boolean', default: false }, readAloud: { type: 'boolean', default: false }, call: { type: 'boolean', default: false },
   asr: { type: 'object', additionalProperties: false, properties: { ...providerProperties, protocol: { type: 'string', enum: ['transcriptions', 'transcriptions-sse', 'openai-websocket'] }, realtime: { type: 'object', additionalProperties: false, properties: { url: routingString(2048), query: { type: 'object', maxProperties: 32, additionalProperties: routingString(512) } } } } },
-  tts: { type: 'object', additionalProperties: false, properties: { ...providerProperties, protocol: { type: 'string', enum: ['speech'] }, voice: routingString(200), speed: { type: 'number', minimum: TTS_SPEED_MIN, maximum: TTS_SPEED_MAX, multipleOf: 0.01, default: DEFAULT_TTS_SPEED }, stream: { type: 'boolean', default: true } } },
+  tts: { type: 'object', additionalProperties: false, properties: { ...providerProperties, protocol: { type: 'string', enum: ['speech', 'speech-stream'] }, voice: routingString(200), speed: { type: 'number', minimum: TTS_SPEED_MIN, maximum: TTS_SPEED_MAX, multipleOf: 0.01, default: DEFAULT_TTS_SPEED }, stream: { type: 'boolean', default: true } } },
 } };
 export const VOICE_SENSITIVE_PATHS = [['asr', 'apiKey'], ['tts', 'apiKey']];
 const defaults = () => ({ dictation: false, readAloud: false, call: false, asr: { baseURL: '', apiKey: '', model: '', protocol: 'transcriptions-sse' }, tts: { baseURL: '', apiKey: '', model: '', protocol: 'speech', voice: '', speed: DEFAULT_TTS_SPEED, stream: true } });
@@ -87,7 +87,7 @@ export function updateConfig(current, patch, { loading = false } = {}) {
       if (kind === 'tts' && key === 'stream') { if (typeof value !== 'boolean') throw new VoiceError('Invalid TTS stream'); next.tts.stream = value; continue; }
       if (key === 'realtime') { next.asr.realtime = validateRealtime(value); continue; }
       if (kind === 'tts' && key === 'speed') { next.tts.speed = normalizeTtsSpeed(value); continue; }
-      if (key === 'protocol' && !loading && value !== current[kind]?.protocol && !(kind === 'tts' ? ['speech'] : ['transcriptions', 'transcriptions-sse', 'openai-websocket']).includes(value)) throw new VoiceError(`Unknown ${kind.toUpperCase()} protocol`);
+      if (key === 'protocol' && !loading && value !== current[kind]?.protocol && !(kind === 'tts' ? ['speech', 'speech-stream'] : ['transcriptions', 'transcriptions-sse', 'openai-websocket']).includes(value)) throw new VoiceError(`Unknown ${kind.toUpperCase()} protocol`);
       const normalized = key === 'baseURL' ? endpoint(value) : string(value, key, key === 'apiKey' ? 4096 : 200);
       next[kind][key] = key === 'model' ? (kind === 'asr' ? normalizeAsrModel(normalized) : normalizeTtsModel(normalized)) : normalized;
     }

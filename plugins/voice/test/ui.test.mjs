@@ -186,10 +186,47 @@ test('OpenAI routes preserve opaque model IDs and legacy protocols until explici
     const updates = [];
     const tree = h.exports.ProviderSettings({ name, draft: old[name], providers: [], update: patch => updates.push(patch) });
     const route = nodes(tree).find(node => node.props.label === (name === 'asr' ? '识别协议' : '合成协议'));
-    assert.deepEqual(Array.from(route.props.options, item => item.value), name === 'asr' ? ['transcriptions-sse', 'transcriptions', 'openai-websocket'] : ['speech']);
+    assert.deepEqual(Array.from(route.props.options, item => item.value), name === 'asr' ? ['transcriptions-sse', 'transcriptions', 'openai-websocket'] : ['speech', 'speech-stream']);
     assert(nodes(tree).some(node => node.props.role === 'alert'));
     route.props.onChange(name === 'asr' ? 'transcriptions-sse' : 'speech');
     assert.deepEqual(Object.keys(updates[0]), ['protocol']);
+  }
+});
+
+test('streaming synthesis selection saves only the protocol and keeps playback independent', async () => {
+  const config = { dictation: true, readAloud: true, call: true, asr: { protocol: 'transcriptions-sse', model: 'ASR/@01' }, tts: { providerId: 'Cloud/@01', protocol: 'speech', model: 'TTS/@01', voice: 'Voice:02', speed: 1.35, stream: false } };
+  const h = mount({ config }), original = h.exports.draftFrom(config), updates = [];
+  const tree = h.exports.ProviderSettings({ name: 'tts', draft: original.tts, providers: [{ id: 'Cloud/@01', configured: true }], update: patch => updates.push(patch) });
+  const route = nodes(tree).find(node => node.props.label === '合成协议');
+  const streamed = route.props.options.find(item => item.value === 'speech-stream');
+  assert.equal(streamed.label, '流式语音合成');
+  assert.match(streamed.hint, /供应商.*支持/);
+  assert.doesNotMatch(route.props.options.find(item => item.value === 'speech').hint, /流式/);
+  route.props.onChange('speech-stream');
+  const draft = { ...original, tts: { ...original.tts, ...updates[0] } };
+  const form = mount({ config }, [draft, true]);
+  const saved = [];
+  form.controller.configure = async patch => saved.push(patch);
+  const settings = form.exports.VoiceSettings({ controller: form.controller });
+  form.refs[0].current = original;
+  await settings.props.onSubmit({ preventDefault() {} });
+  assert.deepEqual(JSON.parse(JSON.stringify(saved)), [{ tts: { protocol: 'speech-stream' } }]);
+  assert.equal(draft.tts.model, 'TTS/@01');
+  assert.equal(draft.tts.voice, 'Voice:02');
+  assert.equal(draft.tts.stream, false);
+  const reloaded = h.exports.draftFrom({ ...config, tts: { ...config.tts, protocol: 'speech-stream' } });
+  assert.equal(reloaded.tts.protocol, 'speech-stream');
+});
+
+test('streaming synthesis enables read and call controls only with configured model', () => {
+  for (const configured of [true, false]) {
+    const h = mount({ mode: 'idle', readEnabled: false, config: { dictation: true, readAloud: true, call: true, asr: { configured: true, model: 'ASR/@01' }, tts: { configured, protocol: 'speech-stream', model: 'TTS/@01' } } });
+    const tree = h.render();
+    const call = nodes(tree).find(node => node.props['aria-label'] === '开始语音通话');
+    const read = nodes(tree).find(node => node.props.className === 'voice-icon-button voice-read-button');
+    assert.equal(call.props.disabled, !configured);
+    assert.equal(read.props.disabled, !configured);
+    assert.equal(call.props['data-available'], configured);
   }
 });
 

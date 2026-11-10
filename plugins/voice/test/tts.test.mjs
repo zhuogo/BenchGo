@@ -27,9 +27,19 @@ test('removed vendor protocols are rejected explicitly', () => {
 });
 
 test('configured voice wins for both speech protocols and inputs are not mutated', () => {
-  for (const protocol of ['speech']) {
+  for (const protocol of ['speech', 'speech-stream']) {
     const config = Object.freeze({ model: 'stepaudio-2.5-tts', voice: 'qingchunshaonv', protocol });
     assert.equal(speechRequest(config, '保留音色').voice, 'qingchunshaonv');
+  }
+});
+
+test('only explicit speech-stream requests upstream streaming independently of playback buffering', () => {
+  for (const stream of [undefined, true, false]) {
+    const config = Object.freeze({ protocol: 'speech-stream', model: 'Opaque TTS:09', voice: 'Custom Voice', speed: 1.35, stream });
+    assert.deepEqual(speechRequest(config, '立即朗读'), {
+      model: 'Opaque TTS:09', voice: 'Custom Voice', input: '立即朗读', response_format: 'pcm', speed: 1.35, stream: true,
+    });
+    assert.equal(Object.hasOwn(speechRequest({ ...config, protocol: 'speech' }, '标准朗读'), 'stream'), false);
   }
 });
 

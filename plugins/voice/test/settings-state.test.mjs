@@ -41,3 +41,15 @@ test('voice stream choice round-trips without overwriting IDs, keys or routes', 
   assert.throws(() => voiceSettingsPatch(legacy, legacy), /显式选择/);
   assert.deepEqual(voiceSettingsPatch({ ...legacy, asr: { ...legacy.asr, protocol: 'transcriptions' } }, legacy), { asr: { protocol: 'transcriptions' } });
 });
+
+test('streaming synthesis protocol switches without changing endpoint or playback choices', () => {
+  const original = { dictation: true, readAloud: true, call: false, asr: { protocol: 'transcriptions-sse', model: 'ASR/@01' }, tts: { providerId: 'Cloud/@01', baseURL: 'https://speech.test/v1', protocol: 'speech', model: 'TTS/@01', voice: 'Voice:02', speed: 1.35, stream: false, apiKey: '' } };
+  const draft = { ...original, tts: { ...original.tts, protocol: 'speech-stream' } };
+  const patch = voiceSettingsPatch(draft, original);
+  assert.deepEqual(patch, { tts: { protocol: 'speech-stream' } });
+  const saved = { ...original, tts: { ...original.tts, ...patch.tts } };
+  assert.deepEqual(saved.tts, draft.tts);
+  assert.deepEqual(voiceSettingsPatch(saved, saved), {});
+  assert.deepEqual(voiceSettingsPatch(original, saved), { tts: { protocol: 'speech' } });
+  assert.throws(() => voiceSettingsPatch({ ...draft, tts: { ...draft.tts, protocol: 'unknown.speech' } }, original), /显式选择/);
+});

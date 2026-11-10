@@ -2,7 +2,7 @@ import { VoiceError, validateRealtime } from './config.mjs';
 
 const protocols = {
   asr: ['transcriptions', 'transcriptions-sse', 'openai-websocket'],
-  tts: ['speech'],
+  tts: ['speech', 'speech-stream'],
 };
 
 /** Resolve the request route without probing the provider or changing model IDs. */

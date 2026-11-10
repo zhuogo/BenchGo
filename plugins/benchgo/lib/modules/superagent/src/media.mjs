@@ -40,7 +40,7 @@ export function createAssistantMedia({ store, providers, credentials, fetcher = 
       if (!selected?.providerId || !selected.modelId) reason = '请配置供应商与模型';
       else {
         const protocol = selected.protocol || (kind === 'asr' ? 'transcriptions' : kind === 'tts' ? 'speech' : '');
-        const supported = kind === 'image' ? ['openai-compatible'] : kind === 'tts' ? ['speech'] : ['transcriptions', 'transcriptions-sse'];
+        const supported = kind === 'image' ? ['openai-compatible'] : kind === 'tts' ? ['speech', 'speech-stream'] : ['transcriptions', 'transcriptions-sse'];
         if (!supported.includes(protocol)) reason = '当前协议不受支持';
         else try {
           if (kind === 'image') {

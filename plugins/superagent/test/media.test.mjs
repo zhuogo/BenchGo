@@ -86,6 +86,31 @@ test('TTS resolves independent provider and exact model then streams PCM', async
   const result = await media.synthesize(new Request('https://app.example/api/assistant/voice/speech', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Hello' }) }));
   assert.equal(result.status, 200); assert.equal((await result.arrayBuffer()).byteLength, 4);
 });
+
+test('independent streaming TTS is available and forwards first PCM before provider EOF', { timeout: 1000 }, async t => {
+  let calls = 0, signal, cancelled = false;
+  const { media } = await fixture(t, async (url, request) => {
+    calls++; signal = request.signal;
+    assert.equal(url, 'https://speech.example/v1/audio/speech');
+    assert.deepEqual(JSON.parse(request.body), { model: 'Opaque TTS:09', voice: 'custom', input: 'Hello', response_format: 'pcm', speed: 1.35, stream: true });
+    return new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array([1, 0])); },
+      cancel() { cancelled = true; },
+    }), { headers: { 'content-type': 'audio/pcm' } });
+  }, { tts: { providerId: 'speech', modelId: 'Opaque TTS:09', protocol: 'speech-stream', voice: 'custom', speed: 1.35 } });
+  assert.deepEqual((await media.availability()).tts, { available: true, reason: '' });
+  assert.equal(calls, 0);
+  const response = await media.synthesize(new Request('https://app.example/api/assistant/voice/speech', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Hello' }),
+  }));
+  assert.equal(response.status, 200); assert.equal(calls, 1);
+  const reader = response.body.getReader();
+  t.after(() => reader.cancel());
+  assert.deepEqual(await reader.read(), { value: new Uint8Array([1, 0]), done: false });
+  assert.equal(signal.aborted, false);
+  await reader.cancel();
+  assert.equal(signal.aborted, true); assert.equal(cancelled, true);
+});
 test('missing independent ASR config is explicit', async t => {
   const { media } = await fixture(t, async () => { throw Error('must not fetch'); });
   const result = await media.transcribe(new Request('https://app.example/api/assistant/voice/transcribe', { method: 'POST', headers: { 'content-type': 'audio/wav' }, body: new Uint8Array() }));
