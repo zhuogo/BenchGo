@@ -27,6 +27,8 @@ test('supplement selects one ticket, retains original text and mandate, and dedu
   assert.equal(f.control(a.id).duplicate, true);
   assert.equal(f.database.pendingSubscriptionMessages(a.id).length, 1);
   assert.equal(f.database.pendingSubscriptionMessages(a.id)[0].content, '补充：请附上原文链接');
+  assert.equal(f.database.ticketInputs(a.id).length, 1);
+  assert.equal(f.database.ticketInputs(a.id)[0].state, 'pending');
   assert.equal(f.database.pendingSubscriptionMessages(b.id).length, 0);
   assert.deepEqual(f.database.getTicket(a.id).mandate, a.mandate);
   assert.throws(() => f.control(b.id), /already belongs/);
@@ -76,7 +78,7 @@ test('control rejects different sessions, channels and threads', t => {
   for (const source of [{ channel: 'feishu', sessionId: 'owner' }, { channel: 'desktop', sessionId: 'another' }, { channel: 'desktop', sessionId: 'owner', threadId: 'side' }]) {
     const ticket = f.ticket(source);
     assert.throws(() => f.control(ticket.id, 'cancel'), /不属于当前会话/);
-    assert.notEqual(f.database.getTicket(ticket.id).status, 'cancelled');
+    assert.notEqual(f.database.getTicket(ticket.id).executionControl?.stopped, true);
   }
 });
 
@@ -91,7 +93,10 @@ test('internal notifications and non-root callers cannot control tickets', t => 
 
 test('cancellation is idempotent and stopped tickets cannot receive supplements', t => {
   const f = fixture(t), ticket = f.ticket();
-  assert.equal(f.control(ticket.id, 'cancel').ticket.status, 'cancelled');
-  assert.equal(f.control(ticket.id, 'cancel').ticket.status, 'cancelled');
-  assert.throws(() => f.control(ticket.id), /已停止/);
+  assert.equal(f.control(ticket.id, 'cancel').ticket.executionControl.stopped, true);
+  assert.equal(f.control(ticket.id, 'cancel').ticket.executionControl.stopped, true);
+  const receipt = f.database.ticketInputs(ticket.id)[0];
+  assert.equal(receipt.kind, 'stop'); assert.equal(receipt.state, 'applied');
+  assert.equal(receipt.application.kind, 'stop-request'); assert.equal(receipt.application.executionStopped, true);
+  assert.throws(() => f.control(ticket.id), /完成或停止/);
 });

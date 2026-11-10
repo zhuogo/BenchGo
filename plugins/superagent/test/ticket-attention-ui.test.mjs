@@ -19,12 +19,12 @@ function harness(overrides = {}, failure) {
   };
   runInNewContext(code, { module, exports: module.exports, crypto: { randomUUID }, require: id => id === 'react' ? react : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('ticket-state.mjs') ? ticketState : '' });
   const ticket = { id: 'original', status: 'waiting', instructionRevision: 2, resultVersion: 3, mandate: { source: { channel: 'desktop' } } };
-  const attention = { id: 'question', ticketId: ticket.id, origin: 'review', instructionRevision: 2, resultVersion: 3, state: 'waiting', question: { question: '采用哪个范围？', options: [{ label: '国内外' }] } };
+  const attention = { id: 'question', ticketId: ticket.id, origin: 'worker', instructionRevision: 2, resultVersion: 3, state: 'waiting', question: { question: '采用哪个范围？', options: [{ label: '国内外' }] } };
   const props = { ticket, attention, api: async (...args) => { calls.push(args); if (failure) throw new Error(failure); }, onAnswered: () => calls.push(['refresh']), ...overrides };
   return { calls, props, render() { cursor = refCursor = 0; return walk(module.exports.TicketAttention(props)); } };
 }
 
-test('free text answers the durable original review question and refreshes after acceptance', async () => {
+test('free text answers the durable original Worker question and refreshes after acceptance', async () => {
   const h = harness();
   h.render().find(node => node.type === 'textarea').props.onChange({ target: { value: ' 国内外，保留 AI 热点 ' } });
   await h.render().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
@@ -39,8 +39,8 @@ test('free text answers the durable original review question and refreshes after
   assert(!h.render().some(node => node.type === 'form'));
 });
 
-test('stale result, changed Mandate and closed tickets cannot submit old questions', () => {
-  for (const patch of [{ resultVersion: 4 }, { instructionRevision: 3 }, { status: 'cancelled' }, { status: 'completed' }]) {
+test('changed applied requirements and closed tickets cannot submit old questions', () => {
+  for (const patch of [{ instructionRevision: 3 }, { executionControl: { stopped: true } }, { status: 'completed' }]) {
     const h = harness(); Object.assign(h.props.ticket, patch);
     assert(!h.render().some(node => node.type === 'form'));
     assert.equal(h.calls.length, 0);
@@ -56,9 +56,9 @@ test('failed answer keeps the same request identity on retry and exposes the sys
   assert.equal(h.calls[0][1].requestId, h.calls[1][1].requestId);
 });
 
-test('worker questions use the source Assignment version rather than the current Mandate', () => {
+test('an in-flight Worker question remains answerable under its applied Assignment version', () => {
   const h = harness();
   h.props.attention = { ...h.props.attention, origin: 'worker', instructionRevision: undefined, assignmentId: 'old' };
   h.props.ticket.assignments = [{ id: 'old', instructionRevision: 1 }];
-  assert(!h.render().some(node => node.type === 'form'));
+  assert(h.render().some(node => node.type === 'form'));
 });

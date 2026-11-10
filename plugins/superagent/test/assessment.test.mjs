@@ -7,13 +7,14 @@ test('daily assessment supports bounded answers and clarification without weaken
   const llm = { async *stream({ messages, tools }) {
     assert.deepEqual(tools, []);
     const prompt = messages.filter(message => message.role === 'system').map(message => message.content[0].text).join('\n');
-    assert.match(prompt, /daily general-purpose assistant first/);
+    assert.match(prompt, /# 内置层/);
+    assert.match(prompt, /Perform read-only intake assessment/);
     assert.match(prompt, /current information.*use accept/);
     assert.match(prompt, /Daily requests need no project/);
     assert.match(prompt, /write concrete acceptance criteria now/);
     assert.match(prompt, /6-10 news items/);
     assert.match(prompt, /Do not invent intermediate counts, phases or deliverables/);
-    assert.match(prompt, /"modelId":"opaque\/main"/);
+    assert.doesNotMatch(prompt, /opaque\/main|Configured main model identity|You are the BenchGo Router/);
     yield { type: 'text-delta', text: JSON.stringify({ decisions: [decision] }) };
     yield { type: 'finish', reason: { kind: 'stop' } };
   } };

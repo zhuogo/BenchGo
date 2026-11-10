@@ -33,7 +33,7 @@ function render(activeSessionId, options = {}) {
     uiSession: { sessionStatus: { getSnapshot: () => options.statuses ?? new Map() } },
     uiWorkspace: { openSession: id => options.onOpenSession?.(id) },
   };
-  const props = { host, open() {}, newSession: options.newSession ?? (() => {}), wide: options.wide ?? true, expandSidebar() {} };
+  const props = { host, open() {}, newSession: options.newSession ?? (() => {}), wide: options.wide ?? true, expandSidebar() {}, panelNavigation: options.panelNavigation };
   let tree = module.exports.Projects(props);
   if (options.showArchived) {
     effects.forEach(effect => effect());
@@ -54,6 +54,18 @@ test('collapsed sidebar removes the project and conversation content region', ()
   assert.equal(nodes.filter(node => node.props.className?.split(' ').includes('cmd-session')).length, 0);
   assert.equal(nodes.filter(node => node.props.className?.split(' ').includes('cmd-sidebar-content')).length, 0);
   assert(nodes.some(node => node.props['aria-label'] === '快捷工具栏'));
+});
+
+test('official panel navigation follows quick actions in expanded and collapsed DOM order', () => {
+  const panelNavigation = { type: 'nav', props: { 'aria-label': '工具与自动化' }, children: [] };
+  for (const wide of [true, false]) {
+    const nodes = render(undefined, { wide, panelNavigation });
+    const quick = nodes.findIndex(node => node.props['aria-label'] === '搜索对话');
+    const panels = nodes.indexOf(panelNavigation);
+    assert(quick >= 0 && panels > quick);
+    const conversations = nodes.findIndex(node => node.props.className === 'cmd-sidebar-content');
+    assert(conversations < 0 || conversations > panels);
+  }
 });
 
 test('SuperAgent panel hides retained native session selection without deleting it', () => {

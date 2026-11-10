@@ -6,7 +6,7 @@
 - 更新引擎时从官方 `origin/master` 获取最新提交，同时更新根目录 `upstream.json` 和子模块 pin；升级后重新验证兼容性。
 - `reference/` 中的 Hermes、Paseo、CC Switch 是参考仓库，不参与产品依赖或构建，不修改它们。
 - `docs/` 只存设计，按六个板块组织；同一板块的小模块可分别维护独立 Markdown，同一主题只保留一份权威正文，通过链接引用，避免重复。板块 `设计.md` 可作范围与模块导航，不要求每板块只有一个文件。全局只保留 `docs/总架构.html` 描述板块关系、机制与流程。服务契约、视觉规范可按独立职责成文，具体实现边界与验收条件随所属模块维护；不新增独立现状、开发清单、验收流水或 `.bak`。历史证据留在 Git、`eval/` 或本地 `artifacts/`。设计内区分已实现与待实施，引用参考代码时说明版本。
-- 自有能力统一放在根目录 `plugins/` 的五个源码包：BenchGo 基础层、Harness 聚合、SuperAgent 总助手、Voice 语音和 Link 直连，最终只安装一个 `benchgo-plugin`。保持服务契约明确，不将源码包或规划目录当作额外安装的插件包。
+- 自有能力统一放在根目录 `plugins/`：BenchGo 基础层、Harness 聚合、SuperAgent 总助手、Voice 语音、Link 直连，以及基础层内部装配的 Interactive、Efficiency、Workbench 源码包，最终只安装一个 `benchgo-plugin`。保留五个 Cordis 入口，内部源码包不增加插件注册行。保持服务契约明确，不将源码包或规划目录当作额外安装的插件包。
 - 应用与插件名称均为 BenchGo；BenchGo 是统一 Logo 与吉祥物 IP，规范及正式素材见 `assets/brand/`，PC、移动端与初始化使用同一形象。
 - 供应商模型 ID 按不透明标识处理，不猜测别名或静默改写。配置修改须验证选择、保存、重载与实际请求一致；显式选择优先于默认值，编辑单项不得丢失其他配置，不支持的能力须明确提示。
 - 根目录使用 `npm run setup/build/dev/start/check` 调用官方脚本；实际依赖由子模块锁定的 Corepack pnpm 管理。
@@ -31,6 +31,9 @@
 - `plugins/voice/`：Voice 语音源码包，包含语音服务、输入与播放界面、协议适配及测试，随同一插件安装并独立启停。
 - `plugins/link/`：多端直连。网页产物在 `dist/`，同样由 `npm run reload:plus` 重建。
 - `plugins/shared/client/`：跨源码包共享组件，不是独立安装包。
+- `plugins/interactive/`：交互回复协议、白名单组件与官方会话回传，基础层内部装配。
+- `plugins/efficiency/`：原生执行工具与上下文压缩的依赖组合，基础层内部装配。
+- `plugins/workbench/`：本机文件/Git/终端与 SSH 运维适配；`lib/` 为构建生成的第三方适配产物，不手工维护。
 - `scripts/desktop/`：Windows 打包、启动页、品牌注入和开发启动。`renderer/` 是 BenchGo 启动页，不改官方欢迎页。
 - `scripts/server/`：服务端种子与发布辅助。
 - `assets/brand/`：BenchGo Logo、方标和吉祥物的唯一素材来源。

@@ -4,4 +4,6 @@ The channel selector uses the actual marks served by the vendors' official websi
 
 `catalog.json` embeds the downloaded assets. `sources.json` records the official page, exact asset URL, MIME type and SHA-256 for each mark (retrieved 2026-11-03). Discord's asset is hosted by its website CDN and linked directly by discord.com; WeChat's asset is linked directly by weixin.qq.com.
 
+Slack and DingTalk marks were added on 2026-11-07 from the favicon links on slack.com and dingtalk.com, respectively. Their exact vendor CDN URLs and hashes are recorded in `sources.json`; both images remain unmodified.
+
 Email, Webhook and API are protocols/interface types, not brands, and therefore use neutral semantic icons. Brand availability is represented by grayscale when unavailable; selection alone does not recolor marks.

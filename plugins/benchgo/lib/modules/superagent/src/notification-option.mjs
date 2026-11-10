@@ -1,3 +1,4 @@
+import { ticketStopped } from './ticket-lifecycle.mjs';
 /** Options express intent only; approvals retain their independent action-bound protocol. */
 export async function replyNotificationOption({ database, orchestration, engine }, { eventId, threadId = 'main', text }) {
   if (typeof eventId !== 'string' || !eventId || eventId.length > 150 || typeof text !== 'string') throw new Error('无效选项回复');
@@ -15,7 +16,7 @@ export async function replyNotificationOption({ database, orchestration, engine 
     || !Number.isSafeInteger(event.instructionRevision) || event.instructionRevision < 1
     || !Number.isSafeInteger(event.resultVersion) || event.resultVersion < 0
     || ticket.instructionRevision !== event.instructionRevision || ticket.resultVersion !== event.resultVersion
-    || ['cancelled', 'cancelling', 'closed'].includes(ticket.status)) throw new Error('这组选项已过期，请重新说明你的决定');
+    || ticketStopped(ticket)) throw new Error('这组选项已过期，请重新说明你的决定');
   const requestId = `notification-option:${eventId}`;
   if (event.attentionId) {
     const attention = orchestration.attentions(ticketId).find(entry => entry.id === event.attentionId);

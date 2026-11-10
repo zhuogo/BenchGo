@@ -16,7 +16,7 @@ function harness(file, name, props, failure, initialState = []) {
   return { calls, render() { cursor = refCursor = 0; return walk(module.exports[name]({ ...props, api: async (action, input) => { calls.push({ action, input }); if (failure) throw new Error(failure); return {}; }, reload: async () => calls.push({ action: 'reload' }) })); } };
 }
 test('ticket revision submits the opened version and preserves failed draft and request ID', async () => {
-  const ticket = { id: 'ticket', target: 'original', acceptance: 'accept', instructionRevision: 4, status: 'paused' };
+  const ticket = { id: 'ticket', target: 'original', acceptance: 'accept', instructionRevision: 4, status: 'waiting', executionControl: { paused: true } };
   const h = harness('tickets.jsx', 'TicketChange', { ticket }, '版本冲突');
   h.render().find(node => node.props.label === '修订要求').props.onClick();
   h.render().filter(node => node.type === 'textarea').at(-1).props.onChange({ target: { value: 'changed context' } });
@@ -28,11 +28,18 @@ test('ticket revision submits the opened version and preserves failed draft and 
   ticket.instructionRevision = 5;
   assert.equal(h.render().find(node => node.type === 'button' && node.props.type === 'submit').props.disabled, true);
 });
-test('active or uncertain execution prevents revision while terminal tickets offer reopen', () => {
-  for (const patch of [{ status: 'uncertain' }, { status: 'open', assignments: [{ state: 'claimed' }] }]) {
+test('running work accepts queued revisions while unsafe states wait and terminal tickets create linked adjustments', async () => {
+  for (const patch of [{ status: 'waiting', assignments: [{ state: 'uncertain' }] }, { status: 'waiting', executionControl: { pauseRequested: true } }, { status: 'waiting', executionControl: { stopRequested: true } },
+    { status: 'running', assignments: [{ state: 'uncertain' }] },
+    { status: 'waiting', resultVersion: 1, continuationWait: { sourceResultVersion: 1, code: 'EXECUTION_EFFECTS_UNKNOWN' } }]) {
     assert.equal(harness('tickets.jsx', 'TicketChange', { ticket: { id: 't', target: 'x', instructionRevision: 1, ...patch } }).render().find(node => node.props.label === '修订要求').props.disabled, true);
   }
-  assert(harness('tickets.jsx', 'TicketChange', { ticket: { status: 'completed' } }).render().some(node => node.props.label === '重开工单'));
+  assert.equal(harness('tickets.jsx', 'TicketChange', { ticket: { id: 't', target: 'x', instructionRevision: 1, status: 'running', assignments: [{ state: 'claimed' }] } }).render().find(node => node.props.label === '修订要求').props.disabled, false);
+  const h = harness('tickets.jsx', 'TicketChange', { ticket: { id: 't', target: 'x', instructionRevision: 1, status: 'completed' } });
+  h.render().find(node => node.props.label === '创建关联调整单').props.onClick();
+  h.render().filter(node => node.type === 'textarea').at(-1).props.onChange({ target: { value: 'follow-up adjustment' } });
+  await h.render().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0])), { action: 'ticketChange', input: { id: 't', operation: 'adjustment', expectedInstructionRevision: 1, target: 'x', acceptance: '', reason: 'follow-up adjustment', requestId: 'request-id' } });
 });
 test('manual Eval retry is bound to both versions and keeps failed reason visible', async () => {
   const row = { id: 'candidate', dispositionRevision: 8, updatedAt: 'then', trigger: { content: 'raw message' } };
@@ -56,7 +63,7 @@ test('checkpoint restore shows exclusions and refuses active, conflicting or inc
   assert.equal(button(harness('checkpoints.jsx', 'CheckpointRestore', { ticket: { ...ticket, assignments: [{ state: 'uncertain' }] }, plan }).render()).props.disabled, true);
 });
 test('checkpoint restore uses the reviewed token and never claims to revert external effects', async () => {
-  const calls = [], ticket = { id: 'ticket', status: 'cancelled', assignments: [{ state: 'cancelled' }] };
+  const calls = [], ticket = { id: 'ticket', status: 'waiting', executionControl: { stopped: true }, assignments: [{ state: 'cancelled' }] };
   const plan = { runId: 'run', token: 'reviewed-token', excluded: ['.env*'], conflicts: [], changes: [], externalEffectsReverted: false };
   const h = harness('checkpoints.jsx', 'CheckpointRestore', { ticket, plan, restore: async input => { calls.push(input); return { backupId: 'backup', externalEffectsReverted: false }; } });
   await h.render().find(node => node.children.includes('确认整轮文件恢复')).props.onClick();

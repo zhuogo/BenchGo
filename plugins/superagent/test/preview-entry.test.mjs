@@ -29,6 +29,6 @@ test('system file selection reuses preview without a second text-read request', 
   const file = { name: 'report.xlsx', path: 'report.xlsx', url: 'api/system-file', type: 'file', bytes: 42 };
   const h = harness('system-files.jsx', ['', 0, { entries: [file] }, '']);
   const entry = h.render('SystemFiles').find(node => node.props.className === 'ba-system-entry');
-  entry.props.onClick({ currentTarget: { focus() {} } });
+  entry.props.onOpen(file, { focus() {} });
   assert.equal(h.render('SystemFiles').find(node => node.type === h.ArtifactPreview).props.file, file);
 });

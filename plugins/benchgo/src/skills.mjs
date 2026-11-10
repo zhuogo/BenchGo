@@ -1,4 +1,5 @@
 import { assertSameOrigin, HttpError, readJson } from '../shared/http.mjs';
+import { createSkillDeck } from './skill-deck.mjs';
 
 /** Read the official winning catalog; never scan or mutate provider files. */
 export function createSkillsCatalog({ getSkills, getWorkspaces, getPresets = () => undefined }) {
@@ -39,13 +40,18 @@ export function createSkillsCatalog({ getSkills, getWorkspaces, getPresets = () 
 
 export function mountSkills(ctx) {
   const catalog = createSkillsCatalog({ getSkills: () => ctx.get('skills'), getWorkspaces: () => ctx.get('workspaceRegistry'), getPresets: () => ctx.get('agentPresets') });
+  const deck = createSkillDeck({ getCatalog: catalog });
   const fetch = async request => {
     try {
       assertSameOrigin(request, { allowDesktopOrigin: true });
       const input = await readJson(request);
-      return Response.json(await catalog(input, request.signal), { headers: { 'cache-control': 'no-store' } });
+      const result = input.action === 'deckList' ? await deck.list(request.signal)
+        : input.action === 'deckGet' ? await deck.get(input.name, request.signal)
+          : input.action === 'deckInstall' ? await deck.install(input.name, request.signal)
+            : await catalog(input, request.signal);
+      return Response.json(result, { headers: { 'cache-control': 'no-store' } });
     } catch (error) {
-      return Response.json({ error: error instanceof HttpError ? error.message : '读取技能失败，请重试' }, { status: error instanceof HttpError ? error.status : 503, headers: { 'cache-control': 'no-store' } });
+      return Response.json({ error: error instanceof HttpError ? error.message : '技能操作失败，请重试' }, { status: error instanceof HttpError ? error.status : 503, headers: { 'cache-control': 'no-store' } });
     }
   };
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/benchgo/skills', methods: ['POST'], requestBody: 'buffered', fetch }));

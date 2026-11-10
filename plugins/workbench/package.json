@@ -1,0 +1,8 @@
+{
+  "name": "@benchgo/workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "BenchGo internal workbench composition; shipped only inside benchgo-plugin",
+  "license": "MIT"
+}

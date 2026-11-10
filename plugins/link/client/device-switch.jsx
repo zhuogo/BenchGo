@@ -1,3 +1,4 @@
+import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
@@ -91,11 +92,11 @@ export function DeviceSwitch() {
   return <>
     <style>{switchStyle}</style>
     <div className="dsh-device-switch" ref={root}>
-      <button type="button" className="dsh-device-switch-trigger" aria-haspopup="menu" aria-expanded={state.open} aria-label={'当前工作台：' + state.active.name} title={state.active.name} disabled={!!busy} onClick={() => { setOpen(value => !value); if (!open) void refresh(); }}>
+      <Tooltip label={state.active.name}><button type="button" className="dsh-device-switch-trigger" aria-haspopup="menu" aria-expanded={state.open} aria-label={'当前工作台：' + state.active.name} disabled={!!busy} onClick={() => { setOpen(value => !value); if (!open) void refresh(); }}>
         <UIIcon name={deviceIcon(state.active)} size={15} />
         <span>{busy ? '正在打开…' : state.active.name}</span>
         <UIIcon name="chevronDown" size={12} />
-      </button>
+      </button></Tooltip>
     </div>
     {state.open && createPortal(<div ref={menu} className="dsh-device-switch-menu" role="menu" aria-label="切换设备" style={box ? { top: box.bottom + 4, left: Math.max(8, Math.min(box.left, window.innerWidth - 236)) } : { top: 40, left: 148 }}>
       {state.items.map(device => <button key={device.id} type="button" role="menuitemradio" aria-checked={state.active.id === device.id} aria-current={state.active.id === device.id} disabled={!!busy} onClick={() => void choose(device)}>

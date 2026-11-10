@@ -16,10 +16,20 @@ test('module build preserves source and assets while excluding recovery files an
   };
   await put('benchgo/scripts/build-modules.mjs');
   await copyFile(new URL('../scripts/build-modules.mjs', import.meta.url), join(plugins, 'benchgo/scripts/build-modules.mjs'));
-  for (const module of ['harness', 'superagent', 'voice']) {
+  for (const module of ['harness', 'superagent', 'voice', 'interactive', 'efficiency', 'workbench']) {
     await put(`${module}/package.json`, '{"type":"module"}');
     await put(`${module}/src/plugin.mjs`, "export const name = 'fixture';");
   }
+  await put('workbench/scripts/vendor-adapter.mjs', `
+import { mkdir, writeFile } from 'node:fs/promises';
+export async function prepareWorkbenchVendors() {
+  const output = new URL('../lib/', import.meta.url);
+  await mkdir(output, { recursive: true });
+  await writeFile(new URL('ssh-host.mjs', output), "export const transport = true;");
+  await writeFile(new URL('DSH-SSH-LICENSE', output), 'Vendor license');
+  await writeFile(new URL('NOTICE', output), 'Vendor notice');
+}`);
+  await put('workbench/src/plugin.mjs', "export { transport } from '../lib/ssh-host.mjs';");
   await put('superagent/src/service.mjs', "import { value } from '../../benchgo/src/shared.mjs';\nexport { value };\n");
   await put('benchgo/src/shared.mjs', 'export const value = 1;');
   await put('superagent/shared/catalog.mjs', 'export default [];');
@@ -36,6 +46,10 @@ test('module build preserves source and assets while excluding recovery files an
   const { buildModules } = await import(pathToFileURL(join(plugins, 'benchgo/scripts/build-modules.mjs')).href);
   await buildModules();
   const output = join(plugins, 'benchgo/lib/modules');
+  const publishedWorkbench = await import(pathToFileURL(join(output, 'workbench/src/plugin.mjs')).href);
+  assert.equal(publishedWorkbench.transport, true);
+  assert.equal(await readFile(join(output, 'workbench/lib/DSH-SSH-LICENSE'), 'utf8'), 'Vendor license');
+  assert.equal(await readFile(join(output, 'workbench/lib/NOTICE'), 'utf8'), 'Vendor notice');
   assert.deepEqual((await readdir(join(output, 'superagent/src'))).sort(), ['plugin.mjs', 'prompt.mjs', 'service.mjs']);
   assert.match(await readFile(join(output, 'superagent/src/service.mjs'), 'utf8'), /from '\.\.\/\.\.\/\.\.\/\.\.\/src\/shared\.mjs'/);
   assert.equal(await readFile(join(output, 'superagent/assets/pet/SOURCE.md'), 'utf8'), 'Preserved provenance');

@@ -1,0 +1,2 @@
+BenchGo composes @linxin666/dsh-ssh 0.4.15 (Apache-2.0), https://github.com/zhu1090093659/dsh-web, and dsh-better-sidebar 0.30.1 (MIT), https://github.com/omdsh-dev/DSH-better-sidebar.
+SSH transport is adapted at build time to require an explicitly confirmed host key. Client factories are bundled under benchgo-plugin; optional installation telemetry is omitted. Original packages and upstream Harness sources are not modified.

@@ -3,7 +3,7 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
   --dsh-windows-menu-start: 48px;
 }
 /* The official sidebar and settings shell stay mounted. Only their geometry changes. */
-[class*="_root"]:has(> [class*="_regionArea"] .cmd-projects) {
+.cmd-shell-sidebar:has(.cmd-projects) {
   --dsh-sidebar-inline-padding: 6px;
   position: relative;
   padding: 8px 6px 6px;
@@ -23,20 +23,21 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 [class*="_root"]:has(.cmd-projects) button[class*="_newSession"],
 [class*="_root"]:has(.cmd-projects) [class*="_railMark"] { display: none; }
 [class*="_root"]:has(.cmd-projects) [class*="_toggle"] [class*="_panelIcon"] { display: inline; }
-[class*="_root"]:has(.cmd-projects) > [class*="_regionArea"] { display: contents; }
-/* Keep the collapsed rail's empty workspace seat flexible so footer controls stay at the bottom. */
-[class*="_root"]:has(.cmd-projects.cmd-narrow) > [class*="_regionArea"] {
+.cmd-shell-sidebar:has(.cmd-projects) [class*="_scrollArea"] {
   display: flex;
-  flex: none;
-  min-height: 0;
   flex-direction: column;
-  order: 1;
+  margin: 0;
+  overflow: hidden;
 }
-[class*="_root"]:has(.cmd-projects) [class*="_panelList"] {
-  display: flex;
-  flex-direction: row;
+.cmd-shell-sidebar:has(.cmd-projects) [class*="_scrollArea"]::before,
+.cmd-shell-sidebar:has(.cmd-projects) [class*="_scrollArea"]::after { display: none; }
+.cmd-shell-sidebar:has(.cmd-projects) [class*="_regionArea"] { flex: 1; min-height: 0; }
+.cmd-shell-sidebar .cmd-sidebar-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
   gap: 4px;
-  margin: 2px 2px 14px;
+  margin: 0 2px 12px;
   padding: 0;
   order: 0;
 }
@@ -178,7 +179,7 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 .cmd-settings:hover svg { transform: rotate(30deg); }
 
 /* Collapsed rail keeps every action reachable, including the expand control. */
-[class*="_root"]:has(.cmd-narrow) [class*="_panelList"] { flex-direction: column; align-items: center; margin: 4px 0 12px; gap: 4px; }
+.cmd-shell-sidebar:has(.cmd-narrow) .cmd-sidebar-panels { display: flex; flex-direction: column; align-items: center; margin: 4px 0 12px; gap: 4px; }
 [class*="_root"]:has(.cmd-narrow) [class*="_panelRow"] { flex: none; width: 36px; height: 36px; padding: 8px; }
 [class*="_root"]:has(.cmd-narrow) > [class*="_logoRow"] { left: 50%; right: auto; width: 36px; transform: translateX(-50%); }
 .cmd-narrow .cmd-sidebar-nav { flex-direction: column; padding: 36px 0 0; margin: 0 0 4px; }

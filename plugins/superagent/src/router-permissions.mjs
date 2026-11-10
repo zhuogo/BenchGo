@@ -23,7 +23,19 @@ export function installRouterPermissionGate(scope, { agent, inherited, controlle
   }
   // Hide inherited execution tools, while retaining the dispatch identity guard
   // for preset-local definitions and later same-name replacements.
-  scope.tools.restrict?.({ allow: [...inherited.keys()].filter(name => coordination.has(name)) });
+  const contextTools = () => scope.get?.('benchgoEfficiency')?.contextTools?.() ?? [];
+  let restriction, signature, updating = false;
+  const restrict = () => {
+    if (updating) return;
+    const allow = [...new Set([...inherited.keys()].filter(name => coordination.has(name) && scope.tools.get(name, agent)).concat(contextTools().map(row => row.name)))];
+    const next = JSON.stringify(allow);
+    if (next === signature) return;
+    signature = next; updating = true;
+    try { restriction?.(); restriction = scope.tools.restrict?.({ allow }); }
+    finally { updating = false; }
+  };
+  restrict();
+  if (typeof scope.get === 'function') { scope.on('tools/change', restrict); scope.effect?.(() => () => restriction?.()); }
   disposeToolFailureReporter(scope, { agent, onToolFailure });
   return scope.on('tools/execute', async (execution, next) => {
     execution.signal.throwIfAborted();
@@ -34,6 +46,7 @@ export function installRouterPermissionGate(scope, { agent, inherited, controlle
     if (execution.agent !== agent) return next();
     if (coordination.has(execution.name)) return next();
     const definition = scope.tools.get(execution.name, execution.agent);
+    if (definition && contextTools().some(row => row.name === execution.name && row.definition === definition)) return next();
     if (!definition || !approved.has(definition)) throw denied(execution.name);
     return next();
   });

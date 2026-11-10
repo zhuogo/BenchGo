@@ -17,7 +17,7 @@ test('option sends original intent with a stable one-event idempotency key', asy
   assert.equal(f.sent[0].approval, undefined);
 });
 test('cross-thread, fabricated and stale choices never reach send', async () => {
-  for (const change of [f => f.input.threadId = 'main', f => f.input.text = '花钱', f => f.ticket.instructionRevision++, f => f.ticket.resultVersion++, f => f.ticket.status = 'cancelled', f => f.ticket.mandate.source.threadId = 'other', f => { delete f.event.instructionRevision; delete f.ticket.instructionRevision; }, f => { delete f.event.resultVersion; delete f.ticket.resultVersion; }]) {
+  for (const change of [f => f.input.threadId = 'main', f => f.input.text = '花钱', f => f.ticket.instructionRevision++, f => f.ticket.resultVersion++, f => f.ticket.executionControl = { stopped: true }, f => f.ticket.mandate.source.threadId = 'other', f => { delete f.event.instructionRevision; delete f.ticket.instructionRevision; }, f => { delete f.event.resultVersion; delete f.ticket.resultVersion; }]) {
     const f = fixture(); change(f);
     await assert.rejects(replyNotificationOption(f.dependencies, f.input));
     assert.equal(f.sent.length, 0);

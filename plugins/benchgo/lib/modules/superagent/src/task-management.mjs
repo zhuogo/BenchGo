@@ -3,7 +3,7 @@ import { normalizeTicketTitle } from './ticket-title.mjs';
 /** Human list organization is separate from execution and acceptance state. */
 export function createTaskManagement({ database, orchestration, scheduler }) {
   const key = (kind, id) => `task-presentation:${kind}:${id}`;
-  const settled = (kind, row) => (kind === 'ticket' ? ['completed', 'failed', 'closed', 'cancelled'] : kind === 'goal' ? ['completed', 'failed', 'cancelled'] : ['unavailable', 'decided']).includes(row.status);
+  const settled = (kind, row) => kind === 'ticket' ? row.status === 'completed' || row.executionControl?.stopped === true : (kind === 'goal' ? ['completed', 'failed', 'cancelled'] : ['unavailable', 'decided']).includes(row.status);
   const executionRevision = (kind, row) => kind === 'ticket' ? row.instructionRevision ?? 1 : kind === 'goal' ? row.rowVersion ?? 0 : row.dispositionRevision ?? 0;
   const meta = (kind, row) => {
     const stored = database.meta(key(kind, row.id)) || { version: 0 };
@@ -20,6 +20,7 @@ export function createTaskManagement({ database, orchestration, scheduler }) {
     return database.transaction(() => {
       const row = kind === 'ticket' ? orchestration.getTicket(id) : kind === 'goal' ? scheduler.getGoal(id) : orchestration.getEvaluation(id);
       if (!row) throw new Error('任务不存在');
+      if (kind === 'ticket' && ['complete', 'reopen'].includes(operation)) throw Object.assign(new Error('工单完成由实际执行与交付确认，不能人工标记'), { code: 'TICKET_COMPLETION_MANAGED' });
       const current = meta(kind, row);
       if (!Number.isSafeInteger(version) || version !== current.version) throw Object.assign(new Error('任务已变化，请刷新后重试'), { code: 'REVISION_CONFLICT' });
       if (current.deleted) throw new Error('任务已删除');

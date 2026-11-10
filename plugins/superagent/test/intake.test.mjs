@@ -4,7 +4,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
-import { ingestAssistantEvent } from '../src/intake.mjs';
+import { ingestAssistantEvent as ingestUnifiedEvent } from '../src/intake.mjs';
+
+// Legacy examples now supply explicit trusted unified metadata as adapter fixtures.
+const ingestAssistantEvent = (db, event, policy) => ingestUnifiedEvent(db, { ...event, sourceType: event.kind, source: { ...event.source, channel: event.source?.channel || event.channel, sourceType: event.kind, conversationId: event.source?.chatId || event.threadId, chatId: event.source?.chatId || event.threadId, connectionId: event.channel } }, policy);
 
 test('late Feishu requests still get assessment but cannot answer current attention or enter subscriptions', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-late-message-'));
@@ -44,7 +47,7 @@ test('platform access accepts human requests without granting owner identity or 
     assert.equal(ingestAssistantEvent(db, { ...event, sourceKey: 'dm', kind: 'direct', mentioned: false }, policy).requiresEval, true);
     assert.equal(ingestAssistantEvent(db, { ...event, sourceKey: 'revoked' }, { ...policy, sourceAllowed: false }).gate.allowed, false);
     assert.equal(ingestAssistantEvent(db, { ...event, sourceKey: 'machine', actor: { id: 'bot', kind: 'machine' } }, policy).gate.allowed, false);
-    assert.equal(ingestAssistantEvent(db, { ...event, sourceKey: 'other-channel', threadId: 'telegram-thread', channel: 'telegram' }, policy).gate.allowed, false);
+    assert.equal(ingestAssistantEvent(db, { ...event, sourceKey: 'other-channel', threadId: 'telegram-thread', channel: 'telegram' }, policy).gate.allowed, true, 'unified rules do not discriminate by channel name');
   } finally { db.close(); }
 });
 

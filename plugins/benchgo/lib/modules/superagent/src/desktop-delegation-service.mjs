@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readAssessmentPolicy } from './assessment-policy.mjs';
 import { normalizeTicketTitle } from './ticket-title.mjs';
-import { roleModels } from './routing.mjs';
+import { configuredWorkModel, rejectModelOverride } from './work-role-policy.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export function currentHumanInstruction(ctx, agent) {
@@ -24,20 +24,19 @@ const required = (value, name, max = 100000) => {
 export function createDesktopDelegationService({ ctx, store, database = store.orchestration, readPolicy = () => readAssessmentPolicy(store, ctx.workspaceRegistry) }) {
   const pending = new Map();
   async function admit(input, exec, { ownerAgent, threadId = 'main', budgetGoalId, goalLeaf } = {}, form) {
+    rejectModelOverride(input);
     if (!ownerAgent || exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可委派桌面工单');
     if (goalLeaf !== undefined) required(goalLeaf, '目标子项路径', 512);
     const sessionId = required(ownerAgent.id, '会话标识');
     const requestId = required(input.requestId, '请求标识', 200);
     const projectId = input.projectId == null ? undefined : required(input.projectId, '项目标识');
     const duplicateOfTicketId = input.duplicateOfTicketId === undefined ? undefined : required(input.duplicateOfTicketId, '重复工单标识', 512);
-    if ((input.provider === undefined) !== (input.model === undefined)) throw new Error('供应商与模型标识必须同时提供或同时省略');
-    const explicitModel = input.provider === undefined ? undefined : { providerId: required(input.provider, '供应商标识'), modelId: required(input.model, '模型标识') };
     const target = required(input.text, '任务内容');
     const title = normalizeTicketTitle(input.title, target);
     const acceptance = input.acceptance ?? '';
     if (typeof acceptance !== 'string' || acceptance.length > 100000) throw new Error('无效验收条件');
     const requestKey = JSON.stringify([sessionId, requestId]);
-    const fingerprint = digest([projectId, explicitModel?.providerId, explicitModel?.modelId, target, acceptance, ...(input.title !== undefined ? [title] : []), ...(budgetGoalId ? [budgetGoalId] : []), ...(duplicateOfTicketId ? [duplicateOfTicketId] : [])]);
+    const fingerprint = digest([projectId, target, acceptance, ...(input.title !== undefined ? [title] : []), ...(budgetGoalId ? [budgetGoalId] : []), ...(duplicateOfTicketId ? [duplicateOfTicketId] : [])]);
     const prior = () => {
       const existing = database.desktopRequest(requestKey);
       if (existing && existing.fingerprint !== fingerprint) throw new Error('请求标识已用于不同任务');
@@ -62,8 +61,7 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       const policy = structuredClone(await readPolicy());
       const project = projectId === undefined ? undefined : policy.projects.find(item => item.id === projectId);
       if (projectId !== undefined && !project) throw new Error('项目不存在');
-      const selectedModel = explicitModel || roleModels(undefined, { models: policy.models || (policy.model ? [policy.model] : []), workerModels: policy.workerModels || policy.routingConfig?.workerModels }, 'worker')[0];
-      if (!selectedModel) throw new Error('尚未配置可用的 Worker 模型');
+      const selectedModel = configuredWorkModel(policy);
       const { providerId, modelId } = selectedModel;
       const info = await ctx.llm.resolveModelInfo(providerId, modelId, exec.signal);
       if (info?.id !== modelId || info?.provider !== providerId) throw new Error('模型解析改变了显式标识，无法委派');
@@ -72,11 +70,12 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       const latest = form || currentHumanInstruction(ctx, ownerAgent);
       if (!latest || digest(latest) !== instructionFingerprint) throw new Error('派工期间当前用户指令已变化，请重试');
       if (current.desktopVersion !== policy.desktopVersion || (project && !current.projects.some(item => item.id === projectId && item.path === project.path))) throw new Error('派工期间项目或授权规则已变化，请重试');
+      if (digest(configuredWorkModel(current)) !== digest(selectedModel)) throw new Error('派工期间工作角色模型已变化，请重试');
       // Each approved Goal leaf is its own Trigger over the same original instruction,
       // so one Trigger still opens exactly one Ticket. Host-supplied, never a model argument.
       const source = { channel: 'desktop', sessionId, messageId: goalLeaf === undefined || goalLeaf === 'root' ? message.id : `${message.id}#goal:${goalLeaf}`, threadId };
       const { trigger } = database.ingest({ dedupeKey: `desktop-message:${digest([sessionId, source.messageId])}`, thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' });
-      return database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, budgetGoalId, duplicateOfTicketId, model: explicitModel, mandate: {
+      return database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, budgetGoalId, duplicateOfTicketId, model: selectedModel, mandate: {
         actorId: 'desktop-owner', source, instruction: original, policyVersion: policy.desktopVersion,
         target, acceptance: taskAcceptance,
         admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval', ...(project ? { project: { id: project.id, path: project.path } } : {}),

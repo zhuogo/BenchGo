@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { validateTicketMandate } from './assessment-policy.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
-const terminal = new Set(['completed', 'failed', 'cancelled', 'closed']);
+const executionTerminal = new Set(['completed', 'failed', 'cancelled']);
 
 /** User-facing restoration only: never expose this as an Agent rollback tool. */
 export function createCheckpointService({ database, checkpoints, readPolicy, agents, validateMandate = validateTicketMandate }) {
@@ -30,7 +30,7 @@ export function createCheckpointService({ database, checkpoints, readPolicy, age
   }
   async function stopped(ticketId, runId, ownerSessionId) {
     const ticket = owned(ticketId, ownerSessionId), { assignment, run, assignments } = execution(ticket, runId);
-    if (!terminal.has(ticket.status) || assignments.some(row => !terminal.has(row.state)) || !terminal.has(run.state)) throw fail('CHECKPOINT_EXECUTION_ACTIVE', '请先终止工单；运行中或待核实执行不能回滚');
+    if (!(ticket.status === 'completed' || ticket.executionControl?.stopped) || assignments.some(row => !executionTerminal.has(row.state)) || !executionTerminal.has(run.state)) throw fail('CHECKPOINT_EXECUTION_ACTIVE', '请先终止工单；运行中或待核实执行不能回滚');
     if (assignment.executionStopped?.fence !== run.fence || assignment.executionStopped?.owner !== run.owner) throw fail('CHECKPOINT_EXECUTION_ACTIVE', '尚未确认原始执行器已经释放');
     if (agents?.get?.(run.sessionId)) throw fail('CHECKPOINT_EXECUTION_ACTIVE', '原始执行会话仍被宿主持有');
     const policy = await readPolicy();
@@ -53,7 +53,7 @@ export function createCheckpointService({ database, checkpoints, readPolicy, age
         const current = await stopped(ticketId, runId, ownerSessionId);
         if (current.policyVersion !== first.policyVersion) throw fail('CHECKPOINT_POLICY_CHANGED', '恢复期间权限已变更；保留恢复前备份');
       } });
-      const ticket = database.updateTicket(ticketId, { status: 'closed' }, { expectedInstructionRevision: first.ticket.instructionRevision });
+      const ticket = database.markTicketRestored(ticketId, { expectedInstructionRevision: first.ticket.instructionRevision });
       return { ...result, ticket };
     },
   };

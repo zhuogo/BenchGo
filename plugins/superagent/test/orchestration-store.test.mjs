@@ -14,19 +14,44 @@ async function fixture(t) {
 }
 const input = key => ({ dedupeKey: key, thread: { id: 'thread', source: { type: 'feishu', id: 'chat' } }, source: { eventId: key }, actor: { id: 'owner' }, content: '原始指令', gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p1' });
 
+for (const code of ['WORKER_SELF_CHECK', 'WORKER_TURN_INCOMPLETE']) test(`${code} retains its controlled cause in the waiting publication`, async t => {
+  const db = await fixture(t);
+  db.createThread({ id: 'self-check-thread', source: { type: 'desktop', id: 'owner' } });
+  const ticket = db.createTicket({ threadId: 'self-check-thread', target: 'finish existing work', mandate: { source: { channel: 'desktop', sessionId: 'owner' } } });
+  db.createAssignment(ticket.id, { id: 'self-check-work' });
+  const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
+  const ownership = { owner: assignment.owner, fence: assignment.fence };
+  const run = db.prepareRun(assignment.id, { ...ownership, sessionId: 'self-check-session', directory: 'directory' });
+  db.updateRun(run.id, { ...ownership, state: 'submitted' });
+  db.recordAssignmentFailure(assignment.id, { ...ownership, stage: 'execution', phase: 'evidence', code });
+  const saved = db.getAssignment(assignment.id);
+  assert.equal(saved.lastFailure.code, code);
+  const raw = new DatabaseSync(db.path, { readOnly: true });
+  try {
+    const row = raw.prepare('SELECT payload FROM sa_outbox WHERE ticket_id=?').get(ticket.id);
+    const publication = JSON.parse(row.payload).publication;
+    assert.equal(publication.origin, 'system');
+    assert.equal(publication.systemState.code, code);
+  } finally { raw.close(); }
+  assert.equal(db.getTicket(ticket.id).resultVersion, 0);
+  assert.equal(db.getTicket(ticket.id).status, 'waiting');
+});
+
 test('pause blocks queued work and resumes the exact checkpoint without replay', async t => {
   const db = await fixture(t);
   db.ingest({ ...input('pause'), mode: 'direct' });
   const ticket = db.createTicket({ threadId: 'thread', target: 'task', mandate: {} });
   db.createAssignment(ticket.id, { id: 'pause-work' });
-  assert.equal(db.pauseTicket(ticket.id).status, 'paused');
+  assert.equal(db.pauseTicket(ticket.id).status, 'waiting');
+  assert.equal(db.pauseTicket(ticket.id).executionControl.paused, true);
   assert.deepEqual(db.claimAssignments('worker', { validateMandate: () => true, now: 0 }), []);
-  assert.equal(db.resumeTicket(ticket.id).status, 'open');
+  assert.equal(db.resumeTicket(ticket.id).status, 'waiting');
   const [assignment] = db.claimAssignments('worker', { validateMandate: () => true, now: 0 });
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   const run = db.prepareRun(assignment.id, { ...ownership, sessionId: 'pause-session', directory: 'workspace', now: 1 });
   db.updateRun(run.id, { ...ownership, state: 'submitted', now: 2 });
-  assert.equal(db.pauseTicket(ticket.id).status, 'pausing');
+  assert.equal(db.pauseTicket(ticket.id).status, 'waiting');
+  assert.equal(db.pauseTicket(ticket.id).executionControl.pauseRequested, true);
   assert.throws(() => db.resumeTicket(ticket.id), { code: 'PAUSE_PENDING' });
   assert.equal(db.renewAssignment(assignment.id, { ...ownership, validateMandate: () => true, now: 3 }).allowed, true);
   const result = { runId: run.id, sessionId: 'pause-session', waitingPause: true, checkpoint: { manifestHash: 'saved' }, transcript: { hash: 'saved', lastSeq: 8 }, remainingExecutionMs: 1234 };
@@ -35,7 +60,8 @@ test('pause blocks queued work and resumes the exact checkpoint without replay',
   assert.throws(() => db.parkPause(assignment.id, { ...ownership, result, now: 5 }), { code: 'PAUSE_PENDING' });
   db.confirmExecutionStopped(assignment.id, ownership);
   assert.equal(db.parkPause(assignment.id, { ...ownership, result, now: 5 }).state, 'paused');
-  assert.equal(db.getTicket(ticket.id).status, 'paused');
+  assert.equal(db.getTicket(ticket.id).status, 'waiting');
+  assert.equal(db.getTicket(ticket.id).executionControl.paused, true);
   assert.equal(db.results(ticket.id).length, 0);
   db.resumeTicket(ticket.id);
   const [resumed] = db.claimAssignments('next-worker', { validateMandate: () => true, now: 6 });
@@ -58,19 +84,22 @@ test('pause survives reopening and never replays an expired execution', async t 
   db.pauseTicket(running.id);
   const reopened = createAssistantOrchestrationStore({ filename: db.path });
   try {
-    assert.equal(reopened.getTicket(queued.id).status, 'paused');
+    assert.equal(reopened.getTicket(queued.id).status, 'waiting');
+  assert.equal(reopened.getTicket(queued.id).executionControl.paused, true);
     assert.deepEqual(reopened.claimAssignments('replacement', { validateMandate: () => true, now: 11 }), []);
     assert.equal(reopened.getAssignment('unknown-paused').state, 'uncertain');
-    assert.equal(reopened.pauseTicket(running.id).status, 'pausing');
+    assert.equal(reopened.pauseTicket(running.id).status, 'waiting');
+  assert.equal(reopened.pauseTicket(running.id).executionControl.pauseRequested, true);
     assert.throws(() => reopened.resumeTicket(running.id), { code: 'PAUSE_PENDING' });
     reopened.resumeTicket(queued.id);
     assert.equal(reopened.claimAssignments('replacement', { validateMandate: () => true, now: 12 })[0].id, 'queued-paused');
-    assert.equal(reopened.cancelTicket(running.id).status, 'cancelling');
-    assert.equal(reopened.resumeTicket(running.id).status, 'cancelling');
+    assert.equal(reopened.cancelTicket(running.id).status, 'waiting');
+  assert.equal(reopened.cancelTicket(running.id).executionControl.stopRequested, true);
+    assert.throws(() => reopened.resumeTicket(running.id), { code: 'TICKET_STOPPED' });
   } finally { reopened.close(); }
 });
 
-test('requirement edits fence stale results and leases without status updates changing requirements', async t => {
+test('requirement edits fence stale results while preserving leases and queued Assignment identities', async t => {
   const db = await fixture(t);
   db.ingest({ ...input('revision'), mode: 'direct' });
   const ticket = db.createTicket({ threadId: 'thread', target: 'original', acceptance: 'first check', mandate: {} });
@@ -80,26 +109,23 @@ test('requirement edits fence stale results and leases without status updates ch
   const [active] = db.claimAssignments('worker', { validateMandate: () => true, now: 0 });
   assert.equal(active.instructionRevision, 1);
   assert.equal(db.updateTicket(ticket.id, { status: 'waiting' }).instructionRevision, 1);
-  assert.equal(db.updateTicket(ticket.id, { target: 'original', status: 'open' }).instructionRevision, 1);
+  assert.equal(db.updateTicket(ticket.id, { target: 'original', status: 'running' }).instructionRevision, 1);
   const changed = db.updateTicket(ticket.id, { acceptance: 'new check' }, { expectedInstructionRevision: 1 });
   assert.equal(changed.instructionRevision, 2);
   assert.throws(() => db.updateTicket(ticket.id, { target: 'lost update' }, { expectedInstructionRevision: 1 }), { code: 'INSTRUCTION_REVISION_CONFLICT' });
-  assert.throws(() => db.commitResult(ticket.id, { assignment: { ...active, instructionRevision: 2 }, result: { summary: 'stale' }, uniqueKey: 'stale', now: 1 }), { code: 'INSTRUCTION_REVISION_CONFLICT' });
+  assert.throws(() => db.commitResult(ticket.id, { assignment: { ...active, instructionRevision: 2 }, result: { summary: 'stale' }, uniqueKey: 'stale', now: 1 }), { code: 'ASSIGNMENT_CONFLICT' });
   assert.throws(() => db.commitResult(ticket.id, { result: { summary: 'unversioned' }, uniqueKey: 'unversioned', now: 1 }), { code: 'INSTRUCTION_REVISION_CONFLICT' });
   assert.equal(db.results(ticket.id).length, 0);
   assert.equal(db.deliveries(ticket.id).length, 0);
-  assert.equal(db.getTicket(ticket.id).status, 'open');
-  assert.deepEqual(db.claimAssignments('next', { validateMandate: () => true, now: 2 }), []);
-  assert.equal(db.getAssignment('queued').state, 'blocked');
-  assert.equal(db.renewAssignment(active.id, { owner: active.owner, fence: active.fence, validateMandate: () => true, now: 3 }).allowed, false);
+  assert.equal(db.getTicket(ticket.id).status, 'running');
+  const [queued] = db.claimAssignments('next', { validateMandate: () => true, now: 2 });
+  assert.equal(queued.id, 'queued'); assert.equal(queued.instructionRevision, 2);
+  assert.equal(db.renewAssignment(active.id, { owner: active.owner, fence: active.fence, validateMandate: () => true, now: 3 }).allowed, true);
   assert.throws(() => db.createAssignment(ticket.id, { instructionRevision: 1 }), { code: 'INSTRUCTION_REVISION_CONFLICT' });
-  const next = db.createAssignment(ticket.id, { id: 'new' });
-  assert.equal(next.instructionRevision, 2);
-  const [claimed] = db.claimAssignments('new-worker', { validateMandate: () => true, now: 4 });
-  db.commitResult(ticket.id, { assignment: claimed, result: { summary: 'new requirement met' }, uniqueKey: 'new', now: 5 });
-  assert.equal(db.getTicket(ticket.id).status, 'completed');
+  db.commitResult(ticket.id, { assignment: queued, result: { summary: 'new requirement met' }, uniqueKey: 'new', now: 5 });
+  assert.equal(db.getTicket(ticket.id).status, 'waiting');
   assert.equal(db.results(ticket.id)[0].instructionRevision, 2);
-  assert.equal(db.commitResult(ticket.id, { assignment: claimed, result: { summary: 'new requirement met' }, uniqueKey: 'new', now: 6 }).duplicate, true);
+  assert.equal(db.commitResult(ticket.id, { assignment: queued, result: { summary: 'new requirement met' }, uniqueKey: 'new', now: 6 }).duplicate, true);
 });
 
 test('existing database migrates Ticket requirements without rewriting legacy Assignments', async t => {
@@ -121,7 +147,7 @@ test('existing database migrates Ticket requirements without rewriting legacy As
     assert.equal(reopened.getTicket(ticket.id).acceptance, 'preserved acceptance');
     const [assignment] = reopened.claimAssignments('worker', { validateMandate: () => true, now: 0 });
     reopened.commitResult(ticket.id, { assignment, result: { summary: 'legacy complete' }, uniqueKey: 'legacy-result', now: 1 });
-    assert.equal(reopened.getTicket(ticket.id).status, 'completed');
+    assert.equal(reopened.getTicket(ticket.id).status, 'waiting');
   } finally { reopened.close(); }
 });
 
@@ -150,10 +176,11 @@ test('cancelling verification uses the original executor release and fences the 
   db.queueVerification(verifier.id, { ...request, fence: verifier.fence, now: 30005 });
   const [next] = db.claimAssignments('verifier-2', { validateMandate: () => true, now: 30006 });
   db.renewAssignment(next.id, { owner: next.owner, fence: next.fence, validateMandate: () => false, now: 30007 });
-  assert.equal(db.cancelTicket(ticket.id).status, 'cancelled');
+  assert.equal(db.cancelTicket(ticket.id).status, 'waiting');
+  assert.equal(db.cancelTicket(ticket.id).executionControl.stopped, true);
   assert.equal(db.getAssignment(assignment.id).state, 'cancelled');
   assert.equal(db.runs(assignment.id)[0].state, 'cancelled');
-  assert.throws(() => db.commitResult(ticket.id, { assignment: next, result: evidence, uniqueKey: 'late', now: 30008 }), { code: 'FENCING_CONFLICT' });
+  assert.throws(() => db.commitResult(ticket.id, { assignment: next, result: evidence, uniqueKey: 'late', now: 30008 }), { code: 'TICKET_CLOSED' });
   assert.equal(db.results(ticket.id).length, 0);
 });
 
@@ -162,7 +189,8 @@ test('verification without confirmed original release remains uncertain on cance
   db.queueVerification(assignment.id, request);
   const [verifier] = db.claimAssignments('verifier', { validateMandate: () => true, now: 6 });
   db.renewAssignment(verifier.id, { owner: verifier.owner, fence: verifier.fence, validateMandate: () => false, now: 7 });
-  assert.equal(db.cancelTicket(ticket.id).status, 'cancelling');
+  assert.equal(db.cancelTicket(ticket.id).status, 'waiting');
+  assert.equal(db.cancelTicket(ticket.id).executionControl.stopRequested, true);
   assert.equal(db.getAssignment(assignment.id).state, 'uncertain');
 });
 
@@ -181,7 +209,7 @@ test('verification-only recovery transfers a fenced lease without creating a sec
   assert.throws(() => db.updateRun(run.id, { owner: assignment.owner, fence: assignment.fence, state: 'uncertain', now: 7 }), { code: 'FENCING_CONFLICT' });
   db.commitResult(ticket.id, { assignment: recovered, result: evidence, status: 'waiting', uniqueKey: 'recovered', now: 8 });
   assert.equal(db.runs(assignment.id).length, 1);
-  assert.equal(db.runs(assignment.id)[0].state, 'waiting');
+  assert.equal(db.runs(assignment.id)[0].state, 'completed');
   assert.equal(db.getAssignment(assignment.id).state, 'completed');
   assert.equal(db.getTicket(ticket.id).status, 'waiting');
   assert.deepEqual(db.verificationCandidates({ now: 100000 }), []);
@@ -244,7 +272,7 @@ test('subscribed context needs a matching execution receipt before result commit
   assert.equal(db.acknowledgeSubscriptionMessage(assignment.id, receipt).applied, true);
   assert.equal(db.pendingSubscriptionMessages(ticket.id).length, 0);
   db.commitResult(ticket.id, { assignment, result: { summary: 'current result' }, uniqueKey: 'result' });
-  assert.equal(db.getTicket(ticket.id).status, 'completed');
+  assert.equal(db.getTicket(ticket.id).status, 'waiting');
 });
 test('immutable trigger, single eval, atomic decision ticket and subscribed handback', async t => {
   const db = await fixture(t);
@@ -340,13 +368,16 @@ test('cancellation fences execution and waits for the matching disposal receipt'
   const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
   const run = db.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence, sessionId: 'session', directory: 'workspace' });
   db.updateRun(run.id, { owner: assignment.owner, fence: assignment.fence, state: 'submitted' });
-  assert.equal(db.cancelTicket(ticket.id).status, 'cancelling');
-  assert.equal(db.cancelTicket(ticket.id).status, 'cancelling');
+  assert.equal(db.cancelTicket(ticket.id).status, 'waiting');
+  assert.equal(db.cancelTicket(ticket.id).executionControl.stopRequested, true);
+  assert.equal(db.cancelTicket(ticket.id).status, 'waiting');
+  assert.equal(db.cancelTicket(ticket.id).executionControl.stopRequested, true);
   assert.deepEqual(db.claimAssignments('other', { validateMandate: () => true }), []);
   assert.throws(() => db.createAssignment(ticket.id, { id: 'late' }), { code: 'TICKET_CLOSED' });
   assert.throws(() => db.confirmExecutionStopped(assignment.id, { owner: 'other', fence: assignment.fence }), { code: 'FENCING_CONFLICT' });
   assert.throws(() => db.confirmExecutionStopped(assignment.id, { owner: assignment.owner, fence: assignment.fence + 1 }), { code: 'FENCING_CONFLICT' });
-  assert.equal(db.confirmExecutionStopped(assignment.id, assignment).status, 'cancelled');
+  assert.equal(db.confirmExecutionStopped(assignment.id, assignment).status, 'waiting');
+  assert.equal(db.confirmExecutionStopped(assignment.id, assignment).executionControl.stopped, true);
   assert.equal(db.getAssignment(assignment.id).state, 'cancelled');
   assert.equal(db.runs(assignment.id)[0].state, 'cancelled');
 });
@@ -373,7 +404,8 @@ test('saved pause recovery waits for expired ownership and persists inspection b
   try { assert.equal(reopened.pauseRecoveryCandidates({ now: 101 }).length, 0); assert.equal(reopened.pauseRecoveryCandidates({ now: 100000 }).length, 1); } finally { reopened.close(); }
   assert.throws(() => db.recoverParkPause(assignment.id, { ...recovery, now: 101, observation: { ...recovery.observation, hash: 'changed' } }), { code: 'PAUSE_CONFLICT' });
   assert.equal(db.recoverParkPause(assignment.id, { ...recovery, now: 101 }).state, 'paused');
-  assert.equal(db.getTicket(ticket.id).status, 'paused');
+  assert.equal(db.getTicket(ticket.id).status, 'waiting');
+  assert.equal(db.getTicket(ticket.id).executionControl.paused, true);
   assert.equal(db.pauseRecoveryCandidates({ now: 100000 }).length, 0);
   assert.equal(db.runs(assignment.id).length, 1);
 });
@@ -386,7 +418,7 @@ test('inferred rules cannot attach to or stop an existing Ticket', () => {
       const ticket = db.createTicket({ threadId: 'thread', target: 'Owner work', mandate: {} });
       const lease = db.claimEval('thread', { owner: 'router', policyVersion: 'p1' });
       assert.throws(() => db.decide(accepted.candidate.id, { evalId: lease.id, owner: 'router', policyVersion: 'p1', outcome, ticketId: ticket.id, mode: 'auto', enabledRuleIds: ['rule'], assessment: { ruleIds: ['rule'] } }), { code: 'NOT_EXPLICIT' });
-      assert.equal(db.getTicket(ticket.id).status, 'open');
+      assert.equal(db.getTicket(ticket.id).status, 'waiting');
     } finally { db.close(); }
   }
 });
@@ -425,7 +457,7 @@ test('goal usage never blocks resume and budget pause reasons are rejected', asy
     assert.deepEqual(reopened.getTicket(ticket.id).pauseReason, { kind: 'manual' });
     assert.equal(reopened.goalBudget('parent').usage.requests, 5);
     assert.equal(reopened.resumeTicket(ticket.id).pauseReason, null);
-    assert.equal(reopened.getTicket(ticket.id).status, 'open');
+    assert.equal(reopened.getTicket(ticket.id).status, 'waiting');
   } finally { reopened.close(); }
 });
 
@@ -471,7 +503,7 @@ test('a Ticket parked by the removed execution-time gate resumes its original Ru
   } finally { raw.close(); }
   const resumed = db.queueBudgetContinuation(ticket.id, { expectedResultVersion: 0, validateMandate: () => true });
   assert.equal(resumed.queued, true);
-  assert.equal(db.getTicket(ticket.id).status, 'open');
+  assert.equal(db.getTicket(ticket.id).status, 'waiting');
   assert.equal(db.getTicket(ticket.id).continuationWait, null);
   const [continued] = db.claimAssignments('continued-owner', { validateMandate: () => true });
   assert.equal(continued.id, assignment.id);

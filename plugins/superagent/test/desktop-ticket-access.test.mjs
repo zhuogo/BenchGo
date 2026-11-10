@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
-import { createDesktopTicketAccess } from '../src/desktop-ticket-access.mjs';
+import { createDesktopTicketAccess, conciseTicketSummary, TICKET_SUMMARY_MAX_CHARS } from '../src/desktop-ticket-access.mjs';
 
 test('ticket queries respect session ownership, filter projects before limiting, and remain read only', t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
@@ -19,7 +19,7 @@ test('ticket queries respect session ownership, filter projects before limiting,
   assert.equal(first.nextOffset, 1);
   assert.equal(second.nextOffset, null);
   assert.deepEqual(new Set([...first.tickets, ...second.tickets].map(row => row.id)), new Set([tickets[0].id, tickets[2].id]));
-  assert.deepEqual(access.query('owner', { status: 'paused', projectId: 'a' }).tickets.map(row => row.id), [tickets[0].id]);
+  assert.equal(access.query('owner', { status: 'waiting', projectId: 'a' }).tickets.length, 2);
   const detail = access.read(tickets[0].id, 'owner');
   assert.throws(() => access.read(tickets[1].id, 'owner'), /当前会话/);
   assert.equal(access.query('owner').tickets.length, 2);
@@ -29,6 +29,23 @@ test('ticket queries respect session ownership, filter projects before limiting,
   assert.throws(() => access.query('owner', { limit: 101 }), /limit/);
   assert.throws(() => access.query('owner', { offset: -1 }), /offset/);
   assert.deepEqual(database.listTickets(), before);
+});
+
+test('routine AI query keeps one bounded paragraph and result pointers; full evidence is explicit', () => {
+  const ticket = { id: 't', status: 'waiting', title: '任务', instructionRevision: 2, resultVersion: 1,
+    mandate: { source: { channel: 'desktop', sessionId: 'owner' } },
+    continuationWait: { reason: '服务不可用\n\n等待恢复', resumeConditions: '更新凭据后继续' },
+    liveSummary: { goal: '要求'.repeat(1000), progress: '执行记录'.repeat(500) } };
+  assert(Array.from(conciseTicketSummary(ticket)).length <= TICKET_SUMMARY_MAX_CHARS);
+  assert(!conciseTicketSummary(ticket).includes('\n'));
+  assert.match(conciseTicketSummary(ticket), /更新凭据后继续/);
+  assert.match(conciseTicketSummary({ ...ticket, continuationWait: { code: 'EXECUTION_FAILED', reason: '原因'.repeat(500), resumeConditions: '更新凭据后继续' } }), /继续条件：更新凭据后继续；下一步：/);
+  const access = createDesktopTicketAccess({ listTickets: () => [ticket] });
+  const [row] = access.query('owner').tickets;
+  assert.equal(typeof row.liveSummary, 'string');
+  assert.deepEqual(row.result, { ticketId: 't', version: 1 });
+  assert.equal('target' in row, false); assert.equal('results' in row, false);
+  assert.match(conciseTicketSummary({ ...ticket, executionControl: { stopped: true } }), /已停止/);
 });
 
 test('trusted logical owner scope includes old model sessions and filters side conversations before paging', t => {

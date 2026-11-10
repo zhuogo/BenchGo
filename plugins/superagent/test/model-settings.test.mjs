@@ -3,10 +3,24 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { identityConfigPatch, auxiliaryModelPatch, auxiliaryCapabilityPatch } from '../client/model-settings.mjs';
+import { identityConfigPatch, auxiliaryModelPatch, auxiliaryCapabilityPatch, validateModelSettings } from '../client/model-settings.mjs';
 import { createAssistantStore } from '../src/store.mjs';
 import { collectAuxiliaryText } from '../src/auxiliary-request.mjs';
 import { roleModels } from '../src/routing.mjs';
+
+test('whole draft validation catches hidden role errors without rewriting opaque IDs', () => {
+  const opaque = { providerId: 'Exact/@ Provider', modelId: 'Exact: Model/01' };
+  const draft = { models: [opaque], workerModels: [], auxiliary: { models: [opaque], capabilities: ['review'] } };
+  assert.equal(validateModelSettings(draft), null);
+  for (const invalid of [{ providerId: '', modelId: 'x' }, { providerId: 'p', modelId: ' x' }, { providerId: 'p', modelId: 'x\n' }, { providerId: 'p', modelId: 'x'.repeat(513) }]) {
+    assert.equal(validateModelSettings({ ...draft, workerModels: [invalid] }).role, 'worker');
+  }
+  assert.equal(validateModelSettings({ ...draft, auxiliary: { models: [opaque, { ...opaque }] } }).role, 'auxiliary');
+  assert.equal(validateModelSettings({ models: Array.from({ length: 33 }, (_, index) => ({ ...opaque, modelId: `${index}` })) }).role, 'router');
+  assert.deepEqual(draft.models, [opaque]);
+  assert.equal(opaque.providerId, 'Exact/@ Provider');
+  assert.equal(opaque.modelId, 'Exact: Model/01');
+});
 
 test('model editor saves and reloads capability choices and routes opaque model IDs without dropping other settings', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'model-settings-'));

@@ -10,17 +10,26 @@ export function attentionAnswer(database, entry) {
 
 export function attentionBatchAnswers(database, ticketId, { sessionId, callId, questions }) {
   const resolved = database.attentionResolutions?.(ticketId, { sessionId, callId }) || [];
-  if (resolved.some(row => row.instructionRevision !== database.getTicket(ticketId)?.instructionRevision)) throw new Error('Attention requirements changed');
   const entries = database.attentions(ticketId).filter(entry => entry.sessionId === sessionId && entry.callId === callId);
   const expected = questions || (resolved.length ? resolved.map(row => row.question) : entries.map(row => row.question));
   if (!expected.length) throw new Error('Attention batch is missing');
-  return expected.map(question => {
+  const consumed = [];
+  const answers = expected.map(question => {
     const automatic = resolved.find(row => row.questionId === question.id && row.route !== 'user');
     if (automatic) return automatic.answer;
     const entry = entries.find(row => row.question.id === question.id);
     if (!entry?.answerTriggerId) throw new Error('Attention answer is missing');
+    consumed.push(entry);
     return attentionAnswer(database, entry);
   });
+  for (const entry of consumed) {
+    if (!database.applyTicketInput || !database.ticketInputs?.(ticketId).some(row => row.triggerId === entry.answerTriggerId)) continue;
+    const assignment = database.getAssignment(entry.assignmentId), run = database.runs(entry.assignmentId).find(row => row.sessionId === sessionId && row.fence === assignment.fence);
+    if (!run) throw new Error('Attention answer execution is missing');
+    database.applyTicketInput(entry.answerTriggerId, { assignmentId: assignment.id, owner: assignment.owner, fence: assignment.fence,
+      runId: run.id, sessionId, boundaryId: `attention:${callId}`, attentionId: entry.id });
+  }
+  return answers;
 }
 
 export function installWorkerAttention(scope, agent, { database, assignment, signal, sessionProjections, llm, readPolicy, pollMs = 250 }) {
@@ -29,7 +38,7 @@ export function installWorkerAttention(scope, agent, { database, assignment, sig
   scope.on('user-questions/request', async (request, next) => {
     if (request.agent !== agent) return next();
     const ticket = database.getTicket(assignment.ticketId);
-    if (!['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'email', 'webhook', 'api'].includes(ticket?.mandate.source?.channel)) return next();
+    if (!['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'webhook', 'api'].includes(ticket?.mandate.source?.channel)) return next();
     const waitSignal = AbortSignal.any([signal, ...(request.signal ? [request.signal] : [])]);
     waitSignal.throwIfAborted();
     let hold, holdAbort;

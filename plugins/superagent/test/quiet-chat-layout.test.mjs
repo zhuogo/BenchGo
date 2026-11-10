@@ -25,13 +25,14 @@ async function fixture() {
       const root = createRoot(document.getElementById('root'));
       const messages = [
         { id:'short', role:'user', text:'好的', time:1793808000000 },
-        { id:'reply', role:'assistant', kind:'final', text:'已经记下。接下来按计划推进。', usage:{inputTokens:120,outputTokens:32}, time:1793808001000 },
+        { id:'reply', role:'assistant', kind:'final', text:'已经记下。接下来按计划推进。\\n\\n阅读较长的中文段落时，需要清晰的笔画、舒展的行距，以及能让视线自然停顿的段落留白。这里也混排 English text 2026 与 **关键结论**，便于核对不同内容的辨识度。\\n\\n- 第一项：保留足够的行间距，避免汉字笔画挤在一起。\\n- 第二项：访问 [说明文档](https://example.com/docs/readability) 查看参考内容。', usage:{inputTokens:120,outputTokens:32}, time:1793808001000 },
         { id:'question:c1', role:'user', kind:'question-reply', questions:[{id:'use',question:'这台服务器主要用来做什么？',header:'用途'},{id:'old',question:'旧服务器怎么处理？'},{id:'note',question:'还有补充吗？'}], answers:[{id:'use',selected:['网站','文件共享']},{id:'old',selected:[],custom:'先保留观察'},{id:'note',selected:[]}], text:'用途：网站、文件共享', time:1793808001500 },
         { id:'long', role:'user', text:'请检查暗主题下输入消息的可读性。\\n长消息也要清楚显示，工具栏不能遮住文字。'.repeat(3), time:1793808002000 },
         { id:'code', role:'assistant', kind:'final', text:'检查结果：\\n\\n~~~js\\nconst message = "BenchGo keeps your messages readable";\\nconsole.log(message);\\n~~~\\n\\n| 项目 | 结果 |\\n| --- | --- |\\n| 暗主题 | 文字和气泡清晰可辨 |\\n| 操作 | 复制、表情、用量 |', time:1793808003000 }
       ];
       window.renderScenario = (state = 'data') => {
         window.apiCalls = [];
+        window.executionOpens = [];
         const api = async (name, args) => {
           window.apiCalls.push([name,args]);
           if (state === 'loading') return new Promise(() => {});
@@ -40,9 +41,10 @@ async function fixture() {
         };
         const statuses = new Map(state==='question' ? [['test-question',{pendingInteraction:{kind:'question',key:'q',sessionId:'test-question'}}]] : []);
         const home = { api, threadId:'main', assistantName:'BenchGo', sessionId:'test-'+state, sessionStatus:{ subscribe:()=>()=>{}, getSnapshot:()=>statuses },
-          assistantConfig:{cardMotion:false}, onOpenResources(){},
+          assistantConfig:{name:'',cardMotion:false}, onOpenResources(){},
+          onOpenExecution:async execution=>{window.executionOpens.push(execution);if(window.failExecution)throw new Error('执行会话打开失败');if(window.holdExecution)await new Promise(resolve=>window.finishExecution=resolve);},
           onRefresh:async()=>{}, history:{ messages:state==='data'?messages:[], reactions:{'message:reply':'👍'},
-            notifications:state==='data'?[{eventId:'delivery',threadId:'main',text:'布局已调整，窄容器也保持侧边操作。',createdAt:1793808004000,options:['继续检查']}]:[] } };
+            notifications:state==='data'?[{eventId:'delivery',threadId:'main',ticketId:'ticket',ticketStatus:'completed',executionSession:{available:true,ticketId:'ticket',sessionId:'official-execution',placement:'ungrouped'},text:'布局已调整，窄容器也保持侧边操作。',createdAt:1793808004000,options:['继续检查']}]:[] } };
         root.render(<div className="ba-root ba-official-conversation" data-assistant-chat="">
           <div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll="" tabIndex={0}>
             {!['data','waiting','question'].includes(state) && <AssistantHome key={'home-'+state} {...home} input={{phase:'plain',draft:''}} inputActions={{captureInsertion(){},insertText(){return true},persistDraft(){}}}/>}
@@ -82,6 +84,7 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
     page.on('pageerror',error=>errors.push(error.message));
     await page.setContent(html);
     await page.locator('[data-chat-key="message:short"]').waitFor();
+    assert.equal(await page.locator('[data-chat-key="message:reply"] .ba-chat-content').getAttribute('aria-label'),'未命名','explicit empty names do not fall back to the cached product name');
     await page.evaluate(()=>document.fonts.ready);
     const geometry = page => page.locator('.ba-chat-feed').evaluate(feed => {
       const origin=feed.getBoundingClientRect();
@@ -99,6 +102,15 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
       await page.locator('.ba-chat-feed').focus();
       const scenario=`${width}${containerWidth?'-container-'+containerWidth:''}/${dark}`;
       const baseline=await geometry(page);
+      const typography=await page.locator('[data-chat-key="message:reply"] .ba-chat-content').evaluate(node=>{
+        const markdown=node.querySelector('[class*="_markdown"]'), paragraph=markdown.querySelector('p');
+        const text=getComputedStyle(markdown),p=getComputedStyle(paragraph);
+        return {font:text.fontFamily,size:parseFloat(text.fontSize),line:parseFloat(text.lineHeight),gap:parseFloat(p.marginBottom)};
+      });
+      assert(!typography.font.includes('Commander FangYuan')&&typography.font.includes('Microsoft YaHei'),'chat prose uses the platform reading face');
+      assert(typography.size>=15&&typography.line/typography.size>=1.79&&typography.gap>=15,'long prose has a readable size, line-height and paragraph gap');
+      const codeFont=await page.locator('[data-chat-key="message:code"] code').first().evaluate(node=>getComputedStyle(node).fontFamily);
+      assert(/Consolas|Mono|monospace/.test(codeFont),'code retains a monospace face');
       for(const row of await page.locator('.ba-chat-message').all()) {
         await row.hover();
         assert.deepEqual(await geometry(page),baseline,`${scenario}: hovering any message must leave all message positions and scroll height unchanged`);
@@ -170,6 +182,22 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
     }
     await page.locator('[data-chat-key="notification:delivery"]').getByRole('button',{name:'继续检查',exact:true}).click();
     assert.deepEqual(await page.evaluate(()=>window.apiCalls.filter(([name])=>name.startsWith('notification'))),[['notificationOption',{eventId:'delivery',threadId:'main',text:'继续检查'}]],'delivery options retain the validated reply endpoint without a read action');
+    const execution=page.getByRole('button',{name:'查看执行会话',exact:true});
+    await page.evaluate(()=>window.holdExecution=true);
+    await execution.click();
+    assert(await execution.isDisabled(),'navigation stays busy while the official session opens');
+    assert.equal(await page.getByLabel('工单执行会话',{exact:true}).getAttribute('aria-busy'),'true');
+    await page.evaluate(()=>{window.holdExecution=false;window.finishExecution();});
+    await execution.waitFor({state:'visible'});
+    await page.waitForFunction(()=>!document.querySelector('[aria-label="工单执行会话"] button').disabled);
+    assert.equal(await page.evaluate(()=>window.executionOpens[0].sessionId),'official-execution');
+    await page.evaluate(()=>window.failExecution=true);
+    await execution.click();
+    await page.getByRole('alert').filter({hasText:'执行会话打开失败'}).waitFor();
+    assert(await execution.isEnabled(),'navigation failure keeps a retry entry on the same message');
+    await page.evaluate(()=>window.failExecution=false);
+    await execution.click();
+    assert.equal(await page.getByRole('alert').filter({hasText:'执行会话打开失败'}).count(),0);
     await shot(page,'dark-delivery');
     const reply=page.locator('[data-chat-key="message:reply"]');
     await reply.getByRole('button',{name:'本条回复用量',exact:true}).focus();

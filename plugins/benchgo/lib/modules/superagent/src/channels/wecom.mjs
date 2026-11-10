@@ -5,15 +5,15 @@ import { deliveryFailure } from './delivery-outcome.mjs';
 export const channelDefinition = {
   id: 'wecom', label: '企业微信', defaults: { enabled: false, ownerIds: [], chatIds: [], botId: '', secretRef: '' },
   fields: [{ key: 'botId', label: '机器人 ID', type: 'text', required: true }, { key: 'secretRef', label: '机器人 Secret 凭据引用', type: 'secretRef', required: true }],
-  capabilities: { direct: true, group: true, text: true, attachments: false, realtimeVoice: false, transport: 'websocket', notes: '智能机器人长连接；支持文字及平台已转写语音，附件暂不支持。群聊需 @ 机器人；回复窗口约六分钟，长任务可在工作台查看结果或重新 @ 查询。' },
+  capabilities: { externalActions: ['external-send'], direct: true, group: true, text: true, attachments: false, realtimeVoice: false, transport: 'websocket', notes: '智能机器人长连接；支持文字及平台已转写语音，附件暂不支持。群聊需 @ 机器人；回复窗口约六分钟，长任务可在工作台查看结果或重新 @ 查询。' },
 };
 export const wecomConfig = input => configFor(channelDefinition, input);
-export function normalizeWecomEvent(frame, config) {
+export function normalizeWecomEvent(frame, config, metadataOnly = false) {
   if (!['aibot_msg_callback', 'aibot_callback'].includes(frame.cmd)) return null;
   const b = frame.body || {}, group = b.chattype === 'group';
-  const text = b.msgtype === 'mixed' ? (b.mixed?.msg_item || []).map(x => x.text?.content || '').filter(Boolean).join('\n') : b.text?.content || b.voice?.content || '';
+  const text = metadataOnly ? '' : b.msgtype === 'mixed' ? (b.mixed?.msg_item || []).map(x => x.text?.content || '').filter(Boolean).join('\n') : b.text?.content || b.voice?.content || '';
   return eventFor('wecom', config, { messageId: b.msgid, actorId: b.from?.userid, chatId: b.chatid || b.from?.userid,
-    text: text || '[此消息包含暂不支持的附件，请发送文字说明或使用 BenchGo 工作台]', group,
+    metadataOnly, text: text || '[此消息包含暂不支持的附件，请发送文字说明或使用 BenchGo 工作台]', group,
     // The authenticated smart-bot group callback is emitted only for bot mentions.
     mentioned: group, extra: { replyRequestId: frame.headers?.req_id, chatType: group ? 'group' : 'direct' } });
 }
@@ -42,7 +42,7 @@ export function createWecomAdapter(options) {
         frame.errcode === 0 ? waiter.resolve() : waiter.reject(deliveryFailure('企业微信未接受交付', Number.isInteger(frame.errcode) ? 'not_sent' : 'unknown', 502)); return;
       }
       if (b.state.authentication !== 'verified') return;
-      await b.receive(config, normalizeWecomEvent(frame, config));
+      await b.receive(config, normalizeWecomEvent(frame, config, true), () => normalizeWecomEvent(frame, config));
     },
   });
   return {
@@ -61,7 +61,7 @@ export function createWecomAdapter(options) {
       try {
         await lifecycle.send(source.chatType === 'group'
           ? { cmd: 'aibot_respond_msg', headers: { req_id: reqId }, body: { msgtype: 'stream', stream: { id: deliveryId(idempotencyKey), finish: true, content: text } } }
-          : { cmd: 'aibot_send_msg', headers: { req_id: reqId }, body: { chatid: source.chatId, msgtype: 'markdown', markdown: { content: text } } });
+          : { cmd: 'aibot_send_msg', headers: { req_id: reqId }, body: { chatid: source.chatId, msgtype: 'markdown', markdown: { content: text } } }, { operation: 'send', source });
       } catch (error) { acknowledgements.delete(reqId); clearTimeout(timer); resolve(); throw error; }
       await receipt; b.state.sending = 'verified'; return { status: 'accepted', messageId: reqId };
     },

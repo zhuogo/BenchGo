@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { openStartupWindow } from './startup-window.mjs';
-import { startupWindowPlugin } from './prepare-startup.mjs';
+import { startupWindowPlugin, verifyStartupBundle } from './prepare-startup.mjs';
 
 function fixture(fail = false) {
   const app = new EventEmitter();
@@ -79,4 +82,32 @@ test('compile integration targets one official entry and rejects changed lifecyc
   assert.match(code, /function reportFatal\(error, source\) \{\n    closeBenchgoStartup\?\.\(\);/);
   plugin.generateBundle();
   assert.throws(() => plugin.transform(source.replace('async function main()', 'async function changed()'), path.pathname), /Official startup changed/);
+});
+
+test('startup executes the packaged enrollment entry and propagates failures before Host startup', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'benchgo-enrollment-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = 'async function main() {}\nfunction reportFatal(error, source) {}';
+  const plugin = startupWindowPlugin('/main.js');
+  const code = plugin.transform(source, '/main.js').code;
+  assert.doesNotMatch(code, /import \{ initializePluginProfile \} from/);
+  const functionSource = code.slice(code.indexOf('async function ensureBenchgoPlugin'), code.indexOf('\nlet closeBenchgoStartup'));
+  const run = new (Object.getPrototypeOf(async function () {}).constructor)('join', 'benchgoPathToFileURL', 'resourcesPath', 'console', `${functionSource}; return ensureBenchgoPlugin(resourcesPath);`);
+  for (const [name, body] of [
+    ['valid', 'export async function initializePluginProfile({ resources }) { return { resources, owner: "packaged-entry" }; }'],
+    ['invalid', 'export async function initializePluginProfile() { throw new Error("registration failed"); }'],
+  ]) {
+    const resources = join(root, name);
+    await mkdir(join(resources, 'benchgo'), { recursive: true });
+    await writeFile(join(resources, 'benchgo/plugin-bundle.mjs'), body);
+    if (name === 'valid') assert.deepEqual(await run(join, pathToFileURL, resources, console), { resources, owner: 'packaged-entry' });
+    else {
+      const errors = [];
+      await assert.rejects(run(join, pathToFileURL, resources, { error: (...args) => errors.push(args) }), /registration failed/);
+      assert.equal(errors.length, 1);
+    }
+  }
+  verifyStartupBundle(code);
+  assert.throws(() => verifyStartupBundle(`${code}\nfunction initializePluginProfile() {}`), /inlined enrollment/);
+  assert.throws(() => verifyStartupBundle(code.replace('await import(enrollmentModule)', 'await oldEnrollment()')), /packaged enrollment/);
 });

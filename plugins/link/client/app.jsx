@@ -1,3 +1,4 @@
+import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import { Select } from '../../shared/client/select.jsx';
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -91,7 +92,7 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
   };
   const refreshStatus = async () => { setBusy('refresh'); setLoading(true); setError(''); try { if (retryPolling.current) await retryPolling.current(); else await refresh(); } catch (e) { setStatusError(e.message); setDiagnostic(e.detail || ''); setPairing(null); } finally { setBusy(''); setLoading(false); } };
   const unavailable = !!busy || loading || !status || !!statusError;
-  if (loading && !status && !statusError) return <section className="link-settings"><DeviceLoading label="正在读取连接状态…" skeleton /></section>;
+  if (loading && !status && !statusError) return <section className="link-settings"><DeviceLoading label="正在读取连接状态…" /></section>;
   const pairButton = <Button kind="primary" icon="scan" onClick={beginPairing} disabled={unavailable}>{busy === 'pairing' ? '正在准备…' : '生成连接信息'}</Button>;
   const details = <>
     <Disclosure className="link-advanced" title="高级设置">
@@ -108,9 +109,9 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
     <div className="link-device-list"><div className="link-panel-head"><div><h3>已授权访问此设备</h3></div><span>{status ? `${status.devices?.length || 0} 台` : '—'}</span></div>{status?.devices?.length ? status.devices.map(device => <div className="link-device" key={device.id}><UIIcon name={deviceIcon(device)} size={18} /><div className="link-authorized-device-info">
       {editingDevice?.id === device.id ? <form className="link-device-rename" onSubmit={renameDevice}>
         <input aria-label="设备备注名称" autoFocus value={editingDevice.name} maxLength={100} disabled={unavailable} onFocus={event => event.currentTarget.select()} onChange={event => setEditingDevice(value => ({ ...value, name: event.target.value }))} onCompositionStart={() => { composingDeviceName.current = true; }} onCompositionEnd={() => { composingDeviceName.current = false; }} onKeyDown={deviceNameKeyDown} />
-        <button type="button" className="link-name-action link-name-cancel" title="取消修改" aria-label="取消修改设备备注" onClick={cancelDeviceRename} disabled={unavailable}><UIIcon name="close" size={15} /></button>
-        <button type="submit" className="link-name-action link-name-confirm" title="保存备注" aria-label="保存设备备注" disabled={unavailable || !editingDevice.name.trim()}><UIIcon name="check" size={15} /></button>
-      </form> : <div className="link-device-name"><strong>{device.name || '未命名设备'}</strong><button type="button" className="link-name-action" title="编辑备注" aria-label="编辑设备备注" onClick={() => { composingDeviceName.current = false; setEditingDevice({ id: device.id, name: device.name || '' }); setError(''); }} disabled={unavailable}><UIIcon name="edit" size={14} /></button></div>}
+        <Tooltip label="取消修改"><button type="button" className="link-name-action link-name-cancel" aria-label="取消修改设备备注" onClick={cancelDeviceRename} disabled={unavailable}><UIIcon name="close" size={15} /></button></Tooltip>
+        <Tooltip label="保存备注"><button type="submit" className="link-name-action link-name-confirm" aria-label="保存设备备注" disabled={unavailable || !editingDevice.name.trim()}><UIIcon name="check" size={15} /></button></Tooltip>
+      </form> : <div className="link-device-name"><strong>{device.name || '未命名设备'}</strong><Tooltip label="编辑备注"><button type="button" className="link-name-action" aria-label="编辑设备备注" onClick={() => { composingDeviceName.current = false; setEditingDevice({ id: device.id, name: device.name || '' }); setError(''); }} disabled={unavailable}><UIIcon name="edit" size={14} /></button></Tooltip></div>}
       <small>最近连接 {formatTime(device.lastSeenAt)}</small>
     </div><Button icon="trash" className="link-button-danger" onClick={() => confirm(device.id, 'revoke')} disabled={unavailable}>撤销</Button></div>) : <p className="link-empty">{loading ? '正在连接…' : statusError ? '暂不可用' : '还没有配对设备'}</p>}</div>
   </>;

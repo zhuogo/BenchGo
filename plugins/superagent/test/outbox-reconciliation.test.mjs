@@ -10,22 +10,25 @@ async function fixture(t, receipt) {
   let db = createAssistantOrchestrationStore({ directory });
   t.after(async () => { db.close(); await rm(directory, { recursive: true, force: true }); });
   db.createThread({ id: 'main', source: { type: 'desktop', id: 'main' } });
-  const ticket = db.createTicket({ threadId: 'main', target: 'saved task', mandate: {} });
-  db.commitResult(ticket.id, { result: { text: 'done' }, uniqueKey: 'result', outboxPayload: { text: 'done' }, now: 10 });
+  const ticket = db.createTicket({ threadId: 'main', target: 'saved task', mandate: { source: { channel: 'desktop', sessionId: 'main' } } });
+  const commit = now => db.commitResult(ticket.id, { result: { summary: 'done', outcome: 'completed', selfCheck: { summary: 'checked current requirements' } }, uniqueKey: 'result', now });
+  commit(10);
   const [delivery] = db.claimOutbox('sender', { now: 11 });
   db.finishOutbox(delivery.id, { owner: 'sender', uncertain: true, receipt, now: 12 });
-  return { get db() { return db; }, delivery, ticket,
+  return { get db() { return db; }, delivery, ticket, commit,
     reopen() { db.close(); db = createAssistantOrchestrationStore({ directory }); } };
 }
 
 test('unknown delivery remains parked across restart; verified sent never repeats execution', async t => {
   const f = await fixture(t);
+  assert.equal(f.db.getTicket(f.ticket.id).status, 'waiting', 'a saved result and unknown send cannot close its Ticket');
   assert.deepEqual(f.db.claimOutbox('retry', { now: 100000 }), []);
   const request = { attempts: 1, outcome: 'unknown', evidence: '平台尚未返回查询结果', now: 20 };
   assert.equal(f.db.reconcileOutbox(f.delivery.id, request).state, 'uncertain');
   f.reopen();
   assert.equal(f.db.deliveries(f.ticket.id)[0].reconciliations[0].outcome, 'unknown');
-  assert.equal(f.db.commitResult(f.ticket.id, { result: { text: 'done' }, uniqueKey: 'result', outboxPayload: { text: 'done' }, now: 25 }).duplicate, true);
+  assert.equal(f.commit(25).duplicate, true);
+  assert.equal(f.db.getTicket(f.ticket.id).status, 'waiting', 'an idempotent commit does not replace the delivery receipt');
   const completed = f.db.reconcileOutbox(f.delivery.id, { ...request, outcome: 'sent',
     evidence: '平台消息查询已找到原请求', receipt: { status: 'accepted', messageId: 'opaque/platform:1' }, now: 30 });
   assert.equal(completed.state, 'sent');

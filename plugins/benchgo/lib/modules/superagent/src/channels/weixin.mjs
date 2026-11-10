@@ -11,15 +11,15 @@ const officialOrigin = value => {
 export const channelDefinition = {
   id: 'weixin', label: '微信', defaults: { enabled: false, ownerIds: [], chatIds: [], accountId: '', tokenRef: '', baseUrl: 'https://ilinkai.weixin.qq.com' },
   fields: [{ key: 'accountId', label: 'iLink 机器人账号 ID', type: 'text', required: true }, { key: 'tokenRef', label: 'iLink Token', type: 'secretRef', required: true }, { key: 'baseUrl', label: '官方服务地址', type: 'text', advanced: true }],
-  capabilities: { direct: true, group: false, text: true, attachments: false, realtimeVoice: false, qrLogin: true, transport: 'long-poll', notes: '扫码连接 iLink 机器人私聊，也可在此页面安全录入已有 Token。不支持普通微信群；图片、文件、语音附件暂不支持。' },
+  capabilities: { externalActions: ['external-send'], direct: true, group: false, text: true, attachments: false, realtimeVoice: false, qrLogin: true, transport: 'long-poll', notes: '扫码连接 iLink 机器人私聊，也可在此页面安全录入已有 Token。不支持普通微信群；图片、文件、语音附件暂不支持。' },
 };
 export const weixinConfig = input => { const config = configFor(channelDefinition, input); officialOrigin(config.baseUrl); return config; };
-export function normalizeWeixinEvent(message, config) {
+export function normalizeWeixinEvent(message, config, metadataOnly = false) {
   if (message.message_type !== 1 || message.group_id || message.room_id || message.chat_room_id || (message.msg_type === 1 && message.to_user_id && message.to_user_id !== config.accountId)) return null;
-  const items = Array.isArray(message.item_list) ? message.item_list : [];
+  const items = !metadataOnly && Array.isArray(message.item_list) ? message.item_list : [];
   const text = items.filter(x => x.type === 1).map(x => x.text_item?.text || '').join('\n');
   return eventFor('weixin', config, { messageId: String(message.message_id || ''), actorId: message.from_user_id, chatId: message.from_user_id,
-    text: text || '[此消息包含暂不支持的附件，请发送文字说明或使用 BenchGo 工作台]', occurredAt: message.create_time_ms });
+    metadataOnly, text: metadataOnly ? '' : text || '[此消息包含暂不支持的附件，请发送文字说明或使用 BenchGo 工作台]', occurredAt: message.create_time_ms });
 }
 export function createWeixinAdapter(options) {
   const b = createBoundary(channelDefinition, options), contexts = new Map();
@@ -30,6 +30,7 @@ export function createWeixinAdapter(options) {
   const loginRequest = async (session, path) => {
     if (disposed || login !== session || now() >= session.expiresAt) throw fail('扫码会话已失效，请重新开始', 410);
     let response, body;
+    await b.authorize('receive', b.connectionSource(await b.read()));
     try {
       response = await (options.fetcher || fetch)(session.origin + path, { method: 'GET', redirect: 'error', headers: { 'iLink-App-Id': 'bot', 'iLink-App-ClientVersion': '131584' }, signal: AbortSignal.any([session.controller.signal, AbortSignal.timeout(35_000)]) });
       body = await response.json();
@@ -38,12 +39,12 @@ export function createWeixinAdapter(options) {
     if (!response.ok || (body.ret !== undefined && body.ret !== 0) || (body.errcode !== undefined && body.errcode !== 0)) throw fail('微信扫码请求未成功', 502);
     return body;
   };
-  const request = async (config, endpoint, payload, timeout = 15_000) => {
+  const request = async (config, endpoint, payload, timeout = 15_000, source) => {
     const token = await beforeDelivery(() => b.secret(config.tokenRef));
     const body = await b.request(config, `${officialOrigin(config.baseUrl)}/ilink/bot/${endpoint}`, { method: 'POST',
       headers: { 'content-type': 'application/json', AuthorizationType: 'ilink_bot_token', authorization: `Bearer ${token}`,
         'X-WECHAT-UIN': Buffer.from(String(randomBytes(4).readUInt32BE())).toString('base64'), 'iLink-App-Id': 'bot', 'iLink-App-ClientVersion': '131584' },
-      body: JSON.stringify({ ...payload, base_info: { channel_version: '2.2.0' } }) }, timeout);
+      body: JSON.stringify({ ...payload, base_info: { channel_version: '2.2.0' } }) }, timeout, source ? { operation: 'send', source } : {});
     if ((body.ret !== undefined && body.ret !== 0) || (body.errcode !== undefined && body.errcode !== 0)) throw deliveryFailure('微信 iLink 请求失败，请检查登录是否过期', 'not_sent', 502);
     b.state.authentication = 'verified'; return body;
   };
@@ -54,12 +55,12 @@ export function createWeixinAdapter(options) {
         if (gen !== generation) break;
         if (!Array.isArray(body.msgs)) throw fail('微信轮询回执无效', 502);
         for (const message of body.msgs) {
-          const event = normalizeWeixinEvent(message, config);
+          const event = normalizeWeixinEvent(message, config, true);
           if (event && typeof message.context_token === 'string' && message.context_token) {
             contexts.set(event.source.chatId, message.context_token);
             if (contexts.size > 1000) contexts.delete(contexts.keys().next().value);
           }
-          await b.receive(config, event);
+          await b.receive(config, event, () => normalizeWeixinEvent(message, config));
         }
         if (typeof body.get_updates_buf === 'string') cursor = body.get_updates_buf;
         b.state.connection = { state: 'connected' }; b.state.error = null;
@@ -110,7 +111,7 @@ export function createWeixinAdapter(options) {
         if (!validId(saved?.ref)) throw fail('微信凭据保存失败', 503);
         if (login !== session || disposed) throw fail('扫码会话已取消', 410);
         clearLogin();
-        return { status: 'confirmed', config: { accountId: body.ilink_bot_id, tokenRef: saved.ref, baseUrl, ...(validId(body.ilink_user_id) ? { ownerIds: [body.ilink_user_id] } : {}) } };
+        return { status: 'confirmed', config: { accountId: body.ilink_bot_id, tokenRef: saved.ref, baseUrl } };
       })();
       try { return await session.pending; } finally { session.pending = undefined; }
     },
@@ -123,7 +124,7 @@ export function createWeixinAdapter(options) {
       const config = await b.outgoing(source, text, idempotencyKey), context = contexts.get(source.chatId);
       if (!context) throw deliveryFailure('微信回复上下文不可用，请在微信重新发送一条消息', 'not_sent', 409);
       const clientId = deliveryId(idempotencyKey);
-      const body = await request(config, 'sendmessage', { msg: { from_user_id: '', to_user_id: source.chatId, client_id: clientId, message_type: 2, message_state: 2, context_token: context, item_list: [{ type: 1, text_item: { text } }] } });
+      const body = await request(config, 'sendmessage', { msg: { from_user_id: '', to_user_id: source.chatId, client_id: clientId, message_type: 2, message_state: 2, context_token: context, item_list: [{ type: 1, text_item: { text } }] } }, 15_000, source);
       if (body.ret !== 0 && body.errcode !== 0) throw deliveryFailure('微信缺少确定发送回执', 'unknown', 502);
       b.state.sending = 'verified'; return { status: 'accepted', messageId: clientId };
     },

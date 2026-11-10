@@ -4,3 +4,7 @@ button.ba-card.ba-card:hover{background:var(--bg-hover,rgba(127,127,127,.08))}
 .ba-card.ba-card:focus-visible{outline:2px solid currentColor;outline-offset:2px}
 .ba-card iframe{display:block;flex:none;width:160px;height:40px;border:0;pointer-events:none}
 .ba-card-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ba-card[data-status]{position:relative;padding-right:14px;flex:1 1 auto}
+.ba-card-status{position:absolute;right:3px;bottom:3px;display:flex;align-items:center;justify-content:center;width:12px;height:12px;border-radius:50%;font:600 10px/1 system-ui;color:var(--dsw-alias-state-business-primary,#315be8);background:transparent}
+.ba-card[data-status="waiting"] .ba-card-status{color:var(--dsw-alias-state-warn-primary,#a87425)}
+.ba-card[data-status="error"] .ba-card-status{color:var(--dsw-alias-state-error-primary,#d05c5c)}

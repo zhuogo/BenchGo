@@ -1,0 +1,8 @@
+{
+  "name": "@benchgo/efficiency",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Internal BenchGo composition of native tools and context management",
+  "license": "MIT"
+}

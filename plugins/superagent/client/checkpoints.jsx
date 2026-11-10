@@ -6,7 +6,7 @@ const labels = { delete: '删除', restore: '恢复', replace: '替换' };
 
 export function CheckpointRestore({ ticket, plan, restore, onRestored }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [result, setResult] = useState(null);
-  const stopped = terminal.has(ticket.status) && (ticket.assignments || []).every(row => terminal.has(row.state));
+  const stopped = (ticket.status === 'completed' || ticket.executionControl?.stopped === true) && (ticket.assignments || []).every(row => terminal.has(row.state));
   const conflicts = plan.conflicts || [];
   const submit = async () => {
     if (busy || result || !stopped || conflicts.length || !plan.token) return;

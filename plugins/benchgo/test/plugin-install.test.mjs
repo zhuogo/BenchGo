@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as filesystem from 'node:fs/promises';
 import { mkdtemp, mkdir, readFile, writeFile, rm, symlink, realpath, readdir, lstat } from 'node:fs/promises';
-import { createRequire, syncBuiltinESMExports } from 'node:module';
+import { createRequire, registerHooks, syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as tar from 'tar';
@@ -147,16 +147,30 @@ test('activation coordinates with official plugin-manager writers and preserves 
   assert.equal(JSON.parse(await readFile(filename)).dependencies.concurrent, '2.0.0');
 });
 
-test('shared services link to matching official runtime and conflicting old sealed Plus is refused', async t => {
+test('shared services validate matching official runtime without native shadows and conflicting old sealed Plus is refused', async t => {
   const { root, profile, seed, put } = await fixture(t);
   const runtime = join(root, 'runtime');
   await put('runtime/node_modules/@deepseek-ai/dsh-llm/package.json', { name: '@deepseek-ai/dsh-llm', version: '0.2.1-alpha.3' });
   const options = await seed('0.1.0', [{ name: '@deepseek-ai/dsh-llm', version: '0.2.1-alpha.3' }]);
   const release = await prepareRelease({ ...options, runtime });
-  assert.equal(await realpath(join(release.directory, 'node_modules/@deepseek-ai/dsh-llm')), await realpath(join(runtime, 'node_modules/@deepseek-ai/dsh-llm')));
+  await assert.rejects(lstat(join(release.directory, 'node_modules/@deepseek-ai/dsh-llm')), { code: 'ENOENT' });
   await put('runtime/node_modules/benchgo-plugin/package.json', { name: 'benchgo-plugin', version: '0.0.1' });
   await assert.rejects(prepareRelease({ ...await seed('0.1.1'), runtime }), /新版应用/);
   assert.equal((await getInstallState(profile)).managed, false);
+});
+
+test('shared runtime refresh preserves occupied physical directories', async t => {
+  const { root, seed, put } = await fixture(t);
+  const service = { name: '@deepseek-ai/dsh-llm', version: '0.2.1-alpha.3' };
+  await put('runtime/node_modules/@deepseek-ai/dsh-llm/package.json', service);
+  const options = await seed('0.1.0', [service]);
+  const release = await prepareRelease({ ...options, runtime: join(root, 'runtime') });
+  const target = join(release.directory, 'node_modules', service.name);
+  await mkdir(target, { recursive: true });
+  await writeFile(join(target, 'user.txt'), 'keep');
+  await assert.rejects(prepareRelease({ ...options, runtime: join(root, 'runtime') }), /不得覆盖官方共享服务/u);
+  assert.equal(await readFile(join(target, 'user.txt'), 'utf8'), 'keep');
+  assert.deepEqual(JSON.parse(await readFile(join(root, 'runtime/node_modules', service.name, 'package.json'), 'utf8')), service);
 });
 
 test('shared services already linked beside the plugin are removed so the official runtime copy is used', async t => {
@@ -165,12 +179,20 @@ test('shared services already linked beside the plugin are removed so the offici
   const shared = [{ name: '@deepseek-ai/dsh-llm', version: '0.2.1-alpha.3' }];
   await put('runtime/node_modules/@deepseek-ai/dsh-llm/package.json', { name: shared[0].name, version: shared[0].version });
   const options = await seed('0.1.0', shared);
-  const legacy = join(options.directory, 'node_modules/benchgo-plugin/node_modules/@deepseek-ai/dsh-llm');
-  await put('legacy/node_modules/@deepseek-ai/dsh-llm/package.json', { name: shared[0].name, version: shared[0].version });
-  await mkdir(join(options.directory, 'node_modules/benchgo-plugin/node_modules/@deepseek-ai'), { recursive: true });
-  await symlink(join(root, 'legacy/node_modules/@deepseek-ai/dsh-llm'), legacy, process.platform === 'win32' ? 'junction' : 'dir');
   const release = await prepareRelease({ ...options, runtime });
-  await assert.rejects(lstat(join(release.directory, 'node_modules/benchgo-plugin/node_modules/@deepseek-ai/dsh-llm')), { code: 'ENOENT' });
+  await put('legacy/node_modules/@deepseek-ai/dsh-llm/package.json', shared[0]);
+  await put('private/node_modules/@deepseek-ai/schemastery/package.json', { name: '@deepseek-ai/schemastery', version: 'private' });
+  for (const base of [release.directory, release.pluginPath]) {
+    const modules = join(base, 'node_modules/@deepseek-ai');
+    await mkdir(modules, { recursive: true });
+    await symlink(join(root, 'legacy/node_modules/@deepseek-ai/dsh-llm'), join(modules, 'dsh-llm'), process.platform === 'win32' ? 'junction' : 'dir');
+    await symlink(join(root, 'private/node_modules/@deepseek-ai/schemastery'), join(modules, 'schemastery'), process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  await prepareRelease({ ...options, runtime });
+  for (const base of [release.directory, release.pluginPath]) {
+    await assert.rejects(lstat(join(base, 'node_modules/@deepseek-ai/dsh-llm')), { code: 'ENOENT' });
+    assert.equal((await lstat(join(base, 'node_modules/@deepseek-ai/schemastery'))).isSymbolicLink(), true);
+  }
   assert.equal(JSON.parse(await readFile(join(root, 'legacy/node_modules/@deepseek-ai/dsh-llm/package.json'), 'utf8')).version, '0.2.1-alpha.3');
   assert.equal((await getInstallState(profile)).managed, false);
 });
@@ -210,4 +232,25 @@ test('invalid and wrong-platform archives cannot activate and rollback requires 
   assert.deepEqual(await readdir(releases), []);
   await assert.rejects(prepareRelease({ ...options, version: '../0.1.0' }));
   await assert.rejects(rollbackRelease({ profile }), /没有可回退/);
+});
+
+test('packaged activation resolves atomic writes from the explicit runtime ancestor without release links', async t => {
+  const { root, profile, seed, put } = await fixture(t);
+  const release = await prepareRelease(await seed('0.1.0'));
+  const official = createRequire(import.meta.url).resolve('@deepseek-ai/dsh-atomic-write/package.json');
+  const target = join(root, 'installation/node_modules/@deepseek-ai/dsh-atomic-write');
+  await mkdir(dirname(target), { recursive: true });
+  await symlink(dirname(official), target, process.platform === 'win32' ? 'junction' : 'dir');
+  await put('installation/dsh/runtime-marker', 'runtime');
+  const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
+    if (specifier === '@deepseek-ai/dsh-atomic-write') throw Object.assign(new Error('no packaged bare dependency'), { code: 'ERR_MODULE_NOT_FOUND' });
+    return nextResolve(specifier, context);
+  } });
+  try {
+    const state = await activateRelease({ profile, release, runtime: join(root, 'installation/dsh'), enabled: true });
+    assert.equal(state.enabled, true);
+    assert.equal(Object.hasOwn(state, 'runtime'), false);
+    await assert.rejects(lstat(join(release.directory, 'node_modules/@deepseek-ai/dsh-atomic-write')), { code: 'ENOENT' });
+    await assert.rejects(activateRelease({ profile, release }), /官方原子写入服务/);
+  } finally { hooks.deregister(); }
 });

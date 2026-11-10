@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createSecureServer } from 'node:http2';
 import { WebSocketServer } from 'ws';
-import { RELAY_CHUNK_BYTES as CHUNK, RELAY_CONTROL_PATH as CONTROL, RELAY_DATA_PATH as DATA, RELAY_VOICE_PATH as VOICE, RELAY_WORKBENCH_PATH as WORKBENCH, relayPathAllowed } from './relay-protocol.mjs';
+import { RELAY_CHUNK_BYTES as CHUNK, RELAY_CONTROL_PATH as CONTROL, RELAY_DATA_PATH as DATA, RELAY_VOICE_PATH as VOICE, RELAY_WORKBENCH_PATH as WORKBENCH, RELAY_PROBE_PATH as PROBE, RELAY_PROTOCOL, RELAY_PROTOCOL_VERSION, relayPathAllowed } from './relay-protocol.mjs';
 
 const MAX_BUFFERED = 256 * 1024;
 const MAX_STREAM_BYTES = 512 * 1024 * 1024;
@@ -45,6 +45,17 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('中继监听端口无效');
   let closed = false, activeHost;
   const tickets = new Map(), transactions = new Set(), sockets = new Set();
+  const anonymousRates = new Map();
+  const limitAnonymous = req => {
+    // The relay owns this public socket. Never accept a client-supplied
+    // forwarding header as the source of an anonymous request.
+    const key = req.socket.remoteAddress ?? 'unknown', tick = Math.floor(Date.now() / 60_000);
+    if (anonymousRates.size >= 1024) for (const [key, rate] of anonymousRates) if (rate.tick !== tick) anonymousRates.delete(key);
+    if (anonymousRates.size >= 1024 && !anonymousRates.has(key)) throw fail('请求过多', 429);
+    const rate = anonymousRates.get(key)?.tick === tick ? anonymousRates.get(key) : { tick, count: 0 };
+    anonymousRates.set(key, rate);
+    if (++rate.count > 600) throw fail('请求过多，请稍后重试', 429);
+  };
   const controls = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024, perMessageDeflate: false });
   const data = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024, perMessageDeflate: false });
   const voice = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
@@ -85,7 +96,7 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
     if (!relayPathAllowed(req.method, path + query)) throw fail('Link 路径未授权', 404);
     if (req.headers.origin && req.headers.origin !== publicOrigin.origin) throw fail('来源未授权', 403);
     const transaction = makeTransaction(req, res, req.method, path + query, requestHeaders(req.headers, path));
-    json(activeHost, { type: 'http', ticket: transaction.ticket, method: transaction.method, path: transaction.path, headers: transaction.headers });
+    json(activeHost, { type: 'http', ticket: transaction.ticket, method: transaction.method, path: transaction.path, headers: transaction.headers, clientAddress: req.socket.remoteAddress });
     let timer = setTimeout(() => transaction.socket?.close(1011, 'relay timeout'), 120_000); timer.unref?.();
     const touch = () => { clearTimeout(timer); timer = setTimeout(() => transaction.socket?.close(1011, 'relay timeout'), 120_000); timer.unref?.(); };
     let requestBytes = 0, responseBytes = 0;
@@ -129,9 +140,19 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
       const authority = req.headers[':authority'] || req.headers.host;
       if (closed || authority !== publicOrigin.host) throw fail('中继地址未授权', 403);
       const raw = req.url || '/';
+      if (raw === PROBE && req.method === 'GET') {
+        if (req.headers.origin && req.headers.origin !== publicOrigin.origin) throw fail('来源未授权', 403);
+        const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+        if (!supplied || !same(supplied, token)) throw fail('中继主机密钥无效', 401);
+        res.writeHead(200, { ...headers, 'content-type': 'application/json' });
+        res.end(JSON.stringify({ protocol: RELAY_PROTOCOL, version: RELAY_PROTOCOL_VERSION, authenticated: true })); return;
+      }
       if (!relayPathAllowed(req.method, raw)) throw fail('Link 路径未授权', 404);
       const url = new URL(raw, publicOrigin);
       if (url.origin !== publicOrigin.origin || !(url.pathname === '/link' || url.pathname.startsWith('/link/'))) throw fail('Link 路径未授权', 404);
+      // Credential-bearing routes are authenticated and limited by device on
+      // Link. Public routes remain anonymous even if a fake token is supplied.
+      if (!url.pathname.startsWith(WORKBENCH) && !['/link/api/rpc', '/link/api/workbench'].includes(url.pathname)) limitAnonymous(req);
       void relayHttp(req, res, url.pathname).catch(error => { if (!res.headersSent) { res.writeHead(error.status ?? 502, { ...securityHeaders, ...headers }); res.end(error.status ? error.message : '目标设备连接失败'); } else res.destroy(); });
     } catch (error) { res.writeHead(error.status ?? 400, headers); res.end(error.message); }
   });
@@ -159,7 +180,7 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
       try { transaction = makeTransaction(req, undefined, 'GET', VOICE, {}, 'voice'); }
       catch (error) { return reject(error.status ?? 502); }
       transaction.rawSocket = socket;
-      json(activeHost, { type: 'voice', ticket: transaction.ticket, path: VOICE, cookie: workbenchCookie(req.headers.cookie).slice(0, 4096) });
+      json(activeHost, { type: 'voice', ticket: transaction.ticket, path: VOICE, cookie: workbenchCookie(req.headers.cookie).slice(0, 4096), clientAddress: req.socket.remoteAddress });
       transaction.attachVoice = dataSocket => {
         clearTimeout(transaction.attachTimer);
         transaction.data = dataSocket;
@@ -218,7 +239,7 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
     async close() {
       closed = true; activeHost?.close(1001, 'relay closed');
       for (const transaction of transactions) { transaction.data?.close(1001, 'relay closed'); transaction.browser?.close(1001, 'relay closed'); transaction.res?.destroy(); transaction.rawSocket?.destroy(); transaction.rejectData?.(new Error('relay closed')); remove(transaction); }
-      tickets.clear();
+      tickets.clear(); anonymousRates.clear();
       const done = new Promise(resolve => server.close(resolve));
       for (const socket of sockets) socket.destroy();
       controls.close(); data.close(); voice.close(); await done;
@@ -226,4 +247,4 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
   };
 }
 
-export const relayRoutes = Object.freeze({ control: CONTROL, data: DATA, workbench: WORKBENCH, voice: VOICE });
+export const relayRoutes = Object.freeze({ control: CONTROL, data: DATA, probe: PROBE, workbench: WORKBENCH, voice: VOICE });

@@ -12,7 +12,7 @@ async function fixture(t, channel) {
   let db = createAssistantOrchestrationStore({ directory });
   t.after(async () => { db.close(); await rm(directory, { recursive: true, force: true }); });
   db.createThread({ id: 'origin', source: { type: channel, id: 'origin' } });
-  const source = { channel, accountId: 'account', connectionRevision: 3, chatId: 'chat', messageId: 'original', topicId: 'topic' };
+  const source = { channel, sourceType: 'topic', connectionId: channel, conversationId: 'chat', accountId: 'account', connectionRevision: 3, chatId: 'chat', messageId: 'original', topicId: 'topic' };
   const entries = [];
   for (let index = 0; index < 2; index++) {
     const ticket = db.createTicket({ threadId: 'origin', target: `work-${index}`, mandate: { actorId: 'owner', source } });
@@ -22,11 +22,11 @@ async function fixture(t, channel) {
     const run = db.prepareRun(assignment.id, { ...ownership, sessionId, directory });
     db.updateRun(run.id, { ...ownership, state: 'submitted' });
     const [attention] = db.openAttention(assignment.id, { ...ownership, sessionId, callId: `call-${index}`, questions: [{ id: 'opaque-question', question: '选择？', options: [{ label: '继续' }] }] });
-    entries.push({ ticket, attention });
+    entries.push({ ticket, attention, assignment, run, ownership });
   }
   const policy = { version: 'p1', routeDirect: true, ownerIds: ['owner', 'other-owner'], threadIds: ['chat', 'other-chat'] };
   let sequence = 0;
-  const receive = (patch = {}) => ingestAssistantEvent(db, { sourceKey: `reply:${++sequence}`, channel, threadId: 'reply-thread', source: { ...source, messageId: 'reply' }, actor: { id: 'owner', kind: 'human' }, kind: 'direct', text: '继续', ...patch }, policy);
+  const receive = (patch = {}) => ingestAssistantEvent(db, { sourceKey: `reply:${++sequence}`, channel, threadId: 'reply-thread', source: { ...source, messageId: 'reply' }, actor: { id: 'owner', kind: 'human' }, kind: 'topic', mentioned: true, text: '继续', ...patch }, policy);
   return { get db() { return db; }, source, entries, receive, restart() { db.close(); db = createAssistantOrchestrationStore({ directory }); } };
 }
 
@@ -36,7 +36,7 @@ for (const channel of ['telegram', 'discord', 'whatsapp', 'weixin']) test(`${cha
   const text = `/answer ${second.attention.id} 继续`;
   for (const patch of [
     { actor: { id: 'other-owner', kind: 'human' } }, { actor: { id: 'owner', kind: 'machine' } },
-    ...[{ channel: 'foreign' }, { accountId: 'other' }, { connectionRevision: 4 }, { chatId: 'other-chat' }, { topicId: 'other' }]
+    ...[{ channel: 'foreign' }, { accountId: 'other' }, { connectionRevision: 4 }, { chatId: 'other-chat', conversationId: 'other-chat' }, { topicId: 'other' }]
       .map(source => ({ source: { ...h.source, ...source, messageId: 'reply' } })),
   ]) assert.equal(h.receive({ text, ...patch }).attention, undefined);
   const answer = h.receive({ text });
@@ -67,9 +67,10 @@ test('old Telegram integer receipts match only the exact originating account and
   assert.equal(accepted.attention.id, first.attention.id);
 });
 
-test('numbered answers cannot revive a question from stale requirements or a terminal task', async t => {
+test('numbered answers cannot revive a question after its new requirements apply or a terminal task', async t => {
   const h = await fixture(t, 'weixin'), [first, second] = h.entries;
   h.db.updateTicket(first.ticket.id, { target: 'changed' }, { expectedInstructionRevision: 1 });
+  h.db.applyTicketRevision(first.assignment.id, { ...first.ownership, runId: first.run.id, boundaryId: 'next-tool-batch' });
   h.db.cancelTicket(second.ticket.id);
   for (const entry of [first, second]) assert.equal(h.receive({ text: `/answer ${entry.attention.id} 继续` }).attention, undefined);
 });

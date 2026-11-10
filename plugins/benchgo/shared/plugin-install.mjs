@@ -1,6 +1,6 @@
 /** Immutable profile-local plugin releases. The profile manifest is the only activation pointer. */
 import { createHash, randomUUID } from 'node:crypto';
-import { cp, lstat, mkdir, readFile, rename, rm, symlink, realpath } from 'node:fs/promises';
+import { cp, lstat, mkdir, readFile, rename, rm, symlink, realpath, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { compareVersions } from './update-feed.mjs';
@@ -46,43 +46,41 @@ async function describeRelease(directory, version) {
   return { directory, version, pluginPath, bundlePath, bundleName, root: dirname(directory), shared: metadata.shared ?? [] };
 }
 
+async function findOfficialPackage(runtime, name) {
+  if (!runtime) return null;
+  for (let current = await realpath(runtime); ; current = dirname(current)) {
+    const candidate = join(current, 'node_modules', name);
+    if (await present(join(candidate, 'package.json'))) return candidate;
+    if (dirname(current) === current) return null;
+  }
+}
+
 async function attachOfficialPackages(release, runtime) {
   if (!runtime) {
     if (release.shared.length) throw new Error('未找到官方引擎目录，无法校验插件共享服务');
     return;
   }
-  runtime = await realpath(runtime);
-  const findPackage = async name => {
-    for (let current = runtime; ; current = dirname(current)) {
-      const candidate = join(current, 'node_modules', name);
-      if (await present(join(candidate, 'package.json'))) return candidate;
-      if (dirname(current) === current) return null;
-    }
-  };
-  if (await findPackage(PLUS_PACKAGE) || await findPackage(LEGACY_PLUGIN_PACKAGE)) throw new Error('此桌面版本仍内置锁定插件，请先安装支持独立插件更新的新版应用');
-  const unlinkTargets = [];
+  if (await findOfficialPackage(runtime, PLUS_PACKAGE) || await findOfficialPackage(runtime, LEGACY_PLUGIN_PACKAGE)) throw new Error('此桌面版本仍内置锁定插件，请先安装支持独立插件更新的新版应用');
+  const obsolete = [];
   for (const item of release.shared) {
     const name = typeof item === 'string' ? item : item.name;
     if (typeof name !== 'string' || !/^@deepseek-ai\/[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error('插件声明了不受支持的共享服务');
-    const source = await findPackage(name), target = join(release.directory, 'node_modules', name);
+    const source = await findOfficialPackage(runtime, name);
     if (!source) throw new Error(`官方引擎缺少共享服务 ${name}`);
     const manifest = await json(join(source, 'package.json'));
-    if (typeof item === 'object' && item.version !== manifest.version) throw new Error(`共享服务 ${name} 版本不兼容，请更新应用`);
-    if (await present(target)) {
-      let current;
-      try { current = await realpath(target); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      if (current === await realpath(source)) continue;
+    if (manifest.name !== name || typeof item === 'object' && item.version !== manifest.version) throw new Error(`共享服务 ${name} 版本不兼容，请更新应用`);
+    for (const base of [release.directory, release.pluginPath]) {
+      const target = join(base, 'node_modules', name);
+      if (!await present(target)) continue;
       if (!(await lstat(target)).isSymbolicLink()) throw new Error('插件包不得覆盖官方共享服务');
-      unlinkTargets.push(target);
-      continue;
+      const linked = await json(join(target, 'package.json'));
+      if (linked.name !== name) throw new Error('插件共享服务链接无法验证，原文件已保留');
+      obsolete.push(target);
     }
-    await mkdir(dirname(target), { recursive: true });
-    await symlink(source, target, process.platform === 'win32' ? 'junction' : 'dir');
   }
-  // Shared services are resolved through the official runtime itself, so the
-  // process holds one copy of each official module. A physical link here can
-  // shadow that copy with a distinct instance, which breaks scope identity.
-  for (const target of unlinkTargets) await rm(target, { recursive: true, force: true });
+  // Let the official profile resolver fall back to its installation anchor.
+  // Native junction lookup can otherwise load an unpacked second Session class.
+  for (const target of obsolete) await unlink(target);
 }
 
 /** Prepare and validate without changing the running profile. No lifecycle scripts are executed. */
@@ -147,7 +145,9 @@ export async function activateRelease(options) {
   try { atomic = await import('@deepseek-ai/dsh-atomic-write'); }
   catch (error) {
     if (error.code !== 'ERR_MODULE_NOT_FOUND') throw error;
-    atomic = await import(pathToFileURL(join(options.release.directory, 'node_modules/@deepseek-ai/dsh-atomic-write/lib/index.js')).href);
+    const source = await findOfficialPackage(options.runtime, '@deepseek-ai/dsh-atomic-write');
+    if (!source) throw new Error('未找到官方原子写入服务，请提供官方引擎目录');
+    atomic = await import(pathToFileURL(join(source, 'lib/index.js')).href);
   }
   return atomic.withFileLock(join(resolve(options.profile), 'package.json'), () => activateLocked(options, atomic));
 }
@@ -207,5 +207,5 @@ export async function rollbackRelease({ profile, runtime }) {
   const state = await getInstallState(profile);
   if (!state.previous) throw new Error('没有可回退的插件版本');
   const release = await prepareRelease({ root: state.root, version: state.previous.version, runtime });
-  return activateRelease({ profile, release });
+  return activateRelease({ profile, release, runtime });
 }

@@ -21,9 +21,9 @@ async function freePort() {
   const server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const { port } = server.address(); await new Promise(resolve => server.close(resolve)); return port;
 }
-function request(port, path, { method = 'GET', body, token, cookie, headers = {} } = {}) {
+function request(port, path, { method = 'GET', body, token, cookie, headers = {}, localAddress } = {}) {
   return new Promise((resolve, reject) => {
-    const req = httpsRequest({ hostname: '127.0.0.1', port, path, method, servername: 'localhost', ca: request.relayCert, headers: {
+    const req = httpsRequest({ hostname: '127.0.0.1', port, path, method, localAddress, servername: 'localhost', ca: request.relayCert, headers: {
       host: `localhost:${port}`, origin: request.relayOrigin, ...(token ? { authorization: 'Bearer ' + token } : {}), ...(cookie ? { cookie } : {}), ...headers,
     } }, res => {
       const chunks = []; res.on('data', chunk => chunks.push(chunk));
@@ -125,6 +125,83 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
   await store.revoke(approved.deviceId); await workbench.revoke(approved.deviceId);
   assert.equal((await request(relayPort, '/link/api/workbench', { method: 'POST', token: tokenValue, body: '{}' })).status, 401);
   assert.equal((await request(relayPort, '/link/workbench/api/stream/echo', { method: 'POST', cookie, body: '{}' })).status, 401);
+});
+
+test('real relay isolates anonymous traffic and each verified device quota, including workbench cookies', { timeout: 30_000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'link-relay-rate-'));
+  const identity = await loadIdentity(directory), store = await openStore(join(directory, 'devices'));
+  const relayPort = await freePort(), origin = `https://localhost:${relayPort}`;
+  request.relayCert = identity.cert; request.relayOrigin = origin;
+  const workbench = createWorkbench({ connection: {
+    createPeer: () => ({ dispose: async () => {} }),
+    createSharedFetchHandler: () => ({ fetch: async () => Response.json({ ok: true }) }),
+  } }, store);
+  const link = await listen({ identity, config: { host: '127.0.0.1', port: 0, publicUrl: '' }, store, workbench, dispatch: async () => ({ ok: true }), onError: () => {} });
+  const secret = 'safe-test-relay-host-secret', relay = await createRelayServer({ host: '127.0.0.1', port: relayPort, identity, publicUrl: origin, token: secret });
+  // Quota windows advance Date.now below; isolate the host's interval so a
+  // slow test cannot mistake that jump for a lost pong.
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const host = createRelayHost({ relayUrl: origin, relayCa: identity.cert, token: secret, relayHeaders: link.relayHeaders, target: { url: `https://127.0.0.1:${link.port}`, pin: identity.pin } });
+  t.after(async () => {
+    await host.close(); t.mock.timers.reset(); await relay.close(); await link.close(); await store.flush();
+    await rm(directory, { recursive: true, force: true });
+    delete request.relayCert; delete request.relayOrigin;
+  });
+  for (let i = 0; i < 100 && !host.status().connected; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(host.status().connected, true);
+  const pair = async name => {
+    const pending = store.request(store.begin().code, name); await store.decide(pending.requestId, true);
+    const device = store.poll(pending.requestId, pending.pollToken);
+    const opened = await request(relayPort, '/link/api/workbench', { method: 'POST', token: device.token, body: '{}', headers: { 'content-type': 'application/json' } });
+    assert.equal(opened.status, 200);
+    return { ...device, cookie: opened.headers['set-cookie'][0].split(';')[0] };
+  };
+  const first = await pair('one'), second = await pair('two');
+  let now = Date.now() + 60_000; t.mock.method(Date, 'now', () => now);
+  const rpc = device => request(relayPort, '/link/api/rpc', { method: 'POST', token: device.token, body: '{}', headers: { 'content-type': 'application/json' } });
+  const page = device => request(relayPort, '/link/workbench/api/test', { cookie: device.cookie });
+  const fill = async call => {
+    for (let offset = 0; offset < 600; offset += 20) {
+      const responses = await Promise.all(Array.from({ length: 20 }, (_, index) => call(offset + index)));
+      assert(responses.every(response => response.status === 200));
+    }
+  };
+  await fill(index => request(relayPort, '/link/api/info', { token: 'forged-' + index, headers: { 'x-forwarded-for': `198.51.100.${index % 250}` } }));
+  assert.equal((await request(relayPort, '/link/api/info', { headers: { 'x-forwarded-for': '203.0.113.2' } })).status, 429);
+  assert.equal((await rpc(first)).status, 200, 'anonymous loopback traffic cannot exhaust a verified device');
+  assert.equal((await page(first)).status, 200, 'verified workbench cookies use the device quota');
+  assert.equal((await rpc(second)).status, 200);
+  assert.equal((await page({ cookie: 'dsh_link_workbench=forged' })).status, 429, 'unverified cookies cannot bypass the anonymous quota');
+  const pairing = store.begin();
+  const otherSource = await request(relayPort, '/link/api/pair', { localAddress: '127.0.0.2', method: 'POST', body: JSON.stringify({ code: pairing.code, name: 'new source' }), headers: { 'content-type': 'application/json' } });
+  assert.equal(otherSource.status, 200, 'another real source can still pair through the same loopback relay host');
+  assert.equal(JSON.parse(otherSource.body).requestId.length > 0, true);
+  assert.equal((await request(relayPort, '/link/api/info', { headers: { 'x-benchgo-relay-source': 'a'.repeat(64), 'x-benchgo-relay-proof': 'b'.repeat(64) } })).status, 429, 'client-supplied relay source headers cannot change the source');
+
+  now += 60_000;
+  await fill(index => index % 2 ? rpc(first) : page(first));
+  assert.equal((await rpc(first)).status, 429);
+  assert.equal((await page(first)).status, 429, 'bearer and cookie share one verified device identity');
+  assert.equal((await rpc(second)).status, 200, 'one authenticated device cannot exhaust another device');
+  assert.equal((await page(second)).status, 200);
+  await store.revoke(second.deviceId); await workbench.revoke(second.deviceId);
+  assert.equal((await rpc(second)).status, 401);
+  assert.equal((await page(second)).status, 401);
+
+  // With no host, reaching the quota still returns 429 instead of 503: the
+  // public socket limit is enforced at the relay before any loopback request.
+  await host.close();
+  for (let i = 0; i < 50; i++) {
+    const response = await request(relayPort, '/link/api/info');
+    if (response.status === 503) break;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  now += 60_000;
+  for (let offset = 0; offset < 600; offset += 20) {
+    const responses = await Promise.all(Array.from({ length: 20 }, (_, index) => request(relayPort, '/link/api/info', { headers: { 'x-forwarded-for': `198.51.100.${(offset + index) % 250}` } })));
+    assert(responses.every(response => response.status === 503));
+  }
+  assert.equal((await request(relayPort, '/link/api/info')).status, 429);
 });
 
 test('relay rejects excess voice upgrades without crashing and host close interrupts TLS handshake', { timeout: 20_000 }, async t => {

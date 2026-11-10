@@ -16,7 +16,7 @@ function objectJson(value) {
 /** Durable delivery only. Admission and transport authorization remain host responsibilities. */
 export function installDirectReplyStore({ db, tx }) {
   db.exec(`CREATE TABLE IF NOT EXISTS sa_direct_replies(
-    id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL UNIQUE REFERENCES sa_candidates(id),
+    id TEXT PRIMARY KEY, candidate_id TEXT UNIQUE REFERENCES sa_candidates(id),
     trigger_id TEXT NOT NULL REFERENCES sa_triggers(id), thread_id TEXT NOT NULL REFERENCES sa_threads(id),
     text TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, actor TEXT NOT NULL, gate TEXT NOT NULL,
     policy_version TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
@@ -27,6 +27,19 @@ export function installDirectReplyStore({ db, tx }) {
       id INTEGER PRIMARY KEY, reply_id TEXT NOT NULL REFERENCES sa_direct_replies(id), attempts INTEGER NOT NULL,
       outcome TEXT NOT NULL, evidence TEXT NOT NULL, receipt TEXT, created_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS sa_direct_reply_reconciliation_reply ON sa_direct_reply_reconciliations(reply_id,id);`);
+  // Owner-authored replies have a real local Trigger, but never a fabricated Eval candidate.
+  if (db.prepare('PRAGMA table_info(sa_direct_replies)').all().find(column => column.name === 'candidate_id')?.notnull) {
+    const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='sa_direct_replies'").get().sql;
+    db.exec('PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE');
+    try {
+      db.exec(schema.replace(/CREATE TABLE(?: IF NOT EXISTS)? sa_direct_replies/u, 'CREATE TABLE sa_direct_replies_migration').replace('candidate_id TEXT NOT NULL UNIQUE', 'candidate_id TEXT UNIQUE'));
+      db.exec('INSERT INTO sa_direct_replies_migration SELECT * FROM sa_direct_replies; DROP TABLE sa_direct_replies; ALTER TABLE sa_direct_replies_migration RENAME TO sa_direct_replies; CREATE INDEX sa_direct_replies_ready ON sa_direct_replies(state,next_at,created_at)');
+      if (db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Direct reply migration violates existing references');
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    finally { db.exec('PRAGMA foreign_keys=ON'); }
+  }
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS sa_direct_reply_owner_trigger ON sa_direct_replies(trigger_id) WHERE kind='owner'");
   const get = id => db.prepare('SELECT * FROM sa_direct_replies WHERE id=?').get(id);
   const value = row => row && ({ id: row.id, candidateId: row.candidate_id, triggerId: row.trigger_id,
     threadId: row.thread_id, text: row.text, kind: row.kind, source: JSON.parse(row.source),
@@ -53,6 +66,24 @@ export function installDirectReplyStore({ db, tx }) {
         reply.text.trim(), input.outcome, source, actor, gate, input.policyVersion, now, at, at);
     },
     api: {
+      enqueueChannelOwnerReply({ triggerId, source, text, policyVersion, now = Date.now() }) {
+        return tx(() => {
+          const trigger = db.prepare('SELECT * FROM sa_triggers WHERE id=?').get(ownerId(triggerId));
+          if (!trigger || typeof text !== 'string' || !text.trim() || text.length > 6000 || trigger.content !== text || typeof policyVersion !== 'string' || !policyVersion) throw new Error('Owner reply requires its immutable local original');
+          const actor = JSON.parse(trigger.actor), local = JSON.parse(trigger.source);
+          if (actor.kind !== 'human' || actor.id !== 'desktop-owner' || local.channel !== 'desktop' || local.kind !== 'channel-owner-reply'
+            || !isDeepStrictEqual(local.deliveryTarget, source)) throw new Error('Owner reply source is not a trusted local channel reply');
+          const existing = db.prepare("SELECT * FROM sa_direct_replies WHERE trigger_id=? AND kind='owner'").get(triggerId);
+          if (existing) {
+            if (existing.text !== text || !isDeepStrictEqual(JSON.parse(existing.source), source)) throw fail('DIRECT_REPLY_SOURCE_CONFLICT', 'Owner reply original changed');
+            return { ...value(existing), duplicate: true };
+          }
+          const at = new Date(time(now)).toISOString(), replyId = randomUUID();
+          db.prepare(`INSERT INTO sa_direct_replies(id,candidate_id,trigger_id,thread_id,text,kind,source,actor,gate,policy_version,state,next_at,created_at,updated_at)
+            VALUES (?,NULL,?,?,?,'owner',?,?,?,?,'queued',?,?,?)`).run(replyId, triggerId, trigger.thread_id, text, objectJson(source), objectJson(actor), objectJson({ strength: 'explicit', ownerAuthored: true }), policyVersion, now, at, at);
+          return value(get(replyId));
+        });
+      },
       enqueueUnavailableReplies({ now = Date.now() } = {}) {
         time(now);
         return tx(() => {
@@ -120,10 +151,11 @@ export function installDirectReplyStore({ db, tx }) {
           return value(get(id));
         });
       },
-      directReplies({ channel, threadId, limit = 100 } = {}) {
+      directReplies({ channel, threadId, state, limit = 100 } = {}) {
         const where = [], args = [];
         if (channel !== undefined) { ownerId(channel); where.push("json_extract(source,'$.channel')=?"); args.push(channel); }
         if (threadId !== undefined) { ownerId(threadId); where.push('thread_id=?'); args.push(threadId); }
+        if (state !== undefined) { ownerId(state); where.push('state=?'); args.push(state); }
         return db.prepare(`SELECT * FROM sa_direct_replies${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC,id LIMIT ?`)
           .all(...args, limitValue(limit, 100)).map(value);
       },

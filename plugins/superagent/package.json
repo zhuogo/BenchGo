@@ -19,6 +19,7 @@
     "@deepseek-ai/dsh-compaction-basic": "0.2.2-rc.1",
     "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
     "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.2-rc.1",
     "@deepseek-ai/dsh-tool-ask-user": "0.2.2-rc.1"
   }
 }

@@ -4,11 +4,11 @@ import { notificationPublication } from '../src/notification-publication.mjs';
 import { systemStateDelivery } from '../src/result-delivery.mjs';
 
 test('verified system publications retain their identity through repeated projections', () => {
-  const publication = systemStateDelivery({ state: 'review_wait', code: 'NETWORK', stage: 'review' });
+  const publication = systemStateDelivery({ state: 'continuation_wait', code: 'NETWORK', stage: 'execution' });
   const event = notificationPublication({ type: 'ticket.result', ticketId: 'ticket', publication,
     origin: 'router', systemState: { state: 'untrusted' }, text: 'RAW WORKER TEXT' });
   assert.equal(event.origin, 'system');
-  assert.deepEqual(event.systemState, { state: 'review_wait', code: 'NETWORK', stage: 'review' });
+  assert.deepEqual(event.systemState, { state: 'continuation_wait', code: 'NETWORK', stage: 'execution' });
   assert.equal(event.text, publication.text);
   assert.deepEqual(notificationPublication(event), event);
 });

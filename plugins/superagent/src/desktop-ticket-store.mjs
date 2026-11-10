@@ -1,3 +1,4 @@
+import { ticketStopped } from './ticket-lifecycle.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 
 /** Direct, approved owner instructions skip model admission but retain a Decision. */
@@ -24,7 +25,7 @@ export function installDesktopTicketStore({ db, tx, api, insertTicket }) {
         const owned = db.prepare('SELECT ticket_id FROM sa_ticket_triggers WHERE trigger_id=? LIMIT 1').get(triggerId);
         if (duplicateOfTicketId && owned?.ticket_id !== duplicateOfTicketId) {
           const existing = api.getTicket(duplicateOfTicketId), source = existing?.mandate.source;
-          if (owned || !existing || ['completed', 'failed', 'closed', 'cancelled', 'cancelling'].includes(existing.status)
+          if (owned || !existing || (existing.status === 'completed' || ticketStopped(existing))
             || source?.channel !== 'desktop' || source.sessionId !== trigger.source.sessionId || (source.threadId || 'main') !== (trigger.source.threadId || 'main')
             || existing.mandate.actorId !== mandate.actorId || existing.mandate.policyVersion !== mandate.policyVersion
             || JSON.stringify(existing.mandate.project) !== JSON.stringify(mandate.project)

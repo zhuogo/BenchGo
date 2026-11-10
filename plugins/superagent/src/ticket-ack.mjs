@@ -13,7 +13,7 @@ export function isRouterTicketAck(event) {
 export function enqueueTicketAck({ db, ticket, trigger, text, now = Date.now() }) {
   if (text === undefined) return false;
   if (!validReply(text)) throw new Error('接单回复缺少有效正文');
-  if (!ticket || ticket.status !== 'open' || !trigger || trigger.actor?.kind !== 'human') return false;
+  if (!ticket || ticket.status !== 'waiting' || ticket.resultVersion > 0 || !trigger || trigger.actor?.kind !== 'human') return false;
   const source = ticket.mandate?.source;
   if (!source?.channel || JSON.stringify(source) !== JSON.stringify(trigger.source)) return false;
   const payload = { type: 'ticket.accepted', origin: 'router', ticketId: ticket.id, source,

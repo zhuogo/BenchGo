@@ -50,9 +50,9 @@ export function createAssistantAssignmentWorker({
         if (renewal) await renewal;
         await renew();
       };
-      // Keep leases alive during Router review; quiesce heartbeat before its
+      // Keep leases alive during result persistence; quiesce heartbeat before its
       // atomic terminal commit so a late renewal cannot revoke a completed run.
-      stage = 'review';
+      stage = 'result';
       await onResult(result, { assignment, ticket, signal: controller.signal, beforeCommit });
       clearInterval(heartbeat); heartbeat = null;
       controller.signal.throwIfAborted();

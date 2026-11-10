@@ -1,7 +1,6 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { executionEffects } from '../src/execution-effects.mjs';
-import { reviewInputHash } from '../src/review-input.mjs';
 
 const call = (id, name) => ({ type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id, name, arguments: '{}' }] } } });
 const result = (id, code) => ({ type: 'tool/result', data: { message: { toolCallId: id, content: [], ...(code ? { isError: true } : {}) }, ...(code ? { error: { code } } : {}) } });
@@ -40,13 +39,4 @@ test('nested dispatch uncertainty survives a successful composite tool result', 
     result('outer'),
   ] });
   assert.deepEqual(observed, { effectsVerified: false, unknownCallIds: ['sub-missing', 'sub-error'] });
-});
-
-test('review fingerprint includes host-observed effect safety independently of Worker summary', () => {
-  const input = { ticket: { target: 'task', acceptance: 'check', instructionRevision: 1, mandate: {} }, result: { summary: 'same summary' } };
-  const legacy = reviewInputHash(input);
-  const verified = reviewInputHash({ ...input, result: { ...input.result, executionEffects: { effectsVerified: true, unknownCallIds: [] } } });
-  const unknown = reviewInputHash({ ...input, result: { ...input.result, executionEffects: { effectsVerified: false, unknownCallIds: ['send'] } } });
-  assert.notEqual(legacy, verified);
-  assert.notEqual(verified, unknown);
 });

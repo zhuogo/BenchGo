@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, readdir, stat, writeFile, realpath, lstat, rm, symlink } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, stat, writeFile, realpath, lstat, rm, unlink } from 'node:fs/promises';
 import { isAbsolute, join, dirname, relative, resolve, sep } from 'node:path';
 import { releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
 import { createRequire } from 'node:module';
@@ -15,6 +15,8 @@ const inside = (root, path) => {
   const child = relative(root, path);
   return child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 };
+// Match release packaging: these pure utility libraries may keep private versions.
+const sharedPackage = name => name.startsWith('@deepseek-ai/') && !['@deepseek-ai/schemastery', '@deepseek-ai/cosmokit'].includes(name);
 const infoAt = path => lstat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
 
 async function checkedPath(root, path, allowLeafLink = false) {
@@ -66,36 +68,131 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
     if (!(await stat(join(source, 'cordis.patch.yml'))).isFile()) throw new Error('缺少 BenchGo 插件注册配置');
     const manifest = JSON.parse(await readFile(join(target, 'package.json'), 'utf8'));
     const localManifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'));
-    const sharedDependencies = Object.entries(localManifest.dependencies || {}).filter(([name]) => name.startsWith('@deepseek-ai/'));
-    // Shared official packages must resolve to the enrolled engine's real module,
-    // never to a copied plugin seed. Existing user dependencies are preserved.
-    const planned = [];
-    if (sharedDependencies.length) {
-      const anchor = await findPackage('@deepseek-ai/dsh-llm', target);
-      const semver = createRequire(join(anchor, 'package.json'))('semver');
-      for (const [name, range] of sharedDependencies) {
-        const packagePath = await findPackage(name, anchor);
-        const metadata = JSON.parse(await readFile(join(packagePath, 'package.json'), 'utf8'));
-        if (metadata.name !== name || !semver.satisfies(metadata.version, range, { includePrerelease: true })) throw new Error(`官方共享依赖版本不兼容：${name}@${metadata.version}，需要 ${range}`);
-        const destination = join(target, 'node_modules', name);
-        const existing = await lstat(destination).catch(() => null);
-        if (existing && !existing.isSymbolicLink()) throw new Error(`共享依赖目标不是链接，不覆盖用户文件：${name}`);
-        planned.push({ name, version: metadata.version, packagePath, destination, existing });
+    const releasePath = join(releaseRoot, 'release.json');
+    await checkedPath(releaseRoot, releasePath);
+    const release = await readFile(releasePath, 'utf8').then(JSON.parse).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    const owned = new Set(release?.developmentDependencies || []);
+    const planned = [], copies = [], copyJobs = [];
+    let anchor, semver;
+    const shared = new Map();
+    const runtimeAnchor = async () => {
+      if (anchor) return anchor;
+      if (typeof enrollment.runtime !== 'string' || !isAbsolute(enrollment.runtime)) throw new Error('登记结果缺少官方运行时目录');
+      anchor = await findPackage('@deepseek-ai/dsh-llm', await realpath(enrollment.runtime));
+      return anchor;
+    };
+    const assertVersion = async (metadata, name, range) => {
+      await runtimeAnchor();
+      semver ??= createRequire(join(anchor, 'package.json'))('semver');
+      if (metadata.name !== name || !semver.satisfies(metadata.version, range, { includePrerelease: true })) throw new Error(`运行依赖版本不兼容：${name}@${metadata.version}，需要 ${range}`);
+    };
+    async function browserPlatformPeer(name, range) {
+      // Official web/src/seed.ts owns this browser singleton; no Node package is shipped.
+      if (!['@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-ui-slots', '@deepseek-ai/dsh-client-ui-primitives', '@deepseek-ai/dsh-client-ui-dockkit'].includes(name)) return false;
+      await runtimeAnchor();
+      const frontend = await findPackage('@deepseek-ai/dsh-web-frontend', anchor);
+      const metadata = JSON.parse(await readFile(join(frontend, 'package.json'), 'utf8'));
+      await assertVersion({ ...metadata, name }, name, range);
+      if (metadata.name !== '@deepseek-ai/dsh-web-frontend') throw new Error('Invalid official frontend package');
+      const dist = join(frontend, 'dist');
+      const html = await readFile(join(dist, 'index.html'), 'utf8');
+      const entries = [...html.matchAll(/<script\b[^>]*\btype=["']module["'][^>]*\bsrc=["']([^"']+)["'][^>]*>/gu)];
+      for (const [, entry] of entries) {
+        if (!/^\.\/assets\/[a-zA-Z0-9._-]+\.js$/u.test(entry)) continue;
+        const script = await readFile(join(dist, entry), 'utf8');
+        // Fail closed if the official seed-table shape changes. A bare string mention is insufficient.
+        for (const [, body] of script.matchAll(/\breturn\s*\{([^{}]+)\}/gu)) {
+          const keys = new Set([...body.matchAll(/(?:^|,)\s*["']([^"']+)["']\s*:\s*[$\w]+\s*(?=,|$)/gu)].map(match => match[1]));
+          if ([name, '@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-ui-slots'].every(key => keys.has(key))) return true;
+        }
       }
-      // New channel SDKs are not part of the engine seed. Link missing runtime
-      // dependencies to their installed development tree (including transitives).
-      for (const [name, range] of Object.entries(localManifest.dependencies || {}).filter(([name]) => !name.startsWith('@deepseek-ai/'))) {
-        const installed = await findPackage(name, target).catch(() => null);
-        if (installed) continue;
-        const packagePath = await findPackage(name, source);
-        const metadata = JSON.parse(await readFile(join(packagePath, 'package.json'), 'utf8'));
-        if (metadata.name !== name || !semver.satisfies(metadata.version, range, { includePrerelease: true })) throw new Error(`开发运行依赖版本不兼容：${name}@${metadata.version}，需要 ${range}`);
-        const destination = join(target, 'node_modules', name);
-        const existing = await lstat(destination).catch(() => null);
-        if (existing && !existing.isSymbolicLink()) throw new Error(`运行依赖目标不是链接，不覆盖用户文件：${name}`);
-        planned.push({ name, version: metadata.version, packagePath, destination, existing });
+      throw new Error(`官方前端未提供浏览器平台模块：${name}`);
+    }
+    async function official(name, range, preservedFrom) {
+      await runtimeAnchor();
+      const packagePath = await findPackage(name, anchor);
+      const metadata = JSON.parse(await readFile(join(packagePath, 'package.json'), 'utf8'));
+      await assertVersion(metadata, name, range);
+      if (preservedFrom) {
+        // Only the two managed legacy links can be retired below. A private
+        // service copy inside a preserved user dependency would still shadow
+        // the official profile resolver, even if its bytes/version match.
+        for (let current = preservedFrom; inside(releaseRoot, current); current = dirname(current)) {
+          const candidate = join(current, 'node_modules', name);
+          if (await infoAt(candidate)) {
+            if (![target, releaseRoot].includes(current) || await realpath(candidate) !== packagePath) throw new Error(`用户依赖的官方服务身份与宿主不一致：${name}，位置 ${preservedFrom}`);
+            break;
+          }
+        }
+      }
+      if (shared.has(name)) return;
+      const links = [];
+      for (const base of [target, releaseRoot]) {
+        const destination = join(base, 'node_modules', name);
+        const existing = await checkedPath(base, destination, true);
+        if (existing && !existing.isSymbolicLink()) throw new Error(`共享依赖目标不是链接，不覆盖用户文件：${name}`);
+        if (existing) {
+          const linked = JSON.parse(await readFile(join(destination, 'package.json'), 'utf8'));
+          if (linked.name !== name) throw new Error(`共享依赖链接无法验证，不覆盖用户文件：${name}`);
+          links.push({ destination, base });
+        }
+      }
+      const item = { name, version: metadata.version, links };
+      shared.set(name, item); planned.push(item);
+    }
+    // Match release staging: copy third-party closures without their private
+    // node_modules; official services always resolve from the enrolled host.
+    async function dependencies(packagePath, destination, ancestors = new Set(), top = false, preserve = false) {
+      const metadata = JSON.parse(await readFile(join(packagePath, 'package.json'), 'utf8'));
+      const optional = metadata.optionalDependencies || {};
+      for (const [name, range] of Object.entries({ ...metadata.dependencies, ...optional })) {
+        if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/iu.test(name) || name.split('/').some(part => part === '.' || part === '..')) throw new Error(`无效依赖名称：${name}`);
+        if (metadata.name === 'ssh2' && name === 'cpu-features') continue;
+        if (sharedPackage(name)) { await official(name, range, preserve ? packagePath : undefined); continue; }
+        let dependency;
+        try { dependency = await findPackage(name, packagePath); }
+        catch (error) { if (Object.hasOwn(optional, name)) continue; throw error; }
+        const info = JSON.parse(await readFile(join(dependency, 'package.json'), 'utf8'));
+        await assertVersion(info, name, range);
+        const supports = (values, value) => !values || (!values.includes(`!${value}`) && (values.every(item => item.startsWith('!')) || values.includes(value)));
+        if (!supports(info.os, process.platform) || !supports(info.cpu, process.arch)) {
+          if (Object.hasOwn(optional, name)) continue;
+          throw new Error(`运行依赖平台不兼容：${name}`);
+        }
+        if (ancestors.has(dependency)) continue;
+        const output = join(destination, 'node_modules', name);
+        if (preserve) {
+          await dependencies(dependency, output, new Set([...ancestors, dependency]), false, true);
+          continue;
+        }
+        if (top) {
+          const existing = await checkedPath(target, output, true);
+          if (existing && !existing.isSymbolicLink() && !owned.has(name)) {
+            const installed = JSON.parse(await readFile(join(output, 'package.json'), 'utf8'));
+            await assertVersion(installed, name, range);
+            await dependencies(output, output, new Set([await realpath(output)]), false, true);
+            continue; // Preserve ordinary user-installed dependencies.
+          }
+          if (existing && !existing.isSymbolicLink()) await checkedTree(target, output);
+          copies.push({ name, packagePath: dependency, destination: output, existing });
+        }
+        copyJobs.push({ packagePath: dependency, destination: output, name });
+        await dependencies(dependency, output, new Set([...ancestors, dependency]));
+      }
+      for (const [name, range] of Object.entries(metadata.peerDependencies || {})) {
+        if (sharedPackage(name) && !metadata.peerDependenciesMeta?.[name]?.optional) {
+          if (await browserPlatformPeer(name, range)) continue;
+          await official(name, range, preserve ? packagePath : undefined);
+        }
       }
     }
+    await dependencies(source, target, new Set([source]), true);
+    for (const item of release?.shared || []) {
+      const name = typeof item === 'string' ? item : item.name;
+      if (typeof name !== 'string' || !sharedPackage(name) || !/^@deepseek-ai\/[a-z0-9][a-z0-9-]*$/u.test(name)) throw new Error('无效共享服务声明');
+      await official(name, typeof item === 'string' ? '*' : item.version);
+    }
+    if (copies.length && !release) throw new Error('缺少受管 release.json，无法记录第三方依赖所有权');
     manifest.dependencies = { ...manifest.dependencies, ...localManifest.dependencies };
     manifest.exports = { ...manifest.exports, ...localManifest.exports };
     // The official client registry ignores subpath entries. Retire the broken
@@ -126,13 +223,23 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
     for (const path of ['package.json', 'cordis.patch.yml', 'assets/icon.svg']) await checkedPath(target, join(target, path));
     for (const path of ['package.json', 'cordis.patch.yml', 'icon.svg']) await checkedPath(releaseRoot, join(wrapper, path));
     await checkedPath(releaseRoot, join(releaseRoot, 'release.json'));
-    for (const { destination } of planned) await checkedPath(target, destination, true);
+    for (const { destination } of copies) await checkedPath(target, destination, true);
+    for (const { links } of planned) for (const { base, destination } of links) await checkedPath(base, destination, true);
 
-    for (const { packagePath, destination, existing } of planned) {
-      if (existing) { const current = await realpath(destination).catch(() => ''); if (current === packagePath) continue; await rm(destination, { force: true }); }
-      await mkdir(dirname(destination), { recursive: true });
-      await symlink(packagePath, destination, 'junction');
+    for (const { destination, existing } of copies) {
+      if (existing) await rm(destination, { recursive: !existing.isSymbolicLink(), force: true });
     }
+    for (const { packagePath, destination, name } of copyJobs) {
+      await mkdir(dirname(destination), { recursive: true });
+      await cp(packagePath, destination, { recursive: true, dereference: true, filter: path => {
+        const child = relative(packagePath, path);
+        return !child.split(/[\\/]/u).includes('node_modules') && !(name === 'ssh2' && child.startsWith(join('lib', 'protocol', 'crypto', 'build')));
+      } });
+    }
+
+    // Official PluginPackages owns runtime identity. Physical unpacked links
+    // bypass its installation fallback and create a second Session/Service.
+    for (const { links } of planned) for (const { destination } of links) await unlink(destination);
     for (const name of obsolete) {
       const path = join(target, name), info = await checkedPath(target, path, true);
       if (info) await rm(path, { recursive: !info.isSymbolicLink() && info.isDirectory(), force: true });
@@ -153,15 +260,12 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
     wrapperManifest.exports = { ...wrapperManifest.exports, './icon': './icon.svg' };
     await writeFile(join(wrapper, 'package.json'), JSON.stringify(wrapperManifest, null, 2) + '\n');
     await writeFile(join(target, 'package.json'), JSON.stringify(manifest, null, 2) + '\n');
-    if (planned.length) {
-      const releasePath = join(releaseRoot, 'release.json');
-      const release = await readFile(releasePath, 'utf8').then(JSON.parse).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-      if (release) {
-        const shared = new Map((release.shared || []).map(item => [item.name, item]));
-        for (const { name, version } of planned.filter(item => item.name.startsWith('@deepseek-ai/'))) shared.set(name, { name, version });
-        release.shared = [...shared.values()];
-        await writeFile(releasePath, JSON.stringify(release, null, 2) + '\n');
-      }
+    if (release) {
+      const services = new Map((release.shared || []).map(item => [item.name, item]));
+      for (const { name, version } of planned) services.set(name, { name, version });
+      release.shared = [...services.values()];
+      release.developmentDependencies = [...new Set([...owned, ...copies.map(item => item.name)])];
+      await writeFile(releasePath, JSON.stringify(release, null, 2) + '\n');
     }
     return target;
   } catch (error) {

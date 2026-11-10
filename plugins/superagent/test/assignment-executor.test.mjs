@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createAssignmentExecutor } from '../src/assignment-executor.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 
-for (const selection of ['worker', 'inherit', 'explicit']) test(`Worker requests preserve ${selection} selection and its ordered role fallback`, async t => {
+for (const selection of ['worker', 'explicit']) test(`Worker ignores ${selection} assignment selection and uses its ordered work-role queue`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-worker-models-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
@@ -17,10 +17,11 @@ for (const selection of ['worker', 'inherit', 'explicit']) test(`Worker requests
   const backup = { providerId: 'Backup/@', modelId: 'Exact: Worker/3', options: { maxTokens: 200 } };
   const explicit = { providerId: 'Explicit/@', modelId: 'Exact: Selected/4', options: { maxTokens: 900 } };
   const workers = selection === 'inherit' ? [] : [worker, backup];
-  const expected = selection === 'explicit' ? [explicit, worker, backup] : selection === 'inherit' ? [router] : workers;
+  const expected = workers;
   database.createAssignment(ticket.id, selection === 'explicit' ? { model: explicit } : {});
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const hooks = new Map(), seen = [], selected = [];
+  const tools = new Map();
+  const hooks = new Map(), seen = [], selected = [], transcript = [], injected = [];
   const signal = new AbortController().signal;
   const ctx = {
     on() { return () => {}; },
@@ -28,18 +29,22 @@ for (const selection of ['worker', 'inherit', 'explicit']) test(`Worker requests
       seen.push([request.provider, request.model, request.maxTokens]);
       if (seen.length < expected.length) throw Object.assign(new Error('Temporary failure'), { status: 503 });
     } },
-    sessionQuery: { readSession: async () => ({ events: [{ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'done' }] } } }] }) },
+    sessionQuery: { readSession: async () => ({ events: [...transcript, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'done' }] } } }] }) },
     agents: { create: async input => {
-      const agent = { model: { current: () => undefined, select: value => selected.push(value) }, followup() {
+      let turn = 0;
+      const agent = { id: input.sessionId, session: { snapshotEvents: () => structuredClone(transcript) }, model: { current: () => selected.at(-1), select: value => selected.push(value) }, inject: message => injected.push(message), followup(message) {
+        transcript.push({ seq: transcript.length, type: 'turn/start', data: { turn: ++turn } });
         hooks.get('agent/status')({ status: 'running' });
         queueMicrotask(async () => {
           try {
+            await hooks.get('agent/pre-step')({ turn, messages: [...injected.splice(0), message] }, async () => ({ kind: 'enter', messages: [] }));
             await hooks.get('agent/request')({ signal }, async () => ({ provider: 'host-default', model: 'host-default' }));
-            hooks.get('agent/status')({ status: 'idle' });
+            await tools.get('assistant_task_result').execute({ selfCheck: { summary: 'Verified output' } }, { agent, signal, callId: 'self-check' });
           } catch (error) { hooks.get('agent/error')({ error }); }
+          finally { transcript.push({ seq: transcript.length, type: 'turn/end', data: { turn, reason: { kind: 'completed' } } }); hooks.get('agent/status')({ status: 'idle' }); }
         });
       } };
-      await input.setup({ effect: fn => fn(), get: () => undefined, systemPrompt: { section() {}, context() {} }, on: (name, handler) => hooks.set(name, handler) }, agent);
+      await input.setup({ tools: { register: tool => tools.set(tool.name, tool) }, effect: fn => fn(), get: () => undefined, systemPrompt: { section() {}, context() {} }, on: (name, handler) => hooks.set(name, handler) }, agent);
       return { agent, dispose: async () => {} };
     } },
   };
@@ -51,7 +56,7 @@ for (const selection of ['worker', 'inherit', 'explicit']) test(`Worker requests
   assert.equal(selected[0].reasoningEffort, expected[0].options.reasoningEffort);
 });
 
-for (const projectMode of [false, true]) test(`host execution is persisted, isolated and permission-gated (project=${projectMode})`, async t => {
+for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], [false, 'max-tokens'], [false, 'paused']]) test(`host execution is persisted, isolated and permission-gated (project=${projectMode}, ending=${ending})`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-executor-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
@@ -61,6 +66,7 @@ for (const projectMode of [false, true]) test(`host execution is persisted, isol
   database.createAssignment(ticket.id, { model: { providerId: 'provider', modelId: 'opaque/model' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const events = new Map(); let disposed = false, meta, submitted = false, sourceReference;
+  const transcript = [], tools = new Map();
   const environment = { path: join(directory, 'isolated'), branch: 'branch', baseCommit: 'commit', repositoryRoot: project.path };
   const worktrees = { create: async (agent, request) => {
     assert.equal(submitted, false);
@@ -70,25 +76,39 @@ for (const projectMode of [false, true]) test(`host execution is persisted, isol
     return environment;
   } };
   const ctx = {
+    workspaceRegistry: { resolveByPath: async () => ({ attachSession: async id => assert.equal(id, database.runs(assignment.id)[0].sessionId) }) },
     on() { return () => {}; },
     llm: { prepareCall: async request => assert.equal(request.model, 'opaque/model') },
-    sessionQuery: { readSession: async () => ({ events: [{ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'Evidence found' }] } } }] }) },
+    sessionQuery: { readSession: async () => ({ events: [...transcript, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'Evidence found' }] } } }, { type: 'turn/end', data: { turn: 1, reason: { kind: ending === 'paused' ? 'blocked' : ending } } }] }) },
     agents: { create: async input => {
       meta = input.meta;
       assert.equal(database.runs(assignment.id)[0].state, 'prepared');
-      const agent = { followup() {
+      const agent = { id: input.sessionId, session: { snapshotEvents: () => transcript }, async followup() {
         assert.equal(database.runs(assignment.id)[0].state, 'submitted');
         submitted = true;
+        await tools.get('assistant_task_result').execute({ selfCheck: { summary: 'Verified evidence' } }, { agent, signal: new AbortController().signal, callId: 'self-check' });
+        if (ending === 'paused') {
+          database.pauseTicket(ticket.id);
+          await events.get('agent/pre-step')({ messages: [] }, async () => ({ kind: 'enter', messages: [] }));
+        }
         events.get('agent/status')({ status: 'running' });
         queueMicrotask(() => events.get('agent/status')({ status: 'idle' }));
       } };
-      await input.setup({ effect: fn => fn(), get: name => name === 'worktrees' ? worktrees : undefined, systemPrompt: { section() {}, context(entry) { if (entry.name === 'benchgo-worker-source-reference') sourceReference = JSON.parse(entry.text()); } }, on: (name, listener) => events.set(name, listener) }, agent);
+      await input.setup({ tools: { register: tool => tools.set(tool.name, tool) }, effect: fn => fn(), get: name => name === 'worktrees' ? worktrees : undefined, systemPrompt: { section() {}, context(entry) { if (entry.name === 'benchgo-worker-source-reference') sourceReference = JSON.parse(entry.text()); } }, on: (name, listener) => events.set(name, listener) }, agent);
       return { agent, dispose: async () => { disposed = true; } };
     } },
   };
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readSourceContext: async () => ({ status: 'available', messages: [{ text: 'Earlier discussion' }] }), readPolicy: async () => ({ version: 'p1', projects: [project] }), authorizeAction: async () => ({ allowed: true }), captureCheckpoint: async input => { assert.deepEqual(input, projectMode ? environment : meta.cwd); return { version: 1, manifestHash: 'mock-checkpoint' }; } });
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readSourceContext: async () => ({ status: 'available', messages: [{ text: 'Earlier discussion' }] }), readPolicy: async () => ({ version: 'p1', projects: [project], workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }), captureCheckpoint: async input => { assert.deepEqual(input, projectMode ? environment : meta.cwd); return { version: 1, manifestHash: 'mock-checkpoint' }; } });
   const signal = new AbortController().signal;
+  if (ending === 'max-tokens') {
+    await assert.rejects(executor(assignment, { ticket, signal, renew: async () => {} }), error => error.code === 'WORKER_TURN_INCOMPLETE' && error.executionPhase === 'evidence');
+    const run = database.runs(assignment.id)[0];
+    assert.equal(database.getWorkerExecutionState(run.id).selfCheck.selfCheck.summary, 'Verified evidence');
+    assert.equal(run.state, 'uncertain'); assert.equal(disposed, true);
+    return;
+  }
   const result = await executor(assignment, { ticket, signal, renew: async () => {} });
+  if (ending === 'paused') { assert.equal(result.waitingPause, true); assert.equal(database.runs(assignment.id)[0].state, 'verifying'); return; }
   assert.equal(submitted, true); assert.equal(disposed, true);
   assert.equal(sourceReference.kind, 'untrusted-source-reference');
   assert.equal(sourceReference.messages[0].content, 'Earlier discussion');
@@ -102,7 +122,7 @@ for (const projectMode of [false, true]) test(`host execution is persisted, isol
   assert.equal(database.runs(assignment.id)[0].state, 'verifying');
   assert.equal(typeof events.get('tools/execute'), 'function');
   const request = await events.get('agent/request')({ signal }, async () => ({ temperature: 0.2, provider: 'inherited', model: 'inherited' }));
-  assert.equal(request.temperature, 0.2);
+  assert.equal(request.temperature, undefined);
   assert.equal(request.provider, 'provider');
   assert.equal(request.model, 'opaque/model');
   await assert.rejects(executor(assignment, { ticket, signal, renew: async () => {} }), /reconciliation/);
@@ -129,7 +149,7 @@ test('elapsed time never interrupts execution; an explicit abort keeps its submi
   execution.catch(() => {});
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(interrupted, 0, 'the removed execution-time gate no longer cancels long work');
-  assert.equal(database.getTicket(ticket.id).status, 'open');
+  assert.equal(database.getTicket(ticket.id).status, 'running');
   controller.abort(new Error('owner stopped'));
   await assert.rejects(execution, /owner stopped/);
   assert.equal(interrupted, 1);
@@ -155,10 +175,14 @@ for (const cleanupFails of [false, true]) test(`cancel waits for confirmed host 
   const work = executor(assignment, { ticket, signal: controller.signal, renew: async () => {} });
   const rejected = assert.rejects(work, cleanupFails ? /cleanup failed/ : /requested stop/);
   await started;
-  assert.equal(database.cancelTicket(ticket.id).status, 'cancelling');
+  assert.equal(database.cancelTicket(ticket.id).status, 'waiting');
+  assert.equal(database.getTicket(ticket.id).executionControl.stopRequested, true);
   controller.abort(new Error('requested stop'));
   await cleanupStarted;
-  assert.equal(database.getTicket(ticket.id).status, 'cancelling');
+  assert.equal(database.getTicket(ticket.id).status, 'waiting');
+  assert.equal(database.getTicket(ticket.id).executionControl.stopRequested, true);
   release(); await rejected;
-  assert.equal(database.getTicket(ticket.id).status, cleanupFails ? 'cancelling' : 'cancelled');
+  assert.equal(database.getTicket(ticket.id).status, 'waiting');
+  assert.equal(database.getTicket(ticket.id).executionControl.stopRequested, cleanupFails);
+  assert.equal(database.getTicket(ticket.id).executionControl.stopped, !cleanupFails);
 });

@@ -2,8 +2,113 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createAssessmentRunner } from '../src/assessment-runner.mjs';
+import { ingestChannelEvent } from '../src/intake.mjs';
+import { channelIds } from '../src/channel-catalog.mjs';
+import { readBuiltinLayer } from '../src/builtin-layer.mjs';
 
-for (const outcome of ['revise', 'reopen']) for (const explicit of [false, true]) test(`assessment ${outcome} keeps Router apart from ${explicit ? 'explicit' : 'default Worker'} selection`, async t => {
+test('all channels answer and clarify with the shared current identity instead of a channel or model persona', async t => {
+  const builtinLayer = await readBuiltinLayer();
+  for (const channel of channelIds) {
+    const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+    t.after(() => database.close());
+    let name = '', legacy = false, outcome = 'answer', calls = 0;
+    const documents = () => [
+      { name: 'SOUL.md', content: '清晰、简洁，保持同一沟通风格。' },
+      { name: 'IDENTITY.md', content: legacy ? '' : `---\nname: ${JSON.stringify(name)}\n---\n\n用户的个人助手。` },
+      { name: 'USER.md', content: '用户资料' },
+      { name: 'AGENTS.md', content: '工作约定' },
+      { name: 'MEMORY.md', content: '共同经历' },
+      { name: 'TOOLS.md', content: 'non-context-tool-note' },
+    ];
+    const model = { providerId: 'opaque-provider/@', modelId: 'opaque-model/@' };
+    const llm = { async *stream(request) {
+      calls++;
+      assert.equal(request.provider, model.providerId);
+      assert.equal(request.model, model.modelId);
+      assert.equal(request.messages[0].content[0].text, builtinLayer);
+      const context = JSON.parse(request.messages[1].content[0].text);
+      assert.deepEqual(context.documents, documents().slice(0, 5));
+      assert.equal(context.assistantName, name);
+      const prompt = request.messages.filter(row => row.role === 'system').map(row => row.content[0].text).join('\n');
+      assert.doesNotMatch(prompt, /opaque-provider|opaque-model|Configured main model identity|non-context-tool-note/);
+      const intake = JSON.parse(request.messages.find(row => row.role === 'user').content[0].text);
+      yield { type: 'text-delta', text: JSON.stringify({ decisions: [{ candidateId: intake.candidates[0].candidateId, outcome,
+        reason: 'Identity uses the supplied shared documents', replyText: name ? '我是窝头，你的个人助手。' : '我是你的个人助手，还没有名字。' }] }) };
+      yield { type: 'finish', reason: { kind: 'stop' } };
+    } };
+    const runner = createAssessmentRunner({ database, llm,
+      readPolicy: async () => ({ version: 'p', model, rules: '' }),
+      readAssistantContext: async () => ({ documents: documents(), assistantName: name, name: 'ignored-config-fallback' }),
+      authorize: async () => ({ allowed: true }),
+    });
+    t.after(() => runner.stop());
+    for (const [index, currentName] of ['', '窝头', '窝头'].entries()) {
+      name = currentName;
+      legacy = index === 1;
+      outcome = name ? 'ask' : 'answer';
+      const messageId = String(index);
+      database.ingest({ dedupeKey: messageId, thread: { id: 'chat', source: { type: channel, id: 'chat' } },
+        source: { channel, chatId: 'chat', messageId }, actor: { id: 'owner', kind: 'human' }, content: '你是谁',
+        gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p' });
+      await runner.tick();
+    }
+    assert.equal(calls, 3, channel);
+    assert.deepEqual(database.directReplies({ threadId: 'chat' }).map(row => row.text).sort(), ['我是你的个人助手，还没有名字。', '我是窝头，你的个人助手。', '我是窝头，你的个人助手。'].sort(), channel);
+    assert.equal(database.listTickets().length, 0, channel);
+  }
+});
+
+test('runner assesses pending intake and promotes the same source only after an authorized Decision', async t => {
+  const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+  t.after(() => database.close());
+  const accepted = await ingestChannelEvent(database, { sourceKey: 'pending-source', channel: 'telegram', threadId: 'thread',
+    source: { channel: 'telegram', sourceType: 'direct', connectionId: 'telegram', conversationId: 'chat', chatId: 'chat' },
+    actor: { id: 'owner', kind: 'human' }, text: 'Original pending request',
+  }, { version: 'p', ownerIds: ['owner'], threadIds: ['chat'] });
+  assert.equal(accepted.trigger, null);
+  const triggerId = accepted.intakeEvent.id;
+  assert.equal(database.getTrigger(triggerId), undefined);
+  assert.equal(database.readIntakeEvent(triggerId).intakeStage, 'pending');
+  const runner = createAssessmentRunner({ database, readPolicy: async () => ({ version: 'p', model: {} }),
+    authorize: async ({ trigger }) => {
+      assert.equal(trigger.content, 'Original pending request');
+      assert.equal(database.getTrigger(triggerId), undefined);
+      return { allowed: true, mandate: { actorId: 'owner', source: trigger.source } };
+    },
+    assess: async ({ candidates, readSource }) => {
+      assert.equal((await readSource({ triggerId })).content, 'Original pending request');
+      return [{ candidateId: candidates[0].candidateId, outcome: 'accept', target: 'Requested result', acceptance: 'Original scope', reason: 'Explicit authorized request' }];
+    },
+  });
+  await runner.tick();
+  await runner.stop();
+  assert.equal(database.getTrigger(triggerId).intakeStage, 'admitted');
+  assert.equal(database.getTrigger(triggerId).content, database.readIntakeEvent(triggerId).content);
+  assert.equal(database.listTickets().length, 1);
+  assert.equal(database.listTickets()[0].mandate.triggerId, triggerId);
+});
+
+test('runner persists stop attention as attachment with the original requested outcome', async t => {
+  const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+  t.after(() => database.close());
+  database.ingest({ dedupeKey: 'attention', thread: { id: 'thread', source: { type: 'telegram', id: 'chat' } },
+    source: { sourceType: 'group', channel: 'telegram', conversationId: 'chat' }, actor: { id: 'owner' }, content: 'Stop',
+    gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p' });
+  let committed;
+  const intercepted = new Proxy(database, { get(target, key) { return key === 'decide' ? (_id, decision) => { committed = decision; } : target[key]; } });
+  const runner = createAssessmentRunner({ database: intercepted,
+    readPolicy: async () => ({ version: 'p', model: {} }),
+    authorize: async () => ({ allowed: true, outcome: 'attach', routerAttention: true }),
+    assess: async ({ candidates }) => [{ candidateId: candidates[0].candidateId, outcome: 'stop', ticketId: 'ticket', reason: 'Stop-like group message' }],
+  });
+  await runner.tick();
+  await runner.stop();
+  assert.equal(committed.outcome, 'attach');
+  assert.equal(committed.assessment.requestedOutcome, 'stop');
+  assert.equal(committed.assessment.routerAttention, true);
+});
+
+for (const outcome of ['revise', 'adjustment']) for (const explicit of [false, true]) test(`assessment ${outcome} keeps Router apart from ${explicit ? 'explicit' : 'default Worker'} selection`, async t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   database.ingest({ dedupeKey: outcome, thread: { id: 'thread', source: { type: 'feishu', id: 'chat' } }, source: {}, actor: { id: 'owner' }, content: 'Change the task', gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p' });
@@ -130,7 +235,7 @@ test('assessment includes bounded head and nearby context beyond the first page 
   }
   const candidate = database.candidates({ threadId: 'long-thread', status: 'queued' })[0];
   assert.ok(candidate);
-  const original = database.getTrigger(candidate.triggerId);
+  const original = database.readIntakeEvent(candidate.triggerId);
   let inspected = false;
   const runner = createAssessmentRunner({ database,
     readPolicy: async () => ({ version: 'p', model: {} }), authorize: async () => ({ allowed: true }),
@@ -153,7 +258,7 @@ test('assessment includes bounded head and nearby context beyond the first page 
   await runner.tick();
   await runner.stop();
   assert.equal(inspected, true);
-  assert.equal(database.getTrigger(candidate.triggerId).content, original.content);
+  assert.equal(database.readIntakeEvent(candidate.triggerId).content, original.content);
 });
 
 test('large candidate batches share an excerpt budget and leave excess candidates queued', async t => {

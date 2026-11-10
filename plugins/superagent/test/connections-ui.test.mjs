@@ -9,21 +9,22 @@ const walk = node => node && typeof node === 'object' ? [node, ...(node.children
 test('channel brand color is driven by saved availability, including fallback icons', () => {
   const source = transformSync(readFileSync(new URL('../../shared/client/channel-brand-icon.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
   const module = { exports: {} };
-  runInNewContext(source, { module, exports: module.exports, require: path => path.endsWith('/ui/button.jsx') ? { Button: 'button' } : path.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : path === 'react' ? { createElement: (type, props, ...children) => ({ type, props, children }) } : path.endsWith('catalog.json') ? { feishu: 'feishu.svg' } : { UIIcon: 'Icon' } });
+  runInNewContext(source, { module, exports: module.exports, require: path => path.endsWith('confirmation.jsx') ? { useConfirmation: () => [async () => confirm, null] } : path.endsWith('/ui/button.jsx') ? { Button: 'button' } : path.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : path === 'react' ? { createElement: (type, props, ...children) => ({ type, props, children }) } : path.endsWith('catalog.json') ? { feishu: 'feishu.svg' } : { UIIcon: 'Icon' } });
   const render = module.exports.ChannelBrandIcon;
   assert.equal(render({ channel: 'feishu', available: false, selected: true }).props.style.filter, 'grayscale(1)');
   assert.equal(render({ channel: 'feishu', available: true, selected: false }).props.style.filter, undefined);
   assert.equal(render({ channel: 'api', available: false, selected: true }).children[0].props.selected, false);
 });
-function harness({ configureError = false, credentialError = false, confirm = true, action } = {}) {
+function harness({ configureError = false, credentialError = false, confirm = true, action, catalogError = false } = {}) {
   const config = { enabled: true, tokenRef: 'safe-ref', ownerIds: ['Owner:X'], untouched: 'keep' };
   const fields = [{ key: 'tokenRef', label: 'Token', required: true }, { key: 'ownerIds', label: '主人 ID', type: 'array' }];
   const state = [[{ id: 'telegram', label: 'Telegram', fields }, { id: 'discord', label: 'Discord', fields }], 'telegram', { channel: 'telegram', config, revision: 7 }, { ...config, ownerIds: 'Owner:X' }, { enabled: true, connection: { state: 'connected' } }, false, '', ''];
   let cursor = 0, refCursor = 0; const refs = [], effects = [], timers = new Set();
   const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value !== false && value != null) }), useEffect(effect) { effects.push(effect); }, useRef: () => ({ current: 0 }), useState(initial) { const index = cursor++; if (!(index in state)) state[index] = initial; return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value; }]; } };
-  const module = { exports: {} }, calls = [];
+  const module = { exports: {} }, calls = [], visibilityListeners = new Set();
+  const document = { visibilityState: 'visible', addEventListener: (_type, callback) => visibilityListeners.add(callback), removeEventListener: (_type, callback) => visibilityListeners.delete(callback) };
   react.useRef = initial => { const index = refCursor++; return refs[index] ||= { current: initial }; };
-  runInNewContext(code, { module, exports: module.exports, window: { confirm: () => confirm }, setTimeout: callback => { timers.add(callback); return callback; }, clearTimeout: callback => timers.delete(callback), require: path => path.endsWith('/ui/button.jsx') ? { Button: 'button' } : path.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : path === 'react' ? react : path === 'qrcode' ? { toDataURL: async content => 'data:image/png;base64,' + content } : { SegmentedControl: 'Tabs', ChannelBrandIcon: 'Brand', CustomSelect: 'CustomSelect' } });
+  runInNewContext(code, { module, exports: module.exports, document, AbortController, AbortSignal, window: { confirm: () => confirm }, setTimeout: callback => { timers.add(callback); return callback; }, clearTimeout: callback => timers.delete(callback), require: path => path.endsWith('confirmation.jsx') ? { useConfirmation: () => [async () => confirm, null] } : path.endsWith('/ui/button.jsx') ? { Button: 'button' } : path.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : path === 'react' ? react : path === 'qrcode' ? { toDataURL: async content => 'data:image/png;base64,' + content } : { SegmentedControl: 'Tabs', ChannelBrandIcon: 'Brand', CustomSelect: 'CustomSelect' } });
   const api = async (op, input) => {
     calls.push({ op, input });
     if (op === 'connectionAction') {
@@ -35,25 +36,44 @@ function harness({ configureError = false, credentialError = false, confirm = tr
     if (op === 'connectionCredential') { if (credentialError) throw new Error('credential failed'); return { ref: 'channel-secret:opaque-id' }; }
     if (op === 'connectionConfigure') { if (configureError) throw new Error('revision conflict'); return { channel: 'telegram', config: { ...config, ...input.patch }, revision: 8 }; }
     if (op === 'connections') return { channel: input.channel, config, revision: 7 };
+    if (op === 'connectionCatalog') { if (catalogError) throw new Error('状态服务暂不可用'); return { channels: state[0].map(item => ({ ...item, status: { enabled: true, authentication: 'verified', connection: { state: 'connected' } } })) }; }
     return {};
   };
-  return { state, calls, effects, timers, render: () => { effects.length = 0; cursor = 0; refCursor = 0; return walk(module.exports.Connections({ api })); } };
+  return { state, calls, effects, timers, render: (props = {}) => { effects.length = 0; cursor = 0; refCursor = 0; return walk(module.exports.Connections({ api, ...props })); } };
 }
 test('status polling preserves drafts and ignores results after cleanup', async () => {
   const h = harness();
   h.state[3].ownerIds = 'Unsaved:Owner';
   h.render();
   const cleanup = h.effects.at(-1)();
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.timers.size, 1);
   const callback = [...h.timers][0]; h.timers.delete(callback);
   await callback();
-  assert.equal(h.calls.at(-1).op, 'connectionStatus');
+  assert.equal(h.calls.at(-1).op, 'connectionCatalog');
   assert.equal(h.state[3].ownerIds, 'Unsaved:Owner');
   const pending = [...h.timers][0]; h.timers.delete(pending);
   const lastStatus = h.state[4];
   const running = pending(); cleanup(); await running;
   assert.equal(h.state[4], lastStatus);
   assert.equal(h.timers.size, 0);
+});
+
+test('hidden connection view does not poll and a failed status refresh dims saved availability without replacing drafts', async () => {
+  const hidden = harness();
+  hidden.render({ active: false }); hidden.effects.at(-1)();
+  assert.equal(hidden.calls.length, 0); assert.equal(hidden.timers.size, 0);
+  const h = harness({ catalogError: true });
+  h.state[4].authentication = 'verified';
+  h.state[3].ownerIds = 'Unsaved:Owner';
+  h.state[18] = { telegram: { at: Date.now(), stale: false } };
+  h.render(); const cleanup = h.effects.at(-1)();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.state[3].ownerIds, 'Unsaved:Owner');
+  assert.equal(h.state[4].authentication, 'verified');
+  assert.equal(h.render().find(node => node.type === 'Tabs').props.options[0].icon.props.available, false);
+  assert.equal(h.state[18].telegram.stale, true);
+  cleanup();
 });
 
 test('channel saves only changed fields with opaque IDs and channel revision', async () => {
@@ -144,19 +164,34 @@ test('save retry uses the current form validation and keeps the unsaved draft', 
   assert.equal(h.state[3].ownerIds, 'Owner:Unsaved');
   assert.equal(h.state[2].revision, 7);
 });
-test('saved enabled channels retain brand color independently of selection and connection health', () => {
+test('channel brand color follows verified availability rather than selection or enabled configuration', () => {
   const h = harness();
+  h.state[4].authentication = 'verified';
   const options = h.render().find(node => node.type === 'Tabs').props.options;
   assert.equal(options[0].icon.props.available, true);
   assert.equal(options[1].icon.props.available, false);
   h.state[4] = { enabled: true, connection: { state: 'failed' } };
-  assert.equal(h.render().find(node => node.type === 'Tabs').props.options[0].icon.props.available, true);
+  assert.equal(h.render().find(node => node.type === 'Tabs').props.options[0].icon.props.available, false);
   h.state[0][1].status = { enabled: true, connection: { state: 'connecting' } };
+  assert.equal(h.render().find(node => node.type === 'Tabs').props.options[1].icon.props.available, false);
+  h.state[0][1].status = { enabled: true, authentication: 'verified', connection: { state: 'connected' } };
   assert.equal(h.render().find(node => node.type === 'Tabs').props.options[1].icon.props.available, true);
   h.state[4] = { enabled: false };
   const selected = h.render().find(node => node.type === 'Tabs').props.options[0].icon.props;
   assert.equal(selected.available, false);
 
+});
+
+test('authenticated Feishu transport lights the brand before REST or message verification', () => {
+  const h = feishuHarness();
+  h.state[4] = { enabled: true, authentication: 'unverified', events: 'unverified', sending: 'unverified', connection: { state: 'connected', authenticated: true } };
+  const nodes = h.render();
+  assert.equal(nodes.find(node => node.type === 'Tabs').props.options[0].icon.props.available, true);
+  assert.equal(nodes.find(node => node.props.className === 'ba-channel-status').props['data-tone'], 'success');
+  const checks = nodes.filter(node => node.props.className === 'ba-connection-check');
+  assert.deepEqual(checks.map(node => node.props['data-tone']), ['success', 'neutral', 'neutral']);
+  h.state[4].connection = { state: 'reconnecting', authenticated: false };
+  assert.equal(h.render().find(node => node.type === 'Tabs').props.options[0].icon.props.available, false);
 });
 
 test('custom channel choices preserve opaque values and required validation before saving', async () => {
@@ -182,14 +217,14 @@ test('credential entry clears plaintext and stores only returned reference in co
   assert.equal(h.calls[1].input.patch.tokenRef, 'channel-secret:opaque-id');
   assert.equal(JSON.stringify(h.calls[1]).includes('secret-value'), false);
 });
-test('cancel and channel switch clear credential plaintext', () => {
+test('cancel and channel switch clear credential plaintext', async () => {
   const h = harness();
   const enter = () => h.render().find(node => node.type === 'input' && node.props.type === 'password').props.onChange({ target: { value: 'secret-value' } });
   enter();
   h.render().find(node => node.type === 'button' && node.children.includes('取消输入')).props.onClick();
   assert.equal(h.state[8].tokenRef, '');
   enter();
-  h.render().find(node => node.type === 'Tabs').props.onChange('discord');
+  await h.render().find(node => node.type === 'Tabs').props.onChange('discord');
   assert.equal(Object.keys(h.state[8]).length, 0);
 });
 test('QR login renders locally and merges only returned credential references into draft', async () => {

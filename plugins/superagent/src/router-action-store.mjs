@@ -60,7 +60,7 @@ export function installRouterActionStore({ db, tx, api, insertTicket }) {
           || mandate.action?.threadId !== mandate.source.threadId) throw fail('MANDATE_ACTION_MISMATCH', 'Router action Mandate does not bind the frozen tool input');
         const at = new Date(now).toISOString();
         const ticket = insertTicket({ id: `router-action:${digest(actionKey)}`, threadId: trigger.threadId,
-          target, acceptance, mandate, sourceTriggerIds: [triggerId] });
+          target, acceptance, mandate, status: 'running', sourceTriggerIds: [triggerId] });
         const assignmentId = `router-action:${digest(actionKey)}`;
         const payload = { executor: 'router-action', action: { sessionId, messageId, callId, toolName, argsHash, triggerId }, instructionRevision: ticket.instructionRevision };
         db.prepare("INSERT INTO sa_assignments(id,ticket_id,payload,state,priority,owner,lease_until,fence,attempts,created_at,updated_at) VALUES (?,?,?,'claimed',?,?,?,?,?,?,?)")
@@ -96,6 +96,7 @@ export function installRouterActionStore({ db, tx, api, insertTicket }) {
             db.prepare("UPDATE sa_runs SET state='uncertain',payload=?,updated_at=? WHERE id=? AND state IN ('prepared','submitted','running','verifying')").run(json(payload), new Date(now).toISOString(), actionRow.run_id);
             db.prepare("UPDATE sa_assignments SET state='uncertain',owner=NULL,lease_until=NULL,updated_at=? WHERE id=? AND state='claimed' AND owner=? AND fence=?").run(new Date(now).toISOString(), actionRow.assignment_id, owner, fence);
           }
+          db.prepare("UPDATE sa_tickets SET status='waiting',updated_at=? WHERE id=? AND status<>'completed'").run(new Date(now).toISOString(), actionRow.ticket_id);
           return { ...actionValue(actionRow), duplicate: false };
         }
         if (assignment.state !== 'claimed' || assignment.owner !== owner || assignment.fence !== fence || assignment.leaseUntil <= now)
@@ -106,6 +107,7 @@ export function installRouterActionStore({ db, tx, api, insertTicket }) {
           const payload = { ...parse(db.prepare('SELECT payload FROM sa_runs WHERE id=?').get(actionRow.run_id).payload), evidence: { receipt, readback, verified: false, error: authorizationError.message } };
           db.prepare("UPDATE sa_runs SET state='uncertain',payload=?,updated_at=? WHERE id=?").run(json(payload), new Date(now).toISOString(), actionRow.run_id);
           db.prepare("UPDATE sa_assignments SET state='uncertain',owner=NULL,lease_until=NULL,updated_at=? WHERE id=?").run(new Date(now).toISOString(), actionRow.assignment_id);
+          db.prepare("UPDATE sa_tickets SET status='waiting',updated_at=? WHERE id=? AND status<>'completed'").run(new Date(now).toISOString(), actionRow.ticket_id);
           return { ...actionValue(actionRow), duplicate: false };
         }
         const at = new Date(now).toISOString();
@@ -118,7 +120,7 @@ export function installRouterActionStore({ db, tx, api, insertTicket }) {
         const result = { delivery, actionReceipt: evidence.receipt, readback: evidence.readback, action: { kind: evidence.kind, toolName: evidence.toolName, callId, argsHash, verified: true },
           summary, ticketId: ticket.id, instructionRevision: ticket.instructionRevision, version, committedAt: at, runId: actionRow.run_id, sessionId: run.sessionId };
         db.prepare('INSERT INTO sa_results VALUES (?,?,?,?)').run(ticket.id, version, json(result), at);
-        db.prepare("UPDATE sa_tickets SET status='completed',result_version=?,updated_at=? WHERE id=? AND result_version=? AND status='open'").run(version, at, ticket.id, ticket.resultVersion);
+        db.prepare("UPDATE sa_tickets SET status='completed',result_version=?,updated_at=? WHERE id=? AND result_version=? AND status IN ('running','waiting')").run(version, at, ticket.id, ticket.resultVersion);
         db.prepare("UPDATE sa_assignments SET state='completed',owner=NULL,lease_until=NULL,updated_at=? WHERE id=? AND state='claimed' AND owner=? AND fence=?").run(at, actionRow.assignment_id, owner, fence);
         db.prepare("UPDATE sa_runs SET state='completed',updated_at=? WHERE id=? AND state='verifying'").run(at, actionRow.run_id);
         const uniqueKey = `router-action-result:${actionRow.action_key}`;

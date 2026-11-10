@@ -1,17 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { prepareTrayInput, prepareApplicationMenuInput, trayLabelsPlugin, prepareDesktopTray, verifyTrayBundle } from './prepare-tray.mjs';
-import config from './electron-builder.config.mjs';
+import config, { verifyPackagedEnrollment } from './electron-builder.config.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const trayPath = join(root, 'deepseek-harness/apps/desktop/lib/types/tray.js');
 const mainInputPath = join(root, 'deepseek-harness/apps/desktop/lib/types/main.js');
+
+test('packaged enrollment resources must exactly match the reviewed source', async t => {
+  const resources = await mkdtemp(join(tmpdir(), 'benchgo-enrollment-resources-'));
+  t.after(() => rm(resources, { recursive: true, force: true }));
+  await mkdir(join(resources, 'benchgo/shared'), { recursive: true });
+  for (const [source, target] of [
+    ['scripts/desktop/plugin-bundle.mjs', 'benchgo/plugin-bundle.mjs'],
+    ['plugins/benchgo/shared/plugin-install.mjs', 'benchgo/shared/plugin-install.mjs'],
+    ['plugins/benchgo/shared/update-feed.mjs', 'benchgo/shared/update-feed.mjs'],
+  ]) await copyFile(join(root, source), join(resources, target));
+  await verifyPackagedEnrollment(resources);
+  await writeFile(join(resources, 'benchgo/shared/plugin-install.mjs'), 'old bundled registration');
+  await assert.rejects(verifyPackagedEnrollment(resources), /differs from source: benchgo\/shared\/plugin-install/);
+});
 
 test('upstream tray anchor changes or duplicates stop compilation', async () => {
   const source = await readFile(trayPath, 'utf8');

@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createAssistantRuntimeStore } from './runtime-store.mjs';
 import { ticketGoalRecord, assertGoalTicketBinding } from './goal-ticket-record.mjs';
+import { rejectModelOverride } from './work-role-policy.mjs';
+import { ticketStopped } from './ticket-lifecycle.mjs';
 
 const TERMINAL_GOAL = new Set(['completed', 'failed', 'cancelled']);
 
@@ -10,7 +12,7 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : value &
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const creation = input => ({ objective: input.objective, title: input.title || String(input.objective).slice(0, 120),
   acceptance: input.acceptance || null, scope: input.scope || null, budget: input.budget || null,
-  projectId: input.projectId ?? null, provider: input.provider ?? null, model: input.model ?? null, text: input.text ?? null,
+  projectId: input.projectId ?? null, text: input.text ?? null,
   threadId: input.threadId || 'main', ownerSessionId: input.ownerSessionId ?? null,
   children: (input.children || []).map(child => ({ ...creation({ ...child, threadId: child.threadId || input.threadId, ownerSessionId: input.ownerSessionId }), requestId: child.requestId ?? null })) });
 const fingerprint = input => createHash('sha256').update(JSON.stringify(canonical(creation(input)))).digest('hex');
@@ -28,19 +30,14 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
     scheduleQueue.set(key, current);
     return current.finally(() => { if (scheduleQueue.get(key) === current) scheduleQueue.delete(key); });
   };
-  const taskAcceptancePassed = task => {
-    const result = asObject(task.result);
-    const verification = asObject(task.verification);
-    const verdict = result.acceptanceVerdict ?? verification.verdict;
-    const evidence = result.evidenceRefs ?? verification.evidenceRefs;
-    if (task.instructionRevision !== undefined && result.instructionRevision !== task.instructionRevision) return false;
-    return verdict === 'passed' && Array.isArray(evidence) && evidence.length > 0;
-  };
+  const taskDelivered = task => task.status === 'completed' && task.result?.outcome === 'completed'
+    && (task.instructionRevision === undefined || task.result.instructionRevision === task.instructionRevision);
   function validateGoal(input, seen = new Set()) {
     if (!input || typeof input !== 'object' || seen.has(input) || seen.size >= 100) throw new Error('目标树无效或超过100项');
+    rejectModelOverride(input);
     seen.add(input);
     const children = Array.isArray(input?.children) ? input.children : [];
-    if (!input?.objective || (!children.length && (!input.projectId || !input.provider || !input.text))) throw new Error('目标缺少 objective、projectId、provider 或 text');
+    if (!input?.objective || (!children.length && (!input.projectId || !input.text))) throw new Error('目标缺少 objective、projectId 或 text');
     for (const child of children) validateGoal(child, seen);
   }
   function validateRequests(input, requestId, seen = new Set()) {
@@ -51,7 +48,7 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
   async function createGoal(input = {}, ticketBinding) {
     validateGoal(input);
     const children = Array.isArray(input.children) ? input.children : [];
-    if (!input.objective || (!children.length && (!input.projectId || !input.provider || !input.text))) throw new Error('目标缺少 objective、projectId、provider 或 text');
+    if (!input.objective || (!children.length && (!input.projectId || !input.text))) throw new Error('目标缺少 objective、projectId 或 text');
     const requestId = input.requestId || randomUUID();
     validateRequests(input, requestId);
     if (!ticketBinding) throw new Error('新目标必须关联已授权工单');
@@ -79,7 +76,7 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
         if (existing.requestFingerprint !== requestFingerprint || existing.parentGoalId !== (input.parentGoalId || null)) throw Object.assign(new Error('目标请求标识已使用或旧请求内容无法核实，请读取原目标'), { code: 'IDEMPOTENCY_CONFLICT' });
         if (existing.nextStep !== 'building_children') return existing;
       }
-      const goal = existing || db.insertGoal({ id: randomUUID(), budgetGoalId: ticketBinding.budgetGoalId || null, requestId, requestFingerprint, inputFingerprint: fingerprint(input), executionKind: 'ticket', ticketIds: ticketBinding.ticketId ? [ticketBinding.ticketId] : [], ticketRevisions: ticketBinding.ticketId ? { [ticketBinding.ticketId]: store.orchestration.getTicket(ticketBinding.ticketId).instructionRevision } : {}, ownerSessionId: input.ownerSessionId || null, status: 'active', title: input.title || String(input.objective).slice(0, 120), objective: input.objective, acceptance: input.acceptance || null, scope: input.scope || null, budget: input.budget || null, projectId: input.projectId, provider: input.provider, model: input.model, text: input.text, threadId: input.threadId || 'main', parentGoalId: input.parentGoalId || null, childGoalIds: [], nextStep: children.length ? 'building_children' : 'verify', createdAt: iso(Date.now()), updatedAt: iso(Date.now()) });
+      const goal = existing || db.insertGoal({ id: randomUUID(), budgetGoalId: ticketBinding.budgetGoalId || null, requestId, requestFingerprint, inputFingerprint: fingerprint(input), executionKind: 'ticket', ticketIds: ticketBinding.ticketId ? [ticketBinding.ticketId] : [], ticketRevisions: ticketBinding.ticketId ? { [ticketBinding.ticketId]: store.orchestration.getTicket(ticketBinding.ticketId).instructionRevision } : {}, ownerSessionId: input.ownerSessionId || null, status: 'active', title: input.title || String(input.objective).slice(0, 120), objective: input.objective, acceptance: input.acceptance || null, scope: input.scope || null, budget: input.budget || null, projectId: input.projectId, workerModel: ticketBinding.ticketId ? store.orchestration.assignments(ticketBinding.ticketId).findLast(row => row.instructionRevision === store.orchestration.getTicket(ticketBinding.ticketId).instructionRevision)?.model : undefined, text: input.text, threadId: input.threadId || 'main', parentGoalId: input.parentGoalId || null, childGoalIds: [], nextStep: children.length ? 'building_children' : 'verify', createdAt: iso(Date.now()), updatedAt: iso(Date.now()) });
 
       if (children.length) {
         if (existing) db.updateGoal(goal.id, { status: 'active', error: null, waitReason: null });
@@ -103,11 +100,11 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
       // the incomplete parent as a leaf or claim its partial children complete.
       if (goal.nextStep === 'building_children' || (goal.nextStep === 'children' && !goal.childGoalIds?.length)) return db.updateGoal(id, { status: 'waiting', waitReason: 'incomplete', error: '目标创建未完成，请重新创建' });
       const childGoals = (goal.childGoalIds || []).map(childId => db.goal(childId)).filter(Boolean);
-      if (childGoals.length !== (goal.childGoalIds || []).length) return db.updateGoal(id, { status: 'waiting', waitReason: 'incomplete', nextStep: 'children', error: '子目标记录缺失，无法验收' });
+      if (childGoals.length !== (goal.childGoalIds || []).length) return db.updateGoal(id, { status: 'waiting', waitReason: 'incomplete', nextStep: 'children', error: '子目标记录缺失，无法同步状态' });
       if (childGoals.length) {
         for (const child of childGoals) if (['active', 'waiting'].includes(child.status)) await advanceGoal(child.id);
         const refreshed = (goal.childGoalIds || []).map(childId => db.goal(childId)).filter(Boolean);
-        if (refreshed.some(child => child.status === 'failed' || child.status === 'cancelled')) return db.updateGoal(id, { status: 'failed', nextStep: 'review', error: '子目标未完成' });
+        if (refreshed.some(child => child.status === 'failed' || child.status === 'cancelled')) return db.updateGoal(id, { status: 'failed', nextStep: 'awaiting_adjustment', error: '子目标未完成' });
         if (refreshed.length && refreshed.every(child => child.status === 'completed')) return db.updateGoal(id, { status: 'completed', nextStep: null, completedAt: iso(Date.now()) });
         if (refreshed.some(child => child.status === 'waiting' || child.status === 'paused')) return db.updateGoal(id, { status: 'waiting', waitReason: 'children', nextStep: 'children' });
         return db.updateGoal(id, { status: 'active', waitReason: null, nextStep: 'children' });
@@ -119,13 +116,12 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
             assertGoalTicketBinding(store.orchestration, row.id, goal);
             if (goal.ticketRevisions?.[row.id] !== row.instructionRevision) throw new Error('工单要求版本已变化或缺少原始版本绑定');
           } catch (error) {
-            return db.updateGoal(id, { status: 'waiting', waitReason: 'requirements', nextStep: 'review', error: error.message });
+            return db.updateGoal(id, { status: 'waiting', waitReason: 'requirements', nextStep: 'awaiting_adjustment', error: error.message });
           }
         }
-        if (rows.some(row => ['failed', 'cancelled'].includes(row.status))) return db.updateGoal(id, { status: 'failed', error: '目标工单失败或已停止', nextStep: 'review' });
-        if (rows.every(row => row.status === 'completed' && taskAcceptancePassed(row))) return db.updateGoal(id, { status: 'completed', nextStep: null, waitReason: null, error: null, completedAt: iso(Date.now()) });
-        const waiting = rows.find(row => ['waiting', 'uncertain', 'blocked', 'completed', 'cancelling'].includes(row.status));
-      return db.updateGoal(id, { status: waiting ? 'waiting' : 'active', waitReason: waiting ? waiting.waitReason || 'acceptance' : null, nextStep: 'verify' });
+        if (rows.every(row => row.status === 'completed' && taskDelivered(row))) return db.updateGoal(id, { status: 'completed', nextStep: null, waitReason: null, error: null, completedAt: iso(Date.now()) });
+        const waiting = rows.find(row => row.status === 'waiting' || row.status === 'completed');
+      return db.updateGoal(id, { status: waiting ? 'waiting' : 'active', waitReason: waiting ? waiting.waitReason || 'delivery' : null, nextStep: 'verify' });
     });
   }
   async function cancelGoal(id, { rowVersion } = {}) {
@@ -141,9 +137,9 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
         for (const ticketId of goal.ticketIds || []) {
             const ticket = store.orchestration.getTicket(ticketId);
             if (!ticket) throw new Error('目标关联工单缺失，停止状态待核实');
-            if (!['completed', 'failed', 'cancelled', 'closed'].includes(ticket.status)) {
+            if (ticket.status !== 'completed' && !ticket.executionControl?.stopped) {
               const stopped = store.orchestration.cancelTicket(ticketId);
-              if (stopped.status === 'cancelling') pending = true;
+              if (stopped.executionControl?.stopRequested && !stopped.executionControl?.stopped) pending = true;
             }
           }
         if (pending) return db.updateGoal(id, { status: 'cancelling', nextStep: 'cancel', waitReason: 'cancellation' });
@@ -175,9 +171,9 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
       for (const ticketId of goal.ticketIds || []) {
         const ticket = store.orchestration.getTicket(ticketId);
         if (!ticket) throw new Error('Goal Ticket is missing');
-        if (['completed', 'failed', 'cancelled', 'closed'].includes(ticket.status)) continue;
+        if (ticket.status === 'completed' || ticketStopped(ticket)) continue;
         const changed = paused ? store.orchestration.pauseTicket(ticketId) : store.orchestration.resumeTicket(ticketId);
-        if (changed.status !== 'paused' && paused) pending = true;
+        if (!changed.executionControl?.paused && paused) pending = true;
       }
       return db.updateGoal(id, { status: paused ? pending ? 'pausing' : 'paused' : 'active', waitReason: paused ? 'user' : null, error: null });
     });
@@ -215,11 +211,13 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
     },
 
     matchGoalRequest(input) {
+      validateGoal(input);
       const goal = db.goalByRequest(input.requestId);
       if (goal && (goal.inputFingerprint !== fingerprint(input) || goal.parentGoalId !== (input.parentGoalId || null))) throw Object.assign(new Error('目标请求标识已用于不同内容或历史请求无法核实'), { code: 'IDEMPOTENCY_CONFLICT' });
       return goal;
     },
     reserveGoalRequest(input) {
+      validateGoal(input);
       const key = `goal-ticket-intent:${createHash('sha256').update(input.requestId).digest('hex')}`;
       const value = fingerprint(input), prior = db.meta(key);
       if (prior && prior.fingerprint !== value) throw Object.assign(new Error('目标请求已冻结，不能改变部分派发中的目标'), { code: 'IDEMPOTENCY_CONFLICT' });
@@ -228,7 +226,7 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
     goals: () => db.goals().map(goal => ({ ...goal, budgetState: goal.budgetGoalId ? api.getGoalBudget(goal.id) : null })),
     getGoal: id => { const goal = db.goal(id); return goal && { ...goal, budgetState: goal.budgetGoalId ? api.getGoalBudget(id) : null }; },
     updateGoal: (id, patch = {}, options) => {
-      if (patch.status === 'completed') throw new Error('目标必须通过任务验收后完成，不能直接标记完成');
+      if (patch.status === 'completed') throw new Error('目标必须在工单完成交付后完成，不能直接标记完成');
       if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key => !['title', 'status'].includes(key))) throw new Error('目标只允许修改标题或暂停、恢复状态；执行身份与任务关联不可修改');
       if (patch.title !== undefined && (typeof patch.title !== 'string' || !patch.title.trim() || patch.title.length > 120)) throw new Error('无效目标标题');
       if (patch.status !== undefined && !['paused', 'active'].includes(patch.status)) throw new Error('仅支持暂停或恢复目标调度');

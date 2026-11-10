@@ -4,19 +4,18 @@ export function ticketGoalRecord(database, ticketId) {
   if (!ticket) return null;
   const latest = database.results(ticketId).at(-1);
   // Only the current committed result may satisfy a Goal. Do not search older
-  // successful versions after a newer review or requirements change.
+  // successful versions after a requirements change.
   const current = latest?.ticketId === ticket.id
     && latest.version === ticket.resultVersion
     && latest.instructionRevision === ticket.instructionRevision ? latest : null;
-  const assignment = database.assignments(ticketId).at(-1);
-  const blocked = ticket.status === 'open' && ['uncertain', 'blocked'].includes(assignment?.state);
   return {
     id: ticket.id,
     kind: 'ticket',
-    status: blocked ? 'waiting' : ticket.status === 'open' ? 'running' : ticket.status,
+    status: ticket.status,
+    executionControl: ticket.executionControl,
     instructionRevision: ticket.instructionRevision,
-    result: current ? { ...current, acceptanceVerdict: current.review?.verdict } : null,
-    waitReason: ticket.status === 'cancelling' ? 'cancellation' : blocked || ticket.status === 'waiting' ? 'external' : undefined,
+    result: current,
+    waitReason: ticket.executionControl?.stopRequested || ticket.executionControl?.stopped ? 'cancellation' : ticket.status === 'waiting' ? 'external' : undefined,
   };
 }
 
@@ -32,9 +31,11 @@ export function assertGoalTicketBinding(database, ticketId, goal) {
     || ticket.target !== goal.text
     || ticket.acceptance !== (goal.acceptance ?? '')) throw new Error('目标工单绑定与已批准任务不一致');
   const assignments = database.assignments(ticketId);
-  if (!goal.provider || !goal.model || !assignments.some(assignment =>
-    assignment.instructionRevision === ticket.instructionRevision
-    && assignment.model?.providerId === goal.provider
-    && assignment.model?.modelId === goal.model)) throw new Error('目标工单缺少一致的显式模型与需求版本');
+  // Persisted legacy provider/model fields are historical binding evidence only;
+  // all public creation paths reject them before this read-only check.
+  const model = goal.workerModel || (goal.provider && goal.model ? { providerId: goal.provider, modelId: goal.model } : null);
+  if (!assignments.some(assignment => assignment.instructionRevision === ticket.instructionRevision
+    && assignment.model?.providerId && assignment.model?.modelId
+    && (!model || assignment.model.providerId === model.providerId && assignment.model.modelId === model.modelId))) throw new Error('目标工单缺少一致的工作角色模型审计与需求版本');
   return ticket;
 }

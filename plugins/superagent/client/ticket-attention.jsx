@@ -12,7 +12,7 @@ export function TicketAttention({ api, ticket, attention, onAnswered, showQuesti
   const answered = attention.state === 'answered' || submitted;
   const desktop = ticket.mandate?.source?.channel === 'desktop';
   const stale = !attentionMatchesTicket(attention, ticket);
-  const closed = terminalTicketStates.has(ticket.status) || stale;
+  const closed = terminalTicketStates.has(ticket.status) || ticket.executionControl?.stopRequested || ticket.executionControl?.stopped || stale;
   const ready = selected.length > 0 || custom.trim().length > 0;
   const change = action => { action(); request.current = null; setError(''); };
   const submit = async event => {
@@ -21,7 +21,7 @@ export function TicketAttention({ api, ticket, attention, onAnswered, showQuesti
     setBusy(true); setError('');
     request.current ||= crypto.randomUUID();
     try {
-      await api('ticketAnswer', { ticketId: ticket.id, attentionId: attention.id, instructionRevision: ticket.instructionRevision,
+      await api('ticketAnswer', { ticketId: ticket.id, attentionId: attention.id, instructionRevision: attention.instructionRevision ?? ticket.instructionRevision,
         requestId: request.current, answer: { selected, ...(custom.trim() ? { custom: custom.trim() } : {}) } });
       setSubmitted(true); await onAnswered?.();
     } catch (cause) { setError(cause.message || String(cause)); }

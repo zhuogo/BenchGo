@@ -8,18 +8,18 @@ const execution = () => ({ assignmentId: 'assignment', runId: 'run', sessionId: 
   children: [{ id: 'child-1', label: '子 Worker 1', status: 'completed' },
     { id: 'child-2', label: '子 Worker 2', status: 'running' }, { id: 'child-3', label: '子 Worker 3', status: 'failed' }],
 });
-const ticket = () => ({ id: 'ticket', status: 'open', instructionRevision: 2,
+const ticket = () => ({ id: 'ticket', status: 'running', instructionRevision: 2,
   assignments: [{ id: 'assignment', instructionRevision: 2, state: 'claimed' }], execution: execution() });
 
 test('the board shows observed worker activity and child outcomes without calling them ticket completion', () => {
   const row = activityTask(ticket(), 'ticket');
-  assert.equal(row.status, 'claimed');
+  assert.equal(row.status, 'running');
   assert.equal(row.progressSummary, '正在搜索网页 · 子任务 1/3 已返回 · 1 项执行中 · 1 项失败');
   assert.doesNotMatch(row.progressSummary, /%|预计/);
   const idle = ticket();
   idle.execution.worker = { ...idle.execution.worker, status: 'waiting', activity: '等待后续事件' };
   idle.execution.children = idle.execution.children.map(child => ({ ...child, status: 'completed' }));
-  assert.equal(activityTask(idle, 'ticket').status, 'claimed', 'idle and all children returning do not finish a ticket');
+  assert.equal(activityTask(idle, 'ticket').status, 'running', 'idle and all children returning do not finish a ticket');
 });
 
 test('activity from a different requirement or assignment cannot overwrite the current task', () => {
@@ -34,18 +34,18 @@ test('activity from a different requirement or assignment cannot overwrite the c
   assert.equal(goal.execution, undefined, 'goals do not adopt a ticket worker tree');
 });
 
-test('review is distinct from execution, while user waits and terminal outcomes override runtime activity', () => {
+test('result persistence is distinct from execution, while user waits and terminal outcomes override runtime activity', () => {
   const row = ticket(); row.execution.phase = 'verifying';
-  assert.equal(activityTask(row, 'ticket').status, 'verifying');
-  assert.equal(activityTask(row, 'ticket').progressSummary, 'Worker 已交回结果，正在核对要求与证据');
-  for (const status of ['completed', 'cancelled', 'failed', 'paused', 'pausing', 'cancelling', 'uncertain']) {
+  assert.equal(activityTask(row, 'ticket').status, 'running');
+  assert.equal(activityTask(row, 'ticket').progressSummary, 'Worker 已交回结果，正在保存');
+  for (const status of ['completed', 'waiting']) {
     const task = activityTask({ ...row, status }, 'ticket');
     assert.equal(task.status, status);
     assert.equal(task.progressSummary, '', 'stale activity must not claim execution is still advancing');
   }
-  const question = activityTask({ ...row, attentions: [{ id: 'attention', state: 'waiting', instructionRevision: 2,
+  const question = activityTask({ ...row, status: 'waiting', attentions: [{ id: 'attention', state: 'waiting', instructionRevision: 2,
     question: { question: '需要哪份材料？' } }] }, 'ticket');
-  assert.equal(question.status, 'awaiting_user');
+  assert.equal(question.status, 'waiting');
   assert.equal(question.detail, '需要哪份材料？');
   assert.equal(question.progressSummary, '');
 });
@@ -58,7 +58,7 @@ function environment() {
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 test('only an open board with live work requests rapid updates; hidden views and errors back off', async () => {
-  const env = environment(); let state = 'open', fail = false;
+  const env = environment(); let state = 'running', fail = false;
   const store = createActivityStore(async action => {
     if (fail) throw new Error('offline');
     return action === 'tickets' ? { tickets: [{ id: 't', status: state }] } : { goals: [] };
@@ -77,7 +77,7 @@ test('only an open board with live work requests rapid updates; hidden views and
   assert.deepEqual([...env.timers.values()], [10000]);
   fail = false; state = 'completed'; await store.refresh();
   assert.deepEqual([...env.timers.values()], [10000]);
-  state = 'open'; await store.refresh(); close();
+  state = 'running'; await store.refresh(); close();
   assert.deepEqual([...env.timers.values()], [10000]);
   unsubscribe(); assert.equal(env.timers.size, 0);
 });
@@ -94,7 +94,7 @@ test('changes arriving during a fetch are coalesced into one follow-up refresh',
   assert.deepEqual([...env.timers.values()], [0], 'invalidate the potentially old response once');
   const [next] = env.timers.keys(); next();
   assert.equal(pending.length, 4);
-  pending.slice(2).forEach(call => call.resolve(call.action === 'tickets' ? { tickets: [{ id: 'new', status: 'open' }] } : { goals: [] }));
+  pending.slice(2).forEach(call => call.resolve(call.action === 'tickets' ? { tickets: [{ id: 'new', status: 'running' }] } : { goals: [] }));
   await flush();
   assert.equal(store.getSnapshot().rows[0].id, 'new');
   assert.deepEqual([...env.timers.values()], [10000]);

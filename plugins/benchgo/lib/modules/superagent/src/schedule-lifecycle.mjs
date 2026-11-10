@@ -51,8 +51,12 @@ export function createScheduleLifecycle({ ctx, store, database }) {
     const fact = { id: source.scheduleId, title: title({ id: source.scheduleId, title: ticket.title }),
       sourceSessionId: source.sessionId, occurrenceAt: source.occurrenceAt };
     publish({ ...fact, phase: 'triggered', at: source.occurrenceAt });
-    if (['completed', 'failed'].includes(ticket.status) && validTime(ticket.updatedAt)) {
+    if (ticket.status === 'completed' && validTime(ticket.updatedAt)) {
       return publish({ ...fact, phase: ticket.status, at: ticket.updatedAt, ticketId: ticket.id });
+    }
+    const result = store.orchestration.results?.(ticket.id)?.findLast(row => row.version === ticket.resultVersion && row.instructionRevision === ticket.instructionRevision);
+    if (ticket.status === 'waiting' && result?.outcome === 'failed' && validTime(result.committedAt)) {
+      return publish({ ...fact, phase: 'failed', at: result.committedAt, ticketId: ticket.id });
     }
   };
   return {

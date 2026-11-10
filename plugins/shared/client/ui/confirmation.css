@@ -1,0 +1,5 @@
+.bg-ui-dialog-content.bg-confirmation{width:min(440px,calc(100vw - 32px));padding:24px;overflow-wrap:anywhere}
+.bg-confirmation>.bg-ui-dialog-title{margin:0 32px 12px 0;font-size:18px;line-height:1.45}
+.bg-confirmation>.bg-ui-dialog-description{margin:0;font-size:13px;line-height:1.75;white-space:pre-wrap;max-height:min(45dvh,360px);overflow:auto;scrollbar-width:thin}
+.bg-confirmation-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:24px}
+@media(max-width:480px){.bg-ui-dialog-content.bg-confirmation{padding:20px}.bg-confirmation-actions>.bg-ui-button{min-height:44px}}

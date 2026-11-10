@@ -20,7 +20,7 @@ export function createAssessmentSourceReader({ database, candidates }) {
     const { triggerId, offset = 0, length = 4000 } = input;
     if (!allowed.has(triggerId)) throw new Error('原文不属于当前研判上下文');
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1 || length > 4000) throw new Error('原文读取范围无效');
-    const row = database.getTrigger(triggerId);
+    const row = database.readIntakeEvent(triggerId);
     if (!row || row.threadId !== allowed.get(triggerId) || typeof row.content !== 'string') throw new Error('原文不可用');
     if (offset > row.content.length) throw new Error('原文读取起点越界');
     const end = Math.min(row.content.length, offset + length);

@@ -209,6 +209,50 @@ test('failed automatic persistence is reported and retries reuse the same durabl
   assert.equal((await (await open()).listMemories()).length, 1);
 });
 
+test('closed-learning slots survive changed model output and never revive corrected or forgotten sources', async t => {
+  const { store, open } = await fixture(t);
+  const evidence = { role: 'user', sessionId: 's', messageId: 'closed-human', taskId: 'closed-ticket', ticketId: 'closed-ticket', resultVersion: 1 };
+  const options = { verifiedSource: evidence, idempotencyKey: 'closed-learning:closed:0:1:memory:0' };
+  const first = await store.memory.propose({ content: '第一次整理', source: evidence }, options);
+  const restarted = await open();
+  const retried = await restarted.memory.propose({ content: '模型重新总结的另一句话', source: evidence }, options);
+  assert.equal(retried.memoryId, first.memoryId);
+  assert.equal((await store.listMemories()).length, 1);
+  const entry = (await store.listMemories())[0];
+  await store.saveMemory({ id: entry.id, content: '用户纠正后的结论', source: { type: 'user-edit' } }, { revision: entry.revision });
+  assert.equal((await restarted.memory.propose({ content: '换句话恢复旧结论', source: evidence }, options)).status, 'excluded');
+  await store.memory.forget(entry.id);
+  assert.equal((await (await open()).memory.propose({ content: '再次试图恢复', source: evidence }, options)).status, 'excluded');
+  assert.equal((await store.listMemories()).length, 0);
+});
+
+test('closed-learning duplicate slots retain their original receipt when retry wording changes', async t => {
+  const { store, open } = await fixture(t);
+  const evidence = { role: 'user', sessionId: 's', messageId: 'slot-human' };
+  const first = await store.memory.propose({ content: '已有自动记忆', source: evidence }, { verifiedSource: evidence });
+  const options = { verifiedSource: evidence, idempotencyKey: 'closed-learning:duplicate:memory:0' };
+  assert.equal((await store.memory.propose({ content: '已有自动记忆', source: evidence }, options)).memoryId, first.memoryId);
+  assert.equal((await (await open()).memory.propose({ content: '模型重试换词', source: evidence }, options)).memoryId, first.memoryId);
+  assert.equal((await store.listMemories()).length, 1);
+  const manual = await store.saveMemory({ content: '已有手工记忆', source: { type: 'user-edit' } });
+  const manualOptions = { verifiedSource: evidence, idempotencyKey: 'closed-learning:duplicate:memory:1' };
+  assert.equal((await store.memory.propose({ content: '已有手工记忆', source: evidence }, manualOptions)).memoryId, manual.id);
+  await store.memory.forget(manual.id);
+  assert.equal((await (await open()).memory.propose({ content: '改写已忘手工内容', source: evidence }, manualOptions)).status, 'excluded');
+});
+
+test('closed learning cannot evade forgotten human evidence by dropping Router tool-call metadata', async t => {
+  const { store, open } = await fixture(t);
+  const original = { role: 'user', sessionId: 'router', messageId: 'human-memory', callId: 'router-memory-call' };
+  const entry = await store.saveMemory({ content: '用户要求忘记的事实', source: original });
+  await store.memory.forget(entry.id);
+  const closed = { role: 'user', sessionId: 'router', messageId: 'human-memory', ticketId: 'closed-task', resultVersion: 1 };
+  const result = await (await open()).memory.propose({ content: '旧事实改写为全新措辞', source: closed },
+    { verifiedSource: closed, idempotencyKey: 'closed-learning:forgotten:0' });
+  assert.equal(result.status, 'excluded');
+  assert.equal((await store.listMemories()).length, 0);
+});
+
 test('invalid UTF-8 and damaged memory metadata are reported without recreating or overwriting files', async t => {
   const { store } = await fixture(t);
   const path = join(store.paths.directory, 'SOUL.md');

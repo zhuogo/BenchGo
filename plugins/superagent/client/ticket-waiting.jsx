@@ -16,7 +16,7 @@ export function TicketWaiting({ api, ticket, onRefresh, onOpenResources, showQue
     try {
       if (action.kind === 'tasks') onOpenResources?.(action.kind, { ticketId: ticket.id });
       else if (action.kind !== 'refresh') {
-        const response = await api(({ resume: 'ticketResume', review: 'ticketRetryReview', stop: 'ticketStop' })[action.kind], action.input);
+        const response = await api(({ resume: 'ticketResume', stop: 'ticketStop' })[action.kind], action.input);
         if (response?.queued === false) throw new Error(`原工单暂未恢复（${response.code || 'WAITING'}）`);
       }
       await onRefresh?.();
@@ -27,7 +27,6 @@ export function TicketWaiting({ api, ticket, onRefresh, onOpenResources, showQue
     <style>{css}</style>
     <strong><UIIcon name="schedules" size={16} />系统状态 · {waiting.label}</strong>
     <p>{waiting.reason}</p>
-    {waiting.retryAt && <p>下次自动核验：<time dateTime={waiting.retryAt}>{new Date(waiting.retryAt).toLocaleString('zh-CN')}</time></p>}
     {showQuestion && waiting.attention && <TicketAttention key={`${waiting.attention.id}:${ticket.instructionRevision}:${ticket.resultVersion}`} api={api} ticket={ticket} attention={waiting.attention} onAnswered={onRefresh} />}
     <div className="ba-row-actions">{waiting.actions.map(action => <Button key={action.kind} variant="ghost" type="button"
       disabled={busy || (action.kind === 'tasks' ? !onOpenResources : action.kind === 'refresh' ? !onRefresh : !api)}

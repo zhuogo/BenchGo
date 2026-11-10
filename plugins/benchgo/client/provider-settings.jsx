@@ -1,4 +1,5 @@
 import { readJsonResponse } from './http-response.mjs';
+import { Loading } from '../../shared/client/ui/loading.jsx';
 import React, { useState } from 'react';
 import { Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ModelsSection } from '../../../deepseek-harness/packages/client/ui-settings-models/src/client/ModelsSection.tsx';
@@ -89,6 +90,6 @@ export function ProviderHarnessField({ value, disabled }) {
         <span className="cmd-provider-harness-check">{value.current.includes(tool.id) && <UIIcon name="check" size={10} />}</span>
       </button>
     </Tooltip>)}</div>
-    {value.loading ? <small>加载中…</small> : value.failure ? <small role="alert">{value.failure} <button type="button" disabled={disabled} onClick={value.retry}>重试</button></small> : <small>{value.restricted ? value.access?.configured ? '订阅登录仅限对应工具；使用本机登录。' : '仅限对应工具，请先完成登录。' : '选择可使用此供应商的工具'}</small>}
+    {value.loading ? <Loading label="加载中" compact /> : value.failure ? <small role="alert">{value.failure} <button type="button" disabled={disabled} onClick={value.retry}>重试</button></small> : <small>{value.restricted ? value.access?.configured ? '订阅登录仅限对应工具；使用本机登录。' : '仅限对应工具，请先完成登录。' : '选择可使用此供应商的工具'}</small>}
   </aside>;
 }

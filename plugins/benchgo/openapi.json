@@ -263,7 +263,7 @@
     "/api/commander/assistant": {
       "post": {
         "summary": "SuperAgent 主聊天、旁聊、配置、记忆与任务操作",
-        "description": "BenchGo SuperAgent owner 通道。Router 兼任对话助手与总调度，负责自然聊天、回答、协调和自动委派，无网页、文件、shell 探索权限。当前明确人类请求授权普通派工，无额外 Ticket 审批；实际副作用保留原授权门禁。send 持久接收并按会话分诊，history.requests 可查询处理状态。桌面派工成功后由当前 Router 自然回复；显式人类渠道请求的接单正文复用同次研判 replyText，通过 ticket.accepted 持久投递，无固定文案兜底。任务结果验收后回原来源。辅助 review 控制研判与成果验收，不额外限制 Worker 并发。models 为 Router 首选与备用；workerModels 为 Worker 独立队列，缺省或空数组继承 Router；auxiliary 仅对启用用途使用，失败回 Router。显式模型选择优先，providerId/modelId 原样保存。directReplyReconcile/outboxReconcile 仅已认证 owner 可调用，核实 uncertain 投递，不重放执行。",
+        "description": "Trusted same-origin authenticated owner peer endpoint. Router handles dialogue and delegation; Workers self-check and commit results to the original source. Router does not review content. Background memory review remains independent. Explicit providerId/modelId values are opaque and preserved. Send receipts do not imply task completion; uncertain deliveries require authenticated owner reconciliation without replay.",
         "requestBody": {
           "required": true,
           "content": {
@@ -373,6 +373,42 @@
               },
               "evaluations": {
                 "type": "object",
+                "description": "Unavailable intake assessments. Original pending or rejected source records are exposed as intakeEvent audit data, never as an admitted domain Trigger.",
+                "properties": {
+                  "candidates": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "intakeEvent": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "content": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "type": "object",
+                              "additionalProperties": true
+                            },
+                            "intakeStage": {
+                              "type": "string",
+                              "enum": [
+                                "pending",
+                                "admitted",
+                                "rejected"
+                              ]
+                            }
+                          },
+                          "additionalProperties": true
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                },
                 "additionalProperties": true
               },
               "goalAdvance": {
@@ -743,7 +779,7 @@
               },
               "ticketAnswer": {
                 "type": "object",
-                "description": "回答明确 attentionId 对应的原问题，需 ticketId/instructionRevision/requestId/answer；Review Attention 同时校验当前结果版本。仅信息、权限、范围问题建立 Attention，内部核验不要求用户回答。答复持久关联原单并在原 Assignment/Run/session 续做，不扩大授权。",
+                "description": "回答明确 attentionId 对应的原问题，需 ticketId/instructionRevision/requestId/answer。仅信息、权限、范围问题建立 Attention；答复关联原单并在原 Assignment/Run/session 续做，不扩大授权。",
                 "additionalProperties": true
               },
               "ticketPause": {
@@ -760,14 +796,9 @@
                 "$ref": "#/components/schemas/AssistantTicket",
                 "description": "终态工单的 revise/reopen/adjustment 均创建关联新单；adjustmentOfTicketId 指向原单，新单 instructionRevision=1/resultVersion=0。原 completed 状态与结果保留；进行中仅允许 revise。"
               },
-              "ticketRetryReview": {
-                "type": "object",
-                "description": "只锁定并复核原执行证据，不是补做入口。内部 review_wait 由系统按持久退避重核；blocked 必须回答原 Attention。failed/rework 自然说明原因并恢复原 Assignment/Run/session/工作区，不以固定次数终单；无进展或额度不足保留可恢复等待。旧 open/uncertain 且 resultVersion=0 可用 expectedResultVersion=0 核实原执行，不重放未知动作。toolEvidence 截断不代表缺证据，按需分页读取。unchanged=true 仅为去重，不代表任务继续或完成。",
-                "additionalProperties": true
-              },
               "tickets": {
                 "type": "object",
-                "description": "工单及结果记录。独立 title 最多10个Unicode字符，target/acceptance保留完整任务要求。review.verdict 为 passed/failed/wait/rework，failed/rework 仅表示本轮结果未通过；内部待核验为 review_wait，真实缺用户决定为 blocked+Attention，资源/无进展保留 continuationWait。系统故障 publication.origin=system 与 AI 正文分开。普通选项和信息答复不能替代动作审批。",
+                "description": "工单及结果记录。独立 title 最多10个Unicode字符，target/acceptance保留完整任务要求。Worker 自校验后提交结果，真实缺用户决定为 blocked+Attention。系统故障 publication.origin=system 与 AI 正文分开。普通信息答复不能替代动作审批。",
                 "additionalProperties": true,
                 "properties": {
                   "tickets": {
@@ -990,6 +1021,60 @@
               "outboxReconcile": {
                 "$ref": "#/components/schemas/AssistantOutboxDelivery",
                 "description": "仅 owner；返回原工单投递。核实历史位于顶层 reconciliations，确认回执位于 receipt；原 payload 保持不变，工单执行与结果不重复。"
+              },
+              "executionSessions": {
+                "type": "object",
+                "description": "Trusted same-origin authenticated owner peer only.",
+                "additionalProperties": true,
+                "properties": {
+                  "sessions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "sessionId",
+                        "ticketId",
+                        "title",
+                        "available"
+                      ],
+                      "properties": {
+                        "sessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "ticketId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "available": {
+                          "const": true
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "required": [
+                  "sessions"
+                ]
+              },
+              "actionPermissions": {
+                "type": "object",
+                "description": "Trusted same-origin authenticated owner peer only.",
+                "additionalProperties": true
+              },
+              "actionPermissionCreate": {
+                "type": "object",
+                "description": "Trusted same-origin authenticated owner peer only.",
+                "additionalProperties": true
+              },
+              "actionPermissionRevoke": {
+                "type": "object",
+                "description": "Trusted same-origin authenticated owner peer only.",
+                "additionalProperties": true
               }
             }
           },
@@ -1184,8 +1269,8 @@
     },
     "/api/benchgo/skills": {
       "post": {
-        "summary": "Read the unified skill catalog and instruction bodies",
-        "description": "Owner-only same-origin JSON endpoint. Reads the default Agent preset through a standing scope lease without creating an Agent. Omitted projectId selects global skills; projectId must identify a registered workspace. Uses official registry winners, without enumerating shadowed copies or scanning arbitrary paths. Owned skill management remains on the assistant API; no new MCP tools.",
+        "summary": "Read unified skills and install reviewed engineering skills on demand",
+        "description": "Owner-only same-origin JSON endpoint. Reads the default Agent preset through a standing scope lease without creating an Agent. Omitted projectId selects global skills; projectId must identify a registered workspace. Uses official registry winners, without enumerating shadowed copies or scanning arbitrary paths. Owned skill management remains on the assistant API; no new MCP tools. Engineering catalog uses mattpocock/skills v1.3.2 at d1478fcb140db0b93c0c8df17bcfd311844749d0. Preview and installation download immutable hash-verified files; installs retain dependencies, license and original invocation policy under the official DSH skills directory, never overwrite existing skills or execute scripts. Installation and actual availability are separate states.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1227,6 +1312,35 @@
                         "type": "string"
                       }
                     }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "deckList"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "name"
+                    ],
+                    "properties": {
+                      "action": {
+                        "enum": [
+                          "deckGet",
+                          "deckInstall"
+                        ]
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    }
                   }
                 ]
               }
@@ -1235,7 +1349,7 @@
         },
         "responses": {
           "200": {
-            "description": "list returns available, skills, projects and scope; get returns skill including content. Missing registry returns available:false for list. Responses use no-store.",
+            "description": "list returns available, skills, projects and scope; get returns skill including content. Missing registry returns available:false for list. Responses use no-store. deckList returns source/version/destination and installation status; deckGet returns skill content, files, dependency plan and licenseText; deckInstall returns installed names and alreadyInstalled. A write does not imply the official watcher has discovered the skill.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1304,8 +1418,151 @@
           "415": {
             "description": "application/json required"
           },
+          "502": {
+            "description": "Fixed-version download failed or content hash/size did not match; retry is supported."
+          },
           "503": {
             "description": "Skill service unavailable or lookup failed"
+          }
+        }
+      }
+    },
+    "/api/benchgo/efficiency": {
+      "get": {
+        "summary": "读取效率增强配置与状态",
+        "description": "返回增强配置与实际可用状态；available 表示官方宿主适配器已就绪，单个 Agent 的能力需另行诊断。",
+        "responses": {
+          "200": {
+            "description": "revision?scope?features.ops/compaction??"
+          },
+          "403": {
+            "description": "请求未通过同源访问校验"
+          }
+        }
+      },
+      "post": {
+        "summary": "更新效率增强配置",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "revision",
+                  "features"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "features": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "ops": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "shell": {
+                            "type": "boolean"
+                          }
+                        }
+                      },
+                      "compaction": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "保存配置并更新 revision，返回与 GET 相同的状态结构"
+          },
+          "400": {
+            "description": "请求或配置格式无效"
+          },
+          "409": {
+            "description": "配置版本已变化，请刷新后重试"
+          }
+        }
+      }
+    },
+    "/api/benchgo/workbench": {
+      "get": {
+        "summary": "读取工作台与 SSH 状态",
+        "description": "仅限本机已认证主人访问，拒绝代理转发与 Link 请求。",
+        "responses": {
+          "200": {
+            "description": "sidebar?ssh?trustedHosts"
+          },
+          "403": {
+            "description": "请求不满足本机主人访问条件"
+          }
+        }
+      },
+      "post": {
+        "summary": "探测与确认 SSH 主机指纹",
+        "description": "ssh.probe 探测主机指纹并返回两分钟内有效的 challenge；ssh.confirm 校验 challenge 与 fingerprint 后保存主机信任记录。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "enum": [
+                      "ssh.probe",
+                      "ssh.confirm"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  },
+                  "port": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "challenge": {
+                    "type": "string"
+                  },
+                  "fingerprint": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "返回指纹探测结果与 challenge，或主机信任确认结果"
+          },
+          "400": {
+            "description": "请求无效、操作不支持或指纹确认已过期"
+          },
+          "403": {
+            "description": "请求不满足本机主人访问条件"
           }
         }
       }
@@ -1835,14 +2092,17 @@
               "ticketChange",
               "ticketPause",
               "ticketResume",
-              "ticketRetryReview",
               "ticketStop",
               "tickets",
               "notificationOption",
               "messageReaction",
               "connectionReplies",
               "directReplyReconcile",
-              "outboxReconcile"
+              "outboxReconcile",
+              "executionSessions",
+              "actionPermissions",
+              "actionPermissionCreate",
+              "actionPermissionRevoke"
             ]
           },
           "threadId": {
@@ -2057,6 +2317,25 @@
             },
             "additionalProperties": true,
             "description": "memorySave 的记忆正文。缺少 source 时由管理入口补充用户来源；更新已有 id 时可配合顶层 revision 保护并发。"
+          },
+          "origin": {
+            "type": "string",
+            "minLength": 1
+          },
+          "categories": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "login",
+                "private-upload"
+              ]
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": true,
@@ -2435,6 +2714,57 @@
             },
             "then": {
               "$ref": "#/components/schemas/AssistantDeliveryReconciliationInput"
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "actionPermissionCreate"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "origin",
+                "categories",
+                "expiresAt",
+                "requestId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "actionPermissionRevoke"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "id",
+                "requestId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "goalCreate"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "goal": {
+                  "$ref": "#/components/schemas/AssistantGoalInput"
+                }
+              },
+              "required": [
+                "goal"
+              ]
             }
           }
         ],
@@ -3508,7 +3838,6 @@
         "properties": {
           "state": {
             "enum": [
-              "review_wait",
               "delivery_wait",
               "budget_wait",
               "continuation_wait",
@@ -3725,46 +4054,26 @@
             "type": "integer",
             "minimum": 1
           },
-          "review": {
+          "selfCheck": {
             "type": "object",
+            "required": [
+              "summary"
+            ],
             "properties": {
-              "verdict": {
-                "enum": [
-                  "passed",
-                  "failed",
-                  "wait",
-                  "rework"
-                ]
-              },
-              "waitKind": {
-                "enum": [
-                  "review_wait",
-                  "blocked",
-                  "continuation_wait"
-                ]
-              },
-              "reason": {
-                "type": "string"
-              },
-              "retryAt": {
-                "type": [
-                  "string",
-                  "number",
-                  "null"
-                ]
-              },
-              "continuationWait": {
-                "type": [
-                  "object",
-                  "null"
-                ],
-                "additionalProperties": true
+              "summary": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "additionalProperties": true
           }
         },
-        "additionalProperties": true
+        "additionalProperties": true,
+        "not": {
+          "required": [
+            "review"
+          ]
+        }
       },
       "AssistantAttention": {
         "type": "object",
@@ -3820,8 +4129,7 @@
           },
           "origin": {
             "enum": [
-              "worker",
-              "review"
+              "worker"
             ]
           },
           "instructionRevision": {
@@ -4252,18 +4560,6 @@
           "projectId": {
             "type": "string"
           },
-          "provider": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "\\S",
-            "maxLength": 100000
-          },
-          "model": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "\\S",
-            "maxLength": 100000
-          },
           "title": {
             "type": "string"
           },
@@ -4292,15 +4588,36 @@
           }
         },
         "additionalProperties": true,
-        "dependentRequired": {
-          "provider": [
-            "model"
-          ],
-          "model": [
-            "provider"
+        "description": "assistant_delegate 工具输入；执行仅使用系统工作角色模型队列，创建会话时冻结，不接受单工单 provider/model 覆盖。duplicateOfTicketId 只关联同来源当前在办工单，不扩大授权、不重复派工。",
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "provider"
+              ]
+            },
+            {
+              "required": [
+                "model"
+              ]
+            },
+            {
+              "required": [
+                "providerId"
+              ]
+            },
+            {
+              "required": [
+                "modelId"
+              ]
+            },
+            {
+              "required": [
+                "workerModel"
+              ]
+            }
           ]
-        },
-        "description": "assistant_delegate 工具输入，不是新增 HTTP action。省略 provider/model 走 Worker；显式填写须成对。duplicateOfTicketId 只关联同来源当前在办工单，text/acceptance 必须保留原要求；宿主复核来源、项目、授权与预算，记录 attach 且不重复派工。已完成工单调整使用 assistant_ticket_change。"
+        }
       },
       "AssistantTicketChangeInput": {
         "type": "object",
@@ -4315,19 +4632,8 @@
           "operation": {
             "enum": [
               "revise",
-              "reopen",
               "adjustment"
             ]
-          },
-          "provider": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "\\S"
-          },
-          "model": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "\\S"
           },
           "id": {
             "type": "string",
@@ -4366,16 +4672,86 @@
             "type": "string"
           }
         },
-        "dependentRequired": {
-          "provider": [
-            "model"
-          ],
-          "model": [
-            "provider"
+        "additionalProperties": true,
+        "description": "进行中仅允许 revise，原执行会话在下一工具边界整份应用；终态使用 adjustment 创建关联新单，原结果保持不变。模型仅由系统工作角色配置决定，不接受单工单覆盖。",
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "provider"
+              ]
+            },
+            {
+              "required": [
+                "model"
+              ]
+            },
+            {
+              "required": [
+                "providerId"
+              ]
+            },
+            {
+              "required": [
+                "modelId"
+              ]
+            },
+            {
+              "required": [
+                "workerModel"
+              ]
+            }
+          ]
+        }
+      },
+      "AssistantGoalInput": {
+        "type": "object",
+        "required": [
+          "objective"
+        ],
+        "properties": {
+          "objective": {
+            "type": "string",
+            "minLength": 1
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantGoalInput"
+            }
+          }
+        },
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "provider"
+              ]
+            },
+            {
+              "required": [
+                "model"
+              ]
+            },
+            {
+              "required": [
+                "providerId"
+              ]
+            },
+            {
+              "required": [
+                "modelId"
+              ]
+            },
+            {
+              "required": [
+                "workerModel"
+              ]
+            }
           ]
         },
         "additionalProperties": true,
-        "description": "终态工单的 revise/reopen/adjustment 均创建关联新单；adjustmentOfTicketId 指向原单，新单 instructionRevision=1/resultVersion=0。原 completed 状态与结果保留；进行中仅允许 revise。"
+        "description": "持续目标及递归子目标只使用系统工作角色模型；不接受节点级 provider/model 覆盖。"
       }
     }
   }

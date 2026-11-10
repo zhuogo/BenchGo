@@ -4,16 +4,16 @@ import { beforeDelivery, deliveryFailure } from './delivery-outcome.mjs';
 export const channelDefinition = {
   id: 'qq', label: 'QQ', defaults: { enabled: false, ownerIds: [], chatIds: [], appId: '', appSecretRef: '' },
   fields: [{ key: 'appId', label: 'App ID', type: 'text', required: true }, { key: 'appSecretRef', label: 'App Secret 凭据引用', type: 'secretRef', required: true }],
-  capabilities: { direct: true, group: true, text: true, attachments: false, realtimeVoice: false, transport: 'websocket', notes: 'QQ 官方机器人 API；私聊与群 @ 需平台授予对应权限。附件暂不支持。' },
+  capabilities: { externalActions: ['external-send'], direct: true, group: true, text: true, attachments: false, realtimeVoice: false, transport: 'websocket', notes: 'QQ 官方机器人 API；私聊与群 @ 需平台授予对应权限。附件暂不支持。' },
 };
 export const qqConfig = input => configFor(channelDefinition, input);
-export function normalizeQqEvent(frame, config) {
+export function normalizeQqEvent(frame, config, metadataOnly = false) {
   if (!['C2C_MESSAGE_CREATE', 'GROUP_AT_MESSAGE_CREATE', 'AT_MESSAGE_CREATE', 'DIRECT_MESSAGE_CREATE'].includes(frame.t)) return null;
   const d = frame.d || {}, group = ['GROUP_AT_MESSAGE_CREATE', 'AT_MESSAGE_CREATE'].includes(frame.t);
   const kind = frame.t === 'GROUP_AT_MESSAGE_CREATE' ? 'groups' : frame.t === 'C2C_MESSAGE_CREATE' ? 'users' : frame.t === 'DIRECT_MESSAGE_CREATE' ? 'dms' : 'channels';
   const actorId = d.author?.user_openid || d.author?.member_openid || d.author?.id;
   const chatId = kind === 'groups' ? d.group_openid : kind === 'users' ? actorId : kind === 'dms' ? d.guild_id : d.channel_id;
-  return eventFor('qq', config, { messageId: d.id, actorId, chatId, text: d.content?.trim() || '[此消息包含暂不支持的附件，请发送文字说明或使用 BenchGo 工作台]', group, mentioned: group, occurredAt: d.timestamp, extra: { targetType: kind } });
+  return eventFor('qq', config, { messageId: d.id, actorId, chatId, metadataOnly, text: metadataOnly ? '' : d.content?.trim() || '[此消息包含暂不支持的附件，请发送文字说明或使用 BenchGo 工作台]', group, mentioned: group, occurredAt: d.timestamp, extra: { targetType: kind } });
 }
 export function createQqAdapter(options) {
   const b = createBoundary(channelDefinition, options); let token, sequence = null, sessionId;
@@ -24,9 +24,9 @@ export function createQqAdapter(options) {
     if (typeof body.access_token !== 'string' || !Number.isFinite(Number(body.expires_in))) throw fail('QQ 认证回执无效', 502);
     token = { key, value: body.access_token, expiresAt: Date.now() + Math.max(0, Number(body.expires_in) - 60) * 1000 }; b.state.authentication = 'verified'; return token.value;
   };
-  const api = async (config, path, options = {}) => {
+  const api = async (config, path, options = {}, source) => {
     const bearer = await beforeDelivery(() => accessToken(config));
-    const body = await b.request(config, 'https://api.sgroup.qq.com' + path, { ...options, headers: { 'content-type': 'application/json', authorization: `QQBot ${bearer}` } });
+    const body = await b.request(config, 'https://api.sgroup.qq.com' + path, { ...options, headers: { 'content-type': 'application/json', authorization: `QQBot ${bearer}` } }, 15_000, source ? { operation: 'send', source } : {});
     if (body.code) throw deliveryFailure('QQ 接口未接受请求', 'not_sent', 502); return body;
   };
   const lifecycle = createSocketLifecycle({ boundary: b, WebSocketImpl: options.WebSocketImpl,
@@ -44,7 +44,7 @@ export function createQqAdapter(options) {
       } else if (frame.op === 7 || frame.op === 9) { if (frame.op === 9 && !frame.d) { sessionId = undefined; sequence = null; } close(); }
       else if (frame.op === 0) {
         if (frame.t === 'READY' || frame.t === 'RESUMED') { sessionId = frame.d?.session_id || sessionId; b.state.connection = { state: 'connected' }; b.state.error = null; }
-        else await b.receive(config, normalizeQqEvent(frame, config));
+        else await b.receive(config, normalizeQqEvent(frame, config, true), () => normalizeQqEvent(frame, config));
         // Advance only after durable intake so a reconnect can replay a failed event.
         if (Number.isSafeInteger(frame.s)) sequence = frame.s;
       }
@@ -56,7 +56,7 @@ export function createQqAdapter(options) {
       const config = await b.outgoing(source, text, idempotencyKey), kind = source.targetType;
       if (!['users', 'groups', 'channels', 'dms'].includes(kind)) throw deliveryFailure('QQ 交付目标类型无效', 'not_sent', 400);
       const msgSeq = Number.parseInt(deliveryId(idempotencyKey).slice(0, 7), 16) + 1;
-      const body = await api(config, `${['users', 'groups'].includes(kind) ? '/v2' : ''}/${kind}/${encodeURIComponent(source.chatId)}/messages`, { method: 'POST', body: JSON.stringify({ content: text, msg_id: source.messageId, ...(['users', 'groups'].includes(kind) ? { msg_type: 0, msg_seq: msgSeq } : {}) }) });
+      const body = await api(config, `${['users', 'groups'].includes(kind) ? '/v2' : ''}/${kind}/${encodeURIComponent(source.chatId)}/messages`, { method: 'POST', body: JSON.stringify({ content: text, msg_id: source.messageId, ...(['users', 'groups'].includes(kind) ? { msg_type: 0, msg_seq: msgSeq } : {}) }) }, source);
       if (typeof body.id !== 'string' || !body.id) throw deliveryFailure('QQ 未返回消息回执，送达状态未知', 'unknown', 502);
       b.state.sending = 'verified'; return { status: 'accepted', messageId: body.id };
     },

@@ -32,6 +32,16 @@ export function shellUi(){return {name:'commander-shell-ui',setup(build){
     // contain the fixed caption toggle inside the clipped, zero-width sidebar.
     source=once(source,'<div className={css.logoRow} data-window-drag>',
       '<div className={css.logoRow} style={windowsTitlebar ? { transform: \'none\' } : undefined} data-window-drag>');
+    // Keep official panel behavior, but let BenchGo place it after its quick
+    // actions in the workspace slot. DOM and keyboard order stay identical.
+    const panels=source.match(/          \{panels\.length > 0 && \(\n[\s\S]*?          \)\}\n(?=          <div className=\{css\.regionArea\}>)/u)?.[0];
+    if(!panels)throw Error('Official sidebar panel navigation changed');
+    const navigation=once(panels.trim().slice(1,-1),
+      '<nav className={css.panelList}',
+      '<nav className={css.panelList + \' cmd-sidebar-panels\'}');
+    source=once(source,panels,'');
+    source=once(source,'  return (\n    <div\n      ref={column}', '  const panelNavigation = (\n'+navigation+'\n  )\n\n  return (\n    <div\n      ref={column}');
+    source=once(source,"            {renderSlot('sidebar.workspaces', {\n              wide,", "            {renderSlot('sidebar.workspaces', {\n              wide, panelNavigation,");
     return {contents:source,loader:'tsx',resolveDir:dirname(path)};
   });
   build.onLoad({filter:/ui-layout[\\/]src[\\/]client[\\/]AppFrame\.tsx$/},async({path})=>{

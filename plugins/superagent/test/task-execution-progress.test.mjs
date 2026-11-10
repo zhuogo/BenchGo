@@ -72,7 +72,7 @@ test('idle is waiting, verification is distinct, and tool errors do not fabricat
   f.runs.get(assignment.id)[0].state = 'verifying';
   const view = f.read('ticket', assignment);
   assert.equal(view.phase, 'verifying'); assert.equal(view.worker.status, 'waiting');
-  assert.equal(view.worker.activity, '执行结果正在核验');
+  assert.equal(view.worker.activity, '正在保存执行结果');
   assert.doesNotMatch(JSON.stringify(view), /PRIVATE/);
 });
 

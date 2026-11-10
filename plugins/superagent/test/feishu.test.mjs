@@ -1,20 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCipheriv, createHash } from 'node:crypto';
-import { createFeishuAdapter, feishuConfig, normalizeFeishuEvent, feishuSourceAllowed } from '../src/feishu.mjs';
+import { createFeishuAdapter, feishuConfig, normalizeFeishuEvent, extractFeishuSource } from '../src/feishu.mjs';
+import { channelSourceAllowed as feishuSourceAllowed } from '../src/channel-policy.mjs';
 
 const config = () => feishuConfig({ enabled: true, appId: 'app', appSecretRef: 'secret-ref', verificationTokenRef: 'verify-ref', botOpenId: 'bot', ownerOpenIds: ['owner'], chatIds: ['chat'] });
 const event = () => ({ schema: '2.0', header: { app_id: 'app', token: 'verify-value', event_id: 'event', event_type: 'im.message.receive_v1' }, event: { sender: { sender_type: 'user', sender_id: { open_id: 'owner' } }, message: { message_id: 'message', chat_id: 'chat', chat_type: 'group', create_time: '1780000000000', message_type: 'text', content: JSON.stringify({ text: '@_user_1 帮我看看' }), mentions: [{ id: { open_id: 'bot' }, key: '@_user_1' }] } } });
 const req = (body, headers = {}) => new Request('https://benchgo.test/feishu', { method: 'POST', body: JSON.stringify(body), headers });
 
 test('new group scope separates direct messages and preserves legacy access defaults', () => {
-  const legacy = config(), source = { appId: 'app', chatId: 'other', chatType: 'p2p' };
+  const legacy = config(), source = { channel: 'feishu', appId: 'app', chatId: 'other', conversationId: 'other', sourceType: 'direct' };
   assert.equal(legacy.accessMode, 'owners');
   assert.equal(feishuSourceAllowed(legacy, source), false);
   const next = feishuConfig({ ...legacy, accessMode: 'platform', groups: [{ chatId: 'chat', name: '测试群', mode: 'mentions' }] });
   assert.equal(feishuSourceAllowed(next, source), true);
-  assert.equal(feishuSourceAllowed(next, { ...source, chatType: 'group' }), false);
-  assert.equal(feishuSourceAllowed(next, { ...source, chatId: 'chat', chatType: 'group' }), true);
+  assert.equal(feishuSourceAllowed(next, { ...source, sourceType: 'group' }), false);
+  assert.equal(feishuSourceAllowed(next, { ...source, chatId: 'chat', conversationId: 'chat', sourceType: 'group' }), true);
   next.directMessages = false;
   assert.equal(feishuSourceAllowed(next, source), false);
   assert.throws(() => feishuConfig({ groups: [{ chatId: 'a', mode: 'all' }, { chatId: 'a', mode: 'mentions' }] }), /重复/);
@@ -22,7 +23,7 @@ test('new group scope separates direct messages and preserves legacy access defa
 
 test('disabled saved connection can verify and paginate joined chats without sending messages', async () => {
   const current = { ...config(), enabled: false }, calls = [];
-  const adapter = createFeishuAdapter({ getConfig: () => current, credentials: { resolve: async () => ({ value: 'secret' }) }, ingest() {}, fetcher: async url => {
+  const adapter = createFeishuAdapter({ allowUnboundAuthorization: true, getConfig: () => current, credentials: { resolve: async () => ({ value: 'secret' }) }, ingest() {}, fetcher: async url => {
     calls.push(url);
     return Response.json(url.includes('/auth/') ? { code: 0, tenant_access_token: 'token', expire: 7200 } : url.includes('/bot/') ? { code: 0, bot: { open_id: 'bot', app_name: '窝头' } } : { code: 0, data: { items: [{ chat_id: 'chat', name: '无敌大队' }], has_more: true, page_token: 'next:opaque' } });
   } });
@@ -37,7 +38,7 @@ test('history is anchored, bounded to the same chat and fails visibly on permiss
   const current = config(), source = normalizeFeishuEvent(event(), current).source;
   const row = (message_id, chat_id = 'chat') => ({ message_id, chat_id, create_time: '1780000000000', msg_type: 'text', body: { content: JSON.stringify({ text: message_id }) }, sender: { id: 'owner', sender_type: 'user' } });
   let failHistory = false, revoked = false;
-  const adapter = createFeishuAdapter({ getConfig: () => current, credentials: { resolve: async () => ({ value: 'secret' }) }, ingest() {}, fetcher: async url => {
+  const adapter = createFeishuAdapter({ allowUnboundAuthorization: true, getConfig: () => current, credentials: { resolve: async () => ({ value: 'secret' }) }, ingest() {}, fetcher: async url => {
     if (url.includes('/auth/')) return Response.json({ code: 0, tenant_access_token: 'token', expire: 7200 });
     if (url.includes('/messages?')) {
       if (revoked) current.chatIds = ['other'];
@@ -57,7 +58,7 @@ test('history is anchored, bounded to the same chat and fails visibly on permiss
 function fixture(options = {}) {
   const calls = [], ingested = [], current = config();
   const values = { 'secret-ref': 'secret-value', 'verify-ref': 'verify-value', 'encrypt-ref': 'encrypt-value' };
-  const adapter = createFeishuAdapter({ getConfig: () => current, credentials: { resolve: async ref => ({ value: values[ref] }) }, ingest: async value => { ingested.push(value); }, fetcher: async (url, options) => { calls.push({ url, options }); return Response.json(url.includes('/auth/') ? { code: 0, tenant_access_token: 'access-token', expire: 7200 } : url.includes('/bot/') ? { code: 0, bot: { open_id: 'bot' } } : { code: 0, data: { message_id: 'reply' } }); }, ...options });
+  const adapter = createFeishuAdapter({ allowUnboundAuthorization: true, getConfig: () => current, credentials: { resolve: async ref => ({ value: values[ref] }) }, ingest: async value => { ingested.push(value); }, fetcher: async (url, options) => { calls.push({ url, options }); return Response.json(url.includes('/auth/') ? { code: 0, tenant_access_token: 'access-token', expire: 7200 } : url.includes('/bot/') ? { code: 0, bot: { open_id: 'bot' } } : { code: 0, data: { message_id: 'reply' } }); }, ...options });
   return { adapter, calls, ingested, current, values };
 }
 
@@ -100,13 +101,13 @@ test('rich text is readable and unsupported attachments are not presented as par
 test('verified metadata determines mention and ownership, raw event excludes auth token', () => {
   const input = event(), normalized = normalizeFeishuEvent(input, config());
   assert.equal(normalized.mentioned, true);
-  assert.equal(normalized.actor.owner, true);
+  assert.equal(normalized.actor.owner, undefined);
   assert.equal(normalized.sourceKey, 'feishu:app:message');
   assert.equal(JSON.stringify(normalized).includes('verify-value'), false);
   input.event.message.mentions = [];
   assert.equal(normalizeFeishuEvent(input, config()).mentioned, false);
   input.event.sender.sender_id.open_id = 'bot';
-  assert.equal(normalizeFeishuEvent(input, config()), null);
+  assert.equal(normalizeFeishuEvent(input, config()).actor.id, 'bot');
 });
 test('reply metadata preserves opaque parent and root IDs in group and direct messages', () => {
   const input = event();
@@ -142,7 +143,7 @@ test('callback verifies token/app and acknowledges only after durable ingestion'
   assert.equal((await f.adapter.status()).sending, 'unverified');
   e = event(); e.event.message.chat_id = 'outside';
   assert.equal((await f.adapter.handle(req(e))).status, 200);
-  assert.equal(f.ingested.length, 1);
+  assert.equal(f.ingested.length, 2, 'adapter must preserve out-of-scope facts for pipeline');
   const failing = fixture({ ingest: async () => { throw Error('private content'); } });
   const response = await failing.adapter.handle(req(event()));
   assert.equal(response.status, 503);
@@ -177,7 +178,7 @@ test('reply retains stable UUID, exact source, and accepted differs from deliver
   const sent = JSON.parse(f.calls.at(-1).options.body);
   assert.equal(JSON.parse(sent.content).text, input.text);
   assert.equal(f.calls.at(-1).url.endsWith('/message/reply'), true);
-  await assert.rejects(f.adapter.send({ ...input, source: { ...source, appId: 'other' } }), /范围/);
+  await assert.rejects(f.adapter.send({ ...input, source: { ...source, appId: 'other' } }), /连接/);
   f.values['secret-ref'] = 'rotated'; await f.adapter.send(input);
   assert.equal(f.calls.filter(call => call.url.includes('/auth/')).length, 2);
   f.current.enabled = false;

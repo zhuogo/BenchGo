@@ -227,5 +227,5 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot } = {}) {
       res.end(req.method === 'HEAD' ? undefined : data);
     } finally { record.abort.signal.removeEventListener('abort', onAbort); res.off('close', onClose); }
   };
-  return { begin, handle, upgrade, revoke, close: async () => { closed = true; await Promise.all([...peers.keys()].map(disposePeer)); realtime.close(); } };
+  return { authenticate, begin, handle, upgrade, revoke, close: async () => { closed = true; await Promise.all([...peers.keys()].map(disposePeer)); realtime.close(); } };
 }

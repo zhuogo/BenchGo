@@ -34,72 +34,23 @@ async function fixture(t, { approve } = {}) {
   return f;
 }
 
-test('Worker vault binds actual run, officially approves and writes only redacted host records', async t => {
-  const f = await fixture(t), tool = f.tools.get('assistant_vault_execute');
-  assert.equal(f.tools.size, 2);
-  assert.equal((await f.tools.get('assistant_vault_list').execute({}, f.exec('list'))).entries.length, 1);
-  const result = await tool.execute(f.input, f.exec());
-  assert.deepEqual(result, { handle: f.entry.handle, status: 202, ok: true, redacted: true });
-  assert.equal(f.sends(), 1); assert.equal(f.approvals(), 1);
-  const records = f.agent.session.snapshotEvents();
-  assert.deepEqual(records.map(event => event.data.phase), ['submitted', 'completed']);
-  assert.ok(records.every(event => event.ignorable && event.data.ticketId === f.ticket.id && event.data.runId === f.run.id));
-  assert.doesNotMatch(JSON.stringify(records), /VERY_PRIVATE_KEY|approved/);
-  assert.deepEqual(f.agent.session.deriveMessages(), []);
-  await assert.rejects(tool.execute(f.input, f.exec()), { code: 'VAULT_REPLAY_BLOCKED' });
-  assert.equal(f.sends(), 1);
-});
-
-test('Worker rejects foreign agents, paused tickets and forged identities before approval', async t => {
-  const f = await fixture(t), tool = f.tools.get('assistant_vault_execute');
-  await assert.rejects(tool.execute(f.input, { ...f.exec(), agent: { ...f.agent } }), { code: 'VAULT_WORKER_MISMATCH' });
-  f.database.pauseTicket(f.ticket.id);
-  await assert.rejects(tool.execute(f.input, f.exec()), { code: 'VAULT_WORKER_STALE' });
-  assert.equal(f.approvals(), 0); assert.equal(f.sends(), 0);
-});
-
-test('rule tightening or cancellation during official approval stops the HTTP boundary', async t => {
-  for (const change of ['policy', 'cancel']) {
-    const f = await fixture(t, { approve: current => { if (change === 'policy') current.setPolicy({ ...current.policy(), desktopVersion: 'revoked' }); else current.database.cancelTicket(current.ticket.id); return true; } });
-    await assert.rejects(f.tools.get('assistant_vault_execute').execute(f.input, f.exec()), error => ['VAULT_POLICY_CHANGED', 'VAULT_WORKER_STALE'].includes(error.code));
-    assert.equal(f.sends(), 0);
-    assert.equal(f.agent.session.snapshotEvents().length, 0);
-  }
-});
-
-test('approval rejection is audited and authorized=true cannot bypass the official approval service', async t => {
-  const f = await fixture(t, { approve: () => false });
-  await assert.rejects(f.tools.get('assistant_vault_execute').execute(f.input, { ...f.exec(), authorized: true }), { code: 'VAULT_APPROVAL_DENIED' });
-  assert.equal(f.sends(), 0); assert.equal(f.approvals(), 1);
-  assert.equal(f.agent.session.snapshotEvents()[0].data.phase, 'denied');
-});
-
-test('final policy/fence gate runs after vault IO immediately before network submission', async t => {
+test('Worker only registers safe vault discovery; the old execute tool is absent', async t => {
   const f = await fixture(t);
-  const original = f.vault.execute;
-  f.vault.execute = async input => {
-    f.setPolicy({ ...f.policy(), desktopVersion: 'revoked-while-vault-waits' });
-    return original(input);
-  };
-  await assert.rejects(f.tools.get('assistant_vault_execute').execute(f.input, f.exec()), { code: 'VAULT_POLICY_CHANGED' });
-  assert.equal(f.approvals(), 1); assert.equal(f.sends(), 0);
+  assert.deepEqual([...f.tools.keys()], ['assistant_vault_list']);
+  assert.equal(f.tools.get('assistant_vault_execute'), undefined);
+  const listing = await f.tools.get('assistant_vault_list').execute({}, f.exec('list'));
+  assert.equal(listing.entries.length, 1);
+  assert.doesNotMatch(JSON.stringify(listing), /VERY_PRIVATE_KEY/);
+  assert.equal(f.sends(), 0); assert.equal(f.approvals(), 0);
+  assert.equal(f.agent.session.snapshotEvents().length, 0);
 });
 
-test('uncertain external effect cannot be replayed under a new call id or reordered body', async t => {
-  const f = await fixture(t), tool = f.tools.get('assistant_vault_execute'); f.failRequest = true;
-  await assert.rejects(tool.execute({ ...f.input, body: { a: 'first', b: 'second' } }, f.exec()), { code: 'VAULT_REQUEST_UNCERTAIN' });
-  await assert.rejects(tool.execute({ ...f.input, body: { b: 'second', a: 'first' } }, f.exec('new-call')), { code: 'VAULT_REPLAY_BLOCKED' });
-  assert.equal(f.sends(), 1); assert.equal(f.approvals(), 1);
-  assert.doesNotMatch(JSON.stringify(f.agent.session.snapshotEvents()), /VERY_PRIVATE_KEY/);
-});
-
-test('approval binds immutable request body and credential rotation invalidates prior approval', async t => {
-  const f = await fixture(t, { approve: current => { current.input.body.task = 'changed-during-approval'; return true; } });
-  await f.tools.get('assistant_vault_execute').execute(f.input, f.exec());
-  assert.equal(JSON.parse(f.sentBody).task, 'approved');
-  const g = await fixture(t, { approve: async current => {
-    await current.vault.save({ ...current.entry, secret: 'ROTATED_KEY' }); return true;
-  } });
-  await assert.rejects(g.tools.get('assistant_vault_execute').execute(g.input, g.exec()), { code: 'VAULT_CONFLICT' });
-  assert.equal(g.sends(), 0);
+test('vault discovery rejects foreign agents, paused tickets and stale mandate', async t => {
+  const f = await fixture(t), tool = f.tools.get('assistant_vault_list');
+  await assert.rejects(tool.execute({}, { ...f.exec(), agent: { ...f.agent } }), { code: 'VAULT_WORKER_MISMATCH' });
+  f.setPolicy({ ...f.policy(), desktopVersion: 'revoked' });
+  await assert.rejects(tool.execute({}, f.exec()), { code: 'VAULT_MANDATE_REVOKED' });
+  assert.equal(f.sends(), 0); assert.equal(f.approvals(), 0);
+  const g = await fixture(t); g.database.pauseTicket(g.ticket.id);
+  await assert.rejects(g.tools.get('assistant_vault_list').execute({}, g.exec()), { code: 'VAULT_WORKER_STALE' });
 });

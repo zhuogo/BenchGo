@@ -25,7 +25,7 @@ for (const scenario of ['auto', 'manual', 'unknown-rule', 'ignore', 'revoked', '
   store.connections.update({ enabled: true, appId: 'app', appSecretRef: 'env:SECRET', ownerOpenIds: ['owner'], chatIds: ['chat'], machineOpenIds: ['ci'], admissionMode: scenario === 'manual' ? 'manual' : 'auto', enabledRuleIds: ['ci-check'] }, { revision: 0 });
   const readPolicy = () => readAssessmentPolicy(store);
   const policy = await readPolicy();
-  const event = { channel: 'feishu', kind: 'group', text: 'CI failed', sourceKey: 'ci-event', threadId: 'thread', mentioned: false, actor: { id: 'ci', kind: 'machine' }, source: { channel: 'feishu', appId: 'app', chatId: 'chat', messageId: 'ci-message' } };
+  const event = { channel: 'feishu', kind: 'group', text: 'CI failed', sourceKey: 'ci-event', threadId: 'thread', mentioned: true, actor: { id: 'ci', kind: 'machine' }, source: { channel: 'feishu', sourceType: 'group', connectionId: 'feishu', conversationId: 'chat', appId: 'app', chatId: 'chat', messageId: 'ci-message' } };
   const gatePolicy = { version: policy.version, machineIds: ['ci'], ownerIds: ['owner'], threadIds: ['chat'] };
   ingestAssistantEvent(store.orchestration, event, gatePolicy);
   assert.equal(ingestAssistantEvent(store.orchestration, event, gatePolicy).duplicate, true);
@@ -47,7 +47,7 @@ for (const scenario of ['auto', 'manual', 'unknown-rule', 'ignore', 'revoked', '
     store.close(); store = await createAssistantStore({ dataDirectory: directory });
   }
   let executions = 0, sends = 0;
-  runtime = createOrchestrationRuntime({ ctx: {}, store, execute: async (_assignment, context) => { executions++; if (scenario === 'revoked-during-run') { store.connections.update({ enabledRuleIds: [] }, { revision: 1 }); await context.renew(); } return { summary: 'CI inspected', evidenceRefs: ['test:evidence'] }; }, review: async () => ({ verdict: 'passed', reason: 'verified' }), feishu: { send: async request => { sends++; assert.equal(request.source.messageId, 'ci-message'); return { status: 'accepted', messageId: 'reply' }; } } });
+  runtime = createOrchestrationRuntime({ ctx: {}, store, execute: async (_assignment, context) => { executions++; if (scenario === 'revoked-during-run') { store.connections.update({ enabledRuleIds: [] }, { revision: 1 }); await context.renew(); } return { summary: 'CI inspected', outcome: 'completed', selfCheck: { summary: 'Checked CI evidence and current requirements' }, evidenceRefs: ['test:evidence'] }; }, feishu: { send: async request => { sends++; assert.equal(request.source.messageId, 'ci-message'); return { status: 'accepted', messageId: 'reply' }; } } });
   for (let i = 0; i < 40; i++) { await runtime.tick(); if (sends || scenario === 'revoked') break; await new Promise(resolve => setTimeout(resolve, 5)); }
   assert.equal(executions, scenario === 'revoked' ? 0 : 1);
   assert.equal(sends, scenario.startsWith('revoked') ? 0 : 1);

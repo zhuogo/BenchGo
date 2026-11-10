@@ -12,6 +12,7 @@ import icons from './icons.json';
 import { FishLogo, Tooltip, Modal, Menu, LinkIconMedium, IconPinOutlineRegular, IconPinFillRegular, IconBranchOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
 import css from './style.css';
 import fontCss from './fonts.css';
+import chatTypographyCss from '../../shared/client/chat-typography.css';
 import { UIIcon } from './iconsax.jsx';
 import { mountModelPicker, mountNativeActivity } from './model-picker.jsx';
 import { moduleSource, startModuleLifecycle } from './modules.mjs';
@@ -24,6 +25,9 @@ import { UpdateLauncher, mountUpdatesStyle } from './updates.jsx';
 import { mountBrand } from '../../link/client/brand.jsx';
 import { DeviceLauncher } from '../../link/client/device-launcher.jsx';
 import { DeviceSwitch } from '../../link/client/device-switch.jsx';
+import { mountEfficiencySettings } from './efficiency-settings.jsx';
+import { mountInteractiveClient } from '../../interactive/client/official.jsx';
+import { mountWorkbenchClient } from '../../workbench/client/index.jsx';
 
 const names = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi', opencode: 'OpenCode', gemini: 'Gemini CLI', hermes: 'Hermes', grok: 'Grok Build', mcode: 'MiniMax Code', deepseek: 'DeepSeek' };
 const liveStates = new Set(['running', 'connecting', 'waiting']);
@@ -57,7 +61,7 @@ function Icon({ provider, size = 18 }) {
 }
 function Activity({ status, className = '' }) {
   if (!liveStates.has(status) && status !== 'failed' && status !== 'completed') return null;
-  return <span className={`cmd-activity cmd-status-${status} ${className}`} role="img" aria-label={states[status]} title={states[status]}><i aria-hidden="true" /></span>;
+  return <Tooltip label={states[status]} delayMs={450} portal><span className={`cmd-activity cmd-status-${status} ${className}`} role="img" aria-label={states[status]} tabIndex={0}><i aria-hidden="true" /></span></Tooltip>;
 }
 function SessionIcon({ provider, status }) {
   return liveStates.has(status) || status === 'failed' || status === 'completed' ? <Activity status={status} /> : <Icon provider={provider} size={16} />;
@@ -92,8 +96,11 @@ function mountBaseUi(ctx) {
   mountModelPicker(ctx);
   mountProviderSettings(ctx);
   mountMediaSettings(ctx);
+  mountEfficiencySettings(ctx);
+  mountInteractiveClient(ctx);
+  mountWorkbenchClient(ctx);
   const lifetime = new AbortController();
-  const style = document.createElement('style'); style.textContent = fontCss + css; document.head.append(style); ctx.effect(() => () => style.remove());
+  const style = document.createElement('style'); style.textContent = fontCss + css + chatTypographyCss; document.head.append(style); ctx.effect(() => () => style.remove());
   let ensuringRecent;
   const ensureRecent = () => {
     if (ensuringRecent) return ensuringRecent;
@@ -147,7 +154,7 @@ function mountBaseUi(ctx) {
   ctx.slots.inject('sidebar.workspaces', () => ctx.slots.register({ name: 'sidebar.workspaces', priority: -10, inject: () => ({ host: ctx, open, newSession }) }, Projects));
 }
 
-function Projects({ host, open, newSession, expandSidebar, wide = true }) {
+function Projects({ host, open, newSession, expandSidebar, panelNavigation, wide = true }) {
   const activePanel = useSyncExternalStore(listener => host.layout.panelInfo.subscribe(listener), () => host.layout.panelInfo.getSnapshot().activePanelId);
   const modules = useSyncExternalStore(moduleSource.subscribe, moduleSource.getSnapshot);
   const harness = useSyncExternalStore(fn => host.sessions.list.subscribe(fn), () => host.sessions.list.getSnapshot());
@@ -287,6 +294,7 @@ function Projects({ host, open, newSession, expandSidebar, wide = true }) {
       <Tooltip label="新聊天" delayMs={450} portal><button type="button" className="cmd-new-chat" onClick={() => newSession()} aria-label="创建新聊天"><UIIcon name="edit" size={16} /></button></Tooltip>
       <Tooltip label="搜索对话" delayMs={450} portal><button type="button" className="cmd-search-toggle" onClick={() => { if (!wide) expandSidebar?.(); if (wide && searching) setFilter(''); setSearching(!wide || !searching); }} aria-label="搜索对话" aria-expanded={searching} aria-pressed={searching}><UIIcon name="search" size={16} /></button></Tooltip>
     </nav>
+    {panelNavigation}
     {wide && searching && <div className="cmd-search-panel"><label className="cmd-search-field"><UIIcon name="search" size={16} /><input autoFocus className="cmd-search" placeholder="搜索对话…" aria-label="搜索对话内容" value={filter} onChange={e => setFilter(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') { setSearching(false); setFilter(''); } }} /><Hint label="关闭搜索"><button type="button" aria-label="关闭搜索" onClick={() => { setSearching(false); setFilter(''); }}><UIIcon name="plus" size={14} className="cmd-search-close" /></button></Hint></label></div>}
     {wide && <div className="cmd-sidebar-content">
     {showArchived && <div className="cmd-section-title cmd-archive-toolbar"><span>已归档</span><Hint label="清空归档"><button type="button" aria-label="清空归档" disabled={busy || (!rows.some(item => item.archived) && !archivedThreadCount)} onClick={() => setConfirmClearArchive(true)}><UIIcon name="trash" size={14} /></button></Hint></div>}

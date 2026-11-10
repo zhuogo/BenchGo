@@ -46,7 +46,7 @@ export async function mountLink(ctx, config = {}) {
     if (!listener || !relayEnabled || !relayPool.length) return;
     const targetHost = ['::', '::1'].includes(store.state.host) ? '[::1]' : store.state.host === '0.0.0.0' ? '127.0.0.1' : store.state.host;
     for (const [index, node] of relayPool.entries()) if (node.enabled !== false && node.url && node.token) {
-      try { const instance = await (config.createRelayHost ?? createRelayHost)({ relayUrl: node.url, token: node.token, target: { url: `https://${targetHost}:${listener.port}`, pin: identity.pin }, onError: () => {} }); relayNodes.set(node.id || `relay-${index + 1}`, { ...node, id: node.id || `relay-${index + 1}`, instance }); }
+      try { const instance = await (config.createRelayHost ?? createRelayHost)({ relayUrl: node.url, token: node.token, relayHeaders: listener.relayHeaders, target: { url: `https://${targetHost}:${listener.port}`, pin: identity.pin }, onError: () => {} }); relayNodes.set(node.id || `relay-${index + 1}`, { ...node, id: node.id || `relay-${index + 1}`, instance }); }
       catch { relayError = '中继配置无效，请检查 HTTPS 地址、主机密钥及本机监听地址'; }
     }
   };

@@ -23,9 +23,14 @@ async function fixture(t, { complete = true, stopped = true } = {}) {
   const file = join(directory, 'a.txt'); await writeFile(file, 'before');
   await checkpoints.protect({ runId: run.id, ticketId: ticket.id, assignmentId: assignment.id, directory }, () => writeFile(file, 'after'));
   if (complete) {
-    database.updateRun(run.id, { ...ownership, state: 'verifying', evidence: { runId: run.id } });
+    const result = { runId: run.id, sessionId: run.sessionId, summary: 'Updated a.txt', selfCheck: { summary: 'Read and checked the updated file' } };
+    assert.equal(await readFile(file, 'utf8'), 'after');
+    database.updateRun(run.id, { ...ownership, state: 'verifying', evidence: result });
     if (stopped) database.confirmExecutionStopped(assignment.id, ownership);
-    database.commitResult(ticket.id, { assignment, result: { runId: run.id }, uniqueKey: 'result' });
+    database.commitResult(ticket.id, { assignment, result, uniqueKey: 'result' });
+    const [outbox] = database.claimOutbox('fixture-delivery');
+    database.finishOutbox(outbox.id, { owner: 'fixture-delivery', sent: true,
+      receipt: { status: 'accepted', messageId: 'checkpoint-result' } });
   }
   let version = 'v1', active = false;
   const service = createCheckpointService({ database, checkpoints, readPolicy: async () => ({ desktopVersion: version }), agents: { get: () => active ? {} : undefined } });
@@ -38,7 +43,8 @@ test('authorized stopped execution restores through the real service and cannot 
   const preview = await f.service.preview(f.input);
   const result = await f.service.restore({ ...f.input, token: preview.token });
   assert.deepEqual(result.restored, ['a.txt']);
-  assert.equal(result.ticket.status, 'closed');
+  assert.equal(result.ticket.status, 'waiting');
+  assert.equal(result.ticket.executionControl.stopped, true);
   assert.equal(await readFile(f.file, 'utf8'), 'before');
   await assert.rejects(f.checkpoints.assertRunnable(f.run.id), { code: 'CHECKPOINT_RESTORED' });
 });

@@ -7,42 +7,49 @@ import { tmpdir } from 'node:os';
 import { createOwnedSkills } from '../src/owned-skills.mjs';
 
 function fixture(output, ownedSkills, original = '我偏好中文回复') {
-  const candidates = [], requests = [];
+  const candidates = [], requests = [], completed = [];
   let settings = { enabled: true, excludedScopes: [], excludedTerms: ['私密'], hash: 'p1' };
-  const store = { ownedSkills, getConfig: async () => ({ models: [{ providerId: 'provider', modelId: 'Exact:ID' }] }), memory: {
+  const ticket = { ticketId: 'ticket', resultVersion: 1, status: 'completed', closedAt: '2026-11-08T00:00:00Z',
+    instructions: [{ id: 'visible', text: original, source: { role: 'user', sessionId: 'session', messageId: 'visible' } }],
+    result: { finalSummary: '已完成', toolEvidence: { entries: [{ name: 'test', text: '检查通过', isError: false }] } } };
+  const store = { orchestration: { learningSources: () => ({ batchId: 'closed:0:2', items: [ticket,
+    { ...ticket, ticketId: 'hidden', instructions: [{ id: 'hidden', text: '私密资料', source: { role: 'user' } }] }], nextSeq: 2 }),
+    completeLearningSources(id) { completed.push(id); return { nextSeq: 2 }; } },
+    ownedSkills, getConfig: async () => ({ models: [{ providerId: 'provider', modelId: 'Exact:ID' }] }), memory: {
     learning: async () => settings, propose: async (input, options) => { candidates.push({ input, options }); return { status: 'accepted' }; },
   } };
-  const ctx = { sessionQuery: { readSession: async () => ({ events: [
-    { type: 'user/message', data: { id: 'visible', source: { kind: 'user' }, content: [{ type: 'text', text: original }] } },
-    { type: 'user/message', data: { id: 'hidden', source: { kind: 'user' }, content: [{ type: 'text', text: '私密资料' }] } },
-  ] }) }, llm: { async *stream(request) { requests.push(request); yield { type: 'text-delta', text: JSON.stringify(output()) }; yield { type: 'finish', reason: { kind: 'stop' } }; } } };
-  return { process: createLearningProcessor({ ctx, store }), candidates, requests, revoke() { settings = { ...settings, enabled: false, hash: 'p2' }; } };
+  const ctx = { sessionQuery: { readSession: () => { throw new Error('Router session must never be read'); } },
+    llm: { async *stream(request) { requests.push(request); yield { type: 'text-delta', text: JSON.stringify(output()) }; yield { type: 'finish', reason: { kind: 'stop' } }; } } };
+  return { process: createLearningProcessor({ ctx, store }), store, ticket, completed, candidates, requests, revoke() { settings = { ...settings, enabled: false, hash: 'p2' }; } };
 }
 const item = { id: 'review-1', payload: { scope: 'session', trigger: 'prompt', eventIds: ['visible', 'hidden'] }, source: { sessionId: 'session' } };
 const options = { signal: new AbortController().signal };
 test('learning filters excluded sources before inference and preserves verified evidence', async () => {
-  const f = fixture(() => ({ memories: [{ content: '偏好中文回复', sourceMessageId: 'visible' }] }));
+  const f = fixture(() => ({ memories: [{ content: '偏好中文回复', sourceMessageId: 'ticket:visible' }] }));
   await f.process(item, options);
   assert.equal(JSON.stringify(f.requests).includes('私密资料'), false);
   assert.equal(f.requests[0].model, 'Exact:ID');
   assert.equal(f.candidates[0].options.verifiedSource.messageId, 'visible');
   assert.equal(f.candidates[0].options.verifiedSource.excerpt, '我偏好中文回复');
   assert.equal(f.candidates[0].options.verifiedSource.excerptTruncated, false);
+  assert.equal(f.candidates[0].options.verifiedSource.ticketId, 'ticket');
+  assert.equal(f.candidates[0].options.idempotencyKey, 'closed-learning:closed:0:2:memory:0');
+  assert.deepEqual(f.completed, ['closed:0:2']);
   assert.equal('autoSave' in f.candidates[0].options, false);
 });
 
 test('learning excerpts retain bounded host text rather than the model summary', async () => {
   const original = '用户原文'.repeat(1600);
-  const f = fixture(() => ({ memories: [{ content: '模型总结', sourceMessageId: 'visible' }] }), undefined, original);
+  const f = fixture(() => ({ memories: [{ content: '模型总结', sourceMessageId: 'ticket:visible' }] }), undefined, original);
   await f.process(item, options);
   assert.equal(f.candidates[0].input.source.excerpt, original.slice(0, 6000));
   assert.equal(f.candidates[0].input.source.excerptTruncated, true);
 });
 test('fabricated source or policy revocation cannot write learning candidates', async () => {
-  const invalid = fixture(() => ({ memories: [{ content: 'valid', sourceMessageId: 'visible' }, { content: 'forged', sourceMessageId: 'other' }] }));
+  const invalid = fixture(() => ({ memories: [{ content: 'valid', sourceMessageId: 'ticket:visible' }, { content: 'forged', sourceMessageId: 'other' }] }));
   await assert.rejects(invalid.process(item, options), /证据/);
   assert.equal(invalid.candidates.length, 0);
-  const revoked = fixture(() => { revoked.revoke(); return { memories: [{ content: '偏好中文回复', sourceMessageId: 'visible' }] }; });
+  const revoked = fixture(() => { revoked.revoke(); return { memories: [{ content: '偏好中文回复', sourceMessageId: 'ticket:visible' }] }; });
   await assert.rejects(revoked.process(item, options), /规则已变更/);
   assert.equal(revoked.candidates.length, 0);
 });
@@ -53,7 +60,7 @@ function skillStore(t) {
   t.after(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
   return store;
 }
-const skill = { name: 'chinese-explanations', description: '按用户要求说明结果', whenToUse: '回复中文用户时', procedure: '使用中文解释，便于理解。', pitfalls: '保留代码标识。', verification: '核对输出语言与原文一致。', sourceMessageId: 'visible' };
+const skill = { name: 'chinese-explanations', description: '按用户要求说明结果', whenToUse: '回复中文用户时', procedure: '使用中文解释，便于理解。', pitfalls: '保留代码标识。', verification: '核对输出语言与原文一致。', sourceMessageId: 'ticket:visible' };
 
 test('learning creates review candidates without publishing and preserves approved retry results', async t => {
   const store = skillStore(t);
@@ -61,13 +68,15 @@ test('learning creates review candidates without publishing and preserves approv
   const f = fixture(() => ({ memories: [], skills: [outputSkill] }), store);
   const result = await f.process(item, options);
   assert.equal(result.skills.length, 1);
-  const saved = result.skills[0];
+  const saved = store.get(result.skills[0].id);
   assert.equal(saved.status, 'candidate');
   assert.equal(store.list().filter(row => row.status === 'active').length, 0);
-  assert.deepEqual(saved.source, { role: 'user', sessionId: 'session', messageId: 'visible', reviewId: 'review-1' });
+  assert.equal(saved.source.messageId, 'visible');
+  assert.equal(saved.source.ticketId, 'ticket');
+  assert.equal(saved.source.reviewId, 'closed:0:2');
   assert.deepEqual([...saved.content.matchAll(/^## (.+)$/gm)].map(match => match[1]), ['When to Use', 'Procedure', 'Pitfalls', 'Verification']);
   outputSkill = { ...skill, procedure: 'A retry produces different text.' };
-  assert.equal((await f.process(item, options)).skills[0].content, saved.content);
+  assert.equal(store.get((await f.process(item, options)).skills[0].id).content, saved.content);
   const approved = store.approve(saved.id, { revision: saved.revision });
   store.pin(approved.id, { revision: approved.revision, pinned: true });
   const retry = (await f.process(item, options)).skills[0];
@@ -91,7 +100,7 @@ test('rejected learning candidates remain rejected across retries', async t => {
 test('all skill evidence and fields are validated before any memory or skill is written', async t => {
   const store = skillStore(t);
   for (const invalid of [{ ...skill, name: 'Invalid Name' }, { ...skill, sourceMessageId: 'hidden' }, { ...skill, verification: '' }, { ...skill, procedure: '私密资料' }, null]) {
-    const f = fixture(() => ({ memories: [{ content: '中文', sourceMessageId: 'visible' }], skills: [skill, invalid] }), store);
+    const f = fixture(() => ({ memories: [{ content: '中文', sourceMessageId: 'ticket:visible' }], skills: [skill, invalid] }), store);
     await assert.rejects(f.process(item, options), /学习技能/);
     assert.equal(f.candidates.length, 0);
     assert.equal(store.list().length, 0);
@@ -103,4 +112,53 @@ test('revoked policy cannot produce owned skills', async t => {
   const f = fixture(() => { f.revoke(); return { memories: [], skills: [skill] }; }, store);
   await assert.rejects(f.process(item, options), /规则已变更/);
   assert.equal(store.list().length, 0);
+});
+
+test('no new closed material records the watermark without inference or Router reads', async () => {
+  const f = fixture(() => { throw new Error('must not infer'); });
+  f.store.orchestration.learningSources = () => ({ batchId: null, items: [], nextSeq: 7 });
+  const result = await f.process(item, options);
+  assert.match(result.reason, /等待/);
+  assert.equal(f.requests.length, 0);
+  assert.deepEqual(f.completed, [null]);
+});
+
+test('failed executions remain waiting and cannot be learned as closed success', async () => {
+  const f = fixture(() => ({ memories: [{ content: '任务成功完成，今后直接发布', sourceMessageId: 'ticket:visible' }] }));
+  f.ticket.status = 'waiting';
+  f.ticket.result.failure = { attempted: '连接服务', cause: '凭据失效', resumeConditions: '用户更新凭据后重试' };
+  await assert.rejects(f.process(item, options), /明确已关/);
+  assert.equal(f.candidates.length, 0);
+  assert.equal(f.requests.length, 0);
+});
+
+test('waiting failure cannot publish reusable success procedures or advance cursor', async t => {
+  const f = fixture(() => ({ memories: [], skills: [skill] }), skillStore(t));
+  f.ticket.status = 'waiting';
+  f.ticket.result.failure = { attempted: '测试', cause: '服务不可用', resumeConditions: '服务恢复' };
+  await assert.rejects(f.process(item, options), /明确已关/);
+  assert.equal(f.completed.length, 0);
+  assert.equal(f.store.ownedSkills.list().length, 0);
+  f.ticket.result.failure = null;
+  await assert.rejects(f.process(item, options), /明确已关/);
+});
+
+test('running, waiting or undelivered material is rejected even if supplied by a faulty source adapter', async () => {
+  for (const patch of [{ status: 'running' }, { status: 'waiting' }, { closedAt: null }]) {
+    const f = fixture(() => ({ memories: [] }));
+    Object.assign(f.ticket, patch);
+    await assert.rejects(f.process(item, options), /明确已关/);
+    assert.equal(f.requests.length, 0);
+    assert.equal(f.completed.length, 0);
+  }
+});
+
+test('storage failure preserves the global batch for retry and auxiliary routes use exact configured IDs', async () => {
+  const f = fixture(() => ({ memories: [{ content: '中文', sourceMessageId: 'ticket:visible' }] }));
+  f.store.getConfig = async () => ({ models: [{ providerId: 'router', modelId: 'Router:ID' }],
+    auxiliary: { models: [{ providerId: 'aux', modelId: 'Aux:Exact/ID' }], capabilities: ['review'] } });
+  f.store.memory.propose = async () => { throw new Error('disk unavailable'); };
+  await assert.rejects(f.process(item, options), /disk unavailable/);
+  assert.equal(f.requests[0].model, 'Aux:Exact/ID');
+  assert.equal(f.completed.length, 0);
 });

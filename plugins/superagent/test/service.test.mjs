@@ -7,12 +7,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { publicConfig } from '../../voice/src/config.mjs';
+import { HostConnectionService } from '../../../deepseek-harness/packages/client/connection/lib/index.js';
 
 const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
 const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
 const compactionRequire = createRequire(new URL('../../../deepseek-harness/packages/compaction/compaction-basic/package.json', import.meta.url));
 const compactionUrl = pathToFileURL(compactionRequire.resolve('@deepseek-ai/dsh-compaction-basic')).href;
-const hook = registerHooks({ resolve(specifier, context, next) { return specifier === '@deepseek-ai/dsh-compaction-basic' ? { url: compactionUrl, shortCircuit: true } : next(specifier, context); } });
+const sessionUrl = pathToFileURL(requireHarness.resolve('@deepseek-ai/dsh-session')).href;
+const hook = registerHooks({ resolve(specifier, context, next) {
+  const url = specifier === '@deepseek-ai/dsh-compaction-basic' ? compactionUrl : specifier === '@deepseek-ai/dsh-session' ? sessionUrl : undefined;
+  return url ? { url, shortCircuit: true } : next(specifier, context);
+} });
 const { mountAssistant } = await import('../src/service.mjs');
 const { Context } = await load('@deepseek-ai/cordis');
 const { default: LlmRuntime, LlmAdapter } = await load('@deepseek-ai/dsh-llm');
@@ -56,7 +61,13 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
       Object.assign(entry, request.patch, { updatedAt: 'v2' }); return entry;
     },
   });
-  ctx.provide('connection', { fetch: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path); } } });
+  const transportCtx = new Context(), connection = new HostConnectionService(transportCtx, [], {});
+  t.after(() => transportCtx.fiber.dispose());
+  ctx.provide('connection', { browserPeer: connection.browserPeer, fetch: { register(route) {
+    routes.set(route.path, route);
+    const dispose = connection.fetch.register(route);
+    return async () => { routes.delete(route.path); await dispose(); };
+  } } });
   ctx.provide('credentials', { resolve: async ref => ref === 'test-feishu-secret' ? { value: 'test-secret' } : undefined });
   ctx.provide('webServer', { register: () => () => {} });
   const workspaceEntity = Object.create({
@@ -82,13 +93,29 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
       mountAssistant(child, commander, providers).then(resolve, reject);
     });
   });
-  const call = async (input, peer) => routes.get('/api/commander/assistant').fetch(new Request('http://localhost/api/commander/assistant', { method: 'POST', body: JSON.stringify(input), headers: { 'content-type': 'application/json' } }), peer);
+  const handler = connection.createSharedFetchHandler('/api');
+  const owner = connection.browserPeer, guest = connection.createPeer({ principal: { kind: 'device' } });
+  const call = async (input, peer = owner) => handler.fetch(new Request('http://localhost/api/commander/assistant', { method: 'POST', body: JSON.stringify(input), headers: { 'content-type': 'application/json' } }), peer);
+  // The real upstream handler deliberately invokes exact routes with only Request.
+  // A body-supplied identity cannot make direct calls or guest transports owners.
+  const forged = { action: 'actionPermissions', principal: { kind: 'owner' }, actor: { id: 'fake' }, human: true };
+  await assert.rejects(app.dispatch(forged), { code: 'ACTION_OWNER_REQUIRED', status: 403 });
+  assert.equal((await call(forged, guest)).status, 403);
+  assert.equal((await call(forged)).status, 200);
+  const permission = await call({ action: 'actionPermissionCreate', origin: 'https://accounts.example:8443', categories: ['login'], expiresAt: '2099-01-01T00:00:00Z', requestId: 'owner-permission', actor: { id: 'fake' } });
+  assert.equal(permission.status, 200);
+  const grant = await permission.json();
+  assert.equal(grant.actor.id, 'desktop-owner');
+  assert.equal((await (await call({ action: 'actionPermissions' })).json()).grants[0].id, grant.id);
+  assert.equal((await call({ action: 'actionPermissionRevoke', id: grant.id, requestId: 'owner-revoke' }, guest)).status, 403);
+  assert.equal((await call({ action: 'actionPermissionRevoke', id: grant.id, requestId: 'owner-revoke' })).status, 200);
+  assert.ok((await (await call({ action: 'actionPermissions' })).json()).grants[0].revokedAt);
   for (const action of ['directReplyReconcile', 'outboxReconcile']) {
     const input = { action, id: 'missing', attempts: 1, outcome: 'unknown', evidence: '已检查上游回执' };
-    assert.equal((await call(input)).status, 403);
-    assert.equal((await call(input, { principal: { kind: 'device' } })).status, 403);
-    assert.equal((await call(input, { principal: { kind: 'owner' } })).status, 404);
-    assert.equal((await call({ ...input, attempts: 0 }, { principal: { kind: 'owner' } })).status, 400);
+    await assert.rejects(app.dispatch(input), { code: 'OWNER_REQUIRED', status: 403 });
+    assert.equal((await call(input, guest)).status, 403);
+    assert.equal((await call(input)).status, 404);
+    assert.equal((await call({ ...input, attempts: 0 })).status, 400);
   }
   await assert.rejects(mountAssistant(ctx, commander, providers), { code: 'BENCHGO_DATA_LOCKED' });
   const connectionInitial = await (await call({ action: 'connections' })).json();
@@ -122,7 +149,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.ok((await systemListing.json()).files.some(file => file.name === 'workspace' && file.kind === 'directory'));
   const systemFile = await routes.get('/api/commander/assistant/system-file').fetch(new Request('http://localhost/api/commander/assistant/system-file?file=missing'));
   assert.equal(systemFile.status, 404);
-  let response = await call({ action: 'config', patch: { models: [{ providerId: 'mounted', modelId: 'exact' }] }, revision: 0 }); assert.equal(response.status, 200);
+  let response = await call({ action: 'config', patch: { models: [{ providerId: 'mounted', modelId: 'exact' }], workerModels: [{ providerId: 'mounted', modelId: 'exact' }] }, revision: 0 }); assert.equal(response.status, 200);
   response = await call({ action: 'config', patch: { name: 'conflict' }, revision: 0 }); assert.equal(response.status, 409);
   response = await call({ action: 'config', patch: { cardHtml: '<b>Service card</b>' } }); assert.equal(response.status, 200); assert.equal((await response.json()).cardHtml, '<b>Service card</b>');
   response = await call({ action: 'ensure' }); const { sessionId } = await response.json(); assert.ok(sessionId);
@@ -133,7 +160,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   await assert.rejects(ticketsTool.execute({}, { agent: { id: 'child' } }), /只有总助手/);
   await assert.rejects(ticketsTool.execute({ op: 'get' }, { agent }), /需要 id/);
   app.store.orchestration.ingest({ dedupeKey: 'query-test', thread: { id: 'query-test', source: { type: 'desktop', id: 'query-test' } }, source: {}, actor: { kind: 'human', id: 'desktop-owner' }, content: 'Query proof', mode: 'direct' });
-  const queryTicket = app.store.orchestration.createTicket({ threadId: 'query-test', target: 'Query proof', status: 'cancelled', mandate: { source: { channel: 'desktop', sessionId: String(agent.id) }, project: { id: 'project' } } });
+  const queryTicket = app.store.orchestration.createTicket({ threadId: 'query-test', target: 'Query proof', status: 'waiting', mandate: { source: { channel: 'desktop', sessionId: String(agent.id) }, project: { id: 'project' } } });
   const queried = await ticketsTool.execute({ projectId: 'project' }, { agent });
   assert.equal(queried.tickets[0].id, queryTicket.id);
   assert.equal((await ticketsTool.execute({ op: 'get', id: queryTicket.id }, { agent })).ticket.target, 'Query proof');
@@ -180,10 +207,11 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const claimAssignments = app.store.orchestration.claimAssignments;
   app.store.orchestration.claimAssignments = () => [];
   t.after(() => { app.store.orchestration.claimAssignments = claimAssignments; });
-  const formGoal = { requestId: 'form-goal', objective: 'Resource goal', projectId: 'project', provider: 'mounted', model: 'exact', text: 'Resource task', acceptance: 'Evidence' };
+  const formGoal = { requestId: 'form-goal', objective: 'Resource goal', projectId: 'project', text: 'Resource task', acceptance: 'Evidence' };
   assert.equal((await call({ action: 'goalCreate', goal: { ...formGoal, requestId: 'budgeted-goal', budget: { requests: 1 } } })).status, 400);
   const formCreatedResponse = await call({ action: 'goalCreate', goal: formGoal });
   assert.equal(formCreatedResponse.status, 200);
+  assert.equal((await call({ action: 'goalCreate', goal: { ...formGoal, requestId: 'legacy-model-goal', provider: 'mounted', model: 'exact' } })).status, 400);
   const formCreated = await formCreatedResponse.json();
   assert.equal(formCreated.executionKind, 'ticket');
   assert.equal((await (await call({ action: 'goalCreate', goal: formGoal })).json()).id, formCreated.id);
@@ -195,13 +223,13 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal(initialUsage.usage.requests, 0);
   for (let index = 0; index < 3; index++) assert.equal(app.store.orchestration.reserveGoalRequest({ ticketId: formTicket.id, requestId: `form-use-${index}` }).allowed, true);
   for (const action of ['goalBudgetUpdate', 'goalBudgetResume']) assert.notEqual((await call({ action, id: formCreated.id, expectedVersion: 1, budget: { requests: 2 } })).status, 200);
-  assert.equal(app.store.orchestration.getTicket(formTicket.id).status, 'open', 'usage never parks the Ticket');
+  assert.equal(app.store.orchestration.getTicket(formTicket.id).status, 'waiting', 'usage never parks the Ticket');
   const budgetResumed = await (await call({ action: 'goalGet', id: formCreated.id })).json();
   assert.equal(budgetResumed.budgetState.usage.requests, 3);
   const cancelledForm = await call({ action: 'goalCancel', id: formCreated.id, rowVersion: budgetResumed.rowVersion });
   assert.equal(cancelledForm.status, 200);
   assert.equal((await cancelledForm.json()).status, 'cancelled');
-  assert.equal(app.store.orchestration.getTicket(formTicket.id).status, 'cancelled');
+  assert.equal(app.store.orchestration.getTicket(formTicket.id).status, 'waiting');
   app.store.orchestration.claimAssignments = claimAssignments;
   let streamFailure;
   duringStream = async () => { try {
@@ -216,7 +244,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.ok(delegateTool.parameters.properties.title);
   const goalTool = ctx.tools.get('assistant_goals', agent);
   await assert.rejects(goalTool.execute({ op: 'list' }, { agent: { id: 'child' } }), /只有总助手/);
-  const goalInput = { requestId: 'owned-goal', objective: 'Deferred work', projectId: 'project', provider: 'mounted', model: 'exact', text: 'Wait' };
+  const goalInput = { requestId: 'owned-goal', objective: 'Deferred work', projectId: 'project', text: 'Wait' };
   const ownedGoal = await goalTool.execute({ op: 'create', goal: goalInput }, { agent, authorized: true });
   assert.equal(ownedGoal.ownerSessionId, agent.id);
   assert.equal(ownedGoal.executionKind, 'ticket');
@@ -233,13 +261,14 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   if (streamFailure) throw streamFailure;
   duringStream = async () => { try {
   const delegateTool = ctx.tools.get('assistant_delegate', agent);
-  const delegation = { projectId: 'project', provider: 'mounted', model: 'exact', title: '检查项目', text: 'Inspect project', acceptance: 'Report project findings with evidence; preserve the original human requirements.', requestId: 'desktop-delegation' };
+  const delegation = { projectId: 'project', title: '检查项目', text: 'Inspect project', acceptance: 'Report project findings with evidence; preserve the original human requirements.', requestId: 'desktop-delegation' };
   await assert.rejects(delegateTool.execute(delegation, { agent: { id: 'child' }, authorized: true }), /只有总助手/);
+  await assert.rejects(delegateTool.execute({ ...delegation, provider: 'mounted', model: 'exact' }, { agent, authorized: true }));
   const ticket = await delegateTool.execute(delegation, { agent, authorized: true });
   assert.equal(ticket.mandate.instruction, 'hello');
   assert.equal((await delegateTool.execute(delegation, { agent, authorized: true })).id, ticket.id);
   assert.ok((await (await call({ action: 'tickets' })).json()).tickets.some(row => row.id === ticket.id));
-  assert.equal((await (await call({ action: 'ticketStop', ticketId: ticket.id })).json()).status, 'cancelled');
+  assert.equal((await (await call({ action: 'ticketStop', ticketId: ticket.id })).json()).status, 'waiting');
   const questionTicket = app.store.orchestration.createTicket({ threadId: ticket.threadId, target: 'Question', mandate: ticket.mandate });
   app.store.orchestration.createAssignment(questionTicket.id, {});
   const [questionAssignment] = app.store.orchestration.claimAssignments('test-worker', { validateMandate: () => true });
@@ -262,7 +291,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal((await call(answerInput)).status, 200);
   const invalidReview = await call({ action: 'ticketRetryReview', ticketId: questionTicket.id, expectedResultVersion: 1 });
   assert.equal(invalidReview.status, 400);
-  assert.match(await invalidReview.text(), /工单待验收状态已变化/);
+  assert.match(await invalidReview.text(), /未知总助手操作/);
   assert.equal((await (await call(answerInput)).json()).duplicate, true);
   const crossSite = await routes.get('/api/commander/assistant').fetch(new Request('http://localhost/api/commander/assistant', { method: 'POST', body: JSON.stringify(answerInput), headers: { origin: 'https://foreign.invalid' } }));
   assert.equal(crossSite.status, 403);
@@ -283,7 +312,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   if (streamFailure) throw streamFailure;
   const memoryTool = ctx.tools.get('assistant_memory', agent);
   await assert.rejects(memoryTool.execute({ content: '无当前用户回合' }, { agent, callId: 'outside-turn' }), /当前原始用户消息/);
-  await assert.rejects(memoryTool.execute({ content: '伪造来源' }, { agent: { id: 'child' }, callId: 'spoofed', authorized: true }), /只有总助手/);
+  await assert.rejects(memoryTool.execute({ content: '伪造来源' }, { agent: { id: 'child' }, callId: 'spoofed', authorized: true }), { code: 'WORKER_MEMORY_WRITE_DENIED' });
   duringStream = async () => { try {
     const before = app.store.orchestration.listTickets().length;
     const exec = { agent, callId: 'direct-memory', signal: new AbortController().signal };

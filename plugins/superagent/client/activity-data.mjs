@@ -1,15 +1,13 @@
-import { ticketSnapshot, ticketWaiting } from './ticket-state.mjs';
+import { ticketSnapshot, ticketWaiting, ticketResultSummary } from './ticket-state.mjs';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
 
-export const terminalActivityStates = new Set(['completed', 'failed', 'cancelled', 'closed']);
-// Paused/cancelling work remains in the history list, but it is no longer
-// actively executing. Keep this set shared by the trigger and drawer so a
-// paused or stopping ticket cannot leave the activity badge looking busy.
+export const terminalActivityStates = new Set(['completed', 'failed', 'cancelled']);
+// Goal controls retain their own lifecycle; Ticket activity uses only three states.
 export const inactiveActivityStates = new Set(['paused', 'pausing', 'cancelling']);
-export const attentionActivityStates = new Set(['waiting', 'awaiting_user', 'continuation_wait', 'blocked', 'uncertain', 'failed']);
-export const liveActivityStates = status => !terminalActivityStates.has(status) && !inactiveActivityStates.has(status);
-export const activeActivityStates = status => liveActivityStates(status) && !attentionActivityStates.has(status);
-export const activityLabels = { open: '已接收', queued: '等待执行', claimed: '执行中', active: '进行中', verifying: '正在核验', reworking: '原工单补做中', completed: '已完成', waiting: '等待处理', awaiting_user: '等待你的答复', review_wait: '系统自动核验中', continuation_wait: '系统等待续做', paused: '已暂停', pausing: '正在暂停', resuming: '正在恢复', cancelling: '正在停止', cancelled: '已停止', failed: '执行失败', uncertain: '待核实', blocked: '受阻', closed: '已结束' };
+export const attentionActivityStates = new Set(['waiting', 'blocked', 'uncertain', 'failed']);
+export const liveActivityStates = status => ['running', 'waiting', 'active', 'resuming'].includes(status);
+export const activeActivityStates = status => ['running', 'active', 'resuming'].includes(status);
+export const activityLabels = { running: '进行', waiting: '等待', completed: '完成', active: '进行中', paused: '已暂停', pausing: '正在暂停', resuming: '正在恢复', cancelling: '正在停止', cancelled: '已停止', failed: '执行失败', blocked: '受阻', uncertain: '待核实' };
 
 /** Runtime activity is evidence about an execution, never a replacement for Ticket state. */
 function currentExecution(row, assignment) {
@@ -35,23 +33,20 @@ function executionSummary(execution) {
 }
 
 export function activityTask(row, kind) {
-  const { assignment, result, delivery, status: ticketStatus, safetyWait } = ticketSnapshot(row);
+  const { assignment, result, delivery, status: ticketStatus } = ticketSnapshot(row);
   const execution = kind === 'ticket' ? currentExecution(row, assignment) : undefined;
-  const status = kind === 'goal' ? row.status
-    : ['open', 'claimed', 'reworking'].includes(ticketStatus) && execution?.phase === 'verifying' ? 'verifying' : ticketStatus;
+  const status = kind === 'goal' ? row.status : ticketStatus;
   const waiting = kind === 'ticket' ? ticketWaiting(row) : null;
-  const detail = kind === 'goal' ? row.error || ({ building_children: '正在拆分子目标', verify: '正在核验目标' })[row.nextStep] : waiting?.reason || result?.delivery?.text || result?.review?.reason || result?.summary;
+  const detail = kind === 'goal' ? row.error || ({ building_children: '正在拆分子目标', verify: '正在同步目标状态' })[row.nextStep] : waiting?.reason || ticketResultSummary(result) || undefined;
   const phase = kind === 'goal' ? `${row.ticketIds?.length || 0} 项关联工单`
-    : status === 'verifying' ? 'Worker 已交回结果，正在核对要求与证据'
-    : status === 'reworking' ? '沿原会话补做并重新核验'
-    : status === 'awaiting_user' ? '等待你的答复 · 原工单保留'
-    : status === 'review_wait' ? '系统自动补证与核验'
-    : status === 'continuation_wait' ? safetyWait ? '系统待核实外部效果' : '系统等待续做'
+    : status === 'completed' ? '已完成并交付'
+    : execution?.phase === 'verifying' && status === 'running' ? 'Worker 已交回结果，正在保存'
+    : waiting ? waiting.reason
     : delivery?.state === 'sent' ? '结果已交付' : delivery ? '结果交付阶段'
-    : result?.review ? '自动核验已结束' : result ? '正在自动核验结果'
-    : assignment ? `执行阶段 · ${activityLabels[assignment.state] || assignment.state || '状态未知'}` : '已接收 · 等待分配';
-  const progressing = ['open', 'claimed', 'reworking', 'verifying'].includes(status);
-  const progressSummary = progressing ? status === 'verifying' ? phase : executionSummary(execution) : '';
+    : result ? '结果已保存'
+    : assignment ? `执行阶段 · ${({ claimed: '执行中', queued: '等待执行', waiting: '等待后续', uncertain: '待核实', blocked: '授权已变更' })[assignment.state] || '已记录'}` : '已接收 · 等待分配';
+  const progressing = status === 'running';
+  const progressSummary = progressing ? execution?.phase === 'verifying' && status === 'running' ? phase : executionSummary(execution) : '';
   return { ...row, execution, progressSummary, key: `${kind}:${row.id}`, kind, status, detail, phase, title: kind === 'ticket' ? normalizeTicketTitle(row.taskMeta?.title || row.title, row.target) : row.target || row.title || row.objective || '未命名任务', time: row.updatedAt || row.createdAt };
 }
 

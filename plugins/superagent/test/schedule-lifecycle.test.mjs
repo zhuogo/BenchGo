@@ -16,10 +16,11 @@ async function fixture(t) {
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   const entry = { id: 'opaque/schedule', title: '每天检查', prompt: 'PRIVATE INSTRUCTION', target: { kind: 'session', sessionId: 'main-session' }, createdAt: at };
   let state = { mainSessionId: 'main-session', threads: [] }, catalog = [entry], available = true;
-  const triggers = new Map(), tickets = new Map(), receipts = [];
+  const triggers = new Map(), tickets = new Map(), results = new Map(), receipts = [];
   const ctx = { get: () => available ? { catalog: async () => catalog, history: async () => ({ records: receipts }) } : undefined };
   const store = { getState: async () => state, orchestration: {
     getTrigger: id => triggers.get(id), getTicket: id => tickets.get(id),
+    results: id => results.get(id) || [],
     listTickets: ({ ownerSessionIds, offset, limit }) => [...tickets.values()].filter(row => ownerSessionIds.includes(row.mandate.source.sessionId)).slice(offset, offset + limit),
   } };
   let lifecycle = createScheduleLifecycle({ ctx, store, database });
@@ -28,7 +29,7 @@ async function fixture(t) {
     triggers.set(triggerId(source.sessionId, entry.id, time), { source, actor: { kind: 'machine', id: 'harness-schedule' } });
     return source;
   };
-  return { entry, tickets, triggers, receipts, admit, get lifecycle() { return lifecycle; }, get database() { return database; },
+  return { entry, tickets, results, triggers, receipts, admit, get lifecycle() { return lifecycle; }, get database() { return database; },
     occurrence: (time = at) => lifecycle.occurrence({ entry: { ...entry, sessionId: 'main-session' }, occurrence: { occurrence_at: time } }),
     setState: value => { state = value; }, setCatalog: value => { catalog = value; }, disableHost: () => { available = false; },
     restart: () => { database.close(); database = createAssistantRuntimeStore({ directory }); lifecycle = createScheduleLifecycle({ ctx, store, database }); },
@@ -43,7 +44,8 @@ test('four lifecycle stages persist, deduplicate retries and respect main-chat c
   f.tickets.set('done', { id: 'done', title: '每天检查', status: 'completed', updatedAt: at, mandate: { admission: 'desktop-schedule', source } });
   const failedAt = '2026-11-06T10:00:00.000Z';
   const failedSource = f.admit(failedAt);
-  f.tickets.set('failed', { id: 'failed', title: '每天检查', status: 'failed', updatedAt: failedAt, mandate: { admission: 'desktop-schedule', source: failedSource } });
+  f.tickets.set('failed', { id: 'failed', title: '每天检查', status: 'waiting', instructionRevision: 1, resultVersion: 1, updatedAt: failedAt, mandate: { admission: 'desktop-schedule', source: failedSource } });
+  f.results.set('failed', [{ version: 1, instructionRevision: 1, outcome: 'failed', committedAt: failedAt }]);
   await f.lifecycle.sync();
   const events = f.database.chatNotifications('main').events;
   assert.deepEqual(events.map(row => row.schedule.phase), ['created', 'triggered', 'completed', 'triggered', 'failed']);

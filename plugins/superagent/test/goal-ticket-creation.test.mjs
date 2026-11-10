@@ -8,6 +8,16 @@ import { createAssistantScheduler } from '../src/scheduler.mjs';
 import { createDesktopDelegationService } from '../src/desktop-delegation-service.mjs';
 import { createGoalTickets } from '../src/goal-ticket-creation.mjs';
 import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
+import { commitWorkerResult } from '../src/result-commit.mjs';
+
+function commitAndDeliver(database, ticket) {
+  const saved = commitWorkerResult({ database, ticket, uniqueKey: `result:${ticket.id}`, result: {
+    outcome: 'completed', summary: '原文结果', selfCheck: { summary: '已检查当前要求和执行结果' }, evidenceRefs: [],
+  } });
+  const delivery = database.claimOutbox('goal-test').find(row => row.id === saved.outbox.id);
+  assert.ok(delivery);
+  database.finishOutbox(delivery.id, { owner: 'goal-test', sent: true, receipt: { status: 'accepted', messageId: `sent:${ticket.id}` } });
+}
 
 for (const budgeted of [false, true]) test(`Ticket goal survives partial creation and restart without duplicate dispatch or changed retry (aggregateInterrupted=${budgeted})`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-goal-tickets-'));
@@ -25,12 +35,16 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
   const ownerAgent = { id: 'owner', status: 'running', session: { header: {}, snapshotEvents: () => [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'original', source: { kind: 'user' }, content: [{ type: 'text', text: 'complete work' }] } }] } };
   const ctx = { workspaceRegistry: { list: () => [{ id: 'project', path: directory }] }, llm: { resolveModelInfo: async (provider, id) => ({ provider, id }) } };
   ctx.agents = { get: () => ownerAgent, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) };
-  const service = createDesktopDelegationService({ ctx, database, readPolicy: async () => ({ desktopVersion: 'policy', projects: ctx.workspaceRegistry.list() }) });
+  const service = createDesktopDelegationService({ ctx, database, readPolicy: async () => ({ desktopVersion: 'policy', workerModels: [{ providerId: 'opaque', modelId: 'exact' }], projects: ctx.workspaceRegistry.list() }) });
   let calls = 0, fail = true;
   const delegation = { delegate: async (...args) => { calls++; if (fail && calls === 2) throw new Error('interrupted'); return service.delegate(...args); } };
-  const child = { objective: 'leaf', projectId: 'project', provider: 'opaque', model: 'exact', text: 'work', ...(budgeted ? { acceptance: 'evidence' } : {}) };
+  const child = { objective: 'leaf', projectId: 'project', text: 'work', ...(budgeted ? { acceptance: 'evidence' } : {}) };
   const goal = { requestId: 'root-request', ownerSessionId: 'owner', objective: 'root', children: [child, { ...child, text: 'second' }] };
   const create = input => createGoalTickets({ goal: input, ctx, ownerAgent, exec: { agent: ownerAgent, authorized: true }, threadId: 'main', delegation, scheduler, database });
+  for (const key of ['provider', 'model', 'providerId', 'modelId', 'workerModel']) {
+    await assert.rejects(create({ ...goal, children: [{ ...child, [key]: 'override' }] }), { code: 'MODEL_OVERRIDE_UNSUPPORTED' });
+    await assert.rejects(scheduler.createGoal({ ...goal, [key]: 'override' }, {}), { code: 'MODEL_OVERRIDE_UNSUPPORTED' });
+  }
   await assert.rejects(create({ ...goal, children: [{ ...child, requestId: goal.requestId }] }), /请求标识/);
   await assert.rejects(create({ ...goal, budget: { requests: 1 } }), /目标预算已移除/);
   assert.equal(database.listTickets().length, 0, 'invalid tree cannot dispatch before validation');
@@ -65,6 +79,7 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
   }
   assert.equal(parent.executionKind, 'ticket');
   assert.equal(parent.childGoalIds.length, 2);
+  assert.deepEqual(scheduler.getGoal(parent.childGoalIds[0]).workerModel, { providerId: 'opaque', modelId: 'exact' });
   assert.equal((await create(goal)).id, parent.id);
   if (budgeted) {
     const second = database.listTickets().find(ticket => ticket.target === 'second');
@@ -73,7 +88,7 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
     assert.equal(ledger.usage.requests, 2, 'retry creation does not reset shared usage');
   }
   await scheduler.tick();
-  assert.equal(scheduler.getGoal(parent.id).status, 'active');
+  assert.equal(scheduler.getGoal(parent.id).status, 'waiting');
   const paused = await scheduler.updateGoal(parent.id, { status: 'paused' });
   assert.equal(paused.status, 'paused');
   assert.ok(parent.childGoalIds.every(id => scheduler.getGoal(id).status === 'paused'));
@@ -85,14 +100,19 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
   assert.ok(parent.childGoalIds.every(id => scheduler.getGoal(id).status === 'paused'));
   await assert.rejects(scheduler.updateGoal(parent.id, { status: 'active' }, { rowVersion: paused.rowVersion - 1 }), { code: 'ROW_CONFLICT' });
   assert.equal((await scheduler.updateGoal(parent.id, { status: 'active' }, { rowVersion: paused.rowVersion })).status, 'active');
-  assert.ok(database.listTickets().every(ticket => ticket.status === 'open'));
+  assert.ok(database.listTickets().every(ticket => ticket.status === 'waiting'));
 
-  for (const ticket of database.listTickets()) database.commitResult(ticket.id, { uniqueKey: `result:${ticket.id}`, result: { review: { verdict: 'passed' }, evidenceRefs: [{ sessionId: 'worker' }] } });
+  for (const ticket of database.listTickets()) commitWorkerResult({ database, ticket, uniqueKey: `result:${ticket.id}`, result: {
+    outcome: 'completed', summary: '原文结果', selfCheck: { summary: '已检查当前要求和执行结果' }, evidenceRefs: [],
+  } });
+  assert.equal((await scheduler.advanceGoal(parent.id)).status, 'waiting', 'result persistence alone cannot complete a Goal');
+  for (const delivery of database.claimOutbox('goal-test')) database.finishOutbox(delivery.id, { owner: 'goal-test', sent: true,
+    receipt: { status: 'accepted', messageId: `sent:${delivery.ticketId}` } });
   assert.equal((await scheduler.advanceGoal(parent.id)).status, 'completed');
   assert.equal(database.listTickets().length, 2);
 });
 
-test('a changed Ticket cannot complete the original Goal even after passing its new review', async t => {
+test('a changed Ticket cannot complete the original Goal even after delivering its new result', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-goal-revision-'));
   const database = createAssistantOrchestrationStore({ directory });
   const store = { orchestration: database, paths: { database: join(directory, 'assistant.db') } };
@@ -104,32 +124,28 @@ test('a changed Ticket cannot complete the original Goal even after passing its 
     actorId: 'desktop-owner', admission: 'desktop-approved-delegation', source: { channel: 'desktop', sessionId: 'owner' }, project: { id: 'project' },
   } });
   database.createAssignment(ticket.id, { model: { providerId: 'provider', modelId: 'exact' } });
-  const goal = await scheduler.createGoal({ requestId: 'goal', ownerSessionId: 'owner', objective: 'original objective', projectId: 'project', provider: 'provider', model: 'exact', text: ticket.target, acceptance: ticket.acceptance }, { ticketId: ticket.id });
+  const goal = await scheduler.createGoal({ requestId: 'goal', ownerSessionId: 'owner', objective: 'original objective', projectId: 'project', text: ticket.target, acceptance: ticket.acceptance }, { ticketId: ticket.id });
   assert.equal(goal.ticketRevisions[ticket.id], 1);
   database.updateTicket(ticket.id, { target: 'different work' }, { expectedInstructionRevision: 1 });
-  database.commitResult(ticket.id, { instructionRevision: 2, uniqueKey: 'changed-result', result: { review: { verdict: 'passed' }, evidenceRefs: [{ sessionId: 'worker' }] } });
+  commitAndDeliver(database, database.getTicket(ticket.id));
   const checked = await scheduler.advanceGoal(goal.id);
   assert.equal(checked.status, 'waiting');
   assert.equal(checked.waitReason, 'requirements');
   assert.equal(database.assignments(ticket.id).length, 1);
 });
 
-test('creation captures the full input before model validation and rejects invalid later leaves before dispatch', async () => {
+test('creation captures the full input before delegation and rejects invalid later leaves before dispatch', async () => {
   const ownerAgent = { id: 'owner' };
   const goal = { requestId: 'stable', objective: 'root', children: [
-    { objective: 'one', projectId: 'project', provider: 'provider', model: 'exact', text: 'original' },
-    { objective: 'two', projectId: 'project', provider: 'provider', model: 'exact', text: 'second' },
+    { objective: 'one', projectId: 'project', text: 'original' },
+    { objective: 'two', projectId: 'project', text: 'second' },
   ] };
   const dispatched = [];
   const scheduler = { matchGoalRequest: () => null, reserveGoalRequest: () => {}, createGoal: async value => value };
-  const ctx = { workspaceRegistry: { list: () => [{ id: 'project' }] }, llm: { resolveModelInfo: async (provider, id) => {
-    goal.children[0].text = 'changed during validation';
-    goal.children[1].model = 'changed model';
-    return { provider, id };
-  } } };
-  const delegation = { delegate: async input => { dispatched.push(input); return { id: `ticket-${dispatched.length}` }; } };
+  const ctx = { workspaceRegistry: { list: () => [{ id: 'project' }] } };
+  const delegation = { delegate: async input => { goal.children[0].text = 'changed during delegation'; dispatched.push(input); return { id: `ticket-${dispatched.length}` }; } };
   const result = await createGoalTickets({ goal, ownerAgent, exec: { agent: ownerAgent }, scheduler, ctx, delegation });
-  assert.deepEqual(dispatched.map(row => [row.text, row.model]), [['original', 'exact'], ['second', 'exact']]);
+  assert.deepEqual(dispatched.map(row => [row.text, row.model]), [['original', undefined], ['second', undefined]]);
   assert.deepEqual(dispatched.map(row => row.acceptance), ['original', 'second']);
   assert.equal(result.children[0].text, 'original');
   assert.equal(result.children[0].acceptance, 'original');
@@ -150,9 +166,9 @@ test('cancellation persists before effects and resumes after restart without dis
     actorId: 'desktop-owner', admission: 'desktop-approved-delegation', source: { channel: 'desktop', sessionId: 'owner' }, project: { id: 'project' },
   } });
   database.createAssignment(ticket.id, { model: { providerId: 'provider', modelId: 'exact' } });
-  const goal = await scheduler.createGoal({ requestId: 'cancel', ownerSessionId: 'owner', objective: 'stop', projectId: 'project', provider: 'provider', model: 'exact', text: 'work' }, { ticketId: ticket.id });
+  const goal = await scheduler.createGoal({ requestId: 'cancel', ownerSessionId: 'owner', objective: 'stop', projectId: 'project', text: 'work' }, { ticketId: ticket.id });
   await assert.rejects(scheduler.cancelGoal(goal.id, { rowVersion: goal.rowVersion + 1 }), { code: 'ROW_CONFLICT' });
-  assert.equal(database.getTicket(ticket.id).status, 'open');
+  assert.equal(database.getTicket(ticket.id).status, 'waiting');
   const [active] = database.claimAssignments('worker', { validateMandate: () => true });
   const original = database.cancelTicket;
   database.cancelTicket = () => { throw new Error('interrupted'); };
@@ -163,14 +179,16 @@ test('cancellation persists before effects and resumes after restart without dis
   database.cancelTicket = original;
   await scheduler.tick();
   assert.equal(scheduler.getGoal(goal.id).status, 'cancelling');
-  assert.equal(database.getTicket(ticket.id).status, 'cancelling');
+  assert.equal(database.getTicket(ticket.id).status, 'waiting');
+  assert.equal(database.getTicket(ticket.id).executionControl.stopRequested, true);
   await scheduler.dispose(); scheduler = createAssistantScheduler({ store, database: runtimeDatabase });
   await scheduler.tick();
   assert.equal(scheduler.getGoal(goal.id).status, 'cancelling');
   database.confirmExecutionStopped(active.id, active);
   await scheduler.tick();
   assert.equal(scheduler.getGoal(goal.id).status, 'cancelled');
-  assert.equal(database.getTicket(ticket.id).status, 'cancelled');
+  assert.equal(database.getTicket(ticket.id).status, 'waiting');
+  assert.equal(database.getTicket(ticket.id).executionControl.stopped, true);
   assert.equal(database.assignments(ticket.id)[0].state, 'cancelled');
   assert.equal((await scheduler.cancelGoal(goal.id)).status, 'cancelled');
 });

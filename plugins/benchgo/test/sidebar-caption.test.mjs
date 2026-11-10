@@ -39,6 +39,9 @@ function mountSidebar({ windows, collapsed = false }) {
       IconNewChatOutlineMedium: () => null,
       IconNewChatOutlineRegular: () => null,
       ShortcutKeys: () => null,
+      useModalLayer: () => {},
+      isBehindModal: () => false,
+      focusWithoutRing: element => element.focus(),
     };
     return sidebarRequire(id);
   } });
@@ -51,9 +54,13 @@ function mountSidebar({ windows, collapsed = false }) {
     React.act(() => root.render(React.createElement(module.exports.SidebarRoot, {
       collapsed, width: collapsed ? (windows ? 0 : 56) : 300,
       usePanels: selector => selector([]),
+      useEntryPins: selector => selector([]),
+      useEntryActions: selector => selector(false),
+      useRemoteAccess: endpoint => endpoint === 'session/create',
       useShortcuts: selector => selector([]),
       usePanelInfo: selector => selector({ activePanelId: null }),
       startSession() {}, selectPanel() {},
+      setPinned() {}, trackEntryClick() {}, renderFactorySlot: () => null,
       toggleSidebar() { collapsed = !collapsed; toggleCount++; render(); },
       t: key => key,
       renderSlot: (name, { wide } = {}) => name === 'sidebar.workspaces'
@@ -125,6 +132,7 @@ test('Windows application menu keeps the same compact gap in both sidebar states
 test('official Windows zero-width geometry and fixed caption positioning remain intact', async () => {
   const frame = await readFile(new URL('../../../deepseek-harness/packages/client/ui-layout/src/client/AppFrame.tsx', import.meta.url), 'utf8');
   const css = await readFile(new URL('../../../deepseek-harness/packages/client/ui-sidebar/src/client/SidebarRoot.module.css', import.meta.url), 'utf8');
-  assert.match(frame, /hasAttribute\('data-windows-titlebar'\) \? 0 : SIDEBAR_COLLAPSED/);
+  assert.match(frame, /const windowsTitlebar = document.documentElement.hasAttribute\('data-windows-titlebar'\)/);
+  assert.match(frame, /const collapsedWidth = drawer \|\| darwin \|\| windowsTitlebar \? 0 : SIDEBAR_COLLAPSED/);
   assert.match(css, /:global\(\[data-windows-titlebar\]\) \.toggle\s*\{\s*position: fixed;/);
 });

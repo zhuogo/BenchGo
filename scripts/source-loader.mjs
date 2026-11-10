@@ -1,7 +1,7 @@
 import { registerHooks } from 'node:module';
 
 const packageURL = new URL('../plugins/benchgo/package.json', import.meta.url).href;
-const sourceRoots = ['harness', 'superagent', 'voice'].map(name => new URL(`../plugins/${name}/`, import.meta.url).href);
+const sourceRoots = ['harness', 'superagent', 'voice', 'interactive', 'efficiency', 'workbench'].map(name => new URL(`../plugins/${name}/`, import.meta.url).href);
 const builtCompaction = new URL('../deepseek-harness/packages/compaction/compaction-basic/lib/index.js', import.meta.url).href;
 
 // Source packages share the installed BenchGo dependency tree. Published modules

@@ -3,6 +3,7 @@ import { Select } from '../../shared/client/select.jsx';
 import { readJsonResponse } from './http-response.mjs';
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { LinkIconMedium, Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives';
+import { Tooltip as BubbleTooltip } from '../../shared/client/ui/tooltip.jsx';
 import { UIIcon } from './iconsax.jsx';
 import css from './updates.css';
 import { brandIcon } from '../../link/client/brand.jsx';
@@ -116,7 +117,7 @@ export function UpdateLauncher({ host, wide = true }) {
             {data?.managed === false && <p className="cmd-update-warning">{serverManaged ? '此主机由服务器部署管理' : '当前安装方式不支持独立更新，请先安装新版应用。'}</p>}
             {data?.busy && <p className="cmd-update-warning" role="status">有任务正在运行，结束后即可更新。</p>}
             {installBlockReason && !data?.busy && data?.managed !== false && plugin.compatible && <p className="cmd-update-warning" role="status">{installBlockReason}</p>}
-            <div className="cmd-update-actions"><span role="status">{pluginStatus}</span><span className="cmd-update-action-buttons">{offerPluginInstall && <button type="button" className="cmd-update-text-button" disabled={working} onClick={() => void run('check')}>重新检查</button>}<button type="button" className={`cmd-update-button ${offerPluginInstall ? 'cmd-update-primary' : ''}`} title={installBlockReason || undefined} disabled={working || (!!offerPluginInstall && !!installBlockReason)} onClick={() => void run(offerPluginInstall ? 'install' : 'check')}>{pending === 'install' || data?.phase === 'downloading' ? '下载中…' : offerPluginInstall ? '更新插件' : '检查更新'}</button></span></div>
+            <div className="cmd-update-actions"><span role="status">{pluginStatus}</span><span className="cmd-update-action-buttons">{offerPluginInstall && <button type="button" className="cmd-update-text-button" disabled={working} onClick={() => void run('check')}>重新检查</button>}<BubbleTooltip label={installBlockReason || undefined} portal><button type="button" className={`cmd-update-button ${offerPluginInstall ? 'cmd-update-primary' : ''}`} disabled={working || (!!offerPluginInstall && !!installBlockReason)} onClick={() => void run(offerPluginInstall ? 'install' : 'check')}>{pending === 'install' || data?.phase === 'downloading' ? '下载中…' : offerPluginInstall ? '更新插件' : '检查更新'}</button></BubbleTooltip></span></div>
           </>}
           {data?.release?.notes && <Disclosure className="cmd-update-notes" title="更新内容"><p>{data.release.notes}</p></Disclosure>}
         </section>

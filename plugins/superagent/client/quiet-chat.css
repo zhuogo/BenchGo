@@ -17,6 +17,7 @@
 .ba-chat-message[data-role=user]{--ba-body-column:2;--ba-tools-column:1;grid-template-columns:max-content minmax(0,1fr);margin-left:auto}
 .ba-chat-message:not(:has(.ba-message-toolbar)){grid-template-columns:minmax(0,1fr)}
 .ba-chat-body{grid-column:var(--ba-body-column);grid-row:1;align-self:center;min-width:0;max-width:100%}
+.ba-chat-followup{grid-column:var(--ba-body-column);grid-row:2;min-width:0;max-width:100%}
 .ba-chat-message time{font-variant-numeric:tabular-nums}
 .ba-chat-content{width:fit-content;max-width:100%;min-width:0}
 .ba-chat-message[data-role=user] .ba-chat-content{padding:12px 16px;background:var(--dsw-specific-bubble,#f3f3f3);color:var(--dsw-alias-label-primary,#222);border-radius:18px 18px 6px 18px;box-sizing:border-box;margin-left:auto}

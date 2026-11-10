@@ -13,6 +13,7 @@ const identity = ticket => ({ ticketId: ticket.id, instructionRevision: ticket.i
 const readRuns = (directory, ticketId) => {
   const db = new DatabaseSync(join(directory, 'user/.benchgo/assistant/assistant.db'), { readOnly: true });
   try {
+    db.exec('PRAGMA busy_timeout=5000');
     return db.prepare('SELECT r.id,r.assignment_id,r.state,r.fence,r.payload FROM sa_runs r JOIN sa_assignments a ON a.id=r.assignment_id WHERE a.ticket_id=? ORDER BY r.created_at').all(ticketId)
       .map(row => { const payload = JSON.parse(row.payload); return { id: row.id, assignmentId: row.assignment_id, state: row.state, fence: row.fence, sessionId: payload.sessionId }; });
   } finally { db.close(); }

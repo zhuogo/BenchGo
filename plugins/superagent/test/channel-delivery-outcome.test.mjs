@@ -6,7 +6,7 @@ import { createTelegramAdapter } from '../src/channels/telegram.mjs';
 import { createChannelRuntime } from '../src/channel-runtime.mjs';
 import { loadChannelModules } from '../src/channel-catalog.mjs';
 
-const common = { ingest: async () => {}, credentials: { resolve: async () => ({ value: 'fixture-token' }) } };
+const common = { allowUnboundAuthorization: true, ingest: async () => {}, credentials: { resolve: async () => ({ value: 'fixture-token' }) } };
 const factories = {
   feishu: fetcher => ({
     adapter: createFeishuAdapter({ ...common, getConfig: () => ({ enabled: true, appId: 'app', appSecretRef: 'secret' }),
@@ -15,7 +15,7 @@ const factories = {
   }),
   whatsapp: fetcher => ({
     adapter: createWhatsAppAdapter({ ...common, getConfig: () => ({ enabled: true, phoneNumberId: 'phone', accessTokenRef: 'token', appSecretRef: 'secret', verificationTokenRef: 'verify' }), fetcher }),
-    source: { channel: 'whatsapp', appId: 'phone', chatId: 'chat', messageId: 'original' }, reject: { error: { code: 131047 } },
+    source: { channel: 'whatsapp', appId: 'phone', accountId: 'phone', chatId: 'chat', messageId: 'original' }, reject: { error: { code: 131047 } },
   }),
   telegram: fetcher => ({
     adapter: createTelegramAdapter({ ...common, getConfig: () => ({ enabled: true, botTokenRef: 'token' }),
@@ -61,7 +61,7 @@ test('multi-part output preserves confirmed receipts and never labels a partial 
     adapterOptions: { ...common, fetcher: async () => ++calls === 1 ? Response.json({ messages: [{ id: 'first-part' }] }) : Response.json({ error: { code: 131047 } }, { status: 400 }) } });
   try {
     await runtime.restart('whatsapp');
-    await assert.rejects(runtime.get('whatsapp').send({ source: { channel: 'whatsapp', appId: 'phone', chatId: 'chat', messageId: 'origin', connectionRevision: 1 }, text: 'x'.repeat(2000), idempotencyKey: 'key' }), error => {
+    await assert.rejects(runtime.get('whatsapp').send({ source: { channel: 'whatsapp', appId: 'phone', accountId: 'phone', sourceType: 'direct', conversationId: 'chat', chatId: 'chat', messageId: 'origin', connectionRevision: 1 }, text: 'x'.repeat(2000), idempotencyKey: 'key' }), error => {
       assert.equal(error.deliveryOutcome, 'unknown');
       assert.equal(error.receipt.parts[0].messageId, 'first-part');
       return true;

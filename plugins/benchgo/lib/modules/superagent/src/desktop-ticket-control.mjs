@@ -1,3 +1,4 @@
+import { ticketStopped } from './ticket-lifecycle.mjs';
 import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
 import { ownsDesktopTicket } from './desktop-ticket-owner.mjs';
@@ -19,14 +20,21 @@ export function createDesktopTicketControl({ ctx, database }) {
         || (source.threadId || 'main') !== threadId || ticket.threadId !== `desktop:${source.sessionId}`) throw new Error('工单不属于当前会话');
       exec.signal?.throwIfAborted();
       if (operation === 'answer') {
+        const question = database.attentions(id).find(row => row.id === attentionId);
+        if (!question) throw new Error('工单原问题不存在');
         const answer = database.answerDesktopAttention({ ticketId: id, attentionId,
-          instructionRevision: ticket.instructionRevision, requestId: message.id,
+          instructionRevision: question.instructionRevision ?? ticket.instructionRevision, requestId: message.id,
           answer: { selected: [], custom: message.content.filter(block => block.type === 'text').map(block => block.text).join('\n') } });
         return { operation, ticketId: id, attention: answer };
       }
-      if (operation === 'supplement' && ['completed', 'failed', 'closed', 'cancelled', 'cancelling'].includes(ticket.status)) throw new Error('工单已停止；请通过工单修订或重开处理新要求');
+      if (operation === 'supplement' && (ticket.status === 'completed' || ticketStopped(ticket))) throw new Error('工单已完成或停止；请通过工单修订或关联调整处理新要求');
       const { trigger } = recordDesktopTrigger(database, { sessionId: ownerAgent.id, threadId, message });
-      if (operation === 'cancel') return { operation, triggerId: trigger.id, ticket: database.cancelTicket(id) };
+      if (operation === 'cancel') {
+        database.recordTicketInput({ ticketId: id, triggerId: trigger.id, kind: 'stop', idempotencyKey: `trigger:${trigger.id}` });
+        const ticket = database.cancelTicket(id);
+        const input = database.applyTicketStopInput(id, trigger.id);
+        return { operation, triggerId: trigger.id, ticket, input };
+      }
       // A model-session reset keeps the logical conversation and the original
       // mandate. Bind this explicit selection to its new Trigger stream only.
       if (source.sessionId !== ownerAgent.id && !database.subscriptions({ ticketId: id, threadId: trigger.threadId }).length) {

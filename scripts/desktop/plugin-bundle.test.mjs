@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { initializePluginProfile, stagePluginBundle } from './plugin-bundle.mjs';
+import { initializePluginProfile, stagePluginBundle, officialSourcePackages } from './plugin-bundle.mjs';
 import { getInstallState, releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
 
 function fixture(t) {
@@ -14,6 +14,27 @@ function fixture(t) {
   const put = (name, value) => { const path = join(root, name); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value)); };
   return { root, put };
 }
+
+test('official source closure follows pinned CLI dependencies and includes CLI itself', t => {
+  const { root, put } = fixture(t);
+  put('cli/package.json', { name: '@deepseek-ai/dsh', version: '0.2.2-rc.1', dependencies: { '@deepseek-ai/dsh-base': 'workspace:*' } });
+  put('cli/node_modules/@deepseek-ai/dsh-base/package.json', { name: '@deepseek-ai/dsh-base', version: '0.2.2-rc.1', peerDependencies: { '@deepseek-ai/cordis': '~4.1.0' }, devDependencies: { '@deepseek-ai/dsh-client-ui-slots': 'workspace:*', '@deepseek-ai/dsh-dev-missing': '*' } });
+  put('cli/node_modules/@deepseek-ai/cordis/package.json', { name: '@deepseek-ai/cordis', version: '4.1.0' });
+  put('cli/node_modules/@deepseek-ai/dsh-client-ui-slots/package.json', { name: '@deepseek-ai/dsh-client-ui-slots', version: '0.2.2-rc.1' });
+  put('node_modules/@deepseek-ai/dsh-unrelated/package.json', { name: '@deepseek-ai/dsh-unrelated', version: '9.0.0' });
+  const packages = officialSourcePackages(join(root, 'cli'));
+  assert.equal(packages.get('@deepseek-ai/dsh'), realpathSync(join(root, 'cli')));
+  assert.equal(JSON.parse(readFileSync(join(packages.get('@deepseek-ai/cordis'), 'package.json'))).version, '4.1.0');
+  assert.equal(packages.has('@deepseek-ai/dsh-unrelated'), false);
+  assert.ok(packages.has('@deepseek-ai/dsh-client-ui-slots'));
+  assert.equal(packages.has('@deepseek-ai/dsh-dev-missing'), false);
+});
+
+test('official source closure rejects missing required official dependencies', t => {
+  const { root, put } = fixture(t);
+  put('cli/package.json', { name: '@deepseek-ai/dsh', dependencies: { '@deepseek-ai/dsh-missing': 'workspace:*' } });
+  assert.throws(() => officialSourcePackages(join(root, 'cli')), /missing dependency @deepseek-ai\/dsh-missing/u);
+});
 
 test('the bundled desktop entry loads shared helpers from packaged resources after relocation', t => {
   const { root, put } = fixture(t);
@@ -39,7 +60,7 @@ test('published plugin payload excludes development/private files and contains i
   const manifest = { name: 'benchgo-plugin', version: '0.1.0', type: 'module', files: ['src', 'lib', 'cordis.patch.yml', 'assets/icon.svg'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { 'fixture-required': '1.0.0' }, devDependencies: { 'fixture-dev': '1.0.0' }, optionalDependencies: { 'fixture-linux': '1.0.0' } };
   put('plugin/assets/icon.svg', '<svg>BenchGo</svg>');
   put('plugin/package.json', manifest);
-  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'cordis.patch.yml']) put(`plugin/${name}`, 'fixture');
+  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${name}`, 'fixture');
   put('plugin/private-credentials.txt', 'do-not-package');
   for (const name of ['fixture-required', 'fixture-dev', 'fixture-linux']) {
     put(`plugin/node_modules/${name}/package.json`, { name, version: '1.0.0', ...(name === 'fixture-linux' ? { os: ['linux'] } : {}) });
@@ -63,12 +84,12 @@ test('published plugin payload excludes development/private files and contains i
   assert.throws(() => stagePluginBundle({ runtime: join(root, 'runtime'), plugin: join(root, 'plugin') }), /already exists/u);
 });
 
-for (const omitted of ['harness', 'superagent', 'voice']) test(`packaging rejects an allowlist that omits ${omitted}`, t => {
+for (const omitted of ['harness', 'superagent', 'voice', 'interactive', 'efficiency', 'workbench']) test(`packaging rejects an allowlist that omits ${omitted}`, t => {
   const { root, put } = fixture(t);
-  const files = ['src', 'lib/client.js', 'lib/link.mjs', 'lib/link-web', 'lib/relay', 'cordis.patch.yml', ...['harness', 'superagent', 'voice'].filter(name => name !== omitted).map(name => `lib/modules/${name}`)];
+  const files = ['src', 'lib/client.js', 'lib/link.mjs', 'lib/link-web', 'lib/relay', 'cordis.patch.yml', ...['harness', 'superagent', 'voice', 'interactive', 'efficiency', 'workbench'].filter(name => name !== omitted).map(name => `lib/modules/${name}`)];
   put('plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0', files, dsh: { bundle: { patch: './cordis.patch.yml' } } });
-  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'cordis.patch.yml']) put(`plugin/${name}`, 'fixture');
-  const required = `lib/modules/${omitted}/src/plugin.mjs`;
+  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${name}`, 'fixture');
+  const required = `lib/modules/${omitted}/src/${omitted === 'interactive' ? 'prompt' : 'plugin'}.mjs`;
   assert.throws(() => stagePluginBundle({ plugin: join(root, 'plugin'), output: join(root, 'seed') }), error => error.message.includes(`missing built file ${required}`));
   assert.equal(existsSync(join(root, 'seed/node_modules/benchgo-plugin')), false);
 });
@@ -78,7 +99,7 @@ test('SSH optional build-machine addons never enter desktop plugin releases', t 
   const { root, put } = fixture(t);
   put('plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0', files: ['src', 'lib', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { ssh2: '1.17.0' } });
   put('plugin/assets/icon.svg', '<svg>BenchGo</svg>');
-  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'cordis.patch.yml']) put('plugin/' + name, 'fixture');
+  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put('plugin/' + name, 'fixture');
   put('plugin/node_modules/ssh2/package.json', { name: 'ssh2', version: '1.17.0', optionalDependencies: { 'cpu-features': '0.0.10' } });
   put('plugin/node_modules/ssh2/lib/index.js', 'module.exports = {};');
   put('plugin/node_modules/ssh2/lib/protocol/crypto.js', 'module.exports = {};');
@@ -336,7 +357,9 @@ test('a new plugin version migrates the profile when an official shared package 
   assert.equal(current.previous.version, '0.1.0');
   assert.equal(JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies['kept-plugin'], '1.2.3');
   assert.equal(existsSync(join(options.profile, '.benchgo/releases/0.1.0/release.json')), true);
-  assert.equal(JSON.parse(readFileSync(join(current.directory, 'node_modules/@deepseek-ai/cordis/package.json'))).version, newCordis.version);
+  assert.equal(existsSync(join(current.directory, 'node_modules/@deepseek-ai/cordis')), false);
+  assert.equal(current.runtime, join(root, 'runtime-next'));
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(manifestPath)).dsh.plusInstall, 'runtime'), false);
 });
 
 test('reinstall refreshes app version and moved shared-runtime links without downgrading or enabling a disabled plugin', enrollmentOptions, async t => {
@@ -361,7 +384,8 @@ test('reinstall refreshes app version and moved shared-runtime links without dow
   assert.equal(result.version, '0.1.0');
   assert.equal(result.appVersion, '0.1.0');
   assert.equal(result.enabled, false);
-  assert.equal(JSON.parse(readFileSync(join(result.directory, 'node_modules/@deepseek-ai/dsh-llm/package.json'))).version, service.version);
+  assert.equal(existsSync(join(result.directory, 'node_modules/@deepseek-ai/dsh-llm')), false);
+  assert.equal(result.runtime, join(root, 'moved-runtime'));
 });
 
 test('an active profile lock blocks installation before configuration changes', enrollmentOptions, async t => {

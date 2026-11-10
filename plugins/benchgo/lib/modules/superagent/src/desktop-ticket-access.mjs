@@ -1,6 +1,23 @@
 import { desktopTicketOwnerScope, ownsDesktopTicket } from './desktop-ticket-owner.mjs';
 import { normalizeTicketTitle } from './ticket-title.mjs';
 
+export const TICKET_SUMMARY_MAX_CHARS = 320;
+const concise = (value, max = TICKET_SUMMARY_MAX_CHARS) => typeof value === 'string' ? Array.from(value.replace(/\s+/gu, ' ').trim()).slice(0, max).join('') : '';
+
+/** A bounded paragraph for routine coordination; persisted evidence stays in get. */
+export function conciseTicketSummary(ticket) {
+  const live = ticket.liveSummary;
+  const reason = ticket.continuationWait;
+  const control = ticket.executionControl || {};
+  const summary = control.stopped ? '已停止，等待明确的继续要求。'
+    : control.stopRequested ? '正在确认停止，等待执行端核实。'
+    : control.paused || control.pauseRequested ? '已请求暂停，等待明确恢复。'
+    : [concise(reason?.reason || live?.blocker, 120),
+      reason?.resumeConditions || reason?.nextStep ? `继续条件：${concise(reason.resumeConditions || reason.nextStep, 120)}` : '',
+      reason?.code === 'EXECUTION_FAILED' ? '下一步：补充条件后明确继续或修订要求。' : concise(live?.progress, 60)].filter(Boolean).join('；');
+  return concise(summary || ({ running: '正在推进。', waiting: '等待执行条件。', completed: '已完成并交付。' })[ticket.status]);
+}
+
 /** Read current desktop conversation tickets from the orchestration store. */
 export function createDesktopTicketAccess(database) {
   const owned = (ticket, ownerSessionId) => {
@@ -20,7 +37,9 @@ export function createDesktopTicketAccess(database) {
       const rows = database.listTickets({ ...(scope ? { ownerSessionIds: scope.sessionIds, ownerThreadId: scope.threadId } : {}), status, projectId, limit: limit + 1, offset, newestFirst: true });
       return {
         tickets: rows.slice(0, limit).map(ticket => ({
-          id: ticket.id, title: normalizeTicketTitle(ticket.title, ticket.target), status: ticket.status, liveSummary: ticket.liveSummary,
+          id: ticket.id, title: normalizeTicketTitle(ticket.title, ticket.target), status: ticket.status,
+          liveSummary: conciseTicketSummary(ticket),
+          result: ticket.resultVersion > 0 ? { ticketId: ticket.id, version: ticket.resultVersion } : null,
           adjustmentOfTicketId: ticket.adjustmentOfTicketId,
           project: ticket.mandate.project, threadId: ticket.threadId,
           instructionRevision: ticket.instructionRevision,

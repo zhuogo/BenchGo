@@ -14,6 +14,17 @@ async function fixture(t) {
   return { store: await open(), open };
 }
 
+test('factory profiles stay unnamed through config reload and session initialization', async t => {
+  const { store, open } = await fixture(t);
+  assert.equal((await store.getConfig()).name, '');
+  const identity = await store.documents.read('IDENTITY.md');
+  assert.equal(identityName(identity.content) ?? '', '');
+  assert.match(identity.content, /初始姓名为空/);
+  assert.doesNotMatch(identity.content, /BenchGo 小助手|飞书助手/);
+  await store.getSessionContext('factory-session');
+  assert.equal((await (await open()).getConfig()).name, '');
+});
+
 test('identity parser reads only frontmatter and preserves unrelated fields', () => {
   assert.equal(identityName('# My name is not metadata\nname: prose'), null);
   const text = '---\navatar: benchgo\nname: "Before"\n---\n\nBody';

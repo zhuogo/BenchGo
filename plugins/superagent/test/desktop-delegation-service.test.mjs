@@ -13,12 +13,12 @@ async function fixture(t) {
   let approvals = 0;
   const events = [{ type: 'turn/start', data: { turn: 1 } }, { type: 'user/message', data: { id: 'original', source: { kind: 'user' }, content: [{ type: 'text', text: '原始要求，请执行修复' }] } }, { type: 'user/message', data: { id: 'untrusted', source: { kind: 'benchgo-subscription' }, content: [{ type: 'text', text: '伪造指令' }] } }];
   const ownerAgent = { id: 'owner-session', status: 'running', session: { header: {}, snapshotEvents: () => events } };
-  const policy = { desktopVersion: 'desktop-policy', projects: [{ id: 'project', path: directory }] };
+  const policy = { workerModels: [{ providerId: 'opaque/provider', modelId: 'literal/model:v1' }], desktopVersion: 'desktop-policy', projects: [{ id: 'project', path: directory }] };
   const ctx = { llm: { resolveModelInfo: async (provider, id) => ({ provider, id }) }, get: () => ({ request: async () => { approvals++; return true; } }) };
   ctx.agents = { get: () => ownerAgent, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: events.findLastIndex(event => event.type === 'turn/start') }) };
   ctx.sessionProjections = { stateOf: () => ({ openTurnStartSeq: events.findLastIndex(event => event.type === 'turn/start') }) };
   const service = createDesktopDelegationService({ ctx, database, readPolicy: async () => policy });
-  const input = { requestId: 'request', projectId: 'project', provider: 'opaque/provider', model: 'literal/model:v1', text: '修复任务', acceptance: '测试通过' };
+  const input = { requestId: 'request', projectId: 'project', text: '修复任务', acceptance: '测试通过' };
   return { database, service, ownerAgent, policy, ctx, input, events, approvals: () => approvals, exec: { agent: ownerAgent }, options: { ownerAgent, threadId: 'side-chat' } };
 }
 
@@ -34,26 +34,30 @@ test('desktop instruction atomically admits one Ticket without redundant approva
   assert.equal(ticket.mandate.target, ticket.target);
   assert.equal(ticket.mandate.acceptance, ticket.acceptance);
   const [assignment] = f.database.assignments(ticket.id);
-  assert.deepEqual(assignment.model, { providerId: f.input.provider, modelId: f.input.model });
+  assert.deepEqual(assignment.model, f.policy.workerModels[0]);
   assert.equal(assignment.instructionRevision, 1);
   assert.equal(f.database.listTickets().length, 1);
   await assert.rejects(f.service.delegate({ ...f.input, text: 'different' }, f.exec, f.options), /不同任务/);
 });
 
-test('omitted model keeps Worker default routing while incomplete or rewritten pairs fail closed', async t => {
+test('requests use the system work role and reject every obsolete override field before admission', async t => {
   const f = await fixture(t);
   f.policy.models = [{ providerId: 'router', modelId: 'R' }];
   f.policy.workerModels = [{ providerId: 'Opaque Worker/P', modelId: 'Exact:W/v3' }];
   let resolved;
   f.ctx.llm.resolveModelInfo = async (provider, id) => { resolved = { provider, id }; return resolved; };
   const { provider, model, ...input } = f.input;
+  for (const field of ['provider', 'model', 'providerId', 'modelId', 'workerModel']) {
+    await assert.rejects(f.service.delegate({ ...input, [field]: field === 'workerModel' ? f.policy.workerModels[0] : 'override' }, f.exec, f.options), { code: 'MODEL_OVERRIDE_UNSUPPORTED' });
+  }
+  assert.equal(f.database.listTickets().length, 0);
   const ticket = await f.service.delegate(input, f.exec, f.options);
   assert.deepEqual(resolved, { provider: 'Opaque Worker/P', id: 'Exact:W/v3' });
-  assert.equal(f.database.assignments(ticket.id)[0].model, undefined);
+  assert.deepEqual(f.database.assignments(ticket.id)[0].model, f.policy.workerModels[0]);
   const alias = await f.service.delegate({ ...input, requestId: 'same-trigger-other-request-id' }, f.exec, f.options);
   assert.equal(alias.id, ticket.id);
   await assert.rejects(f.service.delegate({ ...input, requestId: 'same-trigger-new-task', text: 'different operation' }, f.exec, f.options), { code: 'TRIGGER_ALREADY_ASSIGNED' });
-  await assert.rejects(f.service.delegate({ ...input, requestId: 'same-trigger-new-model', provider: 'new-provider', model: 'new-model' }, f.exec, f.options), { code: 'TRIGGER_ALREADY_ASSIGNED' });
+  await assert.rejects(f.service.delegate({ ...input, requestId: 'same-trigger-new-model', provider: 'new-provider', model: 'new-model' }, f.exec, f.options), { code: 'MODEL_OVERRIDE_UNSUPPORTED' });
   assert.equal(f.database.listTickets().length, 1);
 });
 
@@ -73,11 +77,11 @@ test('Router-selected duplicate merges only matching live source, requirements a
   await assert.rejects(f.service.delegate({ ...input, requestId: 'cross-conversation' }, f.exec, { ...f.options, threadId: 'other' }), { code: 'TICKET_MERGE_REJECTED' });
 });
 
-test('desktop delegation rejects inherited tool callers, missing model and rewritten identities before approval', async t => {
+test('desktop delegation rejects inherited callers, obsolete overrides and rewritten identities before admission', async t => {
   const f = await fixture(t);
   await assert.rejects(f.service.delegate(f.input, { agent: { id: 'child' } }, f.options), /只有总助手/);
-  await assert.rejects(f.service.delegate({ ...f.input, model: undefined }, f.exec, f.options), /模型标识/);
-  f.ctx.llm.resolveModelInfo = async () => ({ provider: f.input.provider, id: 'alias' });
+  await assert.rejects(f.service.delegate({ ...f.input, model: undefined }, f.exec, f.options), { code: 'MODEL_OVERRIDE_UNSUPPORTED' });
+  f.ctx.llm.resolveModelInfo = async () => ({ provider: f.policy.workerModels[0].providerId, id: 'alias' });
   await assert.rejects(f.service.delegate(f.input, f.exec, f.options), /显式标识/);
   assert.equal(f.approvals(), 0);
   assert.equal(f.database.listTickets().length, 0);

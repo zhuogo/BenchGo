@@ -104,6 +104,19 @@ export async function verifyPackagedPluginSeed(seed) {
   }
 }
 
+/** Startup and offline installation must ship the same reviewed enrollment code. */
+export async function verifyPackagedEnrollment(resources) {
+  for (const [source, target] of [
+    ['scripts/desktop/plugin-bundle.mjs', 'benchgo/plugin-bundle.mjs'],
+    ['plugins/benchgo/shared/plugin-install.mjs', 'benchgo/shared/plugin-install.mjs'],
+    ['plugins/benchgo/shared/update-feed.mjs', 'benchgo/shared/update-feed.mjs'],
+  ]) {
+    const expected = await readFile(join(root, source));
+    const actual = await readFile(join(resources, target));
+    if (!actual.equals(expected)) throw new Error(`Packaged BenchGo enrollment differs from source: ${target}`);
+  }
+}
+
 config.afterPack = async context => {
   await officialAfterPack?.(context);
   const require = createRequire(new URL('../../deepseek-harness/apps/desktop/package.json', import.meta.url));
@@ -117,6 +130,7 @@ config.afterPack = async context => {
     }
   }
   await verifyPackagedPluginSeed(`${context.appOutDir}/resources/benchgo/seed`);
+  await verifyPackagedEnrollment(`${context.appOutDir}/resources`);
 };
 config.publish = [{ provider: 'generic', url: 'https://ghfast.top/https://github.com/zhuogo/BenchGo/releases/download/app-updates/', channel: 'latest' }];
 config.nsis.shortcutName = 'BenchGo';

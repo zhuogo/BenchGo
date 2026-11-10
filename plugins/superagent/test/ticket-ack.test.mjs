@@ -100,19 +100,21 @@ test('inferred or machine intake does not announce a human acceptance', t => {
   }
 });
 
-test('acknowledgement cannot follow a completed, cancelled or already reviewed result', () => {
+test('acknowledgement cannot follow a completed, paused, stopped or already saved result', () => {
   const source = { channel: 'feishu', chatId: 'original' };
-  const ticket = { id: 'ticket', status: 'open', resultVersion: 0, mandate: { source } };
+  const ticket = { id: 'ticket', status: 'waiting', resultVersion: 0, mandate: { source } };
   const row = { ticketId: 'ticket', payload: { type: 'ticket.accepted', origin: 'router', ticketId: 'ticket', requestId: 'request', text: '我来查一下。', source } };
   const db = { getTicket: () => ticket };
   assert.equal(deliverySuppression(db, row), null);
   ticket.resultVersion = 1;
   assert.equal(deliverySuppression(db, row), 'ack-superseded');
   ticket.resultVersion = 0;
-  for (const status of ['completed', 'failed', 'cancelled', 'cancelling', 'paused']) {
-    ticket.status = status; assert.equal(deliverySuppression(db, row), 'ack-superseded');
+  ticket.status = 'completed'; assert.equal(deliverySuppression(db, row), 'ack-superseded');
+  ticket.status = 'waiting';
+  for (const flag of ['paused', 'pauseRequested', 'stopRequested', 'stopped']) {
+    ticket.executionControl = { [flag]: true }; assert.equal(deliverySuppression(db, row), 'ack-superseded');
   }
-  ticket.status = 'open'; row.payload.source = { channel: 'feishu', chatId: 'wrong' };
+  ticket.executionControl = {}; row.payload.source = { channel: 'feishu', chatId: 'wrong' };
   assert.equal(deliverySuppression(db, row), 'source-mismatch');
 });
 

@@ -28,7 +28,7 @@ test('reserve atomically creates one claimed router-only Assignment and prepared
   const f = await fixture(t), now = Date.now();
   const reserved = f.db.reserveRouterAction({ ...f.input, now });
   assert.equal(reserved.duplicate, false);
-  assert.equal(reserved.ticket.status, 'open');
+  assert.equal(reserved.ticket.status, 'running');
   assert.equal(reserved.assignment.state, 'claimed');
   assert.equal(reserved.assignment.owner, f.owner);
   assert.equal(reserved.assignment.fence, 1);
@@ -103,7 +103,7 @@ test('policy revocation at settle preserves observed receipt but refuses false c
     receipt: { revision: 2 }, readback: { revision: 2 }, verified: true, now: now + 1, validateMandate: () => false });
   assert.equal(result.state, 'uncertain');
   assert.deepEqual(f.db.getRouterAction(f.sessionId, f.callId).receipt, { revision: 2 });
-  assert.equal(f.db.getTicket(reserved.ticket.id).status, 'open');
+  assert.equal(f.db.getTicket(reserved.ticket.id).status, 'waiting');
   assert.equal(f.db.results(reserved.ticket.id).length, 0);
   assert.equal(f.db.deliveries(reserved.ticket.id).length, 0);
 });

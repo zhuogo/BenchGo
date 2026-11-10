@@ -1,3 +1,5 @@
+import { isChatUserMessage, readAdmittedQuestionReply } from '../src/question-reply.mjs';
+
 const replyText = call => {
   const args = call.args;
   if (!args || args.invalid || args.keys().some(key => key !== 'text')) return null;
@@ -11,14 +13,16 @@ function activeIdentity(history, rows, turn, users) {
   if (!Number.isSafeInteger(turn) || rows.turnEnds?.has(turn)) return null;
   const active = history.activeReply;
   if (active) return active.turn === turn && users.has(active.requestId) ? active : null;
-  const node = [...(rows.nodes || [])].reverse().find(item => ['user', 'steering'].includes(item.kind) && item.source?.kind === 'user');
+  const node = [...(rows.nodes || [])].reverse().find(item => ['user', 'steering'].includes(item.kind) && isChatUserMessage(item));
   if (!node || !Number.isFinite(node.seq)) return null;
   const priorEnd = Math.max(-1, ...[...(rows.turnEnds || [])].filter(([ended]) => ended < turn).map(([, seq]) => seq));
   if (node.seq <= priorEnd) return null;
+  const question = readAdmittedQuestionReply(node);
+  if (node.source.kind === 'user-question-reply' && !question) return null;
   const rpcId = node.source.rpcId || node.source.requestId;
-  const user = [...users.values()].find(item => item.seq === node.seq || (rpcId && item.rpcId === rpcId));
+  const user = [...users.values()].find(item => item.seq === node.seq || (rpcId && item.rpcId === rpcId) || (question && item.callId === question.callId));
   if (user) return { turn, requestId: user.id };
-  const receipt = (history.requests || []).find(item => rpcId && item.requestId === rpcId
+  const receipt = (history.requests || []).find(item => ((rpcId && item.requestId === rpcId) || (question && item.questionReply?.callId === question.callId))
     && item.sessionId === history.sessionId && typeof item.messageId === 'string'
     && ['processing', 'prepared'].includes(item.status));
   return receipt ? { turn, requestId: receipt.messageId } : null;

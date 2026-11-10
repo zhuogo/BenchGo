@@ -5,7 +5,7 @@ import { assessCandidates } from '../src/assessment.mjs';
 
 const candidates = [{ candidateId: 'c', trigger: { id: 't', threadId: 'thread' }, context: { threadId: 'thread', messages: [{ triggerId: 'context' }] } }];
 function reader() {
-  return createAssessmentSourceReader({ candidates, database: { getTrigger: id => ({ id, threadId: 'thread', content: 'x'.repeat(4000) + 'original tail', contentHash: 'hash' }) } });
+  return createAssessmentSourceReader({ candidates, database: { readIntakeEvent: id => ({ id, threadId: 'thread', content: 'x'.repeat(4000) + 'original tail', contentHash: 'hash' }) } });
 }
 test('source reads page original text and refuse hidden IDs, invalid ranges and excess requests', async () => {
   const read = reader();
