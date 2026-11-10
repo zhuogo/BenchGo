@@ -142,6 +142,25 @@ test('a decided queued approval is suppressed at dispatch without interrupting a
   assert.equal(f.state().requests[0].suppressed, true);
 });
 
+test('host approval binding survives queued restart and uses the actual owner thread instead of signal lookalikes', async () => {
+  const signal = { kind: 'approval', eventKey: 'approval:worker:official-id', ticketId: 'ticket',
+    sessionId: 'worker', approvalId: 'official-id', callId: 'call', actionId: 'action', assignmentId: 'assignment', runId: 'run',
+    ownerThreadId: 'forged-thread', approval: { actionId: 'FORGED_NESTED_ACTION' }, privateValue: 'PRIVATE' };
+  const first = fixture(); first.agent.status = 'running';
+  const queued = await first.inbox.enqueueTicketReply({ threadId: 'main', signal });
+  const restored = fixture(JSON.parse(JSON.stringify(first.state())));
+  await restored.inbox.recover(); await restored.inbox.settle('main');
+  const expected = { sessionId: 'worker', callId: 'call', approvalId: 'official-id', actionId: 'action',
+    ticketId: 'ticket', assignmentId: 'assignment', runId: 'run', ownerThreadId: 'main', eventKey: signal.eventKey };
+  assert.equal(restored.sent.length, 1);
+  assert.equal(restored.sent[0].id, queued.messageId);
+  assert.deepEqual(restored.sent[0].source.approval, expected);
+  assert.doesNotMatch(JSON.stringify(restored.sent[0].source), /FORGED|PRIVATE|forged-thread/);
+  await restored.finish({ kind: 'completed' });
+  await restored.inbox.enqueueTicketReply({ threadId: 'main', signal });
+  assert.equal(restored.sent.length, 1, 'restoring a reminder must not replay or create an approval');
+});
+
 test('queued human messages take priority over state notices, which stay out of the user inbox', async () => {
   const f = fixture();
   f.agent.status = 'running';

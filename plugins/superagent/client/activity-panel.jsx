@@ -90,7 +90,7 @@ export function ActivityTrigger({ api }) {
   const label = open ? '收起看板' : '展开看板';
   return <Tooltip label={label} side="bottom" delayMs={450} portal><Button variant="ghost" ref={trigger} type="button" className="ba-activity-trigger" aria-label={label} aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}><IconPanelLeftOutlineRegular className="ba-activity-panel-icon" size={15} />{count > 0 && <span className="ba-activity-count" aria-hidden="true">{count}</span>}</Button></Tooltip>;
 }
-export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId, ctx, SessionProvider, renderSlot, onOpenExecution }) {
+export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId, ctx, SessionProvider, renderSlot, onOpenExecution, onOpenReminder }) {
   const { open, id, close } = useContext(ActivityContext);
   const [confirm, confirmation] = useConfirmation();
   const [manualRefreshing, setManualRefreshing] = useState(false);
@@ -215,7 +215,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
           {rows !== null && active.length > 0 && <section className="ba-board-section"><button type="button" className="ba-board-section-head" aria-expanded={activeOpen} aria-controls={`${id}-active`} onClick={() => setActiveOpen(value => !value)}><span>进行中</span><span className="ba-board-section-count">{active.length}</span><UIIcon name="chevronDown" size={13} /></button><div id={`${id}-active`} hidden={!activeOpen}>{active.map(renderRow)}</div></section>}
           {rows !== null && [...groups].map(([label, items]) => <section className="ba-activity-day ba-board-section" key={label}><h3 className="ba-board-day">{label}<span>{items.length}</span></h3>{items.map(renderRow)}</section>)}
           {rows !== null && !sorted.length && !error && <BoardEmpty identity={identity} onReturn={close} />}</>}
-        {ctx && SessionProvider && renderSlot ? (reviewStarted || open) && <div hidden={tab !== 'approvals'}><ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} compact active={open} onCountChange={setApprovalCount} /></div> : tab === 'approvals' && <ResourceState kind="error" title="审核会话暂不可用" description="请前往任务管理连接原审批会话。" actionLabel="前往审核" onAction={() => openResource('approvals')} />}
+        {ctx && SessionProvider && renderSlot ? (reviewStarted || open) && <div hidden={tab !== 'approvals'}><ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} compact active={open} onCountChange={setApprovalCount} onOpenReminder={id => { close(); onOpenReminder?.(id); }} /></div> : tab === 'approvals' && <ResourceState kind="error" title="审核会话暂不可用" description="请前往任务管理连接原审批会话。" actionLabel="前往审核" onAction={() => openResource('approvals')} />}
         {tab === 'identity' && <section className="ba-board-section"><div className="ba-board-section-intro"><h3>身份与概览</h3><p>你的助手，你的工作方式。</p></div>
           {(identityError || error) && <ResourceState kind="error" title={identityError && error ? '暂时无法更新看板' : identityError ? '暂时无法更新身份' : '暂时无法更新任务统计'} description={identityError && error ? '任务与身份信息暂时无法同步，请检查连接后重试。' : identityError ? identity ? '当前显示上次的身份信息，请重试。' : '身份信息暂时无法读取，请重试。' : rows !== null ? '已保留上次的任务统计，请重试。' : '任务统计暂时无法读取，请重试。'} onAction={refreshAll} />}
           {!identity && !identityError && <ResourceState kind="loading" title="正在读取身份" description="正在同步助手形象与配置。" />}

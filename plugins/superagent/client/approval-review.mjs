@@ -68,3 +68,34 @@ export function reviewSessionOpenError(reference) {
   const state = reference.binding.session.getSnapshot();
   return state.openState === 'open' ? '' : reviewConnectionError(state.openError ?? new Error(`会话尚未打开（${state.openState}）`));
 }
+
+/** The host binding identifies a reminder; never compare its durable id to PendingApproval.key. */
+export function reviewReminderMatches(row, entry) {
+  const binding = row?.approval, { origin, pending } = entry || {};
+  if (row?.role !== 'assistant' || !row.requestId || !binding || !origin || !pending?.answerable) return false;
+  if (!binding.approvalId || binding.eventKey !== `approval:${binding.sessionId}:${binding.approvalId}`) return false;
+  if (!pending.callId || binding.callId !== pending.callId || binding.sessionId !== pending.sessionId
+    || binding.sessionId !== origin.sessionId || binding.ownerThreadId !== origin.ownerThreadId) return false;
+  if (origin.kind === 'worker' && !['ticketId', 'assignmentId', 'runId'].every(key => origin[key] && binding[key] === origin[key])) return false;
+  if (pending.toolName !== 'assistant_external_action') return false;
+  try {
+    const reason = pending.reason;
+    if (!reason?.startsWith('批准本次具体外部动作（仅本次有效）：\n')) return false;
+    const action = JSON.parse(reason.slice(reason.indexOf('\n') + 1));
+    return !!binding.actionId && action.actionId === binding.actionId;
+  } catch { return false; }
+}
+
+/** Read the existing publication history without creating or changing any approval. */
+export async function findReviewReminder(api, entry) {
+  let before;
+  const seen = new Set();
+  for (let page = 0; page < 20; page++) {
+    const history = await api('history', { threadId: entry.origin.ownerThreadId, ...(before == null ? {} : { before }) });
+    const row = (history.messages || []).find(value => reviewReminderMatches(value, entry));
+    if (row) return row;
+    if (!history.hasMore || history.nextBefore == null || seen.has(history.nextBefore)) break;
+    before = history.nextBefore; seen.add(before);
+  }
+  throw new Error('暂未找到这次审批对应的对话提醒，请稍后重试。');
+}

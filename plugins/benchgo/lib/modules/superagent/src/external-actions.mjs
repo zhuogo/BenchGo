@@ -68,7 +68,7 @@ export function createExternalActionService({ store, registry, getContext, reque
         const grant = action.state === 'pending' && action.origin && store.matchSite(action, identity(context));
         if (!grant && action.state === 'pending') {
           const outcome = await requestApproval({ exec, action: publicAction(frozen),
-            reason: '批准本次具体外部动作（仅本次有效）：\n' + JSON.stringify({ category: action.category, origin: action.origin, target: action.target, content: action.content }) });
+            reason: '批准本次具体外部动作（仅本次有效）：\n' + JSON.stringify({ actionId: action.id, category: action.category, origin: action.origin, target: action.target, content: action.content }) });
           context = await current(exec);
           action = store.decide(action.id, outcome === 'allowed-once', context, identity(context));
           if (action.state === 'denied') return publicAction(action);

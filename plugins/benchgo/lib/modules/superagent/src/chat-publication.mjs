@@ -3,6 +3,7 @@ import { fallbackRequestIds, readModelFallbacks } from './model-fallback.mjs';
 import { questionBatch, questionAnswers, questionReplyText, readQuestionReply } from './question-reply.mjs';
 import { ticketStateSource } from './ticket-state-report.mjs';
 import { ticketReplySource } from './ticket-reply.mjs';
+import { approvalChatBinding } from './approval-chat-binding.mjs';
 
 export const chatPublicationType = 'plugin:benchgo-plugin/chat-publication';
 export const executionInputSource = 'benchgo-execution-input';
@@ -88,8 +89,12 @@ export function projectChatMessages(events) {
         if (users.has(row.requestId) && !published.has(row.requestId) && !row.suppressed
           && typeof row.text === 'string' && row.text.trim() && row.text.length <= 16000) {
           published.add(row.requestId);
+          const source = requests.get(row.requestId).source;
+          const approval = source.replyKind === 'approval' && row.ticketReplyEventKey === source.eventKey
+            && source.approval?.ticketId === source.ticketId && source.approval?.eventKey === source.eventKey
+            ? approvalChatBinding(source.approval) : null;
           rows.push({ seq: event.seq, id: `reply:${row.requestId}`, role: 'assistant', kind: 'final', requestId: row.requestId,
-            text: row.text, content: [{ type: 'text', text: row.text }], time: event.time });
+            text: row.text, content: [{ type: 'text', text: row.text }], time: event.time, ...(approval ? { approval } : {}) });
         }
         continue;
       }

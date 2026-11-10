@@ -18,6 +18,8 @@ async function fixture() {
   const bundle = await build({ stdin: { resolveDir: root, loader: 'jsx', contents: `
     import React,{createContext,useContext} from 'react';import {createRoot} from 'react-dom/client';
     import {ApprovalReview,OfficialReviewApproval} from './plugins/superagent/client/approval-review.jsx';
+    import {QuietChat} from './plugins/superagent/client/quiet-chat.jsx';
+    import {approvalReminderNavigation} from './plugins/superagent/client/approval-flow.mjs';
     import {ApprovalCard} from './deepseek-harness/packages/client/ui-approval/src/client/ApprovalCard.tsx';
     import {PendingApproval} from './deepseek-harness/packages/client/ui-approval/src/client/contract/slots.ts';
     import css from './plugins/superagent/client/style.css';import hostCss from './plugins/benchgo/client/style.css';
@@ -31,7 +33,7 @@ async function fixture() {
     window.renderScenario=(mode='data')=>{
       window.answers=[];window.calls=[];window.retains=[];window.releases=[];window.trace=[];window.reviewCounts=[];window.mode=mode;const listeners=new Set();
       const controller=new AbortController();
-      const frozen={category:'external-send',origin:null,target:{channel:'feishu',chatId:'private-chat'},content:{text:'BENCHGO_APPROVAL_ONCE'}};
+      const frozen={actionId:'action-original',category:'external-send',origin:null,target:{channel:'feishu',chatId:'private-chat'},content:{text:'BENCHGO_APPROVAL_ONCE'}};
       const worker=new PendingApproval('worker-session',{toolName:'assistant_external_action',callId:'call-original',reason:'批准本次具体外部动作（仅本次有效）：\\n'+JSON.stringify(frozen),signal:controller.signal});
       const router=new PendingApproval('router-side',{toolName:'assistant_ticket_change',callId:'router-call',reason:'扩大任务范围以调查新的站点？'});
       const unrelated=new PendingApproval('unrelated-session',{toolName:'other',reason:'不得出现的无来源审批'});unrelated.result.catch(()=>{});
@@ -41,20 +43,24 @@ async function fixture() {
       router.result.then(value=>{window.answers.push({sessionId:router.sessionId,value});statuses=new Map(statuses);statuses.delete(router.sessionId);publish();},()=>{});
       const origin={kind:'worker',ticketId:'ticket',title:'发送飞书验证消息',sourceTitle:'主聊天',assignmentId:'assignment',runId:'run',sessionId:'worker-session',ownerThreadId:'main',ownerSessionId:'router-main'};
       const routerOrigin={kind:'router',title:'扩展调研范围',sourceTitle:'客户研究旁聊',sessionId:'router-side',ownerSessionId:'router-side',ownerThreadId:'side'};
+      const reminder={id:'reply:reminder',requestId:'reminder',seq:1,role:'assistant',kind:'final',text:'飞书消息已备好，请你决定是否发送。',approval:{sessionId:'worker-session',callId:'call-original',approvalId:'asked-original',actionId:'action-original',ticketId:'ticket',assignmentId:'assignment',runId:'run',ownerThreadId:'main',eventKey:'approval:worker-session:asked-original'}};
       let origins=[origin,routerOrigin,{kind:'router',title:'普通提问',sessionId:'question-session',ownerSessionId:'question-session',ownerThreadId:'question'}];
       window.addReviewCopies=()=>{for(let index=0;index<24;index++){const sessionId='extra-'+index;const pending=new PendingApproval(sessionId,{toolName:'assistant_external_action',reason:'受控验证动作 '+index});pending.result.catch(()=>{});statuses.set(sessionId,{pendingInteraction:pending});origins.push({...origin,title:'受控验证动作 '+index,sessionId,runId:'run-'+index});}statuses=new Map(statuses);publish();document.dispatchEvent(new Event('benchgo:assistant-changed'));};
       window.stop=()=>{origins=origins.filter(item=>item!==origin);controller.abort(Error('工单已停止'));statuses=new Map(statuses);statuses.delete(worker.sessionId);publish();document.dispatchEvent(new Event('benchgo:assistant-changed'));};
       window.answerElsewhere=()=>worker.answer('rejected');window.removeRouter=()=>{origins=origins.filter(item=>item!==routerOrigin);document.dispatchEvent(new Event('benchgo:assistant-changed'));};
       const opened=new Map();window.failOpened=(id)=>{const entry=opened.get(id);entry.state={openState:'error',openError:Error('会话已断开',{cause:Error('原始日志无法读取')})};for(const listener of entry.listeners)listener();};
       const ctx={uiSession:{sessionStatus:{subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn);},getSnapshot:()=>statuses}},sessions:{retain:(id)=>{window.retains.push(id);window.trace.push('retain:'+id);if(window.mode==='connection-error')throw Error('断开连接');const entry={listeners:new Set(),state:{openState:window.mode==='open-error'?'error':'open',openError:window.mode==='open-error'?Error('读取会话失败',{cause:Error('system event must be first')}):null}};opened.set(id,entry);const binding={session:{getSnapshot:()=>entry.state,subscribe:fn=>{entry.listeners.add(fn);return()=>entry.listeners.delete(fn);}}};return {id,sessionId:id,binding,ready:window.mode==='open-reject'?Promise.reject(Error('打开请求被拒绝')):Promise.resolve(binding),release(){window.releases.push(id);}};}}};
-      const api=async(action,input,signal)=>{window.calls.push({action,input});if(!['approvalOrigins','ensure'].includes(action))throw Error('obsolete API');
+      const api=async(action,input,signal)=>{window.calls.push({action,input});if(action==='history')return {messages:input.before?[reminder]:[],hasMore:!input.before,nextBefore:input.before?null:100};if(!['approvalOrigins','ensure'].includes(action))throw Error('obsolete API');
         if(action==='ensure'){window.trace.push('ensure:'+input.threadId);if(input.threadId==='side'&&window.mode==='ensure-error')throw Error('对话准备失败');
           if(input.threadId==='side'&&window.mode==='ensure-wait')return new Promise(resolve=>{window.completeEnsure=resolve;signal?.addEventListener('abort',()=>window.trace.push('abort-ensure:side'),{once:true});});
           return {sessionId:input.threadId==='side'?(window.mode==='replacement'?'router-new':'router-side'):'question-session'};}
         if(window.mode==='loading')return new Promise(()=>{});if(window.mode==='transient')throw new TypeError('Failed to fetch');if(window.mode==='error')throw Error('审核服务暂时不可用');
         return {origins:window.mode==='empty'?[]:input.sessionId?origins.filter(origin=>origin.sessionId===input.sessionId):origins};};
       let active=true;const scenarioKey=++serial;const counts=value=>window.reviewCounts.push(value);
-      const render=()=>root.render(<div key={scenarioKey} className='ba-root'><style>{hostCss}{css}</style><main style={{padding:24,maxWidth:1120,margin:'auto',boxSizing:'border-box'}}><ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={()=> <CardSlot/>} compact={mode==='compact'} active={active} onCountChange={counts}/>{mode==='double'&&<ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={()=> <CardSlot/>}/>}</main></div>);
+      let loaded=false;window.loadCalls=0;
+      const render=()=>root.render(<div key={scenarioKey} className='ba-root'><style>{hostCss}{css}</style><main style={{padding:24,maxWidth:1120,margin:'auto',boxSizing:'border-box'}}><ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={()=> <CardSlot/>} compact={mode==='compact'} active={active} onCountChange={counts} onOpenReminder={mode==='inline'?()=>{window.navigated=true;render();}:undefined}/>{mode==='inline'&&<QuietChat home={{ctx,api,threadId:'main',sessionId:'router-main',sessionStatus:ctx.uiSession.sessionStatus,SessionProvider,renderSlot:()=> <CardSlot/>,history:{messages:loaded?[reminder]:[],hasMore:!loaded},onLoadEarlier:async()=>{window.loadCalls++;loaded=true;render();}}} session={{running:false}}/>}{mode==='double'&&<ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={()=> <CardSlot/>}/>}</main></div>);
+      window.loadReminder=()=>{loaded=true;render();};
+      window.approvalTarget=()=>approvalReminderNavigation.getSnapshot();
       window.setReviewActive=value=>{active=value;render();};render();
     };
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-review-ui-test'), format: 'iife', jsx: 'automatic',
@@ -189,6 +195,42 @@ test('review Tab renders official Worker and Router approvals in four states; de
     assert.equal(await page.locator('[data-session-scope="worker-session"]').count(), 0);
     assert.deepEqual(await page.evaluate(()=>window.answers), []);
     assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('trusted Router reminder mounts the same official card and review navigation loads and focuses its exact historical message', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    const page = await browser.newPage(), errors = [];
+    page.setDefaultTimeout(6000); page.on('pageerror', error => errors.push(error.message));
+    const html = await fixture();
+    await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort());
+    await page.goto('http://localhost/');
+    await page.evaluate(() => window.renderScenario('inline'));
+    await page.getByRole('button', { name: /发送飞书验证消息 主聊天/ }).click();
+    await page.getByRole('button', { name: '查看对话中的审批', exact: true }).click();
+    const message = page.locator('[data-approval-request="reminder"]');
+    await message.locator('[data-call-id="call-original"]').waitFor();
+    assert.equal(await page.evaluate(() => window.loadCalls), 1, 'loads only the missing history page');
+    assert(await message.evaluate(node => document.activeElement === node), 'focuses the exact original reminder');
+    assert.equal(await page.evaluate(() => window.approvalTarget()), null, 'consumes only the matched navigation intent');
+    assert.deepEqual(await page.evaluate(() => window.calls.filter(call => call.action === 'history').map(call => call.input)), [{ threadId: 'main' }, { threadId: 'main', before: 100 }]);
+    assert.equal(await page.getByRole('button', { name: '允许本次', exact: true }).count(), 2, 'review and inline display one native PendingApproval');
+    if (process.env.BENCHGO_REVIEW_SCREENSHOTS) await page.screenshot({ path: join(process.env.BENCHGO_REVIEW_SCREENSHOTS, 'inline-pending.png'), fullPage: true });
+    await message.getByRole('button', { name: '允许本次', exact: true }).click();
+    await page.waitForFunction(() => window.answers.length === 1);
+    assert.deepEqual(await page.evaluate(() => window.answers), [{ sessionId: 'worker-session', value: 'allowed-once' }]);
+    await page.getByRole('button', { name: '允许本次', exact: true }).waitFor({ state: 'hidden' });
+    assert.equal(await message.count(), 1, 'settlement preserves the Router message');
+    await page.evaluate(() => window.renderScenario('inline'));
+    await page.getByRole('button', { name: /发送飞书验证消息 主聊天/ }).click();
+    await page.evaluate(() => window.loadReminder());
+    await message.getByRole('button', { name: '拒绝', exact: true }).waitFor();
+    await page.evaluate(() => window.stop());
+    await message.getByRole('button', { name: '拒绝', exact: true }).waitFor({ state: 'hidden' });
+    assert.deepEqual(await page.evaluate(() => window.answers), [], 'stop invalidates both cards without answering');
+    assert.deepEqual(errors, []);
+    if (process.env.BENCHGO_REVIEW_SCREENSHOTS) await page.screenshot({ path: join(process.env.BENCHGO_REVIEW_SCREENSHOTS, 'inline-settled.png'), fullPage: true });
   } finally { await browser.close(); }
 });
 

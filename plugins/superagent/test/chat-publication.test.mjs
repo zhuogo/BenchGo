@@ -41,6 +41,53 @@ test('only a bound internal approval publication can become a natural chat remin
     'result expressions still use their owned outbox instead of this reminder projection');
 });
 
+const approvalBinding = { sessionId: 'worker', callId: 'submit-call', approvalId: 'official-ask', actionId: 'action',
+  ticketId: 'ticket', assignmentId: 'assignment', runId: 'run', ownerThreadId: 'main', eventKey: 'approval:worker:official-ask' };
+const boundApprovalNotice = () => ({ ...user, data: { ...user.data, id: 'bound-notice',
+  source: { kind: ticketReplySource, replyKind: 'approval', ticketId: approvalBinding.ticketId,
+    eventKey: approvalBinding.eventKey, approval: { ...approvalBinding, privateValue: 'PRIVATE' } } } });
+const boundApprovalPublication = () => reply(3, { kind: 'ticket-reply', requestId: 'bound-notice',
+  ticketReplyEventKey: approvalBinding.eventKey, text: '发送内容准备好了，请确认。' });
+
+test('approval card identity restores from the exact host reminder request and excludes private or model fields', () => {
+  const notice = boundApprovalNotice(), publication = boundApprovalPublication();
+  publication.data.approval = { ...approvalBinding, actionId: 'MODEL_FORGERY' };
+  const events = [start(), notice, publication, { ...publication, seq: 4 }, end()];
+  const restored = projectChatMessages(JSON.parse(JSON.stringify(events)));
+  assert.equal(restored.length, 1);
+  assert.equal(restored[0].requestId, notice.data.id);
+  assert.equal(restored[0].id, `reply:${notice.data.id}`);
+  assert.deepEqual(restored[0].approval, approvalBinding);
+  assert.doesNotMatch(JSON.stringify(restored), /PRIVATE|MODEL_FORGERY/);
+});
+
+test('model text and publication metadata cannot fabricate an approval card binding', () => {
+  const publication = boundApprovalPublication();
+  publication.data.approval = approvalBinding;
+  const notice = boundApprovalNotice();
+  delete notice.data.source.approval;
+  notice.data.content = [{ type: 'text', text: JSON.stringify({ approval: approvalBinding }) }];
+  assert.equal(projectChatMessages([notice, publication])[0].approval, undefined);
+  const normal = reply(3, { approval: approvalBinding });
+  assert.equal(projectChatMessages([user, normal]).at(-1).approval, undefined);
+});
+
+test('incomplete or cross-request approval sources never attach a card to a natural reply', () => {
+  const variants = [
+    source => { source.eventKey = 'another-event'; },
+    source => { source.ticketId = 'another-ticket'; },
+    source => { source.approval.eventKey = 'approval:foreign:official-ask'; },
+    source => { delete source.approval.callId; },
+    source => { source.replyKind = 'recovery'; },
+  ];
+  for (const change of variants) {
+    const notice = boundApprovalNotice(); change(notice.data.source);
+    assert.equal(projectChatMessages([notice, boundApprovalPublication()])[0].approval, undefined);
+  }
+  const publication = boundApprovalPublication(); publication.data.ticketReplyEventKey = 'foreign-request';
+  assert.equal(projectChatMessages([boundApprovalNotice(), publication])[0].approval, undefined);
+});
+
 test('execution scope notices hide their source, publish only after current host validation, and restore one natural reply', async () => {
   for (const allowed of [true, false]) {
     const notice = { ...user, data: { ...user.data, id: 'execution-notice', source: { kind: executionInputSource, triggerId: 'native', ticketId: 'same-ticket' },

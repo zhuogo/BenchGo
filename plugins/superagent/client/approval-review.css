@@ -10,3 +10,5 @@
 .ba-approval-review[hidden],.ba-review-overview[hidden]{display:none!important}
 .ba-review-heading>div{min-width:0}.ba-review-heading .bg-ui-button{display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
 .ba-approval-review.is-compact .ba-review-heading{gap:8px;padding-bottom:16px}.ba-approval-review.is-compact .ba-review-heading p{font-size:12px}.ba-approval-review.is-compact .ba-review-detail{border:0;border-radius:0;padding:0;background:transparent}.ba-approval-review.is-compact .ba-review-detail h3{font-size:15px}.ba-approval-review.is-compact .ba-review-row{padding:12px 4px}.ba-approval-review.is-compact .ba-review-heading .bg-ui-button{padding-inline:8px}
+
+.ba-review-inline{margin-top:14px;max-width:640px}.ba-review-detail.is-inline{padding:18px 20px;border-radius:12px;background:color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 94%,var(--ba-review-accent))}.ba-review-detail.is-inline h3{font-size:14px}.ba-review-detail.is-inline>header{gap:5px;padding-bottom:14px}.ba-review-detail.is-inline .ba-review-action{gap:12px;padding:14px 0;margin-bottom:14px}.ba-review-reminder-link{margin-top:14px}

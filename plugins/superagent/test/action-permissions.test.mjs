@@ -64,7 +64,11 @@ test('frozen action binds final content, actor, Mandate, run and once-only consu
 test('registered high-risk submit requests official once approval and concurrent/restart retries cannot duplicate', async t => {
   const store = open(t), registry = createExternalActionRegistry(); let sends = 0, asks = 0;
   registry.register({ id: 'send', category: 'external-send', inputSchema, prepare: async () => prepared, submit: async action => { sends++; assert.equal(Object.isFrozen(action.content), true); return { status: 'accepted', receiptId: 'receipt' }; } });
-  const options = { store, registry, getContext: async () => context(), requestApproval: async ({ action }) => { asks++; assert.deepEqual(action.content, prepared.content); assert.equal(action.submission, undefined); return 'allowed-once'; } };
+  const options = { store, registry, getContext: async () => context(), requestApproval: async ({ action, reason }) => {
+    asks++; assert.deepEqual(action.content, prepared.content); assert.equal(action.submission, undefined);
+    assert.deepEqual(JSON.parse(reason.slice(reason.indexOf('\n') + 1)), { actionId: action.id, category: action.category, origin: action.origin, target: action.target, content: action.content });
+    return 'allowed-once';
+  } };
   let service = createExternalActionService(options);
   const action = await service.prepare({ adapterId: 'send', input: {}, requestId: 'send' }, exec());
   const results = await Promise.all([service.submit({ actionId: action.id }, exec()), service.submit({ actionId: action.id }, exec())]);

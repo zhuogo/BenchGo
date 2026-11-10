@@ -4,8 +4,9 @@ import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 import { ResourceState } from './resource-state.jsx';
 import { retainAssistantSession } from './session-retain.mjs';
-import { reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewDisplayText, reviewSessionOpenError, reviewRequestKey, sameReviewOrigin } from './approval-review.mjs';
+import { findReviewReminder, reviewReminderMatches, reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewDisplayText, reviewSessionOpenError, reviewRequestKey, sameReviewOrigin } from './approval-review.mjs';
 import css from './approval-review.css';
+import { approvalReminderNavigation } from './approval-flow.mjs';
 import { transientRefreshError } from './refresh-error.mjs';
 
 const ApprovalContext = createContext(null), EMPTY_STATUSES = new Map();
@@ -28,15 +29,24 @@ export function OfficialReviewApproval({ renderFactorySlot }) {
   });
 }
 
-function ApprovalDetail({ entry, api, current, SessionProvider, renderSlot }) {
-  const [error, setError] = useState(''), alive = useRef(false);
+export function ApprovalDetail({ entry, api, current, SessionProvider, renderSlot, inline = false, onOpenReminder }) {
+  const [error, setError] = useState(''), [opening, setOpening] = useState(false), alive = useRef(false);
   const { origin, pending, reference } = entry;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, [pending]);
   const details = reviewActionDetails(pending), target = details?.target;
   const source = reviewDisplayText(origin.sourceTitle || (origin.ownerThreadId === 'main' ? '主聊天' : '旁聊'));
   const readOrigins = async () => (await api('approvalOrigins', { sessionId: origin.sessionId, toolName: pending.toolName })).origins || [];
   const content = details?.content?.text ?? (details ? JSON.stringify(details.content, null, 2) : null);
-  return <article className="ba-review-detail" aria-label="审核详情">
+  const openReminder = async () => {
+    setOpening(true); setError('');
+    try {
+      const row = await findReviewReminder(api, entry);
+      if (!alive.current || !current.current?.some(item => item.pending === pending && sameReviewOrigin(item.origin, origin))) throw new Error('审批已处理或失效');
+      approvalReminderNavigation.open(row); onOpenReminder?.(origin.ownerThreadId);
+    } catch (cause) { if (alive.current) setError(reviewConnectionError(cause)); }
+    finally { if (alive.current) setOpening(false); }
+  };
+  return <article className={`ba-review-detail${inline ? ' is-inline' : ''}`} aria-label="审核详情">
     <header><span className="ba-review-eyebrow">{source} · {origin.kind === 'worker' ? '任务操作' : '对话操作'}</span><h3>{reviewDisplayText(origin.title || '待授权操作')}</h3></header>
     {details && <section className="ba-review-action" aria-label="本次动作对象与内容"><dl>
       <div><dt>动作</dt><dd>{({ 'external-send': '对外发送与分享', payment: '支付购买', 'password-change': '修改密码', 'account-delete': '删除账号' })[details.category] || details.category}</dd></div>
@@ -47,6 +57,7 @@ function ApprovalDetail({ entry, api, current, SessionProvider, renderSlot }) {
     <ApprovalContext.Provider value={{ pending, origin, readOrigins, isCurrent: () => alive.current && current.current?.some(item => item.pending === pending && sameReviewOrigin(item.origin, origin)), onError: setError }}>
       <SessionProvider session={reference}>{renderSlot(REVIEW_APPROVAL_SLOT, {})}</SessionProvider>
     </ApprovalContext.Provider>
+    {!inline && onOpenReminder && <Button variant="link" type="button" className="ba-review-reminder-link" disabled={opening} onClick={openReminder}>{opening ? '正在定位原提醒…' : '查看对话中的审批'}</Button>}
     {error && <p className="ba-review-decision-error" role="alert">{error}</p>}
   </article>;
 }
@@ -61,40 +72,31 @@ function ConnectionErrors({ items }) {
 function releaseConnection(item) { item.controller.abort(); item.unsubscribe?.(); item.reference?.release(); }
 
 /** One owner-scoped index; requests and answers remain in official Session scopes. */
-export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact = false, active = true, onCountChange }) {
+export function useApprovalIndex({ ctx, api, enabled = true, ownerThreadId }) {
   const [origins, setOrigins] = useState(null), [error, setError] = useState(''), [generation, setGeneration] = useState(0);
-  const [connections, setConnections] = useState(new Map()), [selectedKey, setSelectedKey] = useState(null);
+  const [connections, setConnections] = useState(new Map());
   const [lastFailure, setLastFailure] = useState('');
   const originsSnapshot = useRef(null), manualRetry = useRef(false);
-  const source = ctx.uiSession?.sessionStatus;
+  const source = ctx?.uiSession?.sessionStatus;
   const statuses = useSyncExternalStore(listener => source?.subscribe(listener) || (() => {}), () => source?.getSnapshot() || EMPTY_STATUSES);
-  const retained = useRef(new Map()), current = useRef([]), back = useRef(null), navigation = useRef(null);
-  const openDetail = (key, event) => {
-    const positions = [];
-    for (let node = event.currentTarget.parentElement; node; node = node.parentElement) positions.push([node, node.scrollLeft, node.scrollTop]);
-    navigation.current = { opener: event.currentTarget, positions };
-    setSelectedKey(key);
-  };
-  useLayoutEffect(() => {
-    if (selectedKey) { back.current?.focus({ preventScroll: true }); return; }
-    const saved = navigation.current;
-    if (!saved) return;
-    for (const [node, left, top] of saved.positions) if (node.isConnected) { node.scrollLeft = left; node.scrollTop = top; }
-    if (saved.opener.isConnected) saved.opener.focus({ preventScroll: true });
-    navigation.current = null;
-  }, [selectedKey]);
+  const retained = useRef(new Map()), current = useRef([]);
   const retry = () => {
     for (const [id, item] of retained.current) if (item.error) { releaseConnection(item); retained.current.delete(id); }
     manualRetry.current = true; setGeneration(value => value + 1);
   };
   useEffect(() => {
+    if (!enabled) {
+      for (const item of retained.current.values()) releaseConnection(item);
+      retained.current.clear(); originsSnapshot.current = null; setConnections(new Map());
+      setOrigins([]); setError(''); setLastFailure(''); return;
+    }
     const controller = new AbortController(); let timer, inFlight = false, dirty = false, manual = manualRetry.current;
     manualRetry.current = false;
     const schedule = () => { clearTimeout(timer); timer = setTimeout(tick, 150); };
     const tick = async () => {
       if (controller.signal.aborted || document.hidden) return;
       if (inFlight) { dirty = true; return; } inFlight = true;
-      try { const response = await api('approvalOrigins', {}, controller.signal); if (!controller.signal.aborted) { originsSnapshot.current = response.origins || []; setOrigins(originsSnapshot.current); setError(''); setLastFailure(''); } }
+      try { const response = await api('approvalOrigins', {}, controller.signal); if (!controller.signal.aborted) { originsSnapshot.current = response.origins || []; setOrigins(ownerThreadId ? originsSnapshot.current.filter(origin => origin.ownerThreadId === ownerThreadId) : originsSnapshot.current); setError(''); setLastFailure(''); } }
       catch (cause) { if (!controller.signal.aborted) { const message = reviewConnectionError(cause); setLastFailure(message); if (manual || originsSnapshot.current === null || !transientRefreshError(cause)) setError(message); } }
       finally { manual = false; inFlight = false; if (dirty && !controller.signal.aborted) { dirty = false; schedule(); } }
     };
@@ -102,10 +104,11 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact 
     document.addEventListener('benchgo:assistant-changed', schedule); document.addEventListener('visibilitychange', schedule);
     const fallback = setInterval(tick, 10000); void tick();
     return () => { controller.abort(); clearTimeout(timer); clearInterval(fallback); unsubscribe?.(); document.removeEventListener('benchgo:assistant-changed', schedule); document.removeEventListener('visibilitychange', schedule); };
-  }, [api, source, generation]);
+  }, [api, source, generation, enabled, ownerThreadId]);
   const sessionKey = origins?.map(origin => `${origin.kind}:${origin.ownerThreadId}:${origin.sessionId}`).sort().join('|') || '';
   useEffect(() => {
-    const ids = new Set(origins?.map(origin => origin.sessionId) || []);
+    if (!enabled) return;
+    const ids = new Set(origins?.filter(origin => !ownerThreadId || origin.ownerThreadId === ownerThreadId).map(origin => origin.sessionId) || []);
     const sources = new Map(origins?.map(origin => [origin.sessionId, origin]) || []);
     const publish = () => setConnections(new Map(retained.current));
     for (const [id, item] of retained.current) if (!ids.has(id)) { releaseConnection(item); retained.current.delete(id); }
@@ -136,21 +139,41 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact 
       })();
     }
     publish();
-  }, [ctx, api, sessionKey, generation]);
+  }, [ctx, api, sessionKey, generation, enabled, ownerThreadId]);
   useEffect(() => () => { for (const item of retained.current.values()) releaseConnection(item); retained.current.clear(); }, [ctx]);
-  const entries = (origins || []).flatMap(origin => {
+  const entries = (enabled ? origins || [] : []).filter(origin => !ownerThreadId || origin.ownerThreadId === ownerThreadId).flatMap(origin => {
     const pending = statuses.get(origin.sessionId)?.pendingInteraction, connection = connections.get(origin.sessionId);
     return connection?.ready && pending?.kind === 'approval' && pending.sessionId === origin.sessionId && pending.answerable
       ? [{ origin, pending, reference: connection.reference, key: reviewRequestKey(origin, pending) }] : [];
   });
   current.current = error ? [] : entries;
-  const selected = entries.find(entry => entry.key === selectedKey);
   const connectionErrors = [...connections.values()].filter(item => item.error), connecting = origins?.some(origin => !connections.get(origin.sessionId)?.ready && !connections.get(origin.sessionId)?.error);
+  const count = error || lastFailure || origins === null || connecting || connectionErrors.length ? null : entries.length;
+  return { origins, error, lastFailure, entries, current, statuses, connections, connectionErrors, connecting, count, retry };
+}
+
+export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact = false, active = true, onCountChange, onOpenReminder }) {
+  const { origins, error, lastFailure, entries, current, statuses, connectionErrors, connecting, count, retry } = useApprovalIndex({ ctx, api });
+  const [selectedKey, setSelectedKey] = useState(null), back = useRef(null), navigation = useRef(null);
+  const openDetail = (key, event) => {
+    const positions = [];
+    for (let node = event.currentTarget.parentElement; node; node = node.parentElement) positions.push([node, node.scrollLeft, node.scrollTop]);
+    navigation.current = { opener: event.currentTarget, positions };
+    setSelectedKey(key);
+  };
+  useLayoutEffect(() => {
+    if (selectedKey) { back.current?.focus({ preventScroll: true }); return; }
+    const saved = navigation.current;
+    if (!saved) return;
+    for (const [node, left, top] of saved.positions) if (node.isConnected) { node.scrollLeft = left; node.scrollTop = top; }
+    if (saved.opener.isConnected) saved.opener.focus({ preventScroll: true });
+    navigation.current = null;
+  }, [selectedKey]);
+  const selected = entries.find(entry => entry.key === selectedKey);
   const selectedConnectionError = connectionErrors.find(item => {
     const pending = statuses.get(item.origin.sessionId)?.pendingInteraction;
     return pending && reviewRequestKey(item.origin, pending) === selectedKey;
   });
-  const count = error || lastFailure || origins === null || connecting || connectionErrors.length ? null : entries.length;
   useEffect(() => { onCountChange?.(count); }, [count, onCountChange]);
   return <section className={`ba-approval-review${compact ? ' is-compact' : ''}`} aria-label="审核" data-sync-state={lastFailure ? 'reconnecting' : 'ready'} data-sync-error={lastFailure || undefined} hidden={!active} onKeyDown={event => {
     if (selectedKey && event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); setSelectedKey(null); }
@@ -165,7 +188,7 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact 
       : <nav className="ba-review-list" aria-label="待审核操作">{entries.map(entry => <button type="button" className="ba-review-row" key={entry.key} onClick={event => openDetail(entry.key, event)}><span className="ba-review-row-icon"><ResourceIcon name="key" size={18} /></span><span className="ba-review-row-copy"><strong>{reviewDisplayText(entry.origin.title || '待授权操作')}</strong><span>{reviewDisplayText(entry.origin.sourceTitle || (entry.origin.ownerThreadId === 'main' ? '主聊天' : '旁聊'))} · {entry.origin.kind === 'worker' ? '任务操作' : '对话操作'}</span><small>等待你的决定</small></span><span className="ba-review-row-arrow"><UIIcon name="chevronLeft" size={16} /></span></button>)}</nav>}
     </div>
     {selectedKey && (error ? <ResourceState kind="error" title="审核列表暂时无法读取" description={error} />
-      : selected ? <ApprovalDetail key={selected.key} entry={selected} api={api} current={current} SessionProvider={SessionProvider} renderSlot={renderSlot} />
+      : selected ? <ApprovalDetail key={selected.key} entry={selected} api={api} current={current} SessionProvider={SessionProvider} renderSlot={renderSlot} onOpenReminder={onOpenReminder} />
       : selectedConnectionError ? <ResourceState kind="error" title="此审核所属会话暂未连接" description={selectedConnectionError.error} />
       : origins === null || connecting ? <ResourceState kind="loading" title="正在核对审核状态" />
       : <ResourceState icon="check" title="此审核已处理或失效" description="原请求已不可答复。返回列表查看仍需你决定的操作。" />)}
@@ -174,4 +197,11 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact 
 
 export function mountApprovalReview(ctx) {
   ctx.effect(() => ctx.slots.inject(REVIEW_APPROVAL_SLOT, () => ctx.slots.register({ name: REVIEW_APPROVAL_SLOT }, OfficialReviewApproval)));
+}
+
+/** Same native PendingApproval and scoped official card, mounted below its trusted Router reminder. */
+export function InlineApproval({ row, index, api, SessionProvider, renderSlot }) {
+  const entry = index.entries.find(value => reviewReminderMatches(row, value));
+  if (!entry || !SessionProvider || !renderSlot) return null;
+  return <div className="ba-approval-review ba-review-inline"><style>{css}</style><ApprovalDetail entry={entry} api={api} current={index.current} SessionProvider={SessionProvider} renderSlot={renderSlot} inline /></div>;
 }

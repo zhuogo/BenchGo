@@ -1,9 +1,47 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewDisplayText, reviewDisplayValue, reviewSessionOpenError, sameReviewOrigin } from '../client/approval-review.mjs';
+import { findReviewReminder, reviewReminderMatches, reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewDisplayText, reviewDisplayValue, reviewSessionOpenError, sameReviewOrigin } from '../client/approval-review.mjs';
+import { approvalReminderNavigation } from '../client/approval-flow.mjs';
 
 const worker = { kind: 'worker', ticketId: 'ticket', assignmentId: 'assignment', runId: 'run', sessionId: 'worker', ownerSessionId: 'router', ownerThreadId: 'main' };
 const router = { kind: 'router', sessionId: 'router', ownerSessionId: 'router', ownerThreadId: 'main' };
+
+const binding = { sessionId: 'worker', callId: 'call', approvalId: 'durable-id', actionId: 'action', ticketId: 'ticket', assignmentId: 'assignment', runId: 'run', ownerThreadId: 'main', eventKey: 'approval:worker:durable-id' };
+const reminder = () => ({ role: 'assistant', requestId: 'reminder', approval: { ...binding } });
+const entry = () => ({ origin: { ...worker }, pending: { sessionId: 'worker', callId: 'call', key: 'approval:unrelated-client-sequence', toolName: 'assistant_external_action', answerable: true, reason: '批准本次具体外部动作（仅本次有效）：\n' + JSON.stringify({ actionId: 'action' }) } });
+
+test('inline reminder matches the trusted action and run, never the transient client key or unrelated request', () => {
+  assert(reviewReminderMatches(reminder(), entry()));
+  for (const key of ['sessionId', 'callId', 'actionId', 'ticketId', 'assignmentId', 'runId', 'ownerThreadId', 'eventKey']) {
+    const row = reminder(); row.approval[key] = 'wrong'; assert(!reviewReminderMatches(row, entry()), key);
+  }
+  for (const change of [{ answerable: false }, { toolName: 'other' }, { reason: '{"actionId":"action"}' }, { callId: undefined }]) {
+    const current = entry(); Object.assign(current.pending, change); assert(!reviewReminderMatches(reminder(), current));
+  }
+  assert(!reviewReminderMatches({ ...reminder(), role: 'user' }, entry()));
+});
+
+test('review reminder search follows only the owner history and bounds a stalled or endless cursor', async () => {
+  let reads = 0;
+  const row = reminder();
+  assert.equal(await findReviewReminder(async (action, input) => {
+    assert.equal(action, 'history'); assert.equal(input.threadId, 'main'); reads++;
+    return input.before ? { messages: [row], hasMore: false } : { messages: [], hasMore: true, nextBefore: 9 };
+  }, entry()), row);
+  assert.equal(reads, 2);
+  for (const stalled of [true, false]) {
+    reads = 0;
+    await assert.rejects(findReviewReminder(async () => ({ messages: [], hasMore: true, nextBefore: stalled ? 1 : ++reads }), entry()), /暂未找到/);
+    if (!stalled) assert.equal(reads, 20);
+  }
+});
+
+test('approval navigation clears only the consumed target so a late view cannot erase a newer navigation', () => {
+  approvalReminderNavigation.open(reminder()); const old = approvalReminderNavigation.getSnapshot();
+  approvalReminderNavigation.open({ ...reminder(), requestId: 'new' }); const current = approvalReminderNavigation.getSnapshot();
+  approvalReminderNavigation.clear(old); assert.equal(approvalReminderNavigation.getSnapshot(), current);
+  approvalReminderNavigation.clear(current); assert.equal(approvalReminderNavigation.getSnapshot(), null);
+});
 
 test('review identity preserves Worker fences and current Router ownership without borrowing either role', () => {
   assert(sameReviewOrigin(worker, { ...worker })); assert(sameReviewOrigin(router, { ...router }));

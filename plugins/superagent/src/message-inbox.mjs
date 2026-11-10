@@ -4,9 +4,15 @@ import { readModelFallbacks } from './model-fallback.mjs';
 import { readQuestionReply, readBoundQuestionReply } from './question-reply.mjs';
 import { ticketReplySource, ticketReplyInstruction, ticketReplyIdentity } from './ticket-reply.mjs';
 import { watchdogIncidentIdentity, watchdogNoticeCurrent, watchdogNotificationIdentity } from './watchdog-router-signal.mjs';
+import { approvalSignalBinding } from './approval-chat-binding.mjs';
 
 const active = new Set(['queued', 'processing', 'prepared']);
 const fingerprint = (threadId, text, context) => createHash('sha256').update(JSON.stringify(context === undefined ? [threadId, text] : [threadId, text, context])).digest('hex');
+const ticketReplyMessageSource = (signal, threadId) => {
+  const approval = approvalSignalBinding(signal, threadId);
+  return { kind: ticketReplySource, replyKind: signal.kind, eventKey: signal.eventKey, ticketId: signal.ticketId,
+    ...(approval ? { approval } : {}) };
+};
 
 function replySnapshot(value) {
   if (value === undefined) return undefined;
@@ -139,17 +145,16 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
           if (previous.threadId !== threadId || ticketReplyIdentity(previous.ticketReply) !== ticketReplyIdentity(signal)) throw new Error('工单回复标识冲突');
           if (retry && retryMessageId !== undefined && previous.messageId !== retryMessageId) return {};
           if (retry && ['failed', 'processed'].includes(previous.status) && !previous.suppressed) {
-            const message = createUserMessage({ source: { kind: ticketReplySource, replyKind: signal.kind,
-              eventKey: signal.eventKey, ticketId: signal.ticketId }, content: [{ type: 'text', text: ticketReplyInstruction(signal) }] });
+            const message = createUserMessage({ source: ticketReplyMessageSource(signal, threadId), content: [{ type: 'text', text: ticketReplyInstruction(signal) }] });
             return { requests: state.requests.map(row => row.requestId === requestId ? { ...row, messageId: message.id, message,
               sessionId: null, ticketReply: signal, fingerprint: digest, status: 'queued', error: undefined,
               attempt: (row.attempt || 1) + 1, retryAt: undefined, updatedAt: new Date(now()).toISOString() } : row) };
           }
           if (previous.status !== 'queued') return {};
           return { requests: state.requests.map(row => row.requestId === requestId ? { ...row, fingerprint: digest, ticketReply: signal,
-            message: { ...row.message, content: [{ type: 'text', text: ticketReplyInstruction(signal) }] } } : row) };
+            message: { ...row.message, source: ticketReplyMessageSource(signal, threadId), content: [{ type: 'text', text: ticketReplyInstruction(signal) }] } } : row) };
         }
-        const message = createUserMessage({ source: { kind: ticketReplySource, replyKind: signal.kind, eventKey: signal.eventKey, ticketId: signal.ticketId },
+        const message = createUserMessage({ source: ticketReplyMessageSource(signal, threadId),
           content: [{ type: 'text', text: ticketReplyInstruction(signal) }] });
         const superseded = signal.kind === 'watchdog' && !watchdogNoticeCurrent(signal, state.requests || []);
         return { requests: [...(state.requests || []).map(row => !suppressReason && signal.kind === 'watchdog' && row.status === 'queued'
