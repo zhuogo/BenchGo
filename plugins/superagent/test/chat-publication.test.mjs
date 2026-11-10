@@ -1,3 +1,4 @@
+import { channelMessageRecordType } from '../src/channel-session-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { activeChatReply, chatPublicationType, executionInputSource, installChatPublication, projectChatMessages } from '../src/chat-publication.mjs';
@@ -316,4 +317,44 @@ test('retired state publication is rejected even if a callback permits it or a m
     assert.equal(checked, false);
     assert.deepEqual(projectChatMessages([...events, end('completed', 2)]), []);
   }
+});
+
+const channelMirror = (seq, direction = 'inbound', mirrorKey = `intake:${seq}`) => ({
+  type: channelMessageRecordType, seq, time: '2026-11-10T12:00:00Z', ignorable: true,
+  data: { mirrorKey, direction, text: direction === 'inbound' ? '飞书来源正文' : '已确认送达的回复',
+    source: { channel: 'feishu', sourceType: 'direct', conversationId: 'source-chat' } },
+});
+
+test('channel mirrors appear in actual Router history as public rows without becoming requests or model replies', () => {
+  const inbound = channelMirror(1), delivered = channelMirror(8, 'delivery', 'delivery:ticket:sent-result');
+  const events = [inbound, start(), { ...user, seq: 2 }, reply(5), end(), delivered];
+  const before = JSON.stringify(events), rows = projectChatMessages(events);
+  assert.deepEqual(rows.map(row => [row.id, row.role]), [
+    ['channel:intake:1', 'user'], ['human-1', 'user'], ['reply:human-1', 'assistant'], ['channel:delivery:ticket:sent-result', 'assistant'],
+  ]);
+  for (const [row, event] of [[rows[0], inbound], [rows[3], delivered]]) {
+    assert.deepEqual(row, { seq: event.seq, id: `channel:${event.data.mirrorKey}`, kind: 'channel-message',
+      role: event.data.direction === 'inbound' ? 'user' : 'assistant', direction: event.data.direction,
+      mirrorKey: event.data.mirrorKey, source: { kind: 'benchgo-channel', channelSource: event.data.source },
+      text: event.data.text, content: [{ type: 'text', text: event.data.text }], time: event.time });
+  }
+  assert.equal(activeChatReply([inbound]), null, 'display-only channel input never activates a Router request');
+  assert.equal(JSON.stringify(events), before, 'reading history never rewrites the stored mirrors');
+  assert.deepEqual(rows.filter(row => row.seq < 8).slice(-2).map(row => row.id), ['human-1', 'reply:human-1'], 'public sequence pagination retains channel ordering');
+});
+
+test('channel history deduplicates persisted mirror identity and excludes arbitrary context or malformed records', () => {
+  const inbound = channelMirror(1), delivered = channelMirror(3, 'delivery', 'delivery:ticket:result');
+  const invalid = [
+    { ...inbound, ignorable: false }, { ...inbound, type: 'plugin:other/channel-message' },
+    { ...inbound, data: { ...inbound.data, mirrorKey: '' } },
+    { ...inbound, data: { ...inbound.data, direction: 'tool' } },
+    { ...inbound, data: { ...inbound.data, text: undefined } },
+    { ...inbound, data: { ...inbound.data, source: { channel: 'feishu' } } },
+    { type: 'system/message', seq: 0, data: { content: [{ type: 'text', text: 'PRIVATE_CONTEXT' }] } },
+    { type: 'user/message', seq: 0, data: { id: 'internal', source: { kind: 'benchgo-subscription' }, content: [{ type: 'text', text: 'PRIVATE_WORKER_INPUT' }] } },
+  ];
+  const rows = projectChatMessages([...invalid, inbound, { ...inbound, seq: 2 }, delivered]);
+  assert.deepEqual(rows.map(row => row.id), ['channel:intake:1', 'channel:delivery:ticket:result']);
+  assert.doesNotMatch(JSON.stringify(rows), /PRIVATE_CONTEXT|PRIVATE_WORKER_INPUT/);
 });

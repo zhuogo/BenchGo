@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { prepareInstallerSources } from './prepare-brand.mjs';
+import { prepareInstallerSources, prepareDesktopRenderer, startupArtwork } from './prepare-brand.mjs';
 
 for (const newline of ['\n', '\r\n']) test('installer migration retains registered-directory guard: ' + JSON.stringify(newline), async t => {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-installer-'));
@@ -30,4 +31,22 @@ for (const newline of ['\n', '\r\n']) test('installer migration retains register
   await assert.rejects(readFile(join(output, 'window-frame.cpp')), { code: 'ENOENT' });
   await writeFile(join(source, 'path.nsh'), 'upstream changed ownership semantics');
   await assert.rejects(prepareInstallerSources(root, output), /ownership check changed/);
+});
+
+
+test('startup renderer embeds the unchanged transparent master with local animation hooks', async t => {
+  const output = await mkdtemp(join(tmpdir(), 'benchgo-startup-renderer-'));
+  t.after(() => rm(output, { recursive: true, force: true }));
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  await prepareDesktopRenderer(root, output);
+  const master = await readFile(join(root, 'assets/brand/benchgo-mark.svg'), 'utf8');
+  const artwork = startupArtwork(master);
+  assert.equal(artwork.replace(' class="startup-mascot" aria-hidden="true" focusable="false"', ''), master.trim());
+  for (const name of ['welcome.html', 'splash.html']) {
+    const html = await readFile(join(output, name), 'utf8');
+    assert.equal(html.split(artwork).length, 2);
+    assert.doesNotMatch(html, /benchgo-app|<img|(?:src|href)="https?:/);
+    assert.match(html, /data-part="eyes"/);
+  }
+  assert.throws(() => startupArtwork('<svg></svg>'), /transparent brand master changed/);
 });

@@ -1,6 +1,13 @@
 import { isChatUserMessage, readAdmittedQuestionReply } from '../src/question-reply.mjs';
 
 const eventKey = row => row.ticketStateEventKey || row.eventKey || row.eventId || row.id;
+// Display-only channel mirrors have explicit provenance; arbitrary context is private.
+const channelMessage = row => row?.kind === 'channel-message' && row.source?.kind === 'benchgo-channel'
+  && typeof row.mirrorKey === 'string' && !!row.mirrorKey && ['inbound', 'delivery'].includes(row.direction)
+  && row.role === (row.direction === 'inbound' ? 'user' : 'assistant')
+  && typeof row.source.channelSource?.channel === 'string' && !!row.source.channelSource.channel
+  && typeof row.source.channelSource?.sourceType === 'string' && !!row.source.channelSource.sourceType
+  && typeof row.text === 'string';
 const publicText = row => typeof row.text === 'string' && !!row.text.trim();
 function conversationalNotification(row) {
   if (row.type === 'ticket.attention') return !!(row.attention || row.currentAttention)?.question?.question;
@@ -19,18 +26,31 @@ function conversationalNotification(row) {
 /** Defence in depth: only the server publication projection can supply assistant rows. */
 export function quietChatRows(history = {}, threadId = 'main', session = {}, chat) {
   const rows = (history.messages || []).filter(row => !row.streaming &&
-    (row.role === 'user' || (row.role === 'assistant' && row.kind === 'final'
-      && ![row.origin, row.publication?.origin].some(origin => ['system', 'worker'].includes(origin)))))
+    (channelMessage(row) || (row.kind !== 'channel-message' && (row.role === 'user' || (row.role === 'assistant' && row.kind === 'final'
+      && ![row.origin, row.publication?.origin].some(origin => ['system', 'worker'].includes(origin)))))))
     .map(row => ({ ...row, key: `message:${row.id}` }));
+  const historyEnd = Math.max(-1, ...rows.map(row => row.seq).filter(Number.isFinite));
+  const mirrors = new Set(rows.filter(channelMessage).map(row => row.mirrorKey));
+  const oldestLoaded = history.hasMore ? Math.min(Infinity, ...rows.map(row => row.seq).filter(Number.isFinite)) : -Infinity;
+  for (const node of chat?.legacy?.nodes || []) {
+    if (node.kind !== 'context' || node.form !== 'notice' || node.producer?.label !== 'benchgo-channel' || node.producer?.role !== 'inject'
+      || node.source?.kind !== 'benchgo-channel' || node.seq < oldestLoaded) continue;
+    const { mirrorKey, direction } = node.source;
+    const text = (node.content || []).filter(block => block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n');
+    const row = { id: `channel:${mirrorKey}`, kind: 'channel-message', role: direction === 'inbound' ? 'user' : 'assistant',
+      mirrorKey, direction, source: node.source, text, content: [{ type: 'text', text }], seq: node.seq, time: node.time };
+    if (!channelMessage(row) || mirrors.has(mirrorKey)) continue;
+    mirrors.add(mirrorKey);
+    rows.push({ ...row, key: `message:${row.id}` });
+  }
   const publishedEvents = new Set(rows.filter(row => row.role === 'assistant' && publicText(row))
     .map(eventKey).filter(Boolean));
   // Use the host's synchronous submission echo, then its admitted user events.
-  // Never project assistant/tool/context nodes from this unrestricted view.
+  // Other assistant/tool/context nodes remain private in this unrestricted view.
   const seenSeq = new Set(rows.filter(row => row.role === 'user').map(row => row.seq).filter(Number.isFinite));
   const admittedRequests = new Set(rows.filter(row => row.role === 'user').map(row => row.requestId || row.rpcId || row.source?.requestId || row.source?.rpcId).filter(Boolean));
   const admittedMessages = new Set(rows.filter(row => row.role === 'user').map(row => row.id).filter(Boolean));
   const answeredCalls = new Set(rows.filter(row => row.kind === 'question-reply').map(row => row.callId).filter(Boolean));
-  const historyEnd = Math.max(-1, ...rows.map(row => row.seq).filter(Number.isFinite));
   for (const node of chat?.legacy?.nodes || []) {
     if (!['user', 'steering'].includes(node.kind) || !isChatUserMessage(node)) continue;
     if (node.source.kind === 'user-question-reply') {

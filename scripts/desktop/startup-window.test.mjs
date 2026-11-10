@@ -11,6 +11,8 @@ import { startupWindowPlugin, verifyStartupBundle } from './prepare-startup.mjs'
 function fixture(fail = false) {
   const app = new EventEmitter();
   app.quit = () => { app.quits = (app.quits ?? 0) + 1; };
+  const nativeTheme = new EventEmitter();
+  nativeTheme.shouldUseDarkColors = false;
   const windows = [];
   class BrowserWindow extends EventEmitter {
     constructor(options) {
@@ -19,6 +21,7 @@ function fixture(fail = false) {
       this.webContents.setWindowOpenHandler = handler => { this.openHandler = handler; };
       app.emit('browser-window-created', {}, this);
     }
+    setBackgroundColor(value) { this.background = value; }
     async loadFile(page) { this.page = page; if (fail) throw new Error('missing page'); }
     isDestroyed() { return Boolean(this.destroyed); }
     isVisible() { return Boolean(this.visible); }
@@ -26,7 +29,7 @@ function fixture(fail = false) {
     destroy() { this.destroyed = true; this.emit('closed'); }
   }
   const nativeImage = { createFromPath: path => ({ path, isEmpty: () => !path }) };
-  return { app, BrowserWindow, nativeImage, windows, page: '/renderer/splash.html', iconPath: 'icon.png' };
+  return { app, BrowserWindow, nativeImage, nativeTheme, windows, page: '/renderer/splash.html', iconPath: 'icon.png' };
 }
 
 test('splash covers hidden backend startup and disposes only when another window appears', async () => {
@@ -37,6 +40,11 @@ test('splash covers hidden backend startup and disposes only when another window
   assert.equal(splash.isVisible(), true);
   assert.equal(splash.isDestroyed(), false);
   assert.equal(splash.options.icon.path, 'icon.png');
+  assert.equal(splash.options.backgroundColor, '#ffffff');
+  env.nativeTheme.shouldUseDarkColors = true; env.nativeTheme.emit('updated');
+  assert.equal(splash.background, '#19191b');
+  env.nativeTheme.shouldUseDarkColors = false; env.nativeTheme.emit('updated');
+  assert.equal(splash.background, '#ffffff');
   assert.equal(splash.options.webPreferences.sandbox, true);
   assert.equal(splash.options.webPreferences.preload, undefined);
   assert.deepEqual(splash.openHandler(), { action: 'deny' });
@@ -44,6 +52,7 @@ test('splash covers hidden backend startup and disposes only when another window
   assert.equal(splash.isDestroyed(), true);
   assert.equal(env.app.quits, undefined);
   assert.equal(env.app.listenerCount('browser-window-created'), 0);
+  assert.equal(env.nativeTheme.listenerCount('updated'), 0);
   assert.equal(main.listenerCount('closed'), 0);
   close();
 });
@@ -51,11 +60,14 @@ test('splash covers hidden backend startup and disposes only when another window
 test('fatal cleanup and quit dispose the card without an extra quit request', async () => {
   for (const action of ['fatal', 'quit']) {
     const env = fixture();
+    env.nativeTheme.shouldUseDarkColors = true;
     const close = await openStartupWindow(env);
+    assert.equal(env.windows[0].options.backgroundColor, '#19191b');
     if (action === 'fatal') close(); else env.app.emit('will-quit');
     assert.equal(env.windows[0].isDestroyed(), true);
     assert.equal(env.app.quits, undefined);
     assert.equal(env.app.listenerCount('will-quit'), 0);
+    assert.equal(env.nativeTheme.listenerCount('updated'), 0);
   }
 });
 
@@ -68,6 +80,7 @@ test('a user close quits; an unavailable splash still allows official startup', 
   await openStartupWindow(failed);
   assert.equal(failed.windows[0].isDestroyed(), true);
   assert.equal(failed.app.quits, undefined);
+  assert.equal(failed.nativeTheme.listenerCount('updated'), 0);
 });
 
 test('compile integration targets one official entry and rejects changed lifecycle anchors', async () => {
@@ -78,6 +91,7 @@ test('compile integration targets one official entry and rejects changed lifecyc
   assert.equal(plugin.transform(source, '/other.js'), null);
   assert.throws(() => plugin.generateBundle(), /got 0/);
   const code = plugin.transform(source, path.pathname).code;
+  assert.match(code, /openStartupWindow\(\{ app, BrowserWindow, nativeImage, nativeTheme,/);
   assert.ok(code.indexOf('closeBenchgoStartup = await') < code.indexOf('const desktopSettings ='));
   assert.match(code, /function reportFatal\(error, source\) \{\n    closeBenchgoStartup\?\.\(\);/);
   plugin.generateBundle();

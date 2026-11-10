@@ -20,6 +20,10 @@
 .ba-assistant-heading .ba-card[aria-current="page"]{background:var(--ba-sidebar-active)}
 .ba-assistant-heading .ba-assistant-resources:hover,.ba-assistant-heading .ba-assistant-resources[aria-current="page"]{background:var(--ba-sidebar-hover);color:var(--ba-sidebar-ink)}
 .ba-assistant-section .cmd-section-title{min-height:32px;margin:0;padding:0;gap:4px}
+.ba-sidebar-tabs{flex:1;min-width:0}
+.ba-sidebar-tabs .bg-segments-scroll{overflow:visible}
+.ba-sidebar-tabs .bg-segments{display:flex;width:100%;min-width:0;padding:2px}
+.ba-sidebar-tabs .bg-segments.bg-segments button{flex:1;min-width:0;min-height:28px;padding:4px 8px;font-size:12px}
 .ba-assistant-section .cmd-section-toggle{height:32px;min-height:32px;padding:4px 2px;font-size:12px;font-weight:500;line-height:1.4;color:var(--ba-sidebar-muted);border:0;background:transparent}
 .ba-assistant-section .cmd-section-toggle>.cmd-ui-icon{display:inline-flex;align-items:center;justify-content:center}
 .ba-assistant-section .cmd-section-toggle>.cmd-ui-icon svg{width:100%;height:100%}
@@ -47,6 +51,7 @@
 .ba-assistant-section .ba-thread-actions svg{width:16px;height:16px}
 .ba-assistant-section .cmd-session-row:is(:hover,:focus-within,[data-menu-open="true"]) .ba-thread-actions{opacity:1;pointer-events:auto}
 .ba-assistant-section .cmd-session-row:is(:hover,:focus-within,[data-menu-open="true"]) .ba-thread-meta{opacity:0;pointer-events:none}
+.ba-assistant-section .cmd-session-row[data-source="im"] .ba-thread-meta{opacity:1;pointer-events:auto;min-width:0;gap:6px}
 .ba-sidebar-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-width:0;padding:12px 6px;text-align:center;color:var(--ba-sidebar-muted)}
 .ba-sidebar-quote{margin:0;font-size:12px;font-weight:400;line-height:1.8}
 .ba-sidebar-state .bg-ui-button{min-height:28px;margin-top:2px;padding:4px 10px;font-size:11px}
@@ -63,8 +68,10 @@
 .ba-sidebar-skeleton i:first-child{width:80%}.ba-sidebar-skeleton i:last-child{width:100%}
 @media(prefers-reduced-transparency:reduce){.ba-assistant-section{background:var(--ba-sidebar-surface);backdrop-filter:none}}
 @media(prefers-reduced-motion:reduce){.ba-assistant-toggle>.cmd-ui-icon,.ba-thread-meta,.ba-thread-actions,.ba-assistant-section .ba-thread-actions :is(.cmd-session-quick,.cmd-session-more){transition:none!important}}
-@media(hover:none){.ba-thread-actions{opacity:1;pointer-events:auto}.ba-assistant-section .cmd-session-row:not(.is-archived) .cmd-session-quick{display:none!important}.ba-assistant-section .cmd-session-row:not(.is-archived) .ba-thread-copy{padding-right:32px}.ba-assistant-section .cmd-session-row:not(.is-archived) .ba-thread-meta{opacity:1;pointer-events:auto}.ba-assistant-section .is-archived .ba-thread-meta{opacity:0}.ba-assistant-section .is-archived .ba-thread-copy{padding-right:0}}
-@media(pointer:coarse){.ba-assistant-heading{--ba-heading-control-size:40px}.ba-assistant-section .cmd-section-toggle,.ba-assistant-section .ba-section-add{min-height:40px}.ba-assistant-section .ba-section-add{width:40px;min-width:40px}.ba-sidebar-state .bg-ui-button{min-height:40px}.ba-assistant-section .cmd-session-row .cmd-session{min-height:44px}.ba-assistant-section .ba-thread-actions :is(.cmd-session-quick,.cmd-session-more){width:44px;min-width:44px;height:44px;min-height:44px}.ba-assistant-section .cmd-session-row:not(.is-archived) .ba-thread-copy{padding-right:48px}}
+@media(hover:none){.ba-thread-actions{opacity:1;pointer-events:auto}.ba-assistant-section .cmd-session-row:not(.is-archived) .cmd-session-quick{display:none!important}.ba-assistant-section .cmd-session-row[data-source="side"]:not(.is-archived) .ba-thread-copy{padding-right:32px}.ba-assistant-section .cmd-session-row:not(.is-archived) .ba-thread-meta{opacity:1;pointer-events:auto}.ba-assistant-section .is-archived .ba-thread-meta{opacity:0}.ba-assistant-section .is-archived .ba-thread-copy{padding-right:0}}
+@media(pointer:coarse){.ba-assistant-heading{--ba-heading-control-size:40px}.ba-assistant-section .cmd-section-toggle,.ba-assistant-section .ba-section-add{min-height:40px}.ba-assistant-section .ba-section-add{width:40px;min-width:40px}.ba-sidebar-state .bg-ui-button{min-height:40px}.ba-assistant-section .cmd-session-row .cmd-session{min-height:44px}.ba-assistant-section .ba-thread-actions :is(.cmd-session-quick,.cmd-session-more){width:44px;min-width:44px;height:44px;min-height:44px}.ba-assistant-section .cmd-session-row[data-source="side"]:not(.is-archived) .ba-thread-copy{padding-right:48px}}
+.ba-assistant-section .cmd-session-row[data-source="im"] .ba-thread-copy{padding-right:0}
+@media(pointer:coarse){.ba-sidebar-tabs .bg-segments.bg-segments button{min-height:40px}}
 .ba-official-conversation[data-assistant-chat] [class*="composerSeat"]{margin-top:auto;visibility:visible!important}
 
 /* Keep Router's composer clear of the bottom edge, including sidebar entry. */

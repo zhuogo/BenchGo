@@ -1,3 +1,4 @@
+import { channelMessageRecordOf } from './channel-session-record.mjs';
 import { appendPluginRecord } from '@deepseek-ai/dsh-session';
 import { fallbackRequestIds, readModelFallbacks } from './model-fallback.mjs';
 import { questionBatch, questionAnswers, questionReplyText, readQuestionReply } from './question-reply.mjs';
@@ -50,7 +51,7 @@ export function activeChatReply(events, { includeInternal = false } = {}) {
 export function projectChatMessages(events) {
   const continuations = replyContinuations(events);
   const requests = new Map(events.filter(event => replyEvent(event, events)).map(event => [event.data.id, event.data]));
-  const users = new Set(), published = new Set(), rows = [];
+  const users = new Set(), published = new Set(), channelMirrors = new Set(), rows = [];
   const explicit = new Set();
   for (const event of events) {
     if (replyEvent(event, events)) users.add(event.data.id);
@@ -62,6 +63,18 @@ export function projectChatMessages(events) {
   let turn, request, lastAssistant, publicParts = [];
   const asked = new Map(), answered = new Set();
   for (const event of events) {
+    const channelRecord = channelMessageRecordOf(event);
+    if (channelRecord) {
+      if (!channelMirrors.has(channelRecord.mirrorKey)) {
+        channelMirrors.add(channelRecord.mirrorKey);
+        rows.push({ seq: event.seq, id: `channel:${channelRecord.mirrorKey}`, kind: 'channel-message',
+          role: channelRecord.direction === 'inbound' ? 'user' : 'assistant',
+          direction: channelRecord.direction, mirrorKey: channelRecord.mirrorKey,
+          source: { kind: 'benchgo-channel', channelSource: channelRecord.source },
+          text: channelRecord.text, content: [{ type: 'text', text: channelRecord.text }], time: event.time });
+      }
+      continue;
+    }
     if (event.type === 'turn/start') { turn = event.data?.turn; request = undefined; lastAssistant = undefined; publicParts = []; }
     if (replyEvent(event, events)) {
       users.add(event.data.id);

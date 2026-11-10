@@ -1,6 +1,7 @@
 import { Button } from '../../shared/client/ui/button.jsx';
 import React, { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { AssistantHome } from './home.jsx';
+import { quietChatRows } from './quiet-chat.mjs';
 import { QuietChat } from './quiet-chat.jsx';
 import { ActivityTrigger } from './activity-panel.jsx';
 import { AssistantCard } from './card.jsx';
@@ -32,7 +33,8 @@ function FixedChatView({ renderSlot, useSession, useConversation, useInput, inpu
   }, [input?.phase, input?.draft, input?.occurrences?.length, input?.attachmentIds?.length, inputActions]);
   const showHome = home && session.openState !== 'loading' && session.openState !== 'error'
     && !session.running && !session.promptAttempted && conversation.activeTargets.size === 0
-    && (session.blank || session.awaitingFirstTurn);
+    && (session.blank || session.awaitingFirstTurn)
+    && quietChatRows(home.history, home.threadId, session, conversation.views?.get('chat')).length === 0;
   // Keep the official content factory/composer; never mount its raw execution transcript.
   return <div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll="" tabIndex={0} aria-label="聊天记录">{designIntent && home && designIntent.threadId === home.threadId && <div className="ba-note" role="status">{designIntent.kind === 'refine' ? '请在输入框说明希望继续调整的地方。' : '请在输入框描述你希望的形象。'}<Button variant="ghost" type="button" className="ba-quiet" onClick={() => petDesignIntent.clear()}>关闭提示</Button></div>}{showHome && <AssistantHome {...home} input={input} inputActions={inputActions} />}{home && <QuietChat home={home} session={session} chat={conversation.views?.get('chat')} />}</div></div>;
 }

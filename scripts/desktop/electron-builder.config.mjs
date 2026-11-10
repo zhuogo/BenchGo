@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createElectronBuilderConfig } from '../../deepseek-harness/apps/desktop/scripts/electron-builder-config.mjs';
-import { prepareDesktopBrand, prepareDesktopRenderer } from './prepare-brand.mjs';
+import { prepareDesktopBrand, prepareDesktopRenderer, startupArtwork } from './prepare-brand.mjs';
 import { verifyTrayBundle } from './prepare-tray.mjs';
 import { verifyStartupBundle } from './prepare-startup.mjs';
 
@@ -123,7 +123,7 @@ config.afterPack = async context => {
   const { extractFile } = createRequire(require.resolve('app-builder-lib'))('@electron/asar');
   verifyTrayBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
   verifyStartupBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
-  const startupIcon = `data:image/svg+xml;base64,${(await readFile(`${root}/assets/brand/benchgo-app.svg`)).toString('base64')}`;
+  const startupIcon = startupArtwork(await readFile(`${root}/assets/brand/benchgo-mark.svg`, 'utf8'));
   for (const name of ['welcome.html', 'splash.html']) {
     if (!extractFile(`${context.appOutDir}/resources/app.asar`, `renderer/${name}`).toString('utf8').includes(startupIcon)) {
       throw new Error(`Packaged BenchGo startup artwork does not match the brand master: ${name}`);

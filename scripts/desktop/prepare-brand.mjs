@@ -51,16 +51,22 @@ export async function prepareDesktopBrand(root, output) {
   await sharp(Buffer.from(mascot)).resize(1024, 1024).png().toFile(join(output, 'benchgo-icon.png'));
 }
 
-/** Embed the canonical artwork so packaged startup pages stay fully local. */
+/** Keep the transparent master byte-for-byte apart from its presentation attributes. */
+export function startupArtwork(mark) {
+  if (!mark.startsWith('<svg ') || !mark.includes('data-part="eyes"')) throw new Error('BenchGo transparent brand master changed');
+  return mark.trim().replace('<svg ', '<svg class="startup-mascot" aria-hidden="true" focusable="false" ');
+}
+
+/** Inline the canonical transparent master so CSS can animate its existing eyes. */
 export async function prepareDesktopRenderer(root, output) {
   const source = join(root, 'scripts/desktop/renderer');
-  const icon = await readFile(join(root, 'assets/brand/benchgo-app.svg'));
-  const reference = 'src="../../../assets/brand/benchgo-app.svg"';
+  const artwork = startupArtwork(await readFile(join(root, 'assets/brand/benchgo-mark.svg'), 'utf8'));
+  const reference = /<img class="startup-mascot" src="\.\.\/\.\.\/\.\.\/assets\/brand\/benchgo-mark\.svg"[^>]*>/g;
   await cp(source, output, { recursive: true });
   for (const name of ['welcome.html', 'splash.html']) {
     const html = await readFile(join(source, name), 'utf8');
-    if (html.split(reference).length !== 2) throw new Error(`BenchGo startup artwork reference changed: ${name}`);
-    await writeFile(join(output, name), html.replace(reference, `src="data:image/svg+xml;base64,${icon.toString('base64')}"`));
+    if ([...html.matchAll(reference)].length !== 1) throw new Error(`BenchGo startup artwork reference changed: ${name}`);
+    await writeFile(join(output, name), html.replace(reference, artwork));
   }
 }
 

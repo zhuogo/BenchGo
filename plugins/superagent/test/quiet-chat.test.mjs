@@ -184,3 +184,21 @@ test('quiet chat keeps answered question bubbles in history order', () => {
   ] }, 'main');
   assert.deepEqual(rows.map(row => row.kind || row.role), ['user', 'question-reply', 'final']);
 });
+
+
+test('channel mirrors remain visible in the actual quiet projection and reconcile live with paged history', () => {
+  const source = { kind: 'benchgo-channel', channelSource: { channel: 'feishu', sourceType: 'direct', conversationId: 'oc_exact' }, mirrorKey: 'intake:one', direction: 'inbound' };
+  const node = { kind: 'context', form: 'notice', producer: { role: 'inject', label: 'benchgo-channel' }, seq: 12, time: 12,
+    source, content: [{ type: 'text', text: '飞书原文' }] };
+  const chat = { legacy: { nodes: [node, { ...node, seq: 13, source: { kind: 'system' }, content: [{ type: 'text', text: 'PRIVATE context' }] }] } };
+  const live = quietChatRows({}, 'channel-thread', {}, chat);
+  assert.equal(live.length, 1); assert.equal(live[0].text, '飞书原文');
+  assert.equal(live[0].key, 'message:channel:intake:one');
+  assert.equal(quietChatRows({}, 'channel-thread', {}, { legacy: { nodes: [{ kind: 'user', seq: 11, source: { kind: 'user' }, content: [{ type: 'text', text: '本机回复' }] }, node] } }).length, 2, 'a newer live channel mirror cannot hide an admitted local user message');
+  const history = { messages: [{ ...live[0] }, { ...live[0], id: 'channel:delivery:one', mirrorKey: 'delivery:one', direction: 'delivery', role: 'assistant', seq: 14, time: 14, text: '已交付结果' }] };
+  assert.deepEqual(quietChatRows(history, 'channel-thread', {}, chat).map(row => row.text), ['飞书原文', '已交付结果']);
+  assert.deepEqual(quietChatRows({ ...history, hasMore: true, messages: [history.messages[1]] }, 'channel-thread', {}, chat).map(row => row.text), ['已交付结果'], 'live nodes never reveal unloaded older pages');
+  for (const patch of [{ source: { kind: 'system' } }, { mirrorKey: '' }, { direction: 'outbound' }, { role: 'assistant' }]) {
+    assert.deepEqual(quietChatRows({ messages: [{ ...live[0], ...patch }] }), [], 'invalid channel rows cannot gain user or assistant visibility');
+  }
+});

@@ -13,7 +13,7 @@ export function startupWindowPlugin(mainPath) {
       if (resolve(id) !== target) return null;
       let code = source.replaceAll('\r\n', '\n');
       for (const [before, after] of [
-        ['async function main() {', "async function main() {\n    closeBenchgoStartup = await openStartupWindow({ app, BrowserWindow, nativeImage, page: join(app.getAppPath(), 'renderer', 'splash.html'), iconPath: join(process.resourcesPath, 'icon.png') });\n    await ensureBenchgoPlugin(process.resourcesPath);"],
+        ['async function main() {', "async function main() {\n    closeBenchgoStartup = await openStartupWindow({ app, BrowserWindow, nativeImage, nativeTheme, page: join(app.getAppPath(), 'renderer', 'splash.html'), iconPath: join(process.resourcesPath, 'icon.png') });\n    await ensureBenchgoPlugin(process.resourcesPath);"],
         ['function reportFatal(error, source) {', 'function reportFatal(error, source) {\n    closeBenchgoStartup?.();'],
       ]) {
         if (code.split(before).length !== 2) throw new Error('Official startup changed; review startup window integration');

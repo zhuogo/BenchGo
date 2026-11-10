@@ -12,12 +12,17 @@ test('desktop startup keeps the app identity and local mascot beside the DeepSee
   assert.ok(html.includes('<h1>BenchGo</h1>'));
   assert.ok(html.indexOf('class="startup-mascot"') < html.indexOf('<h1>BenchGo</h1>'));
   assert.ok(html.indexOf('</div>') < html.indexOf('class="startup-engine"'));
-  assert.ok(html.includes('<img class="startup-mascot" src="../../../assets/brand/benchgo-app.svg" alt="BenchGo"'));
+  assert.ok(html.includes('<img class="startup-mascot" src="../../../assets/brand/benchgo-mark.svg" alt="BenchGo"'));
   assert.doesNotMatch(html, /<svg[\s>]/);
   assert.ok(html.includes('<span class="startup-engine">DeepSeek</span>'));
   assert.doesNotMatch(html, /(?:src|href)="https?:/);
   assert.ok(css.includes('.startup-brand { display: flex; flex-direction: row;'));
   assert.ok(css.includes('animation: startup-scan'));
+  assert.ok(css.includes('animation: startup-arrive 400ms'));
+  assert.ok(css.includes('[data-part="eyes"]'));
+  assert.ok(css.includes('@media (prefers-color-scheme: dark)'));
+  assert.ok(css.includes('color-scheme: light dark'));
+  assert.doesNotMatch(css, /animation-delay:\s*[^0]/);
   assert.ok(css.includes('@media (prefers-reduced-motion: reduce)'));
   assert.ok(css.includes('animation: none;'));
 });
@@ -25,7 +30,7 @@ test('desktop startup keeps the app identity and local mascot beside the DeepSee
 test('native splash stays local and only updates its waiting message after 20 seconds', async () => {
   const html = await readFile(new URL('./renderer/splash.html', import.meta.url), 'utf8');
   const script = await readFile(new URL('./renderer/splash.js', import.meta.url), 'utf8');
-  assert.ok(html.includes('<img class="startup-mascot" src="../../../assets/brand/benchgo-app.svg" alt="BenchGo"'));
+  assert.ok(html.includes('<img class="startup-mascot" src="../../../assets/brand/benchgo-mark.svg" alt="BenchGo"'));
   assert.ok(html.indexOf('class="startup-mascot"') < html.indexOf('<h1>BenchGo</h1>'));
   assert.ok(html.indexOf('</div>') < html.indexOf('id="startup-status"'));
   assert.doesNotMatch(html, /<svg[\s>]/);
