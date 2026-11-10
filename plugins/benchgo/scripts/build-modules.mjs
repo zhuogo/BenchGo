@@ -2,6 +2,7 @@ import { cp, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/p
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { prepareWorkbenchVendors } from '../../workbench/scripts/vendor-adapter.mjs';
+import { buildNoise } from '../../voice/scripts/build-noise.mjs';
 
 const packageRoot = fileURLToPath(new URL('../', import.meta.url));
 const pluginsRoot = resolve(packageRoot, '..');
@@ -12,7 +13,7 @@ const inside = (root, path) => {
 const modules = {
   harness: ['package.json', 'src'],
   superagent: ['package.json', 'src', 'shared', 'prompts/builtin-layer.md', 'assets/pet'],
-  voice: ['package.json', 'src', 'client/audio-worklet.js', 'locale'],
+  voice: ['package.json', 'src', 'client/audio-worklet.js', 'lib', 'locale'],
   interactive: ['package.json', 'src'],
   efficiency: ['package.json', 'src'],
   workbench: ['package.json', 'src', 'lib'],
@@ -21,6 +22,7 @@ const modules = {
 /** Preserve module files and import.meta.url resources; shared code stays at the package root. */
 export async function buildModules() {
   await prepareWorkbenchVendors();
+  await buildNoise();
   const output = resolve(packageRoot, 'lib/modules');
   const roots = new Map(await Promise.all(Object.keys(modules).map(async name => [name, await realpath(join(pluginsRoot, name))])));
   const destination = path => {

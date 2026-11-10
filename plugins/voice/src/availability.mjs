@@ -1,4 +1,5 @@
 import { VoiceError, validateRealtime } from './config.mjs';
+import { callStreamingReason } from './call-streaming.mjs';
 
 const protocols = {
   asr: ['transcriptions', 'transcriptions-sse', 'openai-websocket'],
@@ -50,14 +51,15 @@ export async function voiceAvailability(store, providers) {
     return { available, reasons };
   }
   const config = await voiceSnapshot(store, providers);
+  const callReason = callStreamingReason(config);
   for (const [name, enabled, ready, label] of [
     ['voiceInput', config.dictation, config.asr.configured, '语音输入'],
     ['readAloud', config.readAloud, config.tts.configured, '自动朗读'],
-    ['realtimeVoice', config.call, config.asr.configured && config.tts.configured, '实时通话'],
+    ['realtimeVoice', config.call, config.asr.configured && config.tts.configured && !callReason, '实时通话'],
   ]) {
     available[name] = !!(enabled && ready);
     if (!enabled) reasons[name] = `请在设置 → 语音中启用${label}`;
-    else if (!ready) reasons[name] = '共享 Voice 模型、协议、供应商路由或凭据不可用，请检查设置 → 语音';
+    else if (!ready) reasons[name] = name === 'realtimeVoice' && callReason || '共享 Voice 模型、协议、供应商路由或凭据不可用，请检查设置 → 语音';
   }
   return { available, reasons };
 }

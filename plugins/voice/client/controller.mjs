@@ -2,6 +2,7 @@ import { readVoiceEvents, RealtimeRecognizer } from './asr.mjs';
 import { Capture, PCMPlayer } from './media.mjs';
 import { SpeakableChunker, SpeechQueue } from './speech.mjs';
 import { AgentFeed } from './agent-feed.mjs';
+import { callStreamingReason } from '../src/call-streaming.mjs';
 const url=path=>new URL(path,document.baseURI);
 const joinTranscript=(left,right)=>left&&right&&/[\p{L}\p{N}.!?,;:]$/u.test(left)&&/^[\p{L}\p{N}]/u.test(right)&&!/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]$/u.test(left)&&! /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(right)?left+' '+right:left+right;
 async function json(action,args={}) {
@@ -82,6 +83,7 @@ export function createVoiceController(ctx,deps={}) {
     if(ending)await ending;if(capture)await api.hangup();gen=++generation;
     const config=state.getSnapshot().config||await api.load();if(gen!==generation||disposed)return;
     if(!config[mode==='call'?'call':'dictation']||!config.asr.configured||mode==='call'&&!config.tts.configured)throw Error('请先在「设置 → 媒体 → 语音」启用功能并配置模型');
+    if(mode==='call'){const reason=callStreamingReason(config);if(reason)throw Error(reason);}
     attach(sessionId);patch({mode,sessionId,phase:'starting',error:'',transcript:'',recoveryText:recoveries.get(sessionId)||'',recoverySessionId:recoveries.has(sessionId)?sessionId:null,canRetry:false,muted:false,playbackLevel:0});pendingText.clear();awaitingFinal.clear();latestUtterance=0;inputActive=false;inputSequence++;
     if(mode==='call'){
       const [audioResult,leaseResult]=await Promise.allSettled([ensurePlayer(),requestJson('call.start',{sessionId,deviceId})]);
@@ -106,11 +108,11 @@ export function createVoiceController(ctx,deps={}) {
     onSpeechEnd:(id,meta={})=>{if(gen!==generation)return;if(id===latestUtterance)inputActive=false;if(meta.cancelled){awaitingFinal.delete(id);pendingText.delete(id);}refreshPhase();},
     onPartial:(text,meta={})=>{if(gen!==generation)return;if(mode==='dictation'){const combined=joinTranscript(finalText,text);patch({transcript:combined});if(draftConflict)recover(sessionId,combined);writeDraft(combined);}else if((meta.utteranceId??latestUtterance)===latestUtterance)patch({transcript:[...pendingText.values(),text].filter(Boolean).join('\n')});},
     onFinal:(text,meta={})=>{if(gen!==generation)return;const id=meta.utteranceId??latestUtterance;awaitingFinal.delete(id);if(id===latestUtterance)inputActive=false;if(mode==='dictation'){finalText=joinTranscript(finalText,text);patch({transcript:finalText});if(draftConflict)recover(sessionId,finalText);writeDraft(finalText);}else{pendingText.set(id,text);const pending=[...pendingText.entries()].sort((a,b)=>a[0]-b[0]).map(x=>x[1]).join('\n');patch({transcript:pending});recover(sessionId,pending);if(!inputActive&&!awaitingFinal.size)void deliver(gen,inputSequence).catch(error=>{if(gen===generation)fail(error);});}},
-    onError:error=>{if(gen===generation){fail(error);void api.hangup();}}});
+    onError:error=>{if(gen===generation){if(mode==='call'){const text=state.getSnapshot().transcript;if(text?.trim())recover(sessionId,text);}fail(error);void api.hangup();}}});
     capture=createdCapture;await createdCapture.start();if(gen!==generation||disposed){await createdCapture.dispose();return;}patch({phase:'listening'});blocked=false;
     }catch(error){if(gen===generation)await api.hangup();else await createdCapture?.dispose();throw error;}finally{starting=false;}
   }
-  async function applyConfig(config){const previous=state.getSnapshot().config,snapshot=state.getSnapshot();patch({config});if(!previous)return;const changed=key=>JSON.stringify(previous[key])!==JSON.stringify(config[key]);if(snapshot.mode!=='idle'&&(changed('asr')||snapshot.mode==='call'&&!config.call||snapshot.mode==='dictation'&&!config.dictation)){await api.hangup();return;}if(changed('tts')||snapshot.mode!=='call'&&previous.readAloud&&!config.readAloud){stopSpeech();if(!config.readAloud||!config.tts?.configured)patch({readEnabled:false});}if(snapshot.mode==='call'&&!config.tts?.configured)await api.hangup();}
+  async function applyConfig(config){const previous=state.getSnapshot().config,snapshot=state.getSnapshot();patch({config});if(!previous)return;const changed=key=>JSON.stringify(previous[key])!==JSON.stringify(config[key]);if(snapshot.mode!=='idle'&&(changed('asr')||snapshot.mode==='call'&&(!config.call||callStreamingReason(config))||snapshot.mode==='dictation'&&!config.dictation)){await api.hangup();return;}if(changed('tts')||snapshot.mode!=='call'&&previous.readAloud&&!config.readAloud){stopSpeech();if(!config.readAloud||!config.tts?.configured)patch({readEnabled:false});}if(snapshot.mode==='call'&&!config.tts?.configured)await api.hangup();}
   const api={state,
     selectSession(sessionId){const snapshot=state.getSnapshot();if(snapshot.sessionId===sessionId)return;if(snapshot.mode!=='idle'||snapshot.readEnabled)void api.hangup();patch({sessionId,transcript:'',error:'',recoveryText:recoveries.get(sessionId)||'',recoverySessionId:recoveries.has(sessionId)?sessionId:null,canRetry:false});},
     async retryPending(){if(state.getSnapshot().mode!=='call'||delivering)return;if(inputActive||awaitingFinal.size)throw Error('请等待当前语音识别完成后重试');try{await deliver(generation,inputSequence);}catch(error){fail(error);throw error;}},

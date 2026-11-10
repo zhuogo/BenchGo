@@ -146,7 +146,7 @@ test('configuration rejects unsafe URL shapes, unknown fields and header injecti
 test('routes inherit official owner-only Connection routes and use streaming bounded request bodies', () => {
   const registered = [], effects = [];
   mountWeb({ effect(fn) { effects.push(fn()); }, connection: { fetch: { register(route) { registered.push(route); return () => {}; } } } }, memory());
-  assert.deepEqual(registered.map(route => route.path), ['/api/voice', '/api/voice/transcribe', '/api/voice/speech', '/api/voice/worklet']);
+  assert.deepEqual(registered.map(route => route.path), ['/api/voice', '/api/voice/transcribe', '/api/voice/speech', '/api/voice/worklet', '/api/voice/noise-worklet', '/api/voice/noise-wasm']);
   assert.equal(registered.slice(0, 3).every(route => route.requestBody === 'streaming' && route.methods.join() === 'POST'), true);
   assert.deepEqual(registered[3].methods, ['GET']);
   for (const cleanup of effects) cleanup?.();

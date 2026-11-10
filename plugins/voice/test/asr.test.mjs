@@ -99,19 +99,19 @@ test('slow realtime event consumer is closed rather than accumulating unbounded 
   asr.events(id,'');asr.append(id,'',new Uint8Array(4800),1);for(let i=0;i<65;i++)ws.event({type:'conversation.item.input_audio_transcription.delta',item_id:'item',delta:'text '+i});assert.equal(asr.sessions.size,0);assert.equal(ws.closed,true);
 });
 test('Capture SSE revisions replace same chunk and preserve previous chunks',async()=>{
-  const partial=[],final=[];let n=0;const c=new Capture({transcribe:async(_blob,_signal,update)=>{n++;update(n===1?'hell':'worl');update(n===1?'hello':'world');return n===1?'hello':'world';},onPartial:text=>partial.push(text),onFinal:text=>final.push(text)});
-  for(let i=0;i<120;i++)c.accept(new Int16Array(480).fill(2000));await c.stop();assert.equal(final[0],'hello world');assert.ok(partial.includes('hello worl'));assert.equal(partial.some(x=>x.includes('hellhello')),false);
+  const partial=[],final=[];let n=0;const c=new Capture({transcribe:async(_blob,_signal,update)=>{const id=n++;update(['hell','worl','hello worl'][id]);update(['hello','world','hello world'][id]);return ['hello','world','hello world'][id];},onPartial:text=>partial.push(text),onFinal:text=>final.push(text)});
+  for(let i=0;i<120;i++)c.accept(new Int16Array(480).fill(2000),.9);await tick();await c.stop();assert.equal(final[0],'hello world');assert.ok(partial.includes('hello worl'));assert.equal(partial.some(x=>x.includes('hellhello')),false);
 });
 test('parallel SSE chunks reduce tail latency while preserving transcript order',async()=>{
   let active=0,maxActive=0,calls=0;const final=[];
-  const c=new Capture({parallel:true,transcribe:async(_blob,_signal,update)=>{const id=++calls;active++;maxActive=Math.max(maxActive,active);await new Promise(resolve=>setTimeout(resolve,id===1?30:5));update(id===1?'甲':'乙');active--;return id===1?'甲':'乙';},onFinal:text=>final.push(text)});
-  for(let i=0;i<120;i++)c.accept(new Int16Array(480).fill(2000));await c.stop();
-  assert.equal(calls,2);assert.equal(maxActive,2);assert.deepEqual(final,['甲乙']);
+  const c=new Capture({parallel:true,transcribe:async(_blob,_signal,update)=>{const id=++calls;active++;maxActive=Math.max(maxActive,active);await new Promise(resolve=>setTimeout(resolve,id===1?30:5));const text=id===1?'甲':id===2?'乙':'甲乙';update(text);active--;return text;},onFinal:text=>final.push(text)});
+  for(let i=0;i<120;i++)c.accept(new Int16Array(480).fill(2000),.9);await c.pending;await c.stop();
+  assert.equal(calls,3);assert.equal(maxActive,2);assert.deepEqual(final,['甲乙']);
 });
 test('Capture realtime sends frames before silence and stop waits for final',async()=>{
   const sent=[],partial=[],final=[];let finish;
   const c=new Capture({realtime:{append:async(frames,id,update)=>{sent.push(frames.reduce((n,f)=>n+f.length,0));update('修订');},commit:()=>new Promise(resolve=>finish=resolve),close:async()=>{}},onPartial:text=>partial.push(text),onFinal:text=>final.push(text)});
-  for(let i=0;i<20;i++)c.accept(new Int16Array(480).fill(2000));await tick();assert.ok(sent.length>=2);let stopped=false;const stop=c.stop().then(()=>stopped=true);await tick();assert.equal(stopped,false);finish('最终');await stop;assert.deepEqual(final,['最终']);assert.ok(partial.length);
+  for(let i=0;i<20;i++)c.accept(new Int16Array(480).fill(2000),.9);await tick();assert.ok(sent.length>=2);let stopped=false;const stop=c.stop().then(()=>stopped=true);await tick();assert.equal(stopped,false);finish('最终');await stop;assert.deepEqual(final,['最终']);assert.ok(partial.length);
 });
 test('normalized browser events reject early stream errors and abort late partials',async()=>{
  const c=new AbortController(),seen=[];await readVoiceEvents(new Response('{"type":"partial","text":"one"}\n{"type":"final","text":"two"}\n'),c.signal,e=>seen.push(e.text));assert.deepEqual(seen,['one','two']);

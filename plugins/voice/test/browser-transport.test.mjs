@@ -54,6 +54,12 @@ for (const protocol of ['transcriptions', 'transcriptions-sse', 'openai-websocke
       });
       t.after(() => api.dispose());
       const args = { sessionId: 's', inputActions: { captureInsertion: () => ({ start: 0, end: 0, draftRev: 1 }) } };
+      if (mode === 'call' && protocol === 'transcriptions') {
+        await assert.rejects(api.startCall(args), /SSE/);
+        assert.deepEqual(calls, ['config']);
+        assert.equal(captures.length, 0);
+        return;
+      }
       if (mode === 'call') { await api.toggleRead('s'); await api.startCall(args); }
       else await api.startDictation(args);
       const capture = captures[0];

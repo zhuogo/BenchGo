@@ -5,6 +5,26 @@ import { Context } from '@deepseek-ai/cordis';
 globalThis.document||={baseURI:'https://voice.example/'};
 const flush=()=>new Promise(resolve=>setTimeout(resolve,0));
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
+test('call rejects JSON ASR and buffered TTS before acquiring media or lease without rewriting configuration',async()=>{
+  for(const blocked of ['asr','tts']){
+    const config={dictation:true,readAloud:true,call:true,asr:{configured:true,protocol:blocked==='asr'?'transcriptions':'transcriptions-sse'},tts:{configured:true,stream:blocked!=='tts'}};
+    const h=setup({json:async action=>action==='config'?{config}:{}});
+    await assert.rejects(h.api.startCall({sessionId:'s'}),blocked==='asr'?/SSE/:/开启流式播放/);
+    assert.equal(h.captures.length,0);assert.equal(h.players.length,0);assert.deepEqual(h.calls.map(x=>x.action),['config']);
+    assert.deepEqual(h.api.state.getSnapshot().config,config);await h.api.dispose();
+  }
+});
+test('failed final recognition preserves the visible partial in its own session without sending or retrying',async()=>{
+  const h=setup();await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+  c.onSpeechStart(1);c.onPartial('你好，请检查这段转录',{utteranceId:1});c.onError(Error('最终识别失败'));await flush();
+  assert.equal(h.api.state.getSnapshot().mode,'idle');assert.equal(h.api.state.getSnapshot().error,'最终识别失败');
+  assert.equal(h.api.state.getSnapshot().recoveryText,'你好，请检查这段转录');assert.equal(h.api.state.getSnapshot().recoverySessionId,'s');
+  assert.deepEqual(h.texts(),[]);assert.equal(h.captures[0].disposed,true);
+  h.api.selectSession('other');assert.equal(h.api.state.getSnapshot().recoveryText,'');h.api.selectSession('s');
+  assert.equal(h.api.state.getSnapshot().recoveryText,'你好，请检查这段转录');
+  const inserted=[];assert.equal(h.api.recoverToDraft({captureInsertion:()=>({start:0,end:0}),insertText:text=>{inserted.push(text);return true;},persistDraft(){}}),true);
+  assert.deepEqual(inserted,['你好，请检查这段转录']);assert.deepEqual(h.texts(),[]);await h.api.dispose();
+});
 test('idle voice does not poll; pending speech alone arms and drains the flush timer',async()=>{
   const timers=new Map();let next=0;
   const h=setup({setInterval:(fn,ms)=>{const id=++next;timers.set(id,{fn,ms});return id;},clearInterval:id=>timers.delete(id),createChunker:()=>({raw:'',text:'',push(text){this.text+=text;return [];},flushIdle(){const text=this.text;this.text='';return text?[text]:[];},finish(){return this.flushIdle();}})});

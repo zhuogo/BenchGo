@@ -134,7 +134,7 @@
       <div class="grid" style="margin-top:16px">
         <article class="card"><h3><a href="01-设备与远程连接/设计.md">设备与远程连接</a></h3><p>Link 管理配对、授权设备、远程工作台与直连 / 中继传输。远程会话复用原宿主能力，不另建 Agent 引擎。</p></article>
         <article class="card"><h3><a href="02-工作台与Agent/设计.md">工作台与 Agent</a></h3><p>工作台、项目与会话入口，原生 Agent 聚合，共享组件、视觉规范与产物预览；统一产品形象与交互。Windows 启动容器跟随系统主题，标题与透明吉祥物同步进入并有轻表情，规则见<a href="02-工作台与Agent/前端视觉规范.md#windows-启动页">启动页视觉</a>。</p></article>
-        <article class="card"><h3><a href="03-实时语音/设计.md">实时语音</a></h3><p>ASR → 原会话 Agent → TTS。提供输入、朗读和通话，复用原会话权限与审批。按供应商能力显式选择标准或扩展流式协议，音频到达即有序播放。</p></article>
+        <article class="card"><h3><a href="03-实时语音/设计.md">实时语音</a></h3><p>本地降噪与语音检测 → 流式 ASR → 原会话 Agent → 流式 TTS。分片即时预览，完整语段确认后进入 Agent；复用原会话权限与审批，音频到达即有序播放。</p></article>
         <article class="card"><h3><a href="04-模型与工具/设计.md">模型与工具</a></h3><p>共享供应商、模型、工具与技能能力。显式选择优先，模型 ID 和协议值原样保存，可用性必须反映真实状态。</p></article>
         <article class="card"><h3><a href="05-更新与发布/设计.md">更新与发布</a></h3><p>官方引擎 pin、BenchGo 单包构建、品牌注入、独立插件更新与回滚；开发产物和正式发布分别验证。</p></article>
         <article class="card"><h3><a href="06-superagent/设计.md">SuperAgent</a></h3><p>可信入口、Router 分诊、工单执行、Worker 自校验、Router 表达交付与后台记忆；执行使用官方 Harness Agent。</p></article>

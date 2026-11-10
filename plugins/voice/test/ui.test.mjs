@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { createModuleSource } from '../../benchgo/client/modules.mjs';
 import * as settingsState from '../client/settings-state.mjs';
+import { callStreamingReason } from '../src/call-streaming.mjs';
 
 const require = createRequire(new URL('../../benchgo/package.json', import.meta.url));
 const { transformSync } = require('esbuild');
@@ -21,7 +22,7 @@ function mount(overrides = {}, hookValues = [], response = {}) {
   const document = { baseURI: 'https://benchgo.test/', createElement: () => ({ remove() {} }), head: { append() {} }, dispatchEvent() {} };
   const module = { exports: {} }, moduleSource = createModuleSource();
   moduleSource.update({base: true, superagent: overrides.superagent !== false, voice: overrides.voice !== false});
-  runInNewContext(code, { module, exports: module.exports, document, console, URL, AbortController, fetch: async (url, options) => { requests.push({ url: String(url), ...JSON.parse(options.body) }); return { ok: true, json: async () => response }; }, require: path => path.endsWith('segmented-control.jsx') ? { SegmentedControl: 'SegmentedControl' } : path.endsWith('iconsax.jsx') ? { UIIcon: () => null } : path.endsWith('modules.mjs') ? { moduleSource } : path === 'react' ? react : path.includes('ui-primitives') ? primitives : path.endsWith('controller.mjs') ? { createVoiceController: () => controller } : path.endsWith('settings-state.mjs') ? settingsState : path.endsWith('.css') ? { default: css } : (() => { throw Error(path); })() });
+  runInNewContext(code, { module, exports: module.exports, document, console, URL, AbortController, fetch: async (url, options) => { requests.push({ url: String(url), ...JSON.parse(options.body) }); return { ok: true, json: async () => response }; }, require: path => path.endsWith('call-streaming.mjs') ? { callStreamingReason } : path.endsWith('segmented-control.jsx') ? { SegmentedControl: 'SegmentedControl' } : path.endsWith('iconsax.jsx') ? { UIIcon: () => null } : path.endsWith('modules.mjs') ? { moduleSource } : path === 'react' ? react : path.includes('ui-primitives') ? primitives : path.endsWith('controller.mjs') ? { createVoiceController: () => controller } : path.endsWith('settings-state.mjs') ? settingsState : path.endsWith('.css') ? { default: css } : (() => { throw Error(path); })() });
   const ctx = { effect() {}, slots: { inject: (_, action) => action(), register: (options, component) => { registrations.push({ options, component }); } } };
   module.exports.mountMediaSettings(ctx);
   if (overrides.voice !== false) module.exports.apply(ctx);
@@ -30,6 +31,19 @@ function mount(overrides = {}, hookValues = [], response = {}) {
   return { render, effects, refs, actions, state, controller, registrations, requests, stateChanges, exports: module.exports };
 }
 const nodes = root => root && typeof root === 'object' ? [root, ...root.children.flatMap(nodes)] : [];
+
+test('non-streaming ASR and buffered playback keep independent features available but disable call with a settings reason', () => {
+  for (const blocked of ['asr', 'tts']) {
+    const config = { dictation: true, readAloud: true, call: true, asr: { configured: true, model: 'ASR', protocol: blocked === 'asr' ? 'transcriptions' : 'transcriptions-sse' }, tts: { configured: true, model: 'TTS', protocol: 'speech', stream: blocked !== 'tts' } };
+    const h = mount({ mode: 'idle', config });
+    const tree = h.render(), buttons = nodes(tree).filter(node => node.type === 'button');
+    assert.equal(buttons.find(node => node.props['aria-label'] === '开始语音通话').props.disabled, true);
+    assert.equal(buttons.find(node => node.props['aria-label'] === '语音转文本').props.disabled, false);
+    assert.equal(buttons.find(node => node.props['aria-label'] === '自动朗读开启').props.disabled, false);
+    assert(nodes(tree).some(node => node.props.label === callStreamingReason(config)));
+    assert(nodes(tree).some(node => node.type === 'button' && node.children.includes(blocked === 'tts' ? '通话需开启流式播放 · 配置' : '通话需流式识别 · 配置')));
+  }
+});
 test('call composer contains only microphone and hangup controls, never read or send', async () => {
   const h = mount();
   const tree = h.render(), buttons = nodes(tree).filter(node => node.type === 'button');

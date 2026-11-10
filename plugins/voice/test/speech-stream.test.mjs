@@ -29,7 +29,9 @@ test('explicit streaming protocol persists through partial save and reload witho
     const reopened = await new VoiceConfig({ dataDir: directory }).open();
     assert.deepEqual(reopened.value, { ...previous, tts: { ...previous.tts, protocol: 'speech-stream' } });
     const providers = { resolve: async () => ({ baseURL: 'https://shared.test/v1', apiKey: 'server-only-key' }) };
-    assert.deepEqual((await voiceAvailability(reopened, providers)).available, { voiceInput: true, readAloud: true, realtimeVoice: true });
+    const availability = await voiceAvailability(reopened, providers);
+    assert.deepEqual(availability.available, { voiceInput: true, readAloud: true, realtimeVoice: false });
+    assert.match(availability.reasons.realtimeVoice, /流式播放/);
     const h = createVoiceHandlers(reopened, { providers, fetcher: async (url, options) => {
       assert.equal(url, 'https://shared.test/v1/audio/speech');
       assert.equal(options.headers.authorization, 'Bearer server-only-key');

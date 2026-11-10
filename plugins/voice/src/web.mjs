@@ -5,6 +5,7 @@ import { LIMITS, validateWav, transcribe, upstreamFailure } from './media.mjs';
 import { streamTranscription } from './asr.mjs';
 import { RealtimeASR } from './realtime.mjs';
 import { speechRequest } from './tts.mjs';
+import { callStreamingReason } from './call-streaming.mjs';
 import { CallLeases } from './calls.mjs';
 import { readFile } from 'node:fs/promises';
 import { WebSocketServer } from 'ws';
@@ -49,7 +50,7 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
     if (!callId && !store.value[feature]) throw new VoiceError('Start a voice call before requesting call audio', 409);
     const signals = [shutdown, generations[feature === 'dictation' ? 'asr' : 'tts'].signal];
     if (!callId) signals.push(generations[feature].signal);
-    if (callId) { if (!store.value.call) throw new VoiceError('Voice calls are disabled', 409); signals.push(calls.media(callId)); }
+    if (callId) { if (!store.value.call) throw new VoiceError('Voice calls are disabled', 409); const reason = callStreamingReason(store.value); if (reason) throw new VoiceError(reason, 409); signals.push(calls.media(callId)); }
     return scope(request, signals);
   };
   const reserve = (request, feature, kind) => { const operation = operationFor(request, feature); try { return { operation, release: acquire(kind) }; } catch (error) { operation.close(); throw error; } };
@@ -57,6 +58,8 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
     dispose,
     acceptRealtimeSocket: sockets.accept,
     worklet: protect(async () => new Response(await readFile(new URL('../client/audio-worklet.js', import.meta.url)), { headers: { ...headers, 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'private, no-store' } })),
+    noiseWorklet: protect(async () => new Response(await readFile(new URL('../lib/noise-worklet.js', import.meta.url)), { headers: { ...headers, 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'private, no-store' } })),
+    noiseWasm: protect(async () => new Response(await readFile(new URL('../lib/rnnoise.wasm', import.meta.url)), { headers: { ...headers, 'content-type': 'application/wasm', 'cache-control': 'private, no-store' } })),
     config: protect(async request => {
       const input = await readJson(request);
       if (input.action === 'providers') return Response.json({ providers: providers ? await providers.list() : [] }, { headers });
@@ -64,6 +67,7 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
       if (input.action === 'asr.start') {
         const callId = request.headers.get('x-voice-call-id') || '';
         if (callId ? !store.value.call : !store.value.dictation) throw new VoiceError('Voice input is disabled', 409);
+        if (callId) { const reason = callStreamingReason(store.value); if (reason) throw new VoiceError(reason, 409); }
         const signals = [shutdown, generations.asr.signal]; if (!callId) signals.push(generations.dictation.signal); if (callId) signals.push(calls.media(callId));
         const release = acquire('asr'), opening = new AbortController(); signals.push(opening.signal);
         const abort = () => opening.abort(); request.signal.addEventListener('abort', abort, { once: true }); if (request.signal.aborted) abort();
@@ -73,7 +77,7 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
       if (input.action === 'asr.end') { realtime.get(input.id, request.headers.get('x-voice-call-id') || ''); realtime.close(input.id); return Response.json({ ok: true }, { headers }); }
       if (input.action === 'config') return Response.json({ config: await snapshot() }, { headers });
       if (input.action === 'configure') { await store.configure(input.config); if (!unsubscribe) invalidate(); return Response.json({ config: await snapshot(), revision }, { headers }); }
-      if (input.action === 'call.start') { if (!store.value.call) throw new VoiceError('Voice calls are disabled', 409); const startingRevision = revision; await provider('asr'); await provider('tts'); if (startingRevision !== revision || !store.value.call) throw new VoiceError('Voice configuration changed; start the call again', 409); return Response.json({ call: calls.start(input), revision }, { headers }); }
+      if (input.action === 'call.start') { if (!store.value.call) throw new VoiceError('Voice calls are disabled', 409); const reason = callStreamingReason(store.value); if (reason) throw new VoiceError(reason, 409); const startingRevision = revision; await provider('asr'); await provider('tts'); if (startingRevision !== revision || !store.value.call) throw new VoiceError('Voice configuration changed; start the call again', 409); return Response.json({ call: calls.start(input), revision }, { headers }); }
       if (input.action === 'call.heartbeat') return Response.json({ call: calls.heartbeat(input), revision }, { headers });
       if (input.action === 'call.end') return Response.json(calls.end(input), { headers });
       throw new VoiceError('Unknown Voice action');
@@ -156,6 +160,8 @@ export function mountWeb(ctx, store, options = {}) {
     ctx.effect(() => ctx.connection.fetch.register({ path, methods: ['POST'], requestBody: 'streaming', fetch: handler }));
   }
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/voice/worklet', methods: ['GET'], requestBody: 'buffered', fetch: handlers.worklet }));
+  ctx.effect(() => ctx.connection.fetch.register({ path: '/api/voice/noise-worklet', methods: ['GET'], requestBody: 'buffered', fetch: handlers.noiseWorklet }));
+  ctx.effect(() => ctx.connection.fetch.register({ path: '/api/voice/noise-wasm', methods: ['GET'], requestBody: 'buffered', fetch: handlers.noiseWasm }));
   store.acceptRealtimeSocket = handlers.acceptRealtimeSocket;
   ctx.effect(() => () => { if (store.acceptRealtimeSocket === handlers.acceptRealtimeSocket) delete store.acceptRealtimeSocket; });
   ctx.inject?.(['webServer'], child => {

@@ -2,14 +2,6 @@
 const RATE=24000, HALF=12;
 function kernel(x,c){if(Math.abs(x)>=HALF)return 0;return (Math.abs(x)<1e-8?c:Math.sin(Math.PI*c*x)/(Math.PI*x))*(.42+.5*Math.cos(Math.PI*x/HALF)+.08*Math.cos(2*Math.PI*x/HALF));}
 function coefficients(c){return Array.from({length:256},(_,phase)=>{const row=new Float32Array(HALF*2);let sum=0;for(let j=0;j<row.length;j++)sum+=(row[j]=kernel(phase/256+HALF-1-j,c));for(let j=0;j<row.length;j++)row[j]/=sum;return row;});}
-class CaptureResampler {
-  constructor(rate){this.step=rate/RATE;this.cutoff=Math.min(1,RATE/rate)*.94;this.coefficients=coefficients(this.cutoff);this.ring=new Float32Array(4096);this.written=0;this.position=0;}
-  push(value,output){this.ring[this.written++%4096]=value;while(this.position+HALF<this.written){let sum=0;const integer=Math.floor(this.position),start=integer-HALF+1,row=this.coefficients[Math.min(255,Math.floor((this.position-integer)*256))];for(let j=0;j<HALF*2;j++){const index=start+j;sum+=(index<0?0:this.ring[index%4096])*row[j];}output(sum);this.position+=this.step;}}
-}
-class VoiceCaptureProcessor extends AudioWorkletProcessor {
-  constructor(){super();this.resampler=new CaptureResampler(sampleRate);this.frame=new Int16Array(480);this.used=0;this.muted=false;this.inputEpoch=0;this.port.onmessage=({data:m})=>{if(m.type==='mute'){this.muted=!!m.value;this.inputEpoch=m.epoch??this.inputEpoch;this.used=0;this.resampler=new CaptureResampler(sampleRate);}};}
-  process(inputs){const channels=inputs[0];if(this.muted||!channels?.length)return true;for(let i=0;i<channels[0].length;i++){let value=0;for(const c of channels)value+=c[i]||0;this.resampler.push(value/channels.length,v=>{this.frame[this.used++]=Math.round(Math.max(-1,Math.min(1,v))*32767);if(this.used===480){const data=this.frame.buffer;this.port.postMessage({type:'pcm',epoch:this.inputEpoch,data},[data]);this.frame=new Int16Array(480);this.used=0;}});}return true;}
-}
 class VoicePlaybackProcessor extends AudioWorkletProcessor {
   constructor(){super();this.ring=new Float32Array(RATE*8);this.epoch=0;this.coefficients=coefficients(Math.min(1,sampleRate/RATE)*.94);this.reset();this.port.onmessage=({data:m})=>{if(m.type==='clear'){this.epoch=m.epoch;this.reset();}else if(m.epoch===this.epoch&&m.type==='pcm'){const samples=new Int16Array(m.data);if(samples.length+this.written-Math.floor(this.position)>this.ring.length-HALF){this.port.postMessage({type:'error',epoch:this.epoch,error:'播放缓冲超限'});return;}this.spans.push({at:this.written,id:m.id});for(const v of samples)this.ring[this.written++%this.ring.length]=v/32768;}else if(m.epoch===this.epoch&&m.type==='end')this.ends.push({at:this.written,id:m.id});};}
   // Start after a short 60 ms cushion; grow it adaptively only when a stream
@@ -31,5 +23,4 @@ class VoicePlaybackProcessor extends AudioWorkletProcessor {
     if(rendered){this.meterFrames+=out.length;if(this.meterFrames>=sampleRate/15){this.meterFrames=0;let energy=0;for(const value of out)energy+=value*value;this.port.postMessage({type:'level',level:Math.min(1,Math.sqrt(energy/out.length)*4),epoch:this.epoch});}this.stable+=out.length/sampleRate;if(this.stable>=3){this.target=Math.max(RATE*.06,this.target-RATE*.02);this.stable=0;}}else this.stable=0;return true;
   }
 }
-registerProcessor('voice-capture',VoiceCaptureProcessor);
 registerProcessor('voice-playback',VoicePlaybackProcessor);
