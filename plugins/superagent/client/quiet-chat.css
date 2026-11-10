@@ -84,4 +84,3 @@
 @media(hover:none),(pointer:coarse){.ba-message-toolbar{opacity:1;pointer-events:auto}.ba-message-toolbar button,.ba-message-toolbar time,.ba-action-popover button,.ba-reaction-chip,.ba-chat-bottom-button{min-width:44px;min-height:44px}}
 @media(prefers-reduced-motion:reduce){.ba-loading-dots i,.ba-reaction-chip,.ba-chat-message[data-streaming=true] .ba-chat-content>[class*="_markdown"]>*{animation:none}.ba-message-toolbar,.ba-message-toolbar button,.ba-action-popover button,.ba-action-popover button span,.ba-chat-bottom,.ba-chat-bottom-button{transition:none;transform:none}.ba-action-popover button:hover span,.ba-chat-bottom-button:active{transform:none}}
 
-.ba-chat-channel-label{display:block;margin-bottom:6px;font-size:11px;line-height:1.5;color:var(--cmd-muted,#85858a)}
