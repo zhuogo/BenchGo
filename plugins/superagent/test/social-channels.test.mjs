@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { createTelegramAdapter, normalizeTelegramEvent } from '../src/channels/telegram.mjs';
-import { createDiscordAdapter, normalizeDiscordEvent } from '../src/channels/discord.mjs';
+import { createTelegramAdapter, normalizeTelegramEvent } from '../src/channels/telegram/index.mjs';
+import { createDiscordAdapter, normalizeDiscordEvent } from '../src/channels/discord/index.mjs';
 const config = () => ({ enabled: true, botTokenRef: 'ref', ownerIds: ['owner'], chatIds: [] });
 test('Telegram reports topic and mention facts without owner grants', () => {
   const update = { message: { message_id: 2, from: { id: 'owner' }, chat: { id: -2, type: 'supergroup' }, text: '@bot hello', entities: [{ type: 'mention', offset: 0, length: 4 }], message_thread_id: 3, date: 1700000000 } };

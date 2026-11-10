@@ -36,6 +36,31 @@ test('legacy business states migrate once without replaying execution or rewriti
   } finally { reopened.close(); }
 });
 
+test('a legacy failed ticket retains its explicit archive after migration to waiting', async t => {
+  const db = await fixture(t);
+  db.createTicket({ id: 'archived-failure', threadId: 'thread', target: '历史失败单', mandate: {} });
+  db.createAssignment('archived-failure', {});
+  const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
+  db.commitResult('archived-failure', { result: { outcome: 'failed', summary: '历史失败' }, assignment, uniqueKey: 'historical-failure' });
+  const raw = new DatabaseSync(db.path);
+  raw.prepare("UPDATE sa_tickets SET status='failed' WHERE id='archived-failure'").run();
+  raw.prepare("DELETE FROM sa_migrations WHERE id='ticket-three-states-v1'").run();
+  const metadata = { version: 1, archived: true, archiveRevision: 1, cleanupReceiptId: 'original-archive' };
+  raw.prepare('INSERT INTO task_meta(key,value) VALUES (?,?)').run('task-presentation:ticket:archived-failure', JSON.stringify(metadata));
+  raw.close();
+  const reopened = createAssistantOrchestrationStore({ filename: db.path });
+  try {
+    assert.equal(reopened.getTicket('archived-failure').status, 'waiting');
+    assert.equal(reopened.getTicket('archived-failure').archived, true);
+    assert.deepEqual(reopened.listTickets({ archived: false }), []);
+    assert.deepEqual(reopened.listTickets({ archived: true }).map(row => row.id), ['archived-failure']);
+    assert.deepEqual(reopened.claimAssignments('no-replay', { validateMandate: () => true }), []);
+    const check = new DatabaseSync(db.path);
+    try { assert.deepEqual(JSON.parse(check.prepare('SELECT value FROM task_meta WHERE key=?').get('task-presentation:ticket:archived-failure').value), metadata); }
+    finally { check.close(); }
+  } finally { reopened.close(); }
+});
+
 test('failure delivery waits without automatic rerun, a fresh authorized revision resumes the same session', async t => {
   const db = await fixture(t);
   const source = { channel: 'desktop', sessionId: 'owner' };

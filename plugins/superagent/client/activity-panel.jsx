@@ -14,14 +14,10 @@ import { ResourceState } from './resource-state.jsx';
 import { petImageUrl } from './pet-state.mjs';
 import { assistantConfigSync } from './config-sync.mjs';
 import css from './activity-panel.css';
-import { activityLabels as labels, terminalActivityStates as terminal, liveActivityStates, activeActivityStates, attentionActivityStates, archivedActivityTicket } from './activity-data.mjs';
+import { activityLabels as labels, terminalActivityStates as terminal, boardTicketRows } from './activity-data.mjs';
 import { useAssistantActivity } from './use-activity.jsx';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
 import { ApprovalReview } from './approval-review.jsx';
-
-const executionPhases = { preparing: '准备执行', executing: '正在执行', verifying: '正在保存结果' };
-const detailPhase = row => row.execution?.observed !== false && ['running', 'active', 'resuming'].includes(row.status) && executionPhases[row.execution?.phase]
-  ? executionPhases[row.execution.phase] : `${row.stateLabel || labels[row.status] || row.status} · ${row.phase}`;
 
 const taskTitle = row => row?.kind === 'ticket' ? normalizeTicketTitle(row.taskMeta?.title || row.title, row.target) : row?.taskMeta?.title || row?.title || '任务详情';
 
@@ -33,13 +29,6 @@ const timeShort = value => {
   const hm = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
   return date.toDateString() === today.toDateString() ? hm : `${date.getMonth() + 1}月${date.getDate()}日 ${hm}`;
 };
-function day(value) {
-  const date = dateValue(value); if (!date) return '时间未知';
-  const today = new Date(), yesterday = new Date(); yesterday.setDate(today.getDate() - 1);
-  if (date.toDateString() === today.toDateString()) return '今天';
-  if (date.toDateString() === yesterday.toDateString()) return '昨天';
-  return date.toLocaleDateString('zh-CN');
-}
 const TabIcon = ({ path, size = 17 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{path}</svg>;
 const tabIcons = {
   tasks: <TabIcon path={<><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01" /></>} />,
@@ -53,7 +42,7 @@ function BoardEmpty({ identity, onReturn }) {
   return <div className="ba-board-empty" role="status">
     <BoardPet identity={identity} size={88} />
     <strong>下一件事，一起完成</strong>
-    <p>在聊天里交代一件事，进度和结果会留在这里。</p>
+    <p>进行和等待中的工单会显示在这里，历史记录可在任务管理查看。</p>
     <Button variant="outline" onClick={onReturn}>回到聊天<UIIcon name="chevronLeft" className="ba-board-arrow" size={14} /></Button>
   </div>;
 }
@@ -80,13 +69,13 @@ const ActivityContext = createContext(null);
 export function ActivityProvider({ children }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef(null), id = useId();
-  const close = () => { setOpen(false); trigger.current?.focus(); };
+  const close = () => { setOpen(false); requestAnimationFrame(() => trigger.current?.focus()); };
   return <ActivityContext.Provider value={{ open, setOpen, trigger, id, close }}><style>{css}</style>{children}</ActivityContext.Provider>;
 }
 export function ActivityTrigger({ api }) {
   const { open, setOpen, trigger, id } = useContext(ActivityContext);
   const { rows } = useAssistantActivity(api);
-  const count = rows?.filter(row => liveActivityStates(row.status)).length || 0;
+  const count = boardTicketRows(rows || []).length;
   const label = open ? '收起看板' : '展开看板';
   return <Tooltip label={label} side="bottom" delayMs={450} portal><Button variant="ghost" ref={trigger} type="button" className="ba-activity-trigger" aria-label={label} aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}><IconPanelLeftOutlineRegular className="ba-activity-panel-icon" size={15} />{count > 0 && <span className="ba-activity-count" aria-hidden="true">{count}</span>}</Button></Tooltip>;
 }
@@ -160,26 +149,33 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
     return () => animations.forEach(animation => animation.cancel());
   }, [rows, open, tab]);
   useEffect(() => { if (open) panel.current?.focus(); }, [open ]);
+  useEffect(() => {
+    if (!open) return;
+    const main = panel.current?.parentElement?.querySelector(':scope > .ba-main');
+    if (!main) return;
+    const media = window.matchMedia('(max-width: 1000px)'), wasInert = main.inert;
+    const update = () => { main.inert = wasInert || media.matches; };
+    update(); media.addEventListener('change', update);
+    return () => { media.removeEventListener('change', update); main.inert = wasInert; };
+  }, [open]);
   const stop = async row => {
     if (stopping !== null || !await confirm({ title: `停止“${taskTitle(row)}”？`, description: '停止后将拦截这项任务的后续执行。', confirmLabel: '停止任务', cancelLabel: '继续执行', destructive: true })) return;
     panel.current?.querySelector('.ba-task-inline')?.focus({ preventScroll: true });
     setStopping(row.key); setActionError(null);
-    try { await api(row.kind === 'goal' ? 'goalCancel' : 'ticketStop', row.kind === 'goal' ? { id: row.id, rowVersion: row.rowVersion } : { ticketId: row.id }); await refresh(); }
+    try { await api('ticketStop', { ticketId: row.id }); await refresh(); }
     catch (cause) { setActionError({ message: cause.message || '任务未能停止，请重试。', row }); } finally { setStopping(null); }
   };
   const selected = rows?.find(row => row.key === selectedKey);
   const selectedWaiting = selected?.kind === 'ticket' ? ticketWaiting(selected) : null;
-  const sorted = (rows || []).filter(row => !archivedActivityTicket(row) && !row.taskMeta?.deleted).sort((a, b) => (dateValue(b.time)?.getTime() || 0) - (dateValue(a.time)?.getTime() || 0));
-  const active = sorted.filter(row => activeActivityStates(row.status));
-  const attention = sorted.filter(row => attentionActivityStates.has(row.status));
-  const rest = sorted.filter(row => !activeActivityStates(row.status) && !attentionActivityStates.has(row.status));
-  const groups = new Map(); for (const row of rest) { const key = day(row.time); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }
+  const sorted = boardTicketRows(rows || []).sort((a, b) => (dateValue(b.time)?.getTime() || 0) - (dateValue(a.time)?.getTime() || 0));
+  const active = sorted.filter(row => row.status === 'running');
+  const attention = sorted.filter(row => row.status === 'waiting');
   const name = identity?.name || '未命名';
   const modelEntry = identity?.models?.[0];
   const modelLabel = typeof modelEntry === 'string' ? modelEntry : modelEntry?.modelId || modelEntry?.id || modelEntry?.name || '';
-  const goalCount = sorted.filter(row => row.kind === 'goal').length;
-  const ticketCount = sorted.filter(row => row.kind === 'ticket').length;
-  const activeTickets = active.filter(row => row.kind === 'ticket').length;
+  const goalCount = (rows || []).filter(row => row.kind === 'goal' && !row.taskMeta?.deleted).length;
+  const ticketCount = sorted.length;
+  const activeTickets = active.length;
   const renderRow = row => <BoardRow key={row.key} row={row} onOpen={selectTask} />;
   const syncState = error || identityError ? 'error' : rows === null || (!identity && identityLoading) ? 'loading' : 'ready';
   const syncLabel = syncState === 'error' ? '连接待恢复' : syncState === 'loading' ? '正在读取' : connection === 'live' ? '实时执行动态' : '最近任务记录';
@@ -198,7 +194,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
     try { const result = await api(method, { ticketId: row.id }); if (method === 'ticketResume' && result?.queued === false) throw new Error('原工单暂未恢复，请查看等待原因。'); await refreshTickets([row.id]); }
     catch (cause) { setActionError({ message: cause.message || '操作失败，请重试。', row }); } finally { setStopping(null); }
   };
-  const tabs = [['tasks', '任务', active.length], ['approvals', '审核', approvalCount], ['identity', '身份', 0]].map(([value, label, count]) => ({ value, icon: tabIcons[value], label: <>{label}{(count > 0 || value === 'approvals') && <span className="ba-board-tab-count">{count ?? '—'}</span>}</> }));
+  const tabs = [['tasks', '任务', sorted.length], ['approvals', '审核', approvalCount], ['identity', '身份', 0]].map(([value, label, count]) => ({ value, icon: tabIcons[value], label: <>{label}{(count > 0 || value === 'approvals') && <span className="ba-board-tab-count">{count ?? '—'}</span>}</> }));
   const loadingState = <ResourceState kind="loading" title="正在读取任务" description="正在同步进度与结果，请稍候。" />;
   return <>{confirmation}<div className="ba-activity-backdrop" hidden={!open} onClick={close} aria-hidden="true" />
     <aside id={id} ref={panel} hidden={!open} tabIndex={-1} className="ba-activity-panel ba-board" aria-label="助手看板" onKeyDown={onKeyDown}>
@@ -211,9 +207,8 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
         {error && tab === 'tasks' && <ResourceState kind="error" title="暂时无法更新任务" description={`${rows !== null ? '已保留上次的任务记录，请重试。' : '任务记录暂时无法读取，请检查连接后重试。'} ${error}`} onAction={refresh} />}
         {completeness?.truncated && <p className="ba-activity-detail-note" role="status">当前仅同步了部分工单，未读取到的记录仍未知。</p>}
         {tab === 'tasks' && <>{rows === null && !error && loadingState}
-          {attention.length > 0 && <section className="ba-board-section"><h3 className="ba-board-day">待处理<span>{attention.length}</span></h3>{attention.map(renderRow)}</section>}
+          {attention.length > 0 && <section className="ba-board-section"><h3 className="ba-board-day">等待<span>{attention.length}</span></h3>{attention.map(renderRow)}</section>}
           {rows !== null && active.length > 0 && <section className="ba-board-section"><button type="button" className="ba-board-section-head" aria-expanded={activeOpen} aria-controls={`${id}-active`} onClick={() => setActiveOpen(value => !value)}><span>进行中</span><span className="ba-board-section-count">{active.length}</span><UIIcon name="chevronDown" size={13} /></button><div id={`${id}-active`} hidden={!activeOpen}>{active.map(renderRow)}</div></section>}
-          {rows !== null && [...groups].map(([label, items]) => <section className="ba-activity-day ba-board-section" key={label}><h3 className="ba-board-day">{label}<span>{items.length}</span></h3>{items.map(renderRow)}</section>)}
           {rows !== null && !sorted.length && !error && <BoardEmpty identity={identity} onReturn={close} />}</>}
         {ctx && SessionProvider && renderSlot ? (reviewStarted || open) && <div hidden={tab !== 'approvals'}><ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} compact active={open} onCountChange={setApprovalCount} onOpenReminder={id => { close(); onOpenReminder?.(id); }} /></div> : tab === 'approvals' && <ResourceState kind="error" title="审核会话暂不可用" description="请前往任务管理连接原审批会话。" actionLabel="前往审核" onAction={() => openResource('approvals')} />}
         {tab === 'identity' && <section className="ba-board-section"><div className="ba-board-section-intro"><h3>身份与概览</h3><p>你的助手，你的工作方式。</p></div>
@@ -227,10 +222,10 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
           </div></section>}
       </div><footer hidden={!!selected} className="ba-board-footer"><Button variant="ghost" className="ba-board-manage" onClick={() => openResource('tasks')}><UIIcon name="schedules" size={16} />任务管理</Button><span className="ba-board-updated" title={updated ? `上次同步：${stamp(updated)}` : undefined}>{error || identityError ? '连接待恢复' : manualRefreshing ? '更新中…' : updated ? `${timeShort(updated)} 更新` : '尚未同步'}</span><Tooltip label="刷新看板" side="top" delayMs={450} portal><Button variant="ghost" className="ba-icon" aria-label="刷新看板" disabled={loading || identityLoading || manualRefreshing} onClick={refreshAll}><UIIcon name="refresh" className={manualRefreshing ? 'ba-board-refreshing' : undefined} size={16} /></Button></Tooltip></footer>
     <style>{taskCss}</style>
-    <TaskDetail inline open={!!selected && open} title={selected && <TaskStatusTitle title={taskTitle(selected)} status={selected.status} label={selected.kind === 'ticket' ? labels[selected.status] : detailPhase(selected)} />} onClose={returnToList} footer={selected && <div className="ba-activity-detail-actions">
+    <TaskDetail inline open={!!selected && open} title={selected && <TaskStatusTitle title={taskTitle(selected)} status={selected.status} label={labels[selected.status]} />} onClose={returnToList} footer={selected && <div className="ba-activity-detail-actions">
       {selected.kind === 'ticket' && selected.executionSession?.available && <Button variant="ghost" disabled={stopping !== null || !onOpenExecution} onClick={async () => { setStopping(selected.key); setActionError(null); try { await onOpenExecution(selected.executionSession); } catch (cause) { setActionError({ row: selected, message: `执行会话暂时无法打开：${cause.message || cause}` }); } finally { setStopping(null); } }}>查看执行会话</Button>}
       {selected.kind === 'ticket' && selected.status === 'running' && !Object.values(selected.executionControl || {}).some(Boolean) && <Button variant="ghost" disabled={stopping !== null} onClick={() => control(selected, 'ticketPause')}>暂停工单</Button>}
-      <Button variant="ghost" onClick={() => openResource('tasks', selected.kind === 'ticket' ? { ticketId: selected.id } : undefined)}>前往任务管理</Button>{!terminal.has(selected.status) && !selectedWaiting && <Button variant="outline" disabled={stopping !== null} onClick={() => stop(selected)}>{stopping === selected.key ? '正在提交停止…' : '停止任务'}</Button>}</div>}>{selected && <>
+      <Button variant="ghost" onClick={() => openResource('tasks', { ticketId: selected.id })}>前往任务管理</Button>{!terminal.has(selected.status) && !selectedWaiting && <Button variant="outline" disabled={stopping !== null} onClick={() => stop(selected)}>{stopping === selected.key ? '正在提交停止…' : '停止任务'}</Button>}</div>}>{selected && <>
       {actionError?.row.key === selected.key && <ResourceState kind="error" title="操作未能完成" description={actionError.message} actionLabel="重新读取" onAction={async () => { setActionError(null); await refreshTickets([selected.id]); }} />}
       {selected.kind === 'ticket' && <TicketWaiting key={`${selected.id}:${selected.instructionRevision}:${selected.resultVersion}`} api={api} ticket={selected} onRefresh={refresh} onOpenResources={openResource} />}
       {selected.detail && selected.detail !== selectedWaiting?.reason && <section className="ba-activity-detail"><h3>{selected.status === 'completed' ? '结果摘要' : '当前进展'}</h3><p>{selected.detail}</p></section>}

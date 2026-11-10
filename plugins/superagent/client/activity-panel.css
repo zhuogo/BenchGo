@@ -1,4 +1,6 @@
 .ba-root:has(.ba-activity-panel){position:relative}
+/* Keep the complete conversation, including its elevated composer, below the board. */
+.ba-root:has(>.ba-activity-panel)>.ba-main{position:relative;isolation:isolate;z-index:0}
 .ba-root .ba-activity-trigger{display:inline-flex;align-items:center;justify-content:center;gap:4px;flex:none;min-width:32px;min-height:32px;padding:4px;border:0;border-radius:8px;background:transparent;color:var(--ba-muted);cursor:pointer}
 .ba-root .ba-activity-trigger:hover,.ba-root .ba-activity-trigger[aria-expanded=true]{background:var(--ba-hover)}
 .ba-activity-count{font-size:11px;font-variant-numeric:tabular-nums}

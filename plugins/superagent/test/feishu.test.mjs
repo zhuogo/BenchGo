@@ -1,12 +1,87 @@
+import { feishuConfig } from '../src/channels/feishu/definition.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCipheriv, createHash } from 'node:crypto';
-import { createFeishuAdapter, feishuConfig, normalizeFeishuEvent, extractFeishuSource } from '../src/feishu.mjs';
+import { createFeishuAdapter, normalizeFeishuEvent, extractFeishuSource } from '../src/channels/feishu/index.mjs';
 import { channelSourceAllowed as feishuSourceAllowed } from '../src/channel-policy.mjs';
+import { channelSessionKey } from '../src/channel-policy.mjs';
 
 const config = () => feishuConfig({ enabled: true, appId: 'app', appSecretRef: 'secret-ref', verificationTokenRef: 'verify-ref', botOpenId: 'bot', ownerOpenIds: ['owner'], chatIds: ['chat'] });
 const event = () => ({ schema: '2.0', header: { app_id: 'app', token: 'verify-value', event_id: 'event', event_type: 'im.message.receive_v1' }, event: { sender: { sender_type: 'user', sender_id: { open_id: 'owner' } }, message: { message_id: 'message', chat_id: 'chat', chat_type: 'group', create_time: '1780000000000', message_type: 'text', content: JSON.stringify({ text: '@_user_1 帮我看看' }), mentions: [{ id: { open_id: 'bot' }, key: '@_user_1' }] } } });
 const req = (body, headers = {}) => new Request('https://benchgo.test/feishu', { method: 'POST', body: JSON.stringify(body), headers });
+const sourceThread = source => ({ id: 'im', sessionId: 'session', source, sourceKey: channelSessionKey(source) });
+const settleNames = () => new Promise(resolve => setImmediate(resolve));
+
+test('IM names reuse configured groups and cache historical direct sender lookups without blocking catalog', async () => {
+  const current = { ...config(), groups: [{ chatId: 'group', name: '产品设计组', mode: 'all' }] }, calls = [];
+  let release; const contact = new Promise(resolve => { release = resolve; });
+  const adapter = createFeishuAdapter({ allowUnboundAuthorization: true, getConfig: () => current,
+    credentials: { resolve: async () => ({ value: 'secret' }) }, ingest() {}, fetcher: async url => {
+      calls.push(url);
+      if (url.includes('/auth/')) return Response.json({ code: 0, tenant_access_token: 'token', expire: 3600 });
+      if (url.includes('/contact/')) { await contact; return Response.json({ code: 0, data: { user: { open_id: 'owner', name: '张三' } } }); }
+      return Response.json({ code: 0, data: { items: [{ message_id: 'message', chat_id: 'chat', sender: { id: 'owner', id_type: 'open_id', sender_type: 'user' } }] } });
+    } });
+  const direct = sourceThread({ channel: 'feishu', appId: 'app', sourceType: 'direct', conversationId: 'chat', chatId: 'chat', messageId: 'message' });
+  const group = sourceThread({ ...direct.source, sourceType: 'group', conversationId: 'group', chatId: 'group' });
+  assert.deepEqual(await adapter.sourceNames([direct, group]), { [group.sourceKey]: { conversationName: '产品设计组' } });
+  await settleNames();
+  assert.ok(calls.at(-1).includes('/contact/v3/users/owner?user_id_type=open_id'));
+  await adapter.sourceNames([direct, group]);
+  release(); await settleNames();
+  assert.equal((await adapter.sourceNames([direct]))[direct.sourceKey].senderName, '张三');
+  for (let i = 0; i < 5; i++) await adapter.sourceNames([direct, group]);
+  assert.equal(calls.length, 3, 'one token, one old message anchor and one contact query');
+  assert.equal(normalizeFeishuEvent(event(), current).source.senderId, 'owner');
+  current.enabled = false;
+  assert.deepEqual(await adapter.sourceNames([direct, group]), {});
+  adapter.dispose();
+});
+
+test('IM name lookups are bounded, failures are cached and cannot change channel health', async () => {
+  const current = config(), calls = []; let release;
+  const lookup = new Promise(resolve => { release = resolve; });
+  const adapter = createFeishuAdapter({ allowUnboundAuthorization: true, getConfig: () => current,
+    credentials: { resolve: async () => ({ value: 'secret' }) }, ingest() {}, fetcher: async url => {
+      calls.push(url);
+      if (url.includes('/auth/')) return Response.json({ code: 0, tenant_access_token: 'token', expire: 3600 });
+      await lookup; return Response.json({ code: 99991672 });
+    } });
+  const rows = Array.from({ length: 6 }, (_, i) => sourceThread({ channel: 'feishu', appId: 'app', sourceType: 'direct', conversationId: `chat${i}`, chatId: `chat${i}`, senderId: `sender${i}` }));
+  assert.deepEqual(await adapter.sourceNames(rows), {});
+  await settleNames();
+  assert.equal(calls.filter(url => url.includes('/contact/')).length, 3);
+  await adapter.sourceNames(rows); assert.equal(calls.length, 4);
+  release(); await settleNames();
+  await adapter.sourceNames(rows.slice(0, 3)); await settleNames();
+  assert.equal(calls.length, 4, 'permission failure is cached across catalog refreshes');
+  assert.equal((await adapter.status()).error, null);
+  assert.deepEqual(await adapter.sourceNames([{ ...rows[0], sourceKey: 'wrong' }, { ...rows[0], source: { ...rows[0].source, appId: 'another-app' } }]), {});
+  assert.equal(calls.length, 4);
+  adapter.dispose();
+});
+
+test('IM names never accept foreign message anchors or leak a pending lookup across config changes', async () => {
+  const current = config(), calls = []; let foreignAnchor = true, release;
+  const lookup = new Promise(resolve => { release = resolve; });
+  const adapter = createFeishuAdapter({ allowUnboundAuthorization: true, getConfig: () => current,
+    credentials: { resolve: async () => ({ value: 'secret' }) }, ingest() {}, fetcher: async url => {
+      calls.push(url);
+      if (url.includes('/auth/')) return Response.json({ code: 0, tenant_access_token: 'token', expire: 3600 });
+      if (url.includes('/messages/')) return Response.json({ code: 0, data: { items: [{ message_id: 'anchor', chat_id: foreignAnchor ? 'another-chat' : 'chat', sender: { id: 'owner', sender_type: 'user' } }] } });
+      await lookup; return Response.json({ code: 0, data: { user: { open_id: 'owner', name: '旧连接联系人' } } });
+    } });
+  const thread = sourceThread({ channel: 'feishu', appId: 'app', sourceType: 'direct', conversationId: 'chat', chatId: 'chat', messageId: 'anchor' });
+  await adapter.sourceNames([thread]); await settleNames();
+  assert.equal(calls.some(url => url.includes('/contact/')), false);
+  foreignAnchor = false;
+  current.botOpenId = 'updated-bot'; // changing config invalidates the previous failed cache
+  await adapter.sourceNames([thread]); await settleNames();
+  assert.ok(calls.at(-1).includes('/contact/'));
+  current.enabled = false; release(); await settleNames();
+  assert.deepEqual(await adapter.sourceNames([thread]), {});
+  adapter.dispose();
+});
 
 test('new group scope separates direct messages and preserves legacy access defaults', () => {
   const legacy = config(), source = { channel: 'feishu', appId: 'app', chatId: 'other', conversationId: 'other', sourceType: 'direct' };

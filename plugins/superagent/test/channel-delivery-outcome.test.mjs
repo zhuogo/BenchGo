@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createFeishuAdapter } from '../src/feishu.mjs';
-import { createWhatsAppAdapter } from '../src/whatsapp.mjs';
-import { createTelegramAdapter } from '../src/channels/telegram.mjs';
+import { createFeishuAdapter } from '../src/channels/feishu/index.mjs';
+import { createWhatsAppAdapter } from '../src/channels/whatsapp/index.mjs';
+import { createTelegramAdapter } from '../src/channels/telegram/index.mjs';
 import { createChannelRuntime } from '../src/channel-runtime.mjs';
 import { loadChannelModules } from '../src/channel-catalog.mjs';
 

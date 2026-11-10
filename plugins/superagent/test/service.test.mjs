@@ -414,6 +414,19 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const pauseTicket = app.store.orchestration.createTicket({ threadId: ticket.threadId, target: 'Pause original investigation', mandate: ticket.mandate });
   const controlTool = ctx.tools.get('assistant_ticket_control', agent);
   assert.ok(controlTool.parameters.properties.operation.enum.includes('pause'));
+  assert.ok(controlTool.parameters.properties.operation.enum.includes('resume'));
+  app.store.orchestration.createThread({ id: 'foreign-source', source: { type: 'feishu', id: 'foreign-source' } });
+  const globalTickets = [
+    { channel: 'desktop', sessionId: 'another-desktop', threadId: 'another-side' },
+    { channel: 'feishu', sourceType: 'group', conversationId: 'channel-group' },
+  ].map(source => app.store.orchestration.createTicket({ threadId: 'foreign-source', target: 'Global management fixture', mandate: { ...ticket.mandate, source } }));
+  for (const row of globalTickets) {
+    assert.equal((await ticketsTool.execute({ op: 'get', id: row.id }, { agent })).ticket.id, row.id);
+    await assert.rejects(controlTool.execute({ id: row.id, operation: 'supplement' }, { agent }), /不属于当前会话/);
+    assert.equal((await controlTool.execute({ id: row.id, operation: 'pause' }, { agent })).ticket.executionControl.paused, true);
+    assert.deepEqual((await controlTool.execute({ id: row.id, operation: 'resume' }, { agent })).ticket.executionControl, {});
+    assert.deepEqual(app.store.orchestration.getTicket(row.id).mandate, row.mandate);
+  }
   const pauseReceipt = await controlTool.execute({ id: pauseTicket.id, operation: 'pause' }, { agent });
   assert.equal(pauseReceipt.ticket.executionControl.paused, true);
   assert.equal(pauseReceipt.input.kind, 'pause'); assert.equal(pauseReceipt.input.state, 'applied');

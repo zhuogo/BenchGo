@@ -131,7 +131,7 @@ test('cleanup previews globally, then confirms the exact selected subset and cre
   assert.equal(token.actorId, 'desktop-owner');
 });
 
-test('cleanup rejects expanded scope, duplicate IDs, non-one-time approval and local side chats', async () => {
+test('cleanup rejects expanded scope, duplicate IDs and non-one-time approval', async () => {
   for (const selected of [['missing'], ['one', 'one']]) {
     const f = fixture(); await assert.rejects(f.cleanup({ op: 'commit', previewId: 'preview', ids: selected, requestId: 'archive' }), { code: 'CLEANUP_SCOPE_DENIED' });
     assert.equal(f.approvals.length, 0);
@@ -141,9 +141,20 @@ test('cleanup rejects expanded scope, duplicate IDs, non-one-time approval and l
     await assert.rejects(f.cleanup({ op: 'commit', previewId: 'preview', ids: ['one'], requestId: 'archive' }), { code: 'MANAGEMENT_APPROVAL_DENIED' });
     assert.equal(f.calls.some(call => call.op === 'createCleanupConfirmation'), false);
   }
+});
+
+test('a current local side chat can preview, archive and restore global ticket history', async () => {
   const f = fixture({ threadId: 'side' });
-  await f.settings({ op: 'catalog' });
-  await assert.rejects(f.cleanup({ op: 'preview' }), { code: 'CLEANUP_SCOPE_DENIED' });
+  await f.cleanup({ op: 'preview', ids: ['one'] });
+  assert.deepEqual(f.calls[0].args.scope, { owner: 'desktop-owner', mode: 'global' });
+  await f.cleanup({ op: 'commit', previewId: 'preview', ids: ['one'], requestId: 'side-archive' });
+  assert.equal(f.calls.at(-1).op, 'commitCleanup');
+  await f.cleanup({ op: 'restore', receiptId: 'receipt' });
+  await f.cleanup({ op: 'restore', previewId: 'restore-preview', ids: ['one'], requestId: 'side-restore' });
+  assert.equal(f.calls.at(-1).op, 'restoreCleanup');
+  assert.equal(f.approvals.length, 2);
+  f.state.threads[0].source = { channel: 'feishu' };
+  await assert.rejects(f.cleanup({ op: 'preview' }), { code: 'MANAGEMENT_OWNER_REQUIRED' });
 });
 
 test('restore uses its persisted manifest and exact host-approved subset', async () => {

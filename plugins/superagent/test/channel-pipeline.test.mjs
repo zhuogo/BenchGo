@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createUnifiedChannelIngress } from '../src/channel-ingress.mjs';
-import { feishuIncomingEvent } from '../src/feishu.mjs';
+import { feishuIncomingEvent } from '../src/channels/feishu/index.mjs';
 import { channelSessionKey, authorizeChannelConnection, channelSourceAllowed } from '../src/channel-policy.mjs';
 import { channelDefinition, channelIds, loadChannelModules } from '../src/channel-catalog.mjs';
 

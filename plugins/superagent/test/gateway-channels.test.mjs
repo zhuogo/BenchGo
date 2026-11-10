@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { createApiAdapter } from '../src/channels/api.mjs';
-import { createWebhookAdapter } from '../src/channels/webhook.mjs';
+import { createApiAdapter } from '../src/channels/api/index.mjs';
+import { createWebhookAdapter } from '../src/channels/webhook/index.mjs';
 import { channelMessageChunks } from '../src/channels/message-chunks.mjs';
 
 test('long channel replies retain every Unicode character within platform limits', () => {

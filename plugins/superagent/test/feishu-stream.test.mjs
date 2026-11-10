@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createFeishuStream } from '../src/feishu-stream.mjs';
+import { createFeishuStream } from '../src/channels/feishu/stream.mjs';
 
 test('long connection persists authenticated events and stops old callbacks after disable', async () => {
   let handler, closed = 0;

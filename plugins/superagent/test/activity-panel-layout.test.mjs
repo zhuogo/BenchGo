@@ -31,7 +31,7 @@ async function fixture() {
         const [config,setConfig] = useState(initialConfig);
         window.updateConfig = config => { assistantConfigSync.accept({...config,revision:++serial},assistantConfigSync.begin());setConfig(config); };
         return <ActivityProvider><style>{css}</style><div className="ba-root">
-          <main className="ba-main fixture-chat"><header><h1>主聊天</h1><ActivityTrigger api={api}/></header><p>BenchGo · 看板组件验收</p><div className="ba-assistant-section" style={{width:200}}><div className="ba-assistant-heading"><AssistantCard name="BenchGo" status="running" action="focus" onOpen={()=>{}}/></div></div></main>
+          <main className="ba-main fixture-chat"><header><h1>主聊天</h1><ActivityTrigger api={api}/></header><p>BenchGo · 看板组件验收</p><div className="ba-assistant-section" style={{width:200}}><div className="ba-assistant-heading"><AssistantCard name="BenchGo" status="running" action="focus" onOpen={()=>{}}/></div></div><div data-composer-seat style={{position:'absolute',bottom:0,left:0,right:0,zIndex:7,background:'white',padding:12}}><textarea aria-label="发送内容" defaultValue="保留草稿"/><button type="button" aria-label="发送消息" onClick={()=>window.sentMessages=(window.sentMessages||0)+1}>发送</button></div></main>
           <ActivityPanel api={api} sessionId={window.scenarioControl.state==='stream'?'router-main':undefined} assistantConfig={config} onOpenResources={(tab,selection)=>{window.resourceCalls.push(tab);window.resourceSelections.push(selection);}}/>
         </div></ActivityProvider>;
       }
@@ -46,6 +46,9 @@ async function fixture() {
           {id:'blocked',title:'补充项目访问权限',status:'waiting',assignments:[{state:'blocked'}],createdAt:at(40),updatedAt:at(4)},
           {id:'uncertain',title:'核实交付文件的版本',status:'waiting',createdAt:at(50),updatedAt:at(5)},
           {id:'done',title:'整理今天的工作记录',status:'completed',createdAt:at(60),updatedAt:at(6),results:[{version:1,summary:'内部工作摘要',selfCheck:{summary:'已检查要求与执行结果'},outcome:'completed',delivery:{action:'deliver',text:'已归档工作记录，保留了相关文件与说明。'}}],deliveries:[{state:'sent',payload:{type:'ticket.result',instructionRevision:1,resultVersion:1}}]},
+          {id:'archived-waiting',title:'已归档等待工单',status:'waiting',archived:true,createdAt:at(8)},
+          {id:'cleaned-waiting',title:'已整理等待工单',status:'waiting',cleanup:{id:'cleanup-receipt'},createdAt:at(9)},
+          {id:'deleted-running',title:'已删除进行工单',status:'running',taskMeta:{deleted:true},createdAt:at(10)},
         ];
         const goals=[{id:'goal',target:'持续维护 BenchGo 的一致体验',status:'active',rowVersion:7,createdAt:at(120),updatedAt:at(7),ticketIds:['running']}];
         window.updateExecution = step => {
@@ -77,7 +80,6 @@ async function fixture() {
               worker:{id:'uncertain-worker',label:'主 Worker',status:'running',activity:'停止前正在读取资料',updatedAt:at(1)}}});
           document.dispatchEvent(new Event('benchgo:assistant-changed'));
         };
-        window.makeLongGoal=()=>{goals[0].target='长期任务目标：'+ '保持页面一致与执行可靠。'.repeat(30);goals[0].error='当前错误：'+ 'long-unbroken-error-'.repeat(60);document.dispatchEvent(new Event('benchgo:assistant-changed'));};
         const config={name:'',models:[{modelId:'provider/opaque-model@2026-11'}],cardMotion:false};
         const api=async(name,args)=>{
           window.apiCalls.push([name,args]);
@@ -124,6 +126,46 @@ async function fixture() {
   </style></head><body><div id="root"></div><script>${js}</script></body></html>`;
 }
 
+test('activity count matches current ticket rows and narrow overlays cover the complete composer', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
+  const browser=await chromium.launch({headless:true,executablePath});
+  try{
+    const page=await browser.newPage({viewport:{width:768,height:900},reducedMotion:'reduce'});
+    page.setDefaultTimeout(5000);
+    await page.setContent(await fixture());
+    const trigger=page.locator('.ba-activity-trigger'), panel=page.locator('.ba-activity-panel');
+    await page.waitForFunction(()=>document.querySelector('.ba-activity-count')?.textContent==='5');
+    for(const width of [768,390]){
+      await page.setViewportSize({width,height:900});
+      await trigger.click();await panel.waitFor();
+      assert.equal(await panel.locator('[data-task-key]').count(),5);
+      assert.equal(await panel.locator('[role="tab"]').filter({hasText:'任务'}).locator('.ba-board-tab-count').innerText(),'5');
+      assert.equal(await page.locator('.ba-main').evaluate(node=>node.inert),true,'narrow open board makes the whole conversation inert');
+      const covered=await page.locator('[data-composer-seat]').evaluate(node=>{
+        const box=node.getBoundingClientRect(), samples=[box.left+8,(box.left+box.right)/2,box.right-8];
+        return samples.every(x=>document.elementFromPoint(x,box.bottom-8)?.closest('.ba-activity-panel,.ba-activity-backdrop'));
+      });
+      assert.equal(covered,true,'the complete composer surface is below the board or its backdrop');
+      await page.locator('[aria-label="发送消息"]').evaluate(node=>node.focus());
+      assert.equal(await page.locator('[aria-label="发送消息"]').evaluate(node=>node===document.activeElement),false,'covered send controls cannot receive keyboard focus');
+      if(captureDir){await mkdir(captureDir,{recursive:true});await page.screenshot({path:join(captureDir,`overlay-composer-${width}.png`)});}
+      await page.keyboard.press('Escape');await panel.waitFor({state:'hidden'});
+      await page.waitForFunction(()=>!document.querySelector('.ba-main').inert&&document.activeElement===document.querySelector('.ba-activity-trigger'));
+      assert.equal(await page.getByRole('textbox',{name:'发送内容'}).inputValue(),'保留草稿');
+      await page.getByRole('button',{name:'发送消息',exact:true}).click();
+    }
+    assert.equal(await page.evaluate(()=>window.sentMessages),2,'closing restores send controls');
+    await page.evaluate(()=>window.renderScenario('dynamic'));
+    await page.waitForFunction(()=>document.querySelector('.ba-activity-count')?.textContent==='1');
+    await trigger.click();await panel.locator('[data-task-key="ticket:running"] button').click();
+    await page.evaluate(()=>window.updateExecution('delivered'));
+    await page.waitForFunction(()=>!document.querySelector('.ba-activity-count'));
+    await panel.getByRole('region',{name:'任务详情',exact:true}).waitFor();
+    await panel.getByRole('button',{name:'返回列表',exact:true}).click();
+    await panel.getByText('下一件事，一起完成',{exact:true}).waitFor();
+    assert.equal(await panel.locator('[data-task-key]').count(),0,'completed ticket leaves the task list and trigger count together');
+  }finally{await browser.close();}
+});
+
 test('activity board renders honest states, keyboard navigation and responsive task actions', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
   const html=await fixture();
   if(captureDir){await mkdir(captureDir,{recursive:true});await writeFile(join(captureDir,'index.html'),html);}
@@ -164,8 +206,9 @@ test('activity board renders honest states, keyboard navigation and responsive t
     assert.equal(await panel.getByRole('alert').count(),0,'background transport failures stay silent');
     await panel.getByRole('button',{name:'刷新看板',exact:true}).click();
     await panel.getByRole('alert').first().waitFor();
-    assert.equal(await panel.locator('[data-task-key]').count(),7,'failed refresh retains current work without archived tickets');
-    assert.equal(await panel.locator('[data-task-key="ticket:done"], [data-task-key="ticket:failed"]').count(),2,'completed and failed execution remain in the current drawer');
+    assert.equal(await panel.locator('[data-task-key]').count(),5,'failed refresh retains only current visible tickets');
+    assert.equal(await panel.locator('[data-task-key="ticket:done"], [data-task-key="goal:goal"]').count(),0,'completion and goals do not appear in the current ticket board');
+    assert.equal(await panel.locator('[data-task-key="ticket:failed"]').count(),1,'failed execution still appears through its waiting ticket');
     assert(await panel.getByText('已保留上次的任务记录，请重试。',{exact:false}).isVisible());
     await page.evaluate(()=>{window.scenarioControl.fail=false;});
     await panel.getByRole('button',{name:'刷新看板',exact:true}).click();
@@ -190,7 +233,7 @@ test('activity board renders honest states, keyboard navigation and responsive t
         await shot(`${dark?'dark':'light'}-${width}-${{'任务':'tasks','身份':'identity'}[name]}`);
       }
     }
-    assert(await panel.getByText('6 条 · 进行中 1',{exact:true}).isVisible(),'active ticket count excludes the active goal');
+    assert(await panel.getByText('5 条 · 进行中 1',{exact:true}).isVisible(),'active ticket count excludes completed, archived, deleted tickets and goals');
     assert(await panel.getByText('1 个',{exact:true}).isVisible(),'goal count is reported separately');
     await tab('审核').focus();await page.keyboard.press('ArrowRight');
     assert.equal(await tab('身份').getAttribute('aria-selected'),'true','arrow key changes the active tab');
@@ -233,7 +276,7 @@ test('activity board renders honest states, keyboard navigation and responsive t
     await page.waitForFunction(()=>window.apiCalls.some(([name,args])=>name==='ticketStop'&&args.ticketId==='running'));
     await page.keyboard.press('Escape');await page.getByRole('region',{name:'任务详情',exact:true}).waitFor({state:'hidden'});
     await panel.locator('[data-task-key="ticket:running"]').getByText('等待',{exact:true}).waitFor();
-    assert.equal(await panel.locator('[data-task-key="ticket:done"]').count(),1,'completed records remain visible in the task list');
+    assert.equal(await panel.locator('[data-task-key="ticket:done"]').count(),0,'completed records are available through task management instead of the current board');
     assert(!await page.evaluate(()=>window.apiCalls.some(([name])=>name==='taskUpdate')),'activity polling never changes completion');
     await tab('身份').click();
     assert.equal(await panel.locator('.ba-board-identity strong').innerText(),'未命名','an empty name is a placeholder, never the product brand');
@@ -343,7 +386,7 @@ test('activity board updates Worker and child execution in place without declari
     await page.evaluate(()=>window.updateExecution('delivered'));
     await detail.getByRole('img',{name:'完成',exact:true}).waitFor();
     assert(await detail.getByText('内部结果',{exact:true}).isVisible());
-    await row.waitFor({state:'attached'});
+    await row.waitFor({state:'detached'});
     assert(await detail.isVisible(),'closing record keeps its existing detail readable');
     assert(await detail.locator('.ba-activity-detail').evaluate(node=>node.getBoundingClientRect().top<node.parentElement.querySelector('.ba-task-execution').getBoundingClientRect().top),'finished result summary precedes execution history');
     assert.equal(await detail.getByRole('button',{name:'停止任务',exact:true}).count(),0);
@@ -409,15 +452,6 @@ test('long activity details keep current work and actions reachable while finish
       await detail.waitFor({state:'hidden'});
       await page.waitForFunction(()=>document.activeElement?.closest('[data-task-key]')?.dataset.taskKey==='ticket:running');
 
-      await page.evaluate(()=>{window.renderScenario('data');window.makeLongGoal();});
-      await page.locator('.ba-activity-trigger').click();
-      await page.locator('[data-task-key="goal:goal"] .ba-board-task-open').click();
-      await detail.waitFor();
-      assert(await detail.evaluate(node=>node.scrollWidth<=node.clientWidth),'long goal title stays inside the dialog');
-      assert(await footer.evaluate(node=>node.getBoundingClientRect().bottom<=innerHeight),'long title and error do not push actions offscreen');
-      assert(await body.evaluate(node=>node.clientHeight>120),'long title preserves readable body space');
-      if(captureDir)await page.screenshot({path:join(captureDir,`${dark?'dark':'light'}-${width}-long-title-error.png`)});
-      await page.keyboard.press('Escape');await detail.waitFor({state:'hidden'});
     }
   }finally{await browser.close();}
 });
@@ -461,7 +495,7 @@ test('healthy board shows all tasks without scope controls and preserves list DO
     await page.getByRole('button',{name:'展开看板',exact:true}).click();
     const panel=page.locator('.ba-activity-panel'), body=panel.locator('.ba-activity-body');
     await panel.locator('[data-task-key="ticket:running"]').waitFor();
-    assert.equal(await panel.locator('[data-task-key]').count(),25,'all current work is shown across true source sessions');
+    assert.equal(await panel.locator('[data-task-key]').count(),23,'current running and waiting tickets are shown across true source sessions');
     assert.equal(await panel.getByRole('tab',{name:/^(本会话|全部)$/}).count(),0,'scope switch is removed');
     assert.equal(await page.evaluate(()=>window.apiCalls.filter(([name])=>name==='tickets').length),0,'opening baseline is used directly');
     await panel.locator('[data-task-key="ticket:stable-4"]').waitFor();
@@ -478,7 +512,8 @@ test('healthy board shows all tasks without scope controls and preserves list DO
     assert(await handle.evaluate(node=>node.isConnected&&node===document.activeElement),'return restores the original DOM focus');
     assert.equal(await body.evaluate(node=>node.scrollTop),before);
     await page.evaluate(()=>window.streamGoals());
-    await panel.getByRole('button',{name:'持续目标已同步',exact:true}).waitFor({state:'attached'});
+    await page.waitForFunction(()=>window.apiCalls.some(([name])=>name==='goalList'));
+    assert.equal(await panel.locator('[data-task-key="goal:goal"]').count(),0,'goal refresh never adds a non-ticket row to the board');
     await page.waitForTimeout(2200);
     assert.equal(await page.evaluate(()=>window.apiCalls.filter(([name,args])=>name==='tickets'&&!args.ticketId).length),0,'healthy stream does not periodically pull the ledger');
     assert.equal(await panel.getByText('已同步',{exact:true}).count(),0,'quiet updates have no flashing sync message');

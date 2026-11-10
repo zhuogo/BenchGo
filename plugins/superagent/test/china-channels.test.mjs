@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWecomAdapter, normalizeWecomEvent, wecomConfig } from '../src/channels/wecom.mjs';
-import { createQqAdapter, normalizeQqEvent, qqConfig } from '../src/channels/qq.mjs';
-import { createWeixinAdapter, normalizeWeixinEvent, weixinConfig } from '../src/channels/weixin.mjs';
+import { createWecomAdapter, normalizeWecomEvent, wecomConfig } from '../src/channels/wecom/index.mjs';
+import { createQqAdapter, normalizeQqEvent, qqConfig } from '../src/channels/qq/index.mjs';
+import { createWeixinAdapter, normalizeWeixinEvent, weixinConfig } from '../src/channels/weixin/index.mjs';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 class Socket extends EventTarget {

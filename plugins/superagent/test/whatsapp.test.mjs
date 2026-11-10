@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { whatsappConfig, normalizeWhatsAppEvents, createWhatsAppAdapter } from '../src/whatsapp.mjs';
+import { whatsappConfig, normalizeWhatsAppEvents, createWhatsAppAdapter } from '../src/channels/whatsapp/index.mjs';
 
 const config = () => whatsappConfig({ enabled: true, phoneNumberId: 'phone', accessTokenRef: 'access', appSecretRef: 'app', verificationTokenRef: 'verify', ownerIds: ['owner'] });
 const event = () => ({ object: 'whatsapp_business_account', entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: 'phone' }, messages: [{ id: 'message', from: 'owner', timestamp: '1780000000', type: 'text', text: { body: '做这个项目' } }] } }] }] });

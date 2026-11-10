@@ -63,7 +63,7 @@ test('sidebar switches only its list, preserves source identities and renders al
   const gate = new Promise(resolve => { release = resolve; });
   const source = (id, key, conversationId, sourceType = 'group', channel = 'feishu') => ({
     id, sessionId: `existing-${id}`, title: id, sourceKey: `channel:${key.repeat(64)}`,
-    source: { channel, sourceType, conversationId, ...(sourceType === 'topic' ? { topicId: 'real-topic' } : {}) },
+    source: { channel, sourceType, conversationId, ...(sourceType === 'direct' ? { senderName: '张三' } : { conversationName: id }), ...(sourceType === 'topic' ? { topicId: 'real-topic' } : {}) },
   });
   const threads = [{ id: 'manual', title: '普通旁聊', sessionId: 'manual-existing' },
     source('固定群聊', 'a', 'chat-a'), source('固定私聊', 'b', 'chat-b', 'direct'),
@@ -100,6 +100,22 @@ test('sidebar switches only its list, preserves source identities and renders al
     assert.equal(await page.getByText('来源待核实', { exact: true }).count(), 0);
     await page.screenshot({ path: join(screenshots, 'data.png') });
     assert.equal(await page.locator('aside').evaluate(node => node.scrollWidth <= node.clientWidth), true);
+    assert.equal(await page.locator('[data-source="im"] .ba-thread-status').count(), 0, 'the IM type is not repeated at the right edge');
+    assert.equal(await page.locator('[data-source="im"] .ba-thread-title').filter({ hasText: '飞书私聊 · 张三' }).count(), 1);
+    const alignment = await page.locator('.ba-sidebar-toolbar').evaluate(node => {
+      const tabs = node.querySelector('[role="tablist"]').getBoundingClientRect(), toggle = node.querySelector('.cmd-section-toggle').getBoundingClientRect();
+      return { centerDelta: Math.abs(tabs.y + tabs.height / 2 - toggle.y - toggle.height / 2), width: tabs.width, toggleWidth: toggle.width };
+    });
+    assert.ok(alignment.centerDelta < 1, JSON.stringify(alignment));
+    assert.ok(alignment.width < 120, 'the two segments stay compact');
+    assert.equal(alignment.toggleWidth, 28);
+    await page.getByRole('button', { name: '收起IM 会话', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.ba-sidebar-body').getBoundingClientRect().height < 1);
+    assert.equal(await page.locator('.ba-sidebar-body').getAttribute('inert'), '');
+    await page.screenshot({ path: join(screenshots, 'collapsed.png') });
+    await page.getByRole('tab', { name: 'IM', exact: true }).click();
+    await page.getByRole('button', { name: '收起IM 会话', exact: true }).waitFor();
+    await page.waitForFunction(() => document.querySelector('.ba-sidebar-body').getBoundingClientRect().height > 50);
     await page.getByRole('tab', { name: 'IM', exact: true }).focus();
     await page.keyboard.press('ArrowLeft');
     await page.locator('.cmd-session').filter({ hasText: '普通旁聊' }).waitFor();
@@ -134,7 +150,7 @@ test('sidebar switches only its list, preserves source identities and renders al
     await page.screenshot({ path: join(screenshots, 'error.png') });
     mode = 'data';
     await page.getByRole('button', { name: '重试加载', exact: true }).click();
-    await page.getByRole('button', { name: '固定私聊', exact: false }).waitFor();
+    await page.getByRole('button', { name: '飞书私聊 · 张三', exact: false }).waitFor();
     assert.equal(await page.locator('.ba-sidebar-state[data-kind="error"]').count(), 0);
     await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
     await page.evaluate(() => {

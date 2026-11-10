@@ -1,6 +1,6 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createEmailAdapter, emailConfig, normalizeEmailEvent } from '../src/channels/email.mjs';
+import { createEmailAdapter, emailConfig, normalizeEmailEvent } from '../src/channels/email/index.mjs';
 const config = () => emailConfig({ enabled: true, accountId: 'bot@example.com', imapHost: 'imap.example.com', smtpHost: 'smtp.example.com', username: 'bot', passwordSecretRef: 'vault/email', requestSecretRef: 'vault/request', chatIds: ['alice@example.com'] });
 const mail = (extra = {}) => ({ from: { value: [{ address: 'alice@example.com' }] }, messageId: '<m1@example.com>', text: 'BenchGo-Token: secret\n帮我处理', headers: new Map(), ...extra });
 test('email preserves unlisted and automated source facts without granting owner', () => {

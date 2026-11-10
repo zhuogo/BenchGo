@@ -1,5 +1,6 @@
 import { desktopTicketOwnerScope, ownsDesktopTicket } from './desktop-ticket-owner.mjs';
 import { normalizeTicketTitle } from './ticket-title.mjs';
+import { isDesktopTicketManagementScope } from './desktop-ticket-management-authority.mjs';
 
 export const TICKET_SUMMARY_MAX_CHARS = 320;
 const concise = (value, max = TICKET_SUMMARY_MAX_CHARS) => typeof value === 'string' ? Array.from(value.replace(/\s+/gu, ' ').trim()).slice(0, max).join('') : '';
@@ -21,7 +22,7 @@ export function conciseTicketSummary(ticket) {
 /** Read current desktop conversation tickets from the orchestration store. */
 export function createDesktopTicketAccess(database) {
   const owned = (ticket, ownerSessionId) => {
-    if (!ownsDesktopTicket(ticket, ownerSessionId)) throw new Error('工单不属于当前会话');
+    if (!isDesktopTicketManagementScope(ownerSessionId) && !ownsDesktopTicket(ticket, ownerSessionId)) throw new Error('工单不属于当前会话');
     return ticket;
   };
   const detail = ticket => ({ ...ticket, title: normalizeTicketTitle(ticket.title, ticket.target), kind: 'ticket',
@@ -32,7 +33,7 @@ export function createDesktopTicketAccess(database) {
     query(ownerSessionId, { status, projectId, limit = 20, offset = 0 } = {}) {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('工单查询 limit 必须为 1 到 100');
       if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('工单查询 offset 必须为非负整数');
-      const scope = desktopTicketOwnerScope(ownerSessionId);
+      const scope = isDesktopTicketManagementScope(ownerSessionId) ? undefined : desktopTicketOwnerScope(ownerSessionId);
       if (scope && !scope.sessionIds.length) return { tickets: [], nextOffset: null };
       const rows = database.listTickets({ ...(scope ? { ownerSessionIds: scope.sessionIds, ownerThreadId: scope.threadId } : {}), status, projectId, limit: limit + 1, offset, newestFirst: true });
       return {

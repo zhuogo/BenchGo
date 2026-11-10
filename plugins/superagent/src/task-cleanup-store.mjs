@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { normalizeTicketTitle } from './ticket-title.mjs';
-import { ticketIsSettled, ticketPresentationKey, ticketIsArchived } from './ticket-archive.mjs';
+import { ticketExecutionExitedSql, ticketPresentationKey, ticketIsArchived } from './ticket-archive.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const copy = value => structuredClone(value);
@@ -38,9 +38,8 @@ export function initializeTicketCleanup({ db, transaction }) {
       const at = new Date().toISOString();
       next.version = (old.version ?? 0) + 1; next.updatedAt = at;
       if (old.deleted) {
-        const stopped = !db.prepare("SELECT 1 FROM sa_assignments WHERE ticket_id=? AND state NOT IN ('completed','failed','cancelled') LIMIT 1").get(id)
-          && !db.prepare("SELECT 1 FROM sa_runs r JOIN sa_assignments a ON a.id=r.assignment_id WHERE a.ticket_id=? AND r.state NOT IN ('completed','failed','cancelled') LIMIT 1").get(id);
-        const archived = !!ticket && ticketIsSettled({ status: ticket.status, executionControl: JSON.parse(ticket.execution_control || '{}') }) && old.executionRevision === ticket.instruction_revision && stopped;
+        const exited = db.prepare(`SELECT ${ticketExecutionExitedSql()} AS exited FROM sa_tickets WHERE id=?`).get(id)?.exited === 1;
+        const archived = !!ticket && exited && old.executionRevision === ticket.instruction_revision;
         const receiptId = randomUUID();
         for (const key of archiveFields) delete next[key];
         if (archived) Object.assign(next, { archived: true, archivedAt: old.updatedAt || at, archiveRevision: ticket.instruction_revision, cleanupReceiptId: receiptId });
@@ -84,13 +83,13 @@ export function installTaskCleanupStore({ db, transaction }) {
     const meta = metadata(id);
     const assignments = db.prepare('SELECT id,state,fence,updated_at,payload FROM sa_assignments WHERE ticket_id=? ORDER BY id').all(id);
     const runs = db.prepare('SELECT r.id,r.state,r.fence,r.updated_at,r.payload FROM sa_runs r JOIN sa_assignments a ON a.id=r.assignment_id WHERE a.ticket_id=? ORDER BY r.id').all(id);
-    const stopped = assignments.every(item => ['completed', 'failed', 'cancelled'].includes(item.state))
-      && runs.every(item => ['completed', 'failed', 'cancelled'].includes(item.state));
+    const executionExited = db.prepare(`SELECT ${ticketExecutionExitedSql()} AS exited FROM sa_tickets WHERE id=?`).get(id).exited === 1;
+    const executionUncertain = [...assignments, ...runs].some(item => item.state === 'uncertain');
     return { id, title: normalizeTicketTitle(meta.title || row.title, row.target), status: row.status,
       instructionRevision: row.instruction_revision, resultVersion: row.result_version, updatedAt: row.updated_at,
       metaVersion: meta.version ?? 0, metaHash: hash(meta), executionHash: hash([assignments, runs]),
-      archiveBefore: archiveSlice(meta), archived: ticketIsArchived({ status: row.status, instructionRevision: row.instruction_revision, executionControl: JSON.parse(row.execution_control || '{}') }, meta),
-      eligible: ticketIsSettled({ status: row.status, executionControl: JSON.parse(row.execution_control || '{}') }) && stopped };
+      archiveBefore: archiveSlice(meta), archived: ticketIsArchived({ status: row.status, instructionRevision: row.instruction_revision, executionExited }, meta),
+      eligible: executionExited, executionUncertain };
   };
   const readPreview = id => {
     if (!identity(id)) throw fail('CLEANUP_INPUT_INVALID', '需要明确清单 ID');
@@ -110,7 +109,8 @@ export function installTaskCleanupStore({ db, transaction }) {
         if (!row) { excluded.push({ id, code: 'TICKET_NOT_FOUND', reason: '工单不存在' }); continue; }
         if (!row.eligible) {
           excluded.push({ id, title: row.title, status: row.status, code: 'EXECUTION_PENDING',
-            reason: '先另行确认停止并核实执行已退出，再重新预览', requiresStopConfirmation: true,
+            reason: row.executionUncertain ? '执行退出尚未确认，请先核实原执行已退出，再重新预览'
+              : '工单仍在执行或等待执行，请先停止并确认执行退出，再重新预览', requiresStopConfirmation: true,
             ...(includeUnsettled ? { snapshot: row } : {}) });
           continue;
         }

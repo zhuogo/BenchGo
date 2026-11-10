@@ -1,10 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { channelSessionKey } from '../src/channel-policy.mjs';
-import { sidebarThreads, channelIsConnected, sourceConnectionMismatch, readSidebarList } from '../client/sidebar-lists.mjs';
+import { sidebarThreads, channelIsConnected, sourceConnectionMismatch, readSidebarList, channelThreadTitle } from '../client/sidebar-lists.mjs';
 
 const status = { enabled: true, authentication: 'verified', connection: { state: 'connected' } };
 const fixed = (id, source) => ({ id, sessionId: `session-${id}`, source, sourceKey: channelSessionKey(source) });
+test('IM titles use contact or group names without repeating labels or exposing opaque IDs', () => {
+  const direct = fixed('direct', { channel: 'feishu', sourceType: 'direct', conversationId: 'oc_opaque', senderName: ' 李四\n ' });
+  assert.equal(channelThreadTitle(direct, { label: '飞书' }), '飞书私聊 · 李四');
+  assert.equal(channelThreadTitle(direct, { label: '飞书', sourceNames: { [direct.sourceKey]: { senderName: '张三' } } }), '飞书私聊 · 张三');
+  const group = fixed('group', { channel: 'feishu', sourceType: 'group', conversationId: 'oc_group', conversationName: '产品设计组' });
+  assert.equal(channelThreadTitle(group, { label: '飞书' }), '飞书群聊 · 产品设计组');
+  assert.equal(channelThreadTitle({ ...group, title: 'feishu · oc_group', source: { ...group.source, conversationName: '' } }), '飞书群聊');
+  assert.equal(channelThreadTitle({ source: { channel: 'telegram', sourceType: 'topic', conversationName: '项目讨论' } }, { label: 'Telegram' }), 'Telegram话题 · 项目讨论');
+});
 test('sidebar lists preserve existing source sessions and never merge real conversations', () => {
   const source = { channel: 'feishu', appId: 'opaque-app', sourceType: 'group', conversationId: 'same-chat' };
   const rows = [{ id: 'main' }, { id: 'manual', title: 'feishu · same-chat' },

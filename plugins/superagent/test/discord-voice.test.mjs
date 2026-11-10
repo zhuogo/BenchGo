@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { createDiscordVoice, discordPcmWav } from '../src/channels/discord-voice.mjs';
+import { createDiscordVoice, discordPcmWav } from '../src/channels/discord/voice.mjs';
 function fixture(options = {}) {
   const config = { enabled: true, voiceEnabled: true, ownerIds: ['owner'], chatIds: ['text'] };
   const received = [], resources = [], conn = new EventEmitter(); conn.receiver = { speaking: new EventEmitter(), subscribe: () => Readable.from([Buffer.alloc(3840)]) }; conn.subscribe = () => {}; conn.destroy = () => { conn.destroyed = true; };

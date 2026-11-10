@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createDesktopTicketControl } from '../src/desktop-ticket-control.mjs';
 import { recordDesktopTrigger } from '../src/desktop-trigger.mjs';
+import { desktopTicketManagementScope } from '../src/desktop-ticket-management-authority.mjs';
+import { createDesktopTicketAccess } from '../src/desktop-ticket-access.mjs';
 
 function fixture(t) {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
@@ -79,6 +81,54 @@ test('control rejects different sessions, channels and threads', t => {
     const ticket = f.ticket(source);
     assert.throws(() => f.control(ticket.id, 'cancel'), /不属于当前会话/);
     assert.notEqual(f.database.getTicket(ticket.id).executionControl?.stopped, true);
+  }
+});
+
+for (const threadId of ['main', 'side']) test(`trusted local ${threadId} manages channel and other desktop tickets without changing their mandates`, async t => {
+  const f = fixture(t);
+  const state = { mainSessionId: 'owner', threads: [{ id: 'side', sessionId: 'owner' }] };
+  const managementScope = await desktopTicketManagementScope({ ctx: f.ctx, store: { getState: async () => state }, agent: f.ownerAgent, threadId });
+  assert.ok(managementScope);
+  const foreign = [{ channel: 'desktop', sessionId: 'another', threadId: 'other-side' }, { channel: 'feishu', sourceType: 'group', conversationId: 'group' }];
+  const access = createDesktopTicketAccess(f.database);
+  for (const [index, source] of foreign.entries()) {
+    const row = f.ticket(source);
+    f.events[1].data.id = `manage-${index}`;
+    const args = { threadId, managementScope };
+    assert.equal(access.read(row.id, managementScope).id, row.id);
+    assert.ok(access.query(managementScope).tickets.some(item => item.id === row.id));
+    assert.throws(() => f.control(row.id, 'supplement', args), /不属于当前会话/);
+    const paused = f.control(row.id, 'pause', args);
+    assert.equal(paused.ticket.executionControl.paused, true);
+    const resumed = f.control(row.id, 'resume', args);
+    assert.deepEqual(resumed.ticket.executionControl, {});
+    f.events[1].data.id = `cancel-${index}`;
+    assert.equal(f.control(row.id, 'cancel', args).ticket.executionControl.stopped, true);
+    assert.deepEqual(f.database.getTicket(row.id).mandate, row.mandate);
+    assert.throws(() => f.control(row.id, 'resume', args), { code: 'TICKET_STOPPED' });
+  }
+});
+
+test('model-shaped global scope cannot bypass ticket ownership', t => {
+  const f = fixture(t), row = f.ticket({ channel: 'feishu', sourceType: 'group', conversationId: 'group' });
+  const managementScope = { owner: 'desktop-owner', mode: 'global' };
+  assert.throws(() => f.control(row.id, 'cancel', { managementScope }), /不属于当前会话/);
+  assert.throws(() => createDesktopTicketAccess(f.database).read(row.id, managementScope), /无效工单归属范围/);
+});
+
+for (const operation of ['pause', 'cancel']) test(`one explicit owner message can ${operation} multiple selected tickets without input collisions`, async t => {
+  const f = fixture(t), a = f.ticket(), b = f.ticket({ channel: 'feishu', sourceType: 'group', conversationId: 'group' });
+  const managementScope = await desktopTicketManagementScope({ ctx: f.ctx, store: { getState: async () => ({ mainSessionId: f.ownerAgent.id }) }, agent: f.ownerAgent });
+  const options = { managementScope };
+  for (const row of [a, b]) {
+    const first = f.control(row.id, operation, options);
+    const second = f.control(row.id, operation, options);
+    assert.equal(first.triggerId, second.triggerId);
+    assert.equal(f.database.ticketInputs(row.id).length, 1);
+    const input = f.database.ticketInputs(row.id)[0];
+    assert.equal(input.state, 'applied');
+    assert.equal(input.source.messageId, 'followup');
+    assert.equal(input.actor.id, 'desktop-owner');
   }
 });
 

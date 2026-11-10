@@ -1,5 +1,5 @@
 import { normalizeTicketTitle } from './ticket-title.mjs';
-import { ticketPresentation, ticketIsArchived } from './ticket-archive.mjs';
+import { ticketPresentation, ticketIsArchived, ticketIsSettled } from './ticket-archive.mjs';
 
 function activityTime(row) {
   for (const value of [row.updatedAt, row.createdAt]) {
@@ -12,7 +12,7 @@ function activityTime(row) {
 /** Human list organization is separate from execution and acceptance state. */
 export function createTaskManagement({ database, orchestration, scheduler }) {
   const key = (kind, id) => `task-presentation:${kind}:${id}`;
-  const settled = (kind, row) => kind === 'ticket' ? row.status === 'completed' || row.executionControl?.stopped === true : (kind === 'goal' ? ['completed', 'failed', 'cancelled'] : ['unavailable', 'decided']).includes(row.status);
+  const settled = (kind, row) => kind === 'ticket' ? ticketIsSettled(row) : (kind === 'goal' ? ['completed', 'failed', 'cancelled'] : ['unavailable', 'decided']).includes(row.status);
   const executionRevision = (kind, row) => kind === 'ticket' ? row.instructionRevision ?? 1 : kind === 'goal' ? row.rowVersion ?? 0 : row.dispositionRevision ?? 0;
   const meta = (kind, row) => {
     const stored = database.meta(key(kind, row.id)) || { version: 0 };

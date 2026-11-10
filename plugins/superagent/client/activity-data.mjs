@@ -12,6 +12,12 @@ export const activityLabels = { running: '进行', waiting: '等待', completed:
 
 export const archivedActivityTicket = row => row.kind === 'ticket' && (row.archived === true || !!row.cleanup?.id || row.taskMeta?.archived === true);
 
+/** The chat board and its trigger show the same current Ticket set. */
+export function boardTicketRows(rows = []) {
+  return [...new Map(rows.filter(row => row.kind === 'ticket' && ['running', 'waiting'].includes(row.status)
+    && !archivedActivityTicket(row) && !row.taskMeta?.deleted).map(row => [row.id, row])).values()];
+}
+
 /** Runtime activity is evidence about an execution, never a replacement for Ticket state. */
 function currentExecution(row, assignment) {
   const execution = row.execution;

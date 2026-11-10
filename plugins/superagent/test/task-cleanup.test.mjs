@@ -86,6 +86,45 @@ test('pending executor release cannot be hidden even when the ticket status is t
   assert.equal(f.database.meta('task-presentation:ticket:unsafe'), null);
 });
 
+test('a failed waiting ticket with ended execution can be archived without inventing stopped or completed', async t => {
+  const f = await fixture(t);
+  f.ticket('failed-wait', 'waiting');
+  f.orchestration.createAssignment('failed-wait', {});
+  const [assignment] = f.orchestration.claimAssignments('worker', { validateMandate: () => true });
+  const run = f.orchestration.prepareRun(assignment.id, { ...assignment, sessionId: 'failed-session', directory: '/unused' });
+  f.orchestration.updateRun(run.id, { ...assignment, state: 'submitted' });
+  const result = { runId: run.id, sessionId: run.sessionId, outcome: 'failed', summary: '条件不足',
+    failure: { cause: '资源缺失', resumeConditions: '明确补充后继续' } };
+  f.orchestration.updateRun(run.id, { ...assignment, state: 'verifying', evidence: result });
+  f.orchestration.confirmExecutionStopped(assignment.id, assignment);
+  f.orchestration.commitResult('failed-wait', { result, assignment, uniqueKey: 'failed-result' });
+  const before = f.orchestration.getTicket('failed-wait');
+  assert.equal(before.status, 'waiting'); assert.equal(before.executionControl.stopped, undefined);
+  assert.equal(before.executionExited, true);
+  const preview = f.tasks.previewCleanup({ scope, ids: ['failed-wait'] });
+  assert.equal(preview.excluded.length, 0);
+  f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['failed-wait'], confirmedBy: f.confirm(preview), requestId: 'archive-failed' });
+  assert.equal(f.orchestration.getTicket('failed-wait').archived, true);
+  assert.equal(f.orchestration.getTicket('failed-wait').status, 'waiting');
+  assert.equal(f.tasks.project('ticket', [f.orchestration.getTicket('failed-wait')])[0].taskCanOrganize, true);
+  assert.deepEqual(f.orchestration.listTickets({ archived: false }), []);
+  assert.deepEqual(f.orchestration.listTickets({ archived: true, limit: 1 }).map(row => row.id), ['failed-wait']);
+  f.orchestration.updateTicket('failed-wait', { target: '新的明确要求' });
+  assert.equal(f.orchestration.getTicket('failed-wait').archived, false, 'a new instruction does not inherit archival');
+});
+
+test('waiting work with uncertain execution keeps a specific exclusion reason', async t => {
+  const f = await fixture(t); f.ticket('unknown', 'waiting');
+  f.orchestration.createAssignment('unknown', {});
+  const [assignment] = f.orchestration.claimAssignments('worker', { validateMandate: () => true });
+  const run = f.orchestration.prepareRun(assignment.id, { ...assignment, sessionId: 'unknown-session', directory: '/unused' });
+  f.orchestration.updateRun(run.id, { ...assignment, state: 'uncertain' });
+  const preview = f.tasks.previewCleanup({ scope, ids: ['unknown'] });
+  assert.equal(preview.items.length, 0);
+  assert.equal(preview.excluded[0].reason, '执行退出尚未确认，请先核实原执行已退出，再重新预览');
+  assert.equal(f.orchestration.getTicket('unknown').executionExited, false);
+});
+
 test('archive filtering happens before paging and metadata survives a reopen', async t => {
   const f = await fixture(t);
   for (const id of ['a', 'b', 'c']) f.ticket(id);

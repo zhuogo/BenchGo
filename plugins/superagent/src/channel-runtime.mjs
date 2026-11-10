@@ -1,6 +1,6 @@
 import { channelIds, channelModule, channelDefinition } from './channel-catalog.mjs';
 import { createUnifiedChannelIngress } from './channel-ingress.mjs';
-import { createDiscordVoice } from './channels/discord-voice.mjs';
+import { createDiscordVoice } from './channels/discord/voice.mjs';
 import { channelMessageChunks } from './channels/message-chunks.mjs';
 import { beforeDelivery, deliveryFailure } from './channels/delivery-outcome.mjs';
 

@@ -1,6 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { activityTask, groupHomeActivity, createActivityStore, liveActivityStates, activeActivityStates, archivedActivityTicket } from '../client/activity-data.mjs';
+import { activityTask, groupHomeActivity, createActivityStore, liveActivityStates, activeActivityStates, archivedActivityTicket, boardTicketRows } from '../client/activity-data.mjs';
+
+test('chat board counts only distinct visible running and waiting tickets', () => {
+  const ticket = (id, status, extra = {}) => ({ id, kind: 'ticket', status, ...extra });
+  const rows = [ticket('running', 'running'), ticket('waiting', 'waiting'), ticket('done', 'completed'),
+    ticket('archived', 'waiting', { archived: true }), ticket('cleaned', 'waiting', { cleanup: { id: 'receipt' } }),
+    ticket('hidden', 'running', { taskMeta: { archived: true } }), ticket('deleted', 'waiting', { taskMeta: { deleted: true } }),
+    { id: 'goal', kind: 'goal', status: 'active' }, ticket('waiting', 'waiting')];
+  assert.deepEqual(boardTicketRows(rows).map(row => row.id), ['running', 'waiting']);
+  rows[0].status = 'completed'; rows[1].status = 'completed'; rows.at(-1).status = 'completed';
+  assert.equal(boardTicketRows(rows).length, 0);
+});
 
 test('paused and stopping tasks do not count as active activity', () => {
   assert.equal(liveActivityStates('running'), true);

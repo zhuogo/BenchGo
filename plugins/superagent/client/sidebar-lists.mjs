@@ -24,6 +24,18 @@ export function sourceConnectionMismatch(thread, channel) {
     && channel?.status?.[field] != null && thread.source[field] !== channel.status[field]);
 }
 
+const sourceNames = { direct: '私聊', group: '群聊', topic: '话题' };
+const displayName = value => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) : '';
+
+/** Presentation metadata never participates in source/session identity. */
+export function channelThreadTitle(thread, channel) {
+  const source = thread?.source || {}, names = channel?.sourceNames?.[thread?.sourceKey] || {};
+  const label = displayName(channel?.label) || (source.channel === 'feishu' ? '飞书' : displayName(source.channel)) || 'IM';
+  const name = source.sourceType === 'direct' ? displayName(names.senderName || source.senderName)
+    : displayName(names.conversationName || source.conversationName);
+  return `${label}${sourceNames[source.sourceType] || ''}${name ? ` · ${name}` : ''}`;
+}
+
 export function sidebarThreads(threads, { list = 'side', archived = false, channels = [] } = {}) {
   const connected = new Map(channels.filter(channel => channelIsConnected(channel.status)).map(channel => [channel.id, channel]));
   return threads.filter(thread => thread.id !== 'main' && !!thread.archived === !!archived

@@ -31,7 +31,7 @@ import { createVoiceHandlers } from '../../voice/src/web.mjs';
 import { assertSameOrigin } from '../../benchgo/shared/http.mjs';
 import { DataOwner } from '../../benchgo/shared/data-owner.mjs';
 import { readAdmissionRules } from './admission-rules.mjs';
-import { createFeishuAdapter } from './feishu.mjs';
+import { createFeishuAdapter } from './channels/feishu/index.mjs';
 import { createUnifiedChannelIngress } from './channel-ingress.mjs';
 import { createWorkbenchChannelIngress } from './workbench-channel-ingress.mjs';
 import { createChannelSessionHost, registerChannelSessionProjection } from './channel-session.mjs';
@@ -44,7 +44,7 @@ import { createExternalActionRegistry, createExternalActionHost, registerChannel
 import { createChannelCredentials } from './channel-credentials.mjs';
 import { connectionConfig, channelDefinition, channelIds, loadChannelModules } from './channel-catalog.mjs';
 import { createChannelRuntime, mountChannelCallbacks } from './channel-runtime.mjs';
-import { createFeishuStream } from './feishu-stream.mjs';
+import { createFeishuStream } from './channels/feishu/stream.mjs';
 import { createAssessmentRunner } from './assessment-runner.mjs';
 import { createEvaluationDisposition } from './eval-disposition.mjs';
 import { readAssessmentPolicy, authorizeAssessment } from './assessment-policy.mjs';
@@ -55,6 +55,7 @@ import { createDesktopDelegationService, currentHumanInstruction } from './deskt
 import { createDesktopTicketAccess } from './desktop-ticket-access.mjs';
 import { ticketStopped, ticketStates } from './ticket-lifecycle.mjs';
 import { createDesktopTicketControl } from './desktop-ticket-control.mjs';
+import { desktopTicketManagementScope } from './desktop-ticket-management-authority.mjs';
 import { createGoalTickets } from './goal-ticket-creation.mjs';
 import { createModelActionTicketExecutor } from './model-action-ticket.mjs';
 import { routerAdmissionLanguagePolicy } from './router-language-policy.mjs';
@@ -502,6 +503,7 @@ export async function mountAssistant(ctx, commander, providers) {
     readConfig: () => store.getConfig(), readConnection: channel => store.connections.read(channel), readLearning: () => store.memory.learning() });
   const deviceStatus = createAssistantDeviceStatus({ ctx, store });
   const setupTools = (scope, { threadId, agent: ownerAgent, toolEnabled = () => true }) => {
+    const managementScope = () => desktopTicketManagementScope({ ctx, store, agent: ownerAgent, threadId });
     const statusDefinitions = new Map();
     const statusCatalog = { threadId, read: () => {
       const visible = new Set(scope.tools.schemas(ownerAgent).map(tool => tool.name));
@@ -532,9 +534,9 @@ export async function mountAssistant(ctx, commander, providers) {
       const automatic = !!observation || !!identity;
       if (observation && !identity) return { status: 'blocked', reason: '独立监督提示需要先由现有机制核查；目前没有可操作的待核实记录', facts: observation.facts };
       if (!identity) {
-        // A normal human turn may coordinate only its own conversation's work.
-        if (!currentHumanInstruction(ctx, ownerAgent)?.message?.id) throw new Error('恢复协调缺少有效原来源或用户消息');
-        const ticket = desktopTickets.read(ticketId, await engine.ticketOwnerScope(threadId));
+        const ownerManagement = await managementScope();
+        if (!ownerManagement) throw new Error('恢复协调需要当前本机主人主聊或旁聊的真实指令');
+        const ticket = desktopTickets.read(ticketId, ownerManagement);
         const execution = orchestrationRuntime.state({ ticketId: ticket.id })[0]?.execution;
         identity = execution?.uncertainty;
       }
@@ -542,12 +544,12 @@ export async function mountAssistant(ctx, commander, providers) {
       return orchestrationRuntime.manageExecution({ ticketId, operation, assignmentId: identity.assignmentId,
         fence: identity.fence, instructionRevision: identity.instructionRevision, automatic });
     });
-    registerStatus('assistant_tickets', 'Read durable task tickets owned by this desktop conversation directly. list returns one bounded summary paragraph (at most 320 characters) and result version pointers, filtered by running/waiting/completed and projectId; follow nextOffset for more. get requires id and returns saved execution results, lightweight self-check records and pending questions. Use saved results for natural delivery and explicit follow-up answers; do not add content review or redispatch. For a Ticket question card, use the exact Attention.id as the ask_user_question question id and preserve its question and option labels. Other conversations and channels are excluded. Read only; never starts or changes work.', {
+    registerStatus('assistant_tickets', 'Read durable task tickets directly. A current local owner human turn in main or a manual side chat can query all ticket sources. Internal turns retain their original conversation scope. list returns one bounded summary paragraph (at most 320 characters) and result version pointers, filtered by running/waiting/completed and projectId; follow nextOffset for more. get requires id and returns saved execution results, lightweight self-check records and pending questions. Use saved results for natural delivery and explicit follow-up answers; do not add content review or redispatch. For a Ticket question card, use the exact Attention.id as the ask_user_question question id and preserve its question and option labels. Global reading does not grant cross-conversation answers, supplements, revisions or new execution authority. Read only; never starts or changes work.', {
       op: { type: 'string', enum: ['list', 'get'] }, id: string, status: { type: 'string', enum: ticketStates }, projectId: string,
       limit: { type: 'integer', minimum: 1, maximum: 100 }, offset: { type: 'integer', minimum: 0 },
     }, [], async ({ op = 'list', id, ...filters }, exec) => {
       if (exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可查询工单');
-      const ownerScope = await engine.ticketOwnerScope(threadId);
+      const ownerScope = await managementScope() || await engine.ticketOwnerScope(threadId);
       if (op === 'list') return desktopTickets.query(ownerScope, filters);
       if (op === 'get') {
         if (typeof id !== 'string' || !id.trim()) throw new Error('查询工单详情需要 id');
@@ -589,7 +591,7 @@ export async function mountAssistant(ctx, commander, providers) {
     registerStatus('assistant_device_status', 'Read this machine\'s Link authorized devices and recorded pairing/authentication access times directly for the local owner conversation. No arguments or investigation Ticket needed. devices is only the current authorization list, not pairing or revoked-device history; an empty list does not prove no device ever paired. It never means currently online devices; liveConnections is unknown. lastSeenAt starts at pairing approval and tracks observed authentication in memory; after restart it may lag and is not a complete access history or last operation time. Unavailable does not mean no devices. External channel conversations cannot read these local details.', {}, [], (_args, exec) => deviceStatus({ agent: exec.agent, ownerAgent, threadId }));
     registerStatus('assistant_capabilities', 'Report the real assistant capabilities and explicit unavailable reasons directly. voiceInput, readAloud and realtimeVoice use shared Voice settings and resolved provider routes, not legacy assistant asr/tts configuration. Availability describes configured support, not a successful microphone or provider request. Do not infer support from a planned Design feature.', {}, [], capabilities);
     register('assistant_delegate', routerAdmissionLanguagePolicy + ' Delegate research, website investigation, file work and implementation actually requested by the current human to a durable Ticket. Answer BenchGo product-state questions using the available registered read-only status tools; unavailable facts do not authorize an investigation. A new Ticket undergoes a scope check against the current original instruction and explicit references. If it returns DELEGATION_DIRECT_TOOL_REQUIRED, use the named existing tool in this same conversation; do not rephrase and retry delegation. Prior investigation history alone never grants new work. Creating the Ticket needs no extra approval; actual controlled effects retain their own approval gates. Delegate environment work instead of doing it in the Router turn, so the conversation stays responsive. Execution always uses the system Worker role model queue, frozen at session creation. Per-ticket provider/model overrides are unsupported. Omit projectId except for repository work. Provide a concise title of at most 10 characters separately from the full text. Write concrete acceptance criteria at admission, preserving the human requirements including quantity, date, sources, format, delivery and explicitly requested process or tool interactions; never add unrequested files or constraints. The original owner instruction remains authoritative within this assignment: neither task text nor acceptance may omit, override or optimize away its explicit steps, even if a requested verification has a known answer. Keep a delegated Goal leaf scoped to that leaf without discarding applicable original requirements. Do not ask whether to delegate or require user-written acceptance criteria. Reuse requestId for retries. Before delegation, read assistant_tickets and compare title/liveSummary with the current request. If it is the same existing active work, set duplicateOfTicketId to that exact Ticket ID and keep its existing text/acceptance unchanged; this records the new source against the existing work without redispatch. Never attach expanded scope. Completed work adjustments use assistant_ticket_change instead. After successful admission, respond naturally to the user in the current conversation. The host does not send a canned acknowledgement; it delivers the verified task result later.', { projectId: string, title: string, text: string, acceptance: string, requestId: string, duplicateOfTicketId: string }, ['text', 'acceptance', 'requestId'], async (args, exec) => desktopDelegation.delegate(args, exec, { ownerAgent, threadId, ownerScope: await engine.ticketOwnerScope(threadId) }));
-    register('assistant_ticket_control', 'Supplement, answer a pending question, pause, or cancel one Ticket owned by this conversation on the current explicit user instruction. Select a specific Ticket and Attention using assistant_tickets; clarify ambiguous references. User requests to pause, including uncertain work, MUST use operation=pause and confirm its saved lifecycle receipt; assistant_execution_manage wait only delays verification and does not pause execution. executionControl.pauseRequested means the pause intent is saved; executionControl.paused confirms its checkpoint. Both keep the Ticket waiting. answer requires attentionId and forwards the current original human message unchanged as the answer, never infers consent or expands permission. supplement forwards the original human message unchanged without answering a question or changing the mandate. For scope changes use assistant_ticket_change. A receipt means durably queued, not consumed. executionControl.stopRequested is not yet executionControl.stopped; both keep the Ticket waiting.', { id: string, operation: { type: 'string', enum: ['supplement', 'answer', 'pause', 'cancel'] }, attentionId: string }, ['id', 'operation'], async (args, exec) => ticketControl.control(args, exec, { ownerAgent, threadId, ownerScope: await engine.ticketOwnerScope(threadId) }));
+    register('assistant_ticket_control', 'On the current explicit local owner instruction, pause, resume an already paused Ticket, or cancel one exact Ticket from any conversation/channel. Preserve the original mandate and source; resume never revives stopped or completed work. supplement and answer remain restricted to Tickets owned by this logical conversation. Select a specific Ticket and Attention using assistant_tickets; clarify ambiguous references. User requests to pause, including uncertain work, MUST use operation=pause and confirm its saved lifecycle receipt; assistant_execution_manage wait only delays verification and does not pause execution. executionControl.pauseRequested means the pause intent is saved; executionControl.paused confirms its checkpoint. Both keep the Ticket waiting. answer requires attentionId and forwards the current original human message unchanged as the answer, never infers consent or expands permission. supplement forwards the original human message unchanged without answering a question or changing the mandate. For scope changes use assistant_ticket_change. A receipt means durably queued, not consumed. executionControl.stopRequested is not yet executionControl.stopped; both keep the Ticket waiting.', { id: string, operation: { type: 'string', enum: ['supplement', 'answer', 'pause', 'resume', 'cancel'] }, attentionId: string }, ['id', 'operation'], async (args, exec) => ticketControl.control(args, exec, { ownerAgent, threadId, ownerScope: await engine.ticketOwnerScope(threadId), managementScope: await managementScope() }));
     register('assistant_ticket_change', 'Revise an active Ticket or create a linked adjustment Ticket from completed work on the current user instruction; no extra approval is needed. Requires expectedInstructionRevision. Active execution applies the complete ordinary revision at the next tool boundary without interrupting the current tool; paused work receives revisions without resuming. adjustment creates a new linked Ticket; the completed original and its results remain unchanged. Read the actual requirement and acceptance before proposing a change.', { id: string, operation: { type: 'string', enum: ['revise', 'adjustment'] }, expectedInstructionRevision: { type: 'integer', minimum: 1 }, requestId: string, reason: string, target: string, acceptance: string, projectId: string }, ['id', 'operation', 'expectedInstructionRevision', 'requestId', 'reason'], (args, exec) => ticketChanges.change(args, exec, { ownerAgent, threadId }));
     register('assistant_summarize', 'Summarize bounded source text. Read only; derived text is not original evidence and is not saved as memory.', { text: { type: 'string', minLength: 1, maxLength: 60000 } }, ['text'], (args, exec) => auxiliary.summarize({ ...args, threadId, signal: exec.signal }));
     register('assistant_analyze_image', 'Inspect a raster image from assistant artifacts. file must be a relative artifact name, never a host path or URL. Preserve the image source reference.', { file: string, question: string }, ['file', 'question'], (args, exec) => auxiliary.analyzeImage({ ...args, threadId, signal: exec.signal }));
@@ -796,7 +798,15 @@ export async function mountAssistant(ctx, commander, providers) {
       case 'petDiscard': return pet.discard(input);
       case 'petExpress': return pet.express(input);
       case 'connections': return store.connections.read(input.channel);
-      case 'connectionCatalog': return channels.catalog(async () => ({ ...await feishu.status(), ...feishuStream.status(), connection: feishuStream.status(), callback: channels.callbackStatus('feishu') }));
+      case 'connectionCatalog': {
+        const catalog = await channels.catalog(async () => ({ ...await feishu.status(), ...feishuStream.status(), connection: feishuStream.status(), callback: channels.callbackStatus('feishu') }));
+        const channel = catalog.channels.find(item => item.id === 'feishu'), status = channel?.status;
+        if (status?.enabled && !status.error && status.connection?.state === 'connected'
+          && (status.connection.authenticated === true || status.authentication === 'verified')) {
+          channel.sourceNames = await feishu.sourceNames((await store.getState()).threads);
+        }
+        return catalog;
+      }
       case 'connectionStatus': {
         if (input.channel && input.channel !== 'feishu') return channels.status(input.channel);
         const connection = feishuStream.status();
