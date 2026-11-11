@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readAssessmentPolicy } from './assessment-policy.mjs';
 import { assertSpecificTicketDescription, normalizeTicketTitle } from './ticket-title.mjs';
 import { configuredWorkModel, rejectModelOverride } from './work-role-policy.mjs';
-import { assessDesktopDelegationScope, assertDelegationScope, delegationExplicitReference, delegationScopeFailure, delegationScopeVersion, snapshotDelegationCapabilities } from './desktop-delegation-scope.mjs';
+import { readQuestionReply } from './question-reply.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export function currentHumanInstruction(ctx, agent) {
@@ -13,7 +13,14 @@ export function currentHumanInstruction(ctx, agent) {
   if (!Number.isSafeInteger(start) || start < 0) return null;
   const current = events.slice(start + 1);
   if (current.some(event => event.type === 'turn/end')) return null;
-  const message = current.findLast(event => event.type === 'user/message' && event.data?.source?.kind === 'user')?.data;
+  const message = current.findLast(event => {
+    if (event.type !== 'user/message') return false;
+    if (event.data?.source?.kind === 'user') return true;
+    // Reuse the official call/reply binding; a skipped or fabricated card is
+    // not a new human instruction. Keep the original message untouched.
+    const reply = readQuestionReply(event.data, events);
+    return reply?.answers.some(answer => answer.selected.length || answer.custom?.trim());
+  })?.data;
   return message ? { turn: start, message } : null;
 }
 const required = (value, name, max = 100000) => {
@@ -23,12 +30,11 @@ const required = (value, name, max = 100000) => {
 
 /** Local owner entry point. Authority comes from the mounted root Agent, never tool arguments. */
 export function createDesktopDelegationService({ ctx, store, database = store.orchestration,
-  readPolicy = () => readAssessmentPolicy(store, ctx.workspaceRegistry), readOnlyCapabilities = () => [], assessScope = assessDesktopDelegationScope }) {
+  readPolicy = () => readAssessmentPolicy(store, ctx.workspaceRegistry) }) {
   const pending = new Map();
-  async function admit(input, exec, { ownerAgent, threadId = 'main', ownerScope, budgetGoalId, goalLeaf } = {}, form) {
+  async function admit(input, exec, { ownerAgent, threadId = 'main', budgetGoalId, goalLeaf } = {}, form) {
     rejectModelOverride(input);
     input = structuredClone(input);
-    ownerScope = structuredClone(ownerScope);
     if (!ownerAgent || exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可委派桌面工单');
     if (goalLeaf !== undefined) required(goalLeaf, '目标子项路径', 512);
     const sessionId = required(ownerAgent.id, '会话标识');
@@ -73,40 +79,8 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       const policy = structuredClone(await readPolicy());
       const project = projectId === undefined ? undefined : policy.projects.find(item => item.id === projectId);
       if (projectId !== undefined && !project) throw new Error('项目不存在');
-      // Direct desktop ingress still skips candidate Eval. Only a proposed NEW
-      // model-owned Ticket receives this bounded scope check, in the same tool call.
+      // Router owns the delegation decision; the host binds its real source.
       const { trigger } = database.ingest({ dedupeKey: `desktop-message:${digest([sessionId, source.messageId])}`, thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' });
-      let scopeCheck;
-      if (!form && !duplicateOfTicketId && !database.desktopTriggerTicket(trigger.id)) {
-        const capabilities = snapshotDelegationCapabilities(readOnlyCapabilities({ agent: ownerAgent, threadId }));
-        const explicitReference = delegationExplicitReference(database, instruction, { sessionId, threadId, ownerScope });
-        const routingHash = digest([policy.model, policy.models, policy.routingConfig]);
-        const binding = { version: delegationScopeVersion, sessionId, threadId, messageId: source.messageId, humanMessageId: message.id,
-          turn: instruction.turn, requestId, payloadHash: fingerprint, instructionHash: instructionFingerprint,
-          policyVersion: policy.desktopVersion, routingHash, capabilitiesHash: digest(capabilities), referenceHash: digest(explicitReference) };
-        const bindingHash = digest(binding);
-        const requestHash = digest([sessionId, threadId, message.id, instructionFingerprint, fingerprint]);
-        scopeCheck = database.desktopScopeCheck(requestKey, bindingHash, requestHash);
-        if (!scopeCheck || scopeCheck.failureCode) {
-          let result;
-          try {
-            result = await assessScope({ llm: ctx.llm, policy, signal: exec.signal,
-              input: { currentRequest: { messageId: message.id, text: original }, explicitReference,
-                proposal: { title, target, acceptance: taskAcceptance, ...(projectId ? { projectId } : {}) }, capabilities } });
-          } catch (error) { result = delegationScopeFailure(error); }
-          scopeCheck = database.recordDesktopScopeCheck({ requestKey, bindingHash, requestHash, triggerId: trigger.id, binding, ...result });
-        }
-        exec.signal?.throwIfAborted();
-        const checkedPolicy = await readPolicy();
-        if (digest(currentHumanInstruction(ctx, ownerAgent)) !== instructionFingerprint
-          || checkedPolicy.desktopVersion !== policy.desktopVersion
-          || digest([checkedPolicy.model, checkedPolicy.models, checkedPolicy.routingConfig]) !== routingHash
-          || digest(snapshotDelegationCapabilities(readOnlyCapabilities({ agent: ownerAgent, threadId }))) !== binding.capabilitiesHash
-          || digest(delegationExplicitReference(database, instruction, { sessionId, threadId, ownerScope })) !== binding.referenceHash) {
-          throw Object.assign(new Error('范围校验期间当前指令、引用、能力或策略已变化；未创建工单'), { code: 'DELEGATION_SCOPE_STALE' });
-        }
-        assertDelegationScope(scopeCheck.decision);
-      }
       const selectedModel = configuredWorkModel(policy);
       const { providerId, modelId } = selectedModel;
       const info = await ctx.llm.resolveModelInfo(providerId, modelId, exec.signal);
@@ -118,15 +92,9 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       if (!latest || digest(latest) !== instructionFingerprint) throw new Error('派工期间当前用户指令已变化，请重试');
       if (current.desktopVersion !== policy.desktopVersion || (project && !current.projects.some(item => item.id === projectId && item.path === project.path))) throw new Error('派工期间项目或授权规则已变化，请重试');
       if (digest(configuredWorkModel(current)) !== digest(selectedModel)) throw new Error('派工期间工作角色模型已变化，请重试');
-      if (scopeCheck && (digest([current.model, current.models, current.routingConfig]) !== scopeCheck.binding.routingHash
-        || digest(snapshotDelegationCapabilities(readOnlyCapabilities({ agent: ownerAgent, threadId }))) !== scopeCheck.binding.capabilitiesHash
-        || digest(delegationExplicitReference(database, instruction, { sessionId, threadId, ownerScope })) !== scopeCheck.binding.referenceHash)) {
-        throw Object.assign(new Error('派工前范围校验依据已变化；未创建工单'), { code: 'DELEGATION_SCOPE_STALE' });
-      }
       return database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, budgetGoalId, duplicateOfTicketId, model: selectedModel, mandate: {
         actorId: 'desktop-owner', source, instruction: original, policyVersion: policy.desktopVersion,
         target, acceptance: taskAcceptance,
-        ...(scopeCheck ? { scopeCheck: { requestId, bindingHash: scopeCheck.bindingHash } } : {}),
         admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval', ...(project ? { project: { id: project.id, path: project.path } } : {}),
       } });
     })();

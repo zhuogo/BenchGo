@@ -1,6 +1,8 @@
+import { isTranscriptUser } from '../src/transcript-message.mjs';
+
 /** Only fresh append publications are eligible for automatic speech. */
 export class AgentFeed {
-  constructor({onText,onStart,onEnd,onReset}={}) { Object.assign(this,{onText,onStart,onEnd,onReset}); this.attempts=new Map();this.steps=new Map();this.seen=new Set();this.revision=null;this.restart=false; }
+  constructor({onText,onStart,onEnd,onReset,onRecord}={}) { Object.assign(this,{onText,onStart,onEnd,onReset,onRecord}); this.attempts=new Map();this.steps=new Map();this.seen=new Set();this.revision=null;this.restart=false; }
   key(event){return event.data?.attemptId??String(event.data?.turn??'')+':'+String(event.data?.step??'');}
   step(event){const {turn,step}=event.data||{};return turn!==undefined&&step!==undefined?turn+':'+step:undefined;}
   track(event){const key=this.key(event),step=this.step(event);if(step!==undefined)this.steps.set(step,key);return key;}
@@ -19,26 +21,30 @@ export class AgentFeed {
       if(!this.remember(event))continue;
       if(event.type==='assistant/live-chunk') {
         const {chunk}=event.data;const key=this.track(event);
-        if(chunk.type==='text-delta') {if(this.restart){this.restart=false;this.onStart?.(event);}this.attempts.set(key,(this.attempts.get(key)||'')+chunk.text); this.onText?.(chunk.text); }
+        if(chunk.type==='text-delta') {if(this.restart){this.restart=false;this.onStart?.(event);}this.attempts.set(key,(this.attempts.get(key)||'')+chunk.text); this.onText?.(chunk.text,event); }
         continue;
       }
       if(event.type==='turn/start'){this.restart=false;this.clear();this.onStart?.();}
-      if(event.type==='plugin:benchgo-plugin/chat-publication'&&event.data?.kind==='final'&&typeof event.data.text==='string'&&event.data.text.trim()) {
+      if(isTranscriptUser(event))this.onRecord?.(event);
+      if(event.type==='plugin:benchgo-plugin/chat-publication'&&event.ignorable===true&&event.data?.kind==='final'&&typeof event.data.text==='string'&&event.data.text.trim()) {
         // SuperAgent publishes its human-facing reply as a plugin record, not as
         // assistant text; read that text or read-aloud stays silent there.
         if(this.restart){this.restart=false;this.onStart?.(event);}
         this.publicationText=event.data.text;
-        this.onText?.(event.data.text);
+        this.onText?.(event.data.text,event);
+        this.onRecord?.(event);
         continue;
       }
       if(event.type==='llm/retry'||event.type==='assistant/attempt') { this.onReset?.(); this.clear();this.restart=true; }
       if(event.type==='assistant/message') {
+        if(event.surfaceOp!==undefined&&event.surfaceOp!=='append')continue;
         const text=(event.data.message?.content||[]).filter(x=>x.type==='text').map(x=>x.text).join('');
         // Successful messages append before step/end retires the transient attempt.
         // Durable messages carry turn/step, while live chunks carry attemptId.
         const key=change.kind==='settle-assistant'?change.attemptId??this.key(event):this.steps.get(this.step(event))??this.key(event),prefix=this.attempts.get(key)||'';
         if(this.publicationText&&text===this.publicationText){this.forget(key);continue;}
-        if(!event.data.interrupted&&text.startsWith(prefix)){if(this.restart){this.restart=false;this.onStart?.(event);}if(text.length>prefix.length)this.onText?.(text.slice(prefix.length));}
+        if(!event.data.interrupted&&text.startsWith(prefix)){if(this.restart){this.restart=false;this.onStart?.(event);}if(text.length>prefix.length)this.onText?.(text.slice(prefix.length),event);}
+        this.onRecord?.(event);
         this.forget(key);
       }
       if(event.type==='turn/end')this.onEnd?.(event);

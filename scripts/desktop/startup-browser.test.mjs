@@ -13,7 +13,7 @@ const require = createRequire(new URL('../../deepseek-harness/apps/web/package.j
 const { chromium } = require('playwright');
 const executablePath = [process.env.CHROMIUM_EXECUTABLE_PATH, chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(value => value && existsSync(value));
 
-test('prepared startup keeps one brand entrance, local blinking, live themes and recoverable navigation', { skip: !executablePath && 'Chromium/Edge is required' }, async t => {
+test('prepared startup keeps one brand entrance, local eye expressions, live themes and recoverable navigation', { skip: !executablePath && 'Chromium/Edge is required' }, async t => {
   const prepared = await mkdtemp(join(tmpdir(), 'benchgo-startup-browser-'));
   t.after(() => rm(prepared, { recursive: true, force: true }));
   await prepareDesktopRenderer(root, prepared);
@@ -47,7 +47,7 @@ test('prepared startup keeps one brand entrance, local blinking, live themes and
     const entrance = await page.evaluate(() => {
       const brand = document.querySelector('.startup-brand');
       const animation = brand.getAnimations().find(item => item.animationName === 'startup-arrive');
-      animation.pause(); animation.currentTime = 180;
+      animation.pause(); animation.currentTime = 120;
       const mascot = brand.querySelector('.startup-mascot');
       const title = brand.querySelector('h1');
       return {
@@ -57,15 +57,17 @@ test('prepared startup keeps one brand entrance, local blinking, live themes and
         childAnimations: mascot.getAnimations().length + title.getAnimations().length,
         artworkBackground: getComputedStyle(mascot).backgroundColor,
         artworkBorder: getComputedStyle(mascot).borderWidth,
+        artworkFilter: getComputedStyle(mascot.querySelector('[data-effect="soft-shadow"]')).filter,
         hasBackgroundPlate: !!mascot.querySelector(':scope > rect'),
       };
     });
-    assert.equal(entrance.duration, 400);
+    assert.equal(entrance.duration, 240);
     assert.equal(entrance.delay, 0);
     assert(entrance.opacity > 0 && entrance.opacity < 1);
     assert.equal(entrance.childAnimations, 0, 'both children inherit the same parent entrance');
     assert.equal(entrance.artworkBackground, 'rgba(0, 0, 0, 0)');
     assert.equal(entrance.artworkBorder, '0px');
+    assert.equal(entrance.artworkFilter, 'none', 'blinking does not rerasterize a full-artwork SVG filter');
     assert.equal(entrance.hasBackgroundPlate, false);
     await snapshot(name + '-entering');
     await page.evaluate(() => document.querySelector('.startup-brand').getAnimations()[0].finish());
@@ -78,11 +80,22 @@ test('prepared startup keeps one brand entrance, local blinking, live themes and
     const eyeScale = await page.evaluate(() => {
       const eyes = document.querySelector('[data-part="eyes"]');
       const animation = eyes.getAnimations()[0];
-      animation.pause(); animation.currentTime = 800 + 4400 * .43;
+      animation.pause(); animation.currentTime = 250 + 3200 * .1;
       return new DOMMatrix(getComputedStyle(eyes).transform).d;
     });
     assert(Math.abs(eyeScale - .1) < .01, 'only the existing eyes briefly close');
     await snapshot(name + '-blink');
+    for (const [pose, progress, shift] of [['look-left', .36, -18], ['look-right', .58, 18], ['look-center', .8, 0]]) {
+      const expression = await page.evaluate(progress => {
+        const eyes = document.querySelector('[data-part="eyes"]');
+        const animations = eyes.getAnimations();
+        animations[0].currentTime = 250 + 3200 * progress;
+        const matrix = new DOMMatrix(getComputedStyle(eyes).transform);
+        return { shift: matrix.e, scale: matrix.d, animations: animations.length, bodyTransform: getComputedStyle(document.querySelector('[data-part="body"]')).transform };
+      }, progress);
+      assert.deepEqual(expression, { shift, scale: 1, animations: 1, bodyTransform: 'none' }, 'one transform moves only the existing eyes and returns them to center');
+      await snapshot(name + '-' + pose);
+    }
     await page.emulateMedia({ reducedMotion: 'reduce' });
     assert.deepEqual(await page.evaluate(() => ({
       animations: document.getAnimations().length,

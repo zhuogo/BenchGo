@@ -1,5 +1,15 @@
 import { SUPERAGENT_ROLE_PROFILE } from './session-role-assembly.mjs';
 
+/** Product entry ownership includes previous Router sessions, never Worker runs. */
+export function privateRouterSessionIds(state) {
+  const threads = state.threads || [];
+  const channels = new Set(threads.filter(thread => thread.sourceKey || thread.source?.channel && thread.source.channel !== 'desktop').map(thread => thread.id));
+  return [...new Set([state.mainSessionId,
+    ...threads.filter(thread => !channels.has(thread.id)).map(thread => thread.sessionId),
+    ...Object.entries(state.sessionLineage || {}).filter(([threadId]) => !channels.has(threadId)).flatMap(([, ids]) => ids),
+  ].filter(id => typeof id === 'string' && id))];
+}
+
 /** Cold owned sessions stay owned even before their first assembly audit. */
 export async function readOwnedSessionRole({ store, sessionId, readSession }) {
   if (typeof sessionId !== 'string' || !sessionId) return null;

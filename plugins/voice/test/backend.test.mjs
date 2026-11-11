@@ -77,7 +77,7 @@ test('shared availability follows feature switches and the same resolved routes 
   } finally { handlers.dispose(); }
 });
 const memory = () => ({
-  value: { dictation: true, readAloud: true, call: true, asr: { baseURL: 'https://asr.test/v1', model: 'recognizer', apiKey: 'secret-for-test' }, tts: { baseURL: 'https://tts.test/v1', model: 'speaker', apiKey: 'other-secret', voice: 'alloy' } },
+  value: { dictation: true, readAloud: true, call: true, asr: { baseURL: 'https://asr.test/v1', model: 'recognizer', apiKey: 'secret-for-test', protocol: 'transcriptions' }, tts: { baseURL: 'https://tts.test/v1', model: 'speaker', apiKey: 'other-secret', voice: 'alloy', protocol: 'speech', stream: true } },
   snapshot() { return publicConfig(this.value); }, async configure(patch) { this.value = updateConfig(this.value, patch); return this.snapshot(); },
 });
 
@@ -98,12 +98,14 @@ test('configuration is durable, private, masked and serialized without losing co
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test('fresh configuration defaults to streaming OpenAI with no inferred model', async () => {
+test('fresh configuration requires concrete protocol selection with no inferred model', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'voice-defaults-'));
   try {
     const store = await new VoiceConfig({ dataDir: directory }).open();
     assert.equal(store.value.asr.model, '');
-    assert.equal(store.value.asr.protocol, 'transcriptions-sse');
+    assert.equal(store.value.asr.protocol, '');
+    assert.equal(store.value.asr.apiType, '');
+    assert.equal(store.value.tts.protocol, '');
     assert.equal(store.value.tts.model, '');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
@@ -146,9 +148,9 @@ test('configuration rejects unsafe URL shapes, unknown fields and header injecti
 test('routes inherit official owner-only Connection routes and use streaming bounded request bodies', () => {
   const registered = [], effects = [];
   mountWeb({ effect(fn) { effects.push(fn()); }, connection: { fetch: { register(route) { registered.push(route); return () => {}; } } } }, memory());
-  assert.deepEqual(registered.map(route => route.path), ['/api/voice', '/api/voice/transcribe', '/api/voice/speech', '/api/voice/worklet', '/api/voice/noise-worklet', '/api/voice/noise-wasm']);
-  assert.equal(registered.slice(0, 3).every(route => route.requestBody === 'streaming' && route.methods.join() === 'POST'), true);
-  assert.deepEqual(registered[3].methods, ['GET']);
+  assert.deepEqual(registered.map(route => route.path), ['/api/voice', '/api/voice/transcribe', '/api/voice/speech', '/api/voice/conversation', '/api/voice/worklet', '/api/voice/noise-worklet', '/api/voice/noise-wasm']);
+  assert.equal(registered.slice(0, 4).every(route => route.requestBody === 'streaming' && route.methods.join() === 'POST'), true);
+  assert.deepEqual(registered[4].methods, ['GET']);
   for (const cleanup of effects) cleanup?.();
 });
 
@@ -231,7 +233,7 @@ test('call lease enforces one device, heartbeat TTL, 30 minute maximum and activ
 });
 
 test('call APIs bind media to lease; config change and hangup abort live audio immediately', async () => {
-  const store = memory(); store.value.dictation = false; store.value.readAloud = false; let upstream;
+  const store = memory(); store.value.asr.protocol = 'transcriptions-sse'; store.value.dictation = false; store.value.readAloud = false; let upstream;
   const handlers = createVoiceHandlers(store, { fetcher: async (_url, options) => { upstream = options.signal; return new Response(new ReadableStream({}), { headers: { 'content-type': 'audio/pcm' } }); } });
   const control = async value => (await handlers.config(json('/api/voice', value))).json();
   const { call } = await control({ action: 'call.start', sessionId: 'session', deviceId: 'device' });
@@ -296,16 +298,16 @@ test('model selection preserves explicit protocols without guessing transport fr
 });
 test('pre-protocol model migration is provider independent and preserves explicit choices', async () => {
   const legacy = { asr: { providerId: 'routergo', model: 'mimo-v2.5-asr' } };
-  assert.equal(migrateLegacyConfig(legacy).asr.protocol, 'transcriptions-sse');
+  assert.equal(migrateLegacyConfig(legacy).asr.protocol, '');
   assert.equal(legacy.asr.protocol, undefined);
-  assert.equal(migrateLegacyConfig({ asr: { baseURL: 'https://routergo.cn/api/v1', model: 'stepaudio-2.5-asr' } }).asr.protocol, 'transcriptions-sse');
+  assert.equal(migrateLegacyConfig({ asr: { baseURL: 'https://routergo.cn/api/v1', model: 'stepaudio-2.5-asr' } }).asr.protocol, '');
   assert.equal(migrateLegacyConfig({ asr: { ...legacy.asr, protocol: 'mimo-sse' } }).asr.protocol, 'mimo-sse');
-  assert.equal(migrateLegacyConfig({ asr: { model: 'stepaudio-2.5-asr-stream' } }).asr.protocol, 'transcriptions-sse');
+  assert.equal(migrateLegacyConfig({ asr: { model: 'stepaudio-2.5-asr-stream' } }).asr.protocol, '');
   const directory = await mkdtemp(join(tmpdir(), 'voice-migrate-'));
   try {
     await writeFile(join(directory, 'config.json'), JSON.stringify(legacy));
-    const store = await new VoiceConfig({ dataDir: directory }).open(); assert.equal(store.value.asr.protocol, 'transcriptions-sse');
-    await store.configure({ call: true }); assert.equal(JSON.parse(await readFile(store.path, 'utf8')).asr.protocol, 'transcriptions-sse');
+    const store = await new VoiceConfig({ dataDir: directory }).open(); assert.equal(store.value.asr.protocol, '');
+    await store.configure({ call: true }); assert.equal(JSON.parse(await readFile(store.path, 'utf8')).asr.protocol, '');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 test('legacy TTS reload keeps its effective protocol and preserves explicit protocol choices', async () => {
@@ -314,7 +316,7 @@ test('legacy TTS reload keeps its effective protocol and preserves explicit prot
     for (const model of ['stepaudio-2.5-tts', 'stepfun-2.5-tts', 'custom-tts']) for (const explicit of [undefined, 'speech', 'step-speech']) {
       const legacy = { tts: { baseURL: 'https://tts.test/v1', model, ...(explicit ? { protocol: explicit } : {}) } };
       await writeFile(join(directory, 'config.json'), JSON.stringify(legacy));
-      const expected = explicit || 'speech';
+      const expected = explicit || '';
       const store = await new VoiceConfig({ dataDir: directory }).open();
       assert.equal(store.snapshot().tts.protocol, expected);
       assert.equal(store.snapshot().tts.model, model);
@@ -330,6 +332,26 @@ test('safe upstream machine codes explain wrong protocol without reflecting prov
   const response = await h.transcribe(input(wav())), body = await response.json();
   assert.equal(response.status, 502); assert.equal(body.code, 'model_unavailable'); assert.match(body.error, /503.*model_unavailable/u); assert.equal(JSON.stringify(body).includes('secret-for-test'), false); h.dispose();
 });
+
+test('ASR no-speech rejection explains the input failure without reflecting vendor text', async () => {
+  for (const message of ['no speech found', 'No speech detected.', 'no speech found; Bearer secret-for-test']) {
+    const h = createVoiceHandlers(memory(), { fetcher: async () => Response.json({ error: {
+      type: 'request_params_invalid', message,
+    } }, { status: 400 }) });
+    try {
+      const response = await h.transcribe(input(wav())), body = await response.json();
+      assert.equal(response.status, 502);
+      assert.doesNotMatch(JSON.stringify(body), /secret-for-test/);
+      if (message.includes('Bearer')) {
+        assert.equal(body.code, 'request_params_invalid');
+        assert.match(body.error, /400.*request_params_invalid/);
+      } else {
+        assert.equal(body.code, 'asr_no_speech');
+        assert.match(body.error, /未检测到有效语音.*400.*麦克风/);
+      }
+    } finally { h.dispose(); }
+  }
+});
 test('TTS rejects contradictory PCM metadata rather than playing at the wrong pitch', async () => {
   for (const contentType of ['audio/pcm;rate=16000;channels=1', 'audio/pcm;rate=24000;channels=2']) {
     const h = createVoiceHandlers(memory(), { fetcher: async () => new Response(new Uint8Array(8), { headers: { 'content-type': contentType } }) });
@@ -339,9 +361,9 @@ test('TTS rejects contradictory PCM metadata rather than playing at the wrong pi
 
 
 test('configuration cancellation is scoped and leaves call leases usable for subsequent segments', async () => {
-  const store = memory(); store.value = updateConfig(store.value, {});
+  const store = memory(); store.value.asr.protocol = 'transcriptions-sse'; store.value = updateConfig(store.value, {});
   const signals = [], h = createVoiceHandlers(store, { fetcher: async (url, options) => {
-    signals.push({ url, signal: options.signal });
+    signals.push({ url, signal: options.signal, body: JSON.parse(options.body) });
     if (url.endsWith('/audio/transcriptions')) return Response.json({ text: 'ok' });
     return new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1, 0])); } }), { headers: { 'content-type': 'audio/pcm' } });
   } });
@@ -353,10 +375,11 @@ test('configuration cancellation is scoped and leaves call leases usable for sub
     const first = await speech();
     await control({ action: 'configure', config: {} }); assert.equal(signals[0].signal.aborted, false);
     await control({ action: 'configure', config: { dictation: false } }); assert.equal(signals[0].signal.aborted, false);
-    await control({ action: 'configure', config: { tts: { speed: 1.35 } } }); assert.equal(signals[0].signal.aborted, true);
+    await control({ action: 'configure', config: { tts: { speed: 1.35 } } }); assert.equal(signals[0].signal.aborted, false);
+    await control({ action: 'configure', config: { tts: { voice: 'new-voice' } } }); assert.equal(signals[0].signal.aborted, true);
     await assert.rejects(first.arrayBuffer());
     assert.equal((await control({ action: 'call.heartbeat', ...call })).status, 200);
-    const second = await speech(); assert.equal(second.status, 200); assert.equal(signals[1].signal.aborted, false);
+    const second = await speech(); assert.equal(second.status, 200); assert.equal(signals[1].signal.aborted, false); assert.equal(signals[1].body.speed, 1.35);
     await control({ action: 'configure', config: { asr: { model: 'new-recognizer' } } }); assert.equal(signals[1].signal.aborted, false);
     await control({ action: 'configure', config: { call: false } }); assert.equal(signals[1].signal.aborted, true);
     await assert.rejects(second.arrayBuffer());

@@ -25,7 +25,7 @@ export function TaskStatusTitle({ title, status, label }) {
 
 export function TaskIconButton({ label, icon, ...props }) {
   const paths = { pause: <><path d="M8 5v14M16 5v14" /></>, play: <path d="m8 5 11 7-11 7Z" />, stop: <rect x="6" y="6" width="12" height="12" rx="1" /> };
-  return <Button variant="ghost" type="button" className="ba-task-icon" title={label} aria-label={label} {...props}>{paths[icon] ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">{paths[icon]}</svg> : <UIIcon name={icon} size={18} />}</Button>;
+  return <Button variant="ghost" size="icon" type="button" className="ba-task-icon" title={label} aria-label={label} {...props}>{paths[icon] ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">{paths[icon]}</svg> : <UIIcon name={icon} size={18} />}</Button>;
 }
 
 export function TaskDetail({ open, title, onClose, dirty = false, children, footer, inline = false }) {

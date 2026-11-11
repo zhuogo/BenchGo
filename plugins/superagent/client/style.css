@@ -123,6 +123,10 @@
 .ba-studio-body :is(.bg-vault,.ba-memory-page,.ba-system-files,.ba-artifacts){max-width:none}
 .ba-studio-body .bg-ui-button-primary:disabled{opacity:1;color:var(--ba-muted);background:var(--ba-hover)}
 .ba-studio-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;width:min(100%,1040px);margin:0 auto;padding:0 0 24px}
+.ba-studio-heading-main{flex:1;min-width:0;width:100%}
+.ba-studio-heading-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px 20px;min-width:0}
+.ba-studio-heading-row h1{flex:none}
+.ba-studio-heading-row>.bg-segments-scroll{min-width:0;max-width:100%;margin:0}
 .ba-studio-heading h1{margin:0;font-size:22px;font-weight:650;letter-spacing:-.025em;line-height:1.4}
 .ba-studio-heading p{margin:6px 0 0;color:var(--ba-muted);font-size:13px;line-height:1.65}
 .ba-studio-body :is(.ba-permission-header,.bg-vault-toolbar,.ba-artifacts-head)>:is(h1,h2),.ba-studio-body :is(.bg-vault-toolbar,.ba-artifacts-head)>div>:is(h1,h2){font-size:22px;font-weight:650;line-height:1.4;letter-spacing:-.025em}
@@ -141,7 +145,7 @@
 .ba-identity-error{scroll-margin-bottom:140px}
 .ba-identity-error>span{min-width:0;overflow-wrap:anywhere}.ba-identity-error>.cmd-ui-icon{flex:none;margin-top:2px}.ba-identity-error:focus{outline:2px solid currentColor;outline-offset:2px}
 .ba-identity-save>span{display:inline-flex;align-items:center;gap:7px;color:var(--ba-muted);font-size:12px}.ba-identity-save[data-dirty=true]>span{color:var(--dsw-alias-state-business-primary,#315be8)}
-.ba-resource-initial{display:grid;place-items:center;flex:1;padding:24px}.ba-resource-initial>.ba-resource-state{width:min(100%,520px)}
+.ba-resource-initial{display:grid;place-items:center;flex:1 1 0;min-width:0;min-height:0;padding:24px;overflow:auto}.ba-resource-initial>.ba-resource-state{width:min(100%,520px)}
 .ba-model-feedback{display:flex;align-items:center;gap:8px;margin:10px 0 0;color:var(--ba-muted);font-size:12px;line-height:1.6}
 .ba-model-feedback>span{flex:1}.ba-model-feedback[data-error=true]{color:var(--dsw-alias-state-error-primary,#b42318)}
 .ba-memory-feedback{display:flex;align-items:center;gap:10px;margin:0;padding:14px;border:1px solid var(--ba-line);border-radius:10px;background:var(--ba-surface);font-size:13px;color:var(--ba-muted)}

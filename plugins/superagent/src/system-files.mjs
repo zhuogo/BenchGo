@@ -24,7 +24,7 @@ function failure(message, status) { return Object.assign(new Error(message), { s
 
 // Read only, rooted in this assistant's configuration directory. Directory links
 // are deliberately excluded so browsing cannot escape into other workspaces.
-export function createAssistantSystemFiles({ directory, preview = documentPreview }) {
+export function createAssistantSystemFiles({ directory, preview = documentPreview, desktop = () => null }) {
   const root = resolve(directory);
   async function locate(path) {
     if (!validPath(path)) throw failure('文件路径无效', 400);
@@ -58,7 +58,16 @@ export function createAssistantSystemFiles({ directory, preview = documentPrevie
         files.push({ id: filePath, path: filePath, name: entry.name, kind: isDirectory ? 'directory' : kind, mimeType: isDirectory ? null : mimeType, bytes: isDirectory ? null : file.info.size, updatedAt: file.info.mtime.toISOString(), ...(!isDirectory ? { url, downloadUrl: `${url}&download=1`, available: file.info.size <= maxBytes } : {}) });
       }
       files.sort((a, b) => Number(b.kind === 'directory') - Number(a.kind === 'directory') || a.name.localeCompare(b.name, 'zh-CN', { numeric: true }));
-      return { path, root, entries: files.map(file => ({ ...file, type: file.kind === 'directory' ? 'directory' : 'file' })), parentPath: path ? path.split('/').slice(0, -1).join('/') : null, rootLabel: '总助手配置区', files };
+      const host = desktop();
+      const available = !!(typeof host?.workspaceDesktop === 'function' && typeof host?.openWorkspacePath === 'function' && host.workspaceDesktop().available);
+      return { path, root, desktop: { available }, entries: files.map(file => ({ ...file, type: file.kind === 'directory' ? 'directory' : 'file' })), parentPath: path ? path.split('/').slice(0, -1).join('/') : null, rootLabel: '总助手配置区', files };
+    },
+    async openDirectory({ path = '', signal = new AbortController().signal } = {}) {
+      const host = desktop();
+      if (typeof host?.workspaceDesktop !== 'function' || typeof host?.openWorkspacePath !== 'function' || !host.workspaceDesktop().available) throw failure('当前服务无法打开本地文件夹', 409);
+      const folder = await locate(path);
+      if (!folder.info.isDirectory()) throw failure('文件夹不存在', 404);
+      return host.openWorkspacePath({ path: folder.actual }, signal);
     },
     async read({ path } = {}) {
       const file = await locate(path);

@@ -1,3 +1,35 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+const STARTUP_STAGES = new Set(['started', 'splash-visible', 'enrollment-ready', 'shell-loading', 'shell-loaded', 'host-starting', 'host-ready', 'host-connected', 'welcome-state-ready', 'workspace-visible', 'workspace-ready', 'failed']);
+const STARTUP_LABELS = { 'splash-visible': '正在准备插件…', 'enrollment-ready': '正在载入工作台…', 'shell-loading': '正在载入工作台…', 'shell-loaded': '正在启动服务…', 'host-starting': '正在启动服务…', 'host-ready': '正在连接工作台…', 'host-connected': '正在读取设置…', 'welcome-state-ready': '正在打开工作台…' };
+
+/** Keep one bounded, local startup record; diagnostic I/O must never gate startup. */
+export function createStartupTiming(directory, { now = () => performance.now(), startedAt = new Date().toISOString() } = {}) {
+  const start = now(), stages = [], seen = new Set();
+  let finished = false, writes = Promise.resolve();
+  const persist = () => {
+    const value = JSON.stringify({ startedAt, pid: process.pid, status: finished ? stages.at(-1).stage : 'starting', elapsedMs: stages.at(-1).elapsedMs, stages }, null, 2);
+    writes = writes.then(async () => { await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'benchgo-startup.json'), value, { mode: 0o600 }); }).catch(() => {});
+  };
+  const mark = stage => {
+    if (finished || !STARTUP_STAGES.has(stage) || seen.has(stage)) return;
+    seen.add(stage);
+    const elapsedMs = Math.max(0, Math.round(now() - start));
+    stages.push({ stage, elapsedMs, durationMs: elapsedMs - (stages.at(-1)?.elapsedMs ?? 0) });
+    persist();
+  };
+  mark('started');
+  return {
+    mark,
+    finish(stage = 'workspace-ready') {
+      if (finished || !['workspace-ready', 'failed'].includes(stage)) return;
+      mark(stage); finished = true; persist();
+    },
+    flush: () => writes,
+  };
+}
+
 /** A local, sandboxed splash shown before the official backend starts. */
 export async function openStartupWindow({ app, BrowserWindow, nativeImage, nativeTheme, page, iconPath }) {
   const icon = iconPath && nativeImage ? nativeImage.createFromPath(iconPath) : undefined;
@@ -25,6 +57,12 @@ export async function openStartupWindow({ app, BrowserWindow, nativeImage, nativ
     }
     waiting.clear();
     if (!window.isDestroyed()) window.destroy();
+  };
+  dispose.setStage = stage => {
+    const label = STARTUP_LABELS[stage];
+    if (disposed || window.isDestroyed() || !label) return;
+    // Only fixed presentation strings reach our local sandboxed document.
+    void window.webContents.executeJavaScript(`(() => { const status = document.getElementById('startup-status'); if (status) { status.dataset.phase = ${JSON.stringify(stage)}; status.textContent = ${JSON.stringify(label)}; } })()`).catch(() => {});
   };
   const observe = (_event, other) => {
     const shown = () => {

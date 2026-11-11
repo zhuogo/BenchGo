@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>BenchGo · 更新与发布架构</title><link rel="stylesheet" href="../_assets/architecture.css"></head>
+<body><main aria-label="BenchGo 更新与发布架构">
+<header class="header"><div class="brand"><a class="brand-mark" href="../总架构.html" aria-label="BenchGo 总架构" style="text-decoration:none">B</a><div><div class="eyebrow">BENCHGO / BUILD / RELEASE</div><h1>更新与发布<span>架构图解</span></h1></div></div><div class="header-actions"><button type="button" class="btn" id="directory-toggle" aria-expanded="false" aria-controls="directory">☷ <span class="directory-label">节点</span>目录</button><button type="button" class="btn outline" id="walk-start" aria-pressed="false">流程走读 ↗</button></div></header>
+<nav class="tabs" aria-label="架构板块"><a href="../总架构.html"><span class="tab-index">◎</span>总架构</a><a href="../01-设备与远程连接/架构.html"><span class="tab-index">01</span>设备与远程连接</a><a href="../02-工作台与Agent/架构.html"><span class="tab-index">02</span>工作台与 Agent</a><a href="../03-实时语音/架构.html"><span class="tab-index">03</span>实时语音</a><a href="../04-模型与工具/架构.html"><span class="tab-index">04</span>模型与工具</a><a href="架构.html" aria-current="page"><span class="tab-index">05</span>更新与发布</a><a href="../06-superagent/架构.html"><span class="tab-index">06</span>SuperAgent</a></nav>
+<div class="viewport" id="viewport" tabindex="0" aria-label="架构画布：拖动空白平移，滚轮或双指缩放，拖动节点调整布局，点击节点查看源码。方向键平移，加减号缩放，零适应。"><div class="load-state" id="load-state" role="status"><strong id="load-title">正在展开架构图</strong><p id="load-message">如果画布未出现，请确认 _assets 目录与 HTML 一同保留。</p><button type="button" class="btn outline" id="retry" hidden onclick="location.reload()">重新加载</button></div><div class="world" id="world"><div class="canvas-title"><div><h2 id="canvas-title"></h2><p id="canvas-subtitle"></p></div><span class="sheet-no" id="sheet-no"></span></div><div id="zones"></div><svg class="edges" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--edge)"/></marker><marker id="arrow-feedback" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--accent)"/></marker></defs><g id="edge-paths"></g><g id="edge-labels"></g></svg><div id="nodes"></div></div></div>
+<div class="canvas-bottom"><div><div class="legend"><span><i></i>调用 / 依赖</span><span><i class="feedback"></i>反馈 / 记录</span><span><i class="support"></i>配置 / 装配</span><span>虚线边框 · 设计目标</span></div><p class="hint">拖动平移 · 滚轮缩放 · 拖动节点 · 点击查看说明与源码</p></div><div class="camera-controls" aria-label="画布控制"><button type="button" class="btn icon" id="zoom-out" aria-label="缩小">−</button><span class="zoom-value" id="zoom-value">100%</span><button type="button" class="btn icon" id="zoom-in" aria-label="放大">+</button><span class="separator"></span><button type="button" class="btn" id="fit">适应</button><button type="button" class="btn" id="actual">1:1</button><span class="separator"></span><button type="button" class="btn" id="reset">重置</button></div></div>
+<aside class="panel detail" id="detail" aria-label="节点详情" hidden><div class="panel-top"><span class="tag" id="detail-tag"></span><button type="button" class="btn icon" id="detail-close" aria-label="关闭节点详情">×</button></div><h2 id="detail-title"></h2><p class="plain" id="detail-plain"></p><div class="detail-links" id="detail-links"></div><div class="detail-block"><h3>它负责什么</h3><p id="detail-role"></p></div><div class="detail-block"><h3>输入与输出</h3><div class="io"><b>输入</b><span id="detail-input"></span></div><div class="io"><b>输出</b><span id="detail-output"></span></div></div><div class="detail-block"><h3>对应源码</h3><div id="detail-sources"></div></div><p class="notice" id="detail-note"></p></aside>
+<aside class="panel directory" id="directory" aria-label="节点与文档目录" hidden><div class="panel-top"><h2 style="font-size:17px">节点目录</h2><button type="button" class="btn icon" id="directory-close" aria-label="关闭节点目录">×</button></div><input class="search" id="search" type="search" placeholder="搜索名称、服务或函数" aria-label="搜索架构节点"><div class="directory-list" id="directory-list"></div><div class="empty" id="search-empty" hidden><div class="empty-mark">⌕</div><strong>没有匹配的节点</strong><p>试试模块名称或清空关键词。</p><button type="button" class="btn primary" id="clear-search">显示全部节点</button></div><div class="detail-block"><h3>阅读设计</h3><div id="design-links"></div></div><p class="notice" id="boundary"></p></aside>
+<section class="walkthrough" id="walkthrough" aria-label="架构流程走读" aria-live="polite" hidden><div class="step-top"><span id="step-label"></span><button type="button" class="btn icon" id="walk-exit" aria-label="退出流程走读">×</button></div><h3 id="step-title"></h3><p id="step-text"></p><div class="walk-controls"><button type="button" class="btn" id="walk-prev">← 上一步</button><button type="button" class="btn primary" id="walk-next">下一步 →</button></div><div class="progress"><span id="step-progress"></span></div></section>
+<noscript><div class="load-state"><strong>需要 JavaScript 展开交互图</strong><p>请启用 JavaScript，或直接阅读同目录中的设计 Markdown。</p></div></noscript>
+</main><script type="application/json" id="architecture-data">{
+  "id": "05",
+  "title": "更新与发布",
+  "eyebrow": "BUILD / RELEASE",
+  "subtitle": "业务源码装配成唯一 benchgo-plugin，经签名清单分发；主机准备不可变版本，在官方 profile 锁内激活，重启后加载。",
+  "boundary": "图中机制已有实现，但构建、签名、安装、激活与公网分发必须对当前产物分别验收。插件、桌面应用、Android 与服务器是不同更新边界；源码测试或 artifact 存在不代表已正式发布。",
+  "nodes": [
+    {
+      "id": "version",
+      "title": "版本与引擎真源",
+      "kicker": "VERSION SOURCES",
+      "kind": "orchestration",
+      "sub": "应用、插件与引擎分别锁定",
+      "symbol": "package.json · upstream.json",
+      "plain": "先知道更新的是哪一层，再决定构建什么。",
+      "role": "应用版本来自根 manifest，插件版本来自插件 manifest；官方引擎提交来自 upstream.json 与子模块 pin，Android 另有 versionCode。",
+      "input": "源码提交与各交付单元 manifest",
+      "output": "独立版本和兼容引擎范围",
+      "sources": [
+        "package.json",
+        "plugins/benchgo/package.json",
+        "upstream.json",
+        ".gitmodules"
+      ],
+      "note": "不将插件版本当桌面壳版本；官方源码保持不改。",
+      "state": "implemented",
+      "x": 60,
+      "y": 160
+    },
+    {
+      "id": "build",
+      "title": "源码与统一客户端构建",
+      "kicker": "SOURCE ASSEMBLY",
+      "kind": "execution",
+      "sub": "业务模块、资源与 Link 页面重建",
+      "symbol": "buildModules() · build-client.mjs",
+      "plain": "把分开的源码放进一个可交付插件。",
+      "role": "构建 Harness、SuperAgent、Voice 及内部模块，重定位相对 import 与资源 URL；统一构建客户端与 Link 页面。",
+      "input": "plugins 内业务源码、共享组件和资源",
+      "output": "lib/modules、lib/client.js、lib/link-web",
+      "sources": [
+        "plugins/benchgo/scripts/build-modules.mjs",
+        "plugins/benchgo/scripts/build-client.mjs",
+        "plugins/link/scripts/build-web.mjs"
+      ],
+      "note": "lib 是生成产物；开发 reload:plus 不能代替正式发行。",
+      "state": "implemented",
+      "x": 440,
+      "y": 160
+    },
+    {
+      "id": "bundle",
+      "title": "完整包与依赖闭包",
+      "kicker": "PLUGIN BUNDLE",
+      "kind": "execution",
+      "sub": "五入口 + 生产依赖 + 统一客户端",
+      "symbol": "stagePluginBundle()",
+      "plain": "完整包离开源码目录后仍必须能运行。",
+      "role": "按 npm files 白名单收集已构建文件，检查五入口、runtime 与资源；复用官方共享服务身份，构造可安装 composition。",
+      "input": "构建产物与锁定生产依赖",
+      "output": "完整插件目录与 tar.gz",
+      "sources": [
+        "scripts/desktop/plugin-bundle.mjs",
+        "scripts/desktop/package-plugin-update.mjs",
+        "plugins/benchgo/cordis.patch.yml"
+      ],
+      "note": "唯一安装包是 benchgo-plugin；源码包不是额外安装插件。",
+      "state": "implemented",
+      "x": 820,
+      "y": 160
+    },
+    {
+      "id": "sign",
+      "title": "签名清单与包摘要",
+      "kicker": "ED25519 / SHA256",
+      "kind": "execution",
+      "sub": "包尺寸、摘要、版本与引擎范围绑定",
+      "symbol": "createUpdateManifest()",
+      "plain": "让客户端确认清单可信、下载包未被替换。",
+      "role": "对插件包计算 SHA256 与尺寸，把版本和精确引擎范围写入清单；Ed25519 签名后，用内置公钥回验。",
+      "input": "完整包、版本、引擎版本、私钥",
+      "output": "benchgo-update.json 与独立签名",
+      "sources": [
+        "scripts/desktop/create-update-manifest.mjs",
+        "plugins/benchgo/shared/update-public-key.pem"
+      ],
+      "note": "插件签名不等于 EXE 发行者认证；私钥不进入代码或客户端。",
+      "state": "implemented",
+      "x": 1200,
+      "y": 160
+    },
+    {
+      "id": "publish",
+      "title": "独立发行通道",
+      "kicker": "GITHUB RELEASES",
+      "kind": "finish",
+      "sub": "不可变插件版本与签名元数据分开",
+      "symbol": "plugin-v\u003cversion> · plugin-updates",
+      "plain": "先发布完整包，再发布指向它的更新清单。",
+      "role": "CI 默认只产出 artifact；显式 publish 才创建唯一插件版本 Release，并上传独立更新元数据；应用与 Android 使用各自工作流。",
+      "input": "已签名清单、完整包、显式发布选项",
+      "output": "可匿名下载的发行包与更新通道",
+      "sources": [
+        ".github/workflows/plugin-update.yml",
+        ".github/workflows/publish-windows-installer.yml",
+        ".github/workflows/android-package.yml"
+      ],
+      "note": "已有工作流不代表当前版本已发布；需从 GitHub 与默认镜像实际取回核验。",
+      "state": "partial",
+      "x": 1200,
+      "y": 450
+    },
+    {
+      "id": "feed",
+      "title": "下载来源与可信校验",
+      "kicker": "VERIFIED FEED",
+      "kind": "execution",
+      "sub": "所选 HTTPS 来源 → 验签 → 兼容检查",
+      "symbol": "fetchVerifiedRelease() · verifyArtifact()",
+      "plain": "镜像可以换，信任的签名和摘要不能变。",
+      "role": "按所选来源取清单并先验签，再检查 schema、版本、平台与引擎；下载包检查字节数和 SHA256。",
+      "input": "镜像/GitHub/自定义 HTTPS 配置、内置公钥",
+      "output": "已验证 Release 与校验后的包字节",
+      "sources": [
+        "plugins/benchgo/shared/update-feed.mjs"
+      ],
+      "note": "默认镜像为 ghfast.top；失败保留选择。404 是通道未就绪，其他校验失败仍是错误。",
+      "state": "implemented",
+      "x": 820,
+      "y": 450
+    },
+    {
+      "id": "updates",
+      "title": "主机更新协调与互斥",
+      "kicker": "HOST UPDATE SERVICE",
+      "kind": "orchestration",
+      "sub": "检查、下载、安装、回退统一 admission",
+      "symbol": "createUpdates() · mountUpdates()",
+      "plain": "更新当前连接的主机，同时避开正在执行的任务。",
+      "role": "通过 /api/commander/updates 管理状态；插件和应用分别比较。安装前检查 managed/兼容/忙碌，下载后再次检查任务，阻止并发变更。",
+      "input": "更新动作、当前版本、profile、运行任务状态",
+      "output": "真实更新状态或冲突原因",
+      "sources": [
+        "plugins/benchgo/src/updates.mjs",
+        "plugins/benchgo/client/updates.jsx"
+      ],
+      "note": "未知版本不显示已最新；远程手机看到的是主机插件状态，不是 APK 状态。",
+      "state": "implemented",
+      "x": 440,
+      "y": 450
+    },
+    {
+      "id": "prepare",
+      "title": "准备不可变发行目录",
+      "kicker": "RELEASE PREPARATION",
+      "kind": "execution",
+      "sub": "安全解包与完整性检查后保留版本",
+      "symbol": "prepareRelease()",
+      "plain": "先把新版本准备好，再决定是否切过去。",
+      "role": "验证版本、限制压缩包路径与条目，拒绝危险链接和路径穿越；准备 .benchgo/releases 中完整、不可变的版本。",
+      "input": "已校验压缩包、目标版本、runtime",
+      "output": "可供激活的 release 描述与目录",
+      "sources": [
+        "plugins/benchgo/shared/plugin-install.mjs"
+      ],
+      "note": "准备目录完成不等于版本已激活，更不等于运行进程已经加载。",
+      "state": "implemented",
+      "x": 60,
+      "y": 450
+    },
+    {
+      "id": "activate",
+      "title": "官方 profile 锁内激活",
+      "kicker": "ATOMIC ACTIVATION",
+      "kind": "execution",
+      "sub": "切换 manifest 指针，保存上一版本",
+      "symbol": "activateRelease()",
+      "plain": "切换下次启动加载的版本，不覆盖运行中的代码。",
+      "role": "在官方 profile 写锁内更新 composition/manifest，登记 current 与 previous；失败恢复可运行状态，处理已验证的旧包遮蔽。",
+      "input": "prepared release、profile、runtime",
+      "output": "激活指针与 previous 回退记录",
+      "sources": [
+        "plugins/benchgo/shared/plugin-install.mjs",
+        "scripts/desktop/plugin-bundle.mjs"
+      ],
+      "note": "运行中代码不搬动；用户配置、禁用选择与会话保留。",
+      "state": "implemented",
+      "x": 60,
+      "y": 740
+    },
+    {
+      "id": "restart",
+      "title": "重启后解析与加载",
+      "kicker": "RESTART / RESOLVE",
+      "kind": "finish",
+      "sub": "待重启 → 官方解析器 → 实际新版本",
+      "symbol": "getInstallState() · restartRequired",
+      "plain": "重启后真正加载新包，才能确认更新生效。",
+      "role": "更新服务比较已加载版本与激活版本，返回 restartRequired；安装器用随应用的运行时初始化 profile，客户端再显示实际版本。",
+      "input": "已激活 profile 与下一次主机启动",
+      "output": "实际加载的插件、五入口和客户端",
+      "sources": [
+        "plugins/benchgo/src/updates.mjs",
+        "plugins/benchgo/shared/plugin-install.mjs",
+        "scripts/desktop/plugin-bundle.mjs"
+      ],
+      "note": "必须检查物理包、官方解析入口与客户端，不只检查 manifest 版本。",
+      "state": "implemented",
+      "x": 440,
+      "y": 740
+    },
+    {
+      "id": "rollback",
+      "title": "回退到上一完整版本",
+      "kicker": "ROLLBACK BRANCH",
+      "kind": "orchestration",
+      "sub": "检查任务与兼容，再切换上一版本",
+      "symbol": "rollbackRelease()",
+      "plain": "新版本出问题时，切回仍保留的上一版。",
+      "role": "读取 previous，检查完整发行记录与运行时兼容，再沿用 profile 激活机制切换；回退同样重启后生效。",
+      "input": "上一发行记录、空闲主机、兼容 runtime",
+      "output": "回退激活指针与待重启状态",
+      "sources": [
+        "plugins/benchgo/shared/plugin-install.mjs",
+        "plugins/benchgo/src/updates.mjs"
+      ],
+      "note": "有运行或等待交互的任务时不回退；不是删除用户数据重新安装。",
+      "state": "implemented",
+      "x": 820,
+      "y": 740
+    },
+    {
+      "id": "platform",
+      "title": "桌面、Android 与服务器",
+      "kicker": "PLATFORM BOUNDARIES",
+      "kind": "execution",
+      "sub": "壳与原生能力走各自安装/更新路径",
+      "symbol": "package-windows.mjs · Gradle · bootstrap",
+      "plain": "插件负责业务；系统壳与原生能力需要平台包。",
+      "role": "Windows 在自有打包层注入品牌、启动页与离线种子；Android 固定 applicationId 和发行签名；服务器/中继由各自 CLI 管理。",
+      "input": "官方锁定引擎、自有品牌与平台源码",
+      "output": "Windows 安装包、正式 APK 或服务器部署",
+      "sources": [
+        "scripts/desktop/package-windows.mjs",
+        "scripts/desktop/electron-builder.config.mjs",
+        "plugins/link/mobile/android/app/build.gradle",
+        "scripts/server/bootstrap.mjs",
+        "packages/benchgo-relay/src/cli.mjs"
+      ],
+      "note": "桌面原生更新用配置后的官方 electron-updater；实际签名连续性与新装/升级需按产物验收。",
+      "state": "partial",
+      "x": 1200,
+      "y": 740
+    }
+  ],
+  "edges": [
+    {
+      "a": "version",
+      "b": "build",
+      "label": "版本与源码",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "build",
+      "b": "bundle",
+      "label": "构建产物",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "bundle",
+      "b": "sign",
+      "label": "完整插件包",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "sign",
+      "b": "publish",
+      "label": "显式发布",
+      "from": "b",
+      "to": "t"
+    },
+    {
+      "a": "publish",
+      "b": "feed",
+      "label": "客户端获取",
+      "from": "l",
+      "to": "r"
+    },
+    {
+      "a": "feed",
+      "b": "updates",
+      "label": "已验证清单",
+      "from": "l",
+      "to": "r"
+    },
+    {
+      "a": "updates",
+      "b": "prepare",
+      "label": "校验包并准备",
+      "from": "l",
+      "to": "r"
+    },
+    {
+      "a": "prepare",
+      "b": "activate",
+      "label": "再次确认空闲",
+      "from": "b",
+      "to": "t"
+    },
+    {
+      "a": "activate",
+      "b": "restart",
+      "label": "等待下次启动",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "restart",
+      "b": "rollback",
+      "label": "需要回退时",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "rollback",
+      "b": "activate",
+      "label": "锁内切换上一版",
+      "from": "b",
+      "to": "b",
+      "kind": "feedback"
+    },
+    {
+      "a": "publish",
+      "b": "platform",
+      "label": "独立平台发行",
+      "from": "b",
+      "to": "t",
+      "kind": "support"
+    }
+  ],
+  "steps": [
+    {
+      "node": "version",
+      "title": "先确定是插件更新",
+      "text": "假设只改变业务与客户端，不改 Electron、官方引擎或原生能力，就递增插件版本并保留应用版本。"
+    },
+    {
+      "node": "build",
+      "title": "从源码重建完整交付物",
+      "text": "统一构建业务模块、客户端和 Link 页面，再检查五入口、运行时和生产依赖，保证脱离源码也能安装。",
+      "edge": 0
+    },
+    {
+      "node": "sign",
+      "title": "签名并按需发布",
+      "text": "对完整包计算摘要和尺寸，签名清单锁定已验证的引擎范围；CI 默认 artifact，明确 publish 才进入 Release。",
+      "edge": 2
+    },
+    {
+      "node": "feed",
+      "title": "客户端读取可信更新",
+      "text": "主机按用户选定来源拉取清单并验签，分别比较插件和桌面应用版本。来源不可达或版本未知会如实显示。",
+      "edge": 4
+    },
+    {
+      "node": "updates",
+      "title": "安装前后都核对忙碌状态",
+      "text": "检查当前安装与兼容性后下载包；下载期间若有新任务开始，安装被阻止，不切换运行中的业务代码。",
+      "edge": 5
+    },
+    {
+      "node": "activate",
+      "title": "准备成功后切换激活指针",
+      "text": "安全解包到不可变 release，在官方 profile 写锁内切换 manifest 并保留上一版。此时状态是待重启。",
+      "edge": 7
+    },
+    {
+      "node": "restart",
+      "title": "重启并核对实际加载",
+      "text": "启动后核对真实包、官方解析路径、五入口及客户端；仅看到下载完成或 manifest 新版本不能判定成功。",
+      "edge": 8
+    },
+    {
+      "node": "rollback",
+      "title": "必要时回退并再次重启",
+      "text": "在主机空闲时验证上一完整版本与引擎兼容，沿用同一激活机制回退，保留配置和会话。",
+      "edge": 9
+    }
+  ],
+  "docs": [
+    {
+      "label": "更新与发布设计",
+      "path": "docs/05-更新与发布/设计.md"
+    },
+    {
+      "label": "源码装配设计",
+      "path": "docs/02-工作台与Agent/源码架构.md"
+    },
+    {
+      "label": "当前官方引擎锁定",
+      "path": "upstream.json"
+    }
+  ],
+  "version": "2026-11-11-1"
+}</script><script src="../_assets/architecture.js"></script></body></html>

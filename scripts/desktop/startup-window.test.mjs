@@ -5,7 +5,7 @@ import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { openStartupWindow } from './startup-window.mjs';
+import { openStartupWindow, createStartupTiming } from './startup-window.mjs';
 import { startupWindowPlugin, verifyStartupBundle } from './prepare-startup.mjs';
 
 function fixture(fail = false) {
@@ -19,6 +19,8 @@ function fixture(fail = false) {
       super(); this.options = options; windows.push(this);
       this.webContents = new EventEmitter();
       this.webContents.setWindowOpenHandler = handler => { this.openHandler = handler; };
+      this.scripts = [];
+      this.webContents.executeJavaScript = async script => { this.scripts.push(script); };
       app.emit('browser-window-created', {}, this);
     }
     setBackgroundColor(value) { this.background = value; }
@@ -48,6 +50,11 @@ test('splash covers hidden backend startup and disposes only when another window
   assert.equal(splash.options.webPreferences.sandbox, true);
   assert.equal(splash.options.webPreferences.preload, undefined);
   assert.deepEqual(splash.openHandler(), { action: 'deny' });
+  close.setStage('host-starting');
+  assert.match(splash.scripts.at(-1), /正在启动服务/);
+  const sent = splash.scripts.length;
+  close.setStage('arbitrary config content');
+  assert.equal(splash.scripts.length, sent);
   main.show();
   assert.equal(splash.isDestroyed(), true);
   assert.equal(env.app.quits, undefined);
@@ -55,6 +62,8 @@ test('splash covers hidden backend startup and disposes only when another window
   assert.equal(env.nativeTheme.listenerCount('updated'), 0);
   assert.equal(main.listenerCount('closed'), 0);
   close();
+  close.setStage('host-ready');
+  assert.equal(splash.scripts.length, sent);
 });
 
 test('fatal cleanup and quit dispose the card without an extra quit request', async () => {
@@ -101,7 +110,7 @@ test('compile integration targets one official entry and rejects changed lifecyc
 test('startup executes the packaged enrollment entry and propagates failures before Host startup', async t => {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-enrollment-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const source = 'async function main() {}\nfunction reportFatal(error, source) {}';
+  const source = await readFile(new URL('../../deepseek-harness/apps/desktop/lib/types/main.js', import.meta.url), 'utf8');
   const plugin = startupWindowPlugin('/main.js');
   const code = plugin.transform(source, '/main.js').code;
   assert.doesNotMatch(code, /import \{ initializePluginProfile \} from/);
@@ -124,4 +133,37 @@ test('startup executes the packaged enrollment entry and propagates failures bef
   verifyStartupBundle(code);
   assert.throws(() => verifyStartupBundle(`${code}\nfunction initializePluginProfile() {}`), /inlined enrollment/);
   assert.throws(() => verifyStartupBundle(code.replace('await import(enrollmentModule)', 'await oldEnrollment()')), /packaged enrollment/);
+});
+
+test('startup timing records bounded phases and total elapsed time without slowing the caller', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-startup-timing-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let milliseconds = 100;
+  const timing = createStartupTiming(directory, { now: () => milliseconds, startedAt: '2026-11-10T13:00:00.000Z' });
+  milliseconds = 125;
+  timing.mark('host-starting');
+  timing.mark('host-starting');
+  timing.mark('private session text');
+  milliseconds = 180;
+  timing.mark('host-ready');
+  milliseconds = 200;
+  timing.finish();
+  timing.mark('failed');
+  await timing.flush();
+  const saved = JSON.parse(await readFile(join(directory, 'benchgo-startup.json'), 'utf8'));
+  assert.equal(saved.status, 'workspace-ready');
+  assert.equal(saved.elapsedMs, 100);
+  assert.deepEqual(saved.stages, [
+    { stage: 'started', elapsedMs: 0, durationMs: 0 },
+    { stage: 'host-starting', elapsedMs: 25, durationMs: 25 },
+    { stage: 'host-ready', elapsedMs: 80, durationMs: 55 },
+    { stage: 'workspace-ready', elapsedMs: 100, durationMs: 20 },
+  ]);
+  const failed = createStartupTiming(directory, { now: () => milliseconds });
+  failed.finish('failed');
+  await failed.flush();
+  assert.equal(JSON.parse(await readFile(join(directory, 'benchgo-startup.json'), 'utf8')).status, 'failed');
+  const unwritable = createStartupTiming(join(directory, 'benchgo-startup.json', 'invalid'));
+  unwritable.finish();
+  await unwritable.flush();
 });

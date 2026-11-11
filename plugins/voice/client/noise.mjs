@@ -1,3 +1,4 @@
+import { waitForMedia } from './media-startup.mjs';
 // Assets use the caller's existing authenticated same-origin Voice transport.
 export async function createNoiseSuppressor(context, { workletURL = 'api/voice/noise-worklet', wasmURL = 'api/voice/noise-wasm', signal } = {}) {
   const timeout = AbortSignal.timeout(12000);
@@ -6,8 +7,8 @@ export async function createNoiseSuppressor(context, { workletURL = 'api/voice/n
   const response = await fetch(wasmURL, { credentials: 'same-origin', signal: combined });
   if (!response.ok) throw Error('本地语音降噪加载失败，请重试。');
   const bytes = await response.arrayBuffer(); combined.throwIfAborted();
-  const module = await WebAssembly.compile(bytes);
-  await context.audioWorklet.addModule(String(workletURL)); combined.throwIfAborted();
+  const module = await waitForMedia(WebAssembly.compile(bytes), combined);
+  await waitForMedia(context.audioWorklet.addModule(String(workletURL)), combined); combined.throwIfAborted();
   const node = new AudioWorkletNode(context, 'voice-noise-capture', {
     numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], processorOptions: { module },
   });

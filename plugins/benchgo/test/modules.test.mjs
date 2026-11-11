@@ -58,7 +58,7 @@ test('a pending availability response cannot remount modules after client dispos
   await ctx.fiber.dispose();
 });
 
-test('unavailable base endpoints and transport failures dispose optional fibers until the single feed recovers', async () => {
+test('absent or unauthorized owner endpoints dispose optional fibers until the feed recovers', async () => {
   const ctx = new Context(), source = createModuleSource(), live = new Set();
   let refresh, failure, enabled = ['base', 'harness', 'superagent', 'voice', 'link'];
   const entries = Object.fromEntries(['base', 'harness', 'superagent', 'voice'].map(name => [name, child => child.effect(() => {
@@ -66,7 +66,8 @@ test('unavailable base endpoints and transport failures dispose optional fibers 
   })]));
   const stop = startModuleLifecycle(ctx, entries, { source, read: async () => { if (failure) throw failure; return response(enabled); }, poll: options => { refresh = options.refresh; return () => {}; } });
   try {
-    for (const error of [Object.assign(new Error('not found'), {status: 404}), Object.assign(new Error('unavailable'), {status: 503}), new TypeError('Failed to fetch')]) {
+    for (const status of [401, 403, 404, 410]) {
+      const error = Object.assign(new Error('owner unavailable'), { status });
       await refresh();
       assert.equal(live.size, 4); assert.equal(source.getSnapshot().link, true);
       failure = error;
@@ -81,6 +82,38 @@ test('unavailable base endpoints and transport failures dispose optional fibers 
     assert.equal(live.size, 0, 'a missing base cannot leave optional entries active');
     assert(Object.values(source.getSnapshot()).every(value => value === false));
   } finally { await stop(); await ctx.fiber.dispose(); }
+});
+
+test('transient availability failures retain styles, slots and drafts without remounting modules', async () => {
+  const ctx = new Context(), source = createModuleSource(), live = new Set();
+  let refresh, failure, mounts = 0, disposals = 0;
+  const entries = Object.fromEntries(['base', 'harness', 'superagent', 'voice'].map(name => [name, child => child.effect(() => {
+    mounts++; live.add(name); return () => { disposals++; live.delete(name); };
+  })]));
+  const stop = startModuleLifecycle(ctx, entries, { source, read: async () => {
+    if (failure) throw failure;
+    return response(['base', 'harness', 'superagent', 'voice', 'link']);
+  }, poll: options => { refresh = options.refresh; return () => {}; } });
+  try {
+    // Before the first confirmed response a failed read must not invent availability.
+    failure = new TypeError('Failed to fetch');
+    await assert.rejects(refresh(), failure);
+    assert.equal(mounts, 0);
+    assert(Object.values(source.getSnapshot()).every(value => value === false));
+    failure = undefined; await refresh();
+    const confirmed = source.getSnapshot();
+    for (const error of [Object.assign(new Error('unavailable'), { status: 503 }),
+      Object.assign(new Error('bad gateway'), { status: 502 }), new TypeError('Failed to fetch'),
+      new DOMException('Probe timed out', 'TimeoutError')]) {
+      failure = error;
+      await assert.rejects(refresh(), error);
+      assert.equal(source.getSnapshot(), confirmed);
+      assert.equal(live.size, 4); assert.equal(mounts, 4); assert.equal(disposals, 0);
+      failure = undefined; await refresh();
+      assert.equal(mounts, 4);
+    }
+  } finally { await stop(); await ctx.fiber.dispose(); }
+  assert.equal(disposals, 4);
 });
 
 test('the actual client entry defers base UI requests and releases its sidebar polling when base disappears', async () => {

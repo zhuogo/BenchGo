@@ -49,11 +49,16 @@ async function initializeWeb(ctx, { directory, getCommander = () => ctx.get('com
   let dismissWrites = Promise.resolve();
   ctx.effect(() => () => dismissWrites);
   const capabilities = { fonts: { available: false } };
-  const state = () => ({
-    projects: ctx.workspaceRegistry.list().map(p => ({ id: p.id, path: p.path, title: p.title, sessionIds: p.sessionIds })),
-    sessions: getCommander()?.list() ?? [], deletedHarnessIds: [...deletedHarnessIds],
-    capabilities: { delegation: { available: false }, ...capabilities, ...getHarness()?.capabilities },
-  });
+  let privateSessionIds = [];
+  const state = async () => {
+    const assistant = ctx.get?.('assistant');
+    if (assistant?.sidebarPrivateSessionIds) privateSessionIds = await assistant.sidebarPrivateSessionIds();
+    return {
+      projects: ctx.workspaceRegistry.list().map(p => ({ id: p.id, path: p.path, title: p.title, sessionIds: p.sessionIds })),
+      sessions: getCommander()?.list() ?? [], deletedHarnessIds: [...deletedHarnessIds], privateSessionIds,
+      capabilities: { delegation: { available: false }, ...capabilities, ...getHarness()?.capabilities },
+    };
+  };
   const dispatch = async input => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Expected an object');
     const { action } = input;

@@ -5,21 +5,25 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { prepareVoiceDataDirectory } from '../../benchgo/src/data-directory.mjs';
 import { applySettingsOps, assertSettingsExpected, normalizeSettingsOps, notifySettings, settingsSnapshot } from '../../benchgo/shared/settings-adapter-utils.mjs';
+import { VOICE_API_TYPES, VOICE_PROTOCOLS } from '../shared/protocol-catalog.mjs';
 
 export class VoiceError extends HttpError {}
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
-// OpenAI multipart streaming is the default; model IDs remain user-owned.
+// Requests use a concrete saved wire format. Matching is an explicit settings action.
 export const DEFAULT_TTS_SPEED = 1.2;
 const TTS_SPEED_MIN = 0.25, TTS_SPEED_MAX = 4;
 const routingString = maxLength => ({ type: 'string', maxLength, pattern: '^[^\\u0000-\\u001f\\u007f]*$' });
-const providerProperties = { providerId: routingString(200), baseURL: routingString(2048), apiKey: { ...routingString(4096), writeOnly: true }, model: routingString(200) };
+const apiTypes = ['', ...VOICE_API_TYPES.map(item => item.id).filter(id => id !== 'auto')];
+const protocolIds = kind => ['', ...VOICE_PROTOCOLS.filter(item => item.kind === kind && item.id !== 'auto').map(item => item.id)];
+const providerProperties = { providerId: routingString(200), baseURL: routingString(2048), apiKey: { ...routingString(4096), writeOnly: true }, model: routingString(200), apiType: { type: 'string', enum: apiTypes } };
 export const VOICE_CONFIG_SCHEMA = { type: 'object', additionalProperties: false, properties: {
   dictation: { type: 'boolean', default: false }, readAloud: { type: 'boolean', default: false }, call: { type: 'boolean', default: false },
-  asr: { type: 'object', additionalProperties: false, properties: { ...providerProperties, protocol: { type: 'string', enum: ['transcriptions', 'transcriptions-sse', 'openai-websocket'] }, realtime: { type: 'object', additionalProperties: false, properties: { url: routingString(2048), query: { type: 'object', maxProperties: 32, additionalProperties: routingString(512) } } } } },
-  tts: { type: 'object', additionalProperties: false, properties: { ...providerProperties, protocol: { type: 'string', enum: ['speech', 'speech-stream'] }, voice: routingString(200), speed: { type: 'number', minimum: TTS_SPEED_MIN, maximum: TTS_SPEED_MAX, multipleOf: 0.01, default: DEFAULT_TTS_SPEED }, stream: { type: 'boolean', default: true } } },
+  conversation: { type: 'object', additionalProperties: false, properties: { providerId: routingString(200), model: routingString(200) } },
+  asr: { type: 'object', additionalProperties: false, properties: { ...providerProperties, protocol: { type: 'string', enum: protocolIds('asr') }, realtime: { type: 'object', additionalProperties: false, properties: { url: routingString(2048), query: { type: 'object', maxProperties: 32, additionalProperties: routingString(512) } } } } },
+  tts: { type: 'object', additionalProperties: false, properties: { ...providerProperties, protocol: { type: 'string', enum: protocolIds('tts') }, voice: routingString(200), speed: { type: 'number', minimum: TTS_SPEED_MIN, maximum: TTS_SPEED_MAX, multipleOf: 0.01, default: DEFAULT_TTS_SPEED }, stream: { type: 'boolean', default: true } } },
 } };
 export const VOICE_SENSITIVE_PATHS = [['asr', 'apiKey'], ['tts', 'apiKey']];
-const defaults = () => ({ dictation: false, readAloud: false, call: false, asr: { baseURL: '', apiKey: '', model: '', protocol: 'transcriptions-sse' }, tts: { baseURL: '', apiKey: '', model: '', protocol: 'speech', voice: '', speed: DEFAULT_TTS_SPEED, stream: true } });
+const defaults = () => ({ dictation: false, readAloud: false, call: false, conversation: { providerId: '', model: '' }, asr: { baseURL: '', apiKey: '', model: '', apiType: '', protocol: '' }, tts: { baseURL: '', apiKey: '', model: '', apiType: '', protocol: '', voice: '', speed: DEFAULT_TTS_SPEED, stream: true } });
 const string = (value, label, limit) => {
   if (typeof value !== 'string' || value.length > limit || /[\u0000-\u001f\u007f]/u.test(value)) throw new VoiceError(`Invalid ${label}`);
   return value.trim();
@@ -72,6 +76,16 @@ export function updateConfig(current, patch, { loading = false } = {}) {
   if (!object(patch)) throw new VoiceError('Expected config object');
   if (Object.keys(patch).some(key => !Object.hasOwn(VOICE_CONFIG_SCHEMA.properties, key))) throw new VoiceError('Unknown config field');
   const next = structuredClone(current);
+  next.conversation ??= { providerId: '', model: '' };
+  if (Object.hasOwn(patch, 'conversation')) {
+    if (!object(patch.conversation)) throw new VoiceError('Invalid conversation model');
+    for (const [key, value] of Object.entries(patch.conversation)) {
+      if (['configured', 'unavailableReason'].includes(key)) continue;
+      if (!['providerId', 'model'].includes(key)) throw new VoiceError('Unknown conversation model field');
+      next.conversation[key] = string(value, key, 200);
+    }
+    if (!!next.conversation.providerId !== !!next.conversation.model) throw new VoiceError('请同时选择通话交互模型的供应商与模型，或全部留空使用原会话');
+  }
   if (next.tts && !Object.hasOwn(next.tts, 'stream')) next.tts.stream = true;
   if (next.tts && !Object.hasOwn(next.tts, 'speed')) next.tts.speed = DEFAULT_TTS_SPEED;
   for (const key of ['dictation', 'readAloud', 'call']) if (Object.hasOwn(patch, key)) {
@@ -82,19 +96,21 @@ export function updateConfig(current, patch, { loading = false } = {}) {
     if (!object(patch[kind])) throw new VoiceError(`Invalid ${kind}`);
     for (const [key, value] of Object.entries(patch[kind])) {
       // Read-only metadata may be round-tripped by settings forms.
-      if (['configured', 'apiKeyConfigured', 'apiKeyMasked', 'unavailableReason'].includes(key)) continue;
+      if (['configured', 'apiKeyConfigured', 'apiKeyMasked', 'unavailableReason', 'resolvedProtocol', 'detection'].includes(key)) continue;
       if (!Object.hasOwn(VOICE_CONFIG_SCHEMA.properties[kind].properties, key)) throw new VoiceError(`Unknown ${kind} field`);
       if (kind === 'tts' && key === 'stream') { if (typeof value !== 'boolean') throw new VoiceError('Invalid TTS stream'); next.tts.stream = value; continue; }
       if (key === 'realtime') { next.asr.realtime = validateRealtime(value); continue; }
       if (kind === 'tts' && key === 'speed') { next.tts.speed = normalizeTtsSpeed(value); continue; }
-      if (key === 'protocol' && !loading && value !== current[kind]?.protocol && !(kind === 'tts' ? ['speech', 'speech-stream'] : ['transcriptions', 'transcriptions-sse', 'openai-websocket']).includes(value)) throw new VoiceError(`Unknown ${kind.toUpperCase()} protocol`);
+      if (key === 'protocol' && !loading && (value === 'auto' || value !== current[kind]?.protocol && !VOICE_CONFIG_SCHEMA.properties[kind].properties.protocol.enum.includes(value))) throw new VoiceError(`Unknown ${kind.toUpperCase()} protocol`);
+      if (key === 'apiType' && !apiTypes.includes(value) && !(loading && value === 'auto')) throw new VoiceError('Unknown voice API type');
       const normalized = key === 'baseURL' ? endpoint(value) : string(value, key, key === 'apiKey' ? 4096 : 200);
       next[kind][key] = key === 'model' ? (kind === 'asr' ? normalizeAsrModel(normalized) : normalizeTtsModel(normalized)) : normalized;
     }
     const changedProvider = Object.hasOwn(patch[kind], 'providerId') && (current[kind].providerId || '') !== next[kind].providerId || Object.hasOwn(patch[kind], 'baseURL') && !next[kind].providerId && current[kind].baseURL !== next[kind].baseURL;
     if (changedProvider) {
       if (kind === 'asr' && !Object.hasOwn(patch.asr, 'realtime')) delete next.asr.realtime;
-      if (!Object.hasOwn(patch[kind], 'protocol')) next[kind].protocol = kind === 'asr' ? 'transcriptions-sse' : 'speech';
+      if (!Object.hasOwn(patch[kind], 'protocol')) next[kind].protocol = '';
+      if (!Object.hasOwn(patch[kind], 'apiType')) next[kind].apiType = '';
       if (kind === 'tts' && !Object.hasOwn(patch.tts, 'voice')) next.tts.voice = '';
     }
     if (next[kind].providerId) { next[kind].apiKey = ''; next[kind].baseURL = ''; }
@@ -102,15 +118,16 @@ export function updateConfig(current, patch, { loading = false } = {}) {
   }
   return next;
 }
-/** Missing protocols use the standard API without model inference. */
+/** Missing selections remain unmatched; old explicit values are never rewritten. */
 export function migrateLegacyConfig(value) {
   const next = structuredClone(value);
-  if (next.asr && !Object.hasOwn(next.asr, 'protocol')) next.asr.protocol = 'transcriptions-sse';
-  if (next.tts && !Object.hasOwn(next.tts, 'protocol')) next.tts.protocol = 'speech';
+  if (next.asr && !Object.hasOwn(next.asr, 'protocol')) next.asr.protocol = '';
+  if (next.tts && !Object.hasOwn(next.tts, 'protocol')) next.tts.protocol = '';
   return next;
 }
 export function publicConfig(config) {
   return Object.fromEntries(Object.entries(config).map(([key, value]) => {
+    if (key === 'conversation') return [key, { ...value, configured: !!(value.providerId && value.model) }];
     if (!['asr', 'tts'].includes(key)) return [key, value];
     const { apiKey, ...safe } = value;
     return [key, { ...safe, configured: !!((value.providerId || value.baseURL) && value.model), apiKeyConfigured: !!apiKey, apiKeyMasked: apiKey ? '••••••••' : '' }];
@@ -120,7 +137,7 @@ function managedConfig(current, ops) {
   const submitted = applySettingsOps(current, ops, { sensitivePaths: VOICE_SENSITIVE_PATHS, base: defaults() });
   const next = updateConfig(current, submitted), fallback = defaults();
   for (const key of ['dictation', 'readAloud', 'call']) if (!Object.hasOwn(submitted, key)) next[key] = fallback[key];
-  for (const kind of ['asr', 'tts']) for (const key of Object.keys(next[kind])) if (!Object.hasOwn(submitted[kind] || {}, key)) {
+  for (const kind of ['asr', 'tts', 'conversation']) for (const key of Object.keys(next[kind])) if (!Object.hasOwn(submitted[kind] || {}, key)) {
     if (Object.hasOwn(fallback[kind], key)) next[kind][key] = fallback[kind][key]; else delete next[kind][key];
   }
   if (VOICE_SENSITIVE_PATHS.some(([kind, key]) => next[kind][key] !== current[kind][key])) throw Object.assign(new VoiceError('该供应商变更会删除现有凭据，请先通过安全输入入口处理凭据', 409), { code: 'SETTINGS_PATH_BLOCKED' });

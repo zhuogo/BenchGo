@@ -4,7 +4,7 @@ import { Capture } from '../client/media.mjs';
 
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
-function fixture(t,{mediaReady,noiseReady,resumeReady}={}){
+function fixture(t,{mediaReady,noiseReady,resumeReady,startupTimeoutMs}={}){
   const events=[],contexts=[],errors=[],accepted=[];
   const track={enabled:true,stops:0,stop(){this.stops++;events.push('track.stop');}};
   const stream={getTracks:()=>[track],getAudioTracks:()=>[track]};
@@ -18,7 +18,7 @@ function fixture(t,{mediaReady,noiseReady,resumeReady}={}){
     createMediaStreamSource(value){assert.equal(value,stream);events.push('source.create');return source;}
     async close(){this.closed++;this.state='closed';events.push('context.close');}
   }}))Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});
-  const capture=new Capture({transcribe:async()=>'',createNoise:async(context,options)=>{events.push(['noise.create',options]);if(noiseReady)await noiseReady.promise;return noise;},onError:error=>errors.push(error.message)});
+  const capture=new Capture({startupTimeoutMs,transcribe:async()=>'',createNoise:async(context,options)=>{events.push(['noise.create',options]);if(noiseReady)await noiseReady.promise;return noise;},onError:error=>errors.push(error.message)});
   capture.accept=(pcm,probability)=>accepted.push({pcm:[...pcm],probability});
   t.after(async()=>{await capture.dispose();for(const [key,descriptor] of previous)if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];});
   return {capture,events,contexts,errors,accepted,track,stream,node,noise};
@@ -61,7 +61,7 @@ test('muting updates the processor epoch and only current unmuted PCM is accepte
 
 test('hangup during microphone permission stops late tracks without creating audio resources',async t=>{
   const media=deferred(),h=fixture(t,{mediaReady:media});const starting=h.capture.start();
-  await h.capture.dispose();media.resolve(h.stream);await starting;
+  await h.capture.dispose();await starting;media.resolve(h.stream);await tick();
   assert.equal(h.track.stops,1);assert.equal(h.contexts.length,0);assert.equal(h.noise.disposed,0);assert.equal(h.capture.active,false);
 });
 
@@ -69,7 +69,7 @@ test('hangup during noise initialization aborts assets and disposes late process
   const ready=deferred(),h=fixture(t,{noiseReady:ready});const starting=h.capture.start();await tick();
   const signal=h.events.find(event=>event[0]==='noise.create')[1].signal;
   await h.capture.dispose();assert.equal(signal.aborted,true);assert.equal(h.track.stops,1);assert.equal(h.contexts[0].closed,1);
-  ready.resolve();await starting;assert.equal(h.noise.disposed,1);assert.equal(h.events.includes('source.create'),false);
+  await starting;ready.resolve();await tick();assert.equal(h.noise.disposed,1);assert.equal(h.events.includes('source.create'),false);
 });
 
 test('hangup while the audio context resumes never starts a late noise processor',async t=>{
@@ -87,4 +87,28 @@ test('noise initialization rejection releases the microphone and context',async 
 test('processor failure after mute and unmute still stops capture',async t=>{
   const h=fixture(t);await h.capture.start();h.capture.setMuted(true);h.capture.setMuted(false);
   h.node.onprocessorerror();await tick();assert.equal(h.errors.length,1);assert.equal(h.capture.active,false);
+});
+
+test('unanswered microphone permission times out and releases late tracks',async t=>{
+  const media=deferred(),h=fixture(t,{mediaReady:media,startupTimeoutMs:15});
+  await assert.rejects(h.capture.start(),/麦克风初始化超时/);
+  assert.equal(h.capture.active,false);assert.equal(h.contexts.length,0);
+  media.resolve(h.stream);await tick();assert.equal(h.track.stops,1);assert.equal(h.contexts.length,0);
+});
+
+test('timeout during audio resume releases tracks and context without waiting for the browser',async t=>{
+  const resume=deferred(),h=fixture(t,{resumeReady:resume,startupTimeoutMs:15});
+  await assert.rejects(h.capture.start(),/麦克风初始化超时/);
+  assert.equal(h.track.stops,1);assert.equal(h.contexts[0].closed,1);
+  assert.equal(h.events.some(event=>Array.isArray(event)&&event[0]==='noise.create'),false);
+  resume.resolve();await tick();assert.equal(h.contexts[0].closed,1);
+});
+
+test('late permission from a cancelled attempt cannot close a new capture',async t=>{
+  const media=deferred(),h=fixture(t,{mediaReady:media});const first=h.capture.start();
+  await h.capture.dispose();await first;
+  navigator.mediaDevices.getUserMedia=async()=>h.stream;
+  await h.capture.start();const activeContext=h.contexts[0];
+  const oldTrack={stops:0,stop(){this.stops++;}};media.resolve({getTracks:()=>[oldTrack]});await tick();
+  assert.equal(oldTrack.stops,1);assert.equal(h.track.stops,0);assert.equal(activeContext.closed,0);assert.equal(h.capture.active,true);
 });

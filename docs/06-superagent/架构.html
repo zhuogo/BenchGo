@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>BenchGo · SuperAgent架构</title><link rel="stylesheet" href="../_assets/architecture.css"></head>
+<body><main aria-label="BenchGo SuperAgent架构">
+<header class="header"><div class="brand"><a class="brand-mark" href="../总架构.html" aria-label="BenchGo 总架构" style="text-decoration:none">B</a><div><div class="eyebrow">BENCHGO / SUPERAGENT / ORCHESTRATION</div><h1>SuperAgent<span>架构图解</span></h1></div></div><div class="header-actions"><button type="button" class="btn" id="directory-toggle" aria-expanded="false" aria-controls="directory">☷ <span class="directory-label">节点</span>目录</button><button type="button" class="btn outline" id="walk-start" aria-pressed="false">流程走读 ↗</button></div></header>
+<nav class="tabs" aria-label="架构板块"><a href="../总架构.html"><span class="tab-index">◎</span>总架构</a><a href="../01-设备与远程连接/架构.html"><span class="tab-index">01</span>设备与远程连接</a><a href="../02-工作台与Agent/架构.html"><span class="tab-index">02</span>工作台与 Agent</a><a href="../03-实时语音/架构.html"><span class="tab-index">03</span>实时语音</a><a href="../04-模型与工具/架构.html"><span class="tab-index">04</span>模型与工具</a><a href="../05-更新与发布/架构.html"><span class="tab-index">05</span>更新与发布</a><a href="架构.html" aria-current="page"><span class="tab-index">06</span>SuperAgent</a></nav>
+<div class="viewport" id="viewport" tabindex="0" aria-label="架构画布：拖动空白平移，滚轮或双指缩放，拖动节点调整布局，点击节点查看源码。方向键平移，加减号缩放，零适应。"><div class="load-state" id="load-state" role="status"><strong id="load-title">正在展开架构图</strong><p id="load-message">如果画布未出现，请确认 _assets 目录与 HTML 一同保留。</p><button type="button" class="btn outline" id="retry" hidden onclick="location.reload()">重新加载</button></div><div class="world" id="world"><div class="canvas-title"><div><h2 id="canvas-title"></h2><p id="canvas-subtitle"></p></div><span class="sheet-no" id="sheet-no"></span></div><div id="zones"></div><svg class="edges" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--edge)"/></marker><marker id="arrow-feedback" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--accent)"/></marker></defs><g id="edge-paths"></g><g id="edge-labels"></g></svg><div id="nodes"></div></div></div>
+<div class="canvas-bottom"><div><div class="legend"><span><i></i>调用 / 依赖</span><span><i class="feedback"></i>反馈 / 记录</span><span><i class="support"></i>配置 / 装配</span><span>虚线边框 · 设计目标</span></div><p class="hint">拖动平移 · 滚轮缩放 · 拖动节点 · 点击查看说明与源码</p></div><div class="camera-controls" aria-label="画布控制"><button type="button" class="btn icon" id="zoom-out" aria-label="缩小">−</button><span class="zoom-value" id="zoom-value">100%</span><button type="button" class="btn icon" id="zoom-in" aria-label="放大">+</button><span class="separator"></span><button type="button" class="btn" id="fit">适应</button><button type="button" class="btn" id="actual">1:1</button><span class="separator"></span><button type="button" class="btn" id="reset">重置</button></div></div>
+<aside class="panel detail" id="detail" aria-label="节点详情" hidden><div class="panel-top"><span class="tag" id="detail-tag"></span><button type="button" class="btn icon" id="detail-close" aria-label="关闭节点详情">×</button></div><h2 id="detail-title"></h2><p class="plain" id="detail-plain"></p><div class="detail-links" id="detail-links"></div><div class="detail-block"><h3>它负责什么</h3><p id="detail-role"></p></div><div class="detail-block"><h3>输入与输出</h3><div class="io"><b>输入</b><span id="detail-input"></span></div><div class="io"><b>输出</b><span id="detail-output"></span></div></div><div class="detail-block"><h3>对应源码</h3><div id="detail-sources"></div></div><p class="notice" id="detail-note"></p></aside>
+<aside class="panel directory" id="directory" aria-label="节点与文档目录" hidden><div class="panel-top"><h2 style="font-size:17px">节点目录</h2><button type="button" class="btn icon" id="directory-close" aria-label="关闭节点目录">×</button></div><input class="search" id="search" type="search" placeholder="搜索名称、服务或函数" aria-label="搜索架构节点"><div class="directory-list" id="directory-list"></div><div class="empty" id="search-empty" hidden><div class="empty-mark">⌕</div><strong>没有匹配的节点</strong><p>试试模块名称或清空关键词。</p><button type="button" class="btn primary" id="clear-search">显示全部节点</button></div><div class="detail-block"><h3>阅读设计</h3><div id="design-links"></div></div><p class="notice" id="boundary"></p></aside>
+<section class="walkthrough" id="walkthrough" aria-label="架构流程走读" aria-live="polite" hidden><div class="step-top"><span id="step-label"></span><button type="button" class="btn icon" id="walk-exit" aria-label="退出流程走读">×</button></div><h3 id="step-title"></h3><p id="step-text"></p><div class="walk-controls"><button type="button" class="btn" id="walk-prev">← 上一步</button><button type="button" class="btn primary" id="walk-next">下一步 →</button></div><div class="progress"><span id="step-progress"></span></div></section>
+<noscript><div class="load-state"><strong>需要 JavaScript 展开交互图</strong><p>请启用 JavaScript，或直接阅读同目录中的设计 Markdown。</p></div></noscript>
+</main><script type="application/json" id="architecture-data">{
+  "id": "06",
+  "title": "SuperAgent 总助手",
+  "eyebrow": "SUPERAGENT / ORCHESTRATION",
+  "subtitle": "Router 维持持续对话，Worker 在真实官方会话执行；工单账、执行事实与原来源投递共同支撑可恢复的任务闭环。",
+  "boundary": "入口、Router/Worker、工单、自检、原稿、自然表达与 outbox 已有源码接线。权限专用适配器、安全输入、完整接管和安装版真实中断恢复仍有缺口。后台学习不审核当前任务内容，不存在独立内容 Review 返工链。",
+  "nodes": [
+    {
+      "id": "ingress",
+      "title": "统一输入与来源",
+      "kicker": "TRIGGER / INGRESS",
+      "kind": "orchestration",
+      "sub": "工作台、渠道、定时与机器观察",
+      "symbol": "createUnifiedChannelIngress()",
+      "plain": "来自不同入口的消息先带上真实来源，再由同一套规则决定如何处理。",
+      "role": "渠道适配器仅做协议收发、账号映射和能力声明；统一 ingress 归一事件、去重并复核来源。工作台、官方 Schedule 桥与 watchdog 各保留可信身份。",
+      "input": "用户消息、渠道事件、定时与观察信号",
+      "output": "可信来源 envelope 与持久事件",
+      "sources": [
+        "plugins/superagent/src/channel-ingress.mjs",
+        "plugins/superagent/src/intake.mjs",
+        "plugins/superagent/src/workbench-channel-ingress.mjs",
+        "plugins/superagent/src/schedule-bridge.mjs",
+        "plugins/superagent/src/watchdog-observation-route.mjs"
+      ],
+      "note": "渠道不另存一套对话或工单账；机器观察和模型理由均不产生用户授权。",
+      "state": "implemented",
+      "x": 60,
+      "y": 160
+    },
+    {
+      "id": "admission",
+      "title": "准入与入口研判",
+      "kicker": "ADMISSION / ASSESSMENT",
+      "kind": "model",
+      "sub": "确定性准入 → 按需研判候选",
+      "symbol": "assessCandidates()",
+      "plain": "代码先检查来源和规则，需要理解的事件才交给模型判断。",
+      "role": "读取书面准入规则与研判策略，评估候选事件、原文和项目范围；模型输出由确定性服务复核，不能凭摘要扩大来源权限。",
+      "input": "可信候选、准入规则、原文与项目上下文",
+      "output": "直接对话、候选任务或抑制决定",
+      "sources": [
+        "plugins/superagent/src/admission-rules.mjs",
+        "plugins/superagent/src/assessment.mjs",
+        "plugins/superagent/src/assessment-runner.mjs",
+        "plugins/superagent/src/assessment-policy.mjs"
+      ],
+      "note": "普通问答不强制开单，后台事件也不直接启动任意工作。",
+      "state": "implemented",
+      "x": 440,
+      "y": 160
+    },
+    {
+      "id": "router",
+      "title": "Router 主聊与旁聊",
+      "kicker": "CONTINUOUS CONVERSATION",
+      "kind": "model",
+      "sub": "理解、答疑、派工、接收信号与表达",
+      "symbol": "createAssistantEngine()",
+      "plain": "用户始终与同一个总助手对话，工作可以在后台继续。",
+      "role": "通过官方 ctx.agents.create/resume 装配主聊与旁聊，加载冻结文档和历史接缝，处理真实用户消息及持久内部信号；按授权组织任务与自然回复。",
+      "input": "用户原话、身份文档、历史与可信内部信号",
+      "output": "普通回答、开单/修订调用、正式交付表达",
+      "sources": [
+        "plugins/superagent/src/engine.mjs",
+        "plugins/superagent/src/router-permissions.mjs",
+        "plugins/superagent/src/router-language-policy.mjs"
+      ],
+      "note": "Router 也是官方 Agent Session；不额外建立一套推理循环或任务内容验收人格。",
+      "state": "implemented",
+      "x": 820,
+      "y": 160
+    },
+    {
+      "id": "ticket",
+      "title": "工单与原始要求",
+      "kicker": "TICKET / LEDGER",
+      "kind": "orchestration",
+      "sub": "Ticket、要求版本、Mandate 与输入账",
+      "symbol": "createAssistantLedger()",
+      "plain": "把要做的事、谁允许做和后来怎样修改，记在可追溯的同一张单上。",
+      "role": "持久保存工单、执行身份、输入账、要求版本、授权快照与交付关联；任务管理提供列表和详情。完成仍保留原执行会话，普通修改下一工具边界整份切换。",
+      "input": "用户任务、来源、授权与修订",
+      "output": "稳定工单身份、要求版本和执行记录",
+      "sources": [
+        "plugins/superagent/src/ledger.mjs",
+        "plugins/superagent/src/goal-ticket-creation.mjs",
+        "plugins/superagent/src/ticket-revision-service.mjs",
+        "plugins/superagent/src/task-management.mjs"
+      ],
+      "note": "原始用户要求与真实执行证据是权威；模型摘要不能自行关闭工单。",
+      "state": "implemented",
+      "x": 1200,
+      "y": 160
+    },
+    {
+      "id": "dispatch",
+      "title": "调度与授权闸门",
+      "kicker": "ASSIGNMENT / PERMISSION",
+      "kind": "execution",
+      "sub": "领取、fence、动作权限与原单控制",
+      "symbol": "createAssistantScheduler()",
+      "plain": "后台服务协调谁来执行，权限在每个真实动作入口重新检查。",
+      "role": "scheduler 领取分派并维护归属；assignment worker 调用执行器，Worker 权限按任务及工具面裁剪。高风险动作走可信结构化审批，叫停与撤权拦截后续动作。",
+      "input": "当前工单、要求/授权版本、待执行分派",
+      "output": "有效 Assignment/Run 或等待原因",
+      "sources": [
+        "plugins/superagent/src/scheduler.mjs",
+        "plugins/superagent/src/assignment-worker.mjs",
+        "plugins/superagent/src/worker-permissions.mjs",
+        "plugins/superagent/src/external-actions.mjs"
+      ],
+      "note": "专用适配器、安全输入和完整接管仍有缺口；不可用通道不能靠万能脚本识别补足。",
+      "state": "partial",
+      "x": 1200,
+      "y": 450
+    },
+    {
+      "id": "worker",
+      "title": "真实 Worker 执行会话",
+      "kicker": "OFFICIAL AGENT / WORKER",
+      "kind": "execution",
+      "sub": "官方 Agent、工具、项目与一层子 Worker",
+      "symbol": "createAssignmentExecutor()",
+      "plain": "实际工作由官方 Agent 在所属项目或未分组的真实会话里执行。",
+      "role": "执行器直接 ctx.agents.create/resume，固定工作模型并附着原工单执行 Session；工具、审批和文件变化由官方运行时保留，按规则支持一层子 Worker。",
+      "input": "当前要求、冻结模型、任务权限与项目目录",
+      "output": "工具执行、文件产物、进度和原会话记录",
+      "sources": [
+        "plugins/superagent/src/assignment-executor.mjs",
+        "plugins/superagent/src/execution-session.mjs",
+        "plugins/superagent/src/worker-subagents.mjs"
+      ],
+      "note": "SuperAgent 依赖 commander 聚合服务，但工单 Worker 默认并非原生 CLI；执行会话支持用户直接插话。",
+      "state": "implemented",
+      "x": 820,
+      "y": 450
+    },
+    {
+      "id": "selfcheck",
+      "title": "原会话轻量自检",
+      "kicker": "SELF CHECK / ORIGINAL",
+      "kind": "execution",
+      "sub": "适用测试、构建和输出证据",
+      "symbol": "installWorkerSelfCheck()",
+      "plain": "Worker 在自己原来的执行会话里检查成果，并保存完整原稿。",
+      "role": "为原 Agent 安装固定轻量自检要求与结构记录；确定性校验身份、要求与结果落库，保存最终成果原稿和证据指针，再发送完成信号。",
+      "input": "实际成果、机械检查和有效执行身份",
+      "output": "Result 原稿、自检记录与完成信号",
+      "sources": [
+        "plugins/superagent/src/worker-self-check.mjs",
+        "plugins/superagent/src/result-commit.mjs",
+        "plugins/superagent/src/execution-evidence.mjs"
+      ],
+      "note": "没有独立任务内容评分、补审或模型验收返工；纯文本成果也可交付。",
+      "state": "implemented",
+      "x": 440,
+      "y": 450
+    },
+    {
+      "id": "expression",
+      "title": "Router 自然表达",
+      "kicker": "RESULT / ROUTER REPLY",
+      "kind": "model",
+      "sub": "读原稿 → 主动告知 → 保存正式稿",
+      "symbol": "prepareTicketReply / notificationPublication()",
+      "plain": "Worker 做完后，Router 主动用自然的话告知用户，按需要给摘要或完整结果。",
+      "role": "持久完成信号回原 Router，由其读取原稿并生成正式回复；正式稿与 Worker 原稿分别保存，经官方 Session 持久检查点后准备投递。",
+      "input": "完成信号、Worker 原稿和原来源",
+      "output": "持久 Router 正式稿及唯一投递身份",
+      "sources": [
+        "plugins/superagent/src/service.mjs",
+        "plugins/superagent/src/orchestration-runtime.mjs",
+        "plugins/superagent/src/notification-publication.mjs",
+        "plugins/superagent/src/chat-publication.mjs"
+      ],
+      "note": "生成失败仅重试表达，不重新执行 Worker；不使用固定报告、标题前缀或系统状态硬文案。",
+      "state": "implemented",
+      "x": 60,
+      "y": 450
+    },
+    {
+      "id": "delivery",
+      "title": "原来源投递与回执",
+      "kicker": "OUTBOX / DELIVERY",
+      "kind": "finish",
+      "sub": "可信送达后更新工单终态",
+      "symbol": "createOrchestrationRuntime()",
+      "plain": "把保存好的正式回复送回原来的聊天，可信回执决定是否完成交付。",
+      "role": "outbox 持久领取、退避补投并校验目标归属；成功回复确认送达后 completed，结构性失败说明送达后仍 waiting。发送效果未知先核实，不能盲重发。",
+      "input": "已保存正式稿、原来源与 outbox 身份",
+      "output": "投递回执、待交付原因和工单状态",
+      "sources": [
+        "plugins/superagent/src/orchestration-runtime.mjs",
+        "plugins/superagent/src/result-delivery.mjs",
+        "plugins/superagent/src/channels/delivery-outcome.mjs"
+      ],
+      "note": "排入队列、HTTP 接收、可信送达、已读和已播放是不同事实；失败补投不重 Worker。",
+      "state": "implemented",
+      "x": 60,
+      "y": 740
+    },
+    {
+      "id": "facts",
+      "title": "执行事实与受控恢复",
+      "kicker": "FACTS / RECOVERY",
+      "kind": "orchestration",
+      "sub": "会话日志、看板投影、核查与恢复信号",
+      "symbol": "executionSessionProjection()",
+      "plain": "任务状态来自真实会话与持久账；中断时先核清做过什么，再考虑续做。",
+      "role": "汇合执行身份、日志水位、检查点与账本派生列表投影；未知效果先只读核查，通知原 Router。受控续接复用原 Session/Run，保持授权和自动次数边界。",
+      "input": "官方事件、Run/fence、检查点与未知效果",
+      "output": "真实看板状态、异步核查或受控恢复请求",
+      "sources": [
+        "plugins/superagent/src/execution-facts-contract.mjs",
+        "plugins/superagent/src/execution-session.mjs",
+        "plugins/superagent/src/interrupted-continuation.mjs",
+        "plugins/superagent/src/checkpoint-service.mjs"
+      ],
+      "note": "安装版完整中断恢复验收尚未通过；不把“已安排核查”展示成“已恢复执行”。",
+      "state": "partial",
+      "x": 440,
+      "y": 740
+    },
+    {
+      "id": "memory",
+      "title": "身份、记忆与历史检索",
+      "kicker": "CONTEXT / MEMORY",
+      "kind": "orchestration",
+      "sub": "冻结文档 + 官方历史定点读取",
+      "symbol": "createAssistantMemory() / createHistorySearch()",
+      "plain": "长期身份与偏好进入文档，过去的对话按权限从官方记录检索。",
+      "role": "管理 SOUL、IDENTITY、USER、AGENTS、MEMORY 等文档快照；历史搜索委托 sessionQuery 并限制公开 Router 会话范围，业务原文账和文档各自保留权威。",
+      "input": "身份/偏好文档、授权历史与检索词",
+      "output": "有界模型上下文与原始事件指针",
+      "sources": [
+        "plugins/superagent/src/documents.mjs",
+        "plugins/superagent/src/memory.mjs",
+        "plugins/superagent/src/history-search.mjs",
+        "plugins/superagent/src/context-privacy.mjs"
+      ],
+      "note": "不复制第二份对话索引或日志；记忆材料不是用户当前授权。",
+      "state": "implemented",
+      "x": 820,
+      "y": 740
+    },
+    {
+      "id": "learning",
+      "title": "学习与自建技能",
+      "kicker": "LEARNING / OWNED SKILLS",
+      "kind": "orchestration",
+      "sub": "已关工单 → 后台整理 → 技能注册",
+      "symbol": "createLearningProcessor()",
+      "plain": "完成任务后再整理可复用经验，避免把学习变成当前交付的阻塞步骤。",
+      "role": "学习处理器消费已关闭任务，更新受控长期材料与自建技能；技能经验证存储并通过官方 provider 接缝提供，保留状态和来源。",
+      "input": "已关工单、经验候选和技能内容",
+      "output": "受控记忆变更、可用技能或待处理状态",
+      "sources": [
+        "plugins/superagent/src/learning-processor.mjs",
+        "plugins/superagent/src/owned-skills.mjs",
+        "plugins/superagent/src/owned-skill-provider.mjs"
+      ],
+      "note": "后台 learning review 属于经验整理，不审核本次任务能否交付。",
+      "state": "implemented",
+      "x": 1200,
+      "y": 740
+    }
+  ],
+  "edges": [
+    {
+      "a": "ingress",
+      "b": "admission",
+      "label": "来源 + 事件",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "admission",
+      "b": "router",
+      "label": "准入后的输入",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "router",
+      "b": "ticket",
+      "label": "明确执行请求",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "ticket",
+      "b": "dispatch",
+      "label": "当前要求与授权",
+      "from": "b",
+      "to": "t"
+    },
+    {
+      "a": "dispatch",
+      "b": "worker",
+      "label": "有效分派",
+      "from": "l",
+      "to": "r"
+    },
+    {
+      "a": "worker",
+      "b": "selfcheck",
+      "label": "同会话成果",
+      "from": "l",
+      "to": "r"
+    },
+    {
+      "a": "selfcheck",
+      "b": "expression",
+      "label": "原稿 + 完成信号",
+      "from": "l",
+      "to": "r"
+    },
+    {
+      "a": "expression",
+      "b": "delivery",
+      "label": "持久正式稿",
+      "from": "b",
+      "to": "t"
+    },
+    {
+      "a": "worker",
+      "b": "facts",
+      "label": "真实执行事件",
+      "from": "b",
+      "to": "t",
+      "kind": "feedback"
+    },
+    {
+      "a": "facts",
+      "b": "ticket",
+      "label": "状态与输入账",
+      "from": "t",
+      "to": "b",
+      "kind": "feedback"
+    },
+    {
+      "a": "memory",
+      "b": "router",
+      "label": "文档与授权历史",
+      "from": "t",
+      "to": "b",
+      "kind": "support"
+    },
+    {
+      "a": "delivery",
+      "b": "learning",
+      "label": "已关工单",
+      "from": "b",
+      "to": "b",
+      "kind": "support"
+    },
+    {
+      "a": "learning",
+      "b": "memory",
+      "label": "受控经验",
+      "from": "l",
+      "to": "r",
+      "kind": "feedback"
+    },
+    {
+      "a": "facts",
+      "b": "router",
+      "label": "恢复/注意信号",
+      "from": "t",
+      "to": "b",
+      "kind": "feedback"
+    }
+  ],
+  "steps": [
+    {
+      "node": "ingress",
+      "title": "用户提出真实工作请求",
+      "text": "用户在工作台或已认证渠道说“检查项目并修好失败测试”。入口保存原话、来源和当前身份，机器事件不能冒充用户。"
+    },
+    {
+      "node": "router",
+      "title": "Router 理解并保持对话",
+      "text": "普通问答可以直接回答；需要执行时根据明确请求组织工作，用户仍可在主聊或旁聊继续对话。",
+      "edge": 1
+    },
+    {
+      "node": "ticket",
+      "title": "把要求和授权记入工单",
+      "text": "保存来源、原始要求、版本和 Mandate。后续修订进入同单输入账，普通修改在下一工具边界整体生效。",
+      "edge": 2
+    },
+    {
+      "node": "worker",
+      "title": "真实 Agent 执行并接受插话",
+      "text": "分派服务创建或恢复官方 Worker，会话属于原项目工作区或官方未分组；执行过程与工具记录可直接查看，仍受原授权约束。",
+      "edge": 4
+    },
+    {
+      "node": "selfcheck",
+      "title": "Worker 自检并保存完整原稿",
+      "text": "Worker 运行适用的测试或检查，保留输出证据，保存完整成果；系统不再启动独立内容 Review 或自动验收返工链。",
+      "edge": 5
+    },
+    {
+      "node": "expression",
+      "title": "Router 主动自然告知结果",
+      "text": "完成信号回原 Router，由它判断给摘要还是完整结果，并保存正式回复。表达生成失败只重试表达，不让 Worker 再做一次。",
+      "edge": 6
+    },
+    {
+      "node": "delivery",
+      "title": "可信送达决定交付状态",
+      "text": "outbox 将同一正式回复投回原来源。成功回执后完成；结构性失败说明送达后仍等待恢复条件。未知发送效果先核实。",
+      "edge": 7
+    },
+    {
+      "node": "facts",
+      "title": "中断时以证据核查与恢复",
+      "text": "执行事实保留原因、身份和水位；原 Router 异步说明受影响的事情。外部效果未知只核查，条件核清后才允许原会话受控续做。",
+      "edge": 8
+    }
+  ],
+  "docs": [
+    {
+      "label": "板块设计",
+      "path": "docs/06-superagent/设计.md"
+    },
+    {
+      "label": "入口与研判",
+      "path": "docs/06-superagent/入口与研判.md"
+    },
+    {
+      "label": "任务与执行",
+      "path": "docs/06-superagent/任务与执行.md"
+    },
+    {
+      "label": "自校验与交付",
+      "path": "docs/06-superagent/自校验与交付.md"
+    },
+    {
+      "label": "模型与上下文",
+      "path": "docs/06-superagent/模型与上下文.md"
+    },
+    {
+      "label": "记忆与技能",
+      "path": "docs/06-superagent/记忆与技能.md"
+    },
+    {
+      "label": "链接与渠道",
+      "path": "docs/06-superagent/链接与渠道.md"
+    },
+    {
+      "label": "对话交互",
+      "path": "docs/06-superagent/对话交互.md"
+    },
+    {
+      "label": "身份与形象",
+      "path": "docs/06-superagent/身份与形象.md"
+    },
+    {
+      "label": "服务契约",
+      "path": "docs/06-superagent/服务契约.md"
+    }
+  ],
+  "version": "2026-11-11-1"
+}</script><script src="../_assets/architecture.js"></script></body></html>

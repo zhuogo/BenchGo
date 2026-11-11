@@ -17,6 +17,25 @@ test('OpenAI SSE delivers cumulative partials and corrected final', async () => 
   }, {protocol:'transcriptions-sse',baseURL:'https://asr.test/v1',model:'test-model'},new Uint8Array([1,2]),new AbortController().signal,text=>partial.push(text));
   assert.equal(result.text,'你好'); assert.deepEqual(partial,['你','你号','你好']);
 });
+
+test('a successful JSON transcription does not masquerade as SSE or silently switch protocols', async () => {
+  let requests = 0, cancelled = false;
+  const partial = [];
+  const config = { protocol: 'transcriptions-sse', baseURL: 'https://api.stepfun.com/v1', model: 'step-asr' };
+  await assert.rejects(streamTranscription(async (url, options) => {
+    requests++;
+    assert.equal(url, 'https://api.stepfun.com/v1/audio/transcriptions');
+    assert.equal(options.body.get('model'), 'step-asr');
+    assert.equal(options.body.get('stream'), 'true');
+    return new Response(new ReadableStream({ cancel() { cancelled = true; } }), { headers: { 'content-type': 'application/json' } });
+  }, config, new Uint8Array([1, 2]), new AbortController().signal, text => partial.push(text)), error => {
+    assert.equal(error.code, 'asr_stream_unavailable');
+    assert.match(error.message, /未返回 SSE.*整段转录（HTTP）.*实时通话/);
+    return true;
+  });
+  assert.equal(requests, 1); assert.equal(cancelled, true);
+  assert.deepEqual(partial, []); assert.equal(config.protocol, 'transcriptions-sse');
+});
 test('SSE refuses truncated final and propagates cancellation', async () => {
   await assert.rejects(streamTranscription(async()=>sse([{type:'transcript.text.delta',delta:'partial'}]),{protocol:'transcriptions-sse',baseURL:'https://test',model:'test'},new Uint8Array(),new AbortController().signal,()=>{}),/before final/);
   const controller = new AbortController(); controller.abort(); await assert.rejects(streamTranscription(async()=>sse([]),{protocol:'transcriptions-sse',baseURL:'https://test',model:'test'},new Uint8Array(),controller.signal,()=>{}),{name:'AbortError'});

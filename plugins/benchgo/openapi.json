@@ -740,6 +740,80 @@
               },
               "sessionSearch": {
                 "type": "object",
+                "required": [
+                  "query",
+                  "results",
+                  "nextCursor",
+                  "truncated",
+                  "source",
+                  "matchMode",
+                  "coverage",
+                  "limitations"
+                ],
+                "properties": {
+                  "query": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "const": "official"
+                  },
+                  "results": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/AssistantHistoryText"
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "snippet",
+                            "title"
+                          ],
+                          "properties": {
+                            "text": {
+                              "type": "string",
+                              "maxLength": 500
+                            },
+                            "snippet": {
+                              "type": "string",
+                              "maxLength": 500
+                            },
+                            "title": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "nextCursor": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 262144
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  },
+                  "limitations": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "matchMode": {
+                    "const": "official-phrase"
+                  },
+                  "coverage": {
+                    "const": "official-message-text"
+                  }
+                },
                 "additionalProperties": true
               },
               "state": {
@@ -1156,6 +1230,88 @@
                     }
                   }
                 }
+              },
+              "sessionHistory": {
+                "type": "object",
+                "required": [
+                  "sessionId",
+                  "events",
+                  "hasMore",
+                  "nextCursor",
+                  "source"
+                ],
+                "properties": {
+                  "sessionId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "events": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantHistoryText"
+                    }
+                  },
+                  "nextCursor": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 262144
+                  },
+                  "hasMore": {
+                    "type": "boolean"
+                  },
+                  "source": {
+                    "const": "official"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "sessionList": {
+                "type": "object",
+                "required": [
+                  "sessions",
+                  "nextCursor"
+                ],
+                "properties": {
+                  "sessions": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "title",
+                        "createdAt"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "title": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "number"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  },
+                  "nextCursor": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 262144
+                  }
+                },
+                "additionalProperties": true
               }
             }
           },
@@ -2204,7 +2360,9 @@
               "executionSessions",
               "actionPermissions",
               "actionPermissionCreate",
-              "actionPermissionRevoke"
+              "actionPermissionRevoke",
+              "sessionHistory",
+              "sessionList"
             ]
           },
           "threadId": {
@@ -2443,7 +2601,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "approvalOrigins: optionally recheck one existing official session."
+            "description": "官方原样会话标识；历史搜索与读取仍须复核主聊/手动旁聊范围。"
           },
           "toolName": {
             "type": "string",
@@ -2510,6 +2668,19 @@
           "archived": {
             "type": "boolean",
             "description": "tickets: filter explicit user-managed archive visibility before limit; omitted keeps both scopes."
+          },
+          "cursor": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "integer",
+                "minimum": 0
+              }
+            ],
+            "description": "历史搜索/消息页为不透明字符串；ledgerRead 的原文字符分页为整数，二者不可互换。"
           }
         },
         "additionalProperties": true,
@@ -3082,6 +3253,179 @@
               "required": [
                 "ticketIds"
               ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "sessionSearch"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "query"
+              ],
+              "properties": {
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 262144
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "query": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "sessionHistory"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "sessionId"
+              ],
+              "properties": {
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 262144
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "seq": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "before": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "after": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 30
+                },
+                "textLimit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 16000
+                },
+                "offset": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "required": [
+                      "seq"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "before": {
+                        "maximum": 30
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "sessionList"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [],
+              "properties": {
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 262144
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "ledgerRead"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
+                },
+                "cursor": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100000
+                }
+              }
             }
           }
         ],
@@ -5120,6 +5464,74 @@
             }
           }
         ]
+      },
+      "AssistantHistoryText": {
+        "type": "object",
+        "required": [
+          "sessionId",
+          "seq",
+          "time",
+          "role",
+          "text",
+          "fullLength",
+          "offset",
+          "nextOffset",
+          "complete",
+          "source"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "time": {
+            "type": "number"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 16000
+          },
+          "fullLength": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "nextOffset": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "source": {
+            "const": "official"
+          }
+        },
+        "additionalProperties": true
       }
     }
   }

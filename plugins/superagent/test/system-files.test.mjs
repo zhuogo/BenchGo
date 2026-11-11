@@ -81,3 +81,26 @@ test('system-file PDF preview reuses bounded file access', async t => {
   const response = await files.fetch(new Request(request('slides.ppt').url + '&preview=pdf'));
   assert.equal(response.headers.get('content-type'), 'application/pdf'); assert.equal(await response.text(), '%PDF-test');
 });
+
+
+test('system directory open uses the verified current folder and the official desktop capability', async t => {
+  const { directory } = await fixture(t), requests = [];
+  await mkdir(join(directory, 'archive')); await writeFile(join(directory, 'note.md'), 'text');
+  let available = true;
+  const files = createAssistantSystemFiles({ directory, desktop: () => ({ workspaceDesktop: () => ({ available }), async openWorkspacePath(request, signal) { requests.push({ request, signal }); return { opened: true }; } }) });
+  const signal = new AbortController().signal;
+  assert.equal((await files.list()).desktop.available, true);
+  assert.deepEqual(await files.openDirectory({ path: 'archive', signal }), { opened: true });
+  assert.deepEqual(requests[0], { request: { path: join(directory, 'archive') }, signal });
+  await files.openDirectory({ path: '' }); assert.equal(requests[1].request.path, directory);
+  for (const path of ['../escape', 'archive/..', 'C:/escape', '/escape']) await assert.rejects(files.openDirectory({ path }), error => error.status === 400);
+  await assert.rejects(files.openDirectory({ path: 'note.md' }), error => error.status === 404);
+  assert.equal(requests.length, 2);
+  available = false;
+  assert.equal((await files.list()).desktop.available, false);
+  await assert.rejects(files.openDirectory({ path: 'archive' }), error => error.status === 409);
+  assert.equal(requests.length, 2);
+  const headless = createAssistantSystemFiles({ directory });
+  assert.equal((await headless.list()).desktop.available, false);
+  await assert.rejects(headless.openDirectory(), error => error.status === 409);
+});

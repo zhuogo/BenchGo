@@ -30,6 +30,15 @@ async function setup(t, dependencies) {
   return { c, api, dir, route: routes.get('/api/commander'), routes, ctx, warnings };
 }
 
+test('sidebar reads private Router identities through the optional assistant service and retains them during reload', async t => {
+  const { ctx, api } = await setup(t);
+  let assistant = { sidebarPrivateSessionIds: async () => ['main-router', 'old-side-router'] };
+  ctx.get = name => name === 'assistant' ? assistant : undefined;
+  assert.deepEqual((await api({ action: 'state' })).privateSessionIds, ['main-router', 'old-side-router']);
+  assistant = undefined;
+  assert.deepEqual((await api({ action: 'state' })).privateSessionIds, ['main-router', 'old-side-router']);
+});
+
 test('project API registers a real host absolute path and exposes its canonical path in state', async t => {
   const { route, dir, api } = await setup(t);
   const path = `${dir}/../${dir.split(/[\\/]/).at(-1)}`;

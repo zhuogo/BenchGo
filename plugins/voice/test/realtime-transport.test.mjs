@@ -77,7 +77,7 @@ class Upstream extends EventEmitter {
   close() { this.closed = true; this.emit('disposed'); }
 }
 async function fixture(t, { link = false } = {}) {
-  const upstreams = [], value = { dictation: true, call: true, readAloud: true, asr: { protocol: 'openai-websocket', model: 'exact-provider-model', baseURL: 'https://upstream.test' }, tts: { model: 'exact-speaker', baseURL: 'https://tts.test' } };
+  const upstreams = [], value = { dictation: true, call: true, readAloud: true, asr: { protocol: 'openai-websocket', model: 'exact-provider-model', baseURL: 'https://upstream.test' }, tts: { protocol: 'speech', model: 'exact-speaker', baseURL: 'https://tts.test', stream: true } };
   const store = { value, snapshot: () => value }, handlers = createVoiceHandlers(store, { socket: () => { const ws = new Upstream(); upstreams.push(ws); return ws; } });
   const server = createServer(), wss = new WebSocketServer({ noServer: true, maxPayload: 2048, perMessageDeflate: false });
   let workbench, context, cookie;

@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createVoiceController} from '../client/controller.mjs';
+import { SpeakableChunker } from '../client/speech.mjs';
 import { Context } from '@deepseek-ai/cordis';
 globalThis.document||={baseURI:'https://voice.example/'};
 const flush=()=>new Promise(resolve=>setTimeout(resolve,0));
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
 test('call rejects JSON ASR and buffered TTS before acquiring media or lease without rewriting configuration',async()=>{
   for(const blocked of ['asr','tts']){
-    const config={dictation:true,readAloud:true,call:true,asr:{configured:true,protocol:blocked==='asr'?'transcriptions':'transcriptions-sse'},tts:{configured:true,stream:blocked!=='tts'}};
+    const config={dictation:true,readAloud:true,call:true,asr:{configured:true,protocol:blocked==='asr'?'transcriptions':'transcriptions-sse'},tts:{configured:true,protocol:'speech',stream:blocked!=='tts'}};
     const h=setup({json:async action=>action==='config'?{config}:{}});
     await assert.rejects(h.api.startCall({sessionId:'s'}),blocked==='asr'?/SSE/:/开启流式播放/);
     assert.equal(h.captures.length,0);assert.equal(h.players.length,0);assert.deepEqual(h.calls.map(x=>x.action),['config']);
@@ -42,14 +43,109 @@ function setup(options={}){
   const cordisScope=options.cordisScope?new Context():null;if(cordisScope)cordisScope.provide('conversation',conversation);
   const statusListeners=new Set();
   const ctx={uiSession:{sessionStatus:{getSnapshot:()=>new Map([['s',status]]),subscribe:fn=>{statusListeners.add(fn);return ()=>statusListeners.delete(fn);}}},sessions:{binding:id=>({sessionId:id,eventSource:source}),scope:sessionId=>cordisScope||({get:name=>name==='conversation'?{send:text=>conversation.send(text,sessionId),cancel:conversation.cancel}:undefined})}};
-  const deps={window:{addEventListener(){},removeEventListener(){}},setInterval:options.setInterval||globalThis.setInterval,clearInterval:options.clearInterval||globalThis.clearInterval,json:async(action,args)=>{calls.push({action,args});if(options.json)return options.json(action,args);if(action==='config')return {config:{dictation:true,readAloud:true,call:true,asr:{configured:true},tts:{configured:true}}};if(action==='call.start'){await options.callStart?.();return {call:{callId:'lease'}};}if(action==='call.heartbeat')await options.heartbeat?.();return {};},
+  const deps={window:{addEventListener(){},removeEventListener(){}},setInterval:options.setInterval||globalThis.setInterval,clearInterval:options.clearInterval||globalThis.clearInterval,json:async(action,args,signal)=>{calls.push({action,args});if(options.json)return options.json(action,args,signal);if(action==='config')return {config:{dictation:true,readAloud:true,call:true,asr:{configured:true,protocol:'transcriptions-sse'},tts:{configured:true,protocol:'speech'}}};if(action==='call.start'){await options.callStart?.();return {call:{callId:'lease'},...(options.conversationMode?{conversation:{mode:options.conversationMode}}:{})};}if(action==='call.heartbeat')await options.heartbeat?.();return {};},
     createCapture:callbacks=>{const c={callbacks,start:async()=>{await options.captureStart?.();},stop:async()=>'',dispose:async()=>{c.disposed=true;await options.captureDispose?.();}};captures.push(c);return c;},
     createPlayer:callbacks=>{const p={callbacks,start:async()=>{await options.playerStart?.();},dispose:async()=>{p.disposed=true;},clear(){}};players.push(p);return p;},
     createQueue:()=>{const q={items:[],sequence:0,text:[],push:t=>{q.sequence++;q.text.push(t);return true;},cancel(){q.cancelled=true;},dispose:async()=>{q.disposed=true;}};queues.push(q);return q;},
-    createChunker:options.createChunker||(()=>({push:text=>[text],finish:()=>[]}))};
+    ...(options.createConversation?{createConversation:options.createConversation}:{}),createChunker:options.createChunker||(()=>({push:text=>[text],finish:()=>[]}))};
   const api=createVoiceController(ctx,deps);
-  return {api,calls,sent,captures,players,queues,get status(){return status;},set status(s){status=s;for(const fn of statusListeners)fn();},get cancelCalls(){return cancelCalls;},texts:()=>calls.filter(x=>typeof x==='string'),publish(type,data={}){const e={type:'event',event:{seq:++revision,type,data}};snapshot={revision,entries:[...snapshot.entries,e],change:{kind:'append',entries:[e]}};for(const fn of listeners)fn();}};
+  return {api,calls,sent,captures,players,queues,get status(){return status;},set status(s){status=s;for(const fn of statusListeners)fn();},get cancelCalls(){return cancelCalls;},texts:()=>calls.filter(x=>typeof x==='string'),publish(type,data={},envelope={}){const e={type:'event',event:{seq:++revision,type,data,...envelope}};snapshot={revision,entries:[...snapshot.entries,e],change:{kind:'append',entries:[e]}};for(const fn of listeners)fn();}};
 }
+
+test('native SuperAgent publication flushes a short reply once without reading tool arguments', async () => {
+  const h = setup({ conversationMode: 'native', createChunker: () => new SpeakableChunker() });
+  await h.api.startCall({ sessionId: 's' });
+  const capture = h.captures[0].callbacks;
+  capture.onSpeechStart(1); capture.onFinal('你好', { utteranceId: 1 }); await flush();
+  assert.deepEqual(h.texts(), ['你好']);
+  h.publish('turn/start', { turn: 1 });
+  h.publish('assistant/live-chunk', { turn: 1, step: 1, attemptId: 'a', chunk: { type: 'tool-call-delta', text: '{"text":"你好"}' } });
+  assert.equal(h.queues.length, 0);
+  h.publish('plugin:benchgo-plugin/chat-publication', { kind: 'final', requestId: 'hello', text: '你好' }, { ignorable: true });
+  assert.deepEqual(h.queues[0].text, []);
+  h.publish('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: '你好' }] } }, { surfaceOp: 'append' });
+  h.publish('turn/end', { turn: 1, reason: { kind: 'completed' } });
+  assert.deepEqual(h.queues[0].text, ['你好']);
+  assert.equal(h.api.state.getSnapshot().replyText, '你好');
+  assert.equal(h.api.state.getSnapshot().error, '');
+  await h.api.dispose();
+});
+
+test('native call exposes a blocked or failed turn instead of silently returning to listening', async () => {
+  for (const kind of ['blocked', 'error', 'interrupted']) {
+    const h = setup({ conversationMode: 'native' });
+    await h.api.startCall({ sessionId: 's' });
+    const capture = h.captures[0].callbacks;
+    capture.onSpeechStart(1); capture.onFinal('你好', { utteranceId: 1 }); await flush();
+    h.status = { running: true, pendingInteraction: false };
+    h.publish('turn/start', { turn: 1 });
+    if (kind === 'error') { h.publish('assistant/attempt', { turn: 1, step: 1 }); h.publish('llm/retry', { turn: 1, step: 1 }); }
+    h.publish('turn/end', { turn: 1, reason: { kind, error: { message: 'private upstream response' } } });
+    h.status = { running: false, pendingInteraction: false };
+    const state = h.api.state.getSnapshot();
+    assert.equal(state.mode, 'call');
+    assert.equal(state.transcript, '你好');
+    assert.match(state.error, /原会话/);
+    assert.doesNotMatch(state.error, /private upstream response/);
+    assert.deepEqual(h.texts(), ['你好']);
+    assert.equal(h.queues.length, 0);
+    capture.onSpeechStart(2); capture.onFinal('继续', { utteranceId: 2 }); await flush();
+    assert.equal(h.api.state.getSnapshot().error, '');
+    assert.deepEqual(h.texts(), ['你好', '继续']);
+    await h.api.dispose();
+  }
+});
+
+test('native user interruption does not report the cancelled turn as a failure', async () => {
+  const h = setup({ conversationMode: 'native' });
+  await h.api.startCall({ sessionId: 's' });
+  h.publish('turn/start', { turn: 1 });
+  h.captures[0].callbacks.onSpeechStart(1);
+  h.publish('turn/end', { turn: 1, reason: { kind: 'blocked' } });
+  assert.equal(h.api.state.getSnapshot().error, '');
+  await h.api.dispose();
+});
+
+test('saved matched dictation starts without protocol detection and preserves the exact selected transport', async () => {
+  const config = { dictation: true, asr: { configured: true, protocol: 'stepfun-sse', model: 'Step Name/@opaque' }, tts: {} };
+  const h = setup({ json: async () => ({ config }) });
+  await h.api.startDictation({ sessionId: 's', inputActions: { captureInsertion: () => ({ start: 0, end: 0 }), insertText: () => true, persistDraft() {} } });
+  assert.deepEqual(h.calls.map(call => call.action), ['config']);
+  assert.equal(h.captures[0].callbacks.parallel, true);
+  assert.equal(h.api.state.getSnapshot().config.asr.protocol, 'stepfun-sse');
+  await h.api.dispose();
+});
+
+test('call capture uses saved concrete protocols without discovery at startup', async () => {
+  const config = { call: true, asr: { configured: true, protocol: 'transcriptions-sse' }, tts: { configured: true, protocol: 'speech', stream: true } };
+  const h = setup({ json: async action => action === 'call.start' ? { call: { callId: 'lease' }, config } : { config } });
+  await h.api.startCall({ sessionId: 's' });
+  assert.equal(h.captures[0].callbacks.parallel, true);
+  assert.equal(h.api.state.getSnapshot().config.asr.protocol, 'transcriptions-sse');
+  assert.deepEqual(h.calls.map(call => call.action), ['config', 'call.start']);
+  await h.api.dispose();
+});
+
+test('unset and legacy automatic protocols require matching before acquiring microphone or playback', async () => {
+  for (const protocol of ['', 'auto']) for (const mode of ['dictation', 'call', 'readAloud']) {
+    const config = { dictation: true, readAloud: true, call: true, asr: { configured: true, protocol }, tts: { configured: true, protocol, stream: true } };
+    const h = setup({ json: async () => ({ config }) });
+    await assert.rejects(mode === 'dictation' ? h.api.startDictation({ sessionId: 's', inputActions: {} }) : mode === 'call' ? h.api.startCall({ sessionId: 's' }) : h.api.toggleRead('s'), /自动匹配/);
+    assert.equal(h.captures.length, 0); assert.equal(h.players.length, 0);
+    assert.deepEqual(h.calls.map(call => call.action), ['config']);
+    await h.api.dispose();
+  }
+});
+
+test('protocol detection metadata refresh preserves a running capture and read-aloud', async () => {
+  const config = { dictation: true, readAloud: true, call: true, asr: { configured: true, protocol: 'transcriptions-sse' }, tts: { configured: true, protocol: 'speech', stream: true } };
+  let current = config;
+  const h = setup({ json: async action => action === 'call.start' ? { call: { callId: 'lease' } } : { config: current } });
+  await h.api.startCall({ sessionId: 's' });
+  current = { ...config, asr: { ...config.asr, detection: { status: 'supported' }, resolvedProtocol: 'transcriptions-sse' }, tts: { ...config.tts, detection: { status: 'supported' }, resolvedProtocol: 'speech' } };
+  await h.api.load(); assert.equal(h.api.state.getSnapshot().mode, 'call'); assert.equal(h.captures[0].disposed, undefined);
+  await h.api.dispose();
+});
 test('older utterance final waits until current utterance final then merges once',async()=>{const h=setup();await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;c.onSpeechStart(1);c.onSpeechStart(2);c.onFinal('前半句',{utteranceId:1});await flush();assert.deepEqual(h.texts(),[]);c.onFinal('后半句',{utteranceId:2});await flush();assert.deepEqual(h.texts(),['前半句\n后半句']);await h.api.dispose();});
 test('speech start invalidates earlier deliver while cancellation is pending',async()=>{const gate=deferred();const h=setup({cancel:()=>gate.promise});await h.api.startCall({sessionId:'s'});h.status={running:true,pendingInteraction:false};const c=h.captures[0].callbacks;c.onSpeechStart(1);c.onFinal('旧语段',{utteranceId:1});await flush();c.onSpeechStart(2);gate.resolve();await flush();assert.deepEqual(h.texts(),[]);c.onFinal('继续',{utteranceId:2});await flush();assert.deepEqual(h.texts(),['旧语段\n继续']);await h.api.dispose();});
 test('pending interaction neither cancels nor sends, and hangup preserves approval',async()=>{const h=setup();await h.api.startCall({sessionId:'s'});h.status={running:true,pendingInteraction:true};const c=h.captures[0].callbacks;c.onSpeechStart(1);c.onFinal('需要确认',{utteranceId:1});await flush();assert.deepEqual(h.texts(),[]);assert.equal(h.cancelCalls,0);assert.equal(h.api.state.getSnapshot().phase,'waiting');await h.api.hangup();assert.equal(h.cancelCalls,0);await h.api.dispose();});
@@ -61,7 +157,15 @@ test('approval completion sends queued speech once after the approved turn becom
  assert.deepEqual(h.texts(),['授权后继续']);assert.equal(h.api.state.getSnapshot().error,'');await h.api.dispose();
 });
 test('startup failure and hangup release media and remote lease once',async()=>{const h=setup({captureStart:async()=>{throw Error('no mic');}});await assert.rejects(h.api.startCall({sessionId:'s'}),/no mic/);assert.equal(h.captures[0].disposed,true);assert.equal(h.players[0].disposed,true);assert.equal(h.calls.filter(x=>x.action==='call.end').length,1);assert.equal(h.api.state.getSnapshot().mode,'idle');await h.api.dispose();});
-test('hangup is reentrant and cancels running call agent while releasing media',async()=>{const gate=deferred(),h=setup({captureDispose:()=>gate.promise});await h.api.startCall({sessionId:'s'});h.status={running:true,pendingInteraction:false};const a=h.api.hangup(),b=h.api.hangup();assert.equal(a,b);assert.equal(h.cancelCalls,1);gate.resolve();await a;assert.equal(h.calls.filter(x=>x.action==='call.end').length,1);assert.equal(h.players[0].disposed,true);await h.api.dispose();});
+test('call remains connecting until microphone capture is actually ready',async()=>{
+  const gate=deferred(),h=setup({captureStart:()=>gate.promise});
+  const start=h.api.startCall({sessionId:'s'});await flush();
+  assert.equal(h.captures.length,1);assert.equal(h.api.state.getSnapshot().phase,'starting');
+  h.status={running:false,pendingInteraction:false};assert.equal(h.api.state.getSnapshot().phase,'starting');
+  gate.resolve();await start;assert.equal(h.api.state.getSnapshot().phase,'listening');
+  await h.api.dispose();
+});
+test('hangup is reentrant and preserves running execution while releasing media in direct and native calls',async()=>{for(const conversationMode of ['direct','native']){const gate=deferred(),h=setup({conversationMode,captureDispose:()=>gate.promise});await h.api.startCall({sessionId:'s'});h.status={running:true,pendingInteraction:false};const a=h.api.hangup(),b=h.api.hangup();assert.equal(a,b);assert.equal(h.cancelCalls,0);gate.resolve();await a;assert.equal(h.calls.filter(x=>x.action==='call.end').length,1);assert.equal(h.players[0].disposed,true);assert.equal(h.status.running,true);await h.api.dispose();}});
 test('concurrent start rejected, late acquired lease ended after hangup',async()=>{const gate=deferred(),h=setup({callStart:()=>gate.promise});const start=h.api.startCall({sessionId:'s'});await flush();await assert.rejects(h.api.startCall({sessionId:'s'}),/正在启动/);await h.api.hangup();gate.resolve();await start;assert.equal(h.captures.length,0);assert.equal(h.calls.filter(x=>x.action==='call.end').length,1);assert.equal(h.api.state.getSnapshot().mode,'idle');await h.api.dispose();});
 test('automatic read keeps session binding and streams only fresh output after retry',async()=>{const h=setup();await h.api.toggleRead('s');assert.equal(h.api.state.getSnapshot().sessionId,'s');h.publish('turn/start');h.publish('assistant/live-chunk',{attemptId:'a',chunk:{type:'reasoning-delta',text:'hidden'}});h.publish('assistant/live-chunk',{attemptId:'a',chunk:{type:'text-delta',text:'首句'}});h.publish('llm/retry');h.publish('assistant/live-chunk',{attemptId:'b',chunk:{type:'text-delta',text:'重试'}});assert.deepEqual(h.queues[0].text,['首句','重试']);assert.equal(h.api.state.getSnapshot().readEnabled,true);await h.api.dispose();});
 test('automatic read and call each play a successful streamed reply once',async()=>{
@@ -157,7 +261,7 @@ test('player startup and remote lease acquisition run concurrently and failed au
 
 test('configuration save wins against focus loads begun before and during save',async()=>{
  const before=deferred(),during=deferred(),save=deferred();let reads=0;
- const config={dictation:true,call:true,readAloud:true,asr:{configured:true},tts:{configured:true,speed:1}};
+ const config={dictation:true,call:true,readAloud:true,asr:{configured:true,protocol:'transcriptions-sse'},tts:{configured:true,protocol:'speech',speed:1}};
  const h=setup({json:action=>action==='configure'?save.promise:++reads===1?Promise.resolve({config}):reads===2?before.promise:during.promise});
  await h.api.load();const a=h.api.load(),saving=h.api.configure({...config,tts:{...config.tts,speed:2}}),b=h.api.load();
  during.resolve({config});await b;save.resolve({config:{...config,tts:{...config.tts,speed:2}}});await saving;
@@ -165,9 +269,95 @@ test('configuration save wins against focus loads begun before and during save',
 });
 
 test('TTS changes preserve dictation and call capture while ASR changes end capture',async()=>{
- let config={dictation:true,call:true,readAloud:false,asr:{configured:true,model:'a'},tts:{configured:true,speed:1}};
+ let config={dictation:true,call:true,readAloud:false,asr:{configured:true,protocol:'transcriptions-sse',model:'a'},tts:{configured:true,protocol:'speech',speed:1}};
  const h=setup({json:async(action,args)=>action==='config'?{config}:action==='configure'?{config:config=args.config}:action==='call.start'?{call:{callId:'lease'}}:{}});
  await h.api.startCall({sessionId:'s'});await h.api.load();assert.equal(h.api.state.getSnapshot().mode,'call');
  await h.api.configure({...config,tts:{...config.tts,speed:2}});assert.equal(h.api.state.getSnapshot().mode,'call');assert.equal(h.captures[0].disposed,undefined);
  await h.api.configure({...config,asr:{...config.asr,model:'b'}});assert.equal(h.api.state.getSnapshot().mode,'idle');assert.equal(h.captures[0].disposed,true);await h.api.dispose();
+});
+
+
+test('enhanced call uses one speaking channel and barge-in/hangup preserve the original execution',async()=>{
+ let events,bridge;const messages=[];
+ const h=setup({conversationMode:'enhanced',createConversation:options=>{events=options.onEvent;return bridge={start:async()=>{},send:async(text,id)=>{messages.push({text,id});return {accepted:true};},interrupt:async()=>{bridge.interrupted=true;},dispose:async()=>{bridge.closed=true;}};}});
+ await h.api.startCall({sessionId:'s'});h.status={running:true,pendingInteraction:false};
+ h.publish('turn/start');h.publish('assistant/live-chunk',{attemptId:'worker',chunk:{type:'text-delta',text:'执行原文不应直接朗读。'}});h.publish('turn/end');
+ assert.equal(h.queues.length,0);
+ const c=h.captures[0].callbacks;c.onSpeechStart(1);c.onFinal('你好',{utteranceId:1});await flush();
+ assert.deepEqual(messages.map(x=>x.text),['你好']);assert.deepEqual(h.texts(),[]);assert.equal(h.cancelCalls,0);
+ events({type:'start',messageId:'a'});events({type:'text',messageId:'a',text:'你好，有什么想聊的？'});events({type:'end',messageId:'a'});
+ assert.deepEqual(h.queues[0].text,['你好，有什么想聊的？']);
+ c.onSpeechStart(2);assert.equal(bridge.interrupted,true);assert.equal(h.cancelCalls,0);
+ await h.api.hangup();assert.equal(bridge.closed,true);assert.equal(h.cancelCalls,0);await h.api.dispose();
+});
+
+test('enhanced unknown delivery retries the same request and does not merge new speech into it',async()=>{
+ let attempts=0;const requests=[];
+ const h=setup({conversationMode:'enhanced',createConversation:()=>({start:async()=>{},interrupt:async()=>{},dispose:async()=>{},send:async(text,id)=>{requests.push({text,id});if(++attempts===1)throw Error('unknown delivery');return {accepted:true};}})});
+ await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+ c.onSpeechStart(1);c.onFinal('帮我查热点',{utteranceId:1});await flush();
+ c.onSpeechStart(2);c.onFinal('还有天气',{utteranceId:2});await flush();assert.equal(requests.length,1);
+ await h.api.retryPending();assert.equal(requests.length,2);assert.deepEqual(requests[0],requests[1]);assert.equal(h.api.state.getSnapshot().recoveryText,'还有天气');
+ await h.api.retryPending();assert.equal(requests.at(-1).text,'还有天气');assert.notEqual(requests.at(-1).id,requests[0].id);await h.api.dispose();
+});
+
+test('enhanced speed update keeps capture and original execution; changing interaction route ends the call',async()=>{
+ let events,disposals=0;
+ const config={dictation:true,call:true,readAloud:true,asr:{configured:true,protocol:'transcriptions-sse'},tts:{configured:true,protocol:'speech',speed:1.2},conversation:{providerId:'p',model:'fast'}};
+ const h=setup({json:async action=>action==='config'?{config}:action==='call.start'?{call:{callId:'lease'},conversation:{mode:'enhanced'}}:{},createConversation:options=>{events=options.onEvent;return {start:async()=>{},interrupt:async()=>{},dispose:async()=>{disposals++;},send:async()=>({accepted:true})};}});
+ await h.api.startCall({sessionId:'s'});events({type:'start',messageId:'speed-reply'});events({type:'text',messageId:'speed-reply',text:'我来调整。'});events({type:'config',config:{...config,tts:{...config.tts,speed:1.5}}});await flush();
+ assert.equal(h.api.state.getSnapshot().config.tts.speed,1.5);assert.equal(h.api.state.getSnapshot().mode,'call');assert.equal(h.captures[0].disposed,undefined);assert.equal(h.cancelCalls,0);
+ events({type:'text',messageId:'speed-reply',text:'调到一点五倍了。'});events({type:'end',messageId:'speed-reply'});
+ assert.deepEqual(h.queues[0].text,['我来调整。','调到一点五倍了。']);assert.notEqual(h.queues[0].cancelled,true);
+ events({type:'config',config:{...config,conversation:{providerId:'p',model:'other'}}});await flush();assert.equal(h.api.state.getSnapshot().mode,'idle');assert.equal(disposals,1);assert.equal(h.cancelCalls,0);await h.api.dispose();
+});
+
+test('leaving and returning during hangup does not restore stale read-aloud; disposal cannot reopen audio',async()=>{
+ for(const dispose of [false,true]){
+  const gate=deferred(),h=setup({captureDispose:()=>gate.promise});
+  await h.api.toggleRead('s');await h.api.startCall({sessionId:'s'});
+  const ending=h.api.hangup();
+  const cleanup=dispose?h.api.dispose():null;
+  if(!dispose){h.api.selectSession('other');h.api.selectSession('s');}
+  gate.resolve();await ending;await cleanup;
+  assert.equal(h.players.length,1);assert.equal(h.api.state.getSnapshot().readEnabled,false);
+  if(!dispose)await h.api.dispose();
+ }
+});
+
+test('native and direct speech records follow official user and assistant source identities',async()=>{
+ for(const conversationMode of ['direct','native']){
+  const h=setup({conversationMode});await h.api.startCall({sessionId:'s'});
+  const c=h.captures[0].callbacks;c.onSpeechStart(1);c.onFinal('看一下首页',{utteranceId:1});await flush();
+  assert.equal(h.api.state.getSnapshot().conversationMessages.length,0);
+  h.publish('user/message',{id:'official-user',source:{kind:'user'},content:[{type:'text',text:'看一下首页'}]});
+  h.publish('turn/start');
+  h.publish('assistant/live-chunk',{attemptId:'a',turn:1,step:1,chunk:{type:'text-delta',text:'正在查看'}});
+  h.publish('assistant/message',{turn:1,step:1,message:{id:'official-assistant',content:[{type:'text',text:'正在查看首页。'}]}});
+  h.publish('turn/end');
+  const rows=h.api.state.getSnapshot().conversationMessages;
+  assert.equal(rows.length,2);assert.equal(rows[0].sourceId,'user:official-user');
+  assert.equal(rows[1].sourceId,'assistant:1:1');assert.equal(rows[1].partial,false);assert.equal(rows[1].text,'正在查看首页。');
+  await h.api.dispose();
+ }
+});
+
+test('enhanced ASR partial and settled user row share an identity across retries',async()=>{
+ let attempts=0;const h=setup({conversationMode:'enhanced',createConversation:()=>({start:async()=>{},interrupt:async()=>{},dispose:async()=>{},send:async()=>{if(++attempts===1)throw Error('unknown delivery');return {accepted:true};}})});
+ await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+ c.onSpeechStart(1);const transcriptId=h.api.state.getSnapshot().transcriptId;
+ c.onPartial('你好',{utteranceId:1});assert.equal(h.api.state.getSnapshot().transcriptId,transcriptId);
+ c.onFinal('你好，帮我看看',{utteranceId:1});await flush();
+ assert.deepEqual(h.api.state.getSnapshot().conversationMessages[0].transcriptIds,[transcriptId]);
+ await h.api.retryPending();assert.equal(h.api.state.getSnapshot().conversationMessages.length,1);
+ assert.deepEqual(h.api.state.getSnapshot().conversationMessages[0].transcriptIds,[transcriptId]);
+ await h.api.dispose();
+});
+
+test('native successful delivery clears temporary subtitle identity and a new utterance never inherits the old text',async()=>{
+ const h=setup({conversationMode:'native'});await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+ c.onSpeechStart(1);c.onPartial('第一句',{utteranceId:1});c.onFinal('第一句',{utteranceId:1});await flush();
+ assert.equal(h.api.state.getSnapshot().transcriptId,null);
+ c.onSpeechStart(2);assert.equal(h.api.state.getSnapshot().transcript,'');assert.ok(h.api.state.getSnapshot().transcriptId);
+ c.onPartial('第二句',{utteranceId:2});assert.equal(h.api.state.getSnapshot().transcript,'第二句');await h.api.dispose();
 });

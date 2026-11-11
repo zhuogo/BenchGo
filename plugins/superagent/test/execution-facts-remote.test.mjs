@@ -337,3 +337,16 @@ test('disposing the owner scope releases its active official stream and dynamic 
   await control.dispose();
   assert.deepEqual(b.failed, []);
 });
+
+test('a retired activity environment cannot create effects when a retained view retries', async t => {
+  const b = await scopedActivity(t);
+  const retiredRemote = b.scope.remote;
+  await b.owner.dispose();
+  await assert.rejects(retiredRemote.$mount(executionFactsRemoteContribution), /cannot create effect on inactive context/);
+  const stale = b.connect(); stale.start();
+  await new Promise(resolve => setImmediate(resolve));
+  await stale.dispose();
+  assert.deepEqual(b.failed, []);
+  assert.equal(b.facts.listeners.size, 0);
+  assert.equal(b.client.get('remote.benchgoExecutionFacts'), undefined);
+});

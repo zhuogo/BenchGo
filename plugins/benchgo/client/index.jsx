@@ -2,7 +2,7 @@ import { Button } from '../../shared/client/ui/index.jsx';
 import { readJsonResponse } from './http-response.mjs';
 import { mountShellUi } from './shell-ui.jsx';
 import { mountAssistant, AssistantSidebarEntry } from '../../superagent/client/index.jsx';
-import { projectWorkspaces, recentRows, startSidebarSession, isSidebarSessionSelected, sidebarWorkspaces, ensureSidebarWorkspace, workspaceActivity, sidebarSessionStatus, sidebarCapabilityWarning } from './sidebar-state.mjs';
+import { projectWorkspaces, recentRows, startSidebarSession, isSidebarSessionSelected, isSidebarSessionVisible, sidebarSessionTitle, sidebarSessionUpdatedAt, sidebarWorkspaces, ensureSidebarWorkspace, workspaceActivity, sidebarSessionStatus, sidebarCapabilityWarning } from './sidebar-state.mjs';
 import { apply as applyVoice, mountMediaSettings } from '../../voice/client/index.jsx';
 import { applyMobileWorkbench } from './mobile-workbench.jsx';
 import { UsageLauncher, UsageDialog, mountUsageStyle } from './usage.jsx';
@@ -115,7 +115,10 @@ function mountBaseUi(ctx) {
   };
   void ensureRecent().catch(error=>{ if (!lifetime.signal.aborted) update({error:error.message}); });
   const stopPolling = startSidebarPolling({ refresh, onError: error => update({ error: connectionMessage(error) }), isActive: () => data.sessions.some(session => liveStates.has(session.status)) });
+  const refreshOwnership = () => { void refresh(lifetime.signal).catch(error => { if (!lifetime.signal.aborted) update({ error: connectionMessage(error) }); }); };
+  document.addEventListener('benchgo:assistant-changed', refreshOwnership);
   ctx.effect(() => () => {
+    document.removeEventListener('benchgo:assistant-changed', refreshOwnership);
     lifetime.abort(); stopPolling(); stateSignature = undefined; defaultWorkspaceId = undefined;
     data = { projects: [], sessions: [], selected: null, projectId: null, error: '', loaded: false };
     listeners.clear();
@@ -173,6 +176,8 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
   const snapshot = useData();
   const d = modules.harness ? snapshot : { ...snapshot, sessions: [] };
   const workspaceProjects = sidebarWorkspaces(workspaces, d.projects, defaultWorkspaceId);
+  const privateIds = new Set(d.privateSessionIds ?? []);
+  const isPrivate = id => privateIds.has(id) && !harness.byId[id]?.projectionValues?.benchgoChannelSource;
   const projectsLoaded = workspaces.phase === 'ready' || workspaceProjects.length > 0 || d.loaded;
   const [actionSession, setActionSession] = useState(null), [confirmDelete, setConfirmDelete] = useState(null), [confirmProjectDelete, setConfirmProjectDelete] = useState(null), [confirmClearArchive, setConfirmClearArchive] = useState(false);
   const actionAnchor = useRef(null);
@@ -225,14 +230,14 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
   const ungrouped = harness.ids.filter(id => harness.byId[id] && !accounted.has(id)).map(id => ({ id, ungrouped: true }));
   const rows = [
     ...d.sessions.filter(s => (!harness.byId[s.ownerSessionId] || (s.parentId && !s.harnessAdopted)) && (s.title || ['running', 'waiting', 'connecting', 'failed'].includes(s.status)) && (showArchived ? s.archived : !s.archived)).map(s => ({ ...s, status: sidebarSessionStatus(undefined, statuses.get(s.id), s), native: true })),
-    ...[...members, ...ungrouped].filter(({ id }) => harness.byId[id] && !harness.byId[id].blank && !(d.deletedHarnessIds ?? []).includes(id) && archivedIds.has(id) === showArchived).map(member => { const { id } = member; return { ...member, archived: archivedIds.has(id), nativeId: nativeFor(id)?.id, title: harness.byId[id].displayTitle || harness.byId[id].title || '新对话', provider: nativeFor(id)?.provider ?? 'deepseek', model: nativeFor(id)?.model, status: sidebarSessionStatus(harness.byId[id], statuses.get(id), nativeFor(id)), updatedAt: harness.byId[id].updatedAt }; }),
-  ].filter(matches).sort((a, b) => Number(workspaces.pinnedSessionIds?.includes(b.id) ?? false) - Number(workspaces.pinnedSessionIds?.includes(a.id) ?? false)
+    ...[...members, ...ungrouped].filter(({ id }) => isSidebarSessionVisible(harness.byId[id]) && !(d.deletedHarnessIds ?? []).includes(id) && archivedIds.has(id) === showArchived).map(member => { const { id } = member; return { ...member, archived: archivedIds.has(id), nativeId: nativeFor(id)?.id, title: sidebarSessionTitle(harness.byId[id]), provider: nativeFor(id)?.provider ?? 'deepseek', model: nativeFor(id)?.model, status: sidebarSessionStatus(harness.byId[id], statuses.get(id), nativeFor(id)), updatedAt: sidebarSessionUpdatedAt(harness.byId[id]) }; }),
+  ].filter(row => (d.loaded || !row.ungrouped) && !isPrivate(row.id) && !isPrivate(row.ownerSessionId)).filter(matches).sort((a, b) => Number(workspaces.pinnedSessionIds?.includes(b.id) ?? false) - Number(workspaces.pinnedSessionIds?.includes(a.id) ?? false)
     || (Number(b.updatedAt) || Date.parse(b.updatedAt) || 0) - (Number(a.updatedAt) || Date.parse(a.updatedAt) || 0));
   // Workspace activity includes collapsed projects and every live native delegate.
   const live = [
     ...d.sessions.filter(s => !s.archived && liveStates.has(s.status)).map(s => ({ ...s, native: true })),
     ...Object.values(harness.byId).filter(s => !archivedIds.has(s.id) && !(d.deletedHarnessIds ?? []).includes(s.id) && (statuses.get(s.id)?.pendingInteraction || (statuses.get(s.id)?.running ?? s.running)) && !nativeFor(s.id)).map(s => ({ ...s, provider: 'deepseek', status: statuses.get(s.id)?.pendingInteraction ? 'waiting' : 'running' })),
-  ];
+  ].filter(row => !isPrivate(row.id) && !isPrivate(row.ownerSessionId));
   const projects = projectWorkspaces(workspaceProjects);
   const recentIds = new Set(recentRows(rows, workspaceProjects).map(row => row.id));
   const recents = rows.filter(row => row.ungrouped || recentIds.has(row.id));

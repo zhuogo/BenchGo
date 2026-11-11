@@ -41,20 +41,40 @@ export function sidebarWorkspaces(snapshot,fallback=[],defaultId){
 export function isSidebarSessionSelected(session,activeSessionId){
   return typeof activeSessionId==='string'&&activeSessionId.length>0&&(session.id===activeSessionId||(session.native===true&&session.ownerSessionId===activeSessionId&&(!session.parentId||session.harnessAdopted===true)));
 }
+/** Voice calls have durable plugin activity even before an official Agent turn starts. */
+export function isSidebarSessionVisible(session){return !!session&&(!session.blank||session.projectionValues?.benchgoVoice?.used===true);}
+/** The host display title falls back to cwd; a voice-only Session has a meaningful title of its own. */
+export function sidebarSessionTitle(session){return session?.title||(session?.projectionValues?.benchgoVoice?.used===true?'语音对话':session?.displayTitle)||'新对话';}
+export function sidebarSessionUpdatedAt(session){
+  const voice=session?.projectionValues?.benchgoVoice;
+  return voice?.used===true?Math.max(Number(session.updatedAt)||Date.parse(session.updatedAt)||0,Number(voice.lastActivityAt)||0):session?.updatedAt;
+}
 /** Documents discovery is optional when the Profile recovery service can create Recent. */
 export async function ensureSidebarWorkspace(host,recover){
   let initial;
   try{initial=await host.workspaces.initializeDefault();}catch{/* Recovery owns a writable Profile fallback. */}
   return recover({workspaceId:initial?.workspaceId});
 }
-/** Explicit identity avoids the official current/recent-project fallback on generic New Chat. */
-export async function startSidebarSession(host,projects,projectId,defaultId,ensureRecent){
-  const current=sidebarWorkspaces(host.workspaces.list?.getSnapshot(),projects,defaultId);
-  let target=projectId??recentWorkspace(current)?.id;
-  if(projectId==null&&ensureRecent)target=(await ensureRecent())?.workspaceId;
-  if(!target){const initialized=await host.workspaces.initializeDefault();target=initialized?.workspaceId;}
-  if(!target)throw Error('最近工作区创建失败，请重试');
-  host.uiWorkspace.startSession(target);return target;
+const creatingSessions=new WeakMap(),recentCreation=Symbol('recent');
+/** New Chat creates an independent identity; opening a workspace may reuse its old blank/draft. */
+export function startSidebarSession(host,projects,projectId,defaultId,ensureRecent){
+  let pending=creatingSessions.get(host);
+  if(!pending){pending=new Map();creatingSessions.set(host,pending);}
+  const key=projectId??recentCreation;
+  if(pending.has(key))return pending.get(key);
+  const operation=(async()=>{
+    const current=sidebarWorkspaces(host.workspaces.list?.getSnapshot(),projects,defaultId);
+    let target=projectId??recentWorkspace(current)?.id;
+    if(projectId==null&&ensureRecent)target=(await ensureRecent())?.workspaceId;
+    if(!target){const initialized=await host.workspaces.initializeDefault();target=initialized?.workspaceId;}
+    if(!target)throw Error('最近工作区创建失败，请重试');
+    const sessionId=await host.sessions.create({workspaceId:target});
+    host.uiWorkspace.openSession(sessionId);
+    return target;
+  })();
+  pending.set(key,operation);
+  operation.finally(()=>{pending.delete(key);if(!pending.size)creatingSessions.delete(host);}).catch(()=>{});
+  return operation;
 }
 
 /** Optional startup failures stay visible without hiding conversations. */

@@ -1,16 +1,24 @@
+import { protocolDescriptor, VOICE_API_TYPES } from '../shared/protocol-catalog.mjs';
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 
 export function voiceSettingsPatch(draft, original, clearKeys = {}) {
   const patch = {};
   for (const kind of ['asr', 'tts']) {
-    const protocols = kind === 'asr' ? ['transcriptions-sse', 'transcriptions', 'openai-websocket'] : ['speech', 'speech-stream'];
-    if (draft[kind]?.protocol && !protocols.includes(draft[kind].protocol)) throw Error(`${kind.toUpperCase()} 当前协议已不支持，请显式选择 OpenAI 兼容协议后保存。`);
+    if (draft[kind]?.protocol && !protocolDescriptor(kind, draft[kind].protocol)) throw Error(`${kind.toUpperCase()} 当前协议已不支持，请显式选择支持的协议后保存。`);
+    if (draft[kind]?.apiType && !VOICE_API_TYPES.some(type => type.value === draft[kind].apiType)) throw Error(`${kind.toUpperCase()} 当前接口类型已不支持，请重新选择。`);
   }
   for (const key of ['dictation', 'readAloud', 'call']) if (draft[key] !== original[key]) patch[key] = draft[key];
+  const conversation = draft.conversation || { providerId: '', model: '' };
+  if (!!conversation.providerId !== !!conversation.model) throw Error('通话交互模型需要同时选择供应商和模型；两项留空使用原会话直通。');
+  for (const key of ['providerId', 'model']) {
+    const value = conversation[key] || '';
+    if (typeof value !== 'string' || value !== value.trim()) throw Error('通话交互模型的供应商和模型 ID 首尾不能含空格。');
+    if (value !== (original.conversation?.[key] || '')) (patch.conversation ||= {})[key] = value;
+  }
   for (const kind of ['asr', 'tts']) {
     const endpoint = {};
     for (const [key, value] of Object.entries(draft[kind])) {
-      if (key === 'apiKey') continue;
+      if (key === 'apiKey' || ['resolvedProtocol', 'detection', 'configured', 'apiKeyConfigured', 'apiKeyMasked', 'unavailableReason'].includes(key)) continue;
       if (!same(value, original[kind][key])) endpoint[key] = value;
     }
     if (!draft[kind].providerId) {

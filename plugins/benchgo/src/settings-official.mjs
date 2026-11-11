@@ -57,10 +57,31 @@ function nonvolatilePaths(schema, path = []) {
   return Object.entries(schema.dict || {}).flatMap(([key, child]) => nonvolatilePaths(child, [...path, key]));
 }
 
+// Schemastery's toJSON drops RegExp constraints and uses shared mutable state.
+// Snapshot only this native graph, preserving cycles without invoking serializers.
+function projectionFingerprint(schema) {
+  const seen = new Map();
+  const visit = value => {
+    if (typeof value === 'number' && !Number.isFinite(value)) throw Error('Uncacheable numeric annotation');
+    if (value === null || ['string', 'boolean', 'number'].includes(typeof value)) return value;
+    if (value === undefined) return ['undefined'];
+    if (value instanceof RegExp) return ['regexp', value.source, value.flags];
+    const isSchema = native(value);
+    if (!isSchema && (typeof value !== 'object' || !Array.isArray(value) && ![Object.prototype, null].includes(Object.getPrototypeOf(value)))) throw Error('Uncacheable schema annotation');
+    if (isSchema && value.type === 'lazy' && !native(value.inner)) throw Error('Unresolved schema builder');
+    if (seen.has(value)) return ['ref', seen.get(value)];
+    const index = seen.size; seen.set(value, index);
+    if (Array.isArray(value)) return ['array', index, value.map(visit)];
+    return [isSchema ? 'schema' : 'object', index, Object.keys(value).filter(key => !isSchema || !['toString', 'toJSON'].includes(key)).sort().map(key => [key, visit(value[key])])];
+  };
+  return settingsFingerprint(visit(schema));
+}
+
 /** Official services remain the source of configuration and lifecycle semantics. */
 export function createOfficialSettingsAdapter(ctx, { resolveMetadata = () => ({}), projectSchema } = {}) {
   const epoch = randomUUID();
   let projector;
+  const projections = new Map(), formSchemas = new Map();
   const service = name => ctx.get?.(name) ?? ctx[name];
   const retained = fiber => {
     const seen = new Set(), visit = current => {
@@ -74,14 +95,30 @@ export function createOfficialSettingsAdapter(ctx, { resolveMetadata = () => ({}
   const project = async schema => {
     if (projectSchema) return projectSchema(schema);
     if (!projector) {
-      const anchor = service('profileContext')?.installAnchor;
-      const require = createRequire(anchor || import.meta.url);
-      const { createConfigProjector } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-app-boot')).href);
-      projector = await createConfigProjector();
+      // Concurrent namespace projection shares the same validator initialization.
+      projector = (async () => {
+        const anchor = service('profileContext')?.installAnchor;
+        const require = createRequire(anchor || import.meta.url);
+        const { createConfigProjector } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-app-boot')).href);
+        return createConfigProjector();
+      })().catch(error => { projector = undefined; throw error; });
     }
-    const result = projector(schema, 'managedConfig');
+    const result = (await projector)(schema, 'managedConfig');
     return { $schema: 'https://json-schema.org/draft/2020-12/schema', ...result.schema,
       $defs: { ...result.definitions, loaderExpression: false } };
+  };
+  const projected = async row => {
+    let fingerprint = null;
+    try { fingerprint = projectionFingerprint(row.schema); }
+    catch { /* Unresolved builders/non-JSON annotations retain official semantics. */ }
+    let cached = projections.get(row.namespace);
+    if (!cached || cached.source !== row.schema || cached.fingerprint !== fingerprint || fingerprint === null) {
+      cached = { source: row.schema, fingerprint, value: Promise.resolve().then(() => project(row.schema)).then(publicSchema) };
+      projections.set(row.namespace, cached);
+      cached.value.catch(() => { if (projections.get(row.namespace) === cached) projections.delete(row.namespace); });
+    }
+    // Callers may manipulate a catalog; do not let that mutate validation input.
+    return structuredClone(await cached.value);
   };
   const forms = () => service('settings')?.describe({ redactSecrets: true }) ?? [];
   function records() {
@@ -105,7 +142,11 @@ export function createOfficialSettingsAdapter(ctx, { resolveMetadata = () => ({}
     for (const form of formRows) {
       if (used.has(form.ns)) continue;
       let schema;
-      try { schema = new Schema(form.schema); } catch { /* Keep the blocked descriptor. */ }
+      try {
+        const fingerprint = settingsFingerprint(form.schema), cached = formSchemas.get(form.ns);
+        schema = cached?.fingerprint === fingerprint ? cached.schema : new Schema(form.schema);
+        formSchemas.set(form.ns, { fingerprint, schema });
+      } catch { /* Keep the blocked descriptor. */ }
       result.push({ namespace: String(form.ns), form, schema, reason: native(schema) ? undefined : '官方设置未提供可核验的原生 schema' });
     }
     const counts = new Map();
@@ -140,10 +181,13 @@ export function createOfficialSettingsAdapter(ctx, { resolveMetadata = () => ({}
       let rows;
       try { rows = records(); }
       catch { return [{ namespace: '*', title: '官方配置', applies: 'blocked', risk: 'blocked', unavailableReason: '官方配置服务无法读取目录' }]; }
+      const active = new Set(rows.map(row => row.namespace));
+      for (const key of projections.keys()) if (!active.has(key)) projections.delete(key);
+      for (const key of formSchemas.keys()) if (!active.has(key)) formSchemas.delete(key);
       return Promise.all(rows.map(async row => {
         let schema, reason = row.reason;
         if (!reason) {
-          try { schema = publicSchema(await project(row.schema)); }
+          try { schema = await projected(row); }
           catch { reason = '官方 schema 投影服务不可用，无法提供真实类型约束'; }
         }
         const metadata = await resolveMetadata({ entryId: row.namespace, pluginName: row.entry?.options.name, schema: row.schema });

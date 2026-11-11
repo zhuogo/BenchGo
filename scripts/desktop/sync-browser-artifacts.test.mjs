@@ -26,6 +26,9 @@ async function fixture(t) {
     for (const file of ['lib/client.js', 'lib/preview/markdown.js', 'lib/link-web/index.html', 'assets/channel-brands/sources.json', 'assets/fonts/web/text.woff2', 'assets/icon.svg', 'lib/UI-LICENSES.txt', 'lib/LINK-THIRD-PARTY-LICENSES.txt'])
       await put(join(base, file), base === source ? `new:${file}` : `old:${file}`);
   }
+  for (const language of ['en', 'zh-CN']) {
+    for (const base of [source, target, wrapper]) await put(join(base, `locale/${language}.json`), JSON.stringify({ meta: { title: base === source ? 'BenchGo' : language === 'en' ? 'Base' : '基础层' } }));
+  }
   for (const file of ['lib/server/seed.zip', 'lib/modules/superagent/src/service.mjs', 'lib/link.mjs', 'src/plugin.mjs', 'cordis.patch.yml']) await put(join(target, file), 'preserve:'+file);
   return { root, profile, source, target, directory, wrapper, state, manifest, save, put };
 }
@@ -42,6 +45,10 @@ test('browser sync validates the selected release, preserves services and publis
   for (const file of ['lib/server/seed.zip', 'lib/modules/superagent/src/service.mjs', 'lib/link.mjs', 'src/plugin.mjs', 'cordis.patch.yml']) assert.equal(await readFile(join(f.target, file), 'utf8'), 'preserve:'+file);
   assert.equal(await readFile(join(f.profile, 'package.json'), 'utf8'), before);
   assert.equal(JSON.parse(await readFile(join(f.target, 'package.json'), 'utf8')).version, '0.1.1');
+  for (const base of [f.target, f.wrapper]) for (const language of ['en', 'zh-CN']) {
+    assert.equal(JSON.parse(await readFile(join(base, `locale/${language}.json`), 'utf8')).meta.title, 'BenchGo');
+  }
+  assert.equal(JSON.parse(await readFile(join(f.wrapper, 'package.json'), 'utf8')).name, f.state.bundleName);
 });
 
 test('default writer creates missing browser directories atomically and retains older assets', async t => {
@@ -63,7 +70,7 @@ for (const mode of ['unmanaged', 'disabled']) test(`browser sync skips ${mode} p
   assert.equal(result.synced, false); assert.equal(result.reason, mode); assert.equal(writes, 0);
 });
 
-for (const mode of ['outside', 'package', 'active-pointer', 'destination-link', 'source-link', 'missing-source']) test(`browser sync rejects ${mode} before writing`, async t => {
+for (const mode of ['outside', 'package', 'active-pointer', 'destination-link', 'source-link', 'wrapper-locale-link', 'source-locale-link', 'missing-source']) test(`browser sync rejects ${mode} before writing`, async t => {
   const f = await fixture(t);
   if (mode === 'outside') { f.state.directory = join(f.root, 'outside'); await f.save(); }
   if (mode === 'package') await f.put(join(f.target, 'package.json'), JSON.stringify({ name: 'other-plugin', version: '0.1.1' }));
@@ -76,6 +83,14 @@ for (const mode of ['outside', 'package', 'active-pointer', 'destination-link', 
     await rm(path, { recursive: true });
     await mkdir(join(f.root, 'outside'), { recursive: true });
     await symlink(join(f.root, 'outside'), path, process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  if (mode === 'wrapper-locale-link' || mode === 'source-locale-link') {
+    const path = join(mode === 'wrapper-locale-link' ? f.wrapper : f.source, 'locale');
+    await rm(path, { recursive: true });
+    const outside = join(f.root, 'outside');
+    await mkdir(outside);
+    await f.put(join(outside, 'en.json'), '{"meta":{"title":"external"}}');
+    await symlink(outside, path, process.platform === 'win32' ? 'junction' : 'dir');
   }
   if (mode === 'missing-source') await rm(join(f.source, 'lib/client.js'));
   let writes = 0;

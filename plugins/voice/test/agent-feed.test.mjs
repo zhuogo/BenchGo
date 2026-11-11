@@ -24,3 +24,28 @@ test('identical text in a later step or a nonstreamed message is still read',()=
   h.append(entry(3,'assistant/message',{turn:1,step:2,message:{content:[{type:'text',text:'相同回复'}]}}));
   assert.deepEqual(h.out,['相同回复','相同回复']);
 });
+
+test('only fresh authoritative SuperAgent final publications enter speech', () => {
+  const publication = (seq, kind, text, ignorable = true) => {
+    const item = entry(seq, 'plugin:benchgo-plugin/chat-publication', { kind, requestId: 'r', text });
+    if (ignorable) item.event.ignorable = true;
+    return item;
+  };
+  const h = harness([publication(1, 'final', '历史回复')]);
+  h.append(entry(2, 'turn/start'), publication(3, 'ticket-reply', '内部草稿'), publication(4, 'final', '未经标记', false));
+  const reply = publication(5, 'final', '你好');
+  h.append(reply); h.append(reply);
+  h.append(entry(6, 'assistant/message', { message: { content: [{ type: 'text', text: '你好' }] } }), entry(7, 'turn/end'));
+  assert.deepEqual(h.out, ['你好']);
+  assert.deepEqual(h.events, ['start', 'end']);
+});
+
+test('live records retain human input and never expose injected user-role context or model replacements',()=>{
+  const records=[],feed=new AgentFeed({onRecord:event=>records.push(event)});
+  feed.baseline({revision:0,entries:[]});
+  const human=entry(1,'user/message',{id:'human',source:{kind:'user'},content:[{type:'text',text:'我的第一句包含 system/context 词语'}]});
+  const injected=['runtime-context','benchgo-voice-context','file-mention','retry'].map((kind,index)=>entry(index+2,'user/message',{source:{kind},content:[{type:'text',text:'仅模型上下文'}]}));
+  const replacement=entry(6,'user/message',{source:{kind:'user'},content:[{type:'text',text:'压缩替换副本'}]});replacement.event.surfaceOp={op:'replace',startSeq:1,endSeq:1};
+  feed.accept({revision:1,change:{kind:'append',entries:[human,...injected,replacement]}});
+  assert.deepEqual(records,[human.event]);
+});

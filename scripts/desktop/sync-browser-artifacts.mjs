@@ -27,7 +27,7 @@ async function checked(root, path, required = false) {
   return entry;
 }
 
-/** Publish only browser resources into the selected managed Desktop release. */
+/** Publish browser resources and plugin display locales into the managed Desktop release. */
 export async function syncDesktopBrowserArtifacts({ root, profile = desktopProfile(), write = writeArtifact }) {
   profile = resolve(profile);
   const state = await getInstallState(profile);
@@ -53,18 +53,21 @@ export async function syncDesktopBrowserArtifacts({ root, profile = desktopProfi
   if (source === target || inside(source, target) || inside(target, source)) throw new Error('源码与桌面插件目录重叠，未同步');
   if ((await json(join(source, 'package.json'))).name !== 'benchgo-plugin') throw new Error('源码插件包名无效，未同步');
   const plan = [];
-  const visit = async name => {
-    const from = join(source, name), to = join(target, name);
-    const entry = await checked(source, from, true), existing = await checked(target, to);
+  const visit = async (name, destination = target) => {
+    const from = join(source, name), to = join(destination, name);
+    const entry = await checked(source, from, true), existing = await checked(destination, to);
     if (existing && entry.isDirectory() !== existing.isDirectory()) throw new Error(`浏览器产物目标类型冲突：${to}`);
-    if (entry.isDirectory()) for (const child of await readdir(from)) await visit(join(name, child));
-    else plan.push({ from, to });
+    if (entry.isDirectory()) for (const child of await readdir(from)) await visit(join(name, child), destination);
+    else plan.push({ from, to, destination });
   };
   // Validate the complete plan before publishing anything. Do not remove old
   // files: an already-open preview may still request its previous assets.
-  for (const name of [...directories, ...files, 'lib/client.js']) await visit(name);
-  for (const { from, to } of plan) {
-    await checked(target, to);
+  for (const name of [...directories, ...files, 'locale']) await visit(name);
+  // The plugin manager names the enrolled wrapper, not its implementation package.
+  await visit('locale', wrapper);
+  await visit('lib/client.js');
+  for (const { from, to, destination } of plan) {
+    await checked(destination, to);
     await write(to, await readFile(from));
   }
   return { synced: true, target, profile, files: plan.length };

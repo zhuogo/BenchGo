@@ -1,3 +1,4 @@
+import { markdownDestinationEnd, readWindowsPath, spokenLinkLabel, spokenWindowsPath } from './speech-content.mjs';
 // Only assistant-visible text belongs here: reasoning/tool payloads must be excluded by the caller.
 export function speakable(text){
   return text
@@ -8,9 +9,9 @@ export function speakable(text){
     .replace(/^[ \t]*#{1,6}\s+/gm,'').replace(/[*_~]+/g,'').replace(/\s+/g,' ').trim();
 }
 const ACTION = /^(?:微笑|笑着(?:说)?|轻笑|大笑|苦笑|叹气|轻叹|清嗓|咳嗽|点头|摇头|挠头|耸肩|沉默|停顿|深呼吸|吸气|呼气|开心|兴奋|低声|耳语|温柔|严肃|思考中|laughs?|chuckles?|sighs?|whispers?|smiles?|nods?|clears throat)(?:中|地|了一下)?$/iu;
-const HINTS = { code: '代码我发在聊天里了。', table: '表格我放在聊天里了。', url: '链接已发在聊天里。' };
+const HINTS = { code: '代码部分略过。', table: '表格部分略过。', url: '这个链接。' };
 export class SpeakableChunker {
-  constructor({maxChars=120,now=()=>Date.now()}={}){this.now=now;this.startedAt=0;this.updatedAt=0;this.emitted=0;this.maxChars=Math.max(40,Math.min(maxChars,500));this.raw='';this.text='';this.fenced=null;this.inline=false;this.hidden=null;this.discardToken=false;this.url=false;this.table=false;this.lineStart=true;this.hints=new Set();this.discardLink=false;}
+  constructor({maxChars=120,now=()=>Date.now()}={}){this.now=now;this.startedAt=0;this.updatedAt=0;this.emitted=0;this.maxChars=Math.max(40,Math.min(maxChars,500));this.raw='';this.text='';this.fenced=null;this.inline=null;this.hidden=null;this.discardToken=false;this.url=false;this.table=false;this.lineStart=true;this.hints=new Set();this.discardLink=false;}
   push(delta){if(!this.startedAt)this.startedAt=this.now();this.updatedAt=this.now();this.raw+=String(delta||'');return this.consume(false);}
   consume(final,drain=false){
     const out=[];
@@ -20,19 +21,29 @@ export class SpeakableChunker {
     // Emit confirmed sentence and first-clause boundaries without an idle delay.
     // The parser still retains incomplete markup and URL prefixes.
     while(this.raw.length&&(final||drain||this.raw.length>8||/[。！？；!?\n]/u.test(this.raw)||!this.emitted&&/[，,]/u.test(this.raw))){
+      if(this.inline){
+        const end=this.raw.indexOf(this.inline.marker),keep=end<0?Math.max(0,this.raw.length-this.inline.marker.length+1):end;
+        if(!this.inline.overflow){this.inline.text+=this.raw.slice(0,keep);if(this.inline.text.length>2048){this.inline.text='';this.inline.overflow=true;}}
+        this.raw=this.raw.slice(keep);
+        if(end<0){if(final){this.raw='';this.inline=null;hint('code');}break;}
+        const content=this.inline.overflow?'':spokenWindowsPath(this.inline.text);
+        this.raw=this.raw.slice(this.inline.marker.length);this.inline=null;
+        if(content)append(content);else hint('code');this.lineStart=false;continue;
+      }
       if(this.hidden){const close='</'+this.hidden+'>';const pos=this.raw.toLowerCase().indexOf(close);if(pos<0){this.raw=this.raw.slice(-close.length);break;}this.raw=this.raw.slice(pos+close.length);this.hidden=null;continue;}
       if(this.fenced){const pos=this.raw.indexOf(this.fenced);if(pos<0){this.raw=this.raw.slice(-2);if(final)this.raw='';break;}this.raw=this.raw.slice(pos+3);this.fenced=null;this.lineStart=true;continue;}
       if(this.discardLink){const end=this.raw.indexOf(')');const newline=this.raw.indexOf('\n');if(end>=0&&(newline<0||end<newline)){this.raw=this.raw.slice(end+1);this.discardLink=false;continue;}if(newline>=0){this.raw=this.raw.slice(newline);this.discardLink=false;continue;}this.raw='';break;}
       if(this.url){let end=0;while(end<this.raw.length&&!/[\s<>，。！？；）]/u.test(this.raw[end]))end++;this.raw=this.raw.slice(end);if(this.raw.length)this.url=false;else break;continue;}
       if(this.table){const newline=this.raw.indexOf('\n');if(newline<0){this.raw='';break;}this.raw=this.raw.slice(newline+1);this.table=false;this.lineStart=true;continue;}
-      if(this.raw.startsWith('~~~')||this.raw.startsWith(String.fromCharCode(96).repeat(3))){this.fenced=this.raw.slice(0,3);this.inline=false;this.raw=this.raw.slice(3);hint('code');continue;}
+      if(this.raw.startsWith('~~~')||this.raw.startsWith(String.fromCharCode(96).repeat(3))){this.fenced=this.raw.slice(0,3);this.inline=null;this.raw=this.raw.slice(3);hint('code');continue;}
+      if(!final&&/^~{1,2}$/u.test(this.raw))break;
       // Keep incomplete URL prefixes out of idle/final speech, including a prefix split between deltas.
       const lower=this.raw.toLowerCase();const prefixes=['https://','http://','www.'];
       if(prefixes.some(prefix=>lower.startsWith(prefix))){this.url=true;hint('url');continue;}
       if(!final&&prefixes.some(prefix=>prefix.startsWith(lower)))break;
       if(this.raw[0]==='<'){
         const end=this.raw.indexOf('>');if(end<0){if(this.raw.length<256&&!final)break;this.raw=this.raw.slice(-8);if(final)this.raw='';break;}
-        const tag=this.raw.slice(1,end).trim().toLowerCase();if(['think','thinking','analysis','reasoning','secret'].includes(tag))this.hidden=tag;
+        const tag=this.raw.slice(1,end).trim().toLowerCase();if(['think','thinking','analysis','reasoning','secret','code','pre'].includes(tag)){this.hidden=tag;if(['code','pre'].includes(tag))hint('code');}
         this.raw=this.raw.slice(end+1);continue;
       }
       if(this.lineStart){
@@ -40,11 +51,15 @@ export class SpeakableChunker {
         if(/^\s*\|/u.test(line)||line.includes('|')&&(/\|.*\|/u.test(line)||/^[^。！？!?]{0,160}\|/u.test(line))){this.table=true;this.text='';hint('table');continue;}
         if(/^\s*(?:#{1,6}|>|[-+*]|\d+[.)])\s+/u.test(line)){const match=/^\s*(?:#{1,6}|>|[-+*]|\d+[.)])\s+/u.exec(this.raw);this.raw=this.raw.slice(match[0].length);if(!this.raw)break;}
       }
-      if(this.raw.charCodeAt(0)===96){this.inline=!this.inline;this.raw=this.raw.slice(1);continue;}
+      if(this.raw.charCodeAt(0)===96){const marker=/^`+/u.exec(this.raw)[0];if(!final&&marker.length===this.raw.length)break;this.inline={marker,text:'',overflow:false};this.raw=this.raw.slice(marker.length);continue;}
+      const path=readWindowsPath(this.raw,final);
+      if(path?.pending)break;
+      if(path){this.raw=this.raw.slice(path.length);if(path.spoken)append(path.spoken);if(path.overflow)this.discardToken=true;this.lineStart=false;continue;}
+      if(this.raw.startsWith('![')){this.raw=this.raw.slice(1);continue;}
       if(this.raw[0]==='['){
         const labelEnd=this.raw.indexOf(']');
         if(labelEnd<0||this.raw.length===labelEnd+1){if(this.raw.length<2048&&!final)break;if(!final){this.raw='';this.discardLink=true;break;}}
-        if(labelEnd>=0&&this.raw[labelEnd+1]==='('){const urlEnd=this.raw.indexOf(')',labelEnd+2);if(urlEnd<0){if(this.raw.length<2048&&!final)break;const label=this.raw.slice(1,labelEnd);this.raw='';append(label);this.discardLink=!final;break;}const label=this.raw.slice(1,labelEnd);this.raw=this.raw.slice(urlEnd+1);append(label);this.lineStart=false;continue;}
+        if(labelEnd>=0&&this.raw[labelEnd+1]==='('){const urlEnd=markdownDestinationEnd(this.raw,labelEnd+1);if(urlEnd<0){if(this.raw.length<2048&&!final)break;const label=spokenLinkLabel(this.raw.slice(1,labelEnd));this.raw='';append(label);this.discardLink=!final;break;}const label=spokenLinkLabel(this.raw.slice(1,labelEnd));this.raw=this.raw.slice(urlEnd+1);append(label);this.lineStart=false;continue;}
       }
       const pair={'(' : ')','（':'）','[':']','*':'*'}[this.raw[0]];
       if(pair){const end=this.raw.indexOf(pair,1);if(end>0&&end<=80&&ACTION.test(this.raw.slice(1,end).trim())){this.raw=this.raw.slice(end+1);continue;}if(end<0&&this.raw.length<82&&!final)break;}
@@ -54,7 +69,7 @@ export class SpeakableChunker {
       if(ch==='|'&&!this.inline){this.table=true;this.text='';hint('table');continue;}
       this.lineStart=ch==='\n'||this.lineStart&&/[ 	]/u.test(ch);append(ch);
     }
-    if(final){this.raw='';emit();}return out;
+    if(final){this.raw='';if(this.inline){this.inline=null;hint('code');}emit();}return out;
   }
   flushIdle(now=this.now()){
     if(this.hidden||this.fenced||this.inline||this.url||this.table||this.discardLink)return [];

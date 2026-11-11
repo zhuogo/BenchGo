@@ -32,6 +32,27 @@ async function fixture(t, options = {}) {
 }
 const ref = { adapterId: 'fixture', namespace: 'sample' };
 const set = (field, value) => ({ op: 'set', path: [field], value });
+test('startup and notification bursts observe each namespace without reprojecting the whole directory', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-settings-scale-'));
+  const manager = createSettingsManagement({ directory });
+  t.after(async () => { await manager.close(); await rm(directory, { recursive: true, force: true }); });
+  let listener, descriptions = 0, reads = 0, revision = 0;
+  const rows = Array.from({ length: 40 }, (_, index) => ({ namespace: String(index), risk: 'ordinary', applies: 'live', schema: { type: 'object' } }));
+  const registration = manager.register({ id: 'many',
+    async schema() { descriptions++; if (descriptions === 1) for (const row of rows) listener({ namespace: row.namespace }); return rows; },
+    async read() { reads++; return { value: { revision }, fingerprint: String(revision) }; },
+    async apply() {}, subscribe(callback) { listener = callback; return () => {}; },
+  });
+  await registration.ready; await manager.flush();
+  assert.equal(descriptions, 2, 'initial catalog plus one coalesced official discovery notification');
+  assert.equal(reads, 80);
+  revision++;
+  for (const row of rows) listener({ namespace: row.namespace });
+  await manager.flush();
+  assert.equal(descriptions, 3, 'one catalog for the entire burst');
+  assert.equal(manager.history({ limit: 100 }).length, 40);
+  assert.equal((await manager.read({ adapterId: 'many', namespace: '0' })).value.revision, 1);
+});
 async function prepare(manager, ops, extra = {}) {
   const current = await manager.read(ref);
   return manager.prepare({ ...ref, ops, expectedRevision: current.revision, ...extra }, owner);

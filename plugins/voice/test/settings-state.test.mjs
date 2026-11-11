@@ -53,3 +53,21 @@ test('streaming synthesis protocol switches without changing endpoint or playbac
   assert.deepEqual(voiceSettingsPatch(original, saved), { tts: { protocol: 'speech' } });
   assert.throws(() => voiceSettingsPatch({ ...draft, tts: { ...draft.tts, protocol: 'unknown.speech' } }, original), /显式选择/);
 });
+
+test('conversation model edits preserve media config, exact IDs and explicit clearing', () => {
+  const original = { dictation: true, readAloud: true, call: true, asr: { protocol: 'transcriptions-sse', model: 'ASR/@01' }, tts: { protocol: 'speech-stream', model: 'TTS/@01', voice: 'voice', speed: 1.5 }, conversation: { providerId: 'Cloud/@01', model: 'Exact Model:02' } };
+  assert.deepEqual(voiceSettingsPatch({ ...original, conversation: { ...original.conversation, model: 'Exact Model:03' } }, original), { conversation: { model: 'Exact Model:03' } });
+  assert.deepEqual(voiceSettingsPatch({ ...original, conversation: { providerId: '', model: '' } }, original), { conversation: { providerId: '', model: '' } });
+  assert.deepEqual(voiceSettingsPatch({ ...original, tts: { ...original.tts, speed: 1.65 } }, original), { tts: { speed: 1.65 } });
+  for (const conversation of [{ providerId: 'Cloud/@01', model: '' }, { providerId: '', model: 'Exact Model:02' }]) assert.throws(() => voiceSettingsPatch({ ...original, conversation }, original), /同时选择/);
+  assert.throws(() => voiceSettingsPatch({ ...original, conversation: { providerId: 'Cloud/@01', model: ' Exact Model:02' } }, original), /首尾/);
+});
+
+test('explicit matched protocols preserve opaque selections and omit server detection metadata', () => {
+  const original = { asr: { apiType: '', protocol: '', model: 'Unknown Step/@raw' }, tts: { apiType: '', protocol: '', model: 'TTS/@raw' } };
+  const draft = { ...original, asr: { ...original.asr, resolvedProtocol: 'stepfun-sse', detection: { status: 'supported' } }, tts: { ...original.tts, voice: 'Voice/@raw' } };
+  assert.deepEqual(voiceSettingsPatch(draft, original), { tts: { voice: 'Voice/@raw' } });
+  assert.deepEqual(voiceSettingsPatch({ ...original, asr: { ...original.asr, apiType: 'stepfun', protocol: 'stepfun-sse' } }, original), { asr: { apiType: 'stepfun', protocol: 'stepfun-sse' } });
+  assert.throws(() => voiceSettingsPatch({ ...original, asr: { ...original.asr, apiType: 'unknown' } }, original), /接口类型/);
+  assert.throws(() => voiceSettingsPatch({ ...original, asr: { ...original.asr, protocol: 'auto' } }, original), /显式选择/);
+});

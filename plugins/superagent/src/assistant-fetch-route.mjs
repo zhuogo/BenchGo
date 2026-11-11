@@ -16,7 +16,7 @@ export function registerAssistantFetchRoute({ connection, dispatch }) {
     async fetch(request) {
       try {
         assertSameOrigin(request);
-        return Response.json(await dispatch(await request.json(), connection.browserPeer), {
+        return Response.json(await dispatch(await request.json(), connection.browserPeer, { signal: request.signal }), {
           headers: { 'cache-control': 'no-store' },
         });
       } catch (error) {

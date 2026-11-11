@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>BenchGo · 设备与远程连接架构</title><link rel="stylesheet" href="../_assets/architecture.css"></head>
+<body><main aria-label="BenchGo 设备与远程连接架构">
+<header class="header"><div class="brand"><a class="brand-mark" href="../总架构.html" aria-label="BenchGo 总架构" style="text-decoration:none">B</a><div><div class="eyebrow">BENCHGO / REMOTE / LINK</div><h1>设备与远程连接<span>架构图解</span></h1></div></div><div class="header-actions"><button type="button" class="btn" id="directory-toggle" aria-expanded="false" aria-controls="directory">☷ <span class="directory-label">节点</span>目录</button><button type="button" class="btn outline" id="walk-start" aria-pressed="false">流程走读 ↗</button></div></header>
+<nav class="tabs" aria-label="架构板块"><a href="../总架构.html"><span class="tab-index">◎</span>总架构</a><a href="架构.html" aria-current="page"><span class="tab-index">01</span>设备与远程连接</a><a href="../02-工作台与Agent/架构.html"><span class="tab-index">02</span>工作台与 Agent</a><a href="../03-实时语音/架构.html"><span class="tab-index">03</span>实时语音</a><a href="../04-模型与工具/架构.html"><span class="tab-index">04</span>模型与工具</a><a href="../05-更新与发布/架构.html"><span class="tab-index">05</span>更新与发布</a><a href="../06-superagent/架构.html"><span class="tab-index">06</span>SuperAgent</a></nav>
+<div class="viewport" id="viewport" tabindex="0" aria-label="架构画布：拖动空白平移，滚轮或双指缩放，拖动节点调整布局，点击节点查看源码。方向键平移，加减号缩放，零适应。"><div class="load-state" id="load-state" role="status"><strong id="load-title">正在展开架构图</strong><p id="load-message">如果画布未出现，请确认 _assets 目录与 HTML 一同保留。</p><button type="button" class="btn outline" id="retry" hidden onclick="location.reload()">重新加载</button></div><div class="world" id="world"><div class="canvas-title"><div><h2 id="canvas-title"></h2><p id="canvas-subtitle"></p></div><span class="sheet-no" id="sheet-no"></span></div><div id="zones"></div><svg class="edges" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--edge)"/></marker><marker id="arrow-feedback" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--accent)"/></marker></defs><g id="edge-paths"></g><g id="edge-labels"></g></svg><div id="nodes"></div></div></div>
+<div class="canvas-bottom"><div><div class="legend"><span><i></i>调用 / 依赖</span><span><i class="feedback"></i>反馈 / 记录</span><span><i class="support"></i>配置 / 装配</span><span>虚线边框 · 设计目标</span></div><p class="hint">拖动平移 · 滚轮缩放 · 拖动节点 · 点击查看说明与源码</p></div><div class="camera-controls" aria-label="画布控制"><button type="button" class="btn icon" id="zoom-out" aria-label="缩小">−</button><span class="zoom-value" id="zoom-value">100%</span><button type="button" class="btn icon" id="zoom-in" aria-label="放大">+</button><span class="separator"></span><button type="button" class="btn" id="fit">适应</button><button type="button" class="btn" id="actual">1:1</button><span class="separator"></span><button type="button" class="btn" id="reset">重置</button></div></div>
+<aside class="panel detail" id="detail" aria-label="节点详情" hidden><div class="panel-top"><span class="tag" id="detail-tag"></span><button type="button" class="btn icon" id="detail-close" aria-label="关闭节点详情">×</button></div><h2 id="detail-title"></h2><p class="plain" id="detail-plain"></p><div class="detail-links" id="detail-links"></div><div class="detail-block"><h3>它负责什么</h3><p id="detail-role"></p></div><div class="detail-block"><h3>输入与输出</h3><div class="io"><b>输入</b><span id="detail-input"></span></div><div class="io"><b>输出</b><span id="detail-output"></span></div></div><div class="detail-block"><h3>对应源码</h3><div id="detail-sources"></div></div><p class="notice" id="detail-note"></p></aside>
+<aside class="panel directory" id="directory" aria-label="节点与文档目录" hidden><div class="panel-top"><h2 style="font-size:17px">节点目录</h2><button type="button" class="btn icon" id="directory-close" aria-label="关闭节点目录">×</button></div><input class="search" id="search" type="search" placeholder="搜索名称、服务或函数" aria-label="搜索架构节点"><div class="directory-list" id="directory-list"></div><div class="empty" id="search-empty" hidden><div class="empty-mark">⌕</div><strong>没有匹配的节点</strong><p>试试模块名称或清空关键词。</p><button type="button" class="btn primary" id="clear-search">显示全部节点</button></div><div class="detail-block"><h3>阅读设计</h3><div id="design-links"></div></div><p class="notice" id="boundary"></p></aside>
+<section class="walkthrough" id="walkthrough" aria-label="架构流程走读" aria-live="polite" hidden><div class="step-top"><span id="step-label"></span><button type="button" class="btn icon" id="walk-exit" aria-label="退出流程走读">×</button></div><h3 id="step-title"></h3><p id="step-text"></p><div class="walk-controls"><button type="button" class="btn" id="walk-prev">← 上一步</button><button type="button" class="btn primary" id="walk-next">下一步 →</button></div><div class="progress"><span id="step-progress"></span></div></section>
+<noscript><div class="load-state"><strong>需要 JavaScript 展开交互图</strong><p>请启用 JavaScript，或直接阅读同目录中的设计 Markdown。</p></div></noscript>
+</main><script type="application/json" id="architecture-data">{
+  "id": "01",
+  "title": "设备与远程连接",
+  "eyebrow": "REMOTE / LINK",
+  "subtitle": "Link 把可信设备接入目标主机的同一套工作台；优先直连，网络不可达时按优先级经自托管中继连接。",
+  "boundary": "图中实线表示已有源码机制，不代表公网或真机验收通过。家庭 NAT、蜂窝网络、Android、ACME 与首次 SSH 部署仍需实测；公共中继控制面、区域调度为后续目标。当前源码仍装配 cloud-access，设计要求的默认入口收敛尚不能标为完成。",
+  "nodes": [
+    {
+      "id": "entry",
+      "title": "设备中心与客户端",
+      "kicker": "DEVICE ENTRY",
+      "kind": "orchestration",
+      "sub": "保存设备、扫码配对、打开远程工作台",
+      "symbol": "DeviceCenter",
+      "plain": "先选要连接的电脑，再进入它自己的工作台。",
+      "role": "设备页呈现本机连接管理、设备目录与中继池；独立 Link 页面与 Android 壳复用网页入口。",
+      "input": "设备选择、配对地址或 SSH 部署参数",
+      "output": "设备操作与工作台打开请求",
+      "sources": [
+        "plugins/link/client/device-center.jsx",
+        "plugins/link/client/app.jsx",
+        "plugins/link/client/device-launcher.jsx"
+      ],
+      "note": "手机是客户端；主机任务和会话不迁移到手机。",
+      "state": "implemented",
+      "x": 60,
+      "y": 160
+    },
+    {
+      "id": "center",
+      "title": "设备操作协调",
+      "kicker": "DEVICE CENTER",
+      "kind": "orchestration",
+      "sub": "统一配对、选路、代理与部署操作",
+      "symbol": "createDeviceCenter()",
+      "plain": "把一次“打开设备”拆成验证与连接步骤。",
+      "role": "协调设备目录、待批准配对、代理实例和服务器管理；为设备中心生成短时进入票据，关闭时释放连接。",
+      "input": "pair / pairStatus / select / sshConnect 等操作",
+      "output": "设备状态、代理入口或部署任务",
+      "sources": [
+        "plugins/link/src/devices/center.mjs"
+      ],
+      "note": "owner 管理能力按 hostAdmin 能力开放，不能由远端设备授权替代。",
+      "state": "implemented",
+      "x": 440,
+      "y": 160
+    },
+    {
+      "id": "pair",
+      "title": "单次配对与批准",
+      "kicker": "PAIRING / TRUST",
+      "kind": "orchestration",
+      "sub": "短期配对 → 主机批准 → 独立凭据",
+      "symbol": "openStore() · begin / decide",
+      "plain": "扫码只发出申请，目标主机批准后才获得凭据。",
+      "role": "配对码保存摘要、五分钟过期且使用即删除；批准时生成设备凭据，主机只持有 tokenHash，并持久化授权。",
+      "input": "配对码、客户端名称、主机批准",
+      "output": "设备 ID 与设备独立 token",
+      "sources": [
+        "plugins/link/src/pairing/store.mjs",
+        "plugins/link/src/transport/server.mjs"
+      ],
+      "note": "配对码不是全球设备定位服务；owner、设备、中继凭据相互独立。",
+      "state": "implemented",
+      "x": 820,
+      "y": 160
+    },
+    {
+      "id": "tls",
+      "title": "主机 TLS 身份",
+      "kicker": "TLS / SPKI",
+      "kind": "execution",
+      "sub": "固定密钥、公钥指纹与 HTTPS 监听",
+      "symbol": "loadIdentity() · listen()",
+      "plain": "认准这台主机，再把数据交给它。",
+      "role": "持久化 TLS 密钥与证书，检查私钥匹配和证书期限，计算真实 SPKI 指纹；Link 监听使用该身份。",
+      "input": "主机 identity 文件与监听配置",
+      "output": "HTTPS 入口和可供配对绑定的 pin",
+      "sources": [
+        "plugins/link/src/transport/tls.mjs",
+        "plugins/link/src/transport/server.mjs"
+      ],
+      "note": "原生固定指纹与普通浏览器系统 CA 的信任方式不同，不能混为一谈。",
+      "state": "implemented",
+      "x": 1200,
+      "y": 160
+    },
+    {
+      "id": "registry",
+      "title": "设备目录与可信路线",
+      "kicker": "DEVICE REGISTRY",
+      "kind": "orchestration",
+      "sub": "受限文件保存身份、凭据和候选路线",
+      "symbol": "openDeviceRegistry()",
+      "plain": "把设备记下来，下一次连接不再重复批准。",
+      "role": "connections.json 以受限权限原子写入；保存设备凭据、直连 pin 与中继优先级，重启后重置临时在线状态。",
+      "input": "批准结果、设备名称、可信路线",
+      "output": "可再次打开的设备记录与脱敏列表",
+      "sources": [
+        "plugins/link/src/devices/registry.mjs",
+        "plugins/link/src/devices/center.mjs"
+      ],
+      "note": "地址属于路线；持久化设备记录不能证明当前在线。",
+      "state": "implemented",
+      "x": 1200,
+      "y": 450
+    },
+    {
+      "id": "route",
+      "title": "直连优先与有限回退",
+      "kicker": "ROUTE SELECTION",
+      "kind": "execution",
+      "sub": "直连 → 有序中继；失败节点冷却",
+      "symbol": "selectRoute() · orderRoutes()",
+      "plain": "先试直连，不通再试已信任的中继。",
+      "role": "只从保存的配对候选选路；直连先行，中继按用户优先级排序，网络不可达时继续；失败中继冷却十秒。",
+      "input": "设备记录与候选路线",
+      "output": "经探测选出的 HTTPS 目标",
+      "sources": [
+        "plugins/link/src/devices/routes.mjs",
+        "plugins/link/src/devices/remote.mjs"
+      ],
+      "note": "证书、身份和 401/403 错误立即停止；选路发生在发送业务请求之前。",
+      "state": "implemented",
+      "x": 820,
+      "y": 450
+    },
+    {
+      "id": "proxy",
+      "title": "客户端工作台代理",
+      "kicker": "CLIENT PROXY",
+      "kind": "execution",
+      "sub": "兑换工作台会话并代理页面与流量",
+      "symbol": "createDeviceProxy()",
+      "plain": "连接建立后，把远端工作台放进当前客户端。",
+      "role": "为选中的可信目标创建代理；使用设备凭据取得远程工作台会话，管理入口票据、资源转发、流和断开清理。",
+      "input": "选中路线、设备 token、父页面来源",
+      "output": "客户端可打开的工作台地址",
+      "sources": [
+        "plugins/link/src/devices/proxy.mjs",
+        "plugins/link/client/workbench-bridge.mjs"
+      ],
+      "note": "切换路线会重建不匹配的代理实例；不能任意指定上游 URL。",
+      "state": "implemented",
+      "x": 440,
+      "y": 450
+    },
+    {
+      "id": "workbench",
+      "title": "受保护的远程工作台",
+      "kicker": "REMOTE WORKBENCH",
+      "kind": "execution",
+      "sub": "Cookie 保护官方页面、API 与 Gateway",
+      "symbol": "createWorkbench()",
+      "plain": "看到的是目标主机原有工作台，数据仍在主机。",
+      "role": "通过设备授权创建 HttpOnly / Secure / SameSite=Strict 会话；复用已安装官方前端与连接 peer，承载资源、API、事件流及实时语音。",
+      "input": "已批准设备凭据或有效工作台 Cookie",
+      "output": "同一工作台页面、API、Gateway 与语音流",
+      "sources": [
+        "plugins/link/src/transport/workbench.mjs"
+      ],
+      "note": "撤销设备会使会话失效并关闭对应 peer、事件流与语音连接。",
+      "state": "implemented",
+      "x": 60,
+      "y": 450
+    },
+    {
+      "id": "sessions",
+      "title": "官方与原生会话适配",
+      "kicker": "SESSION ADAPTER",
+      "kind": "execution",
+      "sub": "读写真实会话，按需探测业务服务",
+      "symbol": "createSessionAdapter() / createNativeAdapter()",
+      "plain": "远程操作回到主机上的真实会话。",
+      "role": "适配官方会话与 commander 原生会话，转换列表、消息和交互回答；Link 本身不承担模型推理。",
+      "input": "工作台/RPC 会话操作和交互回答",
+      "output": "官方服务结果、原生会话结果或明确不可用",
+      "sources": [
+        "plugins/link/src/session/adapter.mjs",
+        "plugins/link/src/session/native.mjs"
+      ],
+      "note": "Link 独立启停，不硬依赖 Harness 聚合或 SuperAgent；相关服务缺失时按实际能力返回。",
+      "state": "implemented",
+      "x": 60,
+      "y": 740
+    },
+    {
+      "id": "relayhost",
+      "title": "主机主动连出",
+      "kicker": "OUTBOUND TUNNEL",
+      "kind": "execution",
+      "sub": "主机向中继建立受控 TLS 通道",
+      "symbol": "createRelayHost()",
+      "plain": "没有入站路线时，让主机主动连接你的中继。",
+      "role": "验证中继 HTTPS origin 与主机接入凭据；上游固定为本机 HTTPS loopback 加 SPKI，建立控制/数据通道并处理心跳、退避、背压。",
+      "input": "中继 URL、主机密钥、本机 Link pin",
+      "output": "可由中继承载的工作台流量",
+      "sources": [
+        "plugins/link/src/transport/relay-host.mjs",
+        "plugins/link/src/index.mjs"
+      ],
+      "note": "同一主机可接入多个已配置节点；不开放通用 TCP 或任意上游。",
+      "state": "implemented",
+      "x": 440,
+      "y": 740
+    },
+    {
+      "id": "relay",
+      "title": "独立自托管中继",
+      "kicker": "SELF-HOSTED RELAY",
+      "kind": "execution",
+      "sub": "登记主机、校验通道、白名单转发",
+      "symbol": "createRelayServer() · relayPathAllowed()",
+      "plain": "中继负责搬运已允许的工作台流量。",
+      "role": "分离控制和数据通道；校验登记主机、方法与路径，阻止 owner/admin 管理路由，转发 HTTP、事件流和允许的 WebSocket。",
+      "input": "客户端工作台请求与已认证主机隧道",
+      "output": "到目标 Link 的受控转发",
+      "sources": [
+        "plugins/link/src/transport/relay-server.mjs",
+        "plugins/link/src/transport/relay-protocol.mjs",
+        "packages/benchgo-relay/src/cli.mjs"
+      ],
+      "note": "独立 benchgo-relay 安装包；TLS 在中继终止，不宣称端到端加密。",
+      "state": "implemented",
+      "x": 820,
+      "y": 740
+    },
+    {
+      "id": "ssh",
+      "title": "SSH 部署与证书运维",
+      "kicker": "DEPLOYMENT BRANCH",
+      "kind": "finish",
+      "sub": "先确认指纹，再部署并验证工作台",
+      "symbol": "createServerManager() · deployRelay()",
+      "plain": "设备中心也能把工作台或中继部署到服务器。",
+      "role": "确认 SSH 指纹后认证；上传固定种子、安装服务、建立隧道并验证工作台；中继分支管理 TLS、部署与诊断。",
+      "input": "已确认 SSH 身份、认证信息、部署选项",
+      "output": "服务器设备记录或自托管中继节点",
+      "sources": [
+        "plugins/link/src/server/manager.mjs",
+        "plugins/link/src/server/relay-deployment.mjs",
+        "scripts/server/bootstrap.mjs"
+      ],
+      "note": "已有部署代码；公网签发/续期、反代复用、首次部署和 NPM 分发仍需环境验收。",
+      "state": "partial",
+      "x": 1200,
+      "y": 740
+    }
+  ],
+  "edges": [
+    {
+      "a": "entry",
+      "b": "center",
+      "label": "设备操作",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "center",
+      "b": "pair",
+      "label": "首次配对",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "tls",
+      "b": "pair",
+      "label": "绑定主机身份",
+      "from": "l",
+      "to": "r",
+      "kind": "support"
+    },
+    {
+      "a": "pair",
+      "b": "registry",
+      "label": "批准后保存",
+      "from": "b",
+      "to": "t"
+    },
+    {
+      "a": "registry",
+      "b": "route",
+      "label": "读取可信路线",
+      "from": "l",
+      "to": "r"
+    },
+    {
+      "a": "route",
+      "b": "proxy",
+      "label": "可用目标",
+      "from": "l",
+      "to": "r"
+    },
+    {
+      "a": "proxy",
+      "b": "workbench",
+      "label": "设备凭据换会话",
+      "from": "l",
+      "to": "r"
+    },
+    {
+      "a": "workbench",
+      "b": "sessions",
+      "label": "会话与交互",
+      "from": "b",
+      "to": "t"
+    },
+    {
+      "a": "route",
+      "b": "relay",
+      "label": "中继候选",
+      "from": "b",
+      "to": "t",
+      "kind": "support"
+    },
+    {
+      "a": "relayhost",
+      "b": "relay",
+      "label": "主机主动接入",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "relayhost",
+      "b": "workbench",
+      "label": "固定本机上游",
+      "from": "l",
+      "to": "b",
+      "kind": "support"
+    },
+    {
+      "a": "center",
+      "b": "ssh",
+      "label": "独立部署支路",
+      "from": "b",
+      "to": "t",
+      "kind": "support"
+    },
+    {
+      "a": "ssh",
+      "b": "registry",
+      "label": "验证后登记",
+      "from": "t",
+      "to": "b",
+      "kind": "feedback"
+    }
+  ],
+  "steps": [
+    {
+      "node": "entry",
+      "title": "从另一台设备打开主机",
+      "text": "在设备中心添加电脑，粘贴主机生成的配对信息；示例只解释机制，不真的建立连接。"
+    },
+    {
+      "node": "pair",
+      "title": "在主机批准申请",
+      "text": "短期单次配对码产生申请，主机批准后签发独立设备凭据；扫码本身不授予权限。",
+      "edge": 1
+    },
+    {
+      "node": "registry",
+      "title": "保存设备和可信路线",
+      "text": "客户端保存凭据与配对提供的直连指纹、中继路线；再次连接直接使用该设备记录。",
+      "edge": 3
+    },
+    {
+      "node": "route",
+      "title": "先验证直连",
+      "text": "从可信候选先试直连，再按优先级试中继；网络故障才回退，证书或授权错误立即报告。",
+      "edge": 4
+    },
+    {
+      "node": "relay",
+      "title": "必要时经过自己的中继",
+      "text": "主机已主动连出到中继，中继只转发允许的工作台路径，最终仍进入目标主机 Link。",
+      "edge": 8
+    },
+    {
+      "node": "workbench",
+      "title": "进入同一套工作台",
+      "text": "设备凭据兑换受保护 Cookie，会话、API 和 Gateway 均指向目标主机，任务继续在主机执行。",
+      "edge": 6
+    },
+    {
+      "node": "sessions",
+      "title": "断线与撤销有明确归属",
+      "text": "断线释放流资源；主机撤销设备会清除凭据对应会话并关闭 peer。重新连接不得凭地址绕过身份验证。",
+      "edge": 7
+    }
+  ],
+  "docs": [
+    {
+      "label": "设备连接设计",
+      "path": "docs/01-设备与远程连接/设计.md"
+    },
+    {
+      "label": "自建中继",
+      "path": "docs/01-设备与远程连接/自建中继.md"
+    },
+    {
+      "label": "Link 接口契约",
+      "path": "plugins/link/openapi.json"
+    }
+  ],
+  "version": "2026-11-11-1"
+}</script><script src="../_assets/architecture.js"></script></body></html>

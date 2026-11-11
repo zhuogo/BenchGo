@@ -305,6 +305,37 @@ test('updates migrated runtime exports while preserving installed metadata and c
   assert.equal(await realpath(require.resolve('benchgo-plugin/runtime')), await realpath(join(setup.target, 'lib/modules/harness/src/runtime.mjs')));
 });
 
+test('refreshes stale wrapper display locales from the plugin source without changing bundle identity', async t => {
+  const setup = await fixture(t);
+  for (const language of ['en', 'zh-CN']) {
+    for (const base of [setup.source, setup.target, setup.wrapper]) {
+      await mkdir(join(base, 'locale'), { recursive: true });
+      await writeFile(join(base, `locale/${language}.json`), JSON.stringify({ meta: { title: base === setup.source ? 'BenchGo' : language === 'en' ? 'Base' : '基础层' } }));
+    }
+  }
+  const original = JSON.parse(await readFile(join(setup.wrapper, 'package.json'), 'utf8'));
+  original.displayName = 'Base'; original.custom = 'preserve';
+  await writeFile(join(setup.wrapper, 'package.json'), JSON.stringify(original));
+  await syncDevelopmentPlugin(setup);
+  for (const base of [setup.target, setup.wrapper]) for (const language of ['en', 'zh-CN']) {
+    assert.equal(JSON.parse(await readFile(join(base, `locale/${language}.json`), 'utf8')).meta.title, 'BenchGo');
+  }
+  const updated = JSON.parse(await readFile(join(setup.wrapper, 'package.json'), 'utf8'));
+  assert.equal(updated.name, original.name);
+  assert.equal(updated.displayName, 'BenchGo');
+  assert.equal(updated.custom, 'preserve');
+});
+
+test('rejects a wrapper locale junction before any synchronization writes', async t => {
+  const setup = await fixture(t), external = join(setup.root, 'external-locales');
+  await mkdir(external);
+  await writeFile(join(external, 'en.json'), '{"meta":{"title":"external"}}');
+  await symlink(external, join(setup.wrapper, 'locale'), process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(syncDevelopmentPlugin(setup), /符号链接/);
+  assert.equal(await readFile(join(setup.target, 'lib/client.js'), 'utf8'), 'old seed');
+  assert.equal(await readFile(join(external, 'en.json'), 'utf8'), '{"meta":{"title":"external"}}');
+});
+
 test('mirrors owned source and generated trees and removes obsolete modules while preserving user and seed files', async t => {
   const setup = await fixture(t);
   const stale = ['agents/runtime.mjs', 'autoagent/src/service.mjs', 'voice/src/plugin.mjs', 'src/deleted.mjs', 'shared/deleted.mjs', 'locale/deleted.json', 'lib/deleted.mjs', 'lib/modules/harness/src/deleted.mjs', 'lib/link-web/deleted.js'];

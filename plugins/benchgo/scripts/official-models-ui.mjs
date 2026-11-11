@@ -8,6 +8,7 @@ const selector = fileURLToPath(new URL('../client/provider-settings.jsx', import
 const reasoningEditor = fileURLToPath(new URL('../client/model-reasoning.jsx', import.meta.url));
 const reasoningState = fileURLToPath(new URL('../client/model-reasoning-state.mjs', import.meta.url));
 const profileMatch = fileURLToPath(new URL('../client/model-profile.jsx', import.meta.url));
+const loading = fileURLToPath(new URL('../../shared/client/ui/loading.jsx', import.meta.url));
 const once = (source, before, after, label) => {
   if (source.split(before).length !== 2) throw new Error('Official Models UI changed: ' + label);
   return source.replace(before, after);
@@ -19,8 +20,9 @@ export function officialModelsUi() {
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]ModelsSection\.tsx$/ }, async args => {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
       source = 'import { ProviderSelect, ProviderBrandIcon, routerGo } from ' + JSON.stringify(selector) + ';\n' + source;
+      source = 'import { Loading } from ' + JSON.stringify(loading) + ';\n' + source;
       source = once(source, "displayName: t('deepSeekAccount') } } : row) }", "displayName: t('deepSeekAccount') } } : row.entry.provider === routerGo.id ? { ...row, entry: { ...row.entry, displayName: routerGo.name } } : row) }", 'builtin provider display name');
-      source = once(source, "        <p className={styles['intro']}>{t('intro')}</p>\n      </div>\n    )\n  }", "        <p className={styles['intro']}>{t('intro')}</p>\n        <p role=\"status\" aria-live=\"polite\"><span className={styles['buttonSpinner']} aria-hidden=\"true\" /> 正在加载供应商与模型…</p>\n      </div>\n    )\n  }", 'initial models loading');
+      source = once(source, "        <p className={styles['intro']}>{t('intro')}</p>\n      </div>\n    )\n  }", "        <p className={styles['intro']}>{t('intro')}</p>\n        <Loading label=\"正在加载供应商与模型…\" />\n      </div>\n    )\n  }", 'initial models loading');
       source = once(source, "const [addMode, setAddMode] = useState<AddMode>('catalog')", "const [addMode, setAddMode] = useState<AddMode>('catalog')\n  const [providerPreset, setProviderPreset] = useState<any>(undefined)", 'preset state');
       const start = source.indexOf('                      <select\n');
       const end = source.indexOf('                      </select>', start);
@@ -161,7 +163,24 @@ export function officialModelsUi() {
       const module = { exports: {} }; new Function('module', 'exports', js.text)(module, module.exports);
       const spinner = '.buttonSpinner{display:inline-block;vertical-align:middle;margin-right:7px;width:12px;height:12px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:commander-button-spin .7s linear infinite}@keyframes commander-button-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.buttonSpinner{animation:none}}';
       module.exports.default.buttonSpinner = 'buttonSpinner';
-      return { loader: 'js', contents: 'const id="commander-official-models-style"; if (!document.getElementById(id)) { const style=document.createElement("style"); style.id=id; style.textContent=' + JSON.stringify(css.text + spinner) + '; document.head.append(style); } export default ' + JSON.stringify(module.exports.default) + ';' };
+      return { loader: 'js', contents: `
+        export function mountOfficialModelsStyle() {
+          const id = 'commander-official-models-style';
+          let style = document.getElementById(id);
+          if (!style) { style = document.createElement('style'); style.id = id; document.head.append(style); }
+          style.textContent = ${JSON.stringify(css.text + spinner)};
+          style.dataset.users = String(Number(style.dataset.users || 0) + 1);
+          let active = true;
+          return () => {
+            if (!active) return;
+            active = false;
+            const users = Math.max(0, Number(style.dataset.users || 1) - 1);
+            style.dataset.users = String(users);
+            if (!users) style.remove();
+          };
+        }
+        export default ${JSON.stringify(module.exports.default)};
+      ` };
     });
   } };
 }

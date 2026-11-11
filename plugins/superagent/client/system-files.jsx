@@ -13,7 +13,9 @@ const fileType = entry => entry.type === 'directory' ? '文件夹' : entry.name.
 
 export function SystemFiles({ api, onPreviewChange }) {
   const [path, setPath] = useState(''), [revision, setRevision] = useState(0), [listing, setListing] = useState(null), [filter, setFilter] = useState('');
-  const [selected, setSelected] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [selected, setSelected] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [opening, setOpening] = useState(false), [openError, setOpenError] = useState('');
+  const openRequest = useRef(null);
+  useEffect(() => () => openRequest.current?.abort(), []);
   const originButton = useRef(null), scrollPosition = useRef(0), root = useRef(null);
   const directoryViews = useRef(new Map()), loadedPath = useRef(null), restoreView = useRef(false);
   useEffect(() => { if (selected) root.current?.closest('.ba-studio-body')?.scrollTo({ top: 0 }); }, [selected]);
@@ -25,6 +27,7 @@ export function SystemFiles({ api, onPreviewChange }) {
   function navigate(next, focusPath) {
     if (next === path) return;
     directoryViews.current.set(path, { filter, top: root.current?.closest('.ba-studio-body')?.scrollTop || 0, focusPath });
+    setOpenError(''); openRequest.current?.abort(); setOpening(false);
     setPath(next);
   }
   useEffect(() => {
@@ -52,6 +55,14 @@ export function SystemFiles({ api, onPreviewChange }) {
     if (button) { originButton.current = button; scrollPosition.current = root.current?.closest('.ba-studio-body')?.scrollTop || 0; }
     setSelected(entry);
   }
+  async function openDirectory() {
+    if (opening || !listing?.desktop?.available || listing.path !== path) return;
+    const controller = new AbortController(); openRequest.current?.abort(); openRequest.current = controller;
+    setOpening(true); setOpenError('');
+    try { const result = await api('systemFiles', { op: 'openDirectory', path: listing.path }, controller.signal); if (result?.opened !== true) throw new Error('无法确认文件夹已打开，请重试。'); }
+    catch (cause) { if (!controller.signal.aborted) setOpenError(cause.message || '无法打开文件夹，请重试。'); }
+    finally { if (openRequest.current === controller && !controller.signal.aborted) setOpening(false); }
+  }
   const parts = path.split('/').filter(Boolean);
   const entries = (listing?.entries || []).filter(entry => entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()));
   const folders = entries.filter(entry => entry.type === 'directory'), files = entries.filter(entry => entry.type !== 'directory');
@@ -65,8 +76,9 @@ export function SystemFiles({ api, onPreviewChange }) {
         <nav className="ba-system-breadcrumb" aria-label="文件路径"><Button variant="ghost" type="button" onClick={() => navigate('')} aria-current={!path ? 'location' : undefined} aria-label="根目录"><UIIcon name="folder" size={16} />配置区</Button>{parts.map((part, index) => <React.Fragment key={`${part}-${index}`}><span aria-hidden="true">/</span><Button variant="ghost" type="button" aria-current={index === parts.length - 1 ? 'location' : undefined} onClick={() => navigate(parts.slice(0, index + 1).join('/'))}>{part}</Button></React.Fragment>)}</nav>
         <span className="ba-system-count" role="status" aria-live="polite">{busy ? '正在读取…' : listing ? count : ''}</span>
         <label className="ba-system-search"><UIIcon name="search" size={16} /><span>筛选</span><input type="search" aria-label="筛选当前目录文件" placeholder="查找当前目录" value={filter} onChange={event => setFilter(event.target.value)} /></label>
-        <Button variant="outline" type="button" className="ba-system-refresh" aria-label="刷新系统文件" disabled={loading} onClick={() => setRevision(value => value + 1)}><UIIcon name="refresh" size={16} />{busy && listing ? '刷新中…' : error ? '重试' : '刷新'}</Button>
+        <div className="ba-system-tools"><Tooltip label={busy ? '正在刷新' : error ? '重试读取' : '刷新'}><Button variant="ghost" size="icon" type="button" className="ba-system-refresh" aria-label="刷新系统文件" aria-busy={busy} disabled={loading} onClick={() => setRevision(value => value + 1)}><UIIcon name="refresh" size={16} /></Button></Tooltip><Tooltip label={loading ? '正在读取当前目录' : opening ? '正在打开文件夹' : listing?.desktop?.available ? '在文件管理器中打开当前目录' : '当前服务无法打开本地文件夹'}><Button variant="ghost" size="icon" type="button" className="ba-system-open-directory" aria-label="打开当前文件夹" aria-busy={opening} disabled={loading || opening || !listing?.desktop?.available || listing.path !== path} onClick={openDirectory}><UIIcon name="folderOpen" size={17} /></Button></Tooltip></div>
       </div>
+      {openError && <p className="ba-system-open-error" role="alert">{openError} <Button variant="link" size="sm" type="button" disabled={opening} onClick={openDirectory}>重试打开</Button></p>}
       {error && <div className="ba-system-error" role="alert"><UIIcon name="close" size={20} /><div><strong>暂时无法读取此目录</strong><p>{error}{listing ? '。已保留上次读取的文件，请在工具栏重试。' : '。请在工具栏重试。'}</p></div></div>}
       <div className="ba-system-list" role="region" aria-label="目录内容" aria-busy={loading}>
         {loading && !listing && <Loading className="ba-system-loading" label="正在读取文件…" />}

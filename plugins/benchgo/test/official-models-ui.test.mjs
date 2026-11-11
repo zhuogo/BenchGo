@@ -80,6 +80,26 @@ test('official Models CSS remains a scoped module rather than a text export', as
   assert(contents.includes('"addModes":'));
 });
 
+test('official Models stylesheet restores on dependency reactivation and supports overlapping owners', async () => {
+  const { contents } = await transform('ModelsSection.module.css');
+  const sheets = new Map(), module = { exports: {} };
+  const document = {
+    getElementById: id => sheets.get(id),
+    createElement: () => ({ dataset: {}, remove() { sheets.delete(this.id); } }),
+    head: { append(style) { sheets.set(style.id, style); } },
+  };
+  runInNewContext(transformSync(contents, { loader: 'js', format: 'cjs' }).code, { module, exports: module.exports, document });
+  assert.equal(sheets.size, 0, 'module import alone does not own a stylesheet');
+  const first = module.exports.mountOfficialModelsStyle(), second = module.exports.mountOfficialModelsStyle();
+  assert.equal(sheets.size, 1);
+  assert.equal(sheets.values().next().value.dataset.users, '2');
+  first(); first(); assert.equal(sheets.size, 1);
+  second(); assert.equal(sheets.size, 0);
+  const again = module.exports.mountOfficialModelsStyle();
+  assert.equal(sheets.size, 1, 'same cached module restores the removed stylesheet');
+  again(); assert.equal(sheets.size, 0);
+});
+
 test('Harness applicability is first in the official editor and saves only after official commit', async () => {
   for (const filename of ['ProviderEditor.tsx', 'CustomProviderCard.tsx']) {
     const path = new URL(filename, upstream), original = await readFile(path, 'utf8');

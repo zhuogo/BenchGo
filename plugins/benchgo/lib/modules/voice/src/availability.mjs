@@ -1,13 +1,10 @@
 import { VoiceError, validateRealtime } from './config.mjs';
 import { callStreamingReason } from './call-streaming.mjs';
-
-const protocols = {
-  asr: ['transcriptions', 'transcriptions-sse', 'openai-websocket'],
-  tts: ['speech', 'speech-stream'],
-};
+import { prepareConversationCall } from './conversation-model.mjs';
+import { protocolDescriptor } from '../shared/protocol-catalog.mjs';
 
 /** Resolve the request route without probing the provider or changing model IDs. */
-export async function resolveVoiceProvider(store, kind, providers) {
+export async function resolveVoiceProvider(store, kind, providers, { allowUnmatched = false } = {}) {
   const value = structuredClone(store.value[kind]);
   if (value.providerId) {
     if (!providers) throw new VoiceError('模型供应商服务尚未就绪', 409);
@@ -21,13 +18,15 @@ export async function resolveVoiceProvider(store, kind, providers) {
   let endpoint;
   try { endpoint = new URL(value.baseURL); } catch { throw new VoiceError('模型服务地址不可用，请检查语音设置', 409); }
   if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new VoiceError('模型服务地址不可用，请检查语音设置', 409);
-  if (value.protocol && !protocols[kind].includes(value.protocol)) throw new VoiceError(`Unknown ${kind.toUpperCase()} protocol`, 409);
+  if (!value.protocol || value.protocol === 'auto') {
+    if (!allowUnmatched) throw new VoiceError('请在语音设置中点击“自动匹配”并保存明确协议，或手动选择协议。', 409, 'voice_protocol_unselected');
+  } else if (!protocolDescriptor(kind, value.protocol)) throw new VoiceError(`Unknown ${kind.toUpperCase()} protocol`, 409);
   if (kind === 'asr' && value.realtime) value.realtime = validateRealtime(value.realtime, value.apiKey);
   return value;
 }
 
 /** Public config and assistant capabilities use the same request route resolver. */
-export async function voiceSnapshot(store, providers) {
+export async function voiceSnapshot(store, providers, llm) {
   const config = store.snapshot();
   await Promise.all(['asr', 'tts'].map(async kind => {
     try {
@@ -40,6 +39,10 @@ export async function voiceSnapshot(store, providers) {
       if (config[kind].providerId) config[kind].baseURL = '';
     }
   }));
+  if (config.conversation?.configured && llm) {
+    try { await prepareConversationCall(llm, config.conversation, AbortSignal.timeout(12000)); }
+    catch (error) { config.conversation.configured = false; config.conversation.unavailableReason = error instanceof VoiceError ? error.message : '通话交互模型不可用，请检查所选供应商、模型与凭据'; }
+  }
   return config;
 }
 

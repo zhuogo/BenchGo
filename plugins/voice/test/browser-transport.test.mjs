@@ -8,7 +8,7 @@ for (const protocol of ['transcriptions', 'transcriptions-sse', 'openai-websocke
   for (const mode of ['dictation', 'call']) {
     test(`${mode} ${protocol} preserves the browser fetch receiver`, async t => {
       const calls = [], captures = [], queues = [];
-      const config = { dictation: true, call: true, readAloud: true, asr: { configured: true, protocol }, tts: { configured: true } };
+      const config = { dictation: true, call: true, readAloud: true, asr: { configured: true, protocol }, tts: { configured: true, protocol: 'speech' } };
 
       const encode = event => new TextEncoder().encode(JSON.stringify(event) + '\n');
       t.mock.method(globalThis, 'fetch', function (url, options) {

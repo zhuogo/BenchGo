@@ -29,12 +29,13 @@ async function fixture(t) {
   await writeFile(join(directory, 'cordis.yml'), '[]\n');
   const profile = { name: 'test', startedBundles: ['test-settings-bundle'], dir: directory,
     patchPath: join(directory, 'cordis.patch.yml'), installAnchor: join(home, 'package.json'), cwd: home, home, overlays: [], telemetryDisabledEnv: undefined };
-  let consumer, mounts = 0, ownedAdapter;
+  let consumer, mounts = 0, ownedAdapter, projections = 0;
   const Probe = { Config: Schema.object({ ordinary: Schema.string().required(), count: Schema.number().min(1).max(20).default(2).volatile(),
     token: Schema.string().required().role('secret').volatile() }),
     apply(ctx, config) { mounts++; consumer = config; ownedAdapter = createOfficialSettingsAdapter(ctx, { projectSchema: project }); } };
   const projector = await createConfigProjector();
   const project = schema => {
+    projections++;
     const result = projector(schema, 'testConfig');
     return { $schema: 'https://json-schema.org/draft/2020-12/schema', ...result.schema, $defs: { ...result.definitions, loaderExpression: false } };
   };
@@ -47,7 +48,7 @@ async function fixture(t) {
   const manager = createSettingsManagement({ directory: join(home, 'journal') });
   await manager.register(adapter).ready;
   t.after(async () => { await manager.close(); await ctx.fiber.dispose(); await rm(home, { recursive: true, force: true }); });
-  return { ctx, adapter, manager, profile, Probe, consumer: () => consumer, mounts: () => mounts, ownedAdapter: () => ownedAdapter };
+  return { ctx, adapter, manager, profile, Probe, consumer: () => consumer, mounts: () => mounts, projections: () => projections, ownedAdapter: () => ownedAdapter };
 }
 async function change(f, ops) {
   const current = await f.manager.read(ref);
@@ -84,6 +85,51 @@ test('official native schemas retain blocked entries and discover newly declared
   assert(JSON.stringify(entries.find(row => row.namespace === 'probe').schema).includes('newField'));
   await change(f, [set('newField', true)]);
   assert.equal(f.consumer().newField.get(), true);
+});
+
+test('official projections are reused across reads but refresh changed constraints and secret boundaries', async t => {
+  const f = await fixture(t);
+  await f.manager.flush();
+  const initial = f.projections();
+  const catalog = await f.adapter.schema();
+  catalog.find(row => row.namespace === 'probe').schema.type = 'null';
+  await f.manager.read(ref);
+  await change(f, [set('count', 4)]);
+  await f.manager.flush();
+  assert.equal(f.projections(), initial, 'unchanged native graph does not recompile on read or value changes');
+  assert.notEqual((await f.adapter.schema()).find(row => row.namespace === 'probe').schema.type, 'null');
+
+  f.Probe.Config.dict.patterned = Schema.string().pattern(/^[a-z]+$/).volatile();
+  const beforeChange = f.projections();
+  const [one, two] = await Promise.all([f.adapter.schema(), f.adapter.schema()]);
+  assert.equal(f.projections(), beforeChange + 1, 'concurrent callers share one changed projection');
+  assert.match(JSON.stringify(one), /\^\[a-z\]\+\$/);
+  assert.deepEqual(one, two);
+  f.Probe.Config.dict.patterned.meta.pattern = /^[0-9]+$/;
+  assert.match(JSON.stringify(await f.adapter.schema()), /\^\[0-9\]\+\$/);
+  assert.equal(f.projections(), beforeChange + 2, 'RegExp changes are included although native toJSON erases RegExp properties');
+  f.Probe.Config.dict.patterned.meta.role = 'secret';
+  f.Probe.Config.dict.patterned.meta.default = 'private-new-default';
+  const descriptor = (await f.adapter.schema()).find(row => row.namespace === 'probe');
+  assert(descriptor.sensitivePaths.some(path => path.join('.') === 'patterned'));
+  assert(!JSON.stringify(descriptor).includes('private-new-default'));
+});
+
+test('temporary projection failure is retried instead of caching a blocked configuration', async () => {
+  let calls = 0;
+  const config = Schema.object({ value: Schema.string() });
+  const entry = { options: { id: 'probe', name: 'probe', config: {} }, fiber: { uid: 1, runtime: { Config: config }, effectiveConfig: {}, ctx: {} } };
+  const ctx = { settings: { describe: () => [] }, configEditor: { configuration: () => [{ entry, inherited: {}, override: {} }] }, loader: { entries: () => [entry] } };
+  const adapter = createOfficialSettingsAdapter(ctx, { projectSchema: () => { if (++calls === 1) throw Error('temporary'); return { type: 'object' }; } });
+  assert.equal((await adapter.schema())[0].risk, 'blocked');
+  assert.equal((await adapter.schema())[0].applies, 'reload');
+  assert.equal(calls, 2);
+  config.dict.value.meta.default = 1n;
+  assert.equal((await adapter.schema())[0].applies, 'reload', 'unhashable metadata uses the authoritative projector without caching');
+  assert.equal(calls, 3);
+  config.dict.value.meta.default = 'valid';
+  assert.equal((await adapter.schema())[0].applies, 'reload');
+  assert.equal(calls, 4, 'a later valid graph remains observable');
 });
 
 test('official page mutations use the same version and journal while sensitive writes remain blocked', async t => {

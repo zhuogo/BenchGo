@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { createAssistantEngine, readBuiltinLayer } from '../src/engine.mjs';
+import { projectReplyStream } from '../client/reply-stream.mjs';
 import { createChannelSessionHost, registerChannelSessionProjection } from '../src/channel-session.mjs';
 import { channelSessionKey } from '../src/channel-policy.mjs';
 import { channelMessageRecordOf } from '../src/channel-session-record.mjs';
@@ -122,7 +123,9 @@ test('Router requests include builtin layer before user context without maintain
   assert.match(body, /友好、聪明、温暖、体贴的合作者/);
   assert.match(body, /身份与个性依统一文档链[\s\S]*不为渠道另造人设/);
   assert.match(body, /历史话题、旧助手承诺与旧错误不自动触发重查、重跑或扩大调查/);
-  assert.match(body, /通常直接查询再答[\s\S]*不以“我再查一轮：”[\s\S]*不逐步播报/);
+  assert.match(body, /先简短回应要做的事，再立刻调用工具[\s\S]*不调用 assistant_reply 提前结束回合/);
+  assert.match(request, /first stream one brief, specific natural acknowledgement[\s\S]*same turn/);
+  assert.match(request, /avoid another redundant acceptance message afterward/);
   assert.match(body, /时间过去不证明状态已经改变/);
   assert.match(body, /当前列表为空[\s\S]*不证明历史从未发生/);
   assert.match(body, /不在用户未询问时顺带复述旧调查/);
@@ -135,6 +138,55 @@ test('Router requests include builtin layer before user context without maintain
   assert.match(request, /assistant_execution_manage wait only delays verification and is never a lifecycle pause/);
 });
 
+test('Router acknowledgement streams before real tool execution and remains visible until the result', { timeout: 10000 }, async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), frames = [];
+  t.after(() => release.resolve());
+  const acknowledgement = '好的，我去看看服务器状态。';
+  let executions = 0;
+  const f = await fixture(t, (_request, count) => count === 1 ? [
+    ...text(acknowledgement).slice(0, -1),
+    { type: 'block-start', index: 1, blockType: 'tool-call' },
+    { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'acknowledged-query', name: 'assistant_tickets', arguments: '{}' } },
+    { type: 'finish', reason: { kind: 'tool-calls' } },
+  ] : text('还没有正在执行的巡检，我可以按你的请求安排。'), { setupTools(scope) {
+    scope.tools.register({ name: 'assistant_tickets', description: 'Read the actual current work', parameters: { type: 'object', properties: {} },
+      output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      execute: async () => { executions++; entered.resolve(); await release.promise; return { tickets: [] }; } });
+  } });
+  f.ctx.on('agent/assistant-stream', ({ frame }) => { frames.push(frame); }, { global: true });
+  await f.engine.send({ text: '查查我服务器状态怎么样', requestId: 'acknowledge-then-query' });
+  const agent = await f.engine.ensureSession();
+  await entered.promise;
+  try {
+    const beforeResult = agent.session.snapshotEvents();
+    const assistant = beforeResult.find(event => event.type === 'assistant/message');
+    const call = beforeResult.find(event => event.type === 'tool/call' && event.data.name === 'assistant_tickets');
+    assert.ok(assistant.seq < call.seq, 'the official text step precedes the real tool call');
+    assert.ok(frames.some(frame => frame.type === 'chunk' && frame.chunk.type === 'text-delta' && frame.chunk.text === acknowledgement));
+    assert.equal(f.requests.length, 1, 'the acknowledgement uses the first ordinary request, without a separate model call');
+    assert.equal(executions, 1);
+    assert.equal(beforeResult.some(event => event.type === 'tool/result'), false, 'the operation is genuinely still running');
+    const history = await f.engine.history();
+    assert.equal(history.messages.some(row => row.role === 'assistant'), false, 'early text is not a completed or independently published reply');
+    const nodes = beforeResult.filter(event => event.type === 'assistant/message').map(event => ({
+      kind: 'assistant', seq: event.seq, turn: event.data.turn, step: event.data.step,
+      messageId: event.data.message.id,
+      blocks: event.data.message.content.map(block => ({ ...block, kind: block.type })),
+    }));
+    const live = projectReplyStream({ history, sessionId: agent.id, running: true,
+      chat: { legacy: { nodes, partial: { turn: assistant.data.turn, step: assistant.data.step, blocks: [] } } } });
+    assert.equal(live.text, acknowledgement, 'existing official projection retains the short reply during the slow tool');
+    assert.equal(live.streaming, true);
+    assert.equal(beforeResult.some(event => event.type === 'plugin:benchgo-plugin/chat-publication'), false, 'no new acknowledgement protocol is introduced');
+  } finally { release.resolve(); }
+  await agent.whenIdle();
+  const final = await f.engine.history();
+  const replies = final.messages.filter(row => row.role === 'assistant');
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].text, acknowledgement + '\n\n还没有正在执行的巡检，我可以按你的请求安排。');
+  assert.equal(f.requests.length, 2, 'only the ordinary request and post-tool continuation are made');
+});
+
 test('new side chats reuse empty drafts even when creation is concurrent', async t => {
   const f = await fixture(t, () => text('Answer'));
   const threads = await Promise.all(Array.from({ length: 5 }, () => f.engine.createThread({ title: '新旁聊' })));
@@ -145,6 +197,52 @@ test('new side chats reuse empty drafts even when creation is concurrent', async
   const next = await f.engine.createThread({ title: '新旁聊' });
   assert.notEqual(next.id, threads[0].id);
   assert.equal(f.state().threads.length, 2);
+});
+
+test('opening an active Router lifts the official archive gate without replaying blocked input', async t => {
+  const { ArchivedSessionGate } = await import('../../../deepseek-harness/packages/api/session-controller/src/archived-session-gate.ts');
+  const archived = new Set(['worker-history']), restored = [];
+  const registry = { list: () => [], get archivedSessionIds() { return [...archived]; },
+    async unarchiveSession(id) { restored.push(id); archived.delete(id); } };
+  const f = await fixture(t, () => text('你好。'), { install: async ctx => {
+    ctx.provide('workspaceRegistry', registry);
+    await ctx.plugin(ArchivedSessionGate);
+  } });
+  const agent = await f.engine.ensureSession();
+  archived.add(agent.id);
+  agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'previously blocked' }] }));
+  await agent.whenIdle();
+  assert.equal(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end').data.reason.kind, 'blocked');
+  assert.equal(f.requests.length, 0);
+  assert.equal(await f.engine.ensureSession(), agent);
+  assert.deepEqual(restored, [agent.id]);
+  assert.deepEqual([...archived], ['worker-history']);
+  await f.engine.send({ text: '你好' });
+  await agent.whenIdle();
+  assert.equal(f.requests.length, 1);
+  assert.doesNotMatch(JSON.stringify(f.requests[0].messages), /previously blocked/);
+  assert.equal(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end').data.reason.kind, 'completed');
+  await f.engine.ensureSession();
+  assert.deepEqual(restored, [agent.id], 'ready Router checks do not write again');
+  const side = await f.engine.createThread({ title: 'Archived side' });
+  await f.engine.updateThread(side.id, { archived: true });
+  archived.add(side.sessionId);
+  await assert.rejects(f.engine.ensureSession({ threadId: side.id }), /请先恢复已归档的旁聊/);
+  assert.equal(archived.has(side.sessionId), true);
+  assert.deepEqual(restored, [agent.id]);
+});
+
+test('opening a cold Router restores only its current official session identity', async t => {
+  const archived = new Set(['old-router']), restored = [];
+  const f = await fixture(t, () => text('Ready'), {
+    install: async ctx => ctx.provide('workspaceRegistry', { list: () => [],
+      get archivedSessionIds() { return [...archived]; },
+      async unarchiveSession(id) { restored.push(id); archived.delete(id); } }),
+    beforeStateWrite: async patch => { if (patch.mainSessionId) archived.add(patch.mainSessionId); },
+  });
+  const agent = await f.engine.ensureSession();
+  assert.deepEqual(restored, [agent.id]);
+  assert.deepEqual([...archived], ['old-router']);
 });
 
 test('new side chats preserve renamed, pinned and archived drafts', async t => {
@@ -222,7 +320,7 @@ for (const mode of ['text', 'assistant_reply']) test(`Router replies naturally a
       execute: (args, execution) => delegation.delegate(args, execution, { ownerAgent: agent, threadId }),
     });
   } });
-  delegation = createDesktopDelegationService({ ctx: f.ctx, database, assessScope: async () => ({ decision: { outcome: 'delegate', reason: 'Fixture scope' }, routing: null }),
+  delegation = createDesktopDelegationService({ ctx: f.ctx, database,
     readPolicy: async () => ({ desktopVersion: 'natural-reply-policy', projects: [], workerModels: [{ providerId: 'test', modelId: 'first' }] }) });
   const agent = await f.engine.ensureSession();
   agent.followup(createUserMessage({ content: [{ type: 'text', text: requestText }], source: { kind: 'user' } }));

@@ -18,7 +18,7 @@ test('desktop startup keeps the app identity and local mascot beside the DeepSee
   assert.doesNotMatch(html, /(?:src|href)="https?:/);
   assert.ok(css.includes('.startup-brand { display: flex; flex-direction: row;'));
   assert.ok(css.includes('animation: startup-scan'));
-  assert.ok(css.includes('animation: startup-arrive 400ms'));
+  assert.ok(css.includes('animation: startup-arrive 240ms'));
   assert.ok(css.includes('[data-part="eyes"]'));
   assert.ok(css.includes('@media (prefers-color-scheme: dark)'));
   assert.ok(css.includes('color-scheme: light dark'));
@@ -27,7 +27,7 @@ test('desktop startup keeps the app identity and local mascot beside the DeepSee
   assert.ok(css.includes('animation: none;'));
 });
 
-test('native splash stays local and only updates its waiting message after 20 seconds', async () => {
+test('native splash falls back after 20 seconds without replacing a native startup phase', async () => {
   const html = await readFile(new URL('./renderer/splash.html', import.meta.url), 'utf8');
   const script = await readFile(new URL('./renderer/splash.js', import.meta.url), 'utf8');
   assert.ok(html.includes('<img class="startup-mascot" src="../../../assets/brand/benchgo-mark.svg" alt="BenchGo"'));
@@ -38,7 +38,7 @@ test('native splash stays local and only updates its waiting message after 20 se
   assert.ok(html.includes('role="status" aria-live="polite"'));
   assert.doesNotMatch(html, /(?:src|href)="https?:/);
   assert.doesNotMatch(script, /dshWelcome|ipcRenderer|require\(|fetch\(/);
-  const status = { textContent: '' };
+  const status = { textContent: '', dataset: {} };
   let delay;
   let waiting;
   vm.runInNewContext(script, {
@@ -49,6 +49,10 @@ test('native splash stays local and only updates its waiting message after 20 se
   assert.equal(delay, 20000);
   waiting();
   assert.equal(status.textContent, '仍在准备中，请稍候…');
+  status.dataset.phase = 'host-starting';
+  status.textContent = '正在启动服务…';
+  waiting();
+  assert.equal(status.textContent, '正在启动服务…');
 });
 function startup(skip) {
   const handlers = new Map();

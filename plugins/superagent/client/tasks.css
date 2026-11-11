@@ -5,6 +5,10 @@
 .ba-studio-body :is(.ba-tasks,.ba-goals,.ba-evaluations,.ba-task-list-container)>.ba-group-head>div:first-child{display:grid;gap:6px}
 .ba-studio-body :is(.ba-tasks,.ba-goals,.ba-evaluations,.ba-task-list-container)>.ba-group-head h2{font-size:16px}
 .ba-studio-body :is(.ba-tasks,.ba-goals,.ba-evaluations,.ba-task-list-container)>.ba-group-head p{margin:0;color:var(--ba-muted);font-size:13px;line-height:1.6}
+.ba-studio-body .ba-task-list-container>.ba-group-head{margin:0;padding:0}
+.ba-task-list-container>.ba-ticket-view-controls{margin:0}
+.ba-task-actions .ba-task-icon{flex:none;color:var(--ba-muted)}
+@media(pointer:coarse){.ba-task-actions .ba-task-icon{width:44px;height:44px;min-height:44px}}
 .ba-studio-body :is(.ba-tasks,.ba-goals,.ba-evaluations) .ba-task-list{display:grid;gap:8px}
 .ba-studio-body :is(.ba-tasks,.ba-goals,.ba-evaluations) .ba-task-list-row{padding:16px;border:1px solid var(--ba-line);border-radius:12px;background:var(--dsw-alias-bg-base,#fff);transition:border-color .15s ease}
 .ba-studio-body :is(.ba-tasks,.ba-goals,.ba-evaluations) .ba-task-list-row:hover{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#315be8) 30%,var(--ba-line))}

@@ -27,6 +27,34 @@ const valid = (validator, value) => assert.equal(validator(value), true, JSON.st
 const hash = 'a'.repeat(64);
 const path = '/api/commander/assistant';
 
+test('official history search and point reads use distinct bounded pagination contracts', () => {
+  valid(request, { action: 'sessionSearch', query: '香港', cursor: 'opaque-search-page', limit: 10 });
+  valid(request, { action: 'sessionHistory', sessionId: 'router-main', seq: 12, before: 1, textLimit: 1000, offset: 0 });
+  valid(request, { action: 'sessionHistory', sessionId: 'router-main', before: 1000, limit: 30 });
+  valid(request, { action: 'sessionHistory', sessionId: 'router-main', seq: 12, before: 30, after: 30 });
+  valid(request, { action: 'sessionList', limit: 20, cursor: 'opaque-header-page' });
+  valid(request, { action: 'ledgerRead', id: 'business-reference', cursor: 8 });
+  for (const input of [{ action: 'sessionSearch' }, { action: 'sessionSearch', query: 'x', cursor: 3 },
+    { action: 'sessionSearch', query: 'x', limit: 101 }, { action: 'sessionHistory', seq: 1 },
+    { action: 'sessionHistory', sessionId: 'main', seq: -1 },
+    { action: 'sessionHistory', sessionId: 'main', seq: 3, before: 31 },
+    { action: 'sessionHistory', sessionId: 'main', after: 31 },
+    { action: 'sessionHistory', sessionId: 'main', textLimit: 16001 },
+    { action: 'sessionList', cursor: 5 }, { action: 'sessionList', limit: 0 },
+    { action: 'ledgerRead' }, { action: 'ledgerRead', id: 'business-reference', cursor: 'search-page' },
+    { action: 'ledgerRead', id: 'business-reference', limit: 100001 }]) assert.equal(request(input), false, JSON.stringify(input));
+  const text = { sessionId: 's', seq: 3, time: 1, role: 'user', text: '原文', fullLength: 2, offset: 0,
+    nextOffset: null, complete: true, source: 'official' };
+  const search = { query: '香港', source: 'official', results: [{ ...text, snippet: text.text, title: null }],
+    nextCursor: null, truncated: false, matchMode: 'official-phrase', coverage: 'official-message-text', limitations: ['中文子串不保证命中'] };
+  valid(response(path, 'sessionSearch'), search);
+  valid(response(path, 'sessionHistory'), { sessionId: 's', events: [text], hasMore: false, nextCursor: null, source: 'official' });
+  valid(response(path, 'sessionList'), { sessions: [{ id: 's', title: null, createdAt: 1 }], nextCursor: null });
+  assert.equal(response(path, 'sessionSearch')({ ...search, results: [{ ...search.results[0], text: 'x'.repeat(501) }] }), false);
+  assert.equal(response(path, 'sessionSearch')({ ...search, source: 'ledger' }), false);
+  assert.equal(response(path, 'sessionHistory')({ sessionId: 's', messages: [text] }), false);
+});
+
 test('P0 inbox reconciliation and quota-free continuation keep the public contract', () => {
   valid(request, { action: 'requestState', threadId: 'side' });
   valid(response(path, 'requestState'), [{ requestId: 'r', status: 'processing' }]);

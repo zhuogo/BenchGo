@@ -146,10 +146,10 @@ export function createSettingsManagement({ directory, requestConfirmation, now =
     return row;
   };
   const saveOperation = (id, state, payload) => db.prepare('UPDATE settings_operations SET state=?,payload=? WHERE id=?').run(state, JSON.stringify(payload), id);
-  const descriptor = async ref => {
+  const descriptor = async (ref, observedEntries) => {
     const adapter = adapters.get(ref.adapterId);
     if (!adapter) throw fail('SETTINGS_UNAVAILABLE', '配置服务未注册或已退出');
-    const entries = await adapter.schema();
+    const entries = observedEntries ?? await adapter.schema();
     const item = entries.find(row => row.namespace === ref.namespace);
     if (!item) throw fail('SETTINGS_UNAVAILABLE', '配置项未登记或已退出');
     const result = { ...item, adapterId: adapter.id, risk: item.risk ?? 'confirm', impact: item.impact || '未声明具体影响，本次修改需要确认', sensitivePaths: item.sensitivePaths ?? [] };
@@ -167,8 +167,8 @@ export function createSettingsManagement({ directory, requestConfirmation, now =
       ...(value.revision !== undefined ? { revision: value.revision } : {}),
       fingerprint: value.fingerprint, secrets: (value.secrets || []).map(row => ({ path: [...row.path], set: !!row.set })) };
   };
-  const observe = async (ref, { source = 'external', record = true } = {}) => {
-    const { adapter, descriptor: metadata } = await descriptor(ref);
+  const observe = async (ref, { source = 'external', record = true, entries } = {}) => {
+    const { adapter, descriptor: metadata } = await descriptor(ref, entries);
     if (metadata.applies === 'blocked' || metadata.risk === 'blocked') throw fail('SETTINGS_BLOCKED', metadata.unavailableReason || '此配置当前不可管理');
     const snapshot = safeSnapshot(await adapter.read(ref.namespace), metadata);
     const prior = db.prepare('SELECT fingerprint,revision FROM settings_versions WHERE adapter=? AND namespace=?').get(ref.adapterId, ref.namespace);
@@ -237,22 +237,33 @@ export function createSettingsManagement({ directory, requestConfirmation, now =
     register(adapter) {
       if (!adapter?.id || adapters.has(adapter.id) || !['schema', 'read', 'apply'].every(method => typeof adapter[method] === 'function')) throw new Error('Invalid or duplicate settings adapter');
       adapters.set(adapter.id, adapter);
-      const ready = serial(async () => {
-        for (const row of await adapter.schema()) {
-          if (row.applies !== 'blocked' && row.risk !== 'blocked') await observe({ adapterId: adapter.id, namespace: row.namespace });
+      // One directory snapshot per sweep, not one complete schema projection
+      // for every namespace. Mutations still resolve fresh metadata at CAS time.
+      const observeRows = async namespaces => {
+        if (adapters.get(adapter.id) !== adapter) return;
+        const entries = await adapter.schema();
+        for (const row of entries) {
+          if (adapters.get(adapter.id) !== adapter) return;
+          if (namespaces && !namespaces.has(row.namespace) || row.applies === 'blocked' || row.risk === 'blocked') continue;
+          await observe({ adapterId: adapter.id, namespace: row.namespace }, { entries });
         }
         observationErrors.delete(adapter.id);
+      };
+      const ready = serial(async () => {
+        await observeRows();
       });
       ready.catch(() => { observationErrors.set(adapter.id, fail('SETTINGS_OBSERVATION_FAILED', '配置初始快照无法核实')); });
+      let queued = false, allNamespaces = false;
+      const changedNamespaces = new Set();
       const unsubscribe = adapter.subscribe?.(change => {
-        const namespaces = change?.namespace ? [change.namespace] : null;
+        if (change?.namespace) changedNamespaces.add(change.namespace);
+        else allNamespaces = true;
+        if (queued) return;
+        queued = true;
         serial(async () => {
-          if (adapters.get(adapter.id) !== adapter) return;
-          for (const row of await adapter.schema()) {
-            if (namespaces && !namespaces.includes(row.namespace) || row.applies === 'blocked' || row.risk === 'blocked') continue;
-            await observe({ adapterId: adapter.id, namespace: row.namespace });
-          }
-          observationErrors.delete(adapter.id);
+          const namespaces = allNamespaces ? null : new Set(changedNamespaces);
+          changedNamespaces.clear(); allNamespaces = false; queued = false;
+          await observeRows(namespaces);
         }).catch(() => { observationErrors.set(adapter.id, fail('SETTINGS_OBSERVATION_FAILED', '配置变更观察失败，历史尚未核实')); });
       });
       subscriptions.set(adapter.id, unsubscribe);

@@ -50,19 +50,15 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   await ctx.plugin(TypertRegistry);
   await installRoleHost(ctx);
   await ctx.plugin(SessionPersistence.default || SessionPersistence, { root: join(directory, 'official-sessions'), compression: 'none' });
-  await ctx.plugin(SessionQuery.default || SessionQuery, { path: ':memory:', openAt: 'never' });
+  await ctx.plugin(SessionQuery.default || SessionQuery, { path: ':memory:', openAt: 'first-search' });
   const tokenRequire = createRequire(new URL('../../../deepseek-harness/packages/llm/token-meter/package.json', import.meta.url));
   await ctx.plugin((await import(pathToFileURL(tokenRequire.resolve('@deepseek-ai/dsh-token-meter')).href)).default);
   let duringStream;
-  const scopeInputs = [];
+  const modelRequests = [];
   class Adapter extends LlmAdapter {
     async resolveModel(provider, id) { return { provider, id, name: id, context: { contextWindow: 131072 } }; }
     async *stream(request) {
-      if (request.purpose === 'superagent-delegation-scope') {
-        scopeInputs.push(JSON.parse(request.messages.find(message => message.role === 'user').content[0].text));
-        yield { type: 'text-delta', text: JSON.stringify({ outcome: 'delegate', reason: 'Mounted integration fixture confirms the proposed work scope' }) };
-        yield { type: 'finish', reason: { kind: 'stop' } }; return;
-      }
+      modelRequests.push(request);
       const callback = duringStream; duringStream = undefined; if (callback) await callback();
       yield { type: 'block-start', index: 0, blockType: 'text' }; yield { type: 'text-delta', index: 0, text: 'Mounted reply' };
       yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Mounted reply' } }; yield { type: 'finish', reason: { kind: 'stop' } };
@@ -400,14 +396,11 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const delegation = { projectId: 'project', title: '检查项目', text: 'Inspect project', acceptance: 'Report project findings with evidence; preserve the original human requirements.', requestId: 'desktop-delegation' };
   await assert.rejects(delegateTool.execute(delegation, { agent: { id: 'child' }, authorized: true }), /只有总助手/);
   await assert.rejects(delegateTool.execute({ ...delegation, provider: 'mounted', model: 'exact' }, { agent, authorized: true }));
+  const requestsBeforeDelegation = modelRequests.length;
   const ticket = await delegateTool.execute(delegation, { agent, authorized: true });
   assert.equal(ticket.mandate.instruction, 'Inspect project');
-  const scopeInput = scopeInputs.at(-1);
-  assert.equal(scopeInput.currentRequest.text, 'Inspect project');
-  const visible = new Set(ctx.tools.schemas(agent).map(tool => tool.name));
-  assert.ok(scopeInput.capabilities.some(tool => tool.name === 'assistant_device_status'));
-  assert.ok(scopeInput.capabilities.every(tool => visible.has(tool.name) && ctx.tools.get(tool.name, agent)?.description === tool.description));
-  assert.equal(scopeInput.capabilities.some(tool => ['assistant_delegate', 'assistant_config', 'assistant_settings', 'assistant_task_cleanup'].includes(tool.name)), false);
+  assert.equal(modelRequests.length, requestsBeforeDelegation, 'mounted admission does not request another model');
+  assert.equal(ticket.mandate.scopeCheck, undefined);
   assert.equal((await delegateTool.execute(delegation, { agent, authorized: true })).id, ticket.id);
   assert.ok((await (await call({ action: 'tickets' })).json()).tickets.some(row => row.id === ticket.id));
   assert.equal((await (await call({ action: 'ticketStop', ticketId: ticket.id })).json()).executionControl.stopped, true);
@@ -617,7 +610,33 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal(response.status, 200, await response.clone().text());
   assert.deepEqual((await settingsRead()).value, beforeOpaque.value, 'page save preserves the other settings and shares authoritative readback');
   response = await call({ action: 'history' }); assert.equal((await response.json()).messages.at(-1).text, 'Mounted reply');
-  response = await call({ action: 'sessionSearch', query: 'Mounted' }); assert.equal((await response.json()).results.at(-1).text, 'Mounted reply');
+  response = await call({ action: 'sessionSearch', query: 'Mounted' });
+  assert.equal(response.status, 200, await response.clone().text());
+  const search = await response.json();
+  const hit = search.results.find(row => row.text.includes('Mounted reply'));
+  assert.ok(hit, 'official search returns only the public reply projection');
+  assert.equal(search.source, 'official');
+  response = await call({ action: 'sessionHistory', sessionId: hit.sessionId, seq: hit.seq });
+  assert.equal(response.status, 200, await response.clone().text());
+  const original = await response.json();
+  assert.equal(original.events[0].text, 'Mounted reply');
+  assert.equal(original.events[0].sessionId, hit.sessionId);
+  assert.equal(original.events[0].seq, hit.seq);
+  assert.equal(original.messages, undefined, 'the original body is not duplicated under another field');
+  const historyExec = { agent, signal: new AbortController().signal };
+  const searchTool = ctx.tools.get('assistant_session_search', agent);
+  const historyTool = ctx.tools.get('assistant_history', agent);
+  const sessionsTool = ctx.tools.get('assistant_sessions', agent);
+  assert.deepEqual(await searchTool.execute({ query: 'Mounted' }, historyExec), search);
+  assert.deepEqual(await historyTool.execute({ sessionId: hit.sessionId, seq: hit.seq }, historyExec), original);
+  const sessionPage = await (await call({ action: 'sessionList', limit: 1 })).json();
+  assert.equal(sessionPage.sessions.length, 1);
+  assert.deepEqual(await sessionsTool.execute({ limit: 1 }, historyExec), sessionPage);
+  for (const [tool, args] of [[searchTool, { query: 'Mounted' }], [historyTool, { sessionId: hit.sessionId }], [sessionsTool, {}]]) {
+    await assert.rejects(tool.execute(args, { ...historyExec, agent: { id: agent.id } }), { code: 'HISTORY_SCOPE_DENIED' });
+  }
+  const forbiddenHistory = await call({ action: 'sessionHistory', sessionId: 'unowned-worker' });
+  assert.equal((await forbiddenHistory.json()).code, 'SESSION_QUERY_FORBIDDEN');
   response = await call({ action: 'archiveThread', threadId: 'main' }); assert.equal(response.status, 400);
   response = await call({ action: 'unknown' }); assert.equal(response.status, 400);
   const artifact = routes.get('/api/commander/assistant/artifact');

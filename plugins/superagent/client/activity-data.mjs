@@ -209,6 +209,18 @@ export function createActivityStore(api, environment = {}) {
   };
   return {
     getSnapshot: () => snapshot, refresh, refreshTickets,
+    setEnvironment(next = {}) {
+      if (environment === next) return;
+      environment = next;
+      generation++; subscription++; cancel(timer); cancelReads(); refreshPending = false;
+      healthy = false; sourceFailed = false; cursor = null;
+      void transport?.dispose(); transport = null;
+      publish({ ...recovered('stream'), connection: 'reconnecting', loading: snapshot.rows === null });
+      if (listeners.size) {
+        if (environment.connect) connect();
+        else void pull();
+      }
+    },
     subscribe(listener) {
       listeners.add(listener);
       if (listeners.size === 1) {

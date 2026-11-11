@@ -132,6 +132,25 @@ test('official workspaces render projects and conversations before Commander sta
   assert.deepEqual(calls,['fresh']);
 });
 
+test('Recent, global and project new-chat buttons create independent conversations without touching voice history', async () => {
+  const requests=[],opened=[],old={id:'voice-old',blank:true,title:'语音历史',events:[{type:'plugin:benchgo-plugin/voice-conversation',data:{kind:'call-start',callId:'old-call'}}]},projects=[{id:'recent',isDefault:true},{id:'fresh',title:'Fresh project'}];
+  const host={workspaces:{},sessions:{create:async request=>{requests.push(request);return 'new-'+requests.length;}},uiWorkspace:{startSession:()=>assert.fail('must not reuse blank session'),openSession:id=>opened.push(id)}};
+  const actions=[];
+  const nodes=render('voice-old',{
+    commander:{loaded:true,projects,sessions:[]},defaultId:'recent',
+    workspaces:{phase:'ready',archivedSessionIds:[],items:[{workspaceId:'recent',sessionIds:[old.id]},{workspaceId:'fresh',title:'Fresh project',sessionIds:[]}]},
+    sessionSnapshot:{ids:[old.id],byId:{[old.id]:old}},
+    newSession:projectId=>actions.push(helpers.startSidebarSession(host,projects,projectId,'recent',async()=>({workspaceId:'recent'}))),
+  });
+  for(const label of ['最近新聊天','创建新聊天','在 Fresh project 新聊天']){
+    nodes.find(node=>node.props['aria-label']===label).props.onClick({stopPropagation(){}});
+    await actions.at(-1);
+  }
+  assert.deepEqual(requests,[{workspaceId:'recent'},{workspaceId:'recent'},{workspaceId:'fresh'}]);
+  assert.deepEqual(opened,['new-1','new-2','new-3']);
+  assert.equal(old.events[0].data.callId,'old-call');
+});
+
 test('ready empty official workspaces clear stale projects and rows', () => {
   const nodes=render(undefined,{workspaces:{phase:'ready',items:[],archivedSessionIds:[]},sessionSnapshot:{ids:[],byId:{}}});
   assert.equal(nodes.filter(node=>node.props.className?.split(' ').includes('cmd-session')).length,0);
@@ -140,6 +159,21 @@ test('ready empty official workspaces clear stale projects and rows', () => {
 
 const sessionRows = nodes => nodes.filter(node => node.props.className?.split(' ').includes('cmd-session'));
 const rowTitles = nodes => sessionRows(nodes).map(row => row.children.find(child => child.type === 'span')?.children[0]);
+
+test('private main, side and historical Routers stay out of ordinary lists while Worker and IM stay visible', () => {
+  const ids = ['main', 'side', 'old-side', 'worker', 'im'];
+  const options = {
+    commander: { loaded: true, sessions: [], privateSessionIds: ['main', 'side', 'old-side', 'im'] },
+    workspaces: { phase: 'ready', items: [], archivedSessionIds: [] },
+    sessionSnapshot: { ids, byId: Object.fromEntries(ids.map(id => [id, { id, title: id, blank: false,
+      projectionValues: id === 'im' ? { benchgoChannelSource: { channel: 'feishu' } } : {} }])) },
+  };
+  assert.deepEqual(rowTitles(render(undefined, options)), ['worker', 'im']);
+  options.workspaces.archivedSessionIds = ids;
+  assert.deepEqual(rowTitles(render(undefined, { ...options, showArchived: true })), ['worker', 'im']);
+  options.workspaces.items = [{ workspaceId: 'project', title: 'Project', sessionIds: ids }];
+  assert.deepEqual(rowTitles(render(undefined, { ...options, showArchived: true })), ['worker', 'im']);
+});
 
 test('official ungrouped sessions join Recent without attaching a Workspace or duplicating its members', () => {
   const opened = [], nodes = render('second', {
@@ -167,6 +201,17 @@ test('ungrouped discovery follows list.ids and excludes missing, blank and dismi
   assert.deepEqual(rowTitles(nodes), ['worker']);
 });
 
+test('durable voice activity keeps blank official sessions visible, selectable and archivable without showing unused blanks', () => {
+  const records=[['call-start',30],['legacy-voice',20],['ungrouped-voice',10]].map(([id,updatedAt])=>[id,{id,blank:true,displayTitle:'default-workspace',updatedAt,retainedBy:id==='legacy-voice'?{mainView:1}:{},projectionValues:{benchgoVoice:{used:true,startedAt:updatedAt,lastActivityAt:updatedAt}}}]);
+  const options={defaultId:'recent',commander:{loaded:true,projects:[],sessions:[]},workspaces:{phase:'ready',items:[{workspaceId:'recent',sessionIds:['call-start','legacy-voice','unused']}],archivedSessionIds:[]},sessionSnapshot:{ids:[...records.map(([id])=>id),'unused'],byId:{...Object.fromEntries(records),unused:{id:'unused',blank:true,projectionValues:{benchgoVoice:null}}}}};
+  const nodes=render('legacy-voice',options),rows=sessionRows(nodes);
+  assert.equal(rows.length,3);assert.deepEqual(rowTitles(nodes),['语音对话','语音对话','语音对话']);
+  assert.equal(rows.filter(node=>node.props['aria-current']==='page').length,1);
+  assert.equal(nodes.filter(node=>node.props['aria-label']==='归档对话').length,3);
+  assert.equal(sessionRows(render(undefined,{...options,showArchived:true,workspaces:{...options.workspaces,archivedSessionIds:['legacy-voice']}})).length,1);
+  assert.equal(sessionRows(render(undefined,{...options,commander:{...options.commander,deletedHarnessIds:['call-start']}})).length,2);
+});
+
 test('ungrouped and default Workspace rows share official pin and recent activity ordering', () => {
   const nodes = render(undefined, {
     defaultId: 'recent', workspaces: { phase: 'ready', items: [{ workspaceId: 'recent', sessionIds: ['default'] }, { workspaceId: 'project', sessionIds: ['project'] }], archivedSessionIds: [], pinnedSessionIds: ['pinned'] },
@@ -175,6 +220,12 @@ test('ungrouped and default Workspace rows share official pin and recent activit
     ].map(([id, updatedAt]) => [id, { id, title: id, updatedAt, blank: false, retainedBy: {} }])) },
   });
   assert.deepEqual(rowTitles(nodes), ['pinned', 'new', 'default', 'old']);
+});
+
+test('recent voice activity sorts beside text prompts and preserves pin priority', () => {
+  const records=[{id:'voice',title:'Voice',blank:true,updatedAt:1,projectionValues:{benchgoVoice:{used:true,lastActivityAt:50}}},{id:'text',title:'Text',blank:false,updatedAt:30},{id:'pinned',title:'Pinned',blank:false,updatedAt:2}];
+  const nodes=render(undefined,{defaultId:'recent',workspaces:{phase:'ready',items:[{workspaceId:'recent',sessionIds:records.map(row=>row.id)}],archivedSessionIds:[],pinnedSessionIds:['pinned']},sessionSnapshot:{ids:records.map(row=>row.id),byId:Object.fromEntries(records.map(row=>[row.id,row]))}});
+  assert.deepEqual(rowTitles(nodes),['Pinned','Voice','Text']);
 });
 
 test('ungrouped rows follow the official archive set and retain their own navigation identity after restore', () => {

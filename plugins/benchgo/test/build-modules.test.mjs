@@ -37,6 +37,17 @@ export async function prepareWorkbenchVendors() {
   await put('superagent/src/prompt.mjs', "export const builtinLayer = new URL('../prompts/builtin-layer.md', import.meta.url);\n");
   await put('superagent/assets/pet/SOURCE.md', 'Preserved provenance');
   await put('voice/client/audio-worklet.js');
+  await put('voice/shared/protocol-catalog.mjs', "export const protocols = ['auto', 'speech'];");
+  await put('voice/src/protocols.mjs', "export { protocols } from '../shared/protocol-catalog.mjs';");
+  await put('voice/prompts/conversation.md', '# 实时语音交互\n\nSpeak naturally.');
+  await put('voice/src/conversation-prompt.mjs', "export const prompt = new URL('../prompts/conversation.md', import.meta.url);\n");
+  await put('voice/scripts/build-noise.mjs', `
+import { mkdir, writeFile } from 'node:fs/promises';
+export async function buildNoise() {
+  const output = new URL('../lib/', import.meta.url);
+  await mkdir(output, { recursive: true });
+  await writeFile(new URL('noise-worklet.js', output), '// reviewed noise fixture');
+}`);
   await put('voice/locale/en.json', '{}');
   const backups = ['plugin.mjs.bak', 'plugin.mjs.bak2', 'plugin.mjs.bak-20261104-board', 'plugin.mjs.orig', 'plugin.mjs.rej', 'plugin.mjs.tmp', 'plugin.mjs.swp', 'plugin.mjs~'];
   for (const file of backups) await put(`superagent/src/${file}`);
@@ -58,4 +69,8 @@ export async function prepareWorkbenchVendors() {
   for (const file of backups) assert.equal(await readFile(join(plugins, 'superagent/src', file), 'utf8'), 'fixture');
   assert.equal(await readFile(join(plugins, 'superagent/src/recovery.bak/nested.mjs'), 'utf8'), 'fixture');
   assert.equal(await readFile(join(output, 'voice/client/audio-worklet.js'), 'utf8'), 'fixture');
+  const voiceProtocols = await import(pathToFileURL(join(output, 'voice/src/protocols.mjs')).href);
+  assert.deepEqual(voiceProtocols.protocols, ['auto', 'speech']);
+  const voicePrompt = await import(pathToFileURL(join(output, 'voice/src/conversation-prompt.mjs')).href);
+  assert.equal(await readFile(voicePrompt.prompt, 'utf8'), await readFile(join(plugins, 'voice/prompts/conversation.md'), 'utf8'));
 });

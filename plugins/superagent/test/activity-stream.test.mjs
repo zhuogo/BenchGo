@@ -99,6 +99,29 @@ test('disposed subscriptions cannot publish late baselines into a reopened view'
   assert.equal(h.store.getSnapshot().rows[0].id, 'new'); stop();
 });
 
+test('replacing the plugin transport retains task facts and fences the retired context callbacks', async () => {
+  const h = setup(async () => ({ goals: [] })), retired = h.sink;
+  retired.replace({ cursor: 3, tickets: [row('saved')] }); await flush();
+  const previous = h.store.getSnapshot().rows;
+  let replacement, starts = 0, disposed = 0;
+  h.store.setEnvironment({ connect(sink) {
+    replacement = sink;
+    return { start() { starts++; }, restart() {}, dispose() { disposed++; } };
+  } });
+  assert.equal(starts, 1);
+  assert.equal(h.disposed, 1);
+  assert.strictEqual(h.store.getSnapshot().rows, previous);
+  retired.failed(new Error('cannot create effect on inactive context'));
+  retired.replace({ cursor: 9, tickets: [row('retired')] });
+  assert.equal(h.store.getSnapshot().error, '');
+  assert.strictEqual(h.store.getSnapshot().rows, previous);
+  replacement.replace({ cursor: 0, tickets: [row('replacement')] }); await flush();
+  assert.equal(h.store.getSnapshot().rows[0].id, 'replacement');
+  assert.equal(h.store.getSnapshot().connection, 'live');
+  assert.equal(h.timers.size, 0);
+  h.stop(); assert.equal(disposed, 1);
+});
+
 test('background carrier and ticket retries retain snapshots silently; manual and domain failures remain visible', async () => {
   let failure, title = '原记录';
   const h = setup(async (name, args) => {

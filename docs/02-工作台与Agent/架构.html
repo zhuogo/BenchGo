@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>BenchGo · 工作台与 Agent架构</title><link rel="stylesheet" href="../_assets/architecture.css"></head>
+<body><main aria-label="BenchGo 工作台与 Agent架构">
+<header class="header"><div class="brand"><a class="brand-mark" href="../总架构.html" aria-label="BenchGo 总架构" style="text-decoration:none">B</a><div><div class="eyebrow">BENCHGO / WORKSPACE / AGENT</div><h1>工作台与 Agent<span>架构图解</span></h1></div></div><div class="header-actions"><button type="button" class="btn" id="directory-toggle" aria-expanded="false" aria-controls="directory">☷ <span class="directory-label">节点</span>目录</button><button type="button" class="btn outline" id="walk-start" aria-pressed="false">流程走读 ↗</button></div></header>
+<nav class="tabs" aria-label="架构板块"><a href="../总架构.html"><span class="tab-index">◎</span>总架构</a><a href="../01-设备与远程连接/架构.html"><span class="tab-index">01</span>设备与远程连接</a><a href="架构.html" aria-current="page"><span class="tab-index">02</span>工作台与 Agent</a><a href="../03-实时语音/架构.html"><span class="tab-index">03</span>实时语音</a><a href="../04-模型与工具/架构.html"><span class="tab-index">04</span>模型与工具</a><a href="../05-更新与发布/架构.html"><span class="tab-index">05</span>更新与发布</a><a href="../06-superagent/架构.html"><span class="tab-index">06</span>SuperAgent</a></nav>
+<div class="viewport" id="viewport" tabindex="0" aria-label="架构画布：拖动空白平移，滚轮或双指缩放，拖动节点调整布局，点击节点查看源码。方向键平移，加减号缩放，零适应。"><div class="load-state" id="load-state" role="status"><strong id="load-title">正在展开架构图</strong><p id="load-message">如果画布未出现，请确认 _assets 目录与 HTML 一同保留。</p><button type="button" class="btn outline" id="retry" hidden onclick="location.reload()">重新加载</button></div><div class="world" id="world"><div class="canvas-title"><div><h2 id="canvas-title"></h2><p id="canvas-subtitle"></p></div><span class="sheet-no" id="sheet-no"></span></div><div id="zones"></div><svg class="edges" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--edge)"/></marker><marker id="arrow-feedback" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--accent)"/></marker></defs><g id="edge-paths"></g><g id="edge-labels"></g></svg><div id="nodes"></div></div></div>
+<div class="canvas-bottom"><div><div class="legend"><span><i></i>调用 / 依赖</span><span><i class="feedback"></i>反馈 / 记录</span><span><i class="support"></i>配置 / 装配</span><span>虚线边框 · 设计目标</span></div><p class="hint">拖动平移 · 滚轮缩放 · 拖动节点 · 点击查看说明与源码</p></div><div class="camera-controls" aria-label="画布控制"><button type="button" class="btn icon" id="zoom-out" aria-label="缩小">−</button><span class="zoom-value" id="zoom-value">100%</span><button type="button" class="btn icon" id="zoom-in" aria-label="放大">+</button><span class="separator"></span><button type="button" class="btn" id="fit">适应</button><button type="button" class="btn" id="actual">1:1</button><span class="separator"></span><button type="button" class="btn" id="reset">重置</button></div></div>
+<aside class="panel detail" id="detail" aria-label="节点详情" hidden><div class="panel-top"><span class="tag" id="detail-tag"></span><button type="button" class="btn icon" id="detail-close" aria-label="关闭节点详情">×</button></div><h2 id="detail-title"></h2><p class="plain" id="detail-plain"></p><div class="detail-links" id="detail-links"></div><div class="detail-block"><h3>它负责什么</h3><p id="detail-role"></p></div><div class="detail-block"><h3>输入与输出</h3><div class="io"><b>输入</b><span id="detail-input"></span></div><div class="io"><b>输出</b><span id="detail-output"></span></div></div><div class="detail-block"><h3>对应源码</h3><div id="detail-sources"></div></div><p class="notice" id="detail-note"></p></aside>
+<aside class="panel directory" id="directory" aria-label="节点与文档目录" hidden><div class="panel-top"><h2 style="font-size:17px">节点目录</h2><button type="button" class="btn icon" id="directory-close" aria-label="关闭节点目录">×</button></div><input class="search" id="search" type="search" placeholder="搜索名称、服务或函数" aria-label="搜索架构节点"><div class="directory-list" id="directory-list"></div><div class="empty" id="search-empty" hidden><div class="empty-mark">⌕</div><strong>没有匹配的节点</strong><p>试试模块名称或清空关键词。</p><button type="button" class="btn primary" id="clear-search">显示全部节点</button></div><div class="detail-block"><h3>阅读设计</h3><div id="design-links"></div></div><p class="notice" id="boundary"></p></aside>
+<section class="walkthrough" id="walkthrough" aria-label="架构流程走读" aria-live="polite" hidden><div class="step-top"><span id="step-label"></span><button type="button" class="btn icon" id="walk-exit" aria-label="退出流程走读">×</button></div><h3 id="step-title"></h3><p id="step-text"></p><div class="walk-controls"><button type="button" class="btn" id="walk-prev">← 上一步</button><button type="button" class="btn primary" id="walk-next">下一步 →</button></div><div class="progress"><span id="step-progress"></span></div></section>
+<noscript><div class="load-state"><strong>需要 JavaScript 展开交互图</strong><p>请启用 JavaScript，或直接阅读同目录中的设计 Markdown。</p></div></noscript>
+</main><script type="application/json" id="architecture-data">{
+  "id": "02",
+  "title": "工作台与 Agent",
+  "eyebrow": "WORKSPACE / AGENT",
+  "subtitle": "一个客户端组织项目、官方会话与原生 Agent；Interactive、Workbench 在基础层内部装配，任务业务由 SuperAgent 负责。",
+  "boundary": "图示来自当前工作区源码。外部 Agent 能力各异；本机工作台、SSH、真实原生会话和安装版界面需分别验收，不能由构建成功推定。",
+  "nodes": [
+    {
+      "id": "base",
+      "title": "基础层装配",
+      "kicker": "BASE COMPOSITION",
+      "kind": "orchestration",
+      "sub": "公共配置、服务与内部能力的唯一根入口",
+      "symbol": "apply(ctx) / benchgo",
+      "plain": "先把工作台需要的公共能力装进同一个产品。",
+      "role": "提供 benchgo、benchgoSettings，并用 Cordis 注入装配公共接口、Interactive、Efficiency 与 Workbench。五个入口随一个 benchgo-plugin 安装。",
+      "input": "宿主服务、配置与数据目录",
+      "output": "公共服务与独立作用域",
+      "sources": [
+        "plugins/benchgo/src/plugin.mjs",
+        "plugins/benchgo/cordis.patch.yml"
+      ],
+      "note": "内部源码包不增加 Cordis 注册入口；lib/modules 是生成目录。",
+      "state": "implemented",
+      "x": 60,
+      "y": 160
+    },
+    {
+      "id": "client",
+      "title": "统一客户端",
+      "kicker": "ONE CLIENT",
+      "kind": "orchestration",
+      "sub": "按服务可用性挂载并释放模块界面",
+      "symbol": "startModuleLifecycle()",
+      "plain": "当前服务能用，才挂载对应功能入口。",
+      "role": "唯一客户端注册 id 为 benchgo-plugin。根据 /api/benchgo/modules 快照管理 base、harness、superagent、voice、link 的客户端作用域。暂时网络错误保留最后确认状态。",
+      "input": "模块可用性快照",
+      "output": "客户端 fiber 与清理函数",
+      "sources": [
+        "plugins/benchgo/client/index.jsx",
+        "plugins/benchgo/client/modules.mjs"
+      ],
+      "note": "明确停用或访问被拒时卸载模块；选中状态不等于服务可用。",
+      "state": "implemented",
+      "x": 440,
+      "y": 160
+    },
+    {
+      "id": "workspace",
+      "title": "项目与会话导航",
+      "kicker": "WORKSPACE NAVIGATION",
+      "kind": "orchestration",
+      "sub": "项目、未分组、最近、归档与搜索",
+      "symbol": "mountSidebarProjects()",
+      "plain": "从不同导航入口，回到同一条真实会话。",
+      "role": "复用官方 workspaces、sessions 与 uiSession；组织项目、未分组与原生会话，保留归档和重命名入口，按公开状态组织列表。",
+      "input": "项目与官方会话快照、用户选择",
+      "output": "工作区选择、会话打开与列表状态",
+      "sources": [
+        "plugins/benchgo/client/index.jsx",
+        "plugins/benchgo/client/sidebar-state.mjs",
+        "plugins/benchgo/src/web.mjs"
+      ],
+      "note": "工单业务属于 SuperAgent，导航不另建执行队列。",
+      "state": "implemented",
+      "x": 820,
+      "y": 160
+    },
+    {
+      "id": "official",
+      "title": "官方 Agent 会话",
+      "kicker": "OFFICIAL RUNTIME",
+      "kind": "execution",
+      "sub": "官方会话与原生路由的适配接缝",
+      "symbol": "mountHarnessAdapter()",
+      "plain": "普通官方会话由引擎运行；选择原生 Agent 才走适配器。",
+      "role": "Harness 适配器注册原生 Agent 模型路由，把官方流式请求对应到 Commander 原生会话；官方 Agent、Session、工具和投影仍由上游提供。",
+      "input": "官方消息、模型路由与会话",
+      "output": "官方流式输出或原生会话请求",
+      "sources": [
+        "plugins/harness/src/adapter.mjs",
+        "plugins/harness/src/plugin.mjs",
+        "upstream.json"
+      ],
+      "note": "SuperAgent Worker 直接使用官方 Agent，不经 Commander 另建推理循环。",
+      "state": "implemented",
+      "x": 1200,
+      "y": 160
+    },
+    {
+      "id": "commander",
+      "title": "原生会话聚合",
+      "kicker": "HARNESS SERVICE",
+      "kind": "execution",
+      "sub": "创建、连接、发送、打断与归档",
+      "symbol": "Commander / commander",
+      "plain": "让多种原生编码工具有一致的会话管理入口。",
+      "role": "维护会话、driver、提交回执和状态；提交用 requestId 去重，恢复使用真实原生 handle 与会话保存的路由。",
+      "input": "工具、cwd、ownerSessionId、任务",
+      "output": "会话句柄、回执、事件与终态",
+      "sources": [
+        "plugins/harness/src/runtime.mjs",
+        "plugins/harness/src/web.mjs"
+      ],
+      "note": "入队回执不等于完成；wait 超时不取消任务；丢失 handle 不伪造恢复。",
+      "state": "implemented",
+      "x": 1200,
+      "y": 450
+    },
+    {
+      "id": "drivers",
+      "title": "协议驱动与委派桥",
+      "kicker": "NATIVE DRIVERS",
+      "kind": "execution",
+      "sub": "Codex / Claude / Pi / OpenCode / ACP",
+      "symbol": "providerClasses / DelegationBridge",
+      "plain": "每个驱动负责和自己的原生工具说话。",
+      "role": "驱动完成各原生协议连接；委派桥使用 127.0.0.1 随机端口与会话级随机令牌，把 MCP 或扩展的请求交回 Commander。",
+      "input": "原生进程、协议参数、会话能力",
+      "output": "原生工具流与委派结果",
+      "sources": [
+        "plugins/harness/src/runtime.mjs",
+        "plugins/harness/src/providers/codex.mjs",
+        "plugins/harness/src/providers/claude.mjs",
+        "plugins/harness/src/providers/acp.mjs",
+        "plugins/harness/src/delegation.mjs",
+        "plugins/harness/src/mcp.mjs"
+      ],
+      "note": "能力按驱动声明，不能推断每种工具都支持 steer、历史或托管路由。",
+      "state": "implemented",
+      "x": 820,
+      "y": 450
+    },
+    {
+      "id": "approval",
+      "title": "真实审批与提问",
+      "kicker": "HUMAN INTERACTION",
+      "kind": "orchestration",
+      "sub": "原生请求交回官方人工交互入口",
+      "symbol": "approval.request() / askNativeQuestion()",
+      "plain": "需要人决定时，把真实请求交回用户。",
+      "role": "监听 approval.requested；权限走官方 approval，问题走 userQuestions。直接浏览器会话使用自身审批界面；停用时终止等待并移除监听。",
+      "input": "原生 permission / question 事件",
+      "output": "人工决定与对应原生请求答复",
+      "sources": [
+        "plugins/harness/src/plugin.mjs",
+        "plugins/benchgo/src/questions.mjs"
+      ],
+      "note": "不存在 commander_approve 模型工具；模型不能替人自批。",
+      "state": "implemented",
+      "x": 440,
+      "y": 450
+    },
+    {
+      "id": "store",
+      "title": "事件与持久化",
+      "kicker": "PERSISTENT SESSIONS",
+      "kind": "finish",
+      "sub": "索引、回执、句柄与原生历史分工保存",
+      "symbol": "Store / Commander.events()",
+      "plain": "保留已知事实，不把失联或重启当作成功。",
+      "role": "Store 保存聚合会话；Commander 记录事件和回执。重启把原活动会话设为 disconnected，未确定提交设为 uncertain；完整原生历史由驱动读取。",
+      "input": "状态、事件、提交回执、原生 handle",
+      "output": "可恢复索引、事件游标与历史入口",
+      "sources": [
+        "plugins/harness/src/store.mjs",
+        "plugins/harness/src/runtime.mjs"
+      ],
+      "note": "事件窗口可裁剪；截断后需查原生历史。停用释放资源但不删除持久化数据。",
+      "state": "implemented",
+      "x": 60,
+      "y": 450
+    },
+    {
+      "id": "interactive",
+      "title": "交互回复",
+      "kicker": "INTERACTIVE UI",
+      "kind": "orchestration",
+      "sub": "表单、选项、表格与图表白名单",
+      "symbol": "mountInteractivePrompt()",
+      "plain": "在普通回复旁展示可理解、可填写的组件。",
+      "role": "Agent 生命周期注入 BenchGo UI v1 提示；受限 benchgo-ui JSON 由客户端白名单渲染，官方聊天保留原文并追加组件，总助手原位显示。",
+      "input": "真实回复数据与受限 JSON",
+      "output": "可视组件与普通用户答复消息",
+      "sources": [
+        "plugins/interactive/src/prompt.mjs",
+        "plugins/interactive/client/official.jsx",
+        "plugins/interactive/client/protocol.mjs"
+      ],
+      "note": "不执行脚本或任意组件；表单提交不能授权或直接执行动作。",
+      "state": "implemented",
+      "x": 60,
+      "y": 740
+    },
+    {
+      "id": "preview",
+      "title": "产物快览",
+      "kicker": "ARTIFACT PREVIEW",
+      "kind": "finish",
+      "sub": "授权读取后按文件类型预览",
+      "symbol": "ArtifactPreview / createDocumentPreview()",
+      "plain": "任务生成的文件可以直接查看，也能下载原件。",
+      "role": "共享预览支持文本、Markdown、HTML、JSON、媒体、PDF、DOCX 和表格。文档可选限流转换为 PDF，读取仍须经过项目或会话授权。",
+      "input": "已授权文件、格式与主题",
+      "output": "只读预览、PDF 转换或明确错误",
+      "sources": [
+        "plugins/shared/client/artifact-preview.jsx",
+        "plugins/shared/client/preview-model.mjs",
+        "plugins/benchgo/src/document-preview.mjs"
+      ],
+      "note": "HTML 禁止脚本和外部资源；表格不重算公式；LibreOffice 不可用时明确失败。",
+      "state": "implemented",
+      "x": 440,
+      "y": 740
+    },
+    {
+      "id": "workbench",
+      "title": "文件 / Git / 终端",
+      "kicker": "LOCAL WORKBENCH",
+      "kind": "execution",
+      "sub": "本机 owner 范围的工程工作台",
+      "symbol": "mountWorkbench() / ownerWebServer()",
+      "plain": "在工作台里处理本机工程文件和终端。",
+      "role": "内部装配 dsh-better-sidebar 与 SSH 适配；HTTP/WebSocket 校验官方认证、来源及项目边界，设置通过公共配置管理注册并重装作用域。",
+      "input": "本机 owner 会话、项目、配置",
+      "output": "文件、Git、终端界面与可用性快照",
+      "sources": [
+        "plugins/workbench/src/plugin.mjs",
+        "plugins/workbench/src/boundary.mjs",
+        "plugins/workbench/src/preferences.mjs"
+      ],
+      "note": "Link 不会因此获得任意主机文件与终端权限；适配版本由构建校验。",
+      "state": "implemented",
+      "x": 820,
+      "y": 740
+    },
+    {
+      "id": "ssh",
+      "title": "SSH 指纹信任",
+      "kicker": "SSH TRUST",
+      "kind": "execution",
+      "sub": "先探测与确认，再按 pin 握手认证",
+      "symbol": "probeFingerprint() / openSshTrust()",
+      "plain": "先确认连接的是哪台主机，再使用凭据登录。",
+      "role": "探测生成有时效 challenge；明确确认须匹配 SHA256 指纹；真实 SSH 握手匹配保存的 pin 后才能认证。",
+      "input": "主机、探测指纹与用户确认",
+      "output": "可信主机 pin 与受约束连接",
+      "sources": [
+        "plugins/workbench/src/ssh-trust.mjs",
+        "plugins/workbench/src/plugin.mjs"
+      ],
+      "note": "SSH 凭据与动作不注册为模型工具；真实远端连接需独立验收。",
+      "state": "implemented",
+      "x": 1200,
+      "y": 740
+    }
+  ],
+  "edges": [
+    {
+      "a": "base",
+      "b": "client",
+      "label": "装配统一客户端",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "client",
+      "b": "workspace",
+      "label": "挂载导航",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "workspace",
+      "b": "official",
+      "label": "打开真实会话",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "official",
+      "b": "commander",
+      "label": "原生路由分支",
+      "from": "b",
+      "to": "t"
+    },
+    {
+      "a": "commander",
+      "b": "drivers",
+      "label": "连接原生工具",
+      "from": "l",
+      "to": "r"
+    },
+    {
+      "a": "drivers",
+      "b": "approval",
+      "label": "权限 / 提问",
+      "from": "l",
+      "to": "r"
+    },
+    {
+      "a": "approval",
+      "b": "store",
+      "label": "决定写回事件",
+      "from": "l",
+      "to": "r"
+    },
+    {
+      "a": "base",
+      "b": "interactive",
+      "from": "l",
+      "to": "l",
+      "label": "内部装配",
+      "kind": "support",
+      "route": "outer-left"
+    },
+    {
+      "a": "workbench",
+      "b": "preview",
+      "from": "l",
+      "to": "r",
+      "label": "授权文件快览",
+      "kind": "support"
+    },
+    {
+      "a": "workbench",
+      "b": "ssh",
+      "label": "SSH 适配",
+      "from": "r",
+      "to": "l"
+    }
+  ],
+  "steps": [
+    {
+      "node": "client",
+      "title": "进入统一工作台",
+      "text": "先确认基础层与可选服务真实可用，再挂载相应界面。",
+      "edge": 0
+    },
+    {
+      "node": "workspace",
+      "title": "选择项目与会话",
+      "text": "项目、最近与官方未分组指向真实会话；打开后继续已有上下文。",
+      "edge": 1
+    },
+    {
+      "node": "official",
+      "title": "确认本轮执行路径",
+      "text": "普通会话由官方引擎运行；选择外部原生 Agent 才连接 Commander。",
+      "edge": 2
+    },
+    {
+      "node": "commander",
+      "title": "发送并等待真实结果",
+      "text": "提交带 requestId 的输入。入队回执之后继续读事件，不能直接宣称完成。",
+      "edge": 3
+    },
+    {
+      "node": "approval",
+      "title": "人工决定回到执行",
+      "text": "原生工具发起权限或提问请求，由官方交互入口收取人的答复，再交回工具。",
+      "edge": 5
+    },
+    {
+      "node": "store",
+      "title": "按事实恢复和回看",
+      "text": "保留真实 handle。重启后 uncertain 的请求先核对，不能盲目重发。",
+      "edge": 6
+    },
+    {
+      "node": "preview",
+      "title": "查看交付文件",
+      "text": "只读预览任务生成的文件；完整排版或交互可下载原件。"
+    },
+    {
+      "node": "ssh",
+      "title": "在明确边界内处理工程",
+      "text": "文件、Git、终端限定本机 owner；SSH 先探测并确认指纹。",
+      "edge": 9
+    }
+  ],
+  "docs": [
+    {
+      "label": "板块设计",
+      "path": "docs/02-工作台与Agent/设计.md"
+    },
+    {
+      "label": "源码装配与生命周期",
+      "path": "docs/02-工作台与Agent/源码架构.md"
+    },
+    {
+      "label": "产物快览",
+      "path": "docs/02-工作台与Agent/产物快览.md"
+    },
+    {
+      "label": "统一选择器",
+      "path": "docs/02-工作台与Agent/统一选择器.md"
+    },
+    {
+      "label": "任务列表交互",
+      "path": "docs/02-工作台与Agent/任务列表交互.md"
+    }
+  ],
+  "version": "2026-11-11-1"
+}</script><script src="../_assets/architecture.js"></script></body></html>

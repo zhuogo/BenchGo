@@ -222,6 +222,7 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
     for (const path of [icon, join(source, 'cordis.patch.yml')]) await checkedPath(source, path);
     for (const path of ['package.json', 'cordis.patch.yml', 'assets/icon.svg']) await checkedPath(target, join(target, path));
     for (const path of ['package.json', 'cordis.patch.yml', 'icon.svg']) await checkedPath(releaseRoot, join(wrapper, path));
+    await checkedTree(releaseRoot, join(wrapper, 'locale'));
     await checkedPath(releaseRoot, join(releaseRoot, 'release.json'));
     for (const { destination } of copies) await checkedPath(target, destination, true);
     for (const { links } of planned) for (const { base, destination } of links) await checkedPath(base, destination, true);
@@ -250,6 +251,8 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
       await rm(join(target, name), { recursive: true, force: true });
       await cp(join(source, name), join(target, name), { recursive: true, force: true });
     }
+    await rm(join(wrapper, 'locale'), { recursive: true, force: true });
+    await cp(join(source, 'locale'), join(wrapper, 'locale'), { recursive: true, force: true });
     // The selected development wrapper must expose new module rows on reload;
     // user overrides belong to the profile patch, which is never changed here.
     await cp(join(source, 'cordis.patch.yml'), join(target, 'cordis.patch.yml'), { force: true });
@@ -258,6 +261,7 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
     await cp(icon, join(target, 'assets/icon.svg'), { force: true });
     await cp(icon, join(wrapper, 'icon.svg'), { force: true });
     wrapperManifest.exports = { ...wrapperManifest.exports, './icon': './icon.svg' };
+    wrapperManifest.displayName = 'BenchGo';
     await writeFile(join(wrapper, 'package.json'), JSON.stringify(wrapperManifest, null, 2) + '\n');
     await writeFile(join(target, 'package.json'), JSON.stringify(manifest, null, 2) + '\n');
     if (release) {

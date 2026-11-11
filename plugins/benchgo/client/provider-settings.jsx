@@ -3,6 +3,8 @@ import { Loading } from '../../shared/client/ui/loading.jsx';
 import React, { useState } from 'react';
 import { Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ModelsSection } from '../../../deepseek-harness/packages/client/ui-settings-models/src/client/ModelsSection.tsx';
+import { mountOfficialModelsStyle } from '../../../deepseek-harness/packages/client/ui-settings-models/src/client/ModelsSection.module.css';
+import { adaptProviderStore } from './provider-store.mjs';
 import { UIIcon } from './iconsax.jsx';
 import { ProviderBrandIcon } from './provider-brand-icon.jsx';
 import { ToolBrandIcon } from './tool-brand-icon.jsx';
@@ -11,15 +13,19 @@ import css from './provider-settings.css';
 
 /** Keep every official editor and operation; only replace provider selection. */
 export function mountProviderSettings(ctx) {
-  const style = document.createElement('style'); style.textContent = css; document.head.append(style);
-  ctx.effect(() => () => { style.remove(); document.getElementById('commander-official-models-style')?.remove(); });
+  ctx.effect(() => {
+    const style = document.createElement('style'); style.textContent = css; document.head.append(style);
+    const disposeOfficialStyle = mountOfficialModelsStyle();
+    return () => { style.remove(); disposeOfficialStyle(); };
+  });
   // Child slots have one declaration owner. Adapt the official entry's view
   // reversibly, retaining its original inject, controller and render authority.
   ctx.effect(() => {
     const entry = ctx.slots.entries('settings.section').find(item => item.options.id === 'models' && item.children?.['settings.models.provider-card']);
     if (!entry) throw new Error('Official Models settings entry is unavailable');
+    const restoreStore = adaptProviderStore(entry.inject().controller);
     const original = entry.component; entry.component = ModelsSection;
-    return () => { if (entry.component === ModelsSection) entry.component = original; };
+    return () => { restoreStore(); if (entry.component === ModelsSection) entry.component = original; };
   });
 }
 

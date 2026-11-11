@@ -209,7 +209,7 @@ test('sidebar collapse state and chevron structure follow shared rotation styles
   nodes = walk(h.render('AssistantSidebarEntry', props));
   toggle = nodes.find(node => node.props.className === 'cmd-section-toggle');
   assert.equal(toggle.props['aria-expanded'], false);
-  assert.equal(nodes.find(node => node.props.id === 'cmd-assistant-section').props['data-open'], false);
+  assert.equal(nodes.find(node => node.props.id === toggle.props['aria-controls'] && node.props.className === 'cmd-section-body ba-sidebar-body').props['data-open'], false);
   const icon = h.render('UIIcon', { name: 'chevronDown' });
   assert.notEqual(icon.type, 'span');
   assert.equal(icon.props.name, 'chevronDown');

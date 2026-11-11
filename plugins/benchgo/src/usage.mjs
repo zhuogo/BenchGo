@@ -41,10 +41,23 @@ export class UsageLedger {
     this.rows.set(safe.id, safe); this.dirty = true;
   }
   flush() {
-    if (!this.dirty) return this.writes; this.dirty = false;
-    const data = JSON.stringify({ version: 1, rows: [...this.rows.values()] });
-    const task = this.writes.then(async () => { const temp = this.path + '.' + randomUUID() + '.tmp'; try { await writeFile(temp, data, { mode: 0o600 }); await rename(temp, this.path); } finally { await rm(temp, { force: true }); } });
-    this.writes = task.catch(error => { this.error = error.message; }); return task;
+    if (this.flushing) return this.flushing;
+    if (!this.dirty) return this.writes;
+    // Coalesce bursts before serializing, and retain only one snapshot while a
+    // write is in flight. A large ledger must not queue one full copy per event.
+    const task = this.writes.then(async () => {
+      while (this.dirty) {
+        this.dirty = false;
+        const data = JSON.stringify({ version: 1, rows: [...this.rows.values()] });
+        const temp = this.path + '.' + randomUUID() + '.tmp';
+        try { await writeFile(temp, data, { mode: 0o600 }); await rename(temp, this.path); }
+        catch (error) { this.dirty = true; throw error; }
+        finally { await rm(temp, { force: true }); }
+      }
+    });
+    this.flushing = task.finally(() => { this.flushing = null; });
+    this.writes = this.flushing.catch(error => { this.error = error.message; });
+    return this.flushing;
   }
   query({ start, end, page = 1, pageSize = 50, timeZone = 'UTC' } = {}) {
     if (!Number.isSafeInteger(page) || page < 1 || ![25, 50, 100].includes(pageSize)) throw Error('无效的分页参数');
@@ -52,23 +65,28 @@ export class UsageLedger {
     if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) throw Error('请选择有效起止日期');
     let excludedDuplicates = 0;
     const managed = this.managed?.() ?? new Map(), imported = new Set([...this.rows.values()].filter(row => row.source === 'machine').map(row => row.tool + ':' + row.nativeId));
-    const preferred = new Set([...managed.values()].filter(key => imported.has(key) && this.importer?.coverage.state !== 'scanning' && this.importer?.completeNativeIds.has(key)));
+    const managedKeys = new Set(managed.values());
+    const preferred = new Set([...managedKeys].filter(key => imported.has(key) && this.importer?.coverage.state !== 'scanning' && this.importer?.completeNativeIds.has(key)));
     const rows = [...this.rows.values()].filter(row => {
       const nativeKey = row.source === 'machine' ? row.tool + ':' + row.nativeId : managed.get(row.sessionId);
-      const duplicate = row.source === 'machine' ? [...managed.values()].includes(nativeKey) && !preferred.has(nativeKey) : nativeKey && preferred.has(nativeKey);
+      const duplicate = row.source === 'machine' ? managedKeys.has(nativeKey) && !preferred.has(nativeKey) : nativeKey && preferred.has(nativeKey);
       if (duplicate) { excludedDuplicates++; return false; }
       const time = Date.parse(row.time); return time >= from && time < to;
     }).sort((a, b) => b.time.localeCompare(a.time));
     const groups = new Map();
     for (const row of rows) { const key = JSON.stringify([row.tool, row.model]); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }
     const summarize = group => {
-      const total = field => sum(group.map(row => row[field]));
+      // Missing usage in one historical record must not erase measured records.
+      // Keep an entirely unknown field null, including for an empty interval.
+      const total = field => sum(group.map(row => count(row[field])).filter(value => value !== null));
       const cacheReadTokens = total('cacheReadTokens'), inputTokens = total('inputTokens'), cacheWriteTokens = total('cacheWriteTokens');
-      const prompt = sum(group.map(row => row.totalTokens !== null && row.outputTokens !== null ? row.totalTokens - row.outputTokens : sum([row.inputTokens, row.cacheReadTokens, row.cacheWriteTokens])));
+      const cacheMeasured = group.map(row => ({ cache: count(row.cacheReadTokens), prompt: count(row.totalTokens) !== null && count(row.outputTokens) !== null && row.totalTokens >= row.outputTokens ? row.totalTokens - row.outputTokens : sum([count(row.inputTokens), count(row.cacheReadTokens), count(row.cacheWriteTokens)]) })).filter(row => row.cache !== null && row.prompt !== null);
+      const prompt = sum(cacheMeasured.map(row => row.prompt)), cache = sum(cacheMeasured.map(row => row.cache));
       const timed = group.filter(row => row.durationMs > 0 && row.outputTokens !== null);
       const context = group.filter(row => row.contextTokens !== null).sort((a, b) => b.contextTokens - a.contextTokens)[0];
       return { calls: group.length, inputTokens, outputTokens: total('outputTokens'), totalTokens: total('totalTokens'), cacheReadTokens, cacheWriteTokens,
-        cacheHitRate: prompt > 0 && cacheReadTokens !== null ? cacheReadTokens / prompt : null, contextTokens: context?.contextTokens ?? null,
+        cacheHitRate: prompt > 0 && cache !== null ? cache / prompt : null, contextTokens: context?.contextTokens ?? null,
+        incompleteCalls: group.filter(row => ['inputTokens', 'outputTokens', 'totalTokens', 'cacheReadTokens'].some(field => count(row[field]) === null)).length,
         contextWindow: context?.contextWindow ?? null, tokensPerSecond: timed.length ? timed.reduce((n, row) => n + (row.speedOutputTokens ?? row.outputTokens), 0) / timed.reduce((n, row) => n + row.durationMs / 1000, 0) : null, measuredCalls: group.filter(row => row.totalTokens !== null).length };
     };
     const timeline = usageTimeline(rows, { start, end, timeZone });
@@ -85,10 +103,14 @@ export async function mountUsage(ctx, commander, options = {}) {
   catch (error) { ledger = new UsageLedger(directory); ledger.error = '历史用量无法读取，本次仅显示内存采集；原文件保留。'; ledger.flush = () => Promise.resolve(); }
   ledger.managed = () => new Map([...(getCommander()?.sessions.values() ?? [])].filter(session => session.nativeId).map(session => [session.id, session.provider + ':' + (session.provider === 'pi' ? session.nativeId.split('/').at(-1)?.replace(/.jsonl$/u, '').split('_').at(-1) : session.nativeId)]));
   ledger.importer = await new MachineUsageImporter(ledger, normalizeUsage, options.enabled === false ? { roots: {} } : options).open();
-  let scanTimer, scanRounds = 0;
-  const scanMachine = async () => { await ledger.importer.scan(); scanRounds++; if (!ledger.importer.closed && scanRounds < 100 && ledger.importer.coverage.scannedBytes > 0 && ledger.importer.coverage.sources.some(source => source.continuable)) { scanTimer = setTimeout(scanMachine, 1000); scanTimer.unref?.(); } };
-  void scanMachine();
-  const routes = new Map(), stepFirst = new Map(); let stopped = false, backfill;
+  let scanTimer, scanRounds = 0, initialScan;
+  const scanMachine = async () => { if (stopped) return; await ledger.importer.scan(); scanRounds++; if (!stopped && !ledger.importer.closed && scanRounds < 100 && ledger.importer.coverage.scannedBytes > 0 && ledger.importer.coverage.sources.some(source => source.continuable)) { scanTimer = setTimeout(scanMachine, 1000); scanTimer.unref?.(); } };
+  const routes = new Map(), stepFirst = new Map(); let stopped = false, backfill, historySource, flushTimer;
+  const scheduleFlush = () => {
+    if (stopped || !ledger.dirty || flushTimer) return;
+    flushTimer = setTimeout(() => { flushTimer = null; void ledger.flush().catch(() => {}); }, 200);
+    flushTimer.unref?.();
+  };
   // Earlier versions measured entire native turns. Remove those incompatible
   // intervals rather than mixing them into the official settled-step speed.
   for (const row of ledger.rows.values()) if (row.id.startsWith('native:') && (row.durationMs !== null || row.speedOutputTokens !== null)) { row.durationMs = null; row.speedOutputTokens = null; ledger.dirty = true; }
@@ -112,7 +134,7 @@ export async function mountUsage(ctx, commander, options = {}) {
   };
   const attachNative = (child, source) => {
     for (const session of source.sessions.values()) for (const event of session.events) native(source, event);
-    const listener = event => { native(source, event); void ledger.flush().catch(() => {}); };
+    const listener = event => { native(source, event); if (['usage', 'message', 'turn.completed'].includes(event.type)) scheduleFlush(); };
     source.on('event', listener);
     child.effect(() => () => source.off('event', listener));
   };
@@ -137,14 +159,24 @@ export async function mountUsage(ctx, commander, options = {}) {
     const durationMs = Number.isFinite(firstTime) && event.time > firstTime ? event.time - firstTime : null;
     ledger.put({ id: 'harness:' + session.id + ':' + event.seq, tool: source.provider ?? 'harness', model: source.model ?? null, time: new Date(event.time).toISOString(), sessionId: session.id, turnId: String(event.data.turn), status: event.data.interrupted ? 'interrupted' : 'completed', durationMs, ...normalizeUsage(usage ?? {}) });
   };
-  ctx.on('session/event', (session, event) => { official(session, event); void ledger.flush().catch(() => {}); });
+  ctx.on('session/event', (session, event) => { official(session, event); if (['assistant/message', 'assistant/attempt'].includes(event.type)) scheduleFlush(); });
   ctx.inject(['sessionQuery'], child => {
-    backfill = (async () => { for (const record of await child.sessionQuery.listSessions()) { if (stopped) return; try { const snapshot = await child.sessionQuery.readSession(record.header.id); const session = { id: record.header.id, inheritedEventCount: snapshot.inheritedEventCount }; for (const event of snapshot.events) official(session, event); } catch { /* Unreadable old sessions must not prevent current usage collection. */ } } await ledger.flush(); })().catch(error => { ledger.error = error.message; });
+    const source = child.sessionQuery;
+    if (historySource !== source) backfill = undefined;
+    historySource = source;
+    child.effect?.(() => () => { if (historySource === source) historySource = null; });
   });
+  // History is auxiliary: keep real-time collection active, but do not decode
+  // every old conversation or walk all native logs on the desktop's cold path.
+  const readHistory = () => {
+    if (!historySource || stopped) return backfill;
+    const source = historySource;
+    return backfill ??= (async () => { for (const record of await source.listSessions()) { if (stopped || historySource !== source) return; try { const snapshot = await source.readSession(record.header.id); if (stopped || historySource !== source) return; const session = { id: record.header.id, inheritedEventCount: snapshot.inheritedEventCount }; for (const event of snapshot.events) official(session, event); } catch { /* Unreadable old sessions must not prevent current usage collection. */ } } await ledger.flush(); })().catch(error => { ledger.error = error.message; });
+  };
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/commander/usage', methods: ['POST'], requestBody: 'buffered', async fetch(request) {
-    try { assertSameOrigin(request); const input = await readJson(request); await backfill; if (input.refresh === true) await ledger.importer.scan(); return Response.json(ledger.query(input), { headers: { 'cache-control': 'no-store' } }); }
+    try { assertSameOrigin(request); const input = await readJson(request); await Promise.all([readHistory(), initialScan ??= scanMachine()]); if (input.refresh === true) await ledger.importer.scan(); return Response.json(ledger.query(input), { headers: { 'cache-control': 'no-store' } }); }
     catch (error) { return Response.json({ error: error.message }, { status: 400 }); }
   } }));
-  ctx.effect(() => async () => { stopped = true; clearTimeout(scanTimer); await backfill; await ledger.importer.close(); await ledger.flush(); });
+  ctx.effect(() => async () => { stopped = true; clearTimeout(scanTimer); clearTimeout(flushTimer); await backfill; await ledger.importer.close(); await ledger.flush(); });
   await ledger.flush(); return ledger;
 }

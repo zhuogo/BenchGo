@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>BenchGo · 模型与工具架构</title><link rel="stylesheet" href="../_assets/architecture.css"></head>
+<body><main aria-label="BenchGo 模型与工具架构">
+<header class="header"><div class="brand"><a class="brand-mark" href="../总架构.html" aria-label="BenchGo 总架构" style="text-decoration:none">B</a><div><div class="eyebrow">BENCHGO / MODELS / TOOLS</div><h1>模型与工具<span>架构图解</span></h1></div></div><div class="header-actions"><button type="button" class="btn" id="directory-toggle" aria-expanded="false" aria-controls="directory">☷ <span class="directory-label">节点</span>目录</button><button type="button" class="btn outline" id="walk-start" aria-pressed="false">流程走读 ↗</button></div></header>
+<nav class="tabs" aria-label="架构板块"><a href="../总架构.html"><span class="tab-index">◎</span>总架构</a><a href="../01-设备与远程连接/架构.html"><span class="tab-index">01</span>设备与远程连接</a><a href="../02-工作台与Agent/架构.html"><span class="tab-index">02</span>工作台与 Agent</a><a href="../03-实时语音/架构.html"><span class="tab-index">03</span>实时语音</a><a href="架构.html" aria-current="page"><span class="tab-index">04</span>模型与工具</a><a href="../05-更新与发布/架构.html"><span class="tab-index">05</span>更新与发布</a><a href="../06-superagent/架构.html"><span class="tab-index">06</span>SuperAgent</a></nav>
+<div class="viewport" id="viewport" tabindex="0" aria-label="架构画布：拖动空白平移，滚轮或双指缩放，拖动节点调整布局，点击节点查看源码。方向键平移，加减号缩放，零适应。"><div class="load-state" id="load-state" role="status"><strong id="load-title">正在展开架构图</strong><p id="load-message">如果画布未出现，请确认 _assets 目录与 HTML 一同保留。</p><button type="button" class="btn outline" id="retry" hidden onclick="location.reload()">重新加载</button></div><div class="world" id="world"><div class="canvas-title"><div><h2 id="canvas-title"></h2><p id="canvas-subtitle"></p></div><span class="sheet-no" id="sheet-no"></span></div><div id="zones"></div><svg class="edges" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--edge)"/></marker><marker id="arrow-feedback" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--accent)"/></marker></defs><g id="edge-paths"></g><g id="edge-labels"></g></svg><div id="nodes"></div></div></div>
+<div class="canvas-bottom"><div><div class="legend"><span><i></i>调用 / 依赖</span><span><i class="feedback"></i>反馈 / 记录</span><span><i class="support"></i>配置 / 装配</span><span>虚线边框 · 设计目标</span></div><p class="hint">拖动平移 · 滚轮缩放 · 拖动节点 · 点击查看说明与源码</p></div><div class="camera-controls" aria-label="画布控制"><button type="button" class="btn icon" id="zoom-out" aria-label="缩小">−</button><span class="zoom-value" id="zoom-value">100%</span><button type="button" class="btn icon" id="zoom-in" aria-label="放大">+</button><span class="separator"></span><button type="button" class="btn" id="fit">适应</button><button type="button" class="btn" id="actual">1:1</button><span class="separator"></span><button type="button" class="btn" id="reset">重置</button></div></div>
+<aside class="panel detail" id="detail" aria-label="节点详情" hidden><div class="panel-top"><span class="tag" id="detail-tag"></span><button type="button" class="btn icon" id="detail-close" aria-label="关闭节点详情">×</button></div><h2 id="detail-title"></h2><p class="plain" id="detail-plain"></p><div class="detail-links" id="detail-links"></div><div class="detail-block"><h3>它负责什么</h3><p id="detail-role"></p></div><div class="detail-block"><h3>输入与输出</h3><div class="io"><b>输入</b><span id="detail-input"></span></div><div class="io"><b>输出</b><span id="detail-output"></span></div></div><div class="detail-block"><h3>对应源码</h3><div id="detail-sources"></div></div><p class="notice" id="detail-note"></p></aside>
+<aside class="panel directory" id="directory" aria-label="节点与文档目录" hidden><div class="panel-top"><h2 style="font-size:17px">节点目录</h2><button type="button" class="btn icon" id="directory-close" aria-label="关闭节点目录">×</button></div><input class="search" id="search" type="search" placeholder="搜索名称、服务或函数" aria-label="搜索架构节点"><div class="directory-list" id="directory-list"></div><div class="empty" id="search-empty" hidden><div class="empty-mark">⌕</div><strong>没有匹配的节点</strong><p>试试模块名称或清空关键词。</p><button type="button" class="btn primary" id="clear-search">显示全部节点</button></div><div class="detail-block"><h3>阅读设计</h3><div id="design-links"></div></div><p class="notice" id="boundary"></p></aside>
+<section class="walkthrough" id="walkthrough" aria-label="架构流程走读" aria-live="polite" hidden><div class="step-top"><span id="step-label"></span><button type="button" class="btn icon" id="walk-exit" aria-label="退出流程走读">×</button></div><h3 id="step-title"></h3><p id="step-text"></p><div class="walk-controls"><button type="button" class="btn" id="walk-prev">← 上一步</button><button type="button" class="btn primary" id="walk-next">下一步 →</button></div><div class="progress"><span id="step-progress"></span></div></section>
+<noscript><div class="load-state"><strong>需要 JavaScript 展开交互图</strong><p>请启用 JavaScript，或直接阅读同目录中的设计 Markdown。</p></div></noscript>
+</main><script type="application/json" id="architecture-data">{
+  "id": "04",
+  "title": "模型与工具",
+  "eyebrow": "MODELS / TOOLS",
+  "subtitle": "供应商配置与模型选择形成按会话固化的路由；官方 Agent 的执行增强、压缩与技能发现继续复用官方服务。",
+  "boundary": "源码已提供供应商目录、路由隔离、工具生命周期、执行增强与技能目录；统一发起原生登录、卸载完整归属复核仍待完善。真实模型请求、原生 CLI 与技能发现需单独验证。",
+  "nodes": [
+    {
+      "id": "settings",
+      "title": "官方设置与凭据",
+      "kicker": "CONFIGURATION",
+      "kind": "orchestration",
+      "sub": "设置版本、增量写入与凭据引用",
+      "symbol": "createOfficialSettingsAdapter()",
+      "plain": "编辑一项配置时，沿用官方保存与凭据通路。",
+      "role": "基础层公共设置管理注册官方适配器，投影 schema 与版本，脱敏 secret 字段；供应商页复用官方 controller 和配置写入机制。",
+      "input": "配置草稿、期望版本、字段操作",
+      "output": "持久设置与应用结果",
+      "sources": [
+        "plugins/benchgo/src/settings-official.mjs",
+        "plugins/benchgo/src/settings-management.mjs",
+        "plugins/benchgo/client/provider-settings.jsx"
+      ],
+      "note": "保存、重载与实际请求须分别验证；编辑单项不应丢失其他配置。",
+      "state": "implemented",
+      "x": 60,
+      "y": 160
+    },
+    {
+      "id": "providers",
+      "title": "供应商与模型目录",
+      "kicker": "MODEL PROVIDERS",
+      "kind": "model",
+      "sub": "原样保存 ID，区分 API 与订阅",
+      "symbol": "createModelProviders()",
+      "plain": "把真实供应商、模型和认证来源呈现给用户。",
+      "role": "从官方 llm 的可配置供应商目录与 settings 读取配置，经 credentials 解析密钥；对外返回脱敏目录。订阅身份只允许对应原生工具，不转换 API Key。",
+      "input": "provider ID、配置、凭据引用",
+      "output": "供应商、模型目录与认证类型",
+      "sources": [
+        "plugins/benchgo/src/model-providers.mjs",
+        "plugins/benchgo/src/provider-access.mjs",
+        "plugins/benchgo/shared/builtin-providers.mjs"
+      ],
+      "note": "目录可达不证明生成、工具调用或视觉能力可用。RouterGo 使用既有同 ID 配置，不覆盖用户地址。",
+      "state": "implemented",
+      "x": 440,
+      "y": 160
+    },
+    {
+      "id": "picker",
+      "title": "统一模型选择",
+      "kicker": "MODEL SELECTION",
+      "kind": "orchestration",
+      "sub": "按工具、供应商、模型与能力选择",
+      "symbol": "createPickerCatalog()",
+      "plain": "只展示实际安装、路由与认证边界允许的选择。",
+      "role": "pickerCatalog 汇合工具安装、官方模型、认证来源与会话路由支持；客户端保留供应商和原生模型原值。公共参数目录仅精确匹配 model_id 并补缺失项。",
+      "input": "工具目录、供应商、模型与显式选择",
+      "output": "已选择路由模型 ID 与参数草稿",
+      "sources": [
+        "plugins/benchgo/src/picker-catalog.mjs",
+        "plugins/benchgo/client/model-picker.jsx",
+        "plugins/benchgo/client/model-profile-match.mjs",
+        "plugins/benchgo/src/tooling.mjs"
+      ],
+      "note": "模型 ID 是不透明标识；补全不覆盖手动值，失败不阻塞保存。",
+      "state": "implemented",
+      "x": 820,
+      "y": 160
+    },
+    {
+      "id": "route",
+      "title": "按会话固化路由",
+      "kicker": "SESSION ROUTE",
+      "kind": "orchestration",
+      "sub": "捕获选择，恢复时重新核验原绑定",
+      "symbol": "createSessionRoutes().capture()",
+      "plain": "会话创建时记住用谁的模型，之后不会被默认值悄悄改掉。",
+      "role": "capture 固化 tool、providerId、model、协议、地址、凭据引用与指纹；launch 校验原绑定及当前认证，不匹配时明确失败。",
+      "input": "显式供应商、模型、工具与参数",
+      "output": "固化 route、revision 与 fingerprint",
+      "sources": [
+        "plugins/benchgo/src/session-routes.mjs",
+        "plugins/benchgo/src/tool-profiles.mjs"
+      ],
+      "note": "托管会话配置与历史隔离目前仅对 Codex、Claude 声明支持；其他工具使用原生配置模式。",
+      "state": "implemented",
+      "x": 1200,
+      "y": 160
+    },
+    {
+      "id": "launch",
+      "title": "隔离启动与原生执行",
+      "kicker": "ISOLATED LAUNCH",
+      "kind": "execution",
+      "sub": "按固化绑定配置进程，不改全局方案",
+      "symbol": "createSessionRoutes().launch()",
+      "plain": "每条托管会话使用自己的配置和历史目录。",
+      "role": "Codex 使用 managed-runs 下独立 CODEX_HOME 和会话环境；Claude 使用独立 CLAUDE_CONFIG_DIR 与 settings。订阅模式由对应工具读取本机认证；Commander 启动真实 driver。",
+      "input": "保存的 route、sessionId 与安装路径",
+      "output": "隔离进程参数、环境与 managedProfile",
+      "sources": [
+        "plugins/benchgo/src/session-routes.mjs",
+        "plugins/harness/src/runtime.mjs",
+        "plugins/harness/src/isolated-launch.mjs"
+      ],
+      "note": "第三方请求使用 API 密钥；订阅不能跨工具使用。恢复失败不会回退当前默认供应商。",
+      "state": "implemented",
+      "x": 1200,
+      "y": 450
+    },
+    {
+      "id": "installer",
+      "title": "原生工具生命周期",
+      "kicker": "TOOL LIFECYCLE",
+      "kind": "execution",
+      "sub": "发现、安装、更新、重装、取消与卸载",
+      "symbol": "ToolInstaller / resolveLaunch()",
+      "plain": "工具是否已安装、正在运行或能启动，要分别核对。",
+      "role": "ToolInstaller 默认最多并行两个安装任务，同一工具防重入；resolveLaunch 解析系统 PATH 入口。列表核对版本和来源，运行中限制修改，卸载执行前复查真实路径和来源。",
+      "input": "tool ID、安装动作与预览快照",
+      "output": "任务回执、真实可执行路径与状态",
+      "sources": [
+        "plugins/benchgo/src/tool-install.mjs",
+        "plugins/benchgo/src/tool-catalog.mjs",
+        "plugins/benchgo/src/tooling.mjs"
+      ],
+      "note": "源码提供安装任务和卸载预览；当前执行端复查路径/来源，完整版本与跨环境归属复核仍需按设计补齐，不能由预览推定。安装不等于登录。",
+      "state": "partial",
+      "x": 820,
+      "y": 450
+    },
+    {
+      "id": "auth",
+      "title": "原生订阅状态",
+      "kicker": "NATIVE AUTH",
+      "kind": "orchestration",
+      "sub": "识别本机登录，失败引导回官方 CLI",
+      "symbol": "createNativeAuth().status()",
+      "plain": "先确认对应工具真的登录，再允许使用它的订阅模型。",
+      "role": "通过工具原生命令核对登录状态并缓存短期结果；供应商访问规则区分 API、subscription 和 unconfigured。统一工作台发起 Codex/Claude 登录仍未完整接通。",
+      "input": "工具 ID、已安装路径与原生命令结果",
+      "output": "订阅状态与真实登录引导",
+      "sources": [
+        "plugins/benchgo/src/native-auth.mjs",
+        "plugins/benchgo/src/provider-access.mjs",
+        "plugins/benchgo/src/model-providers.mjs"
+      ],
+      "note": "状态识别已有实现；不能把现有识别能力称为统一 OAuth 登录已完成。",
+      "state": "partial",
+      "x": 440,
+      "y": 450
+    },
+    {
+      "id": "efficiency",
+      "title": "官方会话执行增强",
+      "kicker": "EFFICIENCY COMPOSITION",
+      "kind": "orchestration",
+      "sub": "在基础层内部装配增强与状态诊断",
+      "symbol": "mountEfficiency() / benchgoEfficiency",
+      "plain": "同一官方会话按需使用更丰富的工具与上下文管理。",
+      "role": "维护 efficiency.json 版本和 feature 开关，等待真实官方服务后挂载；状态区分 disabled、waiting_services、loading、ready 与 unavailable，配置改变安全重建作用域。",
+      "input": "官方宿主服务、feature 配置",
+      "output": "增强作用域、可用性与会话诊断",
+      "sources": [
+        "plugins/efficiency/src/plugin.mjs",
+        "plugins/efficiency/src/settings-adapter.mjs"
+      ],
+      "note": "scope 为 official-harness；外部原生 Agent 不因此自动获得新工具。",
+      "state": "implemented",
+      "x": 60,
+      "y": 450
+    },
+    {
+      "id": "compaction",
+      "title": "主动上下文压缩",
+      "kicker": "CONTEXT COMPACTION",
+      "kind": "execution",
+      "sub": "复用会话现有压缩服务与工具",
+      "symbol": "mountCompaction()",
+      "plain": "上下文需要整理时，调用官方会话本身的压缩能力。",
+      "role": "组合 smart-compaction@0.3.15，注册 compact_now 与 context_status；拒绝工具名称冲突，诊断当前 Agent 是否具备 compactRegion。",
+      "input": "官方 tools、当前会话压缩服务",
+      "output": "上下文状态或真实压缩结果",
+      "sources": [
+        "plugins/efficiency/src/compaction.mjs"
+      ],
+      "note": "safePointRatio=false；宿主已加载不代表每个 Agent 作用域都提供压缩服务。",
+      "state": "implemented",
+      "x": 60,
+      "y": 740
+    },
+    {
+      "id": "ops",
+      "title": "原生执行工具组合",
+      "kicker": "EXECUTION TOOLS",
+      "kind": "execution",
+      "sub": "保留官方 Shell 与审批语义",
+      "symbol": "mountOps() / integration()",
+      "plain": "在官方 Agent 里组合成熟工具，而不是替换它的执行内核。",
+      "role": "使用 dsh-ops@0.5.0 的公开 integration，挂载 standard、ptc、cordis 预设的文件、常驻与发现能力。shell 仅显式启用，不替换官方工具。",
+      "input": "宿主工具、预设和增强配置",
+      "output": "按预设生效的执行工具与诊断",
+      "sources": [
+        "plugins/efficiency/src/ops.mjs"
+      ],
+      "note": "replaceOfficial=false，hidePwsh=false，不允许系统 Shell 静默回退。",
+      "state": "implemented",
+      "x": 440,
+      "y": 740
+    },
+    {
+      "id": "skills",
+      "title": "统一技能目录",
+      "kicker": "SKILLS REGISTRY",
+      "kind": "orchestration",
+      "sub": "只读官方最终生效项，按项目限定范围",
+      "symbol": "createSkillsCatalog()",
+      "plain": "直接查看模型实际能发现的技能，避免另扫一份目录。",
+      "role": "通过 ctx.skills.list/get 查询官方目录，workspaceRegistry 解析项目；默认 Agent 预设 acquireScope 提供 standing lease，不创建会话，结束立即释放。",
+      "input": "projectId、name、provider 与查询操作",
+      "output": "生效技能摘要或所选正文",
+      "sources": [
+        "plugins/benchgo/src/skills.mjs",
+        "plugins/benchgo/client/skills-library.jsx"
+      ],
+      "note": "不接受任意 cwd；不枚举被覆盖副本，不扫描第三方 CLI 私有目录，不提供任意文件编辑卸载。",
+      "state": "implemented",
+      "x": 820,
+      "y": 740
+    },
+    {
+      "id": "deck",
+      "title": "固定来源工程技能",
+      "kicker": "REVIEWED SKILL DECK",
+      "kind": "finish",
+      "sub": "预览、校验并安装所选依赖闭包",
+      "symbol": "createSkillDeck() / skillInstallPlan()",
+      "plain": "选择一个工程技能，只安装它及声明的依赖。",
+      "role": "目录固定 mattpocock/skills v1.3.2 提交 d1478fcb140db0b93c0c8df17bcfd311844749d0；文件按 Git blob SHA-1 与长度校验，保留许可证并写入官方用户 skills 目录。",
+      "input": "固定清单技能名与安装请求",
+      "output": "已安装文件、来源记录与真实发现状态",
+      "sources": [
+        "plugins/benchgo/src/skill-deck.mjs",
+        "plugins/benchgo/src/skill-deck-manifest.json",
+        "plugins/benchgo/client/skill-deck.jsx"
+      ],
+      "note": "不覆盖已有文件、不执行模板脚本；写入成功不等于官方发现可用。自建技能管理复用 assistant 服务。",
+      "state": "implemented",
+      "x": 1200,
+      "y": 740
+    }
+  ],
+  "edges": [
+    {
+      "a": "settings",
+      "b": "providers",
+      "label": "读取官方配置",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "providers",
+      "b": "picker",
+      "label": "供应商与模型",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "picker",
+      "b": "route",
+      "label": "固化显式选择",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "route",
+      "b": "launch",
+      "label": "核验绑定再启动",
+      "from": "b",
+      "to": "t"
+    },
+    {
+      "a": "installer",
+      "b": "launch",
+      "label": "解析可执行路径",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "providers",
+      "b": "auth",
+      "label": "核对认证来源",
+      "from": "b",
+      "to": "t",
+      "kind": "support"
+    },
+    {
+      "a": "auth",
+      "b": "installer",
+      "label": "探测对应 CLI",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "settings",
+      "b": "efficiency",
+      "label": "内部配置装配",
+      "from": "b",
+      "to": "t",
+      "kind": "support"
+    },
+    {
+      "a": "efficiency",
+      "b": "compaction",
+      "label": "上下文能力",
+      "from": "b",
+      "to": "t"
+    },
+    {
+      "a": "efficiency",
+      "b": "ops",
+      "label": "执行工具能力",
+      "from": "b",
+      "to": "t"
+    },
+    {
+      "a": "skills",
+      "b": "deck",
+      "label": "查看工程技能",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "picker",
+      "b": "skills",
+      "label": "同一工具入口",
+      "from": "b",
+      "to": "t",
+      "kind": "support"
+    }
+  ],
+  "steps": [
+    {
+      "node": "settings",
+      "title": "保存供应商配置",
+      "text": "沿用官方 controller、设置版本和凭据引用。这里编辑一项，其他配置继续保留。",
+      "edge": 0
+    },
+    {
+      "node": "picker",
+      "title": "选择工具与真实模型 ID",
+      "text": "明确选定工具、供应商和原生模型；公共目录仅补缺失参数，不猜别名。",
+      "edge": 1
+    },
+    {
+      "node": "route",
+      "title": "创建时固化路由",
+      "text": "托管模式目前支持 Codex 与 Claude。会话把地址、协议和凭据引用一起固化，默认值改变不影响旧会话。",
+      "edge": 2
+    },
+    {
+      "node": "auth",
+      "title": "核对真实认证来源",
+      "text": "API 和官方订阅各走各自通路；未登录或工具不匹配时拒绝启动，引导到对应 CLI。",
+      "edge": 5
+    },
+    {
+      "node": "launch",
+      "title": "在独立配置中执行",
+      "text": "按原绑定核验后，使用会话专有配置及历史目录启动原生工具；失效时明确失败。",
+      "edge": 3
+    },
+    {
+      "node": "efficiency",
+      "title": "官方 Agent 使用增强工具",
+      "text": "若这轮使用官方 Agent，执行增强与压缩能力按服务和预设生效；外部原生工具不会自动继承。",
+      "edge": 7
+    },
+    {
+      "node": "skills",
+      "title": "查询当前项目生效技能",
+      "text": "官方目录按项目和默认预设作用域返回最终生效项，查询不创建额外 Agent 会话。"
+    },
+    {
+      "node": "deck",
+      "title": "按固定来源安装所选技能",
+      "text": "下载所选技能和声明依赖，逐文件校验后写入；只有进入官方目录并可调用才显示可用。",
+      "edge": 10
+    }
+  ],
+  "docs": [
+    {
+      "label": "板块设计",
+      "path": "docs/04-模型与工具/设计.md"
+    },
+    {
+      "label": "模型与供应商",
+      "path": "docs/04-模型与工具/模型与供应商.md"
+    },
+    {
+      "label": "原生工具与会话",
+      "path": "docs/04-模型与工具/原生工具与会话.md"
+    },
+    {
+      "label": "统一技能管理",
+      "path": "docs/04-模型与工具/统一技能管理.md"
+    }
+  ],
+  "version": "2026-11-11-1"
+}</script><script src="../_assets/architecture.js"></script></body></html>

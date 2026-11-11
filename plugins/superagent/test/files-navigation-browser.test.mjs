@@ -25,11 +25,12 @@ async function fixture() {
     const name='发布准备与部署回滚记录_长文件名用于核验窄屏布局_20261108.md';window.longName=name;
     const files=Array.from({length:26},(_,i)=>({id:'note-'+i+'.md',name:i===25?name:'note-'+i+'.md',path:'note-'+i+'.md',type:'file',url:'/api/files/note.md'+(i===25?'?revision=opaque%2F1#section':''),bytes:48,hash:'revision-1',updatedAt:'2026-11-08T08:00:00Z'}));
     window.renderScenario=(target='artifacts',mode='data',dark=false)=>{
-      window.mode=mode;window.calls=[];window.previewChanges=[];window.failPreview=false;
+      window.mode=mode;window.calls=[];window.previewChanges=[];window.failPreview=false;window.desktopAvailable=true;window.openFail=false;
       document.documentElement.dataset.theme=dark?'dark':'light';
       const api=async(action,input)=>{window.calls.push({action,input});if(window.mode==='loading')return new Promise(()=>{});if(window.mode==='error')throw Error('文件服务暂时不可用');
         if(action==='artifacts')return {artifacts:window.mode==='empty'?[]:files,total:window.mode==='empty'?0:files.length,nextCursor:null};
-        if(action==='systemFiles')return {path:input.path,entries:window.mode==='empty'?[]:input.path?[files[25]]:[{name:'archive',path:'archive',type:'directory'},...files]};return {};
+        if(action==='systemFiles'&&input.op==='openDirectory'){if(window.openFail)throw Error('本地文件夹打开失败');return {opened:true};}
+        if(action==='systemFiles')return {path:input.path,desktop:{available:window.desktopAvailable},entries:window.mode==='empty'?[]:input.path?[files[25]]:[{name:'archive',path:'archive',type:'directory'},...files]};return {};
       };
       root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main className='ba-studio-body'>{target==='artifacts'?<Artifacts api={api}/>:<SystemFiles api={api} onPreviewChange={value=>window.previewChanges.push(value)}/>}</main></div>);
     };
@@ -106,16 +107,32 @@ test('file lists preserve filters, scroll and focus through previews, directory 
         await page.getByRole('button',{name:'← 返回',exact:true}).press('Escape');await file.waitFor();
         assert.equal(await page.getByRole('searchbox',{name:'筛选已加载文件'}).inputValue(),'发布准备');
         await page.evaluate(({dark})=>window.renderScenario('system','data',dark),{dark});
-        const filter=page.getByRole('searchbox',{name:'筛选当前目录文件'});await filter.fill('archive');await page.getByRole('button',{name:'archive',exact:true}).click();
-        await file.waitFor();await page.getByRole('button',{name:'根目录',exact:true}).click();await page.getByRole('button',{name:'archive',exact:true}).waitFor();
+        const filter=page.getByRole('searchbox',{name:'筛选当前目录文件'}), refresh=page.getByRole('button',{name:'刷新系统文件'}), openDirectory=page.getByRole('button',{name:'打开当前文件夹'});
+        await page.getByRole('button',{name:'archive',exact:true}).waitFor();
+        assert.equal((await filter.boundingBox()).height,36);assert.equal((await refresh.boundingBox()).height,36);assert.equal((await openDirectory.boundingBox()).height,36);
+        assert.equal(await refresh.innerText(),'');await capture(`system-toolbar-${width}-${dark?'dark':'light'}`);await openDirectory.click();await page.waitForFunction(()=>window.calls.some(row=>row.input?.op==='openDirectory'&&row.input.path===''));
+        await filter.fill('archive');await page.getByRole('button',{name:'archive',exact:true}).click();
+        await file.waitFor();await openDirectory.click();await page.waitForFunction(()=>window.calls.some(row=>row.input?.op==='openDirectory'&&row.input.path==='archive'));
+        await page.evaluate(()=>window.openFail=true);await openDirectory.click();await page.getByRole('alert').filter({hasText:'本地文件夹打开失败'}).waitFor();await page.evaluate(()=>window.openFail=false);await page.getByRole('button',{name:'重试打开'}).click();await page.getByRole('button',{name:'重试打开'}).waitFor({state:'hidden'});
+        await page.getByRole('button',{name:'根目录',exact:true}).click();await page.getByRole('button',{name:'archive',exact:true}).waitFor();
         await page.waitForFunction(()=>document.activeElement?.textContent==='archive');assert.equal(await filter.inputValue(),'archive');
         await filter.fill('');await file.scrollIntoViewIfNeeded();const directoryScroll=await page.locator('.ba-studio-body').evaluate(node=>node.scrollTop);
         await page.locator('.ba-system-entry').last().locator('.ba-system-size').click();await page.frameLocator('iframe').getByRole('heading',{name:'发布记录'}).waitFor();
         await capture(`system-preview-${width}-${dark?'dark':'light'}`);await page.getByRole('button',{name:'← 返回',exact:true}).click();
         await page.waitForFunction(name=>document.activeElement?.textContent===name,filename);assert(Math.abs(await page.locator('.ba-studio-body').evaluate(node=>node.scrollTop)-directoryScroll)<3);
         await filter.fill('发布准备');await page.evaluate(()=>window.mode='error');await page.getByRole('button',{name:'刷新系统文件'}).click();await page.getByRole('alert').filter({hasText:'文件服务暂时不可用'}).waitFor();assert(await file.isVisible());assert.equal(await filter.inputValue(),'发布准备');await capture(`system-refresh-error-${width}-${dark?'dark':'light'}`);
+        await page.evaluate(()=>{window.mode='data';window.desktopAvailable=false});await refresh.click();await page.waitForFunction(()=>document.querySelector('.ba-system-open-directory')?.disabled);await openDirectory.focus();assert(await openDirectory.isDisabled());
+        await page.keyboard.press('Tab');await page.locator('.ba-system-tools').getByRole('button',{name:'打开当前文件夹'}).locator('..').focus();await page.getByRole('tooltip').getByText('当前服务无法打开本地文件夹',{exact:true}).waitFor();await filter.focus();
+        await capture(`system-headless-${width}-${dark?'dark':'light'}`);
+        await page.evaluate(()=>window.mode='loading');await refresh.click();await page.waitForFunction(()=>document.querySelector('.ba-system-refresh')?.getAttribute('aria-busy')==='true');assert(await file.isVisible());assert(await refresh.isDisabled());assert.equal(await refresh.innerText(),'');await capture(`system-refresh-busy-${width}-${dark?'dark':'light'}`);
       }
     }
+    const touch=await browser.newPage({viewport:{width:390,height:800},hasTouch:true});
+    await touch.route('http://localhost/',route=>route.fulfill({contentType:'text/html',body:html}));await touch.goto('http://localhost/');await touch.evaluate(()=>window.renderScenario('system','data'));
+    await touch.getByRole('button',{name:'archive',exact:true}).waitFor();
+    assert.equal((await touch.getByRole('searchbox',{name:'筛选当前目录文件'}).boundingBox()).height,44);
+    for(const label of ['刷新系统文件','打开当前文件夹'])assert.equal((await touch.getByRole('button',{name:label}).boundingBox()).height,44);
+    if(screenshots)await touch.screenshot({path:join(screenshots,'system-toolbar-touch-390.png')});await touch.close();
     assert.deepEqual(errors,[]);
   } finally { await browser.close(); }
 });

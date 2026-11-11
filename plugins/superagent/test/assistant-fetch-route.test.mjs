@@ -27,6 +27,26 @@ const sourceHook = registerHooks({ resolve(specifier, context, next) {
 const { HostConnectionService } = await import('../../../deepseek-harness/packages/client/connection/src/rpc-host.ts');
 const { Context } = await import(pathToFileURL(requireBenchgo.resolve('@deepseek-ai/cordis')).href);
 
+test('assistant Fetch propagates cancellation to the query execution context', async () => {
+  let route, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const controller = new AbortController();
+  const connection = { browserPeer: {}, fetch: { register(value) { route = value; return () => {}; } } };
+  registerAssistantFetchRoute({ connection, async dispatch(_input, peer, { signal }) {
+    assert.strictEqual(peer, connection.browserPeer);
+    entered(signal);
+    await new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  } });
+  const response = route.fetch(new Request('http://localhost/api/commander/assistant', {
+    method: 'POST', headers: { origin: 'http://localhost', 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'sessionSearch', query: 'cancelled' }), signal: controller.signal,
+  }));
+  const signal = await started;
+  controller.abort(Object.assign(new Error('Search cancelled'), { code: 'SEARCH_CANCELLED' }));
+  assert.equal(signal.aborted, true);
+  assert.equal((await (await response).json()).code, 'SEARCH_CANCELLED');
+});
+
 test('official shared Fetch dispatch reaches the registered assistant route with trusted owner identity', async t => {
   const ctx = new Context(), database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(async () => { await ctx.fiber.dispose(); database.close(); sourceHook.deregister(); });

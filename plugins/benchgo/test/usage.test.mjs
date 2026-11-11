@@ -23,6 +23,59 @@ test('actual Cordis keeps the usage route mounted after the injection callback s
   } finally { await ctx.fiber.dispose(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('startup leaves historical scans idle while live usage is collected; concurrent queries share the first backfill', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'commander-usage-lazy-'));
+  const commander = new EventEmitter(); commander.store = { directory: dir }; commander.sessions = new Map();
+  const effects = [], hooks = {}, routes = [];
+  let listed = 0, scans = 0, release;
+  const pendingHistory = new Promise(resolve => { release = resolve; });
+  const event = { seq: 1, type: 'assistant/message', time: Date.parse('2026-11-10'), data: { turn: 1, usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 }, message: { source: { provider: 'test', model: 'opaque' } } } };
+  const ctx = { effect(fn) { const dispose = fn(); if (dispose) effects.push(dispose); }, on(name, fn) { hooks[name] = fn; },
+    inject(_keys, fn) { fn({ sessionQuery: { async listSessions() { listed++; return [{ header: { id: 'old' } }]; }, async readSession() { await pendingHistory; return { events: [event] }; } } }); },
+    connection: { fetch: { register(route) { routes.push(route); return () => {}; } } } };
+  try {
+    const ledger = await mountUsage(ctx, commander, { enabled: false });
+    assert.equal(listed, 0); assert.equal(ledger.importer.coverage.state, 'idle');
+    ledger.importer.scan = async () => { scans++; };
+    hooks['session/event']({ id: 'live' }, event);
+    assert.equal(ledger.rows.get('harness:live:1').totalTokens, 12);
+    const query = () => routes[0].fetch(new Request('http://app.test/api/commander/usage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ start: '2026-11-10', end: '2026-11-11' }) }));
+    const first = query(), second = query();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(listed, 1); assert.equal(scans, 1);
+    hooks['session/event']({ id: 'during-history' }, event);
+    release();
+    const results = await Promise.all([first, second]);
+    for (const response of results) assert.equal((await response.json()).summary.totalTokens, 36);
+    await query(); assert.equal(listed, 1); assert.equal(scans, 1);
+    for (const dispose of effects.reverse()) await dispose();
+    const stored = await new UsageLedger(dir).open(); assert.equal(stored.rows.size, 3);
+  } finally { release(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('flush coalesces a burst into one snapshot and persists changes received during an active write', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'commander-usage-coalesced-'));
+  try {
+    const ledger = await new UsageLedger(dir).open();
+    let serializations = 0;
+    ledger.rows.set('marker', { id: 'marker', toJSON() { serializations++; return { id: 'marker' }; } });
+    const writes = [];
+    for (let index = 0; index < 50; index++) {
+      ledger.put({ id: 'row-' + index, time: '2026-11-10T00:00:00Z', totalTokens: index });
+      writes.push(ledger.flush());
+    }
+    assert(writes.every(task => task === writes[0]));
+    await Promise.resolve();
+    ledger.put({ id: 'during-write', time: '2026-11-10T00:00:00Z', totalTokens: 99 });
+    assert.equal(ledger.flush(), writes[0]);
+    await Promise.all(writes);
+    assert.equal(serializations, 2);
+    const saved = JSON.parse(await readFile(ledger.path, 'utf8'));
+    assert.equal(saved.rows.length, 52); assert.equal(saved.rows.at(-1).totalTokens, 99);
+    assert.equal(ledger.dirty, false);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('native usage conventions preserve exact counts and unknown buckets', () => {
   assert.deepEqual(normalizeUsage({ inputTokens: 100, cached_input_tokens: 60, outputTokens: 20, totalTokens: 120 }, 'inclusive'), { inputTokens: 40, outputTokens: 20, cacheReadTokens: 60, cacheWriteTokens: null, totalTokens: 120, contextTokens: 100, contextWindow: null, reasoningTokens: null });
   const unknown = normalizeUsage({ input_tokens: 100, output_tokens: 20 });
@@ -76,9 +129,57 @@ test('ledger deduplicates, filters exclusive end and never stores content', asyn
     const stored = await readFile(ledger.path, 'utf8'); assert.doesNotMatch(stored, /private|secret|prompt|response/);
     assert.equal((await new UsageLedger(dir).open()).rows.size, 2);
     ledger.put({ ...row, durationMs: null }); assert.equal(ledger.rows.get('a').durationMs, 2000);
-    ledger.put({ id: 'unknown', tool: 'pi', time: row.time }); assert.equal(ledger.query({ start: '2026-10-16', end: '2026-10-17' }).summary.totalTokens, null);
+    ledger.put({ id: 'unknown', tool: 'pi', time: row.time }); assert.equal(ledger.query({ start: '2026-10-16', end: '2026-10-17' }).summary.totalTokens, 120);
     assert.throws(() => ledger.query({ start: 'bad', end: 'bad' }));
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('mixed historical missing fields preserve known subtotals and cache ratio uses one measured subset', () => {
+  const ledger = new UsageLedger('/unused'), time = '2026-11-09T16:00:00Z';
+  for (const row of [
+    { id: 'full', inputTokens: 40, outputTokens: 20, totalTokens: 120, cacheReadTokens: 60 },
+    { id: 'total-only', totalTokens: 500 },
+    { id: 'cache-only', cacheReadTokens: 900 },
+    { id: 'partial-input', inputTokens: 7, outputTokens: 3 },
+    { id: 'disjoint', inputTokens: 20, outputTokens: 10, cacheReadTokens: 30, cacheWriteTokens: 0 },
+    { id: 'zero', inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0 },
+    { id: 'unknown' },
+  ]) ledger.put({ tool: 'codex', model: 'same', time, ...row });
+  const result = ledger.query({ start: '2026-11-09T16:00:00Z', end: '2026-11-10T16:00:00Z', timeZone: 'Asia/Shanghai' });
+  assert.equal(result.summary.totalTokens, 620);
+  assert.equal(result.summary.inputTokens, 67);
+  assert.equal(result.summary.outputTokens, 33);
+  assert.equal(result.summary.cacheReadTokens, 990);
+  assert.equal(result.summary.cacheWriteTokens, 0);
+  assert.equal(result.summary.cacheHitRate, 90 / 150);
+  assert.equal(result.summary.measuredCalls, 3);
+  assert.equal(result.summary.incompleteCalls, 5);
+  assert.equal(result.groups[0].totalTokens, result.summary.totalTokens);
+  assert.equal(result.timeline.buckets.reduce((sum, bucket) => sum + (bucket.totalTokens ?? 0), 0), result.summary.totalTokens);
+  const empty = ledger.query({ start: '2026-11-11', end: '2026-11-12' });
+  assert.equal(empty.summary.totalTokens, null); assert.equal(empty.summary.cacheHitRate, null);
+  ledger.rows.clear(); ledger.put({ id: 'unknown', time });
+  const unknown = ledger.query({ start: '2026-11-09T16:00:00Z', end: '2026-11-10T16:00:00Z' });
+  assert.equal(unknown.summary.totalTokens, null); assert.equal(unknown.summary.inputTokens, null); assert.equal(unknown.summary.cacheReadTokens, null); assert.equal(unknown.summary.cacheHitRate, null);
+});
+
+test('every preset interval includes known historical usage without null poisoning or changing local day boundaries', () => {
+  const ledger = new UsageLedger('/unused'), end = '2026-11-10T16:00:00Z';
+  for (let day = 1; day <= 30; day++) {
+    const time = new Date(Date.parse(end) - day * 86400000).toISOString();
+    ledger.put({ id: 'measured-' + day, tool: 'codex', time, totalTokens: 10, inputTokens: 8, outputTokens: 2, cacheReadTokens: 0 });
+    if (day > 1) ledger.put({ id: 'unknown-' + day, tool: 'other', time });
+  }
+  ledger.put({ id: 'excluded-end', tool: 'codex', time: end, totalTokens: 9999 });
+  for (const days of [1, 3, 7, 15, 30]) {
+    const start = new Date(Date.parse(end) - days * 86400000).toISOString();
+    const result = ledger.query({ start, end, timeZone: 'Asia/Shanghai' });
+    assert.equal(result.summary.totalTokens, days * 10);
+    assert.equal(result.summary.cacheHitRate, 0);
+    assert.equal(result.summary.incompleteCalls, days - 1);
+    assert.equal(result.recordCount, days * 2 - 1);
+    assert.equal(result.groups.find(group => group.tool === 'other')?.totalTokens ?? null, null);
+  }
 });
 
 test('server pagination returns 50 records while overview aggregates the full interval',()=>{

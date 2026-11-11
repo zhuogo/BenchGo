@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {isRecentWorkspace,projectWorkspaces,recentRows,startSidebarSession,isSidebarSessionSelected,sidebarWorkspaces,ensureSidebarWorkspace,sidebarSessionStatus,sidebarCapabilityWarning} from '../client/sidebar-state.mjs';
+import {isRecentWorkspace,projectWorkspaces,recentRows,startSidebarSession,isSidebarSessionSelected,sidebarWorkspaces,ensureSidebarWorkspace,sidebarSessionStatus,sidebarSessionTitle,sidebarCapabilityWarning} from '../client/sidebar-state.mjs';
 const projects=[{id:'auto',isDefault:true,title:'default-workspace',path:'/home/user/Documents/deepseek-harness/default-workspace'},{id:'user',title:'default-workspace',path:'/projects/default-workspace'},{id:'named',title:'自己的项目',path:'/projects/named'}];
+
+test('voice title replaces cwd fallback while preserving explicit titles and ordinary session display',()=>{
+ const voice={displayTitle:'default-workspace',projectionValues:{benchgoVoice:{used:true}}};
+ assert.equal(sidebarSessionTitle(voice),'语音对话');
+ assert.equal(sidebarSessionTitle({...voice,title:'今日计划'}),'今日计划');
+ assert.equal(sidebarSessionTitle({displayTitle:'my-project'}),'my-project');
+ assert.equal(sidebarSessionTitle({}),'新对话');
+});
 test('session list uses official unread completion and preserves execution priorities',()=>{
  const official={blank:false,running:false};
  assert.equal(sidebarSessionStatus(official), undefined);
@@ -36,8 +44,8 @@ test('Recent recovery receives official identity and survives unavailable Docume
 test('Recent is host default identity, never a merely matching user title',()=>{assert.equal(isRecentWorkspace(projects[0]),true);assert.equal(isRecentWorkspace(projects[1]),false);assert.equal(isRecentWorkspace({path:'/user/deepseek-harness/default-workspace'}),false);assert.deepEqual(projectWorkspaces(projects).map(p=>p.id),['user','named']);});
 test('Recent rows contain default workspace only',()=>{assert.deepEqual(recentRows([{projectId:'auto',id:'a'},{projectId:'user',id:'b'},{cwd:projects[0].path,id:'c'}],projects).map(p=>p.id),['a','c']);});
 test('missing paths never merge unrelated project rows into Recent',()=>{assert.deepEqual(recentRows([{projectId:'auto',id:'a'},{projectId:'user',id:'b'}],[{id:'auto',isDefault:true}]).map(p=>p.id),['a']);});
-test('generic new chat explicitly targets Recent, project add targets selected project',async()=>{const calls=[],host={workspaces:{initializeDefault:async()=>{throw Error('unexpected');}},uiWorkspace:{startSession:id=>calls.push(id)}};await startSidebarSession(host,projects);await startSidebarSession(host,projects,'named');assert.deepEqual(calls,['auto','named']);});
-test('missing default cannot silently reuse last project',async()=>{const host={workspaces:{initializeDefault:async()=>undefined},uiWorkspace:{startSession:()=>assert.fail('must not start last project')}};await assert.rejects(startSidebarSession(host,projects.slice(1)),/最近工作区/);});
+test('generic new chat explicitly targets Recent, project add targets selected project',async()=>{const calls=[],host={workspaces:{initializeDefault:async()=>{throw Error('unexpected');}},sessions:{create:async request=>{assert.deepEqual(Object.keys(request),['workspaceId']);calls.push(request.workspaceId);return 'new-'+calls.length;}},uiWorkspace:{openSession(){}}};await startSidebarSession(host,projects);await startSidebarSession(host,projects,'named');assert.deepEqual(calls,['auto','named']);});
+test('missing default cannot silently reuse last project',async()=>{const host={workspaces:{initializeDefault:async()=>undefined},sessions:{create:()=>assert.fail('must not start last project')},uiWorkspace:{openSession:()=>assert.fail('must not open')}};await assert.rejects(startSidebarSession(host,projects.slice(1)),/最近工作区/);});
 test('official workspaces provide current titles, grouping and default identity before Commander state',()=>{
  const snapshot={phase:'ready',items:[{workspaceId:'auto',title:'official recent',path:'/current',sessionIds:['new']},{workspaceId:'fresh',title:'fresh project',path:'/fresh',sessionIds:['fresh-session']}]};
  const result=sidebarWorkspaces(snapshot,projects,'auto');
@@ -56,16 +64,16 @@ test('pending official items beat fallback and retain matching known default ide
  assert.equal(sidebarWorkspaces({phase:'ready',items:[{workspaceId:'auto'}]},projects,'fresh')[0].isDefault,false);
 });
 test('new chat reads the latest official snapshot instead of waiting for Commander polling',async()=>{
- const calls=[],host={workspaces:{list:{getSnapshot:()=>({phase:'ready',items:[{workspaceId:'fresh-default',sessionIds:[]},{workspaceId:'fresh-project',sessionIds:[]}]})},initializeDefault:async()=>{throw Error('must use official snapshot');}},uiWorkspace:{startSession:id=>calls.push(id)}};
+ const calls=[],host={workspaces:{list:{getSnapshot:()=>({phase:'ready',items:[{workspaceId:'fresh-default',sessionIds:[]},{workspaceId:'fresh-project',sessionIds:[]}]})},initializeDefault:async()=>{throw Error('must use official snapshot');}},sessions:{create:async request=>{assert.deepEqual(Object.keys(request),['workspaceId']);calls.push(request.workspaceId);return 'new-'+calls.length;}},uiWorkspace:{openSession(){}}};
  await startSidebarSession(host,projects,undefined,'fresh-default');await startSidebarSession(host,projects,'fresh-project','fresh-default');
  assert.deepEqual(calls,['fresh-default','fresh-project']);
 });
 test('new chat does not reuse a removed fallback default when official list is ready',async()=>{
- const calls=[],host={workspaces:{list:{getSnapshot:()=>({phase:'ready',items:[]})},initializeDefault:async()=>({workspaceId:'initialized'})},uiWorkspace:{startSession:id=>calls.push(id)}};
+ const calls=[],host={workspaces:{list:{getSnapshot:()=>({phase:'ready',items:[]})},initializeDefault:async()=>({workspaceId:'initialized'})},sessions:{create:async request=>{assert.deepEqual(Object.keys(request),['workspaceId']);calls.push(request.workspaceId);return 'new-'+calls.length;}},uiWorkspace:{openSession(){}}};
  await startSidebarSession(host,projects);assert.deepEqual(calls,['initialized']);
 });
 test('new chat repairs Recent before starting, while explicit project creation bypasses recovery',async()=>{
- const calls=[],host={workspaces:{list:{getSnapshot:()=>({phase:'ready',items:[]})},initializeDefault:async()=>assert.fail('recovery owns initialization')},uiWorkspace:{startSession:id=>calls.push(id)}};
+ const calls=[],host={workspaces:{list:{getSnapshot:()=>({phase:'ready',items:[]})},initializeDefault:async()=>assert.fail('recovery owns initialization')},sessions:{create:async request=>{assert.deepEqual(Object.keys(request),['workspaceId']);calls.push(request.workspaceId);return 'new-'+calls.length;}},uiWorkspace:{openSession(){}}};
  let repairs=0;
  const ensure=async()=>{repairs++;return {workspaceId:'repaired'};};
  assert.equal(await startSidebarSession(host,projects,undefined,'auto',ensure),'repaired');
@@ -73,8 +81,35 @@ test('new chat repairs Recent before starting, while explicit project creation b
  assert.equal(repairs,1);assert.deepEqual(calls,['repaired','named']);
 });
 test('failed Recent recovery never starts a session in a stale or unrelated workspace',async()=>{
- const host={workspaces:{},uiWorkspace:{startSession:()=>assert.fail('must not start')}};
+ const host={workspaces:{},sessions:{create:()=>assert.fail('must not start')},uiWorkspace:{openSession:()=>assert.fail('must not open')}};
  await assert.rejects(startSidebarSession(host,projects,undefined,'auto',async()=>{throw Error('directory unavailable');}),/directory unavailable/);
+});
+
+test('New Chat never reuses old blank voice sessions or unsent drafts',async()=>{
+ const requests=[],opened=[],previous={id:'voice-old',blank:true,draft:'unsent',events:[{type:'plugin:benchgo-plugin/voice-conversation',data:{kind:'user',text:'嘿你好'}}]};
+ const host={workspaces:{list:{getSnapshot:()=>({phase:'ready',items:[{workspaceId:'auto',sessionIds:[previous.id]}]})}},sessions:{list:{getSnapshot:()=>({ids:[previous.id],byId:{[previous.id]:previous}})},create:async request=>{requests.push(request);return 'fresh-'+requests.length;}},uiWorkspace:{startSession:()=>assert.fail('workspace opening reuses blanks'),openSession:id=>opened.push(id)}};
+ for(let i=0;i<2;i++)await startSidebarSession(host,projects,undefined,'auto');
+ assert.deepEqual(requests,[{workspaceId:'auto'},{workspaceId:'auto'}]);
+ assert.deepEqual(opened,['fresh-1','fresh-2']);
+ assert.equal(previous.draft,'unsent');assert.equal(previous.events[0].data.text,'嘿你好');
+});
+
+test('only the same pending new-chat attempt is shared and a later action creates again',async()=>{
+ const opened=[],requests=[];let resolve;
+ const host={workspaces:{},sessions:{create:request=>{requests.push(request);return new Promise(done=>{resolve=done;});}},uiWorkspace:{openSession:id=>opened.push(id)}};
+ const ensure=async()=>({workspaceId:'auto'});
+ const first=startSidebarSession(host,projects,undefined,'auto',ensure),duplicate=startSidebarSession(host,projects,undefined,'auto',ensure);
+ assert.equal(first,duplicate);await Promise.resolve();assert.equal(requests.length,1);
+ resolve('first');await first;
+ const second=startSidebarSession(host,projects,undefined,'auto',ensure);await Promise.resolve();assert.equal(requests.length,2);
+ resolve('second');await second;assert.deepEqual(opened,['first','second']);
+});
+
+test('failed creation preserves the current view and allows a fresh retry',async()=>{
+ const opened=[];let attempts=0;
+ const host={workspaces:{},sessions:{create:async()=>{if(++attempts===1)throw Error('create failed');return 'retry';}},uiWorkspace:{openSession:id=>opened.push(id)}};
+ await assert.rejects(startSidebarSession(host,projects),/create failed/);assert.deepEqual(opened,[]);
+ await startSidebarSession(host,projects);assert.deepEqual(opened,['retry']);
 });
 test('loading and new chat never select rows without an active session',()=>{
  const rows=[{id:'first'},{id:'second'},{id:'native',native:true},{id:'null-owner',ownerSessionId:null,native:true}];

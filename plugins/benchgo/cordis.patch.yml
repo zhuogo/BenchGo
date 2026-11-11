@@ -1,3 +1,9 @@
+# Opt into the official derived index; history remains in the official Session store.
+- id: session-query-sqlite
+  config:
+    path: !!js dshHomePath('storages/benchgo-session-search.sqlite')
+    openAt: first-search
+
 - insert:
     - id: commander
       name: 'benchgo-plugin'

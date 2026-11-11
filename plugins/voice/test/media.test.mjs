@@ -15,11 +15,11 @@ test('HTTP starts at 900 ms then uses 1500 ms fragments without dropping voiced 
   const lengths=[],c=new Capture({parallel:true,transcribe:async blob=>{lengths.push((blob.size-44)/48);return '';}});
   for(let i=0;i<HTTP_FIRST_CHUNK_SECONDS*50-1;i++)c.accept(frame(),.9);
   await tick();assert.deepEqual(lengths,[]);
-  c.accept(frame(),.9);await tick();assert.deepEqual(lengths,[900]);
+  c.accept(frame(),.9);await tick();assert.deepEqual(lengths,[1000]);
   for(let i=0;i<HTTP_CHUNK_SECONDS*50-1;i++)c.accept(frame(),.9);
-  await tick();assert.deepEqual(lengths,[900]);
-  c.accept(frame(),.9);await tick();assert.deepEqual(lengths,[900,1500]);
-  await c.stop();assert.deepEqual(lengths,[900,1500,2400]);
+  await tick();assert.deepEqual(lengths,[1000]);
+  c.accept(frame(),.9);await tick();assert.deepEqual(lengths,[1000,1500]);
+  await c.stop();assert.deepEqual(lengths,[1000,1500,2400]);
 });
 
 test('speech followed by an upload-boundary silence never requests a hallucinating silent tail',async()=>{
@@ -29,7 +29,7 @@ test('speech followed by an upload-boundary silence never requests a hallucinati
   },onFinal:text=>finals.push(text)});
   for(let i=0;i<HTTP_FIRST_CHUNK_SECONDS*50;i++)c.accept(frame(),.9);
   for(let i=0;i<16;i++)c.accept(frame(0),.01);
-  await c.pending;assert.deepEqual(requests,[{samples:21600,voiced:true}]);assert.deepEqual(finals,['你好']);
+  await c.pending;assert.deepEqual(requests,[{samples:24000,voiced:true}]);assert.deepEqual(finals,['你好']);
   await c.dispose();
 });
 
@@ -53,10 +53,10 @@ test('full recognition replaces all completed previews and corrects words split 
   const requests=[],partials=[],finals=[];
   const c=new Capture({parallel:true,transcribe:async blob=>{requests.push((blob.size-44)/48);return ['这是一个实','十雨音测试','这是一个实时语音测试'][requests.length-1];},onPartial:text=>partials.push(text),onFinal:text=>finals.push(text)});
   for(let i=0;i<120;i++)c.accept(frame(),.9);await tick();
-  assert.deepEqual(requests,[900,1500]);assert.equal(partials.at(-1),'这是一个实十雨音测试');
+  assert.deepEqual(requests,[1000,1500]);assert.equal(partials.at(-1),'这是一个实十雨音测试');
   const segment=c.segment;
   for(let i=0;i<4;i++)c.accept(frame(),.9);for(let i=0;i<16;i++)c.accept(frame(0),0);
-  await c.pending;assert.deepEqual(requests,[900,1500,2800]);assert.equal(segment.parts.length,1);assert.equal(segment.audio,null);assert.deepEqual(finals,['这是一个实时语音测试']);await c.dispose();
+  await c.pending;assert.deepEqual(requests,[1000,1500,2800]);assert.equal(segment.parts.length,1);assert.equal(segment.audio,null);assert.deepEqual(finals,['这是一个实时语音测试']);await c.dispose();
 });
 
 test('full recognition cancels previews and starts ahead of obsolete queued fragments',async()=>{
@@ -70,7 +70,7 @@ test('full recognition cancels previews and starts ahead of obsolete queued frag
 
 test('failed full recognition preserves preview and never publishes a successful final',async()=>{
   const partials=[],finals=[],errors=[];
-  const c=new Capture({parallel:true,transcribe:async blob=>{if((blob.size-44)/48===900)return '预览尚未确认';throw Error('full recognition failed');},onPartial:text=>partials.push(text),onFinal:text=>finals.push(text),onError:error=>errors.push(error.message)});
+  const c=new Capture({parallel:true,transcribe:async blob=>{if((blob.size-44)/48===1000)return '预览尚未确认';throw Error('full recognition failed');},onPartial:text=>partials.push(text),onFinal:text=>finals.push(text),onError:error=>errors.push(error.message)});
   for(let i=0;i<45;i++)c.accept(frame(),.9);await tick();assert.deepEqual(partials,['预览尚未确认']);
   for(let i=0;i<15;i++)c.accept(frame(),.9);
   await assert.rejects(c.commit(),/full recognition failed/);await c.pending;
@@ -90,7 +90,7 @@ test('full recognition starts while an older utterance final is pending and publ
 test('JSON full recognition bypasses its cancelled serial preview queue',async()=>{
   const requests=[],finals=[],c=new Capture({parallel:false,transcribe:(blob,signal)=>new Promise(resolve=>requests.push({duration:(blob.size-44)/48,signal,resolve})),onFinal:text=>finals.push(text)});
   for(let i=0;i<120;i++)c.accept(frame(),.9);await tick();assert.equal(requests.length,1);
-  const stopped=c.stop();await tick();assert.equal(requests.length,2);assert.deepEqual(requests.map(request=>request.duration),[900,2400]);assert.equal(requests[0].signal.aborted,true);
+  const stopped=c.stop();await tick();assert.equal(requests.length,2);assert.deepEqual(requests.map(request=>request.duration),[1000,2400]);assert.equal(requests[0].signal.aborted,true);
   requests[1].resolve('完整转录');assert.equal(await stopped,'完整转录');assert.deepEqual(finals,['完整转录']);assert.equal(c.backlog,0);await c.dispose();
 });
 
@@ -114,7 +114,19 @@ test('a short first utterance still uploads all audio and invalid probability ca
   for(const probability of [undefined,NaN,Infinity,-1,2])for(let i=0;i<20;i++)c.accept(frame(),probability);
   assert.equal(c.segment,null);
   for(let i=0;i<6;i++)c.accept(frame(),.9);for(let i=0;i<16;i++)c.accept(frame(0),0);
-  await c.pending;assert.deepEqual(requests,[440]);assert.deepEqual(finals,['嗯']);await c.dispose();
+  await c.pending;assert.deepEqual(requests,[1000]);assert.deepEqual(finals,['嗯']);await c.dispose();
+});
+
+test('short file padding preserves speech and submits at the existing silence endpoint without recording longer',async()=>{
+  const requests=[],ended=[],c=new Capture({transcribe:async blob=>{requests.push(blob);return '你好';},onSpeechEnd:id=>ended.push(id)});
+  for(let i=0;i<6;i++)c.accept(frame(300),.99);
+  for(let i=0;i<15;i++)c.accept(frame(0),0);
+  assert.equal(requests.length,0);assert.deepEqual(ended,[]);
+  c.accept(frame(0),0);await c.pending;
+  assert.deepEqual(ended,[1]);assert.equal(requests.length,1);
+  const samples=new Int16Array((await requests[0].arrayBuffer()).slice(44));
+  assert.equal(samples.length,24000);assert.ok(samples.subarray(0,2880).every(sample=>sample===300));
+  assert.ok(samples.subarray(2880).every(sample=>sample===0));await c.dispose();
 });
 
 test('model probability rejects sustained loud noise and retains quiet speech with hysteresis',async()=>{
@@ -144,6 +156,39 @@ test('modeled speech keeps stricter playback interruption and resets activity on
   for(let i=0;i<30;i++)c.accept(frame(0),.01);
   assert.equal(c.segment,null);assert.deepEqual(requests,[]);
   await c.dispose();
+});
+
+test('soft onset requires high model confidence and never bypasses digital silence or playback protection',async()=>{
+  for(const [sample,probability,playback] of [[50,.89,false],[0,.99,false],[20,.99,false],[50,.99,true]]){
+    const c=new Capture({transcribe:async()=>''});if(playback)c.setPlaybackActive(true);
+    for(let i=0;i<20;i++)c.accept(frame(sample),probability);
+    assert.equal(c.segment,null);await c.dispose();
+  }
+  const requests=[],c=new Capture({transcribe:async blob=>{requests.push(blob);return '你好';}});
+  for(let i=0;i<4;i++)c.accept(frame(50),.99);assert.equal(c.segment,null);
+  c.accept(frame(50),.99);assert.ok(c.segment);
+  for(let i=0;i<16;i++)c.accept(frame(0),0);await c.pending;
+  assert.equal(requests.length,1);await c.dispose();
+});
+
+test('short syllables bridge only bounded modeled low-energy valleys',async()=>{
+  const starts=[],c=new Capture({transcribe:async()=>'你好',onSpeechStart:id=>starts.push(id)});
+  for(let i=0;i<4;i++)c.accept(frame(200),.9);
+  for(let i=0;i<2;i++)c.accept(frame(30),.94);
+  assert.equal(c.segment,null);assert.equal(c.attack,80);
+  c.accept(frame(200),.9);assert.deepEqual(starts,[1]);
+  await c.stop();
+});
+
+test('syllable attack cannot accumulate across real silence, noise, excessive valleys or playback',async()=>{
+  for(const [gap,probability,count,playback] of [[0,.99,1,false],[30,.1,1,false],[30,.9,3,false],[30,.9,2,true]]){
+    const c=new Capture({transcribe:async()=>''});if(playback)c.setPlaybackActive(true);
+    for(let i=0;i<4;i++)c.accept(frame(1000),.9);
+    for(let i=0;i<count;i++)c.accept(frame(gap),probability);
+    c.accept(frame(1000),.9);
+    assert.equal(c.segment,null);assert.equal(c.attack,20);
+    await c.dispose();
+  }
 });
 
 test('faster fragments publish in order before whole-utterance final correction',async()=>{
@@ -221,18 +266,18 @@ test('playback startup prebuffer holds short incomplete streams then flushes com
   vm.runInNewContext(code,{sampleRate:48000,AudioWorkletProcessor:class{constructor(){this.port={postMessage:m=>sent.push(m)};}},registerProcessor:(n,c)=>types[n]=c});
   const p=new types['voice-playback']();p.port.onmessage({data:{type:'pcm',epoch:0,id:1,data:new Int16Array(480).fill(1000).buffer}});const out=new Float32Array(128);p.process([],[[out]]);assert.equal(out.some(Boolean),false);assert.equal(sent.length,0);p.port.onmessage({data:{type:'end',epoch:0,id:1}});for(let i=0;i<8;i++)p.process([],[[out]]);assert.equal(sent.filter(e=>e.type==='played').length,1);assert.ok(sent.some(e=>e.type==='playing'));assert.ok(sent.some(e=>e.type==='idle'));
 });
-test('playback starts at 60 ms and preserves activity across underruns until explicit end',async()=>{
+test('playback starts at 120 ms and preserves activity across underruns until explicit end',async()=>{
   const code=await fs.readFile(new URL('../client/audio-worklet.js',import.meta.url),'utf8'),types={},sent=[];
   vm.runInNewContext(code,{sampleRate:48000,AudioWorkletProcessor:class{constructor(){this.port={postMessage:m=>sent.push(m)};}},registerProcessor:(n,c)=>types[n]=c});
   const p=new types['voice-playback'](),render=()=>p.process([],[[new Float32Array(128)]]),send=(type,samples=0)=>p.port.onmessage({data:{type,epoch:0,id:1,data:new Int16Array(samples).fill(1000).buffer}});
-  send('pcm',960);render();assert.equal(sent.some(e=>e.type==='playing'),false);send('pcm',480);render();assert.equal(sent.filter(e=>e.type==='playing').length,1);
-  for(let i=0;i<50;i++)render();assert.equal(sent.filter(e=>e.type==='buffering').length,1);assert.equal(sent.some(e=>e.type==='idle'),false);assert.equal(p.target,1920);
-  send('pcm',1920);for(let i=0;i<50;i++)render();assert.equal(sent.filter(e=>e.type==='playing').length,1);assert.equal(sent.filter(e=>e.type==='buffering').length,2);assert.equal(sent.some(e=>e.type==='idle'),false);
+  send('pcm',1440);render();assert.equal(sent.some(e=>e.type==='playing'),false);send('pcm',1440);render();assert.equal(sent.filter(e=>e.type==='playing').length,1);
+  for(let i=0;i<70;i++)render();assert.equal(sent.filter(e=>e.type==='buffering').length,1);assert.equal(sent.some(e=>e.type==='idle'),false);assert.equal(p.target,3840);
+  send('pcm',3840);for(let i=0;i<80;i++)render();assert.equal(sent.filter(e=>e.type==='playing').length,1);assert.equal(sent.filter(e=>e.type==='buffering').length,2);assert.equal(sent.some(e=>e.type==='idle'),false);
   send('end');for(let i=0;i<5;i++)render();assert.equal(sent.filter(e=>e.type==='played').length,1);assert.equal(sent.filter(e=>e.type==='idle').length,1);
 });
-test('playback adaptive prebuffer stays within 60–180 ms and clear isolates buffered audio',async()=>{
+test('playback adaptive prebuffer stays within 120–240 ms and clear preserves learned jitter while isolating old audio',async()=>{
   const code=await fs.readFile(new URL('../client/audio-worklet.js',import.meta.url),'utf8'),types={},sent=[];
   vm.runInNewContext(code,{sampleRate:48000,AudioWorkletProcessor:class{constructor(){this.port={postMessage:m=>sent.push(m)};}},registerProcessor:(n,c)=>types[n]=c});
-  const p=new types['voice-playback']();for(let i=0;i<12;i++){p.port.onmessage({data:{type:'pcm',epoch:0,id:1,data:new Int16Array(p.target).fill(1000).buffer}});for(let n=0;n<100;n++)p.process([],[[new Float32Array(128)]]);}assert.equal(p.target,4320);
-  p.port.onmessage({data:{type:'clear',epoch:1}});p.port.onmessage({data:{type:'pcm',epoch:0,id:1,data:new Int16Array(2000).buffer}});assert.equal(p.target,1440);assert.equal(p.written,0);assert.equal(p.active,false);
+  const p=new types['voice-playback']();for(let i=0;i<12;i++){p.port.onmessage({data:{type:'pcm',epoch:0,id:1,data:new Int16Array(p.target).fill(1000).buffer}});for(let n=0;n<100;n++)p.process([],[[new Float32Array(128)]]);}assert.equal(p.target,5760);
+  p.port.onmessage({data:{type:'clear',epoch:1}});p.port.onmessage({data:{type:'pcm',epoch:0,id:1,data:new Int16Array(2000).buffer}});assert.equal(p.target,5760);assert.equal(p.written,0);assert.equal(p.active,false);
 });

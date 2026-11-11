@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {SpeakableChunker,SpeechQueue,speakable} from '../client/speech.mjs';
 test('chunker filters code, hidden reasoning, markdown URLs across every character',()=>{
   const c=new SpeakableChunker(),out=[];const text='你好。<think>不应朗读。</think>请看 [文档](https://example.com)。 '+String.fromCharCode(96).repeat(3)+'js\nsecret();\n'+String.fromCharCode(96).repeat(3)+'最后 '+String.fromCharCode(96)+'danger'+String.fromCharCode(96)+' 再见！';
-  for(const x of text)out.push(...c.push(x));out.push(...c.finish());const all=out.join('');assert.match(all,/你好/);assert.match(all,/文档/);assert.match(all,/最后/);assert.match(all,/danger/);assert.equal(all.split('代码我发在聊天里了。').length-1,1);assert.doesNotMatch(all,/不应|secret|example/);
+  for(const x of text)out.push(...c.push(x));out.push(...c.finish());const all=out.join('');assert.match(all,/你好/);assert.match(all,/文档/);assert.match(all,/最后/);assert.equal(all.split('代码部分略过。').length-1,1);assert.doesNotMatch(all,/不应|secret|example|danger/);
 });
 test('chunker limits Chinese sentence size and keeps punctuation across deltas',()=>{const c=new SpeakableChunker({maxChars:50}),out=[];for(const d of ['你好','，今天很好。','很'.repeat(180),'结束！'])out.push(...c.push(d));out.push(...c.finish());assert.ok(out.every(x=>x.length<=50));assert.match(out.join(''),/今天很好/);});
 test('secret-looking tokens are redacted',()=>{assert.doesNotMatch(speakable('token=abcdefghijklmnopqrstuvwxyz1234567890 api_key: sk-123456789012345678901234'),/abcdefghijklmnopqrstuvwxyz|sk-123/);});
@@ -30,19 +30,68 @@ test('stream filter gives one code/table/URL hint per turn and never reads their
   const fence = String.fromCharCode(96).repeat(3), nl = String.fromCharCode(10);
   const text = '正文。' + fence + 'js' + nl + 'privateCode()' + nl + fence + nl + fence + 'json' + nl + 'anotherCode()' + nl + fence + nl + '| 私有表头 | 数值 |' + nl + '| --- | --- |' + nl + '| 私有单元格 | 10 |' + nl + nl + '请看 https://private.example/a.b?q=secret 后续。另见 https://second.example/x。结束。';
   const spoken = filterChunks(text);
-  for (const hint of ['代码我发在聊天里了。', '表格我放在聊天里了。', '链接已发在聊天里。']) assert.equal(spoken.split(hint).length - 1, 1);
+  for (const hint of ['代码部分略过。', '表格部分略过。', '这个链接。']) assert.equal(spoken.split(hint).length - 1, 1);
   assert.doesNotMatch(spoken, /private|anotherCode|私有|---|second/u); assert.match(spoken, /正文/u); assert.match(spoken, /后续/u); assert.match(spoken, /结束/u);
 });
-test('inline code and ordinary parentheses survive while short stage directions and emoji are removed', () => {
+test('inline code is not spoken while ordinary parentheses survive and stage directions are removed', () => {
   const tick = String.fromCharCode(96);
   const spoken = filterChunks('(笑着说)你好（挠头），请运行 ' + tick + 'npm run dev' + tick + '。（预计耗时 2 分钟）保留这个说明。*sighs*继续。🙂');
-  assert.match(spoken, /npm run dev/u); assert.match(spoken, /预计耗时 2 分钟/u); assert.doesNotMatch(spoken, /笑着说|挠头|sighs|🙂/u);
+  assert.match(spoken, /预计耗时 2 分钟/u); assert.doesNotMatch(spoken, /npm run dev|笑着说|挠头|sighs|🙂/u);
 });
 test('incomplete URL and Markdown destination remain silent across idle flushes', () => {
   let now = 1000; const chunker = new SpeakableChunker({ now: () => now }), out = [];
   for (const delta of ['请看 h', 'ttps://priv', 'ate.example/a', '.b']) { out.push(...chunker.push(delta)); now += 1500; out.push(...chunker.flushIdle()); }
   out.push(...chunker.push(' 然后查看 [文档](https://other.example/private) 完成。')); out.push(...chunker.finish());
   const spoken = out.join(' '); assert.doesNotMatch(spoken, /private|example|https|other/u); assert.match(spoken, /文档/u); assert.match(spoken, /完成/u);
+});
+
+test('Windows paths are spoken as exact locations across every split, including inline and Markdown labels', () => {
+  const tick=String.fromCharCode(96);
+  const samples=[
+    ['文件在 C:\\Users\\Lin\\报告.md。','C 盘的Users文件夹下，Lin文件夹下，报告 点 md'],
+    ['文件在 D:/项目/前端/index.ts:12。','D 盘的项目文件夹下，前端文件夹下，index 点 ts第 12 行'],
+    ['请看 '+tick+'C:\\Users\\Lin\\报告.md'+tick+'。','C 盘的Users文件夹下，Lin文件夹下，报告 点 md'],
+    ['打开 "C:\\Program Files\\BenchGo\\app.exe"。','C 盘的Program Files文件夹下，BenchGo文件夹下，app 点 exe'],
+    ['请看 [C:/Users/Lin/报告.md](C:/Users/Lin/报告.md)。','C 盘的Users文件夹下，Lin文件夹下，报告 点 md'],
+    ['打开 file:///D:/BenchGo/%E6%8A%A5%E5%91%8A.md。','D 盘的BenchGo文件夹下，报告 点 md'],
+  ];
+  for(const [input,expected]of samples)for(let split=0;split<=input.length;split++){
+    const c=new SpeakableChunker(),out=[...c.push(input.slice(0,split)),...c.push(input.slice(split)),...c.finish()].join('');
+    assert.ok(out.includes(expected),JSON.stringify({input,split,out,expected}));assert.doesNotMatch(out,/[\\/`]/u);
+  }
+});
+
+test('idle speech never releases a partial Windows drive or code payload', () => {
+  let now=1000;const c=new SpeakableChunker({now:()=>now}),out=[];
+  for(const delta of ['文件保存在 ','C',':','\\','Users','\\Lin\\','报告','.md']){
+    out.push(...c.push(delta));now+=1600;out.push(...c.flushIdle());assert.doesNotMatch(out.join(''),/C|Users|报告|md/u);
+  }
+  out.push(...c.push('。'));out.push(...c.finish());assert.match(out.join(''),/C 盘的Users文件夹下，Lin文件夹下，报告 点 md/u);
+  const code=new SpeakableChunker({now:()=>now}),spoken=[];
+  for(const delta of ['`','npm ','run dev','`','。']){spoken.push(...code.push(delta));now+=1600;spoken.push(...code.flushIdle());}
+  spoken.push(...code.finish());assert.doesNotMatch(spoken.join(''),/npm|run|dev/u);assert.equal(spoken.join('').split('代码部分略过。').length-1,1);
+});
+
+test('link titles survive nested destinations without reading URLs or inline command labels', () => {
+  const tick=String.fromCharCode(96);
+  const spoken=filterChunks('请看 [官方文档](https://example.com/a(b)/private?q=secret "标题 (说明)")。文件见 [报告](C:/Users/Lin/报告.md)。['+tick+'npm run private-command'+tick+'](https://example.com)。<code>npm run private-command</code>然后继续。');
+  assert.match(spoken,/官方文档/u);assert.match(spoken,/文件见 报告/u);assert.match(spoken,/然后继续/u);
+  assert.doesNotMatch(spoken,/example|private|secret|Users|npm|run|标题|说明/u);
+});
+
+test('backtick and tilde fences remain silent when an idle flush occurs after each character', () => {
+  for(const marker of ['~~~',String.fromCharCode(96).repeat(3)]){
+    let now=1000;const c=new SpeakableChunker({now:()=>now}),out=[];
+    for(const character of marker+'js\nprivateCommand();\n'+marker+'\n完成。'){
+      out.push(...c.push(character));now+=1600;out.push(...c.flushIdle());
+    }
+    out.push(...c.finish());assert.doesNotMatch(out.join(''),/privateCommand|js/u);assert.match(out.join(''),/完成/u);
+  }
+});
+
+test('unclosed inline code and oversized paths stay bounded and never spill raw tails', () => {
+  const c=new SpeakableChunker();c.push('`');for(let i=0;i<1000;i++)c.push('privateCommand');assert.ok(c.raw.length<=8);assert.ok(c.inline.text.length<=2048);assert.doesNotMatch(c.finish().join(''),/privateCommand/u);
+  const path=new SpeakableChunker();path.push('C:\\');for(let i=0;i<1000;i++)path.push('privatePath');assert.ok(path.raw.length<=2048);assert.doesNotMatch(path.finish().join(''),/privatePath/u);
 });
 test('unterminated code and Markdown links have bounded retained text', () => {
   const code = new SpeakableChunker(), fence = String.fromCharCode(96).repeat(3);

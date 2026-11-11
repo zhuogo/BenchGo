@@ -1,15 +1,21 @@
 import { HttpError, assertSameOrigin, readJson, readLimited } from '../../benchgo/shared/http.mjs';
 import { VoiceError } from './config.mjs';
 import { resolveVoiceProvider, voiceSnapshot } from './availability.mjs';
-import { LIMITS, validateWav, transcribe, upstreamFailure } from './media.mjs';
+import { LIMITS, validateWav, transcribe } from './media.mjs';
 import { streamTranscription } from './asr.mjs';
 import { RealtimeASR } from './realtime.mjs';
-import { speechRequest } from './tts.mjs';
 import { callStreamingReason } from './call-streaming.mjs';
 import { CallLeases } from './calls.mjs';
 import { readFile } from 'node:fs/promises';
 import { WebSocketServer } from 'ws';
 import { createRealtimeSockets } from './realtime-socket.mjs';
+import { createVoiceConversations } from './conversations.mjs';
+import { transcriptSourceId } from './transcript-source.mjs';
+import { transcriptMessage } from './transcript-message.mjs';
+import { ProtocolDetection, probeRealtimeAsr } from './protocol-detection.mjs';
+import { protocolDescriptor } from '../shared/protocol-catalog.mjs';
+import { updateConfig } from './config.mjs';
+import { requestSpeech } from './protocols/registry.mjs';
 
 const headers = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
 function scope(request, signals) {
@@ -19,17 +25,23 @@ function scope(request, signals) {
   for (const signal of [request.signal, ...signals]) { signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort(); }
   return { signal: controller.signal, abort, close() { clearTimeout(timeout); for (const signal of [request.signal, ...signals]) signal.removeEventListener('abort', abort); } };
 }
-export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new AbortController().signal, providers, socket } = {}) {
+export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new AbortController().signal, providers, socket, llm, conversationBridge } = {}) {
   const active = { asr: 0, tts: 0 }, realtime = new RealtimeASR({ socket });
+  const probeRealtime = new RealtimeASR({ socket });
+  const detection = new ProtocolDetection({ fetcher, shutdown, websocketProbe: (config, wav, signal, onOutput) => probeRealtimeAsr(probeRealtime, config, wav, signal, onOutput) });
   const sockets = createRealtimeSockets(realtime);
   const calls = new CallLeases(); let revision = 0, previous = structuredClone(store.value);
+  const routeIdentity = ({ speed, ...route }) => JSON.stringify(route);
+  const conversations = createVoiceConversations({ store, llm, bridge: conversationBridge, leases: calls, snapshot: () => snapshot() });
   const generations = Object.fromEntries(['asr', 'tts', 'dictation', 'readAloud'].map(key => [key, new AbortController()]));
   const invalidate = () => {
     const next = store.value;
     if (JSON.stringify(previous) === JSON.stringify(next)) return;
     revision++;
+    if (['asr', 'tts'].some(kind => routeIdentity(previous[kind]) !== routeIdentity(next[kind]))) detection.cancelPending();
     for (const key of Object.keys(generations)) {
-      const changed = ['asr', 'tts'].includes(key) ? JSON.stringify(previous[key]) !== JSON.stringify(next[key]) : previous[key] && !next[key];
+      const withoutSpeed = ({ speed, ...rest } = {}) => rest;
+      const changed = ['asr', 'tts'].includes(key) ? JSON.stringify(key === 'tts' ? withoutSpeed(previous[key]) : previous[key]) !== JSON.stringify(key === 'tts' ? withoutSpeed(next[key]) : next[key]) : previous[key] && !next[key];
       if (!changed) continue;
       generations[key].abort(); generations[key] = new AbortController();
       if (key === 'asr') { sockets.clear(); realtime.clear(); }
@@ -38,13 +50,19 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
     previous = structuredClone(next);
   };
   const unsubscribe = store.subscribe?.(invalidate);
-  const dispose = () => { unsubscribe?.(); sockets.dispose(); realtime.clear(); calls.clear(); for (const generation of Object.values(generations)) generation.abort(); };
+  const dispose = () => { unsubscribe?.(); detection.clear(); probeRealtime.clear(); conversations.dispose(); sockets.dispose(); realtime.clear(); calls.clear(); for (const generation of Object.values(generations)) generation.abort(); };
   shutdown.addEventListener('abort', dispose, { once: true });
   const errorResponse = error => Response.json({ error: error instanceof HttpError ? error.message : 'Voice service request failed; check provider configuration and connectivity', ...(error instanceof HttpError && error.code ? { code: error.code } : {}) }, { status: error instanceof HttpError ? error.status : error?.name === 'AbortError' ? 499 : 502, headers });
   const protect = handler => async request => { try { assertSameOrigin(request); if (shutdown.aborted) throw new VoiceError('Voice service is stopping', 503); return await handler(request); } catch (error) { return errorResponse(error); } };
   const acquire = kind => { if (active[kind] >= (kind === 'tts' ? 3 : 2)) throw new VoiceError('Too many active voice requests; wait for the current segment', 429); active[kind]++; let released = false; return () => { if (!released) { released = true; active[kind]--; } }; };
-  const provider = kind => resolveVoiceProvider(store, kind, providers);
-  const snapshot = () => voiceSnapshot(store, providers);
+  const provider = async (kind, signal = shutdown, requirement = 'any', callId = '') => {
+    const route = await resolveVoiceProvider(store, kind, providers);
+    signal.throwIfAborted(); if (callId) calls.media(callId);
+    const descriptor = protocolDescriptor(kind, route.protocol);
+    if (requirement === 'streaming' && !descriptor.streaming || requirement === 'http' && descriptor.transport === 'websocket') throw new VoiceError('所选协议不符合当前音频传输用途，请在语音设置中重新匹配或选择。', 409);
+    return route;
+  };
+  const snapshot = () => voiceSnapshot(store, providers, llm);
   const operationFor = (request, feature) => {
     const callId = request.headers.get('x-voice-call-id');
     if (!callId && !store.value[feature]) throw new VoiceError('Start a voice call before requesting call audio', 409);
@@ -64,6 +82,18 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
       const input = await readJson(request);
       if (input.action === 'providers') return Response.json({ providers: providers ? await providers.list() : [] }, { headers });
       if (input.action === 'models') { if (!providers) throw new VoiceError('模型供应商服务尚未就绪', 409); return Response.json({ models: await providers.models(input.providerId, request.signal) }, { headers }); }
+      if (['protocol.detect', 'protocol.test'].includes(input.action)) {
+        if (!['asr', 'tts'].includes(input.kind)) throw new VoiceError('Invalid voice endpoint');
+        const submitted = { ...(input.config || {}) }, clearApiKey = submitted.clearApiKey === true; delete submitted.clearApiKey;
+        if (submitted.apiKey === '' && !clearApiKey) delete submitted.apiKey;
+        if (clearApiKey) submitted.apiKey = '';
+        // Legacy auto is a read-only persisted value, never a new settings selection.
+        for (const key of ['protocol', 'apiType']) if (submitted[key] === 'auto') submitted[key] = '';
+        const draft = updateConfig(store.value, { [input.kind]: submitted });
+        const config = await resolveVoiceProvider({ value: draft }, input.kind, providers, { allowUnmatched: true });
+        const result = await detection.detect(input.kind, config, { requirement: input.requirement || 'any', explicit: input.action === 'protocol.test', signal: AbortSignal.any([request.signal, shutdown]) });
+        return Response.json({ result }, { headers });
+      }
       if (input.action === 'asr.start') {
         const callId = request.headers.get('x-voice-call-id') || '';
         if (callId ? !store.value.call : !store.value.dictation) throw new VoiceError('Voice input is disabled', 409);
@@ -71,23 +101,61 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
         const signals = [shutdown, generations.asr.signal]; if (!callId) signals.push(generations.dictation.signal); if (callId) signals.push(calls.media(callId));
         const release = acquire('asr'), opening = new AbortController(); signals.push(opening.signal);
         const abort = () => opening.abort(); request.signal.addEventListener('abort', abort, { once: true }); if (request.signal.aborted) abort();
-        try { const config = await provider('asr'); AbortSignal.any(signals).throwIfAborted(); if (config.protocol !== 'openai-websocket') throw new VoiceError('Select an OpenAI WebSocket transcription protocol first', 409); const id = await realtime.open(config, AbortSignal.any(signals), callId); realtime.get(id, callId).onClose = release; return Response.json({ id, ticket: sockets.issue(id, callId) }, { headers }); }
+        try { const config = await provider('asr', AbortSignal.any(signals), callId ? 'streaming' : 'any', callId); AbortSignal.any(signals).throwIfAborted(); if (config.protocol !== 'openai-websocket') throw new VoiceError('Select an OpenAI WebSocket transcription protocol first', 409); const id = await realtime.open(config, AbortSignal.any(signals), callId); realtime.get(id, callId).onClose = release; return Response.json({ id, ticket: sockets.issue(id, callId) }, { headers }); }
         catch (error) { release(); throw error; } finally { request.signal.removeEventListener('abort', abort); }
       }
       if (input.action === 'asr.end') { realtime.get(input.id, request.headers.get('x-voice-call-id') || ''); realtime.close(input.id); return Response.json({ ok: true }, { headers }); }
       if (input.action === 'config') return Response.json({ config: await snapshot() }, { headers });
       if (input.action === 'configure') { await store.configure(input.config); if (!unsubscribe) invalidate(); return Response.json({ config: await snapshot(), revision }, { headers }); }
-      if (input.action === 'call.start') { if (!store.value.call) throw new VoiceError('Voice calls are disabled', 409); const reason = callStreamingReason(store.value); if (reason) throw new VoiceError(reason, 409); const startingRevision = revision; await provider('asr'); await provider('tts'); if (startingRevision !== revision || !store.value.call) throw new VoiceError('Voice configuration changed; start the call again', 409); return Response.json({ call: calls.start(input), revision }, { headers }); }
-      if (input.action === 'call.heartbeat') return Response.json({ call: calls.heartbeat(input), revision }, { headers });
+      if (input.action === 'call.start') {
+        if (!store.value.call) throw new VoiceError('Voice calls are disabled', 409);
+        const reason = callStreamingReason(store.value); if (reason) throw new VoiceError(reason, 409);
+        const startingRevision = revision, signal = AbortSignal.any([request.signal, shutdown]);
+        const [asr, tts] = await Promise.all([provider('asr', signal, 'streaming'), provider('tts', signal, 'streaming')]);
+        const resolvedReason = callStreamingReason({ asr, tts }); if (resolvedReason) throw new VoiceError(resolvedReason, 409);
+        if (startingRevision !== revision || !store.value.call) throw new VoiceError('Voice configuration changed; start the call again', 409);
+        const call = calls.start(input);
+        try { const conversation = await conversations.open({ ...input, callId: call.callId }); return Response.json({ call, conversation, revision, config: await snapshot() }, { headers }); }
+        catch (error) { calls.end({ ...input, callId: call.callId }); throw error; }
+      }
+      if (input.action === 'call.heartbeat') { await conversations.validate(input); return Response.json({ call: calls.heartbeat(input), revision }, { headers }); }
       if (input.action === 'call.end') return Response.json(calls.end(input), { headers });
       throw new VoiceError('Unknown Voice action');
+    }),
+    conversation: protect(async request => {
+      const input = await readJson(request);
+      if (input.action === 'history') {
+        if (!conversationBridge?.readRecords) throw new VoiceError('语音记录服务尚未就绪', 409);
+        const page = await conversationBridge.readRecords(input.sessionId, { before: input.before, limit: input.limit, mode: input.mode });
+        const items = [];
+        for (const event of page.events) {
+          const data = event.data || {};
+          if (event.type === 'plugin:benchgo-plugin/voice-conversation' && event.ignorable === true && ['user', 'assistant'].includes(data.kind)) items.push({ id: data.messageId || `voice:${event.seq}`, role: data.kind, text: data.text, partial: false, interrupted: !!data.interrupted, callId: data.callId, requestId: data.requestId, messageId: data.messageId, seq: event.seq });
+          else { const message = transcriptMessage(event); if (message?.text) items.push({ id: event.type === 'user/message' ? data.id || `user:${event.seq}` : event.type === 'assistant/message' ? data.message?.id || `assistant:${event.seq}` : `publication:${event.seq}`, ...message, seq: event.seq }); }
+        }
+        for (const item of items) if (item.seq !== undefined) {
+          const event = page.events.find(event => event.seq === item.seq);
+          if (event?.type !== 'plugin:benchgo-plugin/voice-conversation') item.sourceId = transcriptSourceId(event);
+        }
+        const visible = items.filter((item, index) => item.role !== 'assistant' || items[index - 1]?.role !== 'assistant' || items[index - 1]?.text !== item.text);
+        return Response.json({ ...page, items: visible, before: page.nextBefore }, { headers });
+      }
+      if (input.action === 'open') return Response.json(await conversations.open(input), { headers });
+      if (input.action === 'turn') return Response.json(await conversations.turn(input), { headers });
+      if (input.action === 'interrupt') return Response.json(conversations.interrupt(input), { headers });
+      if (input.action === 'close') return Response.json(conversations.close(input), { headers });
+      if (input.action === 'events') {
+        const stream = conversations.events(input);
+        return new Response(stream, { headers: { ...headers, 'content-type': 'application/x-ndjson', 'x-accel-buffering': 'no' } });
+      }
+      throw new VoiceError('未知通话交互操作', 400);
     }),
     transcribe: protect(async request => {
       if (!store.value.dictation && !store.value.call) throw new VoiceError('Voice input is disabled', 409);
       if (!/^audio\/(wav|wave|x-wav)(;|$)/iu.test(request.headers.get('content-type') || '')) throw new VoiceError('Expected audio/wav', 415);
       const { operation, release } = reserve(request, 'dictation', 'asr'); let handedOff = false;
       try {
-        const config = await provider('asr'); operation.signal.throwIfAborted();
+        const config = await provider('asr', operation.signal, request.headers.get('x-voice-call-id') ? 'streaming' : 'http', request.headers.get('x-voice-call-id') || ''); operation.signal.throwIfAborted();
         const bytes = await readLimited(request, LIMITS.audioBytes, operation.signal); validateWav(bytes);
         if ((config.protocol || 'transcriptions') === 'transcriptions') { const result = await transcribe(fetcher, config, bytes, operation.signal); operation.signal.throwIfAborted(); return Response.json(result, { headers }); }
         let finished = false; const close = () => { if (!finished) { finished = true; operation.close(); release(); } };
@@ -104,13 +172,9 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
       if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > LIMITS.speechCharacters) throw new VoiceError('Speech text must contain 1–4000 characters');
       const { operation, release } = reserve(request, 'readAloud', 'tts'); let handedOff = false;
       try {
-        const config = await provider('tts'); operation.signal.throwIfAborted();
-        const upstream = await fetcher(`${config.baseURL}/audio/speech`, {
-          method: 'POST', headers: { 'content-type': 'application/json', ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}) },
-          body: JSON.stringify(speechRequest(config, input.text)), signal: operation.signal, redirect: 'error',
-        });
+        const config = await provider('tts', operation.signal, request.headers.get('x-voice-call-id') ? 'streaming' : 'any', request.headers.get('x-voice-call-id') || ''); operation.signal.throwIfAborted();
+        const upstream = await requestSpeech(fetcher, config, input.text, operation.signal);
         if (operation.signal.aborted) { void upstream.body?.cancel().catch(() => {}); operation.signal.throwIfAborted(); }
-        if (!upstream.ok) throw await upstreamFailure(upstream, 'TTS', operation.signal);
         if (!upstream.body) throw new VoiceError('TTS service returned no audio', 502);
         const type = upstream.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
         if (type && !['audio/pcm', 'audio/pcm16', 'audio/x-pcm', 'application/octet-stream'].includes(type)) { void upstream.body.cancel().catch(() => {}); throw new VoiceError('TTS service must return raw PCM16LE, 24 kHz mono audio', 502); }
@@ -156,7 +220,7 @@ export function mountWeb(ctx, store, options = {}) {
   const shutdown = new AbortController();
   const handlers = createVoiceHandlers(store, { ...options, shutdown: shutdown.signal });
   ctx.effect(() => () => shutdown.abort());
-  for (const [path, handler] of [['/api/voice', handlers.config], ['/api/voice/transcribe', handlers.transcribe], ['/api/voice/speech', handlers.speech]]) {
+  for (const [path, handler] of [['/api/voice', handlers.config], ['/api/voice/transcribe', handlers.transcribe], ['/api/voice/speech', handlers.speech], ['/api/voice/conversation', handlers.conversation]]) {
     ctx.effect(() => ctx.connection.fetch.register({ path, methods: ['POST'], requestBody: 'streaming', fetch: handler }));
   }
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/voice/worklet', methods: ['GET'], requestBody: 'buffered', fetch: handlers.worklet }));
