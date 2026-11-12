@@ -2,15 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { activityTask, groupHomeActivity, createActivityStore, liveActivityStates, activeActivityStates, archivedActivityTicket, boardTicketRows } from '../client/activity-data.mjs';
 
-test('chat board counts only distinct visible running and waiting tickets', () => {
+test('chat board retains completed tickets until they are archived or deleted', () => {
   const ticket = (id, status, extra = {}) => ({ id, kind: 'ticket', status, ...extra });
   const rows = [ticket('running', 'running'), ticket('waiting', 'waiting'), ticket('done', 'completed'),
     ticket('archived', 'waiting', { archived: true }), ticket('cleaned', 'waiting', { cleanup: { id: 'receipt' } }),
     ticket('hidden', 'running', { taskMeta: { archived: true } }), ticket('deleted', 'waiting', { taskMeta: { deleted: true } }),
     { id: 'goal', kind: 'goal', status: 'active' }, ticket('waiting', 'waiting')];
-  assert.deepEqual(boardTicketRows(rows).map(row => row.id), ['running', 'waiting']);
+  assert.deepEqual(boardTicketRows(rows).map(row => row.id), ['running', 'waiting', 'done']);
   rows[0].status = 'completed'; rows[1].status = 'completed'; rows.at(-1).status = 'completed';
-  assert.equal(boardTicketRows(rows).length, 0);
+  assert.deepEqual(boardTicketRows(rows).map(row => row.id), ['running', 'waiting', 'done']);
+  rows[0].taskMeta = { archived: true };
+  rows[2].taskMeta = { deleted: true };
+  assert.deepEqual(boardTicketRows(rows).map(row => row.id), ['waiting']);
 });
 
 test('paused and stopping tasks do not count as active activity', () => {

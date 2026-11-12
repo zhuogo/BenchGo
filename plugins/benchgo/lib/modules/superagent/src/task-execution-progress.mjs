@@ -18,6 +18,7 @@ const category = name => name === 'web_search' ? 'search' : name === 'web_fetch'
   : ['subagent', 'spawn_agent', 'send_message', 'followup_task', 'wait_agent', 'list_agents'].includes(name) ? 'child'
   : name === 'ask_user_question' ? 'question' : 'tool';
 const eventSchema = z.object({ seq: z.number().int(), kind: z.string(), time: z.string().nullable(), category: z.string().optional() });
+const activitySchema = z.object({ seq: z.number().int(), time: z.string().nullable(), status: z.string(), activity: z.string() });
 const requestSchema = z.object({ state: z.enum(['unknown', 'inflight', 'settled']), startedAt: z.string().nullable(), settledAt: z.string().nullable(), deadline: z.null() });
 const stateSchema = z.object({ sessionId: z.string(), parentSessionId: z.string().nullable(), inheritedEventCount: z.number().int(),
   cursor: z.number().int(), status: z.string(), activity: z.string(), updatedAt: z.string().nullable(), turn: z.number().int().nullable(), step: z.number().int().nullable(),
@@ -25,12 +26,14 @@ const stateSchema = z.object({ sessionId: z.string(), parentSessionId: z.string(
     incomplete: z.boolean(), active: z.array(z.object({ callId: z.string(), category: z.string(), sourceSeq: z.number().int() })).max(128) }),
   children: z.array(z.object({ sessionId: z.string(), catalogSeq: z.number().int(), createdAt: z.string().nullable(),
     notice: z.object({ seq: z.number().int(), reason: z.string(), messageId: z.string() }).optional() })).max(512),
-  childrenTruncated: z.boolean(), milestones: z.array(eventSchema).max(64), lastEvent: eventSchema.nullable() });
+  childrenTruncated: z.boolean(), milestones: z.array(eventSchema).max(64), lastEvent: eventSchema.nullable(),
+  activityHistory: z.array(activitySchema).max(64), activityHistoryTruncated: z.boolean() });
 const initialState = (header, inheritedEventCount) => ({ sessionId: header.id,
   parentSessionId: header.origin === 'subagent' ? header.parentSession || null : null, inheritedEventCount,
   cursor: -1, status: 'unknown', activity: '', updatedAt: null, turn: null, step: null,
   request: { state: 'unknown', startedAt: null, settledAt: null, deadline: null },
-  tools: { calls: 0, results: 0, errors: 0, active: [], incomplete: false }, children: [], childrenTruncated: false, milestones: [], lastEvent: null });
+  tools: { calls: 0, results: 0, errors: 0, active: [], incomplete: false }, children: [], childrenTruncated: false, milestones: [], lastEvent: null,
+  activityHistory: [], activityHistoryTruncated: false });
 
 /** Pure, bounded fold. Parameters, outputs, failure prose and reasoning never enter it. */
 function applyExecutionEvent(state, event) {
@@ -87,9 +90,18 @@ function applyExecutionEvent(state, event) {
   if (children !== state.children) kind = 'subagent/returned';
   next.lastEvent = { seq: event.seq, kind, time, ...(toolCategory ? { category: toolCategory } : {}) };
   if (event.type !== 'tool/call') next.milestones = [...state.milestones, next.lastEvent].slice(-64);
+  // Retain meaningful changes independently from the mutable current activity.
+  // Successful tool results and step preparation are generic resets, not progress.
+  const history = state.activityHistory || [], previous = history.at(-1);
+  if ((next.status !== state.status || next.activity !== state.activity)
+    && (event.type !== 'step/start' && (event.type !== 'tool/result' || data.message?.isError))
+    && (previous?.status !== next.status || previous?.activity !== next.activity)) {
+    next.activityHistory = [...history, { seq: event.seq, time, status: next.status, activity: next.activity }].slice(-64);
+    next.activityHistoryTruncated = state.activityHistoryTruncated || history.length >= 64;
+  }
   return next;
 }
-const executionProjectionDefinition = { key: executionProjectionKey, stateVersion: 1, stateSchema,
+const executionProjectionDefinition = { key: executionProjectionKey, stateVersion: 2, stateSchema,
   init: initialState, apply: applyExecutionEvent, wire: { viewSchema: stateSchema, view: state => state, summary: false } };
 
 export function createTaskExecutionProgress({ ctx, database, now = Date.now, bootId = randomUUID() }) {
@@ -189,6 +201,8 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
       if (!run) return null;
       const worker = records.get(run.sessionId), live = agents.get(run.sessionId);
       const current = worker?.runId === run.id && worker?.fence === assignment.fence;
+      const historyOf = record => record?.runId === run.id ? (record.state?.activityHistory || [])
+        .filter(row => row.time && row.time >= run.createdAt) : [];
       const completed = ticket.status === 'completed' || run.state === 'completed';
       const phase = completed ? 'finished' : run.state === 'prepared' ? 'preparing'
         : terminal.has(run.state) ? 'finished' : run.state === 'waiting' ? 'waiting' : run.state === 'uncertain' ? 'unknown' : 'executing';
@@ -209,6 +223,7 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
             activity: childStatus === 'completed' ? '已返回父 Worker' : childStatus === 'failed' ? '子 Worker 执行失败'
               : childStatus === 'cancelled' ? '子 Worker 已停止' : childStatus === 'unknown' ? '子任务状态待核实' : child.state?.activity || '正在处理子任务',
             updatedAt: latest(child.state?.updatedAt, child.live?.observedAt), activationId: child.live?.activationId || null,
+            history: historyOf(child), historyTruncated: child.state?.activityHistoryTruncated === true,
             historical: child.fence !== assignment.fence, sourceSeq: child.cursor };
         });
       const childCounts = { total: children.length, running: 0, completed: 0, failed: 0 };
@@ -220,7 +235,8 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
       return { ticketId: ticket.id, assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId, fence: assignment.fence,
         instructionRevision: revision, appliedInstructionRevision: run.instructionRevision ?? assignment.instructionRevision ?? 1,
         phase, observed: !!worker, updatedAt: latest(iso(run.updatedAt), worker?.state?.updatedAt, ...children.map(row => row.updatedAt)),
-        worker: { id: run.sessionId, label: '主 Worker', status, activity: text, updatedAt: latest(iso(run.updatedAt), worker?.state?.updatedAt) },
+        worker: { id: run.sessionId, label: '主 Worker', status, activity: text, updatedAt: latest(iso(run.updatedAt), worker?.state?.updatedAt),
+          history: current ? historyOf(worker) : [], historyTruncated: current && worker.state?.activityHistoryTruncated === true },
         children, childCounts, milestones: worker?.state?.milestones || [],
         watermark: { projectionSeq: database.executionFactCursor(), sessionSeq: current ? worker.cursor : null },
         completeness: complete ? 'complete' : 'partial',

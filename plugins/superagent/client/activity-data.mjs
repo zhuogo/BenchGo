@@ -15,7 +15,7 @@ export const archivedActivityTicket = row => row.kind === 'ticket' && (row.archi
 
 /** The chat board and its trigger show the same current Ticket set. */
 export function boardTicketRows(rows = []) {
-  return [...new Map(rows.filter(row => row.kind === 'ticket' && ['running', 'waiting'].includes(row.status)
+  return [...new Map(rows.filter(row => row.kind === 'ticket' && ['running', 'waiting', 'completed'].includes(row.status)
     && !archivedActivityTicket(row) && !row.taskMeta?.deleted).map(row => [row.id, row])).values()];
 }
 

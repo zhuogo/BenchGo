@@ -80,6 +80,11 @@ async function fixture() {
           tickets[0].execution.milestones=[{seq:1,kind:'step/end',time:at(1)},{seq:2,kind:'step/end',time:at(0)}];
           document.dispatchEvent(new Event('benchgo:assistant-changed'));
         };
+        window.updateWorkerHistory = (history,historyTruncated=false) => {
+          const worker=tickets[0].execution.worker;
+          Object.assign(worker,{history,historyTruncated,activity:history.at(-1).activity,status:history.at(-1).status,updatedAt:history.at(-1).time});
+          document.dispatchEvent(new Event('benchgo:assistant-changed'));
+        };
         window.updateUncertainty = stopping => {
           const row=tickets.find(row=>row.id==='uncertain');
           Object.assign(row,{status:'waiting',executionControl:stopping?{stopRequested:true}:{},instructionRevision:1,updatedAt:at(0),
@@ -142,12 +147,12 @@ test('activity count matches current ticket rows and narrow overlays cover the c
     page.setDefaultTimeout(5000);
     await page.setContent(await fixture());
     const trigger=page.locator('.ba-activity-trigger'), panel=page.locator('.ba-activity-panel');
-    await page.waitForFunction(()=>document.querySelector('.ba-activity-count')?.textContent==='5');
+    await page.waitForFunction(()=>document.querySelector('.ba-activity-count')?.textContent==='6');
     for(const width of [768,390]){
       await page.setViewportSize({width,height:900});
       await trigger.click();await panel.waitFor();
-      assert.equal(await panel.locator('[data-task-key]').count(),5);
-      assert.equal(await panel.locator('[role="tab"]').filter({hasText:'任务'}).locator('.ba-board-tab-count').innerText(),'5');
+      assert.equal(await panel.locator('[data-task-key]').count(),6);
+      assert.equal(await panel.locator('[role="tab"]').filter({hasText:'任务'}).locator('.ba-board-tab-count').innerText(),'6');
       assert.equal(await page.locator('.ba-main').evaluate(node=>node.inert),true,'narrow open board makes the whole conversation inert');
       const covered=await page.locator('[data-composer-seat]').evaluate(node=>{
         const box=node.getBoundingClientRect(), samples=[box.left+8,(box.left+box.right)/2,box.right-8];
@@ -167,11 +172,16 @@ test('activity count matches current ticket rows and narrow overlays cover the c
     await page.waitForFunction(()=>document.querySelector('.ba-activity-count')?.textContent==='1');
     await trigger.click();await panel.locator('[data-task-key="ticket:running"] button').click();
     await page.evaluate(()=>window.updateExecution('delivered'));
-    await page.waitForFunction(()=>!document.querySelector('.ba-activity-count'));
+    await panel.getByRole('region',{name:'任务详情',exact:true}).locator('[data-worker-status="completed"]').first().waitFor();
+    assert.equal(await trigger.locator('.ba-activity-count').innerText(),'1','completion retains the trigger count');
     await panel.getByRole('region',{name:'任务详情',exact:true}).waitFor();
     await panel.getByRole('button',{name:'返回列表',exact:true}).click();
-    await panel.getByText('下一件事，一起完成',{exact:true}).waitFor();
-    assert.equal(await panel.locator('[data-task-key]').count(),0,'completed ticket leaves the task list and trigger count together');
+    await panel.locator('[data-task-key="ticket:running"]').waitFor();
+    assert.equal(await panel.locator('[data-task-key]').count(),1,'completed ticket remains in the list after returning from detail');
+    await panel.locator('h3').filter({hasText:/^已完成/}).waitFor();
+    await panel.locator('[data-task-key="ticket:running"] .ba-board-chip[data-status="completed"]').waitFor();
+    await panel.locator('[data-task-key="ticket:running"] button').click();
+    await panel.getByRole('region',{name:'任务详情',exact:true}).waitFor();
   }finally{await browser.close();}
 });
 
@@ -215,8 +225,9 @@ test('activity board renders honest states, keyboard navigation and responsive t
     assert.equal(await panel.getByRole('alert').count(),0,'background transport failures stay silent');
     await panel.getByRole('button',{name:'刷新看板',exact:true}).click();
     await panel.getByRole('alert').first().waitFor();
-    assert.equal(await panel.locator('[data-task-key]').count(),5,'failed refresh retains only current visible tickets');
-    assert.equal(await panel.locator('[data-task-key="ticket:done"], [data-task-key="goal:goal"]').count(),0,'completion and goals do not appear in the current ticket board');
+    assert.equal(await panel.locator('[data-task-key]').count(),6,'failed refresh retains only current visible tickets');
+    assert.equal(await panel.locator('[data-task-key="ticket:done"]').count(),1,'completed tickets remain in the current board');
+    assert.equal(await panel.locator('[data-task-key="goal:goal"]').count(),0,'goals do not appear in the ticket board');
     assert.equal(await panel.locator('[data-task-key="ticket:failed"]').count(),1,'failed execution still appears through its waiting ticket');
     assert(await panel.getByText('已保留上次的任务记录，请重试。',{exact:false}).isVisible());
     await page.evaluate(()=>{window.scenarioControl.fail=false;});
@@ -282,7 +293,7 @@ test('activity board renders honest states, keyboard navigation and responsive t
     assert.equal(await page.getByRole('region',{name:'任务详情',exact:true}).getByRole('button',{name:/停止任务|暂停工单/}).count(),0);
     await page.keyboard.press('Escape');await page.getByRole('region',{name:'任务详情',exact:true}).waitFor({state:'hidden'});
     assert.equal(await page.evaluate(()=>window.apiCalls.some(([name])=>['ticketStop','ticketPause'].includes(name))),false);
-    assert.equal(await panel.locator('[data-task-key="ticket:done"]').count(),0,'completed records are available through task management instead of the current board');
+    assert.equal(await panel.locator('[data-task-key="ticket:done"]').count(),1,'completed records remain available in the board');
     assert(!await page.evaluate(()=>window.apiCalls.some(([name])=>name==='taskUpdate')),'activity polling never changes completion');
     await tab('身份').click();
     assert.equal(await panel.locator('.ba-board-identity strong').innerText(),'未命名','an empty name is a placeholder, never the product brand');
@@ -393,7 +404,8 @@ test('activity board updates Worker and child execution in place without declari
     await page.evaluate(()=>window.updateExecution('delivered'));
     await detail.getByRole('img',{name:'完成',exact:true}).waitFor();
     assert(await detail.getByText('内部结果',{exact:true}).isVisible());
-    await row.waitFor({state:'detached'});
+    await row.waitFor({state:'attached'});
+    assert.equal(await row.locator('.ba-board-chip').innerText(),'完成','completed ticket remains in its board group');
     assert(await detail.isVisible(),'closing record keeps its existing detail readable');
     assert.equal(await detail.locator('.ba-activity-detail').count(),0,'the result belongs to the unified timeline');
     assert.equal(await detail.getByRole('button',{name:'停止任务',exact:true}).count(),0);
@@ -464,6 +476,47 @@ test('task details lead with real progress, retain summary history and expose ic
     }
     await management.click();
     assert.deepEqual(await page.evaluate(()=>window.resourceSelections),[{ticketId:'running'}]);
+    assert.deepEqual(errors,[]);
+  }finally{await browser.close();}
+});
+
+test('worker updates append a retained timeline through completion and reopening', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
+  const browser=await chromium.launch({headless:true,executablePath});
+  try{
+    const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'});
+    page.setDefaultTimeout(5000);
+    const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    await page.setContent(await fixture());
+    const history=[
+      {seq:1,time:'2026-11-12T10:00:00.000Z',status:'running',activity:'正在搜索网页'},
+      {seq:2,time:'2026-11-12T10:00:01.000Z',status:'running',activity:'正在读取文件'},
+    ];
+    await page.evaluate(history=>{window.renderScenario('dynamic');window.updateWorkerHistory(history);},history);
+    await page.getByRole('button',{name:'展开看板',exact:true}).click();
+    await page.locator('[data-task-key="ticket:running"] .ba-board-task-open').click();
+    const detail=page.getByRole('region',{name:'任务详情',exact:true});
+    const main=detail.locator('[data-worker-id="worker-main"], [data-history-worker-id="worker-main"]');
+    await detail.locator('[data-history-worker-id="worker-main"]').waitFor();
+    assert.deepEqual(await main.locator('p').allTextContents(),['正在读取文件','正在搜索网页']);
+    history.push({seq:3,time:'2026-11-12T10:00:02.000Z',status:'running',activity:'正在执行命令'});
+    await page.evaluate(history=>window.updateWorkerHistory(history),history);
+    await detail.getByText('正在执行命令',{exact:true}).waitFor();
+    assert.deepEqual(await main.locator('p').allTextContents(),['正在执行命令','正在读取文件','正在搜索网页']);
+    await page.keyboard.press('Tab');await detail.locator('[data-history-worker-id="worker-main"] strong').first().focus();
+    await page.getByRole('tooltip').getByText('历史动态 · 当时运行中',{exact:true}).waitFor();
+    history.push({seq:4,time:'2026-11-12T10:00:03.000Z',status:'completed',activity:'本轮执行已结束'});
+    await page.evaluate(history=>{window.updateExecution('delivered');window.updateWorkerHistory(history,true);},history);
+    await detail.locator('[data-worker-id="worker-main"][data-worker-status="completed"]').waitFor();
+    assert.deepEqual(await main.locator('p').allTextContents(),['执行结束','正在执行命令','正在读取文件','正在搜索网页']);
+    await detail.getByRole('button',{name:'返回列表',exact:true}).click();
+    await page.locator('[data-task-key="ticket:running"] .ba-board-task-open').click();
+    await detail.locator('[data-worker-status="completed"]').first().waitFor();
+    assert.equal(await main.count(),4,'reopening preserves progress after completion');
+    for(const dark of [false,true])for(const width of [1440,390]){
+      await page.setViewportSize({width,height:900});await page.evaluate(dark=>document.body.toggleAttribute('data-ds-dark-theme',dark),dark);
+      assert(await detail.evaluate(node=>node.scrollWidth<=node.clientWidth),'timestamps and activity history fit the detail');
+      if(captureDir){await mkdir(captureDir,{recursive:true});await page.screenshot({path:join(captureDir,`${dark?'dark':'light'}-${width}-worker-history.png`)});}
+    }
     assert.deepEqual(errors,[]);
   }finally{await browser.close();}
 });
@@ -597,7 +650,7 @@ test('healthy board shows all tasks without scope controls and preserves list DO
     await page.getByRole('button',{name:'展开看板',exact:true}).click();
     const panel=page.locator('.ba-activity-panel'), body=panel.locator('.ba-activity-body');
     await panel.locator('[data-task-key="ticket:running"]').waitFor();
-    assert.equal(await panel.locator('[data-task-key]').count(),23,'current running and waiting tickets are shown across true source sessions');
+    assert.equal(await panel.locator('[data-task-key]').count(),24,'current running, waiting and completed tickets are shown across true source sessions');
     assert.equal(await panel.getByRole('tab',{name:/^(本会话|全部)$/}).count(),0,'scope switch is removed');
     assert.equal(await page.evaluate(()=>window.apiCalls.filter(([name])=>name==='tickets').length),0,'opening baseline is used directly');
     await panel.locator('[data-task-key="ticket:stable-4"]').waitFor();

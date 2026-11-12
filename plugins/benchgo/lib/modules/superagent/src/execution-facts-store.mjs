@@ -36,6 +36,9 @@ function safeState(value, sessionId, parentSessionId, cursor) {
       ...(object(row.notice) ? { notice: { seq: seq(row.notice.seq), reason: text(row.notice.reason, 64), messageId: text(row.notice.messageId, 512) } } : {}),
     })), childrenTruncated: value.childrenTruncated === true || (value.children?.length || 0) > 512,
     milestones: (Array.isArray(value.milestones) ? value.milestones : []).slice(-64).map(milestone),
+    activityHistory: (Array.isArray(value.activityHistory) ? value.activityHistory : []).slice(-64).filter(object).map(row => ({
+      seq: seq(row.seq), time: date(row.time), status: text(row.status, 32), activity: text(row.activity),
+    })), activityHistoryTruncated: value.activityHistoryTruncated === true || (value.activityHistory?.length || 0) > 64,
     lastEvent: object(value.lastEvent) ? milestone(value.lastEvent) : null };
 }
 function safeLive(value) {

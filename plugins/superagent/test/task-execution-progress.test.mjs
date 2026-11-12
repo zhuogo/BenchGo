@@ -124,6 +124,41 @@ test('persisted completion overrides stale session activity and exposes no savin
   assert.equal(projection.worker.activity, '执行已结束');
 });
 
+test('worker activity retains ordered changes, deduplicates resets and replays cold official history', async t => {
+  const f = await fixture(t), session = f.worker.agent.session;
+  turn(session); call(session, 'read'); result(session); call(session, 'read'); result(session);
+  call(session, 'write'); result(session, true); end(session);
+  const history = f.read().worker.history;
+  assert.deepEqual(history.map(row => row.activity), ['正在处理任务', '正在读取文件', '正在修改文件', '工具调用失败，正在处理', '本轮执行已结束']);
+  assert(history.every((row, index) => Number.isSafeInteger(row.seq) && row.time && (!index || row.seq > history[index - 1].seq)));
+  assert.equal(f.read().worker.historyTruncated, false);
+  assert.doesNotMatch(JSON.stringify(history), /PRIVATE|arguments|read_file|write_file/);
+  await f.restart({ clearProjection: true });
+  assert.deepEqual(f.read().worker.history, history, 'a discarded display projection is rebuilt from the official log');
+  assert.equal(f.database.getTicket(f.ticket.id).status, 'running', 'a completed turn never completes the domain ticket');
+});
+
+test('bounded main and child history exposes truncation and excludes history before the current run', async t => {
+  const f = await fixture(t), parent = f.worker.agent.session;
+  turn(parent);
+  for (let index = 0; index < 70; index++) { call(parent, index % 2 ? 'write' : 'read'); result(parent); }
+  const worker = f.read().worker;
+  assert.equal(worker.history.length, 64); assert.equal(worker.historyTruncated, true);
+  assert.equal(worker.history.at(-1).activity, '正在修改文件');
+  catalog(parent, 'history-child');
+  const child = await f.createAgent('history-child', { origin: 'subagent', parentSession: parent.id, delegationDepth: 1 });
+  turn(child.agent.session); call(child.agent.session, 'web_fetch'); result(child.agent.session); end(child.agent.session);
+  const childHistory = f.read().children[0].history;
+  assert.deepEqual(childHistory.map(row => row.activity), ['正在处理任务', '正在读取网页', '本轮执行已结束']);
+  assert.equal(f.read().children[0].historyTruncated, false);
+  const projection = f.database.getExecutionProjection(parent.id);
+  const earliest = '2000-01-01T00:00:00.000Z';
+  f.database.recordExecutionProjection({ ...projection, state: { ...projection.state,
+    activityHistory: [{ seq: 0, time: earliest, status: 'running', activity: '旧执行活动' }, ...projection.state.activityHistory.slice(-63)] } });
+  assert.equal(f.read().worker.history.some(row => row.activity === '旧执行活动'), false);
+  assert.doesNotMatch(JSON.stringify([f.read(), f.database.getExecutionProjection(parent.id)]), /PRIVATE|arguments/);
+});
+
 test('events arriving after the immutable recovery cut survive startup and duplicate/late notifications', async t => {
   const f = await fixture(t, { begin: false }), session = f.worker.agent.session;
   turn(session); const old = call(session);

@@ -67,7 +67,7 @@ function BoardEmpty({ identity, onReturn }) {
   return <div className="ba-board-empty" role="status">
     <BoardPet identity={identity} size={88} />
     <strong>下一件事，一起完成</strong>
-    <p>进行和等待中的工单会显示在这里，历史记录可在任务管理查看。</p>
+    <p>进行、等待和已完成的工单会显示在这里，归档记录可在任务管理查看。</p>
     <Button variant="outline" onClick={onReturn}>回到聊天<UIIcon name="chevronLeft" className="ba-board-arrow" size={14} /></Button>
   </div>;
 }
@@ -187,6 +187,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
   const sorted = boardTicketRows(rows || []).sort((a, b) => (dateValue(b.time)?.getTime() || 0) - (dateValue(a.time)?.getTime() || 0));
   const active = sorted.filter(row => row.status === 'running');
   const attention = sorted.filter(row => row.status === 'waiting');
+  const completed = sorted.filter(row => row.status === 'completed');
   const name = identity?.name || '未命名';
   const renderRow = row => <BoardRow key={row.key} row={row} onOpen={selectTask} />;
   const syncState = error || identityError ? 'error' : rows === null || (!identity && identityLoading) ? 'loading' : 'ready';
@@ -216,6 +217,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
         {tab === 'tasks' && <>{rows === null && !error && loadingState}
           {attention.length > 0 && <section className="ba-board-section"><h3 className="ba-board-day">等待<span>{attention.length}</span></h3>{attention.map(renderRow)}</section>}
           {rows !== null && active.length > 0 && <section className="ba-board-section"><button type="button" className="ba-board-section-head" aria-expanded={activeOpen} aria-controls={`${id}-active`} onClick={() => setActiveOpen(value => !value)}><span>进行中</span><span className="ba-board-section-count">{active.length}</span><UIIcon name="chevronDown" size={13} /></button><div id={`${id}-active`} hidden={!activeOpen}>{active.map(renderRow)}</div></section>}
+          {completed.length > 0 && <section className="ba-board-section"><h3 className="ba-board-day">已完成<span>{completed.length}</span></h3>{completed.map(renderRow)}</section>}
           {rows !== null && !sorted.length && !error && <BoardEmpty identity={identity} onReturn={close} />}</>}
         {ctx && SessionProvider && renderSlot ? (reviewStarted || open) && <div hidden={tab !== 'approvals'}><ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} compact active={open} onCountChange={setApprovalCount} onOpenReminder={id => { close(); onOpenReminder?.(id); }} /></div> : tab === 'approvals' && <ResourceState kind="error" title="审核会话暂不可用" description="请前往任务管理连接原审批会话。" actionLabel="前往审核" onAction={() => openResource('approvals')} />}
         {tab === 'identity' && <section className="ba-board-section" aria-label="身份卡片">
