@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { initializePluginProfile, stagePluginBundle, officialSourcePackages } from './plugin-bundle.mjs';
+import { initializePluginProfile, stagePluginBundle, officialSourcePackages, assertBrowserPlatformPeer } from './plugin-bundle.mjs';
 import { getInstallState, releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
 
 function fixture(t) {
@@ -35,6 +35,37 @@ test('official source closure rejects missing required official dependencies', t
   put('cli/package.json', { name: '@deepseek-ai/dsh', dependencies: { '@deepseek-ai/dsh-missing': 'workspace:*' } });
   assert.throws(() => officialSourcePackages(join(root, 'cli')), /missing dependency @deepseek-ai\/dsh-missing/u);
 });
+
+test('browser platform peers are supplied by the pinned shell, including injected client services', t => {
+  const { root, put } = fixture(t), name = '@deepseek-ai/dsh-client-ui-primitives', slots = '@deepseek-ai/dsh-client-ui-slots';
+  put('apps/cli/package.json', { name: '@deepseek-ai/dsh', devDependencies: { [name]: '*', [slots]: '*' } });
+  put(`apps/cli/node_modules/${name}/package.json`, { name, version: '0.2.2-rc.1' });
+  put(`apps/cli/node_modules/${slots}/package.json`, { name: slots, version: '0.2.2-rc.1' });
+  put('packages/client/web/src/platform.ts', `export const PLATFORM_MODULES = ['${name}', '${slots}', '@deepseek-ai/dsh-client-fake'];`);
+  put('packages/client/web/src/seed.ts', `import * as UiPrimitives from '${name}'; import * as UiSlots from '${slots}'; const modules = {'${name}': UiPrimitives, '${slots}': UiSlots};`);
+  const metadata = { dsh: { client: { platform: 'web', inject: [] } } }, options = { officialRoot: root };
+  assert.equal(assertBrowserPlatformPeer(name, '^0.2.2-rc.1', metadata, options), true);
+  assert.throws(() => assertBrowserPlatformPeer(name, '^0.3.0', metadata, options), /does not satisfy/u);
+  assert.equal(assertBrowserPlatformPeer(slots, '*', { dsh: { client: { platform: 'web', inject: [slots] } } }, options), true);
+  for (const other of ['@deepseek-ai/dsh-client-fake', '@deepseek-ai/cordis', 'zod']) {
+    assert.equal(assertBrowserPlatformPeer(other, '*', metadata, options), false);
+  }
+  assert.equal(assertBrowserPlatformPeer(name, '*', {}, options), false);
+  put('packages/client/web/src/seed.ts', 'export const modules = {};');
+  assert.throws(() => assertBrowserPlatformPeer(name, '*', metadata, options), /browser platform omits/u);
+});
+
+for (const [kind, name] of [['dependencies', '@deepseek-ai/dsh-client-ui-primitives'], ['peerDependencies', '@deepseek-ai/dsh-missing']]) {
+  test(`desktop rejects a missing Host ${kind} ${name}`, t => {
+    const { root, put } = fixture(t);
+    put('plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0', files: ['src', 'lib', 'cordis.patch.yml'],
+      dsh: { bundle: { patch: './cordis.patch.yml' }, client: { platform: 'web' } }, [kind]: { [name]: '*' } });
+    put('plugin/assets/icon.svg', '<svg/>');
+    for (const file of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${file}`, 'fixture');
+    assert.throws(() => stagePluginBundle({ runtime: join(root, 'runtime'), plugin: join(root, 'plugin'), output: join(root, 'seed') }), error => error.message === `Plus bundle: official runtime omits ${name}`);
+    assert.equal(existsSync(join(root, 'seed/release.json')), false);
+  });
+}
 
 test('the bundled desktop entry loads shared helpers from packaged resources after relocation', t => {
   const { root, put } = fixture(t);

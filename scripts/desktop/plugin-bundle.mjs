@@ -61,6 +61,27 @@ export function officialSourcePackages(cli = resolve(import.meta.dirname, '../..
   return packages;
 }
 
+const browserPlatformPeers = new Set([
+  '@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-ui-slots',
+  '@deepseek-ai/dsh-client-ui-primitives', '@deepseek-ai/dsh-client-ui-dockkit',
+]);
+
+/** These client peers come from the shell's static module table; browser DI does not make them Host services. */
+export function assertBrowserPlatformPeer(name, spec, metadata, { officialRoot = resolve(import.meta.dirname, '../../deepseek-harness') } = {}) {
+  if (!browserPlatformPeers.has(name) || metadata.dsh?.client?.platform !== 'web') return false;
+  const platform = readFileSync(join(officialRoot, 'packages/client/web/src/platform.ts'), 'utf8');
+  const seed = readFileSync(join(officialRoot, 'packages/client/web/src/seed.ts'), 'utf8');
+  if (!platform.includes(`'${name}'`) || !seed.includes(`from '${name}'`) || !seed.includes(`'${name}':`)) {
+    throw new Error(`Plus bundle: official browser platform omits ${name}`);
+  }
+  const directory = officialSourcePackages(join(officialRoot, 'apps/cli')).get(name);
+  if (!directory) throw new Error(`Plus bundle: official source omits ${name}`);
+  const version = readJson(join(directory, 'package.json')).version;
+  const semver = createRequire(fileURLToPath(new URL('../../deepseek-harness/package.json', import.meta.url)))('semver');
+  if (!semver.satisfies(version, spec, { includePrerelease: true })) throw new Error(`Plus bundle: ${name}@${version} does not satisfy ${spec}`);
+  return true;
+}
+
 /** Copy published plugin files and required JS dependencies without duplicating Cordis or official services. */
 export function stagePluginBundle({ runtime, output, plugin = resolve(import.meta.dirname, '../../plugins/benchgo'), platform = process.platform, arch = process.arch }) {
   runtime = runtime ? resolve(runtime) : null; plugin = resolve(plugin);
@@ -125,7 +146,11 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
       dependencies(dependency, output, new Set([...ancestors, dependency]));
     }
     for (const [name, spec] of Object.entries(metadata.peerDependencies ?? {})) {
-      if (sharedPackage(name) && !metadata.peerDependenciesMeta?.[name]?.optional) assertShared(name, spec);
+      if (sharedPackage(name) && !metadata.peerDependenciesMeta?.[name]?.optional) {
+        // Source-only seeds retain their existing closure. Desktop Host omits shell-static client modules.
+        if (runtime && assertBrowserPlatformPeer(name, spec, metadata)) continue;
+        assertShared(name, spec);
+      }
     }
   }
   try {
