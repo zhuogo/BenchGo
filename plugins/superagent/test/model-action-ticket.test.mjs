@@ -46,23 +46,23 @@ test('same callId with different arguments is rejected without a second action',
   await assert.rejects(executor.execute({ ...base, name: 'assistant_pet', args: { content: 'one' } }), /identity conflict/);
 });
 
-test('approval denial and changed root instruction reserve no Ticket or execute no action', async t => {
+test('Router persistent action needs no approval card; a changed root instruction reserves no Ticket', async t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   const message = { id: 'message-1', source: { kind: 'user' }, content: [{ type: 'text', text: '请记住' }] };
   const ownerAgent = { id: 'router-session', status: 'running', session: { header: {}, snapshotEvents: () => [{ type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, data: message }] } };
-  let approve = async () => 'allowed-once', calls = 0, approvalCalls = 0;
-  const ctx = { agents: { get: id => id === ownerAgent.id ? ownerAgent : undefined, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) }, get: name => name === 'approval' ? { request: (...args) => { approvalCalls++; return approve(...args); } } : undefined };
-  const executor = createModelActionTicketExecutor({ ctx, database, readPolicy: async () => ({ desktopVersion: 'desktop-v1' }), perform: async () => { calls++; return { id: 'm1' }; }, verify: async () => ({ verified: true, evidence: { kind: 'document', revision: 1 } }) });
-  const input = { name: 'assistant_profile', args: { content: 'fact' }, ownerAgent, exec: { agent: ownerAgent, callId: 'deny', authorized: true, signal: new AbortController().signal } };
-  approve = async () => 'rejected';
-  await assert.rejects(executor.execute(input), { code: 'MODEL_ACTION_DENIED' });
-  assert.equal(approvalCalls, 1, 'Harness generic authorization does not skip action-specific approval');
-  assert.equal(database.listTickets().length, 0);
-  approve = async () => { message.id = 'changed'; return 'allowed-once'; };
+  let calls = 0, approvalCalls = 0, changeInstruction = false;
+  const ctx = { agents: { get: id => id === ownerAgent.id ? ownerAgent : undefined, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) }, get: name => name === 'approval' ? { request: async () => { approvalCalls++; return 'rejected'; } } : undefined };
+  const readPolicy = async () => { if (changeInstruction) message.id = 'changed'; return { desktopVersion: 'desktop-v1' }; };
+  const executor = createModelActionTicketExecutor({ ctx, database, readPolicy, perform: async () => { calls++; return { id: 'm1' }; }, verify: async () => ({ verified: true, evidence: { kind: 'document', revision: 1 } }) });
+  const input = { name: 'assistant_profile', args: { content: 'fact' }, ownerAgent, exec: { agent: ownerAgent, callId: 'direct', signal: new AbortController().signal } };
+  assert.deepEqual(await executor.execute(input), { id: 'm1' });
+  assert.equal(approvalCalls, 0);
+  assert.equal(calls, 1);
+  changeInstruction = true;
   await assert.rejects(executor.execute({ ...input, exec: { ...input.exec, callId: 'changed' } }), { code: 'MODEL_ACTION_INSTRUCTION_CHANGED' });
-  assert.equal(calls, 0);
-  assert.equal(database.listTickets().length, 0);
+  assert.equal(calls, 1);
+  assert.equal(database.listTickets().length, 1);
 });
 
 test('arguments are frozen before dispatch and failed readback becomes non-replayable uncertain', async t => {

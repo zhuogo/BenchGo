@@ -1,4 +1,3 @@
-import { officialTooltipSource } from '../../benchgo/test/official-tooltip-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -31,11 +30,12 @@ async function fixture() {
       throw Error('Unexpected action: '+action);
     };
     window.remount=()=>root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main className='ba-studio-body'><Goals api={api}/></main></div>);
-    window.renderScenario=(mode='data')=>{window.calls=[];window.mode=mode;window.rows=mode==='empty'?[]:[{id:'goal-one',objective:'推进发布准备',executionKind:'checklist',status:'active',rowVersion:7}];window.remount();};
+    window.renderScenario=(mode='data')=>{window.calls=[];window.mode=mode;window.rows=mode==='empty'?[]:[{id:'goal-one',objective:'推进发布准备',status:'active',rowVersion:7}];window.remount();};
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-goals-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
-    alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
-    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles(), officialTooltipSource()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
+    alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')),
+      '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts') },
+    loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>body{margin:0;font-family:Arial,sans-serif}.ba-root{height:auto!important;min-width:0!important}</style></head><body><div id="root"></div><script>${result.outputFiles[0].text.replaceAll('</script', '<\\/script')}</script></body></html>`;
 }
 
@@ -59,6 +59,11 @@ test('goal checklist renders four states without creation and completes, reopens
         assert.equal(await page.getByRole('textbox', { name: '新目标', exact: true }).count(), 0);
         assert.equal(await page.getByRole('button', { name: /^(添加|添加目标)$/ }).count(), 0);
         if (mode === 'empty') await page.getByText('在 SuperAgent 对话中提出目标，让助手记录并持续跟进。', { exact: true }).waitFor();
+        if (mode === 'data') {
+          assert.equal(await page.getByText(/历史执行目标|关联工单/).count(), 0, 'every goal is a plain checklist item');
+          assert.equal(await page.getByRole('button', { name: '查看工单', exact: true }).count(), 0);
+          assert(await page.getByRole('checkbox', { name: '完成：推进发布准备', exact: true }).isEnabled());
+        }
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
         if (screenshots) await page.screenshot({ path: join(screenshots, `${mode}-${width}.png`), fullPage: true });
       }

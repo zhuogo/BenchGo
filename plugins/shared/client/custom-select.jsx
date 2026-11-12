@@ -28,6 +28,7 @@ export function CustomSelect({ value, options = [], onChange, disabled = false, 
   useEffect(() => { if (disabled) close(); }, [disabled]);
   useLayoutEffect(() => {
     if (!open) return;
+    let frame = 0;
     const update = () => {
       const anchor = trigger.current; if (!anchor) return;
       const rect = anchor.getBoundingClientRect(), viewport = window.visualViewport;
@@ -37,14 +38,20 @@ export function CustomSelect({ value, options = [], onChange, disabled = false, 
       const upwards = below < 220 && above > below, menuWidth = Math.min(Math.max(rect.width, 180), width - 24);
       const computed = getComputedStyle(anchor), variables = {};
       for (let index = 0; index < computed.length; index++) { const key = computed[index]; if (key.startsWith('--bg-') || key.startsWith('--ba-') || key.startsWith('--link-') || key.startsWith('--dsw-') || key.startsWith('--dc-')) variables[key] = computed.getPropertyValue(key); }
-      setPosition({ ...variables, position: 'fixed', width: menuWidth, maxHeight: Math.max(80, Math.min(360, upwards ? above : below)), left: Math.max(leftEdge + 12, Math.min(rect.left, leftEdge + width - menuWidth - 12)), ...(upwards ? { bottom: window.innerHeight - rect.top + 6 } : { top: rect.bottom + 6 }), fontFamily: computed.fontFamily });
+      setPosition({ ...variables, position: 'fixed', width: menuWidth, maxHeight: Math.max(80, Math.min(360, upwards ? above : below)), left: Math.max(leftEdge + 12, Math.min(rect.left, leftEdge + width - menuWidth - 12)), ...(upwards ? { bottom: window.innerHeight - rect.top + 6 } : { top: rect.bottom + 6 }), fontFamily: computed.fontFamily, transformOrigin: upwards ? 'bottom left' : 'top left' });
     };
     update();
+    const scheduleUpdate = event => {
+      // The menu's own scroll never moves its anchor. Repositioning on these
+      // captured events remeasured the trigger and rerendered every option.
+      if (event?.type === 'scroll' && event.target instanceof Node && popup.current?.contains(event.target)) return;
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; update(); });
+    };
     const outside = event => { if (!trigger.current?.contains(event.target) && !popup.current?.contains(event.target)) close(); };
     document.addEventListener('pointerdown', outside, true); document.addEventListener('focusin', outside);
-    window.addEventListener('resize', update); window.addEventListener('scroll', update, true);
-    window.visualViewport?.addEventListener('resize', update); window.visualViewport?.addEventListener('scroll', update);
-    return () => { document.removeEventListener('pointerdown', outside, true); document.removeEventListener('focusin', outside); window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true); window.visualViewport?.removeEventListener('resize', update); window.visualViewport?.removeEventListener('scroll', update); };
+    window.addEventListener('resize', scheduleUpdate); window.addEventListener('scroll', scheduleUpdate, true);
+    window.visualViewport?.addEventListener('resize', scheduleUpdate); window.visualViewport?.addEventListener('scroll', scheduleUpdate);
+    return () => { cancelAnimationFrame(frame); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('focusin', outside); window.removeEventListener('resize', scheduleUpdate); window.removeEventListener('scroll', scheduleUpdate, true); window.visualViewport?.removeEventListener('resize', scheduleUpdate); window.visualViewport?.removeEventListener('scroll', scheduleUpdate); };
   }, [open]);
   useEffect(() => { if (open && position) (searchable ? search.current : popup.current)?.focus({ preventScroll: true }); }, [open, !!position, searchable]);
   useEffect(() => { if (open) document.getElementById(listId + '-' + active)?.scrollIntoView({ block: 'nearest' }); }, [active, open, listId]);

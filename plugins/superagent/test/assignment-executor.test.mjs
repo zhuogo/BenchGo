@@ -68,7 +68,6 @@ for (const selection of ['worker', 'explicit']) test(`Worker ignores ${selection
           try {
             await hooks.get('agent/pre-step')({ turn, messages: [...injected.splice(0), message] }, async () => ({ kind: 'enter', messages: [] }));
             await hooks.get('agent/request')({ signal }, async () => ({ provider: 'host-default', model: 'host-default' }));
-            await tools.get('assistant_task_result').execute({ selfCheck: { summary: 'Verified output' } }, { agent, signal, callId: 'self-check' });
           } catch (error) { hooks.get('agent/error')({ error }); }
           finally { transcript.push({ seq: transcript.length, type: 'turn/end', data: { turn, reason: { kind: 'completed' } } }); hooks.get('agent/status')({ status: 'idle' }); }
         });
@@ -110,7 +109,6 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
         assert.equal(database.runs(assignment.id)[0].state, 'submitted');
         submitted = true;
         await events.get('tools/execute')({ agent, name: 'write', arguments: {}, callId: 'project-write', signal: new AbortController().signal }, async () => 'written');
-        await tools.get('assistant_task_result').execute({ selfCheck: { summary: 'Verified evidence' } }, { agent, signal: new AbortController().signal, callId: 'self-check' });
         if (ending === 'paused') {
           database.pauseTicket(ticket.id);
           await events.get('agent/pre-step')({ messages: [] }, async () => ({ kind: 'enter', messages: [] }));
@@ -128,7 +126,7 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
   if (ending === 'max-tokens') {
     await assert.rejects(executor(assignment, { ticket, signal, renew: async () => {} }), error => error.code === 'WORKER_TURN_INCOMPLETE' && error.executionPhase === 'evidence');
     const run = database.runs(assignment.id)[0];
-    assert.equal(database.getWorkerExecutionState(run.id).selfCheck.selfCheck.summary, 'Verified evidence');
+    assert.equal(tools.has('assistant_task_result'), false);
     assert.equal(run.state, 'submitted'); assert.equal(disposed, true);
     return;
   }
@@ -138,6 +136,7 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
   assert.equal(sourceReference.kind, 'untrusted-source-reference');
   assert.equal(sourceReference.messages[0].content, 'Earlier discussion');
   assert.equal(result.summary, 'Evidence found');
+  for (const key of ['finalSummary', 'toolEvidence', 'selfCheck', 'outcome', 'failure']) assert.equal(Object.hasOwn(result, key), false, key);
   assert.equal(meta.cwd, projectMode ? project.path : database.runs(assignment.id)[0].directory);
   assert.equal(database.runs(assignment.id)[0].workingDirectory, meta.cwd);
   assert.equal(result.directory, database.runs(assignment.id)[0].directory);

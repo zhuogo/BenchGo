@@ -17,7 +17,7 @@ test('official child and fork preserve native tools, history and nested delegati
   let dispatched = 0, modelRequests = 0;
   ctx.on('agent/request', (_request, next) => { modelRequests++; return next(); });
   ctx.tools.register({ name: 'read', description: 'Test read', parameters: {}, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => { dispatched++; return 'read'; } });
-  const database = { getTicket: () => ({ mandate: { source: { channel: 'desktop' } } }), ticketGoalBudget: () => null,
+  const database = { getTicket: () => ({ mandate: { source: { channel: 'desktop' } } }), getSessionRole: () => null,
     renewAssignment: (_id, input) => ({ allowed: input.validateMandate() }) };
   const parent = await ctx.agents.create({ sessionId: 'benchgo-test-worker', meta: { cwd: process.cwd() }, setup: (scope, agent) => { installWorkerSubagents(scope, agent, {
     ctx, database, assignment: { id: 'assignment', ticketId: 'ticket' },

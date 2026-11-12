@@ -56,17 +56,17 @@ export function createAssistantAssignmentWorker({
       await onResult(result, { assignment, ticket, signal: controller.signal, beforeCommit });
       clearInterval(heartbeat); heartbeat = null;
       controller.signal.throwIfAborted();
-      const state = database.getAssignment?.(assignment.id)?.state;
+      const state = database.getAssignment(assignment.id)?.state;
       if (!['completed', 'waiting', 'paused', 'queued'].includes(state)) database.finishAssignment(assignment.id, { ...ownership, status: 'completed' });
       return { id: assignment.id, status: ['waiting', 'paused', 'queued'].includes(state) ? state : 'completed' };
     } catch (error) {
       if (error?.resultDraft) { try { await onResult(error.resultDraft, { assignment, ticket: { id: assignment.ticketId }, signal: controller.signal, beforeCommit: async () => {} }); } catch { /* Run/session and runtime retain the draft for persistence retry. */ } }
       let runs = [];
-      try { runs = database.runs?.(assignment.id) || []; } catch { /* The retained draft survives diagnostic read failure. */ }
+      try { runs = database.runs(assignment.id); } catch { /* The retained draft survives diagnostic read failure. */ }
       const effects = error?.executionEffects || (stage === 'execution' && !runs.some(run => ['submitted', 'running', 'verifying', 'uncertain'].includes(run.state))
         ? { effectsVerified: true, unknownCallIds: [] } : undefined);
       const uncertain = effects?.effectsVerified !== true;
-      try { database.recordAssignmentFailure?.(assignment.id, { ...ownership, stage, code: error?.code, phase: error?.executionPhase,
+      try { database.recordAssignmentFailure(assignment.id, { ...ownership, stage, code: error?.code, phase: error?.executionPhase,
         message: String(error?.message || error), effects, cleanupFailure: error?.cleanupFailure }); } catch { /* Preserve the original failure. */ }
       try {
         if (uncertain) database.renewAssignment(assignment.id, { ...ownership, validateMandate: () => false });
@@ -84,7 +84,7 @@ export function createAssistantAssignmentWorker({
   async function runOnce() {
     if (stopped) return { claimed: 0, results: [], skipped: true };
     const batch = running ||= (async () => {
-      if (database.hasAssignmentWork?.() === false) return [];
+      if (!database.hasAssignmentWork()) return [];
       const policy = await readPolicy();
       const configured = getConcurrency ? await getConcurrency() : concurrency;
       if (!Number.isSafeInteger(configured) || configured < 1) throw new Error('Invalid assignment concurrency');

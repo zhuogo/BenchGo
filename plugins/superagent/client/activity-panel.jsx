@@ -120,7 +120,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
   const selectTask = useCallback(key => { listPosition.current = { top: panel.current?.querySelector('.ba-activity-body')?.scrollTop || 0, opener: document.activeElement }; setSelectedKey(key); }, []);
   const returnToList = () => { setSelectedKey(null); requestAnimationFrame(() => { const body = panel.current?.querySelector('.ba-activity-body'); if (body) body.scrollTop = listPosition.current.top; listPosition.current.opener?.focus({ preventScroll: true }); }); };
   useEffect(() => { setSelectedKey(null); }, [sessionId]);
-  useEffect(() => { if (open) setReviewStarted(true); }, [open]);
+  useEffect(() => { if (open && tab === 'approvals') setReviewStarted(true); }, [open, tab]);
   const identityRequest = useRef(null);
   useEffect(() => { if (assistantConfig) setIdentity(assistantConfig); }, [assistantConfig]);
   const refreshIdentity = useCallback(async () => {
@@ -149,29 +149,21 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
   const refreshAll = () => refreshWithFeedback(() => Promise.all([refresh(), refreshIdentity()]));
   const openResource = (resource, selection) => { setSelectedKey(null); close(); onOpenResources?.(resource, selection); };
   useLayoutEffect(() => {
-    const body = panel.current?.querySelector('.ba-activity-body');
-    if (!body) return;
     const before = previous.current;
-    const elements = [...body.querySelectorAll('[data-task-key]')];
-    const top = body.getBoundingClientRect().top;
-    const positions = new Map(elements.map(element => [element.dataset.taskKey, element.getBoundingClientRect().top - top + body.scrollTop]));
     const keys = rows === null ? null : new Set(rows.map(row => row.key));
-    previous.current = { open, tab, keys, positions };
-    if (!open || !before?.open || !before.keys || before.tab !== tab || document.hidden || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const inserted = elements.filter(element => !before.keys.has(element.dataset.taskKey));
-    if (!inserted.length) return;
+    previous.current = { open, tab, keys };
+    if (!open || tab !== 'tasks' || selectedKey || !before?.open || !before.keys || before.tab !== tab || document.hidden || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    // Existing task updates need no layout animation. Measuring every row here
+    // blocked paint on each execution event, even when the board was closed.
+    if (!rows?.some(row => !before.keys.has(row.key))) return;
+    const inserted = [...(panel.current?.querySelectorAll('[data-task-key]') || [])].filter(element => !before.keys.has(element.dataset.taskKey));
     const animations = [];
-    for (const element of elements) {
+    for (const element of inserted) {
       if (!element.animate) continue;
-      const key = element.dataset.taskKey;
-      const delta = before.positions.has(key) ? before.positions.get(key) - positions.get(key) : 0;
-      const frames = !before.keys.has(key)
-        ? [{ opacity: 0, transform: 'translateY(-8px)' }, { opacity: 1, transform: 'translateY(0)' }]
-        : delta ? [{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }] : null;
-      if (frames) animations.push(element.animate(frames, { duration: 240, easing: 'cubic-bezier(.2,.7,.2,1)' }));
+      animations.push(element.animate([{ opacity: 0, transform: 'translateY(-8px)' }, { opacity: 1, transform: 'translateY(0)' }], { duration: 240, easing: 'cubic-bezier(.2,.7,.2,1)' }));
     }
     return () => animations.forEach(animation => animation.cancel());
-  }, [rows, open, tab]);
+  }, [rows, open, tab, selectedKey]);
   useEffect(() => { if (open) panel.current?.focus(); }, [open ]);
   useEffect(() => {
     if (!open) return;
@@ -219,7 +211,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
           {rows !== null && active.length > 0 && <section className="ba-board-section"><button type="button" className="ba-board-section-head" aria-expanded={activeOpen} aria-controls={`${id}-active`} onClick={() => setActiveOpen(value => !value)}><span>进行中</span><span className="ba-board-section-count">{active.length}</span><UIIcon name="chevronDown" size={13} /></button><div id={`${id}-active`} hidden={!activeOpen}>{active.map(renderRow)}</div></section>}
           {completed.length > 0 && <section className="ba-board-section"><h3 className="ba-board-day">已完成<span>{completed.length}</span></h3>{completed.map(renderRow)}</section>}
           {rows !== null && !sorted.length && !error && <BoardEmpty identity={identity} onReturn={close} />}</>}
-        {ctx && SessionProvider && renderSlot ? (reviewStarted || open) && <div hidden={tab !== 'approvals'}><ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} compact active={open} onCountChange={setApprovalCount} onOpenReminder={id => { close(); onOpenReminder?.(id); }} /></div> : tab === 'approvals' && <ResourceState kind="error" title="审核会话暂不可用" description="请前往任务管理连接原审批会话。" actionLabel="前往审核" onAction={() => openResource('approvals')} />}
+        {ctx && SessionProvider && renderSlot ? (reviewStarted || (open && tab === 'approvals')) && <div hidden={tab !== 'approvals'}><ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} compact active={open && tab === 'approvals'} onCountChange={setApprovalCount} onOpenReminder={id => { close(); onOpenReminder?.(id); }} /></div> : tab === 'approvals' && <ResourceState kind="error" title="审核会话暂不可用" description="请前往任务管理连接原审批会话。" actionLabel="前往审核" onAction={() => openResource('approvals')} />}
         {tab === 'identity' && <section className="ba-board-section" aria-label="身份卡片">
           {identityError && <ResourceState kind="error" title="暂时无法更新身份" description={identity ? '当前显示上次的身份信息，请重试。' : '身份信息暂时无法读取，请检查连接后重试。'} onAction={refreshIdentity} />}
           {!identity && !identityError && <ResourceState kind="loading" title="正在读取身份" description="正在同步助手形象与配置。" />}

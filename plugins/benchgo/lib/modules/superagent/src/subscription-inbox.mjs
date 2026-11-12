@@ -36,7 +36,7 @@ export function installSubscriptionInbox(scope, agent, { database, assignment, r
     if (ticketExecutionBlocked(ticket)) return { kind: 'reject' };
     // pre-step precedes the model request. Every tool emitted by that request
     // therefore shares this one immutable snapshot, including serial tools.
-    const previous = database.appliedTicketSnapshot?.(assignment.id);
+    const previous = database.appliedTicketSnapshot(assignment.id);
     const current = run && database.applyTicketRevision(assignment.id, {
       owner: assignment.owner, fence: assignment.fence, runId: run.id,
       boundaryId: `${run.id}:${assignment.fence}:step:${agent.session.snapshotEvents().at(-1)?.seq ?? agent.session.snapshotEvents().length}:${++boundary}`,

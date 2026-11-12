@@ -10,6 +10,7 @@ import { ProviderBrandIcon } from './provider-brand-icon.jsx';
 import { ToolBrandIcon } from './tool-brand-icon.jsx';
 import { availableTools, currentToolId, providersForTool, selectionReasoningEffort, providerAllowsTool } from './model-picker-state.mjs';
 import css from './model-picker.css';
+import { ModelEffortSlider } from './model-effort-slider.jsx';
 import { nativeActivityLabel } from './native-activity.mjs';
 import { IconPinOutlineRegular, IconPinFillRegular } from '@deepseek-ai/dsh-client-ui-primitives';
 
@@ -133,7 +134,6 @@ function ModelPicker({ locked, available, useDirectory, load, select, binding, o
   const [catalog, setCatalog] = useState(null), [catalogLoading, setCatalogLoading] = useState(false), [revision, setRevision] = useState(0);
   const [toolsOpen, setToolsOpen] = useState(false), [position, setPosition] = useState(null), [error, setError] = useState(''), [catalogError, setCatalogError] = useState('');
   const [sessionBinding, setSessionBinding] = useState(null), [bindingError, setBindingError] = useState('');
-  const [effortDrag, setEffortDrag] = useState(null);
   const [effortOptimistic, setEffortOptimistic] = useState(null);
   const [, renderPins] = useState(0);
   const pinnedModels = useRef((() => { try { return JSON.parse(localStorage.getItem('commander.pinned-models') || '{}') || {}; } catch { return {}; } })());
@@ -145,7 +145,6 @@ function ModelPicker({ locked, available, useDirectory, load, select, binding, o
   const currentModel = currentGroup?.models.find(model => model.id === state.current?.model);
   const busy = state.status === 'selecting', loading = state.status === 'loading' || catalogLoading;
   useEffect(() => {
-    setEffortDrag(null);
     setEffortOptimistic(null);
   }, [state.current?.provider, state.current?.model]);
   useEffect(() => {
@@ -166,7 +165,7 @@ function ModelPicker({ locked, available, useDirectory, load, select, binding, o
   const boundProvider = sessionBinding?.bound ? sessionBinding.route?.providerId : null;
   const toolLocked = modelLocked || !!boundTool;
   const bindingHint = harnessUnavailable ? 'Harness 聚合未启用，请启用模块或切换模型' : bindingError || (sessionBinding?.bound && !sessionBinding?.route?.providerId ? '此对话使用本机默认模型，当前不能在会话中切换供应商模型' : sessionBinding?.bound ? '当前会话可在已选工具和供应商内切换模型' : sessionBinding === null ? '正在确认会话绑定状态…' : '');
-  const close = () => { setOpen(false); setProvider(null); setToolsOpen(false); setQuery(''); setEffortDrag(null); };
+  const close = () => { setOpen(false); setProvider(null); setToolsOpen(false); setQuery(''); };
   const refresh = (force = true) => { setError(''); if (force) pickerCatalog.invalidate(); setRevision(value => value + 1); void load().catch(reason => setError(reason.message)); };
   useEffect(() => {
     let active = true;
@@ -225,14 +224,6 @@ function ModelPicker({ locked, available, useDirectory, load, select, binding, o
   const effortModel = currentModel ? { group: currentGroup, model: currentModel, providerName: currentProviderEntry?.name || currentRoute?.providerName || currentGroup?.name || currentGroup?.id } : null;
   const effortOptions = effortModel?.model.reasoning?.efforts || [];
   const effectiveEffortId = effortOptimistic !== null && effortOptions.some(item => item.id === effortOptimistic) ? effortOptimistic : activeEffort;
-  const committedIndex = Math.max(0, effortOptions.findIndex(effort => effort.id === effectiveEffortId));
-  const stepCount = Math.max(1, effortOptions.length - 1);
-  const snappedRatio = effortOptions.length > 1 ? committedIndex / stepCount : 1;
-  const activeRatio = effortDrag !== null ? effortDrag : snappedRatio;
-  const activeIndex = effortOptions.length > 1 ? Math.round(activeRatio * stepCount) : 0;
-  const activeOption = effortOptions[activeIndex] || effortOptions[0];
-  const isOff = effortDrag === null && (!activeOption || activeOption.id === 'off' || (effortOptions.length > 1 && activeIndex === 0 && /off|关|无/i.test(activeOption.id + ' ' + activeOption.name)));
-  const intensity = isOff ? 0 : effortDrag !== null ? Math.max(0.45, activeRatio) : (effortOptions.length > 1 ? Math.max(0.2, activeRatio) : 1);
   const commitEffortIndex = async index => {
     const target = effortOptions[index];
     if (!target || !effortModel) return;
@@ -240,12 +231,6 @@ function ModelPicker({ locked, available, useDirectory, load, select, binding, o
     if (target.id === activeEffort) return;
     const ok = await choose(effortModel.group, effortModel.model, target.id, true);
     if (!ok) setEffortOptimistic(null);
-  };
-  const ratioFromPointer = event => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const pad = 16;
-    const usable = Math.max(1, rect.width - pad * 2);
-    return Math.max(0, Math.min(1, (event.clientX - rect.left - pad) / usable));
   };
   const effortName = currentModel?.reasoning?.efforts?.find(effort => effort.id === effectiveEffortId)?.name;
   const failures = state.failures?.filter(group => tool === 'deepseek' ? !group.id?.startsWith('commander-') : group.id === 'commander-' + tool) || [];
@@ -309,83 +294,7 @@ function ModelPicker({ locked, available, useDirectory, load, select, binding, o
           <span>当前模型</span>
           <strong><em>{effortModel.providerName}</em><i>/</i><b>{effortModel.model.name}</b></strong>
         </div>
-        {effortOptions.length > 0 && <div className="cmd-model-effort-section">
-          <div className="cmd-model-effort-heading">
-            <span>推理强度</span>
-            <strong data-off={isOff ? 'true' : 'false'}>{activeOption?.name || effortOptions[0].name}</strong>
-          </div>
-          <div
-            className={'cmd-model-effort-track' + (effortDrag !== null ? ' is-dragging' : '') + (isOff ? ' is-off' : '')}
-            role="slider"
-            tabIndex={sliderDisabled ? -1 : 0}
-            aria-disabled={sliderDisabled}
-            aria-label="推理强度档位"
-            aria-valuemin={0}
-            aria-valuemax={Math.max(0, effortOptions.length - 1)}
-            aria-valuenow={activeIndex}
-            aria-valuetext={activeOption?.name || effortOptions[0].name}
-            style={{ '--effort-ratio': activeRatio, '--effort-intensity': intensity }}
-            onPointerDown={event => {
-              if (sliderDisabled) return;
-              event.preventDefault();
-              event.stopPropagation();
-              event.currentTarget.setPointerCapture?.(event.pointerId);
-              setEffortDrag(ratioFromPointer(event));
-            }}
-            onPointerMove={event => {
-              if (effortDrag === null) return;
-              event.stopPropagation();
-              setEffortDrag(ratioFromPointer(event));
-            }}
-            onPointerUp={event => {
-              if (effortDrag === null) return;
-              event.stopPropagation();
-              const ratio = ratioFromPointer(event);
-              const index = effortOptions.length > 1 ? Math.round(ratio * stepCount) : 0;
-              if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-              setEffortDrag(null);
-              void commitEffortIndex(index);
-            }}
-            onPointerCancel={event => {
-              event.stopPropagation();
-              if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-              setEffortDrag(null);
-            }}
-            onClick={event => event.stopPropagation()}
-            onKeyDown={event => {
-              if (sliderDisabled) return;
-              let nextIndex = activeIndex;
-              if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') nextIndex = Math.max(0, activeIndex - 1);
-              else if (event.key === 'ArrowRight' || event.key === 'ArrowUp') nextIndex = Math.min(effortOptions.length - 1, activeIndex + 1);
-              else if (event.key === 'Home') nextIndex = 0;
-              else if (event.key === 'End') nextIndex = Math.max(0, effortOptions.length - 1);
-              else return;
-              event.preventDefault();
-              event.stopPropagation();
-              setEffortDrag(null);
-              void commitEffortIndex(nextIndex);
-            }}
-          >
-            <div className="cmd-model-effort-rail">
-              <div className="cmd-model-effort-ticks" aria-hidden="true">
-                {effortOptions.map((option, idx) => {
-                  const tickRatio = effortOptions.length > 1 ? idx / stepCount : 1;
-                  const passed = activeRatio + 0.001 >= tickRatio;
-                  return <span key={option.id} className={'cmd-model-effort-tick' + (passed ? ' is-active' : '')} style={{ left: `calc(16px + (100% - 32px) * ${tickRatio})` }} />;
-                })}
-              </div>
-              <div className="cmd-model-effort-fill" aria-hidden="true">
-                <span className="cmd-model-effort-ions cmd-model-effort-ions-a" />
-                <span className="cmd-model-effort-ions cmd-model-effort-ions-b" />
-                <span className="cmd-model-effort-glow" />
-              </div>
-              <div className="cmd-model-effort-thumb" aria-hidden="true" />
-            </div>
-          </div>
-          {effortOptions.length > 1 && <div className="cmd-model-effort-scale">
-            {effortOptions.map((option, idx) => <button key={option.id} type="button" tabIndex={-1} disabled={sliderDisabled} className={'cmd-model-effort-step' + (idx === activeIndex ? ' is-current' : '')} onClick={event => { event.stopPropagation(); setEffortDrag(null); void commitEffortIndex(idx); }}>{option.name}</button>)}
-          </div>}
-        </div>}
+        {effortOptions.length > 0 && <ModelEffortSlider key={JSON.stringify([effortModel.group.id, effortModel.model.id])} options={effortOptions} value={effectiveEffortId} disabled={sliderDisabled} onCommit={commitEffortIndex} />}
       </section>}
       {message && <footer className="cmd-model-footer"><span role="alert">{message}</span><button type="button" onClick={refresh} disabled={busy || loading}>重试</button></footer>}
     </div>, document.body)}

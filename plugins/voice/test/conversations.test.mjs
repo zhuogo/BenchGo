@@ -12,6 +12,8 @@ import { VoiceConversation } from '../client/conversation.mjs';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function until(predicate) { for (let i = 0; i < 200; i++) { if (predicate()) return; await tick(); } assert.fail('等待会话事件超时'); }
 const text = value => [{ type: 'text-delta', index: 0, text: value }, { type: 'finish', reason: { kind: 'stop' } }];
+const speakAndInvoke = (value, name, args = {}) => [{ type: 'text-delta', index: 0, text: value }, { type: 'tool-call-delta', index: 1, id: 'tool-id', name, argumentsDelta: JSON.stringify(args) }, { type: 'finish', reason: { kind: 'tool-calls' } }];
+const hostState = request => JSON.parse(request.messages.findLast(message => message.role === 'user' && message.content[0]?.text?.startsWith('宿主状态')).content[0].text.slice('宿主状态（数据）：'.length));
 const invoke = (name, args = {}) => [{ type: 'tool-call-delta', index: 0, id: 'tool-id', name, argumentsDelta: JSON.stringify(args) }, { type: 'finish', reason: { kind: 'tool-calls' } }];
 function memory() {
   const listeners = new Set();
@@ -26,11 +28,6 @@ function fixture(t, { kind = 'ordinary', script = [text('你好，有什么可�
   let subscriptions = 0, executeStatus = null;
   const bridge = {
     async describe() { return { kind }; }, async history() { return []; },
-    async handoffContext(sessionId, requestId) {
-      const current = records.findIndex(record => record.kind === 'user' && record.requestId === requestId);
-      return records.slice(0, current).filter(record => ['user', 'assistant'].includes(record.kind)).slice(-5)
-        .map(record => ({ sourceSeq: records.indexOf(record) + 1, role: record.kind, text: record.text }));
-    },
     async append(sessionId, data) { records.push({ sessionId, ...data }); },
     subscribe(sessionId, listener) { subscriptions++; listeners.add(listener); return () => listeners.delete(listener); },
     status() { return executeStatus; },
@@ -160,8 +157,8 @@ test('三种通话绑定后记录启动标识一次；保存失败清理绑定�
   assert.equal((await f.api.open(f.input)).mode, 'enhanced');
 });
 
-test('交接保留原话与近期对话，只执行一次；进度静默，终态只表达一次', async t => {
-  const f = fixture(t, { script: [text('想调整哪一页？'), invoke('delegate', { task: '调整首页，保留既有内容。', contextSourceSeqs: [1, 2] }), text('好，我开始看。'), text('首页已经改好了。')] });
+test('交接只提交任务与本次原话，只执行一次；进度静默，终态只表达一次', async t => {
+  const f = fixture(t, { script: [text('想调整哪一页？'), invoke('delegate', { task: '调整首页，保留既有内容。' }), text('好，我开始看。'), text('首页已经改好了。')] });
   await f.api.open(f.input); await f.listen(); await f.turn('我想改页面', 'first');
   await until(() => f.events.filter(event => event.type === 'end').length === 1);
   await f.turn('首页，按刚才说的做', 'second');
@@ -169,10 +166,9 @@ test('交接保留原话与近期对话，只执行一次；进度静默，终�
   await until(() => f.events.filter(event => event.type === 'end').length === 2);
   assert.equal(f.executions.length, 1); assert.equal(f.executions[0].text, '首页，按刚才说的做');
   assert.equal(f.executions[0].task, '调整首页，保留既有内容。');
-  assert.deepEqual(f.executions[0].contextSourceSeqs, [1, 2]);
-  assert.equal(Object.hasOwn(f.executions[0], 'context'), false);
-  const runtime = JSON.parse(f.requests[1].messages.find(message => message.role === 'user' && message.content[0]?.text.startsWith('宿主状态')).content[0].text.slice('宿主状态（数据）：'.length));
-  assert.deepEqual(runtime.handoffContext, [{ sourceSeq: 1, role: 'user', text: '我想改页面' }, { sourceSeq: 2, role: 'assistant', text: '想调整哪一页？' }]);
+  assert.deepEqual(Object.keys(f.executions[0]).sort(), ['requestId', 'sessionId', 'task', 'text']);
+  assert.deepEqual(Object.keys(hostState(f.requests[1])).sort(), ['activeExecution', 'currentModel', 'currentUserRequestId', 'voice']);
+  for (const name of ['delegate', 'revise_execution']) assert.deepEqual(Object.keys(f.requests[1].tools.find(tool => tool.name === name).parameters.properties), ['task']);
   assert.equal(f.records.find(record => record.kind === 'handoff').userMessageId, 'real-user');
   assert.equal((await f.turn('首页，按刚才说的做', 'second')).duplicate, true);
   await assert.rejects(f.turn('换个原话', 'second'), /不能替换/);
@@ -191,15 +187,15 @@ test('交互模型无法关闭思考时在通话启动前明确拒绝，不调�
   assert.equal(f.requests.length, 0); assert.equal(f.executions.length, 0);
 });
 
-test('缺失任务、伪造字段和无效来源不执行；模型可在同轮整理后提交', async t => {
+test('缺失任务和伪造字段不执行；模型可在同轮整理后提交', async t => {
   const f = fixture(t, { script: [invoke('delegate'), invoke('delegate', { task: '调整首页', text: '伪造原话' }),
-    invoke('delegate', { task: '调整首页', contextSourceSeqs: [1, 1] }), invoke('delegate', { task: '调整首页，禁止删除现有文件。' }), text('我来调整。')] });
+    invoke('delegate', { task: '调整首页，禁止删除现有文件。' }), text('我来调整。')] });
   await f.api.open(f.input); await f.listen(); await f.turn('调整首页，不要删除文件');
   await until(() => f.events.some(event => event.type === 'end'));
   assert.equal(f.executions.length, 1);
   assert.equal(f.executions[0].text, '调整首页，不要删除文件');
   assert.equal(f.executions[0].task, '调整首页，禁止删除现有文件。');
-  assert.equal(f.requests.at(-1).messages.filter(message => message.role === 'tool' && message.isError).length, 3);
+  assert.equal(f.requests.at(-1).messages.filter(message => message.role === 'tool' && message.isError).length, 2);
 });
 
 test('修订仅提交模型整理的增量，早期约束仍在语音层理解历史中', async t => {
@@ -215,11 +211,8 @@ test('修订仅提交模型整理的增量，早期约束仍在语音层理解�
   assert.equal(f.executions[1].revision, true);
   assert.equal(f.executions[1].text, '标题改成18px');
   assert.equal(f.executions[1].task, '将首页标题字号改为 18px，原有禁止插件与保留文件约束继续生效。');
-  const request = f.requests[3];
-  assert.match(JSON.stringify(request.messages), /不要使用官方 DeepSeek 插件，也不要删除文件/);
-  const state = JSON.parse(request.messages.findLast(message => message.role === 'user' && message.content[0]?.text.startsWith('宿主状态')).content[0].text.slice('宿主状态（数据）：'.length));
-  assert.equal(state.handoffContext.length, 5);
-  assert.equal(state.handoffContext.some(item => item.text.includes('不要使用官方')), false);
+  // The dialogue layer still sees the early constraint when it writes the task.
+  assert.match(JSON.stringify(f.requests[3].messages), /不要使用官方 DeepSeek 插件，也不要删除文件/);
 });
 
 test('桥拒绝超预算任务后允许同轮精炼，未知送达后不再尝试提交', async t => {
@@ -247,12 +240,85 @@ test('语音要求调整语速保存真实配置，下一次读取一致，不�
   const reply = f.requests.at(-1).messages.findLast(message => message.role === 'tool'); assert.equal(JSON.parse(reply.content[0].text).speed, 1.5);
 });
 
-test('不允许模型擅改语速，缺失和越界参数均返回工具失败', async t => {
-  const f = fixture(t, { script: [invoke('set_voice_speed', { speed: 1.5 }), text('你好。'), invoke('set_voice_speed'), text('请给出具体倍速。'), invoke('set_voice_speed', { speed: 8 }), text('这个倍速不支持。')] });
+test('口语化的语速要求无需关键词即可生效；宿主只校验参数，缺失和越界均返回工具失败', async t => {
+  const f = fixture(t, { script: [invoke('set_voice_speed', { speed: 1.1 }), text('好，慢一点了。'), invoke('set_voice_speed'), text('请给出具体倍速。'), invoke('set_voice_speed', { speed: 8 }), text('这个倍速不支持。')] });
   await f.api.open(f.input); await f.listen();
-  for (const [i, value] of ['你好', '调整语速', '把语速调到8'].entries()) { await f.turn(value, String(i)); await until(() => f.events.filter(event => event.type === 'end').length === i + 1); }
-  assert.equal(f.store.value.tts.speed, 1.2); assert.equal(f.events.some(event => event.type === 'config'), false);
-  for (const index of [1, 3, 5]) assert.equal(f.requests[index].messages.findLast(message => message.role === 'tool').isError, true);
+  for (const [i, value] of ['讲慢一点', '再调一下', '一点五倍太慢，调到八倍'].entries()) { await f.turn(value, String(i)); await until(() => f.events.filter(event => event.type === 'end').length === i + 1); }
+  assert.equal(f.store.value.tts.speed, 1.1); assert.equal(f.events.filter(event => event.type === 'config').length, 1);
+  assert.ok(!f.requests[1].messages.findLast(message => message.role === 'tool').isError);
+  for (const index of [3, 5]) assert.equal(f.requests[index].messages.findLast(message => message.role === 'tool').isError, true);
+});
+
+test('先接话再交接且已被接受时不再请求第二次生成；未被接受仍按真实回执继续表达', async t => {
+  const f = fixture(t, { script: [speakAndInvoke('好，我来看首页。', 'delegate', { task: '检查首页并保留现有内容。' })] });
+  await f.api.open(f.input); await f.listen(); await f.turn('帮我看首页');
+  await until(() => f.events.some(event => event.type === 'end'));
+  assert.equal(f.requests.length, 1); assert.equal(f.executions.length, 1);
+  const reply = f.records.find(record => record.kind === 'assistant');
+  assert.equal(reply.text, '好，我来看首页。'); assert.equal(reply.interrupted, false);
+  assert.equal(f.records.find(record => record.kind === 'handoff').state, 'running');
+  assert.equal(f.events.some(event => event.type === 'error'), false);
+  const g = fixture(t, { script: [speakAndInvoke('好，我来看首页。', 'delegate', { task: '检查首页。' }), text('现在还在忙，这次没有提交。')] });
+  g.bridge.execute = async () => { throw new VoiceError('原会话正在工作，请等待、询问进度或明确修订当前工作', 409); };
+  await g.api.open(g.input); await g.listen(); await g.turn('帮我看首页');
+  await until(() => g.events.some(event => event.type === 'end'));
+  assert.equal(g.requests.length, 2);
+  assert.equal(g.requests[1].messages.findLast(message => message.role === 'tool').isError, true);
+  assert.equal(g.records.find(record => record.kind === 'assistant').text, '好，我来看首页。现在还在忙，这次没有提交。');
+});
+
+test('长执行结果表达后只留有界摘录，不挤掉更早的要求；宿主状态里的结论同样有界', async t => {
+  const f = fixture(t, { script: [text('记住了。'), text('已经完成，结果比较长。'), text('好的。')] }), long = '结'.repeat(16000);
+  await f.api.open(f.input); await f.listen(); await f.turn('不要使用官方插件', 'early');
+  await until(() => f.events.filter(event => event.type === 'end').length === 1);
+  f.bridge.status = () => ({ requestId: 'task', state: 'completed', text: long });
+  f.emit({ type: 'completed', requestId: 'task', text: long });
+  await until(() => f.events.filter(event => event.type === 'end').length === 2);
+  assert.ok(JSON.stringify(f.requests[1].messages).includes(long), 'the expressing request sees the full result');
+  await f.turn('继续', 'later'); await until(() => f.events.filter(event => event.type === 'end').length === 3);
+  const sent = f.requests[2].messages, body = JSON.stringify(sent);
+  assert.match(body, /不要使用官方插件/);
+  const excerpt = sent.find(message => message.content[0]?.text?.startsWith('已向用户表达过的执行事实摘录')).content[0].text;
+  assert.deepEqual(JSON.parse(excerpt.slice(excerpt.indexOf('\n') + 1)), [{ type: 'completed', requestId: 'task', text: '结'.repeat(600), truncated: true }]);
+  const state = hostState(f.requests[2]);
+  assert.equal(state.activeExecution.text, '结'.repeat(2000)); assert.equal(state.activeExecution.truncated, true);
+  assert.equal(body.includes('结'.repeat(2001)), false);
+  assert.equal(sent.some(message => message.content[0]?.text?.startsWith('以下是宿主回传')), false);
+});
+
+test('没有有效发言的打断可恢复：暂存结果表达一次且不重派，重复恢复与其他设备无效', async t => {
+  const f = fixture(t, { script: [invoke('delegate', { task: '检查首页并保留现有内容。' }), text('开始了。'), text('首页已经完成。')] });
+  await f.api.open(f.input); await f.listen(); await f.turn('帮我看首页');
+  await until(() => f.events.some(event => event.type === 'end')); f.api.interrupt(f.input);
+  f.emit({ type: 'completed', requestId: 'request', text: '首页已完成' }); await tick(); await tick();
+  assert.equal(f.requests.length, 2);
+  assert.throws(() => f.api.resume({ ...f.input, deviceId: 'other' }), /another device/);
+  assert.deepEqual(f.api.resume(f.input), { resumed: true });
+  await until(() => f.events.filter(event => event.type === 'end').length === 2);
+  assert.equal(f.requests.length, 3); assert.deepEqual(f.requests[2].tools, []);
+  assert.match(JSON.stringify(f.requests[2].messages), /首页已完成/);
+  assert.equal(f.records.filter(record => record.kind === 'assistant').at(-1).text, '首页已经完成。');
+  assert.equal(f.executions.length, 1);
+  assert.deepEqual(f.api.resume(f.input), { resumed: false });
+  await tick(); await tick(); assert.equal(f.requests.length, 3);
+});
+
+test('反复误打断同一结果时最多自动恢复两次，之后留待下一句真实发言表达', async t => {
+  const hold = async function* (request) { yield { type: 'text-delta', index: 0, text: '结果是' }; await new Promise((_, reject) => request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true })); };
+  const f = fixture(t, { script: [hold, hold, hold, text('首页已经完成。')] });
+  await f.api.open(f.input); await f.listen();
+  f.emit({ type: 'completed', requestId: 'task', text: '首页已完成' });
+  for (const [attempt, resumed] of [[1, true], [2, true], [3, false]]) {
+    await until(() => f.requests.length === attempt && f.events.filter(event => event.type === 'start').length === attempt);
+    f.api.interrupt(f.input);
+    await until(() => f.events.filter(event => event.type === 'end').length === attempt);
+    assert.deepEqual(f.api.resume(f.input), { resumed });
+  }
+  await tick(); await tick(); assert.equal(f.requests.length, 3);
+  await f.turn('结果怎么样？', 'ask'); await until(() => f.events.some(event => event.type === 'end' && event.requestId === 'ask'));
+  assert.equal(f.requests.length, 4); assert.match(JSON.stringify(f.requests[3].messages), /首页已完成/);
+  assert.equal(f.records.filter(record => record.kind === 'assistant').at(-1).text, '首页已经完成。');
+  assert.equal(f.executions.length, 0);
 });
 
 test('native 绕过额外模型且不受普通通话交互配置调整影响；缺配明确direct', async t => {
@@ -260,7 +326,13 @@ test('native 绕过额外模型且不受普通通话交互配置调整影响；�
   await native.store.configure({ conversation: { providerId: 'new', model: 'new' } }); assert.doesNotThrow(() => native.leases.owned(native.input));
   await assert.rejects(native.turn('你好'), /原有会话/); assert.equal(native.requests.length, 0);
   const direct = fixture(t); await direct.store.configure({ conversation: { providerId: '', model: '' } });
-  assert.equal((await direct.api.open(direct.input)).mode, 'direct'); assert.equal(direct.prepares.length, 0);
+  const downgraded = await direct.api.open(direct.input);
+  assert.deepEqual(downgraded, { mode: 'direct', reason: '未配置通话交互模型，当前直接使用原会话模型', configurable: true });
+  assert.deepEqual(await direct.api.open(direct.input), downgraded); assert.equal(direct.prepares.length, 0);
+  // Settings cannot resolve an unsupported session, so it is not offered as configurable.
+  const child = fixture(t); await child.store.configure({ conversation: { providerId: '', model: '' } });
+  child.bridge.describe = async () => ({ kind: 'unsupported', reason: '子 Agent 会话未启用通话交接，请从原工作会话进入' });
+  assert.deepEqual(await child.api.open(child.input), { mode: 'direct', reason: '子 Agent 会话未启用通话交接，请从原工作会话进入' });
 });
 
 test('并发open只订阅一次，交互模型配置变化清理对应租约', async t => {
@@ -423,6 +495,8 @@ test('完整HTTP启动、长连接、交互、语速变更和历史分页沿相�
   assert.equal(f.store.value.tts.speed, 1.5); assert.equal(seen.some(event => event.type === 'config'), true);
   assert.equal((await handlers.config(json({ action: 'call.heartbeat', ...input }))).status, 200);
   assert.equal((await handlers.conversation(json({ action: 'interrupt', ...input, deviceId: 'attacker' }))).status, 409);
+  assert.equal((await handlers.conversation(json({ action: 'resume', ...input, deviceId: 'attacker' }))).status, 409);
+  assert.deepEqual(await (await handlers.conversation(json({ action: 'resume', ...input }))).json(), { resumed: false });
   assert.equal((await handlers.conversation(json({ action: 'history', sessionId: 'session' }, { origin: 'https://attacker.test' }))).status, 403);
   f.bridge.readRecords = (sessionId, options) => { assert.equal(sessionId, 'session'); assert.equal(options.before, 30); return { events: [{ type: 'plugin:benchgo-plugin/voice-conversation', ignorable: true, seq: 20, data: { kind: 'assistant', messageId: 'message', text: '调好了。', interrupted: true } }], hasMore: true, nextBefore: 20 }; };
   const history = await (await handlers.conversation(json({ action: 'history', sessionId: 'session', before: 30 }))).json();

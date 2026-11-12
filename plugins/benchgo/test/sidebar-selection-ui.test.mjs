@@ -12,11 +12,12 @@ const source = readFileSync(new URL('../client/index.jsx', import.meta.url), 'ut
 const code = transformSync(source + '\nexport { Projects, mountSidebarProjects }; export function setSidebarSnapshot(snapshot, defaultId) { data = snapshot; defaultWorkspaceId = defaultId; }', { loader: 'jsx', format: 'cjs' }).code;
 
 function render(activeSessionId, options = {}) {
-  const state = [], effects = [], events = new Map(); let cursor = 0;
+  const state = [], refs = [], effects = [], events = new Map(); let cursor = 0, refCursor = 0;
   const react = {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(child => child !== false && child != null) }),
     useState: initial => { const index = cursor++; if (!(index in state)) state[index] = typeof initial === 'function' ? initial() : initial; return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value; }]; },
-    useRef: initial => ({ current: initial }), useEffect: effect => effects.push(effect),
+    useRef: initial => refs[refCursor++] ||= { current: initial }, useEffect: effect => effects.push(effect),
+    useMemo: calculate => calculate(),
     useSyncExternalStore: (_subscribe, snapshot) => snapshot(),
   };
   const module = { exports: {} }, moduleSource = createModuleSource();
@@ -43,8 +44,9 @@ function render(activeSessionId, options = {}) {
   if (options.showArchived) {
     effects.forEach(effect => effect());
     events.get('commander:toggle-archive')();
-    cursor = 0; tree = module.exports.Projects(props);
+    cursor = 0; refCursor = 0; tree = module.exports.Projects(props);
   }
+  if (options.thenWide !== undefined) { cursor = 0; refCursor = 0; tree = module.exports.Projects({ ...props, wide: options.thenWide }); }
   const walk = node => {
     if (!node || typeof node !== 'object') return [];
     let resolved = node;
@@ -59,6 +61,19 @@ test('collapsed sidebar removes the project and conversation content region', ()
   assert.equal(nodes.filter(node => node.props.className?.split(' ').includes('cmd-session')).length, 0);
   assert.equal(nodes.filter(node => node.props.className?.split(' ').includes('cmd-sidebar-content')).length, 0);
   assert(nodes.some(node => node.props['aria-label'] === '快捷工具栏'));
+});
+
+test('collapsing after use keeps the conversation list mounted but hidden, and expanding shows the same list', () => {
+  const content = nodes => nodes.find(node => node.props.className === 'cmd-sidebar-content');
+  const rows = nodes => nodes.filter(node => node.props.className?.split(' ').includes('cmd-session')).length;
+  const collapsed = render(undefined, { thenWide: false });
+  assert.equal(content(collapsed).props.hidden, true, 'the rail hides the list from layout, focus and assistive technology');
+  assert.equal(rows(collapsed), 3, 'rows are retained, so expanding does not rebuild them');
+  assert.equal(collapsed.find(node => node.type?.name === 'Menu' || node.props.listClassName === 'cmd-actions-popover')?.props.open ?? false, false);
+  const expanded = render(undefined, { wide: false, thenWide: true });
+  assert.equal(content(expanded).props.hidden, false);
+  assert.equal(rows(expanded), 3);
+  assert(readFileSync(new URL('../client/style.css', import.meta.url), 'utf8').includes('.cmd-sidebar-content[hidden] { display: none; }'));
 });
 
 test('official panel navigation follows quick actions in expanded and collapsed DOM order', () => {

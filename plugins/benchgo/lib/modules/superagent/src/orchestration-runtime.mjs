@@ -83,7 +83,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         return save(result);
       });
     } catch (error) {
-      if (run.evidence && (run.evidence.summary || run.evidence.finalSummary)) {
+      if (run.evidence?.summary) {
         // Retain the raw text even when the official storage is temporarily
         // unavailable. Unknown completion remains running; it is not success.
         commitWorkerResult({ database, ticket, result: { ...run.evidence, completionPending: true }, assignment,
@@ -106,12 +106,12 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       try { await commitResult(entry.result, entry.context); pendingDrafts.delete(id); }
       catch { /* Durable Run/session drafts and this in-memory copy remain available. */ }
     }
-    if (database.hasPendingResultRecovery?.({ now: now() }) === false) return;
+    if (!database.hasPendingResultRecovery({ now: now() })) return;
     for (const ticket of database.listTickets({ limit: 1000 })) {
       for (const assignment of database.assignments(ticket.id)) {
         if (pendingDrafts.has(assignment.id) || assignment.state === 'claimed' && assignment.leaseUntil > now()) continue;
         const run = database.runs(assignment.id).find(row => row.fence === assignment.fence);
-        if (!run?.evidence || !run.evidence.summary && !run.evidence.finalSummary) continue;
+        if (!run?.evidence?.summary) continue;
         if (!run || run.resultSaved && !run.resultSaved.completionPending && !run.resultSaved.notificationPending) continue;
         if (!['uncertain', 'cancelled', 'verifying', 'submitted', 'running', 'completed', 'failed'].includes(run.state)) continue;
         const previous = assignment.savedResultRecovery?.fence === assignment.fence && assignment.savedResultRecovery?.runId === run.id ? assignment.savedResultRecovery : null;
@@ -136,15 +136,14 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     let policy;
     const currentPolicy = async () => policy ||= await readPolicy();
     if (onDelivered) {
-      if (database.sentDeliveries) for (const row of database.sentDeliveries({ ticketLimit: 1000 })) await mirrorDelivered(row);
-      else for (const ticket of database.listTickets({ limit: 1000 })) for (const row of database.deliveries(ticket.id)) await mirrorDelivered(row);
-      for (const row of database.directReplies?.({ state: 'sent', limit: 1000 }) || []) await mirrorDelivered(row);
+      for (const row of database.sentDeliveries({ ticketLimit: 1000 })) await mirrorDelivered(row);
+      for (const row of database.directReplies({ state: 'sent', limit: 1000 })) await mirrorDelivered(row);
     }
-    if (database.hasAnsweredAttention?.() !== false) {
+    if (database.hasAnsweredAttention()) {
       await currentPolicy();
       database.queueAnsweredAttention({ validateMandate: mandate => validateTicketMandate(mandate, { policy }) });
     }
-    for (const ticket of database.schedulingTickets?.({ limit: 1000 }) || database.listTickets({ limit: 1000 })) {
+    for (const ticket of database.schedulingTickets({ limit: 1000 })) {
       shutdown.signal.throwIfAborted();
       if (ticketExecutionBlocked(ticket) || ticket.continuationWait && ticket.continuationWait.stage !== 'scheduling' || ticket.resultVersion > 0) continue;
       if (database.assignments(ticket.id).length) continue;
@@ -269,7 +268,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       const tickets = ticketId === undefined ? database.listTickets({ limit: boundedLimit, offset, newestFirst, archived }) : [database.getTicket(ticketId)].filter(Boolean);
       return tickets.map(ticket => {
         const assignments = database.assignments(ticket.id);
-        const inputDiagnostics = (database.ticketInputs?.(ticket.id) || []).filter(input => input.snapshot?.executionInput?.outcome === 'failed')
+        const inputDiagnostics = database.ticketInputs(ticket.id).filter(input => input.snapshot?.executionInput?.outcome === 'failed')
           .map(input => ({ id: input.id, triggerId: input.triggerId, state: input.state, receivedAt: input.receivedAt,
             code: input.snapshot.executionInput.code, reason: input.snapshot.executionInput.reason }));
         const uncertainty = executionUncertainty(database, ticket, { now: now() });

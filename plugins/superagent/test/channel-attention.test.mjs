@@ -24,7 +24,7 @@ async function fixture(t, channel) {
     const [attention] = db.openAttention(assignment.id, { ...ownership, sessionId, callId: `call-${index}`, questions: [{ id: 'opaque-question', question: '选择？', options: [{ label: '继续' }] }] });
     entries.push({ ticket, attention, assignment, run, ownership });
   }
-  const policy = { version: 'p1', routeDirect: true, ownerIds: ['owner', 'other-owner'], threadIds: ['chat', 'other-chat'] };
+  const policy = { version: 'p1', ownerIds: ['owner', 'other-owner'], threadIds: ['chat', 'other-chat'] };
   let sequence = 0;
   const receive = (patch = {}) => ingestAssistantEvent(db, { sourceKey: `reply:${++sequence}`, channel, threadId: 'reply-thread', source: { ...source, messageId: 'reply' }, actor: { id: 'owner', kind: 'human' }, kind: 'topic', mentioned: true, text: '继续', ...patch }, policy);
   return { get db() { return db; }, source, entries, receive, restart() { db.close(); db = createAssistantOrchestrationStore({ directory }); } };

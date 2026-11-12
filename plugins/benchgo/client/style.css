@@ -112,6 +112,8 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 .cmd-search-toggle[aria-pressed="true"] { background: var(--cmd-hover); color: var(--cmd-text); box-shadow: inset 0 0 0 1px var(--cmd-line); }
 .cmd-sidebar-content { order: 1; flex: 1; min-height: 0; overflow: auto; padding: 0 2px 12px; scrollbar-width: none; -ms-overflow-style: none; }
 .cmd-sidebar-content::-webkit-scrollbar { display: none; width: 0; height: 0; }
+/* The collapsed rail keeps the list mounted but out of layout, focus and the accessibility tree. */
+.cmd-sidebar-content[hidden] { display: none; }
 .cmd-section-title { display: flex; align-items: center; justify-content: space-between; min-height: 32px; padding: 0 4px; margin: 0 0 5px; color: var(--cmd-muted); font-size: 12px; font-weight: 500; }
 .cmd-section-title button { display: flex; padding: 5px; color: var(--cmd-muted); opacity: 1; transition: background 140ms ease; }
 .cmd-search-panel { order: -1; flex: none; margin: 0 2px 10px; animation: cmd-reveal 180ms ease both; }
@@ -127,7 +129,7 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 .cmd-section-toggle > .cmd-ui-icon { opacity: .6; transition: transform 220ms cubic-bezier(.2,.8,.2,1), opacity 160ms ease; }
 .cmd-section-toggle[aria-expanded="false"] > .cmd-ui-icon { transform: rotate(-90deg); }
 .cmd-section-toggle:hover > .cmd-ui-icon { opacity: 1; }
-.cmd-section-body { display: grid; grid-template-rows: 1fr; opacity: 1; transition: grid-template-rows 220ms cubic-bezier(.2,.8,.2,1), opacity 180ms ease; }
+.cmd-section-body { display: grid; grid-template-rows: 1fr; opacity: 1; transition: opacity 140ms cubic-bezier(.2,.7,.25,1); }
 .cmd-section-body[data-open="false"] { grid-template-rows: 0fr; opacity: 0; pointer-events: none; }
 .cmd-section-inner { min-height: 0; overflow: hidden; }
 .cmd-recents { opacity: 1; transform: translateY(0); transition: opacity 110ms ease, transform 110ms ease; }
@@ -301,29 +303,19 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 .cmd-copy-status { margin: 12px 0 0; font-size: 12px; color: var(--dsw-alias-label-secondary, #818181); }
 .cmd-copy-fallback { width: 100%; min-height: 140px; margin-top: 10px; padding: 10px; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l3, #88888825); border-radius: 8px; resize: vertical; background: var(--dsw-alias-interactive-bg-hover, #88888812); color: inherit; font: 12px/1.6 var(--ds-font-family-code, monospace); }
 
-/* Region uses display:contents: fade actual plugin boxes with the official rail. */
-[class*="_frame"][data-animating]:has(.cmd-projects) { transition: grid-template-columns 300ms cubic-bezier(.22,.68,0,1); }
-[class*="_frame"][data-animating]:has(.cmd-projects) > [class*="_handle"] { transition: left 300ms cubic-bezier(.22,.68,0,1); }
-[class*="_frame"][data-dragging]:has(.cmd-projects),
-[class*="_frame"][data-dragging]:has(.cmd-projects) > [class*="_handle"] { transition: none; }
-[class*="_root"][class*="_fading"]:has(.cmd-projects) .cmd-sidebar-nav,
-[class*="_root"][class*="_fading"]:has(.cmd-projects) .cmd-search-panel,
-[class*="_root"][class*="_fading"]:has(.cmd-projects).cmd-sidebar-content { opacity: 0; transform: translateX(-6px); transition: opacity 130ms ease, transform 150ms ease; }
-[class*="_root"][class*="_railIn"]:has(.cmd-projects) .cmd-sidebar-nav,
-[class*="_root"][class*="_railIn"]:has(.cmd-projects).cmd-sidebar-content { animation: cmd-rail-in 150ms cubic-bezier(.2,.8,.2,1) backwards; }
-[class*="_root"]:has(.cmd-projects:not(.cmd-narrow)):not([class*="_fading"]) .cmd-sidebar-nav,
-[class*="_root"]:has(.cmd-projects:not(.cmd-narrow)):not([class*="_fading"]).cmd-sidebar-content { animation: cmd-reveal 200ms ease both; }
-@keyframes cmd-rail-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
+/* Sidebar geometry commits once; feedback never animates the conversation width. */
+.cmd-shell-frame[data-plus-shell],
+.cmd-shell-frame[data-plus-shell] > [data-side],
+.cmd-shell-frame[data-plus-shell] .cmd-shell-sidebar { transition: none; }
+.cmd-shell-sidebar:has(.cmd-projects) { overflow: hidden; }
+.cmd-shell-sidebar:has(.cmd-projects) .cmd-sidebar-nav,
+.cmd-shell-sidebar:has(.cmd-projects) .cmd-sidebar-content,
+.cmd-shell-sidebar:has(.cmd-projects) > [class*="_panelList"],
+.cmd-shell-sidebar:has(.cmd-projects) > [class*="_footArea"] { animation: none; transform: none; opacity: 1; transition: none; }
 @media (prefers-reduced-motion: reduce) {
-  [class*="_frame"][data-animating]:has(.cmd-projects),
-  [class*="_frame"][data-animating]:has(.cmd-projects) > [class*="_handle"],
-  [class*="_root"]:has(.cmd-projects) .cmd-sidebar-nav,
-  [class*="_root"]:has(.cmd-projects) .cmd-search-panel,
-  [class*="_root"]:has(.cmd-projects) .cmd-sidebar-content,
   .cmd-section-body, .cmd-section-toggle > .cmd-ui-icon,
   .cmd-recents, .cmd-session-actions button { animation: none !important; transition: none !important; }
 }
-
 .cmd-sidebar-footer { flex-direction: column; align-items: stretch; gap: 6px; }
 .cmd-sidebar-status { display: flex; flex-direction: column; align-items: flex-start; width: 100%; min-width: 0; }
 .cmd-sidebar-status:empty { display: none; }
@@ -345,18 +337,6 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
   .cmd-activity::before, .cmd-activity::after, .cmd-activity > i { animation: none !important; }
   .cmd-status-running::before, .cmd-status-connecting::before { opacity: .2; transform: scale(.9); }
 }
-/* Geometry and content share a single timeline; no delayed rail mount/crossfade. */
-.cmd-shell-frame:has(.cmd-projects) { transition: grid-template-columns 280ms cubic-bezier(.22,.68,0,1); }
-.cmd-shell-frame[data-dragging]:has(.cmd-projects) { transition: none; }
-.cmd-shell-sidebar:has(.cmd-projects) { overflow: hidden; transition: padding 280ms cubic-bezier(.22,.68,0,1); }
-.cmd-shell-sidebar:has(.cmd-projects) .cmd-sidebar-nav,
-.cmd-shell-sidebar:has(.cmd-projects) .cmd-sidebar-content,
-.cmd-shell-sidebar:has(.cmd-projects) > [class*="_panelList"],
-.cmd-shell-sidebar:has(.cmd-projects) > [class*="_footArea"] { animation: none !important; transform: none; opacity: 1; transition: padding 280ms cubic-bezier(.22,.68,0,1), margin 280ms cubic-bezier(.22,.68,0,1), gap 280ms cubic-bezier(.22,.68,0,1); }
-.cmd-shell-sidebar .cmd-session > span:not(.cmd-icon):not(.cmd-activity),
-.cmd-shell-sidebar .cmd-project-name button > span:not(.cmd-ui-icon):not(.cmd-activity) { animation: cmd-sidebar-label-in 200ms ease both; }
-@keyframes cmd-sidebar-label-in { from { opacity: 0; transform: translateX(-5px); } to { opacity: 1; transform: translateX(0); } }
-@media (prefers-reduced-motion: reduce) { .cmd-shell-frame:has(.cmd-projects),.cmd-shell-sidebar:has(.cmd-projects),.cmd-shell-sidebar:has(.cmd-projects) * { transition: none !important; animation: none !important; } }
 .cmd-session-quick-actions{position:absolute;z-index:2;right:31px;top:50%;transform:translateY(-50%);display:flex;align-items:center;gap:1px;opacity:0;background:transparent;transition:opacity 140ms ease}.cmd-session-row:hover .cmd-session-quick-actions,.cmd-session-row:focus-within .cmd-session-quick-actions{opacity:1}.cmd-session-row .cmd-session-quick{min-height:28px;display:flex!important;align-items:center;justify-content:center;width:26px;height:28px;padding:5px!important;background:transparent!important;box-shadow:none;color:color-mix(in srgb,var(--cmd-text) 78%,var(--cmd-muted));transition:color 140ms ease}.cmd-session-quick:hover,.cmd-session-quick:focus-visible{color:var(--cmd-text)}.cmd-session-row:hover .cmd-session>span:not(.cmd-icon):not(.cmd-activity),.cmd-session-row:focus-within .cmd-session>span:not(.cmd-icon):not(.cmd-activity){-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 56px),transparent 100%);mask-image:linear-gradient(to right,#000 calc(100% - 56px),transparent 100%)}.cmd-project-delete{display:flex;margin-right:3px;padding:5px!important;opacity:0;color:var(--cmd-muted)}.cmd-project-name:hover .cmd-project-delete,.cmd-project-name:focus-within .cmd-project-delete{opacity:1}.cmd-project-delete:hover{color:#c05c59!important}
 
 .cmd-session-row.is-archived .cmd-session { padding-right: 62px; }

@@ -1,5 +1,4 @@
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { documentHash } from './documents.mjs';
@@ -23,7 +22,6 @@ const blockPattern = () => /<!-- benchgo-memory (\{[^\n]*\}) -->\r?\n([\s\S]*?)\
 const learningPattern = /<!-- benchgo-learning (\{[^\n]*\}) -->/u;
 const intro = '记录有来源的长期事实、决定和经验；不保存原始聊天或当前任务状态。';
 const limit = (value, fallback, max) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : fallback;
-const matchesId = (entry, id) => entry.id === id || entry.legacyIds?.includes(id);
 const cleanText = value => String(value || '').replace(/<!--[\s\S]*?(?:-->|$)/gu, '');
 const sourceReference = ({ excerpt, excerptTruncated, ...source }) => source;
 
@@ -132,8 +130,8 @@ export async function createAssistantMemory({ directory, documents }) {
   let closed = false;
   function tombstone(entry, reason = 'corrected') {
     const put = db.prepare("INSERT INTO memory_tombstones VALUES (?,?,?,?,?) ON CONFLICT(entry_id,hash) DO UPDATE SET reason=CASE WHEN excluded.reason='forgotten' THEN excluded.reason ELSE memory_tombstones.reason END");
-    for (const id of new Set([entry.id, ...(entry.legacyIds || [])])) for (const hash of new Set([fingerprint(entry.content), fingerprint(cleanText(entry.content))])) {
-      put.run(id, hash, hasSource(entry.source) ? sourceFingerprint(entry.source) : '', reason, now());
+    for (const hash of new Set([fingerprint(entry.content), fingerprint(cleanText(entry.content))])) {
+      put.run(entry.id, hash, hasSource(entry.source) ? sourceFingerprint(entry.source) : '', reason, now());
     }
     for (const alias of sourceAliases(entry.source)) db.prepare("INSERT INTO memory_source_tombstones VALUES (?,?) ON CONFLICT(source_hash) DO UPDATE SET reason=CASE WHEN excluded.reason='forgotten' THEN excluded.reason ELSE memory_source_tombstones.reason END").run(alias, reason);
   }
@@ -148,7 +146,7 @@ export async function createAssistantMemory({ directory, documents }) {
     if (!ids.size) return context;
     const documents = (context.documents || []).map(row => {
       if (!['MEMORY.md', 'USER.md', 'TOOLS.md'].includes(row.name)) return row;
-      const removed = parseMemoryDocument(row.content, row.name).filter(entry => [entry.id, ...(entry.legacyIds || [])].some(id => ids.has(id)));
+      const removed = parseMemoryDocument(row.content, row.name).filter(entry => ids.has(entry.id));
       let content = row.content;
       for (const entry of removed.reverse()) content = content.slice(0, entry.start) + content.slice(entry.end);
       // Runtime projections contain no HTML markers. Match full bounded paragraph ranges
@@ -165,7 +163,7 @@ export async function createAssistantMemory({ directory, documents }) {
       }
       return content === row.content ? row : { ...row, content, hash: documentHash(content) };
     });
-    const memories = (context.memories || []).filter(entry => ![entry.id, ...(entry.legacyIds || [])].some(id => ids.has(id)));
+    const memories = (context.memories || []).filter(entry => !ids.has(entry.id));
     if (documents.every((row, index) => row === context.documents[index]) && memories.length === (context.memories || []).length) return context;
     const result = { ...context, documents, memories };
     // Runtime context also carries USER.md under its historical profile alias.
@@ -185,7 +183,7 @@ export async function createAssistantMemory({ directory, documents }) {
     if (new Set(entries.map(entry => entry.id)).size !== entries.length) throw Object.assign(new Error('多个文档存在重复记忆 ID'), { code: 'MEMORY_PARSE_ERROR' });
     const hashes = Object.fromEntries(rows.map(row => [row.name, row.hash]));
     if (JSON.stringify(meta('index-hashes')) !== JSON.stringify(hashes)) tx(() => {
-      const byId = new Map(entries.flatMap(entry => [entry.id, ...(entry.legacyIds || [])].map(id => [id, entry])));
+      const byId = new Map(entries.map(entry => [entry.id, entry]));
       for (const previous of db.prepare('SELECT * FROM memory_index').all()) {
         const next = byId.get(previous.id);
         if (!next || fingerprint(next.content) !== previous.hash) db.prepare('INSERT OR IGNORE INTO memory_tombstones VALUES (?,?,?,?,?)').run(previous.id, previous.hash, previous.source_hash, 'external-edit', now());
@@ -214,7 +212,7 @@ export async function createAssistantMemory({ directory, documents }) {
   async function save(input, { revision, expectedHash, explicit = true, candidateId } = {}) {
     inputValue(input);
     const { entries } = await snapshot();
-    const previous = input.id ? entries.find(entry => matchesId(entry, input.id)) : null;
+    const previous = input.id ? entries.find(entry => entry.id === input.id) : null;
     if (input.id && !previous) throw new Error('Memory not found');
     if (!explicit && denied(input)) throw Object.assign(new Error('该来源或内容已被用户纠正、拒绝或遗忘'), { code: 'MEMORY_EXCLUDED' });
     const document = previous?.document || input.document || 'MEMORY.md';
@@ -223,7 +221,7 @@ export async function createAssistantMemory({ directory, documents }) {
       if (!explicit && denied(input)) throw Object.assign(new Error('该来源或内容已被用户纠正、拒绝或遗忘'), { code: 'MEMORY_EXCLUDED' });
       const rows = parseMemoryDocument(body, document);
       // The candidate mapping is durable in Markdown before its DB receipt is updated.
-      const accepted = candidateId && rows.find(entry => entry.candidateId === candidateId || entry.id === `candidate-${candidateId}` || fingerprint(entry.content) === fingerprint(input.content));
+      const accepted = candidateId && rows.find(entry => entry.candidateId === candidateId || fingerprint(entry.content) === fingerprint(input.content));
       if (accepted) {
         saved = publicEntry(accepted.candidateId ? accepted : { ...accepted, candidateId });
         return accepted.candidateId ? body : body.slice(0, accepted.start) + annotation(saved) + body.slice(accepted.end);
@@ -236,7 +234,6 @@ export async function createAssistantMemory({ directory, documents }) {
       const supersedes = existing ? { id: existing.id, revision: existing.revision, updatedAt: existing.updatedAt || existing.createdAt || null } : undefined;
       saved = { id: existing?.id || randomUUID(), content: input.content.trim(), source, scope: input.scope || existing?.scope || 'personal', createdAt: existing?.createdAt || timestamp, updatedAt: timestamp, revision: (existing?.revision || 0) + 1, document,
         ...(candidateId || existing?.candidateId ? { candidateId: candidateId || existing.candidateId } : {}),
-        ...(existing?.legacyIds ? { legacyIds: existing.legacyIds } : {}),
         ...(supersedes ? { supersedes, versionChain: [...(existing.versionChain || []), supersedes] } : {}),
       };
       if (existing && existing.content !== saved.content) tombstone(existing);
@@ -248,20 +245,19 @@ export async function createAssistantMemory({ directory, documents }) {
   }
   async function remove(id, { revision, purgeHistory = false } = {}) {
     const { entries } = await snapshot();
-    const previous = entries.find(entry => matchesId(entry, id));
-    const aliases = new Set([id, ...(previous ? [previous.id, ...(previous.legacyIds || [])] : [])]);
+    const previous = entries.find(entry => entry.id === id);
     if (previous) await documents.mutate(previous.document, body => {
-      const existing = parseMemoryDocument(body, previous.document).find(entry => matchesId(entry, id));
+      const existing = parseMemoryDocument(body, previous.document).find(entry => entry.id === id);
       if (!existing) return body;
       if (revision !== undefined && existing.revision !== revision) throw Object.assign(new Error('Assistant data changed; reload before saving'), { code: 'REVISION_CONFLICT', revision: existing.revision });
       tombstone(existing, 'forgotten');
-      for (const alias of aliases) db.prepare("UPDATE memory_tombstones SET reason='forgotten' WHERE entry_id=?").run(alias);
+      db.prepare("UPDATE memory_tombstones SET reason='forgotten' WHERE entry_id=?").run(id);
       return body.slice(0, existing.start) + body.slice(existing.end);
     }, { source: { type: 'forget', entryId: id } });
     await snapshot();
     if (purgeHistory) {
       const redact = (body, document) => {
-        const matched = parseMemoryDocument(body, document).filter(entry => [entry.id, ...(entry.legacyIds || [])].some(value => aliases.has(value)));
+        const matched = parseMemoryDocument(body, document).filter(entry => entry.id === id);
         let result = body;
         for (const entry of matched.reverse()) result = result.slice(0, entry.start) + result.slice(entry.end);
         return result;
@@ -270,70 +266,16 @@ export async function createAssistantMemory({ directory, documents }) {
       await documents.redactSessionContexts(redactForgottenContext);
       for (const row of db.prepare('SELECT * FROM memory_candidates').all()) {
         const candidate = JSON.parse(row.payload);
-        if (aliases.has(candidate.memoryId) || aliases.has(candidate.input?.id) || candidate.id === previous?.candidateId || (previous && fingerprint(candidate.input?.content || '') === fingerprint(previous.content))) db.prepare('DELETE FROM memory_candidates WHERE id=?').run(row.id);
-      }
-      const backup = join(directory, 'migration-v1', 'entries.json');
-      if (existsSync(backup)) {
-        const data = JSON.parse(readFileSync(backup, 'utf8'));
-        if (Array.isArray(data.entries)) { data.entries = data.entries.filter(entry => !aliases.has(entry?.id)); writeFileSync(backup, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 }); }
+        if (candidate.memoryId === id || candidate.input?.id === id || candidate.id === previous?.candidateId || (previous && fingerprint(candidate.input?.content || '') === fingerprint(previous.content))) db.prepare('DELETE FROM memory_candidates WHERE id=?').run(row.id);
       }
     }
     return Boolean(previous);
-  }
-  async function migrate() {
-    if (meta('entries-v1')) return;
-    const path = join(directory, 'memory', 'entries.json');
-    if (!existsSync(path)) {
-      mkdirSync(join(directory, 'memory'), { recursive: true });
-      writeFileSync(path, JSON.stringify({ schemaVersion: 1, revision: 0, entries: [], migratedTo: '../MEMORY.md' }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-      setMeta('entries-v1', { completedAt: now(), imported: 0 }); return;
-    }
-    const directoryBackup = join(directory, 'migration-v1'); mkdirSync(directoryBackup, { recursive: true });
-    const backup = join(directoryBackup, 'entries.json');
-    if (!existsSync(backup)) copyFileSync(path, backup);
-    const data = JSON.parse(readFileSync(path, 'utf8'));
-    if (data.schemaVersion !== 1 || !Array.isArray(data.entries)) throw new Error('旧版记忆格式不受支持；原文件与备份已保留');
-    const invalid = [], ids = new Set();
-    const valid = data.entries.filter((entry, index) => {
-      try { inputValue(entry); if (typeof entry.id !== 'string' || !entry.id || ids.has(entry.id)) throw new Error('Invalid id'); ids.add(entry.id); return true; }
-      catch (error) { invalid.push({ index, reason: error.message }); return false; }
-    });
-    const result = await documents.mutate('MEMORY.md', body => {
-      const existing = new Set(parseMemoryDocument(body).map(entry => entry.id));
-      const added = valid.filter(entry => !existing.has(entry.id)).map(entry => annotation({ ...entry, document: 'MEMORY.md', revision: Number.isSafeInteger(entry.revision) && entry.revision > 0 ? entry.revision : 1, scope: entry.scope || 'personal' }));
-      return added.length ? body.trimEnd() + '\n\n' + added.join('\n\n') + '\n' : body;
-    }, { source: { type: 'migration', path: 'memory/entries.json' } });
-    // Leave a non-authoritative compatibility marker; never maintain a second editable body.
-    const marker = JSON.stringify({ schemaVersion: 1, revision: data.revision || 0, entries: [], migratedTo: '../MEMORY.md', backup: '../migration-v1/entries.json' }, null, 2) + '\n';
-    const temporary = `${path}.${randomUUID()}.tmp`; writeFileSync(temporary, marker, { mode: 0o600 }); renameSync(temporary, path);
-    setMeta('entries-v1', { completedAt: now(), imported: valid.length, invalid, hash: result.hash, backup: 'migration-v1/entries.json' });
   }
   const candidateRow = row => row ? { ...JSON.parse(row.payload), status: row.status } : null;
   const updateCandidate = candidate => {
     db.prepare('UPDATE memory_candidates SET status=?,payload=? WHERE id=?').run(candidate.status, JSON.stringify(candidate), candidate.id);
     return candidate;
   };
-  async function migrateCandidateIds() {
-    for (const document of ['MEMORY.md', 'USER.md', 'TOOLS.md']) await documents.mutate(document, body => {
-      let result = body;
-      for (const entry of parseMemoryDocument(body, document).filter(row => row.id.startsWith('candidate-')).reverse()) {
-        const migrated = { ...entry, id: randomUUID(), candidateId: entry.candidateId || entry.id.slice('candidate-'.length), legacyIds: [...new Set([...(entry.legacyIds || []), entry.id])] };
-        result = result.slice(0, entry.start) + annotation(migrated) + result.slice(entry.end);
-      }
-      return result;
-    }, { source: { type: 'memory-id-migration' } });
-    // Markdown is the durable receipt. Repair DB mappings even if an earlier startup
-    // stopped after the file write, without changing the entry's content or revision.
-    const { entries } = await snapshot();
-    for (const entry of entries) {
-      if (!entry.candidateId) continue;
-      const candidate = candidateRow(db.prepare('SELECT payload,status FROM memory_candidates WHERE id=?').get(entry.candidateId));
-      if (candidate && candidate.status !== 'rejected' && (candidate.memoryId !== entry.id || candidate.status !== 'accepted')) {
-        const { error, reason, ...saved } = candidate;
-        updateCandidate({ ...saved, status: 'accepted', memoryId: entry.id, resolvedAt: saved.resolvedAt || now() });
-      }
-    }
-  }
   async function resolveCandidate(id, patch = {}) {
     const candidate = candidateRow(db.prepare('SELECT payload,status FROM memory_candidates WHERE id=?').get(id));
     if (!candidate) throw new Error('记忆候选不存在');
@@ -363,7 +305,7 @@ export async function createAssistantMemory({ directory, documents }) {
       await resolveCandidate(row.id);
     }
   }
-  try { await migrate(); await migrateCandidateIds(); await recoverCandidates(); } catch (error) { db.close(); throw error; }
+  try { await recoverCandidates(); } catch (error) { db.close(); throw error; }
   return {
     list: async () => (await snapshot()).entries.map(publicEntry),
     save, remove, redactForgottenContext,
@@ -436,7 +378,7 @@ export async function createAssistantMemory({ directory, documents }) {
       if (savedSlot) {
         const saved = savedSlot.candidate_id && candidateRow(db.prepare('SELECT payload,status FROM memory_candidates WHERE id=?').get(savedSlot.candidate_id));
         if (saved) return ['accepted', 'rejected', 'excluded'].includes(saved.status) ? saved : resolveCandidate(saved.id);
-        return savedSlot.memory_id && current.entries.some(entry => matchesId(entry, savedSlot.memory_id))
+        return savedSlot.memory_id && current.entries.some(entry => entry.id === savedSlot.memory_id)
           ? { status: 'duplicate', memoryId: savedSlot.memory_id } : { status: 'excluded', reason: '该学习槽位已处理或遗忘' };
       }
       const key = fingerprint(input.content);
@@ -455,21 +397,6 @@ export async function createAssistantMemory({ directory, documents }) {
       const persisted = (stableId && db.prepare('SELECT id FROM memory_candidates WHERE id=?').get(stableId)) || db.prepare('SELECT id FROM memory_candidates WHERE fingerprint=?').get(key);
       return resolveCandidate(persisted.id);
     },
-    candidates: async ({ status = 'pending' } = {}) => db.prepare('SELECT payload,status FROM memory_candidates WHERE status=? ORDER BY created_at DESC LIMIT 200').all(status).map(row => ({ ...JSON.parse(row.payload), status: row.status })),
-    // Deprecated compatibility entry point; uses the same automatic policy, never an approval bypass.
-    accept: resolveCandidate,
-    async reject(id) {
-      const row = db.prepare('SELECT * FROM memory_candidates WHERE id=?').get(id);
-      if (!row) throw new Error('记忆候选不存在');
-      const candidate = JSON.parse(row.payload);
-      if (row.status === 'accepted') throw new Error('记忆已保存，请使用遗忘操作删除');
-      if (row.status === 'rejected') return candidate;
-      tombstone({ id, ...candidate.input }, 'rejected');
-      const result = { id, status: 'rejected', createdAt: candidate.createdAt, resolvedAt: now() };
-      db.prepare('UPDATE memory_candidates SET status=?,payload=? WHERE id=?').run(result.status, JSON.stringify(result), id);
-      return result;
-    },
-    migration: async () => meta('entries-v1'),
     close() { if (!closed) { closed = true; db.close(); } },
   };
 }

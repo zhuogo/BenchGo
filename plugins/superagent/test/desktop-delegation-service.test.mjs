@@ -217,19 +217,6 @@ test('new delegation requires the exact live root driver even with approval bypa
   assert.equal(f.database.listTickets().length, 0);
 });
 
-test('resource form authority is separate from live model authority and records literal input', async t => {
-  const f = await fixture(t);
-  f.ownerAgent.status = 'idle';
-  const options = { ownerAgent: f.ownerAgent, threadId: 'main', requestId: 'form-id', original: '{"objective":"literal form"}' };
-  const ticket = await f.service.submitForm(f.input, options);
-  assert.equal(ticket.mandate.instruction, options.original);
-  assert.equal(ticket.mandate.source.messageId, 'goal-form:form-id');
-  assert.equal(f.approvals(), 0, 'resource submission itself is the owner instruction');
-  assert.equal((await f.service.submitForm(f.input, options)).id, ticket.id);
-  await assert.rejects(f.service.delegate({ ...f.input, requestId: 'model-new' }, { ...f.exec, authorized: true }, f.options), /当前原始用户消息/);
-  assert.throws(() => f.service.submitForm(f.input, { ...options, ownerAgent: { id: f.ownerAgent.id } }), /真实主助手/);
-});
-
 test('successful receipts preserve their exact original human source, including duplicate attachments', async t => {
   const f = await fixture(t);
   const ticket = await f.service.delegate(f.input, f.exec, f.options);

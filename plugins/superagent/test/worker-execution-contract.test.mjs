@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { workerModelRoute, workerRequest } from '../src/worker-model-route.mjs';
 import { installWorkerFailureConvergence } from '../src/worker-permissions.mjs';
-import { installWorkerSelfCheck, validateWorkerSelfCheck } from '../src/worker-self-check.mjs';
 import { attachExecutionSession, executionSessionProjection, findExecutionSessionOwner } from '../src/execution-session.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -19,22 +18,16 @@ test('new Worker uses only its work role; resume preserves the frozen queue and 
   const frozen = workerModelRoute({ policy });
   policy.workerModels[0].options.maxTokens = 1;
   assert.equal(frozen.models[0].options.maxTokens, 700);
-  const resumed = workerModelRoute({ policy: { workerModels: [] }, savedQueue: { ...frozen, index: 1 },
-    current: { provider: backup.providerId, model: backup.modelId }, resumed: true });
+  const resumed = workerModelRoute({ policy: { workerModels: [] }, savedQueue: { ...frozen, index: 1 }, resumed: true });
   assert.equal(resumed.index, 1);
   assert.deepEqual(workerRequest({ provider: 'project', model: 'default', reasoningEffort: 'ultra', maxTokens: 900, tools: [] }, resumed.models[1]),
     { provider: backup.providerId, model: backup.modelId, maxTokens: 200, tools: [] });
   assert.throws(() => workerModelRoute({ policy: { models: [primary] } }), /not configured/);
-  assert.throws(() => workerModelRoute({ policy, savedQueue: { models: frozen.models, index: 99 }, current: { provider: 'other', model: 'foreign' }, resumed: true }), /outside/);
+  assert.throws(() => workerModelRoute({ policy, resumed: true }), /route is missing/, 'a continued Run never adopts current settings');
+  assert.throws(() => workerModelRoute({ policy, savedQueue: { models: frozen.models, index: 99 }, resumed: true }), /outside/);
 });
 
-test('legacy resume freezes only the saved request instead of combining new backups', () => {
-  const route = workerModelRoute({ policy: { workerModels: [primary, backup] }, resumed: true,
-    current: { provider: 'historic', model: 'opaque historical', reasoningEffort: 'high' }, requestConfig: { maxTokens: 333 } });
-  assert.deepEqual(route.models, [{ providerId: 'historic', modelId: 'opaque historical', options: { reasoningEffort: 'high', maxTokens: 333 } }]);
-});
-
-test('Worker metadata migrates once, preserves fallback after reopen and rejects a stale writer', async t => {
+test('Worker route freezes once, preserves its selection after reopen and rejects a stale writer', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-worker-state-'));
   let database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
@@ -44,103 +37,14 @@ test('Worker metadata migrates once, preserves fallback after reopen and rejects
   const [assignment] = database.claimAssignments('owner', { validateMandate: () => true });
   const run = database.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence, sessionId: 'worker-session', directory });
   const identity = { assignmentId: assignment.id, runId: run.id, owner: assignment.owner, fence: assignment.fence };
-  database.freezeWorkerModelRoute({ ...identity, models: [primary, backup], index: 0, routeOrigin: 'legacy-queue' });
+  database.freezeWorkerModelRoute({ ...identity, models: [primary, backup], index: 0 });
   database.selectWorkerModelRoute({ ...identity, index: 1 });
   database.freezeWorkerModelRoute({ ...identity, models: [{ providerId: 'new', modelId: 'foreign' }], index: 0 });
   assert.throws(() => database.selectWorkerModelRoute({ ...identity, owner: 'other', index: 0 }), /owner changed/);
   database.close(); database = createAssistantOrchestrationStore({ directory });
   const state = database.getWorkerExecutionState(run.id);
   assert.deepEqual(state.models, [primary, backup]);
-  assert.equal(state.index, 1); assert.equal(state.routeOrigin, 'legacy-queue');
-});
-
-test('self-check records only the owning live Worker and validates structural failure details', async () => {
-  const entries = [], tools = new Map(), agent = { id: 'session', session: {} }, assignment = { id: 'a', ticketId: 't', owner: 'o', fence: 2 };
-  const run = { id: 'r', sessionId: 'session', owner: 'o', fence: 2, state: 'submitted' };
-  const database = { getAssignment: () => ({ ...assignment, state: 'claimed' }), getTicket: () => ({ id: 't', status: 'running', instructionRevision: 3 }),
-    runs: () => [run], appliedTicketSnapshot: () => ({ instructionRevision: 3 }), recordWorkerSelfCheck: ({value}) => entries.push(value), getWorkerExecutionState: () => ({selfCheck: entries.at(-1)}) };
-  const record = installWorkerSelfCheck({ tools: { register: tool => tools.set(tool.name, tool) } }, agent, { database, assignment, run,
-    appendRecord: (_session, type, data) => entries.push({ type, data }) });
-  assert.deepEqual(record.read({ events: [] }), {});
-  const tool = tools.get('assistant_task_result'), execution = { agent, signal: new AbortController().signal, callId: 'c' };
-  await assert.rejects(tool.execute({ selfCheck: { summary: 'done' } }, { ...execution, agent: {} }), /stale/);
-  await assert.rejects(tool.execute({ selfCheck: { summary: 'blocked' }, outcome: 'failed', failure: { attempted: 'read' } }, execution), /requires/);
-  await tool.execute({ selfCheck: { summary: 'Tests and output checked', checks: ['test command passed'] } }, execution);
-  assert.deepEqual(record.read({ events: entries }), { selfCheck: { summary: 'Tests and output checked', checks: ['test command passed'] }, outcome: 'completed', selfCheckRevision: 3 });
-  assert.equal(validateWorkerSelfCheck({ selfCheck: { summary: 'Unsupported file' }, outcome: 'failed', failure: { attempted: 'Read file', cause: 'Format unsupported', resumeConditions: 'Provide supported format' } }).outcome, 'failed');
-});
-
-test('optional self-check never installs a completion steering hook', () => {
-  const hooks = [];
-  installWorkerSelfCheck({ on: name => hooks.push(name) }, {}, { database: {}, assignment: {}, run: {} });
-  assert.deepEqual(hooks, []);
-});
-
-for (const truncated of [false, true]) test(`official AgentLoop ${truncated ? 'preserves max-tokens without completion steering' : 'delivers a natural final response without a bookkeeping model round'}`, { timeout: 15000 }, async t => {
-  const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
-  const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
-  const { Context } = await load('@deepseek-ai/cordis');
-  const { default: LlmRuntime, LlmAdapter, createUserMessage, HarnessError } = await load('@deepseek-ai/dsh-llm');
-  const ctx = new Context(); t.after(() => ctx.fiber.dispose());
-  await ctx.plugin(LlmRuntime);
-  for (const name of ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-agent-loop']) {
-    await ctx.plugin((await load(name)).default, name === '@deepseek-ai/dsh-agent-loop' ? { agents: [] } : undefined);
-  }
-  const requireNative = createRequire(new URL('../../../deepseek-harness/packages/core/tool-executor-native/package.json', import.meta.url));
-  await ctx.plugin(await import(pathToFileURL(requireNative.resolve('@deepseek-ai/dsh-tool-executor-native')).href));
-  const requests = [], state = { selfCheck: null };
-  class Adapter extends LlmAdapter {
-    async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: 131072 } }; }
-    async *stream(request) {
-      requests.push(request);
-      if (requests.length === 2) {
-        yield { type: 'block-start', index: 0, blockType: 'tool-call' };
-        yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'actual-self-check', name: 'assistant_task_result', arguments: JSON.stringify({ selfCheck: { summary: 'Verified original task evidence' } }) } };
-        yield { type: 'finish', reason: { kind: 'tool-calls' } }; return;
-      }
-      assert.ok(requests.length <= 3, 'no unbounded completion loop');
-      const text = requests.length === 1 ? 'Now preparing the final report' : 'Complete final report';
-      yield { type: 'block-start', index: 0, blockType: 'text' };
-      yield { type: 'text-delta', index: 0, text };
-      yield { type: 'block-end', index: 0, block: { type: 'text', text } };
-      yield { type: 'finish', reason: { kind: truncated ? 'max-tokens' : 'stop' } };
-    }
-  }
-  ctx.llm.registerAdapter(['self-check-test'], new Adapter());
-  const assignment = { id: 'a', ticketId: 't', owner: 'o', fence: 1, state: 'claimed', leaseUntil: Date.now() + 60000 };
-  const run = { id: 'r', sessionId: 'self-check-same-session', owner: 'o', fence: 1, state: 'running' };
-  const ticket = { id: 't', status: 'running', instructionRevision: 1 };
-  const database = { getAssignment: () => assignment, getTicket: () => ticket, runs: () => [run],
-    appliedTicketSnapshot: () => ({ instructionRevision: 1 }), getWorkerExecutionState: () => state,
-    recordWorkerSelfCheck: ({ value }) => { state.selfCheck = value; } };
-  let created = 0, record;
-  ctx.on('agent/created', () => { created++; });
-  const handle = await ctx.agents.create({ sessionId: run.sessionId, setup: async (scope, agent) => {
-    record = installWorkerSelfCheck(scope, agent, { database, assignment, run });
-  } });
-  t.after(() => handle.dispose());
-  handle.agent.model.select({ provider: 'self-check-test', model: 'opaque-model' });
-  handle.agent.followup(createUserMessage({ source: { kind: 'benchgo-worker-instruction' }, content: [{ type: 'text', text: 'Finish the assigned task' }] }));
-  await handle.agent.whenIdle();
-  const events = handle.agent.session.snapshotEvents();
-  assert.equal(created, 1); assert.equal(handle.agent.id, run.sessionId);
-  if (truncated) {
-    assert.equal(requests.length, 1);
-    assert.equal(events.filter(event => event.type === 'turn/start').length, 1);
-    assert.equal(events.filter(event => event.type === 'step/start').length, 1);
-    assert.equal(events.findLast(event => event.type === 'turn/end').data.reason.kind, 'max-tokens');
-    assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-self-check').length, 0);
-    assert.deepEqual(record.read(), {});
-    return;
-  }
-  assert.equal(requests.length, 1);
-  assert.equal(events.filter(event => event.type === 'turn/start').length, 1);
-  assert.equal(events.filter(event => event.type === 'turn/end').length, 1);
-  assert.equal(events.filter(event => event.type === 'step/start').length, 1);
-  assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-self-check').length, 0);
-  assert.deepEqual(record.read(), {});
-  assert.equal(events.findLast(event => event.type === 'assistant/message').data.message.content.find(block => block.type === 'text').text, 'Now preparing the final report');
-  assert.equal(events.findLast(event => event.type === 'turn/end').data.reason.kind, 'completed');
+  assert.equal(state.index, 1);
 });
 
 test('official loop stops repeated shared structural failures across tools without another model request', { timeout: 15000 }, async t => {
@@ -155,7 +59,7 @@ test('official loop stops repeated shared structural failures across tools witho
   }
   const requireNative = createRequire(new URL('../../../deepseek-harness/packages/core/tool-executor-native/package.json', import.meta.url));
   await ctx.plugin(await import(pathToFileURL(requireNative.resolve('@deepseek-ai/dsh-tool-executor-native')).href));
-  const requests = [], state = { selfCheck: null };
+  const requests = [];
   class Adapter extends LlmAdapter {
     async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: 131072 } }; }
     async *stream(request) {
@@ -166,13 +70,11 @@ test('official loop stops repeated shared structural failures across tools witho
       yield { type: 'finish', reason: { kind: 'tool-calls' } };
     }
   }
-  ctx.llm.registerAdapter(['self-check-test'], new Adapter());
+  ctx.llm.registerAdapter(['convergence-test'], new Adapter());
   const assignment = { id: 'a', ticketId: 't', owner: 'o', fence: 1, state: 'claimed', leaseUntil: Date.now() + 60000 };
-  const run = { id: 'r', sessionId: 'self-check-same-session', owner: 'o', fence: 1, state: 'running' };
+  const run = { id: 'r', sessionId: 'convergence-same-session', owner: 'o', fence: 1, state: 'running' };
   const ticket = { id: 't', status: 'running', instructionRevision: 1 };
-  const database = { getAssignment: () => assignment, getTicket: () => ticket, runs: () => [run],
-    appliedTicketSnapshot: () => ({ instructionRevision: 1 }), getWorkerExecutionState: () => state,
-    recordWorkerSelfCheck: ({ value }) => { state.selfCheck = value; } };
+  const database = { getTicket: () => ticket };
   let created = 0, record;
   ctx.on('agent/created', () => { created++; });
   const handle = await ctx.agents.create({ sessionId: run.sessionId, setup: async (scope, agent) => {
@@ -182,7 +84,7 @@ test('official loop stops repeated shared structural failures across tools witho
       execute() { throw new HarnessError('Disk quota exhausted before dispatch', 'ENOSPC'); } });
   } });
   t.after(() => handle.dispose());
-  handle.agent.model.select({ provider: 'self-check-test', model: 'opaque-model' });
+  handle.agent.model.select({ provider: 'convergence-test', model: 'opaque-model' });
   handle.agent.followup(createUserMessage({ source: { kind: 'benchgo-worker-instruction' }, content: [{ type: 'text', text: 'Finish the assigned task' }] }));
   await handle.agent.whenIdle();
   const events = handle.agent.session.snapshotEvents();

@@ -4,7 +4,7 @@ export const terminalTicketStates = new Set(['completed']);
 export const ticketLabels = Object.freeze({ running: '进行', waiting: '等待', completed: '完成' });
 export const shortTicketText = (value, max = 240) => Array.from(String(value || '').replace(/\s+/g, ' ').trim()).slice(0, max).join('');
 export function ticketResultSummary(result) {
-  return shortTicketText(result?.summary || result?.finalSummary || result?.delivery?.text);
+  return shortTicketText(result?.summary || result?.delivery?.text);
 }
 const safetyWaitCodes = new Set(['EXECUTION_EFFECTS_UNKNOWN', 'EXECUTION_NOT_VERIFIED', 'EXECUTION_STOP_UNCONFIRMED']);
 
@@ -12,8 +12,7 @@ export function attentionMatchesTicket(attention, ticket) {
   const revision = ticket.instructionRevision ?? 1;
   const assignment = ticket.assignments?.find(row => row.id === attention.assignmentId);
   const applied = assignment?.appliedSnapshot?.instructionRevision ?? assignment?.instructionRevision ?? revision;
-  if ((attention.instructionRevision ?? applied) !== applied) return false;
-  return attention.origin !== 'review';
+  return (attention.instructionRevision ?? applied) === applied;
 }
 
 /** Read only the current Mandate version; old reports must not drive live actions. */
@@ -36,10 +35,10 @@ export function ticketSnapshot(ticket) {
   return { assignment, result, delivery, attention, status, continuationWait, safetyWait: safetyWaitCodes.has(continuationWait?.code) };
 }
 
-/** Recovery is explicit and carries no quota: budget gates were removed on 2026-11-06. */
+/** Recovery is explicit: only a real user action resumes a waiting Ticket. */
 export function continuationRecovery(ticket) {
   const { status, continuationWait } = ticketSnapshot(ticket);
-  if (status !== 'waiting' || !continuationWait || continuationWait.stage === 'scheduling' || ['LEGACY_CONTENT_REVIEW_RETIRED', 'EXECUTION_FAILED'].includes(continuationWait.code) || safetyWaitCodes.has(continuationWait.code)
+  if (status !== 'waiting' || !continuationWait || continuationWait.stage === 'scheduling' || continuationWait.code === 'EXECUTION_FAILED' || safetyWaitCodes.has(continuationWait.code)
     || Object.values(ticket.executionControl || {}).some(Boolean)
     || !Number.isSafeInteger(ticket.resultVersion) || ticket.resultVersion < 0) return null;
   return { label: '恢复原单', input: { ticketId: ticket.id, expectedResultVersion: ticket.resultVersion } };
@@ -76,8 +75,8 @@ export function ticketWaiting(ticket) {
   const executionNotice = ticketExecutionNotice(ticket);
   const uncertain = !!executionNotice || safetyWait || snapshot.assignment?.state === 'uncertain';
   const failed = continuationWait?.code === 'EXECUTION_FAILED' || result?.outcome === 'failed';
-  const failureReason = failed ? [shortTicketText(result?.failure?.cause || continuationWait?.reason, 100),
-    shortTicketText(result?.failure?.resumeConditions || continuationWait?.resumeConditions, 100), '调整要求后继续。'].filter(Boolean).join('；') : '';
+  const failureReason = failed ? [shortTicketText(continuationWait?.reason, 100),
+    shortTicketText(continuationWait?.resumeConditions, 100), '调整要求后继续。'].filter(Boolean).join('；') : '';
   const reason = shortTicketText(
     control.stopRequested ? executionNotice?.reason || '停止已生效，正在等待执行端确认退出。'
     : control.stopped ? '已停止，已有成果保留；明确继续要求后再推进。'

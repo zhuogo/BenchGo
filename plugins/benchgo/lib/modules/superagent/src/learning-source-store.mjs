@@ -35,11 +35,6 @@ export function installLearningSourceStore({ db, tx }) {
       .run(ticketId, ticket.result_version, outbox.id, closedAt || outbox.sent_at);
     return db.prepare('SELECT seq FROM sa_learning_closed_tickets WHERE ticket_id=? AND result_version=?').get(ticketId, ticket.result_version);
   }
-  // Old source tombstones cannot reconstruct dropped call metadata. Retire old
-  // terminal material rather than re-extracting forgotten facts during migration.
-  tx(() => {
-    db.prepare("INSERT OR IGNORE INTO sa_learning_source_meta VALUES ('legacy-closed-material-retired',1)").run();
-  });
   function material(seq) {
     const row = db.prepare(`SELECT c.*,t.status,t.instruction_revision,r.payload FROM sa_learning_closed_tickets c
       JOIN sa_tickets t ON t.id=c.ticket_id JOIN sa_results r ON r.ticket_id=c.ticket_id AND r.version=c.result_version
@@ -57,8 +52,7 @@ export function installLearningSourceStore({ db, tx }) {
     const result = parse(row.payload);
     if (result.outcome !== row.status || result.instructionRevision !== row.instruction_revision) return null;
     return { seq: row.seq, ticketId: row.ticket_id, resultVersion: row.result_version, status: row.status, closedAt: row.closed_at,
-      instructions, result: { finalSummary: result.finalSummary ?? result.summary ?? '', failure: result.failure ?? null,
-        toolEvidence: result.toolEvidence ?? null, transcript: result.transcript ?? null } };
+      instructions, result: { summary: result.summary ?? '' } };
   }
   return {
     recordClosedTicket(ticketId, { closedAt, inTransaction = false } = {}) {

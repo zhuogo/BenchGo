@@ -28,4 +28,4 @@ node --test plugins/superagent/test/watchdog-profile.test.mjs
 
 真实官方配置装配测试使用已构建 CLI 的 `--dump-config`，不启动宿主。当前工作树没有已构建 CLI 时，该项会明确跳过；可设置 `BENCHGO_WATCHDOG_TEST_CLI` 指向已核对版本的官方 `bin.js` 后执行同一测试。此检查不替代真实 Schedule、机械检查或信号投递验收。
 
-独立 profile 已对安装版签名只读接口完成真实周期检查及停止隔离验证；故障与模型疑似场景的验收边界见[任务与执行](../../docs/06-superagent/任务与执行.md#外部-watchdog-监督)。此封装默认不改主配置，也不自动启动监督。
+独立 profile 已对安装版签名只读接口完成真实周期检查及停止隔离验证；故障场景的验收边界见[任务与执行](../../docs/06-superagent/任务与执行.md#外部-watchdog-监督)。此封装默认不改主配置，也不自动启动监督。

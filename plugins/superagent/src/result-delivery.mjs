@@ -28,7 +28,7 @@ export function validateDelivery(value) {
   return { action: value.action, text: value.text, ...(value.options?.length ? { options: value.options } : {}), ...provenance };
 }
 export function resultDelivery({ result }) {
-  const body = result.finalSummary ?? result.summary;
+  const body = result.summary;
   if (typeof body !== 'string' || !body.trim()) throw new Error('Result requires its original body');
   return { action: 'deliver', origin: 'worker', text: body };
 }
@@ -45,7 +45,7 @@ export function resultOutbox({ ticket, result, delivery }) {
 export function deliverySuppression(database, row) {
   const payload = row.payload;
   if (payload.type === 'ticket.accepted') {
-    if (!isRouterTicketAck(payload)) return 'legacy-or-invalid-ack';
+    if (!isRouterTicketAck(payload)) return 'invalid-ack';
     const ticket = database.getTicket(row.ticketId);
     if (!ticket || ticketExecutionBlocked(ticket) || ticket.resultVersion > 0) return 'ack-superseded';
     if (payload.ticketId !== ticket.id || JSON.stringify(payload.source) !== JSON.stringify(ticket.mandate.source)) return 'source-mismatch';
@@ -62,13 +62,13 @@ export function deliverySuppression(database, row) {
   if (payload.replyState === 'suppressed' && payload.suppressionReason === 'router-action-already-replied') return payload.suppressionReason;
   const state = payload.stateSignal || (payload.publication?.origin === 'system' ? payload.publication.systemState : null);
   if (state?.state === 'continuation_wait') {
-    const current = database.assignments?.(ticket.id)?.some(row => ['uncertain', 'failed'].includes(row.state)
+    const current = database.assignments(ticket.id).some(row => ['uncertain', 'failed'].includes(row.state)
       && row.lastFailure?.code === state.code && row.lastFailure?.stage === state.stage
       && (!payload.assignmentId || row.id === payload.assignmentId && row.fence === payload.fence));
     if (!current) return 'state-superseded';
   }
   if (payload.type === 'ticket.attention') {
-    const attention = database.attentions?.(ticket.id)?.find(entry => entry.id === payload.attentionId);
+    const attention = database.attentions(ticket.id).find(entry => entry.id === payload.attentionId);
     if (attention?.answerTriggerId) return 'attention-resolved';
   }
   return null;

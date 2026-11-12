@@ -2,12 +2,12 @@ import { Button } from '../../shared/client/ui/index.jsx';
 import { readJsonResponse } from './http-response.mjs';
 import { mountShellUi } from './shell-ui.jsx';
 import { mountAssistant, AssistantSidebarEntry } from '../../superagent/client/index.jsx';
-import { projectWorkspaces, recentRows, startSidebarSession, isSidebarSessionSelected, isSidebarSessionVisible, sidebarSessionTitle, sidebarSessionUpdatedAt, sidebarWorkspaces, ensureSidebarWorkspace, workspaceActivity, sidebarSessionStatus, sidebarCapabilityWarning } from './sidebar-state.mjs';
+import { projectWorkspaces, recentRows, startSidebarSession, isSidebarSessionSelected, isSidebarSessionVisible, sidebarSessionTitle, sidebarSessionUpdatedAt, sidebarWorkspaces, ensureSidebarWorkspace, workspaceActivity, sidebarSessionStatus, sidebarCapabilityWarning, latestSidebarNativeSessions } from './sidebar-state.mjs';
 import { apply as applyVoice, mountMediaSettings } from '../../voice/client/index.jsx';
 import { applyMobileWorkbench } from './mobile-workbench.jsx';
 import { UsageLauncher, UsageDialog, mountUsageStyle } from './usage.jsx';
 import { ThemeLauncher, createThemeSource } from './theme-launcher.jsx';
-import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import icons from './icons.json';
 import { FishLogo, Tooltip, Modal, Menu, LinkIconMedium, IconPinOutlineRegular, IconPinFillRegular, IconBranchOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
 import css from './style.css';
@@ -26,6 +26,8 @@ import { mountBrand } from '../../link/client/brand.jsx';
 import { DeviceLauncher } from '../../link/client/device-launcher.jsx';
 import { DeviceSwitch } from '../../link/client/device-switch.jsx';
 import { mountEfficiencySettings } from './efficiency-settings.jsx';
+import { mountDiagnosticsSettings } from './diagnostics-settings.jsx';
+import { perfTrace } from '../../shared/client/perf-trace.mjs';
 import { mountInteractiveClient } from '../../interactive/client/official.jsx';
 import { mountWorkbenchClient } from '../../workbench/client/index.jsx';
 import { mountSessionMascot } from './session-mascot.jsx';
@@ -46,8 +48,11 @@ const connectionMessage = error => {
 function update(patch) { if(patch.projects)patch={...patch,projects:patch.projects.map(project=>({...project,isDefault:project.id===defaultWorkspaceId}))};data = { ...data, ...patch }; for (const fn of listeners) fn(); }
 function useData() { return useSyncExternalStore(fn => { listeners.add(fn); return () => listeners.delete(fn); }, () => data); }
 async function api(action, args = {}, signal) {
-  const res = await fetch(new URL('api/commander', document.baseURI), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...args }), signal });
-  return readJsonResponse(res, new URL('api/commander', document.baseURI));
+  const done = perfTrace.time('commander:' + action);
+  try {
+    const res = await fetch(new URL('api/commander', document.baseURI), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...args }), signal });
+    return await readJsonResponse(res, new URL('api/commander', document.baseURI));
+  } finally { done(); }
 }
 let stateSignature, stateRequest = 0, readOwnershipIds;
 async function refresh(signal) {
@@ -102,6 +107,7 @@ function mountBaseUi(ctx) {
   mountProviderSettings(ctx);
   mountMediaSettings(ctx);
   mountEfficiencySettings(ctx);
+  mountDiagnosticsSettings(ctx);
   mountInteractiveClient(ctx);
   mountWorkbenchClient(ctx);
   const lifetime = new AbortController();
@@ -199,6 +205,10 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
   const projectsLoaded = workspaces.phase === 'ready' || workspaceProjects.length > 0 || d.loaded;
   const [actionSession, setActionSession] = useState(null), [confirmDelete, setConfirmDelete] = useState(null), [confirmProjectDelete, setConfirmProjectDelete] = useState(null), [confirmClearArchive, setConfirmClearArchive] = useState(false);
   const actionAnchor = useRef(null);
+  // Collapsing hides the list instead of unmounting it, so expanding neither
+  // rebuilds every row nor refetches the assistant state.
+  const contentMounted = useRef(wide);
+  if (wide) contentMounted.current = true;
   const [busy, setBusy] = useState(false), [copyStatus, setCopyStatus] = useState('');
   const [sections, setSections] = useState(() => {
     try { return { projects: true, recent: true, ...JSON.parse(localStorage.getItem('commander.sidebar.sections') || '{}') }; }
@@ -239,7 +249,8 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
   });
 
   const activeHarnessId = Object.keys(harness.byId).find(id => (harness.byId[id].retainedBy?.mainView ?? 0) > 0);
-  const nativeFor = id => d.sessions.filter(s => s.ownerSessionId === id && (!s.parentId || s.harnessAdopted)).sort((a,b) => Number(b.updatedAt)-Number(a.updatedAt))[0];
+  const nativeOwners = useMemo(() => latestSidebarNativeSessions(d.sessions), [d.sessions]);
+  const nativeFor = id => nativeOwners.get(id);
   const matches = row => !filter || `${row.title} ${row.provider} ${row.model || ''}`.toLowerCase().includes(filter.toLowerCase());
   const members = workspaceProjects.flatMap(p => p.sessionIds.map(id => ({ id, projectId: p.id })));
   const accounted = new Set(members.map(member => member.id));
@@ -316,13 +327,13 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
   const row = s => {
     const selected = activePanel == null && isSidebarSessionSelected(s, activeHarnessId);
     return <div key={s.id} className={`cmd-session-row ${showArchived ? 'is-archived' : ''} ${selected ? 'is-selected' : ''}`}>
-    <button type="button" aria-label={wide ? undefined : `${names[s.provider]} · ${s.title || "对话"}`} className={`cmd-session ${liveStates.has(s.status) ? 'cmd-is-active' : ''} ${selected ? 'cmd-selected' : ''}`} aria-current={selected ? 'page' : undefined} onClick={() => { setActionSession(null); if(s.native) open(s.id).catch(e => setError(e.message)); else { update({ selected: null, projectId: s.projectId }); host.uiWorkspace.openSession(s.id); } }}><SessionIcon provider={s.provider} status={s.status} />{wide && <span onDoubleClick={event => { event.stopPropagation(); if (!s.native) setRenameTarget(s); }}>{s.title || names[s.provider]}{!s.native && <small style={{ marginInlineStart: 6, color: 'var(--cmd-muted)' }}>{renderSlot('benchgo.sidebar.session.row.trailing', { sessionId: s.id })}</small>}</span>}</button>
-    {wide && <div className="cmd-session-quick-actions">
+    <button type="button" className={`cmd-session ${liveStates.has(s.status) ? 'cmd-is-active' : ''} ${selected ? 'cmd-selected' : ''}`} aria-current={selected ? 'page' : undefined} onClick={() => { setActionSession(null); if(s.native) open(s.id).catch(e => setError(e.message)); else { update({ selected: null, projectId: s.projectId }); host.uiWorkspace.openSession(s.id); } }}><SessionIcon provider={s.provider} status={s.status} /><span onDoubleClick={event => { event.stopPropagation(); if (!s.native) setRenameTarget(s); }}>{s.title || names[s.provider]}{!s.native && <small style={{ marginInlineStart: 6, color: 'var(--cmd-muted)' }}>{renderSlot('benchgo.sidebar.session.row.trailing', { sessionId: s.id })}</small>}</span></button>
+    <div className="cmd-session-quick-actions">
       {!showArchived && <Hint label={workspaces.pinnedSessionIds?.includes(s.id) ? '取消置顶' : '置顶'}><button type="button" className="cmd-session-quick" aria-label={workspaces.pinnedSessionIds?.includes(s.id) ? '取消置顶' : '置顶会话'} onClick={event => { event.stopPropagation(); void togglePin(s); }}>{workspaces.pinnedSessionIds?.includes(s.id) ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />}</button></Hint>}
       <Hint label={showArchived ? '取消归档' : '归档'}><button type="button" className="cmd-session-quick" aria-label={showArchived ? '取消归档对话' : '归档对话'} disabled={busy} onClick={event => { event.stopPropagation(); void operate(s, 'archive'); }}><UIIcon name={showArchived ? 'unarchive' : 'archive'} size={14} /></button></Hint>
       {showArchived && <Hint label="删除"><button type="button" className="cmd-session-quick cmd-danger" aria-label="删除对话" disabled={busy} onClick={event => { event.stopPropagation(); setConfirmDelete(s); setActionSession(null); }}><UIIcon name="trash" size={14} /></button></Hint>}
-    </div>}
-    {wide && !showArchived && <Tooltip label="对话操作" delayMs={450} portal><button type="button" className="cmd-session-more" aria-label={'对话操作：' + (s.title || names[s.provider])} aria-expanded={actionSession?.id === s.id} aria-haspopup="menu" onClick={event => { actionAnchor.current = event.currentTarget; setActionSession(actionSession?.id === s.id ? null : s); setCopyStatus(''); setError(''); }}><UIIcon name="more" size={16} /></button></Tooltip>}
+    </div>
+    {!showArchived && <Tooltip label="对话操作" delayMs={450} portal><button type="button" className="cmd-session-more" aria-label={'对话操作：' + (s.title || names[s.provider])} aria-expanded={actionSession?.id === s.id} aria-haspopup="menu" onClick={event => { actionAnchor.current = event.currentTarget; setActionSession(actionSession?.id === s.id ? null : s); setCopyStatus(''); setError(''); }}><UIIcon name="more" size={16} /></button></Tooltip>}
   </div>;
   };
   return <section className={`cmd-projects ${wide ? '' : 'cmd-narrow'}`} aria-label="项目与对话">
@@ -334,25 +345,25 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
     </nav>
     {panelNavigation}
     {wide && searching && <div className="cmd-search-panel"><label className="cmd-search-field"><UIIcon name="search" size={16} /><input autoFocus className="cmd-search" placeholder="搜索对话…" aria-label="搜索对话内容" value={filter} onChange={e => setFilter(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') { setSearching(false); setFilter(''); } }} /><Hint label="关闭搜索"><button type="button" aria-label="关闭搜索" onClick={() => { setSearching(false); setFilter(''); }}><UIIcon name="plus" size={14} className="cmd-search-close" /></button></Hint></label></div>}
-    {wide && <div className="cmd-sidebar-content">
+    {contentMounted.current && <div className="cmd-sidebar-content" hidden={!wide}>
     {showArchived && <div className="cmd-section-title cmd-archive-toolbar"><span>已归档</span><Hint label="清空归档"><button type="button" aria-label="清空归档" disabled={busy || (!rows.some(item => item.archived) && !archivedThreadCount)} onClick={() => setConfirmClearArchive(true)}><UIIcon name="trash" size={14} /></button></Hint></div>}
     {modules.superagent && <AssistantSidebarEntry ctx={host} showArchived={showArchived} />}
-    <div className="cmd-section-title">{wide && <button type="button" className="cmd-section-toggle" aria-expanded={sections.projects} aria-controls="cmd-project-section" onClick={() => toggleSection('projects')}><span>{showArchived ? '已归档项目' : '项目'}</span><UIIcon name="chevronDown" size={12} /></button>}{!showArchived && <Hint label="添加项目"><button aria-label="添加项目目录" onClick={() => { if (!wide) expandSidebar?.(); setAdding(!wide || !adding); }}><UIIcon name="plus" size={16} /></button></Hint>}</div>
+    <div className="cmd-section-title"><button type="button" className="cmd-section-toggle" aria-expanded={sections.projects} aria-controls="cmd-project-section" onClick={() => toggleSection('projects')}><span>{showArchived ? '已归档项目' : '项目'}</span><UIIcon name="chevronDown" size={12} /></button>{!showArchived && <Hint label="添加项目"><button aria-label="添加项目目录" onClick={() => setAdding(!adding)}><UIIcon name="plus" size={16} /></button></Hint>}</div>
     {!showArchived && adding && <ProjectPicker host={host} api={api} onClose={() => setAdding(false)} onSelected={async project => { await refresh(); setAdding(false); newSession(project.id); }} />}
 
     <ErrorLine message={d.error || error || sidebarCapabilityWarning(d.capabilities)} />
-    <div id="cmd-project-section" className="cmd-section-body" data-open={!wide || sections.projects} inert={wide && !sections.projects ? '' : undefined}><div className="cmd-section-inner">
-    {!projectsLoaded && wide && <p className="cmd-sidebar-empty">正在读取项目…</p>}
+    <div id="cmd-project-section" className="cmd-section-body" data-open={sections.projects} inert={!sections.projects ? '' : undefined}><div className="cmd-section-inner">
+    {!projectsLoaded && <p className="cmd-sidebar-empty">正在读取项目…</p>}
     {projects.filter(p => !showArchived || rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))).map(p => {
       const activity = workspaceActivity(p, live);
-      return <div className="cmd-project" key={p.id}><div className="cmd-project-name"><button aria-label={wide ? undefined : activity ? `${p.title}，${states[activity]}` : p.title} aria-expanded={!!expanded[p.id]} onClick={() => { if (!wide) expandSidebar?.(); setExpanded(v => ({ ...v, [p.id]: !wide || !v[p.id] })); }}><UIIcon name="folder" size={16} selected={!!expanded[p.id]} />{wide && <span>{p.title}</span>}{activity && <Activity status={activity} className="cmd-project-activity" />}{wide && <UIIcon name="chevronDown" className={expanded[p.id] ? 'cmd-project-chevron cmd-rotated' : 'cmd-project-chevron'} size={12} />}</button>{!showArchived && <Hint label="新聊天"><button className="cmd-project-new" onClick={() => newSession(p.id)} aria-label={`在 ${p.title} 新聊天`}><UIIcon name="plus" size={16} /></button></Hint>}{!showArchived && wide && !p.isDefault && <Hint label="删除项目"><button type="button" className="cmd-project-delete" aria-label={`删除项目 ${p.title}`} onClick={() => setConfirmProjectDelete(p)}><UIIcon name="trash" size={14} /></button></Hint>}</div>{wide && (showArchived || expanded[p.id]) && <div className="cmd-project-children">{rows.filter(s => s.projectId === p.id || (p.path && s.cwd === p.path)).map(row)}{!rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path)) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档对话' : '还没有对话'}</p>}</div>}</div>;
+      return <div className="cmd-project" key={p.id}><div className="cmd-project-name"><button aria-expanded={!!expanded[p.id]} onClick={() => setExpanded(v => ({ ...v, [p.id]: !v[p.id] }))}><UIIcon name="folder" size={16} selected={!!expanded[p.id]} /><span>{p.title}</span>{activity && <Activity status={activity} className="cmd-project-activity" />}<UIIcon name="chevronDown" className={expanded[p.id] ? 'cmd-project-chevron cmd-rotated' : 'cmd-project-chevron'} size={12} /></button>{!showArchived && <Hint label="新聊天"><button className="cmd-project-new" onClick={() => newSession(p.id)} aria-label={`在 ${p.title} 新聊天`}><UIIcon name="plus" size={16} /></button></Hint>}{!showArchived && !p.isDefault && <Hint label="删除项目"><button type="button" className="cmd-project-delete" aria-label={`删除项目 ${p.title}`} onClick={() => setConfirmProjectDelete(p)}><UIIcon name="trash" size={14} /></button></Hint>}</div>{(showArchived || expanded[p.id]) && <div className="cmd-project-children">{rows.filter(s => s.projectId === p.id || (p.path && s.cwd === p.path)).map(row)}{!rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path)) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档对话' : '还没有对话'}</p>}</div>}</div>;
     })}
-    {wide && projectsLoaded && !(showArchived ? projects.some(p => rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))) : projects.length) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档项目' : '暂无项目'}</p>}
+    {projectsLoaded && !(showArchived ? projects.some(p => rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))) : projects.length) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档项目' : '暂无项目'}</p>}
     </div></div>
-    <div className="cmd-section-title cmd-recent-title">{wide && <button type="button" className="cmd-section-toggle" aria-expanded={sections.recent} aria-controls="cmd-recent-section" onClick={() => toggleSection('recent')}><span className="cmd-section-label">{showArchived ? '已归档最近' : '最近'}{!showArchived && recentActivity && <Activity status={recentActivity} />}</span><UIIcon name="chevronDown" size={12} /></button>}{!showArchived && <Hint label="新聊天"><button type="button" aria-label="最近新聊天" onClick={() => newSession()}><UIIcon name="plus" size={16} /></button></Hint>}</div>
-    <div id="cmd-recent-section" className="cmd-section-body" data-open={!wide || sections.recent} inert={wide && !sections.recent ? '' : undefined}><div className="cmd-section-inner"><div className="cmd-recents" data-transition={archivePhase}>{wide && recents.map(row)}{wide && d.loaded && !recents.length && (filter || showArchived) && <p className="cmd-sidebar-empty">{filter ? '没有找到对话' : '暂无归档对话'}</p>}</div></div></div>
+    <div className="cmd-section-title cmd-recent-title"><button type="button" className="cmd-section-toggle" aria-expanded={sections.recent} aria-controls="cmd-recent-section" onClick={() => toggleSection('recent')}><span className="cmd-section-label">{showArchived ? '已归档最近' : '最近'}{!showArchived && recentActivity && <Activity status={recentActivity} />}</span><UIIcon name="chevronDown" size={12} /></button>{!showArchived && <Hint label="新聊天"><button type="button" aria-label="最近新聊天" onClick={() => newSession()}><UIIcon name="plus" size={16} /></button></Hint>}</div>
+    <div id="cmd-recent-section" className="cmd-section-body" data-open={sections.recent} inert={!sections.recent ? '' : undefined}><div className="cmd-section-inner"><div className="cmd-recents" data-transition={archivePhase}>{recents.map(row)}{d.loaded && !recents.length && (filter || showArchived) && <p className="cmd-sidebar-empty">{filter ? '没有找到对话' : '暂无归档对话'}</p>}</div></div></div>
     </div>}
-    <Menu open={!showArchived && !!actionSession} onClose={() => { if(!busy)setActionSession(null); }} anchor={null} anchorRef={actionAnchor} side="right" align="end" portal autoFocus compact listClassName="cmd-actions-popover">
+    <Menu open={wide && !showArchived && !!actionSession} onClose={() => { if(!busy)setActionSession(null); }} anchor={null} anchorRef={actionAnchor} side="right" align="end" portal autoFocus compact listClassName="cmd-actions-popover">
       {currentActionSession && <>
         <div className="cmd-session-details"><Icon provider={currentActionSession.provider} size={16} /><span>{names[currentActionSession.provider] || currentActionSession.provider}{currentActionSession.model ? ' · ' + currentActionSession.model : ''}</span></div>
         <div className="cmd-session-actions">

@@ -4,7 +4,7 @@ import { ticketWaiting, ticketExecutionNotice } from '../client/ticket-state.mjs
 import { executionStatusText } from '../src/ticket-lifecycle.mjs';
 
 const ticket = { id: 'original', status: 'waiting', instructionRevision: 2, resultVersion: 3,
-  results: [{ instructionRevision: 2, version: 3, outcome: 'completed', summary: '原文结果', selfCheck: { summary: '已自检' } }] };
+  results: [{ instructionRevision: 2, version: 3, outcome: 'completed', summary: '原文结果' }] };
 test('legacy persistence status is readable Chinese without changing unknown messages', () => {
   const reason = 'Saved result is awaiting persistence';
   assert.equal(executionStatusText(reason), '执行结果已暂存，尚未完成正式保存。');
@@ -29,7 +29,8 @@ test('delivery uncertainty neither hides a real question nor replaces the execut
   const asking = ticketWaiting({ ...ticket, deliveries, attentions: [attention] });
   assert.equal(asking.attention, attention);
   assert.equal(asking.reason, '请选择检查范围');
-  const failed = ticketWaiting({ ...ticket, deliveries, results: [{ ...ticket.results[0], outcome: 'failed', failure: { cause: '目标模型当前不可用', resumeConditions: '请调整模型配置' } }] });
+  const failed = ticketWaiting({ ...ticket, deliveries, results: [{ ...ticket.results[0], outcome: 'failed' }],
+    continuationWait: { code: 'EXECUTION_FAILED', sourceResultVersion: 3, reason: '目标模型当前不可用', resumeConditions: '请调整模型配置' } });
   assert.match(failed.reason, /目标模型当前不可用/);
   assert.doesNotMatch(failed.reason, /来源回执未知|外部操作是否生效/);
 });
@@ -43,18 +44,10 @@ test('unknown external effects allow refreshing without resuming or retrying', (
     }
   }
 });
-test('manual and legacy quota pauses both resume directly; next steps never offer quota or added time', () => {
-  assert.equal(ticketWaiting({ ...ticket, status: 'waiting', executionControl: { paused: true }, pauseReason: { kind: 'manual' } }).actions[0].kind, 'resume');
-  const legacy = ticketWaiting({ ...ticket, status: 'waiting', executionControl: { paused: true }, pauseReason: { kind: 'budget', reason: 'tokens' } });
-  assert.equal(legacy.actions[0].kind, 'resume');
-  assert.doesNotMatch(JSON.stringify(legacy), /额度|goals|additionalExecutionMs/);
-});
-test('a pre-result Ticket parked by the removed execution-time gate resumes without added time', () => {
-  const waiting = ticketWaiting({ ...ticket, resultVersion: 0, results: [],
-    continuationWait: { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 0 } });
-  assert.equal(waiting.actions[0].label, '恢复原单');
-  assert.deepEqual(waiting.actions[0].input, { ticketId: 'original', expectedResultVersion: 0 });
-  assert.notEqual(waiting.label, '等待续做资源');
+test('a manual pause resumes directly; next steps never offer quota or added time', () => {
+  const paused = ticketWaiting({ ...ticket, status: 'waiting', executionControl: { paused: true }, pauseReason: { kind: 'manual' } });
+  assert.equal(paused.actions[0].kind, 'resume');
+  assert.doesNotMatch(JSON.stringify(paused), /额度|goals|additionalExecutionMs/);
 });
 test('current unanswered attention leads while stale attention never supplies a question', () => {
   const attention = { id: 'question', state: 'waiting', origin: 'worker', instructionRevision: 2, resultVersion: 3,
@@ -114,7 +107,8 @@ test('missing recovery evidence is not advertised as a scheduled automatic check
 
 
 test('failed execution waits with a concise reason and a concrete next step instead of blind resume', () => {
-  const failed = { ...ticket, results: [{ instructionRevision: 2, version: 3, outcome: 'failed', failure: { cause: '服务拒绝请求。'.repeat(100), resumeConditions: '修改有效授权。'.repeat(100) } }], continuationWait: { code: 'EXECUTION_FAILED', sourceResultVersion: 3 } };
+  const failed = { ...ticket, results: [{ instructionRevision: 2, version: 3, outcome: 'failed' }],
+    continuationWait: { code: 'EXECUTION_FAILED', sourceResultVersion: 3, reason: '服务拒绝请求。'.repeat(100), resumeConditions: '修改有效授权。'.repeat(100) } };
   const waiting = ticketWaiting(failed);
   assert.equal(waiting.status, 'waiting');
   assert(Array.from(waiting.reason).length <= 240);

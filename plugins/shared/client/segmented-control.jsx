@@ -10,7 +10,10 @@ export function SegmentedControl({ options, value, onChange, label, panelId, tab
     const element = track.current;
     const measure = () => {
       const selected = element?.querySelector('[aria-selected=true]');
-      if (selected) setIndicator({ transform: `translateX(${selected.offsetLeft}px)`, width: selected.offsetWidth, height: selected.offsetHeight, top: selected.offsetTop });
+      if (selected) {
+        const next = { transform: `translateX(${selected.offsetLeft}px)`, width: selected.offsetWidth, height: selected.offsetHeight, top: selected.offsetTop };
+        setIndicator(previous => previous && Object.keys(next).every(key => previous[key] === next[key]) ? previous : next);
+      }
     };
     measure();
     const observer = new ResizeObserver(measure);

@@ -4,9 +4,8 @@ const digest = value => createHash('sha256').update(JSON.stringify(value)).diges
 const actor = Object.freeze({ kind: 'machine', id: 'harness-schedule' });
 const failure = message => Object.assign(new Error(message), { code: 'SCHEDULE_BRIDGE_UNAVAILABLE' });
 
-/** Current Host destinations are explicit; the legacy shape is read-only compatibility. */
-export const scheduleTargetSession = entry => entry?.target
-  ? ['session', 'new_once'].includes(entry.target.kind) ? entry.target.sessionId : undefined : entry?.sessionId;
+/** Only an existing destination session can be owned; a schedule that opens a new session each time has none. */
+export const scheduleTargetSession = entry => ['session', 'new_once'].includes(entry?.target?.kind) ? entry.target.sessionId : undefined;
 
 /** Only the official typed inbox source is eligible; user text cannot impersonate it. */
 export function scheduleOccurrences(message) {
@@ -87,7 +86,7 @@ export function createScheduleBridge({ ctx, store, readPolicy, onOccurrence }) {
       if (entry.prompt !== occurrence.reminder_prompt) {
         const history = await host.history?.({ id: entry.id, limit: 100 });
         if (!history?.records?.some(row => row.scheduledAt === occurrence.occurrence_at && row.prompt === occurrence.reminder_prompt
-          && (row.targetSessionId === sessionId || (!entry.target && row.targetSessionId === undefined)))) throw failure('Schedule 指令已变化且缺少原始投递凭据');
+          && row.targetSessionId === sessionId)) throw failure('Schedule 指令已变化且缺少原始投递凭据');
       }
       accepted.push(await ingest({ entry, occurrence, threadId: owned.get(sessionId), messageId: message.id }));
     }
@@ -105,7 +104,7 @@ export function createScheduleBridge({ ctx, store, readPolicy, onOccurrence }) {
       const history = await host.history({ id: entry.id, limit: 1 });
       const receipt = history.records?.[0];
       if (!receipt || typeof receipt.prompt !== 'string' || Date.parse(receipt.deliveredAt) < Date.parse(activation) || !Number.isFinite(Date.parse(receipt.deliveredAt))
-        || (receipt.targetSessionId !== entry.sessionId && (entry.target || receipt.targetSessionId !== undefined))) continue;
+        || receipt.targetSessionId !== entry.sessionId) continue;
       await ingest({ entry, occurrence: { occurrence_at: receipt.scheduledAt, reminder_prompt: receipt.prompt }, threadId: owned.get(entry.sessionId), messageId: receipt.messageId });
     }
   }

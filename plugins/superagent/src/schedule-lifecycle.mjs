@@ -54,7 +54,7 @@ export function createScheduleLifecycle({ ctx, store, database }) {
     if (ticket.status === 'completed' && validTime(ticket.updatedAt)) {
       return publish({ ...fact, phase: ticket.status, at: ticket.updatedAt, ticketId: ticket.id });
     }
-    const result = store.orchestration.results?.(ticket.id)?.findLast(row => row.version === ticket.resultVersion && row.instructionRevision === ticket.instructionRevision);
+    const result = store.orchestration.results(ticket.id).findLast(row => row.version === ticket.resultVersion && row.instructionRevision === ticket.instructionRevision);
     if (ticket.status === 'waiting' && result?.outcome === 'failed' && validTime(result.committedAt)) {
       return publish({ ...fact, phase: 'failed', at: result.committedAt, ticketId: ticket.id });
     }

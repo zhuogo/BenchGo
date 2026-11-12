@@ -40,7 +40,7 @@ export class Capture {
     }catch(e){if(generation!==this.generation||!this.active)return;this.active=false;await this.release();throw e;}
     finally{clearTimeout(timer);if(this.initializing===initializing)this.initializing=null;}
   }
-  setPlaybackActive(value){this.playbackActive=!!value;if(!value)this.echoUntil=this.now()+220;}
+  setPlaybackActive(value){const active=!!value;if(active===this.playbackActive)return;this.playbackActive=active;if(!active)this.echoUntil=this.now()+220;}
   setMuted(value){
     if(this.muted===!!value)return;this.muted=!!value;if(this.muted)this.generation++;for(const track of this.stream?.getAudioTracks?.()||[])track.enabled=!this.muted;this.node?.port.postMessage({type:'mute',value:this.muted,epoch:this.generation});
     if(this.muted){const id=this.segment?.id;this.segment=null;this.pre=[];this.attack=0;this.attackGap=0;for(const c of this.controllers)c.abort();void this.realtime?.clear?.().catch(error=>this.onError(error));this.onLevel(0);if(id)this.onSpeechEnd(id,{cancelled:true});}

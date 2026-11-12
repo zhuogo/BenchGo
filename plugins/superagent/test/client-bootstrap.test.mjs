@@ -14,7 +14,7 @@ function load(path, overrides = {}) {
   runInNewContext(transformSync(readFileSync(new URL(path, import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code, {
     module, exports: module.exports, AbortController, crypto: webcrypto, queueMicrotask: fn => fn(), setTimeout: fn => fn(),
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
-    document: { dispatchEvent() {}, createElement: () => ({ remove() {} }), head: { append() {} } },
+    document: { dispatchEvent() {}, addEventListener() {}, removeEventListener() {}, createElement: () => ({ remove() {} }), head: { append() {} } },
     require: id => id.endsWith('session-retain.mjs') ? { retainAssistantSession } : overrides[id] || empty,
   });
   return module.exports;
@@ -24,7 +24,7 @@ test('declared client dependencies authorize uiConversation in optional child sc
   const entry = load('../../benchgo/client/index.jsx');
   const effects = [], errors = [], activated = [];
   const conversation = load('../client/conversation.jsx', { react: {
-    createContext: () => ({}), createElement: () => null, useEffect: effect => effects.push(effect),
+    createContext: () => ({}), createElement: () => null, useEffect: effect => effects.push(effect), useCallback: callback => callback, useMemo: read => read(),
     useState: initial => [initial, value => { if (typeof value === 'string' && value) errors.push(value); }],
   } });
   const ctx = new Context();

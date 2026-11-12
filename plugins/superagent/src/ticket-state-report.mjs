@@ -1,5 +1,4 @@
 import { ticketExecutionBlocked } from './ticket-lifecycle.mjs';
-export const ticketStateSource = 'benchgo-ticket-state';
 
 export function isTicketStateNotice(value) {
   return value?.type === 'ticket.result' && value.publication?.origin === 'system'

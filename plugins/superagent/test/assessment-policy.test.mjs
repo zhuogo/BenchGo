@@ -105,7 +105,7 @@ test('assessment keeps Router and Worker role queues separate and resolves Worke
   const worker = { providerId: 'Worker/@', modelId: 'Exact: Worker/2' };
   const auxiliary = { models: [{ providerId: 'Aux/@', modelId: 'Exact: Aux/3' }], capabilities: ['review'] };
   let config = { revision: 1, models: [router], workerModels: [worker], auxiliary };
-  const store = { getConfig: async () => config, connections: { read: () => ({ revision: 1, config: {} }) }, documents: { read: async () => ({ hash: 'rules', content: '' }) } };
+  const store = { getConfig: async () => config, connections: { read: () => ({ revision: 1, config: {} }), list: () => [{ channel: 'feishu', revision: 1, config: {} }] }, documents: { read: async () => ({ hash: 'rules', content: '' }) } };
   const policy = await readAssessmentPolicy(store);
   assert.deepEqual(policy.model, router);
   assert.deepEqual(policy.models, [router]);
@@ -120,7 +120,7 @@ test('assessment keeps Router and Worker role queues separate and resolves Worke
 test('policy binds disk rules and channel revision; revoked ownership cannot open tickets', async () => {
   let revision = 1, configRevision = 1, hash = 'rules-1';
   const connection = { enabled: true, appId: 'app', chatIds: ['chat'], ownerOpenIds: ['owner'] };
-  const store = { connections: { read: () => ({ revision, config: connection }) }, getConfig: async () => ({ revision: configRevision, models: [{ providerId: 'opaque-provider', modelId: 'opaque/model' }] }), documents: { read: async () => ({ hash, content: 'current rules' }) } };
+  const store = { connections: { read: () => ({ revision, config: connection }), list: () => [{ channel: 'feishu', revision, config: connection }] }, getConfig: async () => ({ revision: configRevision, models: [{ providerId: 'opaque-provider', modelId: 'opaque/model' }] }), documents: { read: async () => ({ hash, content: 'current rules' }) } };
   const first = await readAssessmentPolicy(store);
   configRevision++;
   assert.equal((await readAssessmentPolicy(store)).version, first.version, 'ordinary settings edits do not revoke active work');
@@ -143,7 +143,7 @@ test('policy binds disk rules and channel revision; revoked ownership cannot ope
 test('machine admission requires auto mode and every enabled written rule; revocation fences its mandate', async () => {
   let revision = 1;
   const connection = { enabled: true, appId: 'app', chatIds: ['chat'], ownerOpenIds: ['owner'], machineOpenIds: ['ci'], admissionMode: 'auto', enabledRuleIds: ['opaque/rule'] };
-  const store = { connections: { read: () => ({ revision, config: structuredClone(connection) }) }, getConfig: async () => ({ models: [] }), documents: { read: async () => ({ hash: 'rules', content: '## rule: opaque/rule\nInspect failures only' }) } };
+  const store = { connections: { read: () => ({ revision, config: structuredClone(connection) }), list: () => [{ channel: 'feishu', revision, config: structuredClone(connection) }] }, getConfig: async () => ({ models: [] }), documents: { read: async () => ({ hash: 'rules', content: '## rule: opaque/rule\nInspect failures only' }) } };
   const policy = await readAssessmentPolicy(store);
   assert.match(policy.rules, /Inspect failures only/);
   const input = { policy, candidate: { gate: { allowed: true, strength: 'inferred' } }, trigger: { actor: { id: 'ci', kind: 'machine' }, source: { sourceType: 'direct', conversationId: 'chat', connectionId: 'feishu', channel: 'feishu', appId: 'app', chatId: 'chat' }, content: 'Failure report' }, decision: { outcome: 'accept', ruleIds: ['opaque/rule'] } };

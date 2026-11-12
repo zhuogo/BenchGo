@@ -21,7 +21,7 @@ export function chatPublicationRecordOf(event, request) {
     || value?.requestId !== request.id || typeof value.text !== 'string'
     || !value.text.trim() || value.text.length > 16000) return null;
   const kind = request.source?.kind;
-  if (value.kind === 'final') return !['benchgo-ticket-reply', 'benchgo-ticket-state'].includes(kind) ? value : null;
+  if (value.kind === 'final') return kind !== 'benchgo-ticket-reply' ? value : null;
   return value.kind === 'ticket-reply' && kind === 'benchgo-ticket-reply'
     && ['approval', 'recovery', 'watchdog'].includes(request.source.replyKind) && !value.suppressed ? value : null;
 }

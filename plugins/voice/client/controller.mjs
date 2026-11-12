@@ -32,19 +32,19 @@ export function createVoiceController(ctx,deps={}) {
   const now=deps.now||Date.now,playCue=deps.playCallCue||playCallCue;
   const clock=deps.clock||deps.now||(()=>globalThis.performance?.now?.()??Date.now());
   let connectionCue=null,callConnected=false;
-  const state=observable({config:null,mode:'idle',phase:'idle',sessionId:null,error:'',transcript:'',transcriptId:null,turnPending:false,recoveryText:'',recoverySessionId:null,canRetry:false,level:0,playbackLevel:0,muted:false,readEnabled:false,conversationMode:'direct',replyText:'',conversationMessages:[],conversationRevision:0});
+  const state=observable({config:null,mode:'idle',phase:'idle',sessionId:null,error:'',transcript:'',transcriptId:null,turnPending:false,recoveryText:'',recoverySessionId:null,canRetry:false,level:0,playbackLevel:0,muted:false,readEnabled:false,dictationHold:false,conversationMode:'direct',conversationReason:'',conversationConfigurable:false,replyText:'',conversationMessages:[],conversationRevision:0});
   const deviceId=crypto.randomUUID(),played=new Set(),pendingText=new Map(),partialText=new Map(),awaitingFinal=new Set(),recoveries=new Map(),deliveries=new Set();
   const recoveryVersions=new Map();let loadSequence=0,configureSequence=0,configuring=0;
   const pendingPublications=new Map(),interruptedSpeech=new Set();let pendingPublicationCharacters=0;
-  let delivering=null,waitingForInteraction=false;
-  let callConversation=null,conversationPhase='listening',uncertainDelivery=null,readBeforeCall=false;
-  let speechMessageId=null;
+  let delivering=null,waitingForInteraction=false,dictation=null;
+  let callConversation=null,conversationPhase='listening',conversationInterrupted=false,uncertainDelivery=null,readBeforeCall=false;
+  let speechMessageId=null,replyActive=false;
   let opening=true,pendingOpening='',openingVersion=0;
   let continuationTimer=null,continuationVersion=0,pendingTurnId=null,speechEndedAt=null;
   let capture,player,queue,chunker,stopFeed,lease,heartbeat,binding,callReference,viewSessionId=null,generation=0,inputSequence=0,latestUtterance=0,inputActive=false,speaking=false,blocked=false,disposed=false,stopping=false,starting=null,ending=null;
   const patch=value=>{if(!disposed)state.patch(value);};
   const latency=new CallLatency({now:clock,onChange:metrics=>{patch({metrics});deps.onMetrics?.(metrics);}});
-  function interruptInput(){stopSpeech(true);settleInterruptedMessages();return callConversation?callConversation.interrupt():cancelAgent();}
+  function interruptInput(){stopSpeech(true);settleInterruptedMessages();if(!callConversation)return cancelAgent();conversationInterrupted=true;return callConversation.interrupt();}
   function recordMessage(role,id,text,fields={},append=false){
     const current=state.getSnapshot(),messages=[...current.conversationMessages],index=messages.findIndex(row=>row.id===id);
     const previous=index>=0?messages[index]:{id,role,text:'',time:now(),callId:lease?.callId};
@@ -78,7 +78,12 @@ export function createVoiceController(ctx,deps={}) {
   const fail=error=>patch({error:error?.message||String(error)});
   const callHeaders=()=>lease?{'x-voice-call-id':lease.callId}:{};
   const status=(sessionId=state.getSnapshot().sessionId)=>ctx.uiSession.sessionStatus.getSnapshot().get(sessionId);
-  const refreshPhase=()=>patch({phase:state.getSnapshot().phase==='starting'&&starting?'starting':inputActive?'listening':awaitingFinal.size?'transcribing':continuationTimer!==null?'listening':speaking?'speaking':callConversation?conversationPhase:status()?.pendingInteraction?'waiting':status()?.running?'thinking':state.getSnapshot().mode!=='idle'?'listening':'idle'});
+  const refreshPhase=()=>{
+    // Synthesis gaps and an empty render buffer do not finish the reply.
+    // Keep interruption protection independent of the visible speaking phase.
+    capture?.setPlaybackActive?.(!!connectionCue||speaking||!blocked&&(replyActive||played.size>0));
+    patch({phase:state.getSnapshot().phase==='starting'&&starting?'starting':inputActive?'listening':awaitingFinal.size?'transcribing':continuationTimer!==null?'listening':speaking?'speaking':callConversation?conversationPhase:status()?.pendingInteraction?'waiting':status()?.running?'thinking':state.getSnapshot().mode!=='idle'?'listening':'idle'});
+  };
   const statusOff=ctx.uiSession.sessionStatus.subscribe(()=>{
     refreshPhase();
     if(waitingForInteraction&&!status()?.pendingInteraction&&!status()?.running){
@@ -86,9 +91,9 @@ export function createVoiceController(ctx,deps={}) {
       void Promise.resolve().then(()=>deliver(gen,sequence)).catch(error=>{if(gen===generation)fail(error);});
     }
   });
-  function stopSpeech(interrupted=false) {if(interrupted&&(speaking||played.size))latency.interrupt();latency.clearSegments();if(interrupted&&speechMessageId){interruptedSpeech.add(speechMessageId);if(interruptedSpeech.size>256)interruptedSpeech.delete(interruptedSpeech.values().next().value);}clearChunkTimer();resetOpening();blocked=true;speaking=false;capture?.setPlaybackActive?.(!!connectionCue);patch({playbackLevel:0});chunker=makeChunker();queue?.cancel();played.clear();refreshPhase(); }
+  function stopSpeech(interrupted=false) {if(interrupted&&(speaking||played.size))latency.interrupt();latency.clearSegments();if(interrupted&&speechMessageId){interruptedSpeech.add(speechMessageId);if(interruptedSpeech.size>256)interruptedSpeech.delete(interruptedSpeech.values().next().value);}clearChunkTimer();resetOpening();blocked=true;speaking=false;replyActive=false;patch({playbackLevel:0});chunker=makeChunker();queue?.cancel();played.clear();refreshPhase(); }
   function ensurePlayer() {
-    if(!player){const current=makePlayer({now:clock,workletURL:url('api/voice/worklet'),onError:error=>{if(player===current)fail(error);},onPlaybackStart:metrics=>{if(player!==current)return;latency.playback(metrics||{},true);speaking=true;capture?.setPlaybackActive?.(true);refreshPhase();},onPlaybackIdle:()=>{if(player!==current)return;speaking=false;capture?.setPlaybackActive?.(!!connectionCue);patch({playbackLevel:0});refreshPhase();},onMetrics:metrics=>{if(player!==current)return;if(metrics.level!==undefined)patch({playbackLevel:metrics.level});if(metrics.type==='playback')latency.playback(metrics,metrics.event==='segment_started');},onPlayed:id=>{if(player!==current)return;played.delete(id);if(!played.size&&!queue?.items.length){speaking=false;capture?.setPlaybackActive?.(!!connectionCue);patch({playbackLevel:0});refreshPhase();}}});player=current;}
+    if(!player){const current=makePlayer({now:clock,workletURL:url('api/voice/worklet'),onError:error=>{if(player===current)fail(error);},onPlaybackStart:metrics=>{if(player!==current)return;latency.playback(metrics||{},true);speaking=true;refreshPhase();},onPlaybackIdle:()=>{if(player!==current)return;speaking=false;patch({playbackLevel:0});refreshPhase();},onMetrics:metrics=>{if(player!==current)return;if(metrics.level!==undefined)patch({playbackLevel:metrics.level});if(metrics.type==='playback')latency.playback(metrics,metrics.event==='segment_started');},onPlayed:id=>{if(player!==current)return;played.delete(id);if(!played.size&&!queue?.items.length){speaking=false;patch({playbackLevel:0});}refreshPhase();}});player=current;}
     return player.start();
   }
   function ensureQueue() {
@@ -109,7 +114,7 @@ export function createVoiceController(ctx,deps={}) {
   }
   function pushText(delta,event) {
     if(callConversation||state.getSnapshot().mode==='call'&&state.getSnapshot().phase==='starting'||interruptedSpeech.has(transcriptSourceId(event)))return;
-    if(state.getSnapshot().mode==='call'&&delta&&!blocked){const sourceId=transcriptSourceId(event);speechMessageId=sourceId||speechMessageId||crypto.randomUUID();recordMessage('assistant',speechMessageId,delta,{sourceId,messageId:speechMessageId,partial:true},true);patch({replyText:state.getSnapshot().replyText+delta});}
+    if(state.getSnapshot().mode==='call'&&delta&&!blocked){const sourceId=transcriptSourceId(event),append=!!speechMessageId&&speechMessageId===sourceId;speechMessageId=sourceId||speechMessageId||crypto.randomUUID();recordMessage('assistant',speechMessageId,delta,{sourceId,messageId:speechMessageId,partial:true},append);patch({replyText:state.getSnapshot().replyText+delta});}
     pushSpeech(delta);
   }
   const inputPending=()=>inputActive||awaitingFinal.size>0||continuationTimer!==null||state.getSnapshot().turnPending;
@@ -127,7 +132,13 @@ export function createVoiceController(ctx,deps={}) {
     if(chunker){for(const value of chunker.finish())enqueue(value);flushOpening();clearChunkTimer();}
   }
   function flushPublications(){
-    if(inputPending()||state.getSnapshot().mode!=='call'||state.getSnapshot().phase==='starting'||callConversation)return;
+    if(inputPending()||state.getSnapshot().mode!=='call'||state.getSnapshot().phase==='starting')return;
+    if(callConversation){
+      // A cough, noise or empty recognition interrupts without any utterance,
+      // so no turn follows to release the execution results it suspended.
+      if(conversationInterrupted&&!uncertainDelivery&&!pendingTranscript().trim()){conversationInterrupted=false;const current=callConversation;void current.resume().catch(error=>{if(callConversation===current)fail(error);});}
+      return;
+    }
     for(const [key,row]of pendingPublications){pendingPublications.delete(key);pendingPublicationCharacters-=row.text.length;pushPublication(row.text,row.event);}
   }
   function pushSpeech(delta) {
@@ -138,15 +149,21 @@ export function createVoiceController(ctx,deps={}) {
   function attach(sessionId) {
     if(binding?.sessionId===sessionId)return;const next=ctx.sessions.binding(sessionId);if(!next)throw Error('请先打开一个可用对话');if(binding)stopSpeech();stopFeed?.();binding=next;
     const source=binding.eventSource;
-    const feed=new AgentFeed({publicOnly:()=>state.getSnapshot().conversationMode==='native'||starting?.mode==='call'&&!lease,onText:pushText,onPublication:pushPublication,onRecord:(event,projected)=>{
+    const feed=new AgentFeed({publicOnly:()=>state.getSnapshot().conversationMode==='native'||starting?.mode==='call'&&!lease,streamPublicText:()=>state.getSnapshot().phase!=='starting'&&!(starting?.mode==='call'&&!lease),onText:pushText,onPublication:pushPublication,onRecord:(event,projected)=>{
       if(callConversation||state.getSnapshot().mode!=='call')return;
       const data=event.data||{},sourceId=transcriptSourceId(event),message=projected||transcriptMessage(event),role=message?.role||(event.type==='user/message'?'user':'assistant');
       const text=message?.text;
       if(role==='assistant'&&data.interrupted){const row=state.getSnapshot().conversationMessages.find(row=>row.sourceId===sourceId);if(row)recordMessage(role,row.id,row.text,{partial:false,interrupted:true});return;}
       if(text?.trim())recordMessage(role,sourceId,text,{sourceId,seq:event.seq,partial:false});
       if(!projected&&role==='assistant'&&text?.trim()&&blocked&&!interruptedSpeech.has(sourceId))pushPublication(text,event);
-    },onStart:()=>{if(callConversation)return;speechMessageId=null;patch({replyText:''});if(!inputActive&&!awaitingFinal.size&&!state.getSnapshot().turnPending)blocked=false;flushOpening();resetOpening();chunker=makeChunker();refreshPhase();},onReset:()=>{if(!callConversation)stopSpeech();},onEnd:event=>{
+      // A completed native text step is ready to speak even if tools keep the
+      // turn open. Flush its short trailing phrase instead of waiting for end.
+      if(state.getSnapshot().conversationMode==='native'&&event.type==='assistant/message'&&!blocked&&chunker){
+        for(const value of chunker.finish())enqueue(value);flushOpening();clearChunkTimer();chunker=makeChunker();
+      }
+    },onStart:()=>{if(callConversation)return;speechMessageId=null;patch({replyText:''});if(!inputActive&&!awaitingFinal.size&&!state.getSnapshot().turnPending)blocked=false;replyActive=!blocked;flushOpening();resetOpening();chunker=makeChunker();refreshPhase();},onReset:()=>{if(!callConversation)stopSpeech();},onEnd:event=>{
       if(callConversation)return;
+      replyActive=false;
       const reason=event?.data?.reason;
       if(!inputActive&&!awaitingFinal.size&&!state.getSnapshot().turnPending&&(state.getSnapshot().readEnabled||state.getSnapshot().mode==='call')&&['blocked','error','interrupted'].includes(reason?.kind)){
         stopSpeech();settleInterruptedMessages();
@@ -171,7 +188,7 @@ export function createVoiceController(ctx,deps={}) {
       if(uncertainDelivery){entries=uncertainDelivery.entries;text=uncertainDelivery.text;}
       const requestId=uncertainDelivery?.requestId||crypto.randomUUID();
       recordMessage('user',requestId,text,{requestId,transcriptIds:entries.map(([id])=>`voice-input:${gen}:${id}`),partial:false});
-      uncertainDelivery={requestId,text,entries};pendingTurnId=null;conversationPhase='thinking';patch({phase:'thinking',turnPending:false,error:''});
+      uncertainDelivery={requestId,text,entries};conversationInterrupted=false;pendingTurnId=null;conversationPhase='thinking';patch({phase:'thinking',turnPending:false,error:''});
 
       latency.submit();const result=await current.send(text,requestId);
       if(!result?.accepted)throw Error('语音交接未确认，请重试核对');
@@ -191,10 +208,12 @@ export function createVoiceController(ctx,deps={}) {
     }catch(error){if(gen===generation&&sequence===inputSequence&&!inputActive&&!awaitingFinal.size&&continuationTimer===null){patch({turnPending:false});refreshPhase();}throw error;}
     finally{deliveries.delete(claim);if(delivering===claim)delivering=null;if(gen===generation){const text=pendingTranscript();recover(deliverySession,text);patch({canRetry:!!text&&state.getSnapshot().mode==='call'&&!inputActive&&!awaitingFinal.size&&continuationTimer===null});flushPublications();}}
   }
-  async function begin({sessionId,inputActions},mode) {
+  async function begin({sessionId,inputActions,hold=false},mode) {
     if(disposed)throw Error('语音插件已停用');if(starting)throw Error('语音正在启动');if(state.getSnapshot().mode==='call')throw Error('已有通话正在进行，请先结束当前通话');if(stopping)throw Error('正在释放上一段语音，请稍后重试');
     if(recoveries.has(sessionId)&&state.getSnapshot().mode==='idle'){api.selectSession(sessionId);api.recoverToDraft(inputActions);}
     const opening=new AbortController(),attempt={mode,sessionId,opening};starting=attempt;let gen,createdCapture;
+    // Held dictation buffers its text until release decides: send it, or keep dictating into the draft.
+    const session=mode==='dictation'?{sessionId,held:!!hold,text:'',keep:null}:null;if(session){dictation=session;attempt.dictation=session;}
     try{
     if(ending)await ending;opening.signal.throwIfAborted();if(capture)await endMedia(attempt);opening.signal.throwIfAborted();gen=++generation;
     let config=state.getSnapshot().config||await api.load();if(gen!==generation||disposed)return;
@@ -208,7 +227,7 @@ export function createVoiceController(ctx,deps={}) {
       const reference=ctx.sessions.retain(sessionId,{source:'controllerOperation',signal:opening.signal});callReference=reference;
       await reference.ready;if(gen!==generation||disposed||opening.signal.aborted)return;
     }
-    attach(sessionId);if(mode==='call'){latency.reset();patch({metrics:latency.snapshot()});}speechEndedAt=null;patch({mode,sessionId,phase:'starting',error:'',transcript:'',transcriptId:null,turnPending:false});
+    attach(sessionId);if(mode==='call'){latency.reset();patch({metrics:latency.snapshot()});}speechEndedAt=null;patch({mode,sessionId,phase:'starting',error:'',transcript:'',transcriptId:null,turnPending:false,dictationHold:!!session?.held});
     patch({recoveryText:recoveries.get(sessionId)||'',recoverySessionId:recoveries.has(sessionId)?sessionId:null,canRetry:false,muted:false,playbackLevel:0});clearContinuation();pendingTurnId=null;pendingText.clear();partialText.clear();awaitingFinal.clear();latestUtterance=0;inputActive=false;inputSequence++;
     if(mode==='call'){
       readBeforeCall=state.getSnapshot().readEnabled;
@@ -218,17 +237,17 @@ export function createVoiceController(ctx,deps={}) {
       if(gen!==generation||disposed){await requestJson('call.end',{sessionId,deviceId,callId:result.call.callId});return;}lease={...result.call,sessionId};if(audioResult.status==='rejected')throw audioResult.reason;const currentLease=lease;
       const conversationMode=result.conversation?.mode||'direct';
       if(!['direct','native','enhanced'].includes(conversationMode))throw Error('通话接入模式不可用');
-      patch({conversationMode,replyText:''});uncertainDelivery=null;conversationPhase='listening';
+      patch({conversationMode,conversationReason:typeof result.conversation?.reason==='string'?result.conversation.reason:'',conversationConfigurable:result.conversation?.configurable===true,replyText:''});uncertainDelivery=null;conversationInterrupted=false;conversationPhase='listening';
       if(conversationMode==='enhanced'){
         const current=makeConversation({request,endpoint:url('api/voice/conversation'),identity:{sessionId,deviceId,callId:lease.callId},
           onEvent:event=>{
             if(gen!==generation||callConversation!==current)return;
-            if(event.type==='start'){flushOpening();resetOpening();blocked=inputActive||awaitingFinal.size>0||state.getSnapshot().turnPending;chunker=makeChunker();conversationPhase='thinking';patch({replyText:''});}
+            if(event.type==='start'){flushOpening();resetOpening();blocked=inputActive||awaitingFinal.size>0||state.getSnapshot().turnPending;replyActive=!blocked;chunker=makeChunker();conversationPhase='thinking';patch({replyText:''});refreshPhase();}
             if(event.type==='text'){patch({replyText:(state.getSnapshot().replyText+event.text).slice(-4000)});recordMessage('assistant',event.messageId,event.text,{messageId:event.messageId,requestId:event.requestId,partial:true},true);pushSpeech(event.text);}
-            if(event.type==='end'){const row=state.getSnapshot().conversationMessages.find(row=>row.id===event.messageId);if(row)recordMessage('assistant',event.messageId,row.text,{partial:false});if(!blocked){ensureQueue();for(const text of (chunker||=makeChunker()).finish())enqueue(text);flushOpening();}clearChunkTimer();conversationPhase='listening';refreshPhase();}
+            if(event.type==='end'){replyActive=false;const row=state.getSnapshot().conversationMessages.find(row=>row.id===event.messageId);if(row)recordMessage('assistant',event.messageId,row.text,{partial:false});if(!blocked){ensureQueue();for(const text of (chunker||=makeChunker()).finish())enqueue(text);flushOpening();}clearChunkTimer();conversationPhase='listening';refreshPhase();}
             if(event.type==='state'){if(['thinking','listening','waiting'].includes(event.phase))conversationPhase=event.phase;refreshPhase();}
             if(event.type==='config'||event.type==='settings'){if(event.config)void applyConfig(event.config).catch(fail);}
-            if(event.type==='error'){fail(Error(event.error||'语音交互失败'));conversationPhase='listening';refreshPhase();}
+            if(event.type==='error'){replyActive=false;fail(Error(event.error||'语音交互失败'));conversationPhase='listening';refreshPhase();}
           },onError:error=>{if(gen===generation){fail(error);void endMedia();}}});
         callConversation=current;await current.start();
         if(gen!==generation||disposed){await current.dispose();return;}
@@ -236,12 +255,14 @@ export function createVoiceController(ctx,deps={}) {
       heartbeat=schedule(()=>{void requestJson('call.heartbeat',{sessionId,deviceId,callId:currentLease.callId}).catch(error=>{if(lease===currentLease){fail(error);void endMedia();}});},15000);
     }
     patch({mode,sessionId,phase:'starting',error:'',transcript:''});blocked=false;
-    let span=mode==='dictation'?inputActions.captureInsertion():null,inserted='',finalText='',draftConflict=false;
+    let span=session&&!session.held?inputActions.captureInsertion():null,inserted='',finalText='',draftConflict=false;
     const writeDraft=text=>{
-      if(gen!==generation||text===inserted||draftConflict)return;
+      if(session)session.text=text;
+      if(gen!==generation||session?.held||text===inserted||draftConflict)return;
       if(!inputActions.insertText(text,span)){draftConflict=true;patch({error:'草稿已被修改，结束转录后会保留识别文字到草稿',transcript:text});recover(sessionId,text);return;}
       inserted=text;const next=inputActions.captureInsertion();span={start:span.start,end:span.start+text.length,draftRev:next.draftRev};inputActions.persistDraft();
     };
+    if(session)session.keep=actions=>{if(gen!==generation)return;inputActions=actions||inputActions;span=inputActions.captureInsertion();writeDraft(session.text);};
     const asrProtocol=config.asr.protocol;
     const realtime=asrProtocol==='openai-websocket'?new RealtimeRecognizer({request,endpoint:url,headers:callHeaders,now:clock,openSocket:path=>ctx.connection.openWebSocket(path),onError:error=>{if(gen===generation){fail(error);void endMedia();}}}):null;
     if(realtime){createdCapture={dispose:()=>realtime.close()};capture=createdCapture;await realtime.start();if(gen!==generation){await realtime.close();return;}}
@@ -271,16 +292,16 @@ export function createVoiceController(ctx,deps={}) {
       if(mode==='dictation'){finalText=joinTranscript(finalText,text);patch({transcript:finalText});if(draftConflict)recover(sessionId,finalText);writeDraft(finalText);}
       else {pendingText.set(id,text);patch({transcript:visibleTranscript()});recover(sessionId,pendingTranscript());if(!inputActive&&!awaitingFinal.size)continueTurn(gen,inputSequence);else refreshPhase();}
     },
-    onError:error=>{if(gen===generation){if(mode==='call'){const text=inputEntries().map(([,text])=>text).filter(Boolean).join('\n');if(text?.trim())recover(sessionId,text);}fail(error);void endMedia();}}});
+    onError:error=>{if(gen===generation){if(mode==='call'){const text=inputEntries().map(([,text])=>text).filter(Boolean).join('\n');if(text?.trim())recover(sessionId,text);}else if(session?.held&&session.text.trim())recover(sessionId,session.text);fail(error);void endMedia();}}});
     capture=createdCapture;await createdCapture.start();if(gen!==generation||disposed){await createdCapture.dispose();return;}
     if(mode==='call'){
       callConnected=true;
       try{
         const cue=playCue('connected',{context:player?.context});
-        if(cue){connectionCue=cue;capture.setPlaybackActive?.(true);const finished=()=>{if(connectionCue!==cue)return;connectionCue=null;if(gen===generation&&capture===createdCapture)capture.setPlaybackActive?.(speaking);};void Promise.resolve(cue.finished).then(finished,finished);}
+        if(cue){connectionCue=cue;refreshPhase();const finished=()=>{if(connectionCue!==cue)return;connectionCue=null;if(gen===generation&&capture===createdCapture)refreshPhase();};void Promise.resolve(cue.finished).then(finished,finished);}
       }catch{}
     }
-    patch({phase:'listening'});blocked=false;flushPublications();
+    patch({phase:'listening'});blocked=false;flushPublications();refreshPhase();
     }catch(error){if(gen===generation){await endMedia();throw error;}await createdCapture?.dispose();if(error?.name!=='AbortError'&&!opening.signal.aborted)throw error;}finally{if(starting===attempt)starting=null;}
   }
   async function applyConfig(config){
@@ -290,6 +311,17 @@ export function createVoiceController(ctx,deps={}) {
     if(snapshot.mode!=='idle'&&(changed('asr')||snapshot.mode==='call'&&(snapshot.conversationMode!=='native'&&changed('conversation')||!config.call||callStreamingReason(config))||snapshot.mode==='dictation'&&!config.dictation)){await endMedia();return;}
     if(ttsRoute(previous.tts)!==ttsRoute(config.tts)||snapshot.mode!=='call'&&previous.readAloud&&!config.readAloud){stopSpeech();if(!config.readAloud||!config.tts?.configured)patch({readEnabled:false});}
     if(snapshot.mode==='call'&&!config.tts?.configured)await endMedia();
+  }
+  // Ends dictation after its final recognition. Returns the buffered text of a held session; otherwise the draft already has it.
+  async function finishDictation(){
+    const session=dictation,snapshot=state.getSnapshot();
+    if(snapshot.mode!=='dictation'){if(starting?.mode==='dictation')await endMedia();return null;}
+    // Nothing was captured before the microphone is ready, and a half-started capture cannot be flushed.
+    if(!capture?.stop||snapshot.phase==='starting'){await endMedia();return null;}
+    const current=capture;stopping=true;
+    try{await current.stop({flush:true});}finally{if(capture===current){capture=null;patch({mode:'idle',phase:'idle',dictationHold:false});}stopping=false;}
+    if(dictation===session)dictation=null;
+    return session?.held&&session.text.trim()?{sessionId:session.sessionId,text:session.text}:null;
   }
   const api={state,
     selectSession(sessionId){viewSessionId=sessionId;const snapshot=state.getSnapshot();if(snapshot.mode==='call'||starting?.mode==='call'&&!starting.opening.signal.aborted||snapshot.sessionId===sessionId)return;if(snapshot.mode!=='idle'||snapshot.readEnabled)void endMedia();++generation;patch({sessionId,transcript:'',transcriptId:null,error:'',recoveryText:recoveries.get(sessionId)||'',recoverySessionId:recoveries.has(sessionId)?sessionId:null,canRetry:false,conversationMessages:[],conversationRevision:0});},
@@ -315,16 +347,29 @@ export function createVoiceController(ctx,deps={}) {
       const gen=generation;attach(sessionId);try{await ensurePlayer();if(gen!==generation||disposed)return;ensureQueue();resetOpening();chunker=makeChunker();blocked=false;patch({readEnabled:true,sessionId,error:''});}catch(error){await endMedia();throw error;}
     },
     startDictation:args=>begin(args,'dictation'),
-    async stopDictation(){if(state.getSnapshot().mode!=='dictation')return;if(!capture){await endMedia();return;}const current=capture;stopping=true;try{await current.stop({flush:true});}finally{if(capture===current){capture=null;patch({mode:'idle',phase:'idle'});}stopping=false;}},
+    keepDictation(inputActions){const session=dictation;if(!session?.held)return;session.held=false;patch({dictationHold:false});session.keep?.(inputActions);},
+    async stopDictation(){const held=await finishDictation();if(held?.text)recover(held.sessionId,held.text);},
+    async sendDictation(){
+      const held=await finishDictation();if(!held?.text)return {sent:false};
+      const {sessionId,text}=held;
+      // Spoken words are never dropped: whatever cannot be sent returns to the draft.
+      if(status(sessionId)?.pendingInteraction){recover(sessionId,text);throw Error('请先在对话中完成授权或交互；语音文字已保留到草稿');}
+      const scope=ctx.sessions.scope(sessionId);if(!scope){recover(sessionId,text);throw Error('对话已经关闭，语音文字已保留');}
+      try{await scope.get('conversation').send(text);}catch{recover(sessionId,text);throw Error('发送失败，语音文字已保留到草稿');}
+      return {sent:true};
+    },
     startCall:args=>begin(args,'call'),
     hangup:()=>endMedia(undefined,true),
     async dispose(){disposed=true;readBeforeCall=false;loadSequence++;environment?.removeEventListener('focus',reload);globalThis.document?.removeEventListener?.('visibilitychange',visible);unschedule(chunkTimer);await endMedia();statusOff();environment?.removeEventListener('pagehide',leave);environment?.removeEventListener('offline',leave);}
   };
   function endMedia(preserveStart,userInitiated=false){
-    if(starting!==preserveStart)starting?.opening.abort();if(ending)return ending;
+    if(starting!==preserveStart)starting?.opening.abort();
+    // Words buffered by a held dictation survive any teardown as a recoverable draft.
+    if(dictation&&dictation!==preserveStart?.dictation){const lost=dictation;dictation=null;if(lost.held&&lost.text.trim())recover(lost.sessionId,lost.text);}
+    if(ending)return ending;
     const notifyEnd=userInitiated&&callConnected;callConnected=false;const oldCue=connectionCue;connectionCue=null;oldCue?.cancel();
-    const endGeneration=++generation;clearContinuation();pendingTurnId=null;inputSequence++;inputActive=false;waitingForInteraction=false;unschedule(heartbeat);const snapshot=state.getSnapshot(),oldCapture=capture,oldLease=lease,oldQueue=queue,oldPlayer=player,oldConversation=callConversation,oldReference=callReference,restoreRead=readBeforeCall;capture=null;lease=null;callConversation=null;callReference=null;uncertainDelivery=null;readBeforeCall=false;
-    stopSpeech();settleInterruptedMessages();queue=null;player=null;played.clear();pendingText.clear();partialText.clear();awaitingFinal.clear();pendingPublications.clear();pendingPublicationCharacters=0;interruptedSpeech.clear();stopFeed?.();stopFeed=null;binding=null;patch({mode:'idle',phase:'idle',level:0,playbackLevel:0,muted:false,readEnabled:false,turnPending:false,canRetry:false,conversationMode:'direct',replyText:''});
+    const endGeneration=++generation;clearContinuation();pendingTurnId=null;inputSequence++;inputActive=false;waitingForInteraction=false;unschedule(heartbeat);const snapshot=state.getSnapshot(),oldCapture=capture,oldLease=lease,oldQueue=queue,oldPlayer=player,oldConversation=callConversation,oldReference=callReference,restoreRead=readBeforeCall;capture=null;lease=null;callConversation=null;callReference=null;uncertainDelivery=null;conversationInterrupted=false;readBeforeCall=false;
+    stopSpeech();settleInterruptedMessages();queue=null;player=null;played.clear();pendingText.clear();partialText.clear();awaitingFinal.clear();pendingPublications.clear();pendingPublicationCharacters=0;interruptedSpeech.clear();stopFeed?.();stopFeed=null;binding=null;patch({mode:'idle',phase:'idle',level:0,playbackLevel:0,muted:false,readEnabled:false,dictationHold:false,turnPending:false,canRetry:false,conversationMode:'direct',conversationReason:'',conversationConfigurable:false,replyText:''});
     const run=(async()=>{
       try{
         await Promise.allSettled([oldCapture?.dispose(),oldQueue?.dispose(),oldPlayer?.dispose(),oldConversation?.dispose()]);

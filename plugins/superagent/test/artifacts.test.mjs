@@ -9,7 +9,7 @@ import { join } from 'node:path';
 const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/compaction/compaction-basic/package.json', import.meta.url));
 const compactionUrl = pathToFileURL(requireHarness.resolve('@deepseek-ai/dsh-compaction-basic')).href;
 const hook = registerHooks({ resolve(specifier, context, next) { return specifier === '@deepseek-ai/dsh-compaction-basic' ? { url: compactionUrl, shortCircuit: true } : next(specifier, context); } });
-const { createAssistantArtifacts } = await import('../src/service.mjs');
+const { createAssistantArtifacts } = await import('../src/artifacts.mjs');
 hook.deregister();
 
 async function fixture(t) {

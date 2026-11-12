@@ -49,6 +49,17 @@ export function sidebarSessionUpdatedAt(session){
   const voice=session?.projectionValues?.benchgoVoice;
   return voice?.used===true?Math.max(Number(session.updatedAt)||Date.parse(session.updatedAt)||0,Number(voice.lastActivityAt)||0):session?.updatedAt;
 }
+/** Resolve the newest adopted native session once per catalog, not once per row. */
+export function latestSidebarNativeSessions(sessions){
+  const owners=new Map();
+  for(const session of sessions){
+    const owner=session.ownerSessionId;
+    if(!owner||(session.parentId&&!session.harnessAdopted))continue;
+    const previous=owners.get(owner);
+    if(!previous||Number(session.updatedAt)-Number(previous.updatedAt)>0)owners.set(owner,session);
+  }
+  return owners;
+}
 /** Documents discovery is optional when the Profile recovery service can create Recent. */
 export async function ensureSidebarWorkspace(host,recover){
   let initial;

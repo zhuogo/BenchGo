@@ -90,7 +90,7 @@ test('scoped host tool combines actual Worker, current mandate, official card an
   const reminders = [], warnings = [];
   const mandate = { policyVersion: 'p1', actorId: 'desktop-owner', admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval', source: { channel: 'desktop', sessionId: 'router', messageId: 'instruction' } };
   const database = {
-    getTicket: () => ({ id: 'ticket', status, executionControl, mandate }),
+    getTicket: () => ({ id: 'ticket', status, executionControl, mandate }), appliedTicketSnapshot: () => ({}),
     getAssignment: () => ({ state: 'claimed', owner: 'worker', fence: 1 }),
     runs: () => [{ id: 'run', owner: 'worker', fence: 1, sessionId: 'session', state: 'running' }],
     renewAssignment: (_id, input) => ({ allowed: input.validateMandate(mandate) }),

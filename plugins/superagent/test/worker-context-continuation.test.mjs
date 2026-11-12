@@ -6,7 +6,8 @@ function fixture(ids = []) {
   let pending = ids.map(id => ({ id }));
   return {
     assignment: { ticketId: 'ticket' },
-    database: { pendingSubscriptionMessages(ticketId) { assert.equal(ticketId, 'ticket'); return pending; } },
+    database: { pendingSubscriptionMessages(ticketId) { assert.equal(ticketId, 'ticket'); return pending; },
+      pendingTicketInputs: () => [], getTicket: () => ({ id: 'ticket', status: 'running', executionControl: {} }) },
     set(ids) { pending = ids.map(id => ({ id })); },
   };
 }

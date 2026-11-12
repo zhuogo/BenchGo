@@ -239,14 +239,6 @@ export function createHistorySearch({ ctx, store }) {
       check(signal);
       return { sessions, nextCursor: index + limit < ordered.length ? next(binding, { index: index + limit }) : null };
     },
-    async readLegacyReference(reference, input = {}, options = {}) {
-      const seq = reference?.seq ?? reference?.eventSeq;
-      if (typeof reference?.sessionId !== 'string' || !Number.isSafeInteger(seq)) throw fail('LEDGER_NOT_FOUND', '旧历史引用缺少可核验来源');
-      const textLimit = Math.min(integer(input.limit, 16000, 100000, 1), 16000);
-      const page = await this.history({ sessionId: reference.sessionId, seq, textLimit, offset: input.cursor }, options);
-      const row = page.events[0];
-      return { ...row, content: row.text, cursor: row.offset, nextCursor: row.nextOffset };
-    },
     dispose() { cache.clear(); },
   };
 }

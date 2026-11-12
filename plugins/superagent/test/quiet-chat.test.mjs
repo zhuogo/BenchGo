@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { quietChatRows } from '../client/quiet-chat.mjs';
+import { quietChatRows, historyReconcileSeq } from '../client/quiet-chat.mjs';
 import { projectReplyStream, projectReplyRows, conversationActivity } from '../client/reply-stream.mjs';
 import { continuationRecovery, ticketSnapshot } from '../client/ticket-state.mjs';
 import { PartialArguments } from '@deepseek-ai/dsh-util-values';
@@ -164,12 +164,25 @@ test('ticket acknowledgements require Router provenance and durable request iden
   assert.equal(quietChatRows({ notifications: [ack] })[0].text, ack.text);
 });
 
+test('history reconciles on nodes that change durable history, not on every settled step', () => {
+  const user = { kind: 'user', seq: 3 }, step = { kind: 'assistant', seq: 4 }, tool = { kind: 'tool-result', name: 'read', seq: 5 };
+  const published = { kind: 'tool-result', name: 'assistant_reply', seq: 6 }, notice = { kind: 'context', seq: 7 };
+  const seq = nodes => historyReconcileSeq({ legacy: { nodes } });
+  assert.equal(historyReconcileSeq(undefined), undefined);
+  assert.equal(seq([]), undefined);
+  assert.equal(seq([user]), 3);
+  assert.equal(seq([user, step, tool, { ...step, seq: 8 }, { ...tool, seq: 9 }]), 3, 'steps and ordinary tool results keep the previous reconcile point');
+  assert.equal(seq([user, step, tool, published]), 6, 'an executed publication reconciles immediately');
+  assert.equal(seq([user, step, notice, { ...tool, seq: 8 }]), 7);
+  assert.equal(seq([step, tool]), undefined);
+});
+
 test('option accompanies its body and uses the validated endpoint, never approval or raw send', async () => {
   const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
   const code = transformSync(readFileSync(new URL('../client/quiet-chat.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
-  const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null && x !== false) }), useState: value => [value, () => {}], useRef: () => ({ current: null }), useEffect() {}, useSyncExternalStore: (_subscribe, snapshot) => snapshot() };
+  const react = { createElement: (type, props, ...children) => typeof type === 'function' ? type(props || {}) : ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null && x !== false) }), memo: component => component, useCallback: callback => callback, useState: value => [value, () => {}], useRef: () => ({ current: null }), useEffect() {}, useSyncExternalStore: (_subscribe, snapshot) => snapshot() };
   const module = { exports: {} }, calls = [];
-  runInNewContext(code, { module, exports: module.exports, require: id => id.endsWith('approval-review.jsx') ? { useApprovalIndex: () => ({ entries: [], current: { current: [] } }), InlineApproval: 'InlineApproval' } : id.endsWith('approval-flow.mjs') ? { approvalReminderNavigation: { subscribe() {}, getSnapshot: () => null } } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('ticket-state.mjs') ? { continuationRecovery, ticketSnapshot } : id.endsWith('ticket-attention.jsx') ? { TicketAttention: 'TicketAttention' } : id.endsWith('message-actions.jsx') ? { MessageActions: 'MessageActions' } : id === 'react' ? react : id.endsWith('use-chat-scroll.jsx') ? { useChatScroll: () => ({ root: null, host: null }) } : id.endsWith('quiet-chat.mjs') ? { quietChatRows } : id.endsWith('reply-stream.mjs') ? { projectReplyStream, projectReplyRows, conversationActivity } : id.endsWith('conversation-activity.jsx') ? { ConversationActivity: 'ConversationActivity' } : {} });
+  runInNewContext(code, { module, exports: module.exports, require: id => id.endsWith('approval-review.jsx') ? { useApprovalIndex: () => ({ entries: [], current: { current: [] } }), InlineApproval: 'InlineApproval' } : id.endsWith('approval-flow.mjs') ? { approvalReminderNavigation: { subscribe() {}, getSnapshot: () => null } } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('ticket-state.mjs') ? { continuationRecovery, ticketSnapshot } : id.endsWith('ticket-attention.jsx') ? { TicketAttention: 'TicketAttention' } : id.endsWith('message-actions.jsx') ? { MessageActions: 'MessageActions' } : id === 'react' ? react : id.endsWith('use-chat-scroll.jsx') ? { useChatScroll: () => ({ root: null, host: null }) } : id.endsWith('quiet-chat.mjs') ? { quietChatRows, historyReconcileSeq } : id.endsWith('reply-stream.mjs') ? { projectReplyStream, projectReplyRows, conversationActivity } : id.endsWith('conversation-activity.jsx') ? { ConversationActivity: 'ConversationActivity' } : {} });
   const tree = module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side', api: async (...args) => calls.push(args), history: { notifications: [{ eventId: 'e', type: 'ticket.result', origin: 'router', publication: { action: 'ask' }, threadId: 'side', text: '方案已准备好', options: ['就这么办'] }] } } });
   const walk = node => node && typeof node === 'object' ? [node, ...(node.children || []).flatMap(walk)] : [];
   const nodes = walk(tree);

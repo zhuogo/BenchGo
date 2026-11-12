@@ -174,6 +174,7 @@ html[data-platform=darwin] .voice-stage-header{padding-top:40px}
 .voice-stage-caption{text-align:center;flex:none}
 .voice-stage-caption h2{margin:0;font-size:23px;font-weight:500;line-height:1.5;letter-spacing:.01em;transition:color 200ms}
 .voice-stage-caption>p{margin:9px 0 0;color:var(--voice-muted);font-size:12px;line-height:1.7;max-width:440px;overflow-wrap:anywhere}
+.voice-stage-caption .voice-text-button{color:var(--voice-blue)}
 .voice-stage-subtitle{display:flex;align-items:center;justify-content:center;min-height:90px;width:min(100%,580px);padding:18px 0 12px;text-align:center;font-size:15px;line-height:1.85;color:var(--voice-text)}
 .voice-stage-subtitle p{margin:0;max-height:112px;overflow:auto;scrollbar-width:thin;white-space:pre-wrap;overflow-wrap:anywhere;animation:voice-panel-enter 200ms ease both}
 .voice-stage-controls{position:relative;z-index:3;display:flex;align-items:center;justify-content:center;gap:28px;margin:0;padding-top:12px;flex:none}

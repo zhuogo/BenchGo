@@ -36,6 +36,17 @@ function deliverCommitted(database) {
   }
 }
 
+// Only a bound, normally completed execution closes its Ticket.
+function completeTicket(database, ticketId, summary, uniqueKey) {
+  const queued = database.assignments(ticketId)[0] || database.createAssignment(ticketId, { text: 'original work' });
+  const [assignment] = database.claimAssignments('original-worker', { assignmentId: queued.id, validateMandate: () => true });
+  const ownership = { owner: assignment.owner, fence: assignment.fence };
+  const run = database.prepareRun(assignment.id, { ...ownership, sessionId: `session:${uniqueKey}`, directory: '/task' });
+  database.updateRun(run.id, { ...ownership, state: 'submitted' });
+  return database.commitResult(ticketId, { assignment, uniqueKey, instructionRevision: 1,
+    result: { summary, runId: run.id, sessionId: run.sessionId, completion: { kind: 'completed' } } });
+}
+
 function hostRevision(f, requestExpansion) {
   const events = [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'scope-change', source: { kind: 'user' }, content: [{ type: 'text', text: '将工单移到选定项目' }] } }];
   const ownerAgent = { id: 'owner', status: 'running', session: { header: {}, snapshotEvents: () => events } };
@@ -73,7 +84,7 @@ test('requirements change preserves Assignment and source Mandate with durable C
 
 test('completed work creates an idempotent linked adjustment and never changes its prior result', async t => {
   const f = await fixture(t);
-  f.db.commitResult(f.ticket.id, { result: { summary: 'old result', outcome: 'completed' }, uniqueKey: 'old-result', instructionRevision: 1 });
+  completeTicket(f.db, f.ticket.id, 'old result', 'old-result');
   deliverCommitted(f.db);
   const before = f.db.getTicket(f.ticket.id), results = f.db.results(f.ticket.id);
   assert.throws(() => f.db.changeTicket(f.ticket.id, { ...f.input, operation: 'adjustment', validateMandate: () => false }), { code: 'MANDATE_REVOKED' });
@@ -287,25 +298,6 @@ test('a source message shared by context and revision has one durable input rece
   assert.equal(f.db.recordTicketInput({ ticketId: f.ticket.id, triggerId: f.input.triggerId, kind: 'context', idempotencyKey: 'another-entry' }).id, context.id);
 });
 
-test('an old subscription receipt migrates into the one input ledger without replaying its message', async t => {
-  const f = await fixture(t);
-  f.db.subscribe(f.ticket.id, f.ticket.threadId, { beforeTriggerId: f.input.triggerId });
-  f.db.deliverSubscribedMessage(f.input.triggerId, { ticketId: f.ticket.id });
-  const [assignment] = f.db.claimAssignments('worker', { validateMandate: () => true });
-  const ownership = { owner: assignment.owner, fence: assignment.fence };
-  const run = f.db.prepareRun(assignment.id, { ...ownership, sessionId: 'migration-session', directory: f.directory });
-  f.db.acknowledgeSubscriptionMessage(assignment.id, { ...ownership, triggerId: f.input.triggerId, sessionId: run.sessionId, messageId: 'original-receipt' });
-  const path = f.db.path; f.db.close();
-  const legacy = new DatabaseSync(path);
-  legacy.exec('DROP TABLE sa_ticket_inputs; DROP TABLE sa_ticket_boundaries'); legacy.close();
-  f.reopen();
-  const receipt = f.db.ticketInputs(f.ticket.id)[0];
-  assert.equal(receipt.state, 'applied'); assert.equal(receipt.application.runId, run.id);
-  assert.equal(receipt.application.messageId, 'original-receipt');
-  assert.equal(receipt.application.migrated, true);
-  assert.deepEqual(f.db.pendingSubscriptionMessages(f.ticket.id), []);
-});
-
 test('live summary follows current goal, actual assignment progress and blocker without reusing old revision results', async t => {
   const f = await fixture(t);
   assert.equal(f.db.getTicket(f.ticket.id).liveSummary.progress, '排队执行');
@@ -345,14 +337,14 @@ test('host revision preserves its run model and rejects per-Ticket model fields 
 
 test('a linked adjustment Ticket saves new work and delivers its Router reply while the original stays historical', async t => {
   const f = await fixture(t);
-  const store = { orchestration: f.db, paths: { workspace: f.directory }, getConfig: async () => ({ models: [] }), connections: { read: () => ({ revision: 0, config: { enabled: false } }) }, documents: { read: async () => ({ hash: 'rules', content: '' }) } };
+  const store = { orchestration: f.db, paths: { workspace: f.directory }, getConfig: async () => ({ models: [] }), connections: { read: () => ({ revision: 0, config: { enabled: false } }), list: () => [{ channel: 'feishu', revision: 0, config: { enabled: false } }] }, documents: { read: async () => ({ hash: 'rules', content: '' }) } };
   const policy = await readAssessmentPolicy(store);
-  f.db.commitResult(f.ticket.id, { result: { summary: 'historical', outcome: 'completed' }, uniqueKey: 'historical', instructionRevision: 1 });
+  completeTicket(f.db, f.ticket.id, 'historical', 'historical');
   deliverCommitted(f.db);
   const adjustment = f.db.changeTicket(f.ticket.id, { ...f.input, operation: 'adjustment', mandate: { ...f.input.mandate, policyVersion: policy.desktopVersion }, validateMandate: m => m.policyVersion === policy.desktopVersion });
   let executions = 0, freshDelivery = false;
   const runtime = createOrchestrationRuntime({ ctx: {}, store,
-    execute: async (assignment, { ticket }) => { executions++; assert.equal(assignment.instructionRevision, 1); assert.equal(ticket.adjustmentOfTicketId, f.ticket.id); assert.equal(ticket.mandate.policyVersion, policy.desktopVersion); return { summary: 'fresh', evidenceRefs: [], selfCheck: { summary: 'new checks completed', instructionRevision: 1 } }; },
+    execute: async (assignment, { ticket }) => { executions++; assert.equal(assignment.instructionRevision, 1); assert.equal(ticket.adjustmentOfTicketId, f.ticket.id); assert.equal(ticket.mandate.policyVersion, policy.desktopVersion); return { summary: 'fresh', evidenceRefs: [], completion: { kind: 'completed' } }; },
     prepareTicketReply: async delivery => {
       assert.equal(delivery.payload.text, undefined);
       assert.equal(delivery.payload.publication, undefined);
@@ -383,7 +375,7 @@ test('Feishu owner adjusts a completed subscribed Ticket through fresh Eval and 
   t.after(() => runner.stop());
   await runner.tick();
   targetTicket = db.listTickets({ threadId: original.trigger.threadId })[0];
-  db.commitResult(targetTicket.id, { uniqueKey: 'feishu-old', instructionRevision: 1, result: { summary: 'finished', outcome: 'completed' } });
+  completeTicket(db, targetTicket.id, 'finished', 'feishu-old');
   deliverCommitted(db);
   const reopened = ingestAssistantEvent(db, event('reopen-message', '重新执行刚才的工单'), sourcePolicy);
   assert.equal(reopened.requiresEval, true);
@@ -401,7 +393,7 @@ test('Feishu owner adjusts a completed subscribed Ticket through fresh Eval and 
   await runner.tick();
   assert.equal(repeated.duplicate, true);
   assert.equal(repeated.delivery, null);
-  assert.equal(db.assignments(targetTicket.id).length, 0);
+  assert.deepEqual(db.assignments(targetTicket.id).map(row => row.state), ['completed'], 'the original execution is never requeued');
   assert.equal(db.assignments(current.id).length, 1);
   assert.equal(db.ticketRevisions(targetTicket.id).length, 0);
   assert.equal(db.ticketRevisions(current.id).length, 1);
@@ -412,8 +404,7 @@ for (const verified of [true, false]) test(`an explicit failure revision resumes
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   const run = f.db.prepareRun(assignment.id, { ...ownership, sessionId: 'failure-original-session', directory: f.directory });
   f.db.updateRun(run.id, { ...ownership, state: 'submitted' });
-  const result = { runId: run.id, sessionId: run.sessionId, summary: '缺少目标资源，等待补充后继续。', outcome: 'failed',
-    failure: { attempted: '核对授权来源', cause: '目标资源不可用', resumeConditions: '补充目标资源后继续' },
+  const result = { runId: run.id, sessionId: run.sessionId, summary: '缺少目标资源，等待补充后继续。', outcome: 'failed', completion: { kind: 'completed' },
     ...(verified ? { checkpoint: { manifestHash: 'checkpoint' }, transcript: { hash: 'transcript', lastSeq: 1 } } : {}), executionEffects: { effectsVerified: true } };
   f.db.updateRun(run.id, { ...ownership, state: 'verifying', evidence: result });
   f.db.confirmExecutionStopped(assignment.id, ownership);

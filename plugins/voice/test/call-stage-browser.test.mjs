@@ -30,7 +30,7 @@ async function fixture() {
         if(options.before)return {items:[{id:'older',role:'user',text:'这是更早的一次通话。',callId:'old',requestId:'old'}],hasMore:false};
         return {items:['empty','live'].includes(scenario)?[]:scenario==='native'?[{...user,id:'durable-user',sourceId:'user:one'},{...assistant,sourceId:'assistant:1:0'}]:[{...user,id:'durable-user'},assistant],hasMore:scenario==='data',nextBefore:20};
       }};
-      function App(){const[open,setOpen]=useState(true),[muted,setMuted]=useState(false),[statePatch,setStatePatch]=useState(patch),returnFocus=useRef();window.patchCall=next=>setStatePatch(previous=>({...previous,...next}));return <div ref={returnFocus}><button id="restore" onClick={()=>setOpen(true)}>返回通话</button><CallStage state={{mode:'call',phase:'listening',conversationMode:scenario==='native'?'native':'enhanced',sessionId:'session',level:.35,muted,conversationMessages:scenario==='native'?[{...user,id:'live-user',sourceId:'user:one'},{...assistant,id:'live-reply',sourceId:'assistant:1:0',partial:true}]:scenario==='data'?[user,{...assistant,partial:true}]:[],...statePatch}} sessionId="session" controller={controller} returnFocusRef={returnFocus} open={open} historyOnly={!['stage','live'].includes(scenario)} origin={{x:120,y:740}} pending={false} error={statePatch.error||''} onMute={()=>{setMuted(!muted);window.actions.push('mute')}} onMinimize={()=>{setOpen(false);window.actions.push('minimize')}} onHangup={()=>{setOpen(false);window.actions.push('hangup')}} onRetry={()=>window.actions.push('retry')}/></div>}
+      function App(){const[open,setOpen]=useState(true),[muted,setMuted]=useState(false),[statePatch,setStatePatch]=useState(patch),returnFocus=useRef();window.patchCall=next=>setStatePatch(previous=>({...previous,...next}));return <div ref={returnFocus}><button id="restore" onClick={()=>setOpen(true)}>返回通话</button><CallStage state={{mode:'call',phase:'listening',conversationMode:scenario==='native'?'native':'enhanced',sessionId:'session',level:.35,muted,conversationMessages:scenario==='native'?[{...user,id:'live-user',sourceId:'user:one'},{...assistant,id:'live-reply',sourceId:'assistant:1:0',partial:true}]:scenario==='data'?[user,{...assistant,partial:true}]:[],...statePatch}} sessionId="session" controller={controller} returnFocusRef={returnFocus} open={open} historyOnly={!['stage','live'].includes(scenario)} origin={{x:120,y:740}} pending={false} error={statePatch.error||''} onMute={()=>{setMuted(!muted);window.actions.push('mute')}} onMinimize={()=>{setOpen(false);window.actions.push('minimize')}} onHangup={()=>{setOpen(false);window.actions.push('hangup')}} onRetry={()=>window.actions.push('retry')} onOpenSettings={()=>{if(window.settingsUnavailable)throw Error('请从侧栏设置 → 媒体 → 语音打开配置。');window.actions.push('settings')}}/></div>}
       root.render(<App key={key}/>);return key;
     };
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-call-stage'), format: 'iife', jsx: 'automatic',
@@ -54,6 +54,7 @@ test('call stage renders four record states, theme, mobile, audio levels and usa
       for (const scenario of ['empty', 'loading', 'error', 'data']) {
         await page.evaluate(scenario => window.renderScenario(scenario), scenario);
         await page.getByRole('dialog').waitFor();
+        await settleAnimations(page);
         assert.equal(await page.locator('.voice-stage-header').innerText(),'关闭');
         assert(await page.locator('.voice-stage-header button').evaluate(node=>{const button=node.getBoundingClientRect(),header=node.parentElement.getBoundingClientRect();return button.left>header.left+header.width/2;}));
         if (scenario === 'loading') await page.getByText('正在读取语音记录…').waitFor();
@@ -137,6 +138,50 @@ test('call stage renders four record states, theme, mobile, audio levels and usa
 });
 const userText = '帮我看看这个页面，保持现在的模型。';
 const settleAnimations = page => page.evaluate(() => Promise.all(document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {}))));
+
+test('direct call explains the wait only while the session model is thinking', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  const screenshots = process.env.BENCHGO_VOICE_STAGE_SCREENSHOTS;
+  if (screenshots) await mkdir(screenshots, { recursive: true });
+  try {
+    const page = await browser.newPage(), errors = []; page.setDefaultTimeout(6000); page.on('pageerror', failure => errors.push(failure.message));
+    const html = await fixture(); await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort()); await page.goto('http://localhost/');
+    const reason = '未配置通话交互模型，当前直接使用原会话模型', direct = { conversationMode: 'direct', conversationReason: reason, conversationConfigurable: true, phase: 'thinking', transcript: '帮我看看这个页面。' };
+    const hint = page.locator('.voice-stage-caption>p'), settings = page.getByRole('button', { name: '去设置', exact: true });
+    const render = async (patch, heading) => { await page.evaluate(patch => window.renderScenario('stage', patch), patch); await page.getByRole('heading', { name: heading, exact: true }).waitFor(); };
+    for (const width of [1440, 390]) for (const dark of [false, true]) {
+      await page.setViewportSize({ width, height: 800 }); await page.evaluate(dark => document.documentElement.dataset.dark = dark, dark);
+      await render(direct, '正在想一想');
+      assert.equal((await hint.innerText()).replace(/\s+/g, ''), reason + '去设置');
+      const colors = await page.evaluate(() => { const style = name => getComputedStyle(document.querySelector(name)).color; return { hint: style('.voice-stage-caption>p'), title: style('.voice-stage-caption h2'), muted: style('.voice-stage-controls>div>span') }; });
+      assert.equal(colors.hint, colors.muted); assert.notEqual(colors.hint, colors.title);
+      assert(await page.evaluate(() => { const hint = document.querySelector('.voice-stage-caption>p').getBoundingClientRect(), text = document.querySelector('.voice-stage-subtitle').getBoundingClientRect(); return hint.left >= 0 && hint.right <= innerWidth && hint.bottom <= text.top + 1; }));
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      if (screenshots) { await settleAnimations(page); await page.screenshot({ path: join(screenshots, `direct-thinking-${width}-${dark ? 'dark' : 'light'}.png`) }); }
+      await page.getByRole('button', { name: '展开幕布', exact: true }).click(); await page.getByRole('complementary', { name: '完整语音记录' }).waitFor();
+      assert(await settings.isVisible()); assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      if (screenshots) { await settleAnimations(page); await page.screenshot({ path: join(screenshots, `direct-thinking-curtain-${width}-${dark ? 'dark' : 'light'}.png`) }); }
+    }
+    for (const [patch, heading] of [[{ ...direct, conversationMode: 'enhanced' }, '正在想一想'], [{ ...direct, conversationMode: 'native' }, '正在想一想'], [{ ...direct, conversationReason: '' }, '正在想一想'], [{ ...direct, phase: 'listening' }, '我在听'], [{ ...direct, phase: 'transcribing' }, '正在听清你的话'], [{ ...direct, phase: 'speaking' }, '正在回应'], [{ ...direct, phase: 'starting' }, '正在连接']]) {
+      await render(patch, heading);
+      assert.equal(await hint.count(), 0, JSON.stringify(patch)); assert.equal(await settings.count(), 0);
+    }
+    await render({ ...direct, phase: 'waiting' }, '等待你的确认'); assert.equal(await hint.innerText(), '请返回对话完成确认');
+    await render({ ...direct, error: '麦克风暂不可用' }, '语音遇到问题'); assert.equal(await hint.innerText(), '麦克风暂不可用');
+    // The hint follows the phase within one call instead of staying on screen.
+    await render(direct, '正在想一想'); await settings.waitFor();
+    await page.evaluate(() => window.patchCall({ phase: 'speaking', replyText: '好，我看一下。' })); await page.getByRole('heading', { name: '正在回应', exact: true }).waitFor(); assert.equal(await hint.count(), 0);
+    await page.evaluate(() => window.patchCall({ phase: 'thinking' })); await settings.click();
+    assert.deepEqual(await page.evaluate(() => window.actions), ['settings']);
+    await page.evaluate(() => { window.settingsUnavailable = true; }); await settings.click();
+    assert.equal((await hint.innerText()).replace(/\s+/g, ''), reason + '请从侧栏设置→媒体→语音打开配置。'); assert.equal(await settings.count(), 0);
+    // A downgrade that settings cannot resolve is explained without the shortcut.
+    const unsupported = '子 Agent 会话未启用通话交接，请从原工作会话进入';
+    await render({ ...direct, conversationConfigurable: false, conversationReason: unsupported }, '正在想一想');
+    assert.equal(await hint.innerText(), unsupported); assert.equal(await settings.count(), 0);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
 
 test('curtain hides its scrollbar while preserving wheel, keyboard and reading position', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
   const browser = await chromium.launch({ executablePath, headless: true });

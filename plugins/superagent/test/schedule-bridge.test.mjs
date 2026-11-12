@@ -10,8 +10,8 @@ const message = (id = 'm1', prompt = '检查项目', time = at) => ({ id, source
 function fixture(t) {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   let policy = { version: 'p1', desktopVersion: 'd1', model: { providerId: 'p', modelId: 'm' }, connection: {}, projects: [], mode: 'manual', enabledRuleIds: [] };
-  const entry = { id: 'opaque/schedule', sessionId: 'main-session', prompt: '检查项目', status: 'active', lastDelivery: { scheduledAt: at, messageId: 'm1' } };
-  const records = [{ scheduledAt: at, deliveredAt: at, messageId: 'm1', prompt: entry.prompt }];
+  const entry = { id: 'opaque/schedule', target: { kind: 'session', sessionId: 'main-session' }, prompt: '检查项目', status: 'active', lastDelivery: { scheduledAt: at, messageId: 'm1' } };
+  const records = [{ scheduledAt: at, deliveredAt: at, messageId: 'm1', targetSessionId: 'main-session', prompt: entry.prompt }];
   let handler, catalog = [entry];
   const host = { catalog: async () => catalog, history: async () => ({ records }) };
   const ctx = { get: name => name === 'schedule' ? host : undefined, on: (name, callback) => { assert.equal(name, 'schedule/changed'); handler = callback; return () => { handler = undefined; }; } };
@@ -43,7 +43,7 @@ test('latest official history recovers startup delivery and preserves delivered 
   assert.equal(f.database.getTrigger(candidate.triggerId).content, '检查项目');
   await f.bridge.ingestMessages({ sessionId: 'main-session', messages: [message('duplicate')] });
   assert.equal(f.database.candidates().length, 1);
-  f.records[0] = { scheduledAt: '2026-11-03T01:00:00.000Z', deliveredAt: '2026-11-03T01:00:00.000Z', messageId: 'm2', prompt: 'edited' };
+  f.records[0] = { scheduledAt: '2026-11-03T01:00:00.000Z', deliveredAt: '2026-11-03T01:00:00.000Z', messageId: 'm2', targetSessionId: 'main-session', prompt: 'edited' };
   f.changed(); await f.bridge.tick();
   assert.equal(f.database.candidates().length, 2);
 });
@@ -100,8 +100,6 @@ test('first bridge installation never replays receipts already delivered by the 
 
 test('current Host target and receipt session must match the owned destination', async t => {
   const f = fixture(t), projections = [];
-  f.entry.target = { kind: 'session', sessionId: f.entry.sessionId };
-  delete f.entry.sessionId;
   f.records[0].targetSessionId = 'foreign';
   const bridge = createScheduleBridge({ ctx: f.ctx, store: f.store, readPolicy: f.readPolicy,
     onOccurrence: value => projections.push(value) });

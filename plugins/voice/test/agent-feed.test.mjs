@@ -5,7 +5,7 @@ import { projectChatMessages } from '../../superagent/src/chat-publication.mjs';
 const entry=(seq,type,data={})=>({type:type==='assistant/live-chunk'?'transient':'event',event:{seq,type,data}});
 const user=(seq,id,source={kind:'user'})=>entry(seq,'user/message',{id,source,content:[]});
 const live=(seq,text,id='a')=>entry(seq,'assistant/live-chunk',{attemptId:id,turn:1,step:1,chunk:{type:'text-delta',text}});
-function harness(history=[]){const out=[],events=[],feed=new AgentFeed({onText:t=>out.push(t),onStart:()=>events.push('start'),onReset:()=>events.push('reset'),onEnd:()=>events.push('end')});let revision=0;feed.baseline({revision,entries:history});return {feed,out,events,append(...entries){feed.accept({revision:++revision,change:{kind:'append',entries}});},settle(id,e){feed.accept({revision:++revision,change:{kind:'settle-assistant',attemptId:id,entry:e}});}};}
+function harness(history=[],options={}){const out=[],events=[],feed=new AgentFeed({onText:t=>out.push(t),onStart:()=>events.push('start'),onReset:()=>events.push('reset'),onEnd:()=>events.push('end'),...options});let revision=0;feed.baseline({revision,entries:history});return {feed,out,events,append(...entries){feed.accept({revision:++revision,change:{kind:'append',entries}});},settle(id,e){feed.accept({revision:++revision,change:{kind:'settle-assistant',attemptId:id,entry:e}});}};}
 test('fresh deltas and settlement emit exactly once without reasoning',()=>{const h=harness();h.append(entry(1,'turn/start'));const a=live(1.1,'你好');h.append(a);h.append(a);h.append(entry(1.2,'assistant/live-chunk',{attemptId:'a',chunk:{type:'reasoning-delta',text:'secret'}}));const settle=entry(2,'assistant/message',{message:{content:[{type:'text',text:'你好世界'},{type:'reasoning',text:'hidden'}]}});h.settle('a',settle);h.settle('a',settle);assert.deepEqual(h.out,['你好','世界']);});
 test('history baseline and prepends never read; active baseline prefix avoids replay',()=>{const h=harness([live(1.1,'旧文本')]);h.settle('a',entry(2,'assistant/message',{message:{content:[{type:'text',text:'旧文本新增'}]}}));assert.deepEqual(h.out,['新增']);h.feed.accept({revision:10,change:{kind:'prepend',entries:[entry(0,'assistant/message',{message:{content:[{type:'text',text:'历史'}]}})]}});assert.deepEqual(h.out,['新增']);});
 test('retry clears old attempt then allows new attempt and its settlement',()=>{const h=harness();h.append(entry(1,'turn/start'),live(1.1,'失败前'));h.append(entry(2,'llm/retry'));h.append(live(2.1,'恢复','b'));h.settle('b',entry(3,'assistant/message',{message:{content:[{type:'text',text:'恢复成功'}]}}));h.append(entry(4,'turn/end'));assert.deepEqual(h.events,['start','reset','start','end']);assert.deepEqual(h.out,['失败前','恢复','成功']);});
@@ -106,6 +106,54 @@ test('native question replies require the original admitted call and share its p
     assert.deepEqual(spoken,projectChatMessages(events).filter(row=>row.role==='assistant').map(row=>row.text));
     if(valid){assert.equal(records[0].data.requestId,'question-answer');feed.accept({revision:6,change:{kind:'append',entries:[{event:{seq:6,type:'plugin:benchgo-plugin/chat-publication',ignorable:true,data:{kind:'final',requestId:'question-answer',text:'继续处理。'}}}]}});assert.equal(spoken.length,1);}
   }
+});
+
+test('native public text streams before settlement and every step settles without a turn-end replay',()=>{
+  const records=[],h=harness([],{publicOnly:true,streamPublicText:true,onRecord:(event,message)=>records.push(message||event)});
+  const message=(seq,step,text)=>entry(seq,'assistant/message',{turn:1,step,message:{source:{kind:'model'},content:[{type:'text',text}]}});
+  h.append(entry(1,'turn/start',{turn:1}),user(2,'human'),live(3,'我先核对。'));
+  assert.deepEqual(h.out,['我先核对。']);
+  h.append(message(4,1,'我先核对。再给你结果。'));
+  assert.deepEqual(h.out,['我先核对。','再给你结果。']);
+  h.append(message(4.1,1,'我先核对。再给你结果。'));
+  h.append(live(5,'迟到的旧片段'));
+  h.append(entry(6,'assistant/live-chunk',{turn:1,step:2,attemptId:'b',chunk:{type:'text-delta',text:'结果已出来。'}}));
+  h.append(message(7,2,'结果已出来。'),entry(8,'turn/end',{turn:1,reason:{kind:'completed'}}));
+  assert.deepEqual(h.out,['我先核对。','再给你结果。','结果已出来。']);
+  assert.equal(records.filter(event=>event.type==='assistant/message').length,2);
+  assert.equal(records.filter(message=>message.role==='assistant').length,0);
+});
+
+test('native streaming keeps completed baseline steps silent across replace and retry',()=>{
+  const history=[entry(1,'turn/start',{turn:1}),user(2,'human'),live(3,'旧句。'),entry(4,'assistant/message',{turn:1,step:1,message:{source:{kind:'model'},content:[{type:'text',text:'旧句。'}]}})];
+  const h=harness(history,{publicOnly:true,streamPublicText:true});
+  h.append(live(5,'迟到的旧句。'));
+  h.feed.accept({revision:20,entries:history,change:{kind:'replace'}});
+  h.feed.accept({revision:21,change:{kind:'append',entries:[live(6,'恢复后的旧句。'),entry(7,'llm/retry'),live(8,'重试后的旧句。'),entry(9,'assistant/live-chunk',{turn:1,step:2,attemptId:'next',chunk:{type:'text-delta',text:'新的回复。'}})]}});
+  assert.deepEqual(h.out,['新的回复。']);
+});
+
+test('native streaming excludes internal turns, nested agents, stale turns, reasoning and tool arguments',()=>{
+  for(const kind of ['benchgo-ticket-reply','benchgo-execution-input','runtime-context']){
+    const h=harness([],{publicOnly:true,streamPublicText:true});
+    h.append(entry(1,'turn/start',{turn:1}),user(2,'internal',{kind}),live(3,'PRIVATE'));
+    h.append(entry(4,'assistant/message',{turn:1,step:1,message:{source:{kind:'model'},content:[{type:'text',text:'PRIVATE'}]}}),entry(5,'turn/end',{turn:1,reason:{kind:'completed'}}));
+    assert.deepEqual(h.out,[]);
+  }
+  const h=harness([],{publicOnly:true,streamPublicText:true});h.append(entry(1,'turn/start',{turn:1}),user(2,'human'));
+  for(const data of [{turn:0,chunk:{type:'text-delta',text:'PRIVATE'}},{turn:1,parentCallId:'worker',chunk:{type:'text-delta',text:'PRIVATE'}},
+    {turn:1,chunk:{type:'reasoning-delta',text:'PRIVATE'}},{turn:1,chunk:{type:'tool-call-delta',argumentsDelta:'PRIVATE'}}])h.append(entry(h.feed.seen.size+1,'assistant/live-chunk',{step:1,...data}));
+  assert.deepEqual(h.out,[]);
+  h.append(live(20,'只读公开正文。'));assert.deepEqual(h.out,['只读公开正文。']);
+});
+
+test('native streaming keeps distinct steps and explicit publications even when their wording is equal',()=>{
+  const h=harness([],{publicOnly:true,streamPublicText:true});
+  h.append(entry(1,'turn/start',{turn:1}),user(2,'human'),live(3,'已完成。'));
+  h.append(entry(4,'assistant/message',{turn:1,step:1,message:{source:{kind:'model'},content:[{type:'text',text:'已完成。'}]}}));
+  const publication=entry(5,'plugin:benchgo-plugin/chat-publication',{kind:'final',requestId:'human',text:'已完成。'});publication.event.ignorable=true;
+  h.append(publication,publication,entry(6,'assistant/message',{turn:1,step:2,message:{source:{kind:'model'},content:[{type:'text',text:'已完成。'}]}}),entry(7,'turn/end',{turn:1,reason:{kind:'completed'}}));
+  assert.deepEqual(h.out,['已完成。','已完成。']);
 });
 
 test('native completed replies retain the admitted user identity across a verified model fallback',()=>{

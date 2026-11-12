@@ -13,7 +13,7 @@ test('late Feishu requests still get assessment but cannot answer current attent
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-late-message-'));
   let db = createAssistantOrchestrationStore({ directory });
   try {
-    const policy = { version: 'v', allowHumanRequests: true, routeDirect: true };
+    const policy = { version: 'v', allowHumanRequests: true };
     const event = { channel: 'feishu', kind: 'group', mentioned: true, actor: { kind: 'human', id: 'member' },
       source: { channel: 'feishu', appId: 'app', chatId: 'chat' }, text: 'hello' };
     ingestAssistantEvent(db, { ...event, sourceKey: 'new', threadId: 'new', occurredAt: '2026-11-03T15:31:00Z' }, policy);
@@ -38,7 +38,7 @@ test('late Feishu requests still get assessment but cannot answer current attent
 test('platform access accepts human requests without granting owner identity or opening unmentioned work', () => {
   const db = createAssistantOrchestrationStore({ filename: ':memory:' });
   try {
-    const policy = { version: 'platform', ownerIds: [], allowHumanRequests: true, sourceAllowed: true, routeDirect: true };
+    const policy = { version: 'platform', ownerIds: [], allowHumanRequests: true, sourceAllowed: true };
     const event = { channel: 'feishu', sourceKey: 'platform-request', threadId: 'thread', source: { chatId: 'chat' }, actor: { kind: 'human', id: 'member' }, text: 'Help', kind: 'group', mentioned: true };
     const accepted = ingestAssistantEvent(db, event, policy);
     assert.equal(accepted.requiresEval, true);
@@ -54,7 +54,7 @@ test('platform access accepts human requests without granting owner identity or 
 test('explicit requests keep their own candidates with one or multiple running subscriptions', () => {
   const db = createAssistantOrchestrationStore({ filename: ':memory:' });
   try {
-    const policy = { version: 'p', allowHumanRequests: true, routeDirect: true };
+    const policy = { version: 'p', allowHumanRequests: true };
     const event = { channel: 'feishu', kind: 'group', mentioned: true, threadId: 'chat', source: { channel: 'feishu', chatId: 'chat' }, actor: { id: 'user', kind: 'human' }, text: 'Investigate another website' };
     ingestAssistantEvent(db, { ...event, sourceKey: 'first' }, policy);
     const first = db.createTicket({ threadId: 'chat', target: 'first website', mandate: {} });
@@ -78,7 +78,7 @@ test('explicit requests keep their own candidates with one or multiple running s
 test('received discussion is a bounded same-app same-chat reference without new candidates', () => {
   const db = createAssistantOrchestrationStore({ filename: ':memory:' });
   try {
-    const policy = { version: 'v', allowHumanRequests: true, routeDirect: true };
+    const policy = { version: 'v', allowHumanRequests: true };
     const source = { channel: 'feishu', appId: 'app', chatId: 'group', messageId: 'anchor' };
     const event = { channel: 'feishu', actor: { id: 'member', kind: 'human' }, kind: 'group', mentioned: false, text: 'Discussion' };
     for (let i = 0; i < 25; i++) ingestAssistantEvent(db, { ...event, sourceKey: `m${i}`, threadId: `thread${i}`, source: { ...source, messageId: `m${i}` } }, policy);
@@ -108,7 +108,7 @@ test('trusted policy controls direct intake and group mention; replay cannot cre
     assert.equal(ingestAssistantEvent(db, mentioned, policy).duplicate, true);
     assert.equal(db.candidates().length, 1);
     const direct = ingestAssistantEvent(db, { ...event, sourceKey: 'message-3', kind: 'direct' }, policy);
-    assert.equal(direct.direct, true); assert.equal(direct.requiresEval, false);
+    assert.equal(direct.direct, true); assert.equal(direct.requiresEval, true, 'direct messages enter the same Router queue');
     const forged = ingestAssistantEvent(db, { ...event, sourceKey: 'message-4', actor: { kind: 'human', id: 'other', owner: true }, kind: 'direct' }, policy);
     assert.equal(forged.direct, false); assert.equal(forged.gate.allowed, false);
     assert.throws(() => ingestAssistantEvent(db, { ...mentioned, text: 'changed' }, policy), { code: 'TRIGGER_CONFLICT' });

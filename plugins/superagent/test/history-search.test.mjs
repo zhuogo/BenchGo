@@ -93,7 +93,7 @@ test('history paging, Unicode original segments, source validation and increment
   assert.equal(earlier.events.length, 2); assert.equal(earlier.nextCursor, null);
   const target = earlier.events.find(r => r.role === 'assistant');
   let cursor = 0, rebuilt = '';
-  do { const p = await f.service.readLegacyReference({ sessionId: 'main', eventSeq: target.seq }, { limit: 4, cursor }); rebuilt += p.content; cursor = p.nextCursor; } while (cursor !== null);
+  do { const [row] = (await f.service.history({ sessionId: 'main', seq: target.seq, textLimit: 4, offset: cursor })).events; rebuilt += row.text; cursor = row.nextOffset; } while (cursor !== null);
   assert.equal(rebuilt, '😀报告'.repeat(10));
   f.turn('main', 'fresh needle', 'fresh answer');
   assert.equal((await f.service.search({ query: 'fresh' })).results.length, 1);
@@ -150,13 +150,13 @@ test('metadata pages never observe logs and source changes invalidate metadata c
   await assert.rejects(f.service.sessions({ limit: 1, cursor: p.nextCursor }), { code: 'SESSION_QUERY_INVALID_CURSOR' });
 });
 
-test('long source references remain pageable at the legacy 100000 character limit', async t => {
+test('long originals remain pageable in bounded segments', async t => {
   const f = await fixture(t); f.turn('main', 'x'.repeat(20000), 'reply');
   const original = (await f.service.history({ sessionId: 'main' })).events.find(e => e.role === 'user');
-  const p = await f.service.readLegacyReference({ sessionId: 'main', eventSeq: original.seq }, { limit: 100000 });
-  assert.equal(p.content.length, 16000); assert.equal(p.nextCursor, 16000);
-  const end = await f.service.readLegacyReference({ sessionId: 'main', eventSeq: original.seq }, { limit: 100000, cursor: p.nextCursor });
-  assert.equal(end.content.length, 4000); assert.equal(end.nextCursor, null);
+  const [p] = (await f.service.history({ sessionId: 'main', seq: original.seq, textLimit: 16000 })).events;
+  assert.equal(p.text.length, 16000); assert.equal(p.nextOffset, 16000);
+  const [end] = (await f.service.history({ sessionId: 'main', seq: original.seq, textLimit: 16000, offset: p.nextOffset })).events;
+  assert.equal(end.text.length, 4000); assert.equal(end.nextOffset, null);
 });
 
 test('context response budgets retain nonempty resumable public rows', async t => {

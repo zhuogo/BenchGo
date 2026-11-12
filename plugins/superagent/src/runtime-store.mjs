@@ -191,15 +191,6 @@ export function createAssistantRuntimeStore({ directory, filename, afterCommit }
       if (!changed.changes) throw Object.assign(new Error('Goal changed'), { code: 'ROW_CONFLICT' });
       return value;
     },
-    lease(owner, now = Date.now(), duration = 30000) {
-      return transaction(() => {
-        const current = api.meta('scheduler');
-        if (current && current.owner !== owner && current.until > now) return null;
-        const lease = { owner, until: now + duration, token: current?.owner === owner ? current.token : (current?.token || 0) + 1 };
-        api.setMeta('scheduler', lease); return lease;
-      });
-    },
-    releaseLease(owner) { transaction(() => { const current = api.meta('scheduler'); if (current?.owner === owner) api.setMeta('scheduler', { ...current, until: 0 }); }); },
     close() { if (!closed) { closed = true; db.close(); } },
   };
   // Standalone SQLite writes autocommit. Inside a transaction the outer commit

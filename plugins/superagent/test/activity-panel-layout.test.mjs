@@ -45,12 +45,12 @@ async function fixture() {
           {id:'failed',title:'重新验证离线恢复',status:'waiting',createdAt:at(30),updatedAt:at(3),results:[{summary:'连接中断，恢复后可以重新验证。'}]},
           {id:'blocked',title:'补充项目访问权限',status:'waiting',assignments:[{state:'blocked'}],createdAt:at(40),updatedAt:at(4)},
           {id:'uncertain',title:'核实交付文件的版本',status:'waiting',createdAt:at(50),updatedAt:at(5)},
-          {id:'done',title:'整理今天的工作记录',status:'completed',createdAt:at(60),updatedAt:at(6),results:[{version:1,summary:'内部工作摘要',selfCheck:{summary:'已检查要求与执行结果'},outcome:'completed',delivery:{action:'deliver',text:'已归档工作记录，保留了相关文件与说明。'}}],deliveries:[{state:'sent',payload:{type:'ticket.result',instructionRevision:1,resultVersion:1}}]},
+          {id:'done',title:'整理今天的工作记录',status:'completed',createdAt:at(60),updatedAt:at(6),results:[{version:1,summary:'内部工作摘要',outcome:'completed',delivery:{action:'deliver',text:'已归档工作记录，保留了相关文件与说明。'}}],deliveries:[{state:'sent',payload:{type:'ticket.result',instructionRevision:1,resultVersion:1}}]},
           {id:'archived-waiting',title:'已归档等待工单',status:'waiting',archived:true,createdAt:at(8)},
           {id:'cleaned-waiting',title:'已整理等待工单',status:'waiting',cleanup:{id:'cleanup-receipt'},createdAt:at(9)},
           {id:'deleted-running',title:'已删除进行工单',status:'running',taskMeta:{deleted:true},createdAt:at(10)},
         ];
-        const goals=[{id:'goal',target:'持续维护 BenchGo 的一致体验',status:'active',rowVersion:7,createdAt:at(120),updatedAt:at(7),ticketIds:['running']}];
+        const goals=[{id:'goal',objective:'持续维护 BenchGo 的一致体验',status:'active',rowVersion:7,createdAt:at(120),updatedAt:at(7)}];
         window.updateExecution = step => {
           const row=tickets[0], finished=step==='delivered', verifying=step==='verifying';
           const worker={id:'worker-main',label:'主 Worker',status:finished||verifying?'completed':step==='unknown'?'waiting':'running',activity:finished||verifying?'正在保存结果':step==='unknown'?'等待后续事件':'正在搜索网页',updatedAt:at(0)};
@@ -65,7 +65,7 @@ async function fixture() {
           }
           Object.assign(row,{status:finished?'completed':step==='paused'?'waiting':'running',executionControl:step==='paused'?{paused:true}:{},instructionRevision:1,resultVersion:finished?1:0,updatedAt:at(0),
             executionSession:{available:true,sessionId:'worker-main',ticketId:'running'},
-            assignments:[{id:'assignment-main',instructionRevision:1,state:finished?'completed':'claimed'}],results:finished?[{instructionRevision:1,version:1,summary:'内部结果',selfCheck:{summary:'已检查要求与执行结果'},outcome:'completed',delivery:{text:'已完成调研，来源与限制随结果交付。'}}]:[],
+            assignments:[{id:'assignment-main',instructionRevision:1,state:finished?'completed':'claimed'}],results:finished?[{instructionRevision:1,version:1,summary:'内部结果',outcome:'completed',delivery:{text:'已完成调研，来源与限制随结果交付。'}}]:[],
             deliveries:finished?[{state:'sent',payload:{type:'ticket.result',instructionRevision:1,resultVersion:1}}]:[],
             execution:{assignmentId:'assignment-main',runId:'run-main',sessionId:'worker-main',instructionRevision:1,phase:verifying?'verifying':'executing',updatedAt:at(0),observed:step!=='unknown',worker,children,
               childCounts:{total:children.length,running:children.filter(c=>c.status==='running').length,completed:children.filter(c=>c.status==='completed').length,failed:children.filter(c=>c.status==='failed').length},
@@ -101,7 +101,6 @@ async function fixture() {
           if(name==='tickets'&&control.holdRefresh) await new Promise(resolve=>{window.finishRefresh=()=>{control.holdRefresh=false;resolve();};});
           if(name==='state') return {config};
           if(name==='ticketStop'){Object.assign(tickets.find(row=>row.id===args.ticketId),{status:'waiting',executionControl:{stopped:true}});return {};}
-          if(name==='goalCancel'){goals.find(row=>row.id===args.id).status='cancelled';return {};}
           if(name==='tickets') return {tickets:control.state==='empty'?[]:args.ticketId?tickets.filter(row=>row.id===args.ticketId):tickets.filter(row=>!!row.archived===args.archived).slice(0,args.limit||1000)};
           if(name==='goalList') return {goals:control.state==='empty'?[]:goals};
           return {};
@@ -112,7 +111,7 @@ async function fixture() {
           let cursor=0;
           configureAssistantActivity(api,{connect(sink){window.streamSink=sink;return {start(){sink.replace({cursor,tickets});},restart(){sink.replace({cursor,tickets});},dispose(){}};}});
           window.streamUpdate=()=>{window.updateExecution('running');window.streamSink.update({cursor:++cursor,entries:[{seq:cursor,ticketId:'running',kind:'execution'}]});};
-          window.streamGoals=()=>{goals[0].target='持续目标已同步';window.streamSink.update({cursor:++cursor,entries:[{seq:cursor,ticketId:null,kind:'goal'}]});};
+          window.streamGoals=()=>{goals[0].objective='持续目标已同步';window.streamSink.update({cursor:++cursor,entries:[{seq:cursor,ticketId:null,kind:'goal'}]});};
         }
         root.render(<App key={++serial} api={api} initialConfig={supplied?config:undefined}/>);
       };
@@ -672,5 +671,26 @@ test('healthy board shows all tasks without scope controls and preserves list DO
     await page.waitForTimeout(2200);
     assert.equal(await page.evaluate(()=>window.apiCalls.filter(([name,args])=>name==='tickets'&&!args.ticketId).length),0,'healthy stream does not periodically pull the ledger');
     assert.equal(await panel.getByText('已同步',{exact:true}).count(),0,'quiet updates have no flashing sync message');
+  }finally{await browser.close();}
+});
+
+test('incremental activity updates do not synchronously measure every task row, including while closed', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
+  const browser=await chromium.launch({headless:true,executablePath});
+  try{
+    const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'no-preference'});
+    await page.setContent(await fixture());await page.evaluate(()=>window.renderScenario('stream'));
+    await page.getByRole('button',{name:'展开看板',exact:true}).click();
+    await page.locator('[data-task-key="ticket:running"]').waitFor();
+    await page.evaluate(()=>{
+      window.taskMeasurements=0;
+      const measure=Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect=function(...args){if(this.matches('[data-task-key]'))window.taskMeasurements++;return measure.apply(this,args);};
+    });
+    for(const open of [true,false]){
+      if(!open)await page.getByRole('button',{name:'收起看板',exact:true}).last().click();
+      await page.evaluate(()=>{window.taskMeasurements=0;window.streamUpdate();});
+      await page.waitForTimeout(250);
+      assert.equal(await page.evaluate(()=>window.taskMeasurements),0,`an existing task update does not measure the entire ${open?'open':'closed'} board`);
+    }
   }finally{await browser.close();}
 });

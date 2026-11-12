@@ -62,7 +62,6 @@ test('production runtime dispatches Worker files without backup or rollback serv
             .then(() => handlers.get('tools/execute')({ name: 'opaque/write-tool', callId: 'call-1', agent, signal: new AbortController().signal }, () => writeFile(file, 'agent content')))
             .then(async () => {
               assert.equal(await readFile(file, 'utf8'), 'agent content');
-              await tools.get('assistant_task_result').execute({ selfCheck: { summary: 'Verified created artifact', checks: ['Read created file'] } }, { agent, signal: new AbortController().signal, callId: 'self-check' });
               transcript.push({ seq: transcript.length, type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'text', text: 'Created artifact' }] } } });
               transcript.push({ seq: transcript.length, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } });
             }).then(() => handlers.get('agent/status')({ status: 'idle' }), error => handlers.get('agent/error')({ error }));
@@ -79,7 +78,7 @@ test('production runtime dispatches Worker files without backup or rollback serv
       assert.equal(db.getTicket(ticket.id).status, 'waiting');
       assert.equal(delivery.payload.text, undefined);
       assert.equal(delivery.payload.publication, undefined);
-      assert.equal(db.results(ticket.id).at(-1).finalSummary, 'Created artifact');
+      assert.equal(db.results(ticket.id).at(-1).summary, 'Created artifact');
       return { status: 'ready', text: '文件已经创建并检查完成。' };
     },
     deliverDesktop: async delivery => {

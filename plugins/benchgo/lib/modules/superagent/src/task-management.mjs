@@ -10,12 +10,12 @@ function activityTime(row) {
 }
 
 /** Human list organization is separate from execution and acceptance state. */
-export function createTaskManagement({ database, orchestration, scheduler }) {
+export function createTaskManagement({ database, orchestration, goals }) {
   const key = (kind, id) => `task-presentation:${kind}:${id}`;
-  const settled = (kind, row) => kind === 'ticket' ? ticketIsSettled(row) : (kind === 'goal' && row.executionKind === 'checklist') || (kind === 'goal' ? ['completed', 'failed', 'cancelled'] : ['unavailable', 'decided']).includes(row.status);
-  const executionRevision = (kind, row) => kind === 'ticket' ? row.instructionRevision ?? 1 : kind === 'goal' ? row.rowVersion ?? 0 : row.dispositionRevision ?? 0;
+  const settled = (kind, row) => kind === 'ticket' ? ticketIsSettled(row) : kind === 'goal' || ['unavailable', 'decided'].includes(row.status);
+  const executionRevision = (kind, row) => kind === 'ticket' ? row.instructionRevision ?? 1 : row.dispositionRevision ?? 0;
   const meta = (kind, row) => {
-    if (kind === 'goal' && row.executionKind === 'checklist') return { version: row.rowVersion, title: row.objective, completed: row.status === 'completed', deleted: !!row.deleted };
+    if (kind === 'goal') return { version: row.rowVersion, title: row.objective, completed: row.status === 'completed', deleted: !!row.deleted };
     const stored = database.meta(key(kind, row.id)) || { version: 0 };
     if (kind === 'ticket') {
       const value = ticketPresentation(row, stored);
@@ -39,14 +39,14 @@ export function createTaskManagement({ database, orchestration, scheduler }) {
     if (!['rename', 'complete', 'reopen', 'delete'].includes(operation)) throw new Error('无效任务操作');
     if (kind === 'ticket' && operation === 'delete') throw Object.assign(new Error('工单清理须先预览具体清单并取得本次确认'), { code: 'CLEANUP_PREVIEW_REQUIRED' });
     return database.transaction(() => {
-      const row = kind === 'ticket' ? orchestration.getTicket(id) : kind === 'goal' ? scheduler.getGoal(id) : orchestration.getEvaluation(id);
+      const row = kind === 'ticket' ? orchestration.getTicket(id) : kind === 'goal' ? goals.getGoal(id) : orchestration.getEvaluation(id);
       if (!row) throw new Error('任务不存在');
       if (kind === 'ticket' && ['complete', 'reopen'].includes(operation)) throw Object.assign(new Error('工单完成由实际执行与交付确认，不能人工标记'), { code: 'TICKET_COMPLETION_MANAGED' });
       const current = meta(kind, row);
       if (!Number.isSafeInteger(version) || version !== current.version) throw Object.assign(new Error('任务已变化，请刷新后重试'), { code: 'REVISION_CONFLICT' });
       if (kind !== 'ticket' && current.deleted) throw new Error('任务已删除');
-      if (kind === 'goal' && row.executionKind === 'checklist') {
-        const goal = scheduler.updateGoal(id, operation === 'rename' ? { objective: title } : operation === 'delete' ? { deleted: true } : { status: operation === 'complete' ? 'completed' : 'active' }, { rowVersion: version });
+      if (kind === 'goal') {
+        const goal = goals.updateGoal(id, operation === 'rename' ? { objective: title } : operation === 'delete' ? { deleted: true } : { status: operation === 'complete' ? 'completed' : 'active' }, { rowVersion: version });
         return { id, kind, goal, taskMeta: meta(kind, goal) };
       }
       if (operation === 'rename' && (typeof title !== 'string' || !title.trim() || kind !== 'ticket' && title.trim().length > 200)) throw new Error(kind === 'ticket' ? '名称不能为空' : '名称须为 1 至 200 字');
@@ -59,10 +59,7 @@ export function createTaskManagement({ database, orchestration, scheduler }) {
       return { id, kind, taskMeta: next };
     });
   }
-  const cleanup = name => (...args) => {
-    if (!database.taskCleanup) throw new Error('工单清理存储不可用');
-    return database.taskCleanup[name](...args);
-  };
+  const cleanup = name => (...args) => database.taskCleanup[name](...args);
   return { project, update,
     previewCleanup: cleanup('previewCleanup'), getCleanupPreview: cleanup('getCleanupPreview'),
     commitCleanup: cleanup('commitCleanup'), previewRestore: cleanup('previewRestore'), restoreCleanup: cleanup('restoreCleanup'),

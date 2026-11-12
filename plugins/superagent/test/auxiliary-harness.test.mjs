@@ -38,7 +38,7 @@ test('official Harness prepared vision dispatch reads durable image and rejects 
   const config = { models: [{ providerId: 'official-fixture', modelId: 'main/text-only' }], auxiliary: {
     capabilities: ['vision'], models: [{ providerId: 'official-fixture', modelId: 'aux/opaque' }],
   } };
-  const api = createAuxiliaryOperations({ ctx, store: { getConfig: async () => config },
+  const api = createAuxiliaryOperations({ ctx, store: { getConfig: async () => config, ledger: { append: record => record } },
     artifacts: { fetch: async () => new Response(png, { headers: { 'content-type': 'image/png' } }) } });
   const result = await api.analyzeImage({ file: 'test.png', question: 'Describe this image' });
   assert.equal(result.text, 'One image inspected');

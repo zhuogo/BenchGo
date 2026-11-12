@@ -45,20 +45,15 @@ test('legacy configuration defaults to no auxiliary without changing its revisio
   assert.deepEqual(loaded.models, config.models);
 });
 
-test('legacy key pools are stripped on load and cannot be configured again', async t => {
+test('removed credential pools are rejected explicitly and never stored', async t => {
   const { store, open } = await fixture(t);
-  const config = await store.updateConfig({ models: [{ providerId: 'opaque/provider-A', modelId: 'Exact/model' }], cardHtml: '<b>Name</b>' });
-  await writeFile(store.paths.config, JSON.stringify({ ...config, keyPools: [{ providerId: 'opaque/provider-A', candidates: ['opaque/provider-B'] }] }));
-  store.close(); const restored = await open();
-  const before = await restored.getConfig();
-  assert.equal(Object.hasOwn(before, 'keyPools'), false);
-  assert.equal(before.revision, config.revision);
-  for (const keyPools of [null, {}, [{ providerId: 'one', candidates: ['two'] }]]) {
-    await assert.rejects(restored.updateConfig({ keyPools }), { code: 'KEY_POOL_REMOVED' });
-    assert.deepEqual(await restored.getConfig(), before);
+  const before = await store.updateConfig({ models: [{ providerId: 'opaque/provider-A', modelId: 'Exact/model' }], cardHtml: '<b>Name</b>' });
+  for (const keyPools of [null, {}, [], [{ providerId: 'one', candidates: ['two'] }]]) {
+    await assert.rejects(store.updateConfig({ keyPools }), { code: 'KEY_POOL_REMOVED' });
+    assert.deepEqual(await store.getConfig(), before);
   }
-  await restored.updateConfig({ keyPools: [] });
-  const saved = await restored.getConfig();
+  store.close();
+  const saved = await (await open()).getConfig();
   assert.equal(Object.hasOwn(saved, 'keyPools'), false);
   assert.equal(saved.models[0].modelId, 'Exact/model');
   assert.equal(saved.cardHtml, '<b>Name</b>');

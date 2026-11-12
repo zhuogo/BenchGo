@@ -35,6 +35,15 @@ test('conversation receives UTF-8 events before EOF and rejects old speech after
   await h.client.dispose(); assert.equal(h.requests.at(-1).action, 'close'); assert.equal(h.errors.length, 0);
 });
 
+test('resume follows the pending interruption and sends nothing after dispose', async () => {
+  const h = fixture(); await h.client.start();
+  const interrupting = h.client.interrupt(); await h.client.resume(); await interrupting;
+  assert.deepEqual(h.requests.slice(-2).map(row => row.action), ['interrupt', 'resume']);
+  assert.deepEqual(h.requests.at(-1), { action: 'resume', sessionId: 's', callId: 'c', deviceId: 'd' });
+  await h.client.dispose(); const count = h.requests.length;
+  await h.client.resume(); assert.equal(h.requests.length, count);
+});
+
 test('unexpected event EOF reports disconnection without replaying an accepted turn', async () => {
   const h = fixture(); await h.client.start(); await h.client.send('执行原话', 'same-request');
   h.finish(); await tick(); assert.equal(h.errors.length, 1); assert.match(h.errors[0].message, /断开/);

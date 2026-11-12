@@ -13,7 +13,7 @@ function fixture() {
   const ticket = { id: 'ticket', title: '发送已备齐正文', status: 'running', mandate: mandate() };
   const assignment = { id: 'assignment', ticketId: ticket.id, owner: 'worker', fence: 3, state: 'claimed', leaseUntil: 200 };
   const run = { id: 'run', sessionId: 'worker-session', owner: 'worker', fence: 3, state: 'running' };
-  const database = { listTickets: () => [ticket], assignments: () => [assignment], runs: () => [run], getTicket: () => ticket };
+  const database = { listTickets: () => [ticket], assignments: () => [assignment], runs: () => [run], getTicket: () => ticket, appliedTicketSnapshot: () => ({}) };
   const origins = (extra = {}) => executionApprovalOrigins({ database, ownerScope: main, ownerSessionId: 'router-main', policy, now: 100, ...extra });
   return { ticket, assignment, run, database, origins };
 }

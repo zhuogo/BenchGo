@@ -4,10 +4,10 @@ export async function continueWorkerContext({ database, assignment, signal, runT
   if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) throw new Error('Invalid context continuation limit');
   let turns = 0;
   const pendingInputs = () => [...database.pendingSubscriptionMessages(assignment.ticketId),
-    ...(database.pendingTicketInputs?.(assignment.ticketId) || []).filter(row => ['revision', 'authorization'].includes(row.kind))];
+    ...database.pendingTicketInputs(assignment.ticketId).filter(row => ['revision', 'authorization'].includes(row.kind))];
   for (;;) {
     signal?.throwIfAborted();
-    if (isWaiting() || ticketExecutionBlocked(database.getTicket?.(assignment.ticketId))) return { turns, waiting: true };
+    if (isWaiting() || ticketExecutionBlocked(database.getTicket(assignment.ticketId))) return { turns, waiting: true };
     const pending = pendingInputs();
     if (!pending.length) return { turns, waiting: false };
     if (turns >= maxTurns) throw new Error('Worker source context continuation limit exceeded; reconciliation required');

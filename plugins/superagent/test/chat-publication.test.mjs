@@ -2,7 +2,6 @@ import { channelMessageRecordType } from '../src/channel-session-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { activeChatReply, chatPublicationType, executionInputSource, installChatPublication, projectChatMessages, chatNotificationIdentities } from '../src/chat-publication.mjs';
-import { ticketStateSource } from '../src/ticket-state-report.mjs';
 import { ticketReplySource } from '../src/ticket-reply.mjs';
 
 const user = { type: 'user/message', seq: 0, data: { id: 'human-1', source: { kind: 'user' }, content: [{ type: 'text', text: 'question' }] } };
@@ -309,32 +308,6 @@ test('state publication rechecks permission for explicit and natural replies and
   }
 });
 
-
-test('retired state reports never stream or project even with a historical permit or publication', () => {
-  const legacy = { ...stateNotice, data: { ...stateNotice.data, source: { ...stateNotice.data.source, kind: ticketStateSource } } };
-  const events = [start(2), legacy, answer([{ type: 'text', text: 'LEGACY REPORT' }], 2), statePermit('LEGACY REPORT'),
-    reply(8, { requestId: legacy.data.id, ticketStateEventKey: 'notice:1', text: 'LEGACY REPORT' })];
-  assert.equal(activeChatReply(events), null);
-  assert.deepEqual(projectChatMessages([...events, end('completed', 2)]), []);
-});
-
-test('retired state publication is rejected even if a callback permits it or a matching reply already exists', () => {
-  for (const existing of [false, true]) {
-    const legacy = { ...stateNotice, data: { ...stateNotice.data, source: { kind: ticketStateSource } } };
-    const events = [start(2), legacy];
-    if (existing) events.push(reply(8, { requestId: legacy.data.id, text: 'LEGACY REPORT' }));
-    let tool, checked = false;
-    const agent = { session: { snapshotEvents: () => events } };
-    installChatPublication({ tools: { register: value => { tool = value; } } }, agent, {
-      canPublish: () => { checked = true; return true; },
-      appendRecord: () => assert.fail('retired source cannot publish'),
-    });
-    assert.throws(() => tool.execute({ text: 'LEGACY REPORT' }, { agent,
-      concludeTurn: () => assert.fail('retired source cannot conclude a published reply') }), /旧工单状态发布路径已停用/);
-    assert.equal(checked, false);
-    assert.deepEqual(projectChatMessages([...events, end('completed', 2)]), []);
-  }
-});
 
 const channelMirror = (seq, direction = 'inbound', mirrorKey = `intake:${seq}`) => ({
   type: channelMessageRecordType, seq, time: '2026-11-10T12:00:00Z', ignorable: true,

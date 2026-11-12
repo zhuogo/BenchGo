@@ -63,7 +63,7 @@ test('pinning a model only updates local ordering and does not refresh catalog m
  const view=render({provider:'routergo'}), pin=view.nodes.find(node=>node.props['aria-label']==='置顶模型');
  pin.props.onClick({stopPropagation(){}});
  assert.equal(view.actions.length,1);
- assert.equal(view.actions[0].id,15,'pin state is separate from the catalog reload revision');
+ assert.equal(view.actions[0].id,14,'pin state is separate from the catalog reload revision');
  assert.equal(view.selections.length,0);
 });
 test('installed unsupported tools remain visible and cannot be activated',()=>{

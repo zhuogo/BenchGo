@@ -32,7 +32,7 @@ async function fixture() {
         const tasks=createTaskManagement({database:{meta:key=>metadata.get(key)}});
         const rows=[sample('queued','准备周报','waiting',{updatedAt:'2026-11-01T08:00:00Z'}),sample('running','运行兼容测试','running',{updatedAt:'2026-11-09T08:00:00Z',assignments:[{state:'claimed'}],executionSession:{available:true,sessionId:'real-execution',ticketId:'running'}}),
           sample('paused','确认发布范围','waiting',{executionControl:{paused:true},updatedAt:'2026-11-08T08:00:00Z'}),sample('stopped','已停止验证','waiting',{executionControl:{stopped:true},updatedAt:null,taskCanOrganize:true}),
-          sample('done','交付设计稿','completed',{updatedAt:null,taskCanOrganize:true,resultVersion:1,results:[{version:1,summary:'保留原始成果与审计证据',selfCheck:{summary:'逐项检查通过'},evidenceRefs:[]}]})];
+          sample('done','交付设计稿','completed',{updatedAt:null,taskCanOrganize:true,resultVersion:1,results:[{version:1,summary:'保留原始成果与审计证据',evidenceRefs:[]}]})];
         if(state==='cleanup')rows.push(sample('stopped-two','另一项已停止工单','waiting',{executionControl:{stopped:true},taskCanOrganize:true}));
         else {rows.push(sample('archived','已归档设计稿','completed',{resultVersion:1,results:[{version:1,summary:'保留归档成果'}]}));metadata.set('task-presentation:ticket:archived',{version:1,archived:true,archiveRevision:1,cleanupReceiptId:'old-receipt',archivedAt:'2026-11-08T08:00:00Z'});}
         if(state==='long')rows.push(...Array.from({length:35},(_,index)=>sample('extra-'+index,'历史工作 '+index,'running',{updatedAt:'2026-11-02T08:00:00Z'})));
@@ -148,7 +148,7 @@ test('ticket board renders resource states with three business states, filters, 
     assert.equal(await list.count(), 1);
     await page.getByRole('button', { name: /已归档设计稿.*完成/ }).click();
     await page.getByRole('region', { name: '任务详情', exact: true }).waitFor();
-    await page.getByRole('tab', { name: '结果与证据', exact: true }).click();
+    await page.getByRole('tab', { name: '执行结果', exact: true }).click();
     assert(await page.getByRole('region', { name: '任务详情', exact: true }).getByText('保留归档成果', { exact: true }).isVisible());
     assert.equal(await page.getByRole('region', { name: '任务详情', exact: true }).getByRole('button', { name: '继续工单', exact: true }).count(), 0);
     await shot('archive-desktop');
@@ -184,9 +184,9 @@ test('ticket board renders resource states with three business states, filters, 
     await requirements.click();
     assert(await page.getByRole('region', { name: '任务详情', exact: true }).getByText('确认发布范围：按要求完成并提供证据', { exact: true }).isVisible());
     assert.equal(await page.getByRole('region', { name: '任务详情', exact: true }).getByRole('button', { name: '任务要求', exact: true }).count(), 0, 'requirements are directly visible in their own tab');
-    await page.getByRole('region', { name: '任务详情', exact: true }).getByRole('tab', { name: '结果与证据', exact: true }).click();
-    await page.getByRole('tabpanel', { name: '结果与证据', exact: true }).getByText('尚无结果', { exact: true }).waitFor();
-    assert(await page.getByRole('tabpanel', { name: '结果与证据', exact: true }).getByText('执行结果保存后会显示在这里。', { exact: true }).isVisible(), 'the result tab is reachable before the first result');
+    await page.getByRole('region', { name: '任务详情', exact: true }).getByRole('tab', { name: '执行结果', exact: true }).click();
+    await page.getByRole('tabpanel', { name: '执行结果', exact: true }).getByText('尚无结果', { exact: true }).waitFor();
+    assert(await page.getByRole('tabpanel', { name: '执行结果', exact: true }).getByText('执行结果保存后会显示在这里。', { exact: true }).isVisible(), 'the result tab is reachable before the first result');
     assert.equal(await page.getByRole('button', { name: '查看执行会话', exact: true }).count(), 0);
     await page.keyboard.press('Escape');
     await board.getByRole('button', { name: /运行兼容测试.*进行/ }).click();

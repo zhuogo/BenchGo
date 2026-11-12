@@ -1,11 +1,11 @@
 ﻿import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, existsSync, openSync, fsyncSync, closeSync, copyFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, existsSync, openSync, fsyncSync, closeSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { notifySettings } from '../../../../shared/settings-adapter-utils.mjs';
 
 export const ASSISTANT_DOCUMENTS = Object.freeze(['AGENTS.md', 'SOUL.md', 'USER.md', 'IDENTITY.md', 'TOOLS.md', 'MEMORY.md']);
-// TOOLS remains managed for legacy imports and on-demand reading, not injection.
+// TOOLS remains managed for profile imports and on-demand reading, not injection.
 export const ASSISTANT_CONTEXT_DOCUMENTS = Object.freeze(['SOUL.md', 'IDENTITY.md', 'USER.md', 'AGENTS.md', 'MEMORY.md']);
 const templates = {
   "AGENTS.md": "# 工作约定\n\n执行用户已交代的工作；发现范围外新事项时先提出建议。\n前台保持可交流，持续工作交由后台任务；默认只报告结果、失败和需要用户决定的事项。\n根据真实执行结果说明完成情况，检查与任务相称；工具与执行权限以当前服务为准。\n",
@@ -14,15 +14,6 @@ const templates = {
   "IDENTITY.md": "# 助手身份\n\n我是用户的长期个人助手，负责理解需求、工作协调与结果交付。\n初始姓名为空；用户命名后由本文件顶部的 name 字段管理，该名字就是正名，空字符串表示未命名。\n所有渠道沿用同一身份；渠道、产品品牌与所用模型不构成姓名或个人身份。\n默认使用品牌形象，也支持用户自己的形象。更换外观不改变我的身份、权限或记忆。\n自身人设沿用 SOUL.md，用户资料沿用 USER.md，共同经历与长期经验沿用同一套记忆。\n",
   "TOOLS.md": "# 本地工具笔记\n\n记录已核实的环境特点、使用经验及配置入口。\n实际工具可用性以当前运行时服务为准；此文件不保存密钥、令牌或工具注册表。\n",
   "MEMORY.md": "# 长期记忆\n\n记录有来源的长期事实、决定和经验；不保存原始聊天或当前任务状态。\n"
-};
-// Exact hashes only: preserve user-edited documents.
-const brokenTemplateHashes = {
-  "AGENTS.md": "308d35adb9ec37a0b97940e63f68d4efc8d8e327448006b19a9b9939238af0e4",
-  "SOUL.md": "1bfcec3377948670e05cfbecd35567672a0827065a5c9279e535725a5e692d79",
-  "USER.md": "e9753ef2cfd6c635543f442a91b052da3b2e23993775fa1001bcb406bd48daa5",
-  "IDENTITY.md": "b09a5922c96decc206084aaa920f9f0e1adf393264a368870f98b3638ad5e82e",
-  "TOOLS.md": "2f1a818788f145d76f865f6ec91d69712dbc2112fff28dbd274bb394f795683a",
-  "MEMORY.md": "2d2c3074e3e78bb005f0f1292265c38f7ed78ebe4d3c71eb2941fc2bc54c5563"
 };
 const now = () => new Date().toISOString();
 export const documentHash = content => createHash('sha256').update(content, 'utf8').digest('hex');
@@ -65,7 +56,6 @@ export async function createAssistantDocuments({ directory }) {
   const db = new DatabaseSync(join(directory, 'assistant.db'));
   db.exec(`PRAGMA busy_timeout=5000;
     PRAGMA secure_delete=ON;
-    CREATE TABLE IF NOT EXISTS document_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS session_context_snapshots (session_id TEXT PRIMARY KEY, context TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS document_lock (id INTEGER PRIMARY KEY CHECK(id=1), owner TEXT NOT NULL, pid INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS document_current (name TEXT PRIMARY KEY, hash TEXT NOT NULL, revision INTEGER NOT NULL, updated_at TEXT NOT NULL, source TEXT NOT NULL);
@@ -75,8 +65,6 @@ export async function createAssistantDocuments({ directory }) {
     CREATE INDEX IF NOT EXISTS document_journal_status ON document_journal(status);`);
   let closed = false;
   const tx = fn => { db.exec('BEGIN IMMEDIATE'); try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; } };
-  const meta = key => decode(db.prepare('SELECT value FROM document_meta WHERE key=?').get(key)?.value);
-  const setMeta = (key, value) => db.prepare('INSERT INTO document_meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, JSON.stringify(value));
   const actual = name => {
     try { const value = new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(join(directory, name))); validText(value); return value; }
     catch (error) { error.document = name; throw error; }
@@ -168,42 +156,12 @@ export async function createAssistantDocuments({ directory }) {
     return { name, content, hash: pending.hash, revision: pending.revision, updatedAt: pending.createdAt, source: pending.source };
   }
   function initialize() {
-    if (!meta('legacy-profile-v1')) {
-      const backup = join(directory, 'migration-v1');
-      const migrated = [], conflicts = [];
-      const names = readdirSync(directory);
-      for (const lower of ['identity.md', 'user.md']) {
-        const upper = lower.toUpperCase().replace('.MD', '.md');
-        // A crash during a case-only rename is recoverable from the migration backup.
-        if (!names.includes(lower)) {
-          const backupPath = join(backup, lower);
-          if (!existsSync(join(directory, upper)) && existsSync(backupPath)) copyFileSync(backupPath, join(directory, upper));
-          continue;
-        }
-        mkdirSync(backup, { recursive: true });
-        const backupPath = join(backup, lower);
-        if (!existsSync(backupPath)) copyFileSync(join(directory, lower), backupPath);
-        if (names.includes(upper)) {
-          if (actual(lower) !== actual(upper)) conflicts.push({ legacy: lower, current: upper, backup: `migration-v1/${lower}`, reason: '两份大小写文档并存；当前大写文档有效，旧版保留待合并' });
-          continue;
-        }
-        const temporary = join(directory, `${lower}.${randomUUID()}.migration`);
-        renameSync(join(directory, lower), temporary);
-        renameSync(temporary, join(directory, upper));
-        migrated.push({ from: lower, to: upper, backup: `migration-v1/${lower}` });
-      }
-      setMeta('legacy-profile-v1', { completedAt: now(), migrated, conflicts });
-    }
     for (const name of ASSISTANT_DOCUMENTS) {
       if (!existsSync(join(directory, name))) {
         if (current(name)) throw Object.assign(new Error(`助手文档 ${name} 缺失；请恢复文件，不会用模板覆盖已有资料`), { code: 'DOCUMENT_MISSING', document: name });
         writeFileSync(join(directory, name), templates[name], { flag: 'wx', mode: 0o600 });
       }
-      const original = sync(name);
-      const header = name === 'IDENTITY.md' ? original.content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n\r?\n/)?.[0] || '' : '';
-      if (documentHash(original.content.slice(header.length)) === brokenTemplateHashes[name]) {
-        change(name, header + templates[name], { expectedHash: original.hash, source: { type: 'template-encoding-repair' } });
-      }
+      sync(name);
     }
   }
   try { await locked(initialize); } catch (error) { db.close(); throw error; }
@@ -213,7 +171,7 @@ export async function createAssistantDocuments({ directory }) {
     list: () => locked(() => ASSISTANT_DOCUMENTS.map(sync)),
     read: name => locked(() => sync(validName(name))),
     update: (name, options) => locked(() => change(name, options?.content, options)),
-    // Used by legacy profile and entry adapters: transformation happens under the same profile lock.
+    // Read, transform and write under the same profile lock.
     mutate: (name, transform, options = {}) => locked(() => {
       const previous = sync(validName(name));
       if (options.expectedHash !== undefined && options.expectedHash !== previous.hash) throw conflict(previous.hash);
@@ -235,7 +193,6 @@ export async function createAssistantDocuments({ directory }) {
       const hashes = Object.fromEntries(documents.map(row => [row.name, row.hash]));
       return { documents, hashes, snapshotId: documentHash(JSON.stringify(hashes)) };
     }),
-    migration: () => locked(() => meta('legacy-profile-v1')),
     sessionContext: (sessionId, sanitize = value => value) => locked(() => {
       const row = db.prepare('SELECT context FROM session_context_snapshots WHERE session_id=?').get(sessionId);
       if (!row) return null;

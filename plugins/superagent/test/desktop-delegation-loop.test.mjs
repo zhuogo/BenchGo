@@ -53,7 +53,7 @@ async function fixture(t, { mode, proposal }) {
       return state;
     },
     getConfig: async () => structuredClone(config),
-    getProfile: async () => ({ identity: 'Be concise.', user: '' }), listMemories: async () => [] };
+    memory: { forgottenRevision: () => 0, redactForgottenContext: value => value }, ledger: { append: () => ({}) }, getSessionContext: async () => ({ documents: [{ name: 'IDENTITY.md', content: 'Be concise.' }, { name: 'USER.md', content: '' }], memories: [] }) };
   ctx.provide('sessionQuery', { listSessions: async () => ctx.sessions.list().map(session => ({ header: session.header })),
     readSession: async id => ({ events: ctx.sessions.get(id).snapshotEvents() }) });
   let linkReads = 0, activeQuery = false, routerSteps = 0;

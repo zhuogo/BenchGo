@@ -14,6 +14,8 @@
 .ba-official-conversation [data-composer-seat]{position:relative;flex:0 0 auto;margin-top:auto;z-index:7;background:var(--dsw-alias-bg-base,#fff)}
 .ba-quiet-chat-column{width:100%;max-width:var(--dsh-chat-content-width,768px);margin:0 auto;min-width:0}
 .ba-chat-message{--ba-body-column:1;--ba-tools-column:2;position:relative;display:grid;grid-template-columns:minmax(0,1fr) max-content;column-gap:8px;width:fit-content;max-width:100%;margin:0 0 16px;min-width:0;overflow-wrap:anywhere}
+/* A width change republishes the inherited content axis. Rows consume neither variable, so pinning both here keeps a sidebar drag from recalculating every message subtree. */
+.ba-chat-message{--dsh-chat-content-width:100%;--dsh-composer-card-max-width:100%}
 .ba-chat-message[data-role=user]{--ba-body-column:2;--ba-tools-column:1;grid-template-columns:max-content minmax(0,1fr);margin-left:auto}
 .ba-chat-message:not(:has(.ba-message-toolbar)){grid-template-columns:minmax(0,1fr)}
 .ba-chat-body{grid-column:var(--ba-body-column);grid-row:1;align-self:center;min-width:0;max-width:100%}
@@ -22,8 +24,8 @@
 .ba-chat-content{width:fit-content;max-width:100%;min-width:0}
 .ba-chat-message[data-role=assistant] .ba-chat-body>.ba-chat-content{box-sizing:border-box;padding:12px 16px;color:var(--dsw-alias-label-primary,#222);border-radius:16px 16px 16px 6px;background:color-mix(in srgb,var(--dsw-alias-label-primary,#222) 5%,var(--dsw-alias-bg-base,#fff))}
 .ba-chat-message[data-role=user] .ba-chat-content{padding:12px 16px;background:var(--dsw-specific-bubble,#f3f3f3);color:var(--dsw-alias-label-primary,#222);border-radius:16px 16px 6px 16px;box-sizing:border-box;margin-left:auto}
-/* Official Markdown preserves block nodes while appending text: only new blocks reveal once. */
-.ba-chat-message[data-streaming=true] .ba-chat-content>[class*="_markdown"]>*{animation:ba-chat-reveal .18s ease-out}
+/* New blocks soften once; token additions need no per-frame JavaScript or global style invalidation. */
+.ba-chat-message[data-streaming=true] .ba-chat-content>[class*="_markdown"]>*{animation:ba-chat-reveal .24s cubic-bezier(.2,.7,.25,1)}
 .ba-chat-user-text{white-space:pre-wrap;line-height:1.6}
 .ba-chat-question-reply{display:grid;gap:12px;line-height:1.6}
 .ba-chat-question p{margin:0;white-space:pre-wrap}
@@ -80,7 +82,7 @@
 .ba-chat-message[data-role=user] .ba-action-error{text-align:right}
 .ba-chat-sr{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 @keyframes ba-reaction-in{from{transform:scale(.8)}to{transform:scale(1)}}
-@keyframes ba-chat-reveal{from{opacity:.65}to{opacity:1}}
+@keyframes ba-chat-reveal{from{opacity:.2;filter:blur(1px)}to{opacity:1;filter:blur(0)}}
 @container ba-chat (max-width:700px){.ba-quiet-chat{padding-left:16px;padding-right:16px}.ba-chat-message,.ba-chat-message[data-role=user]{--ba-body-column:1;--ba-tools-column:1;grid-template-columns:minmax(0,1fr);column-gap:0}.ba-message-toolbar{grid-row:3;justify-self:start;margin-top:6px}.ba-chat-message[data-role=user] .ba-message-toolbar{justify-self:end}.ba-action-error{grid-row:4}.ba-message-time-label{display:none}.ba-message-toolbar .ba-message-time-icon{display:block}.ba-message-toolbar time{width:32px;padding:0;margin-left:2px}}
 @media(hover:none),(pointer:coarse){.ba-message-toolbar{opacity:1;pointer-events:auto}.ba-message-toolbar button,.ba-message-toolbar time,.ba-action-popover button,.ba-reaction-chip,.ba-chat-bottom-button{min-width:44px;min-height:44px}}
 @media(prefers-reduced-motion:reduce){.ba-reaction-chip,.ba-chat-message[data-streaming=true] .ba-chat-content>[class*="_markdown"]>*{animation:none}.ba-message-toolbar,.ba-message-toolbar button,.ba-action-popover button,.ba-action-popover button span,.ba-chat-bottom,.ba-chat-bottom-button{transition:none;transform:none}.ba-action-popover button:hover span,.ba-chat-bottom-button:active{transform:none}}

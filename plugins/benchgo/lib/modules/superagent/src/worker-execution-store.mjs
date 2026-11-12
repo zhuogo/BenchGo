@@ -6,13 +6,11 @@ const json = value => JSON.stringify(value);
 export function installWorkerExecutionStore({ db, tx, api }) {
   db.exec(`CREATE TABLE IF NOT EXISTS sa_worker_execution_state(
     run_id TEXT PRIMARY KEY REFERENCES sa_runs(id), models TEXT NOT NULL, model_index INTEGER NOT NULL,
-    self_check TEXT, updated_at TEXT NOT NULL, fallback_plan TEXT, route_origin TEXT NOT NULL DEFAULT 'work-role')`);
-  if (!db.prepare('PRAGMA table_info(sa_worker_execution_state)').all().some(column => column.name === 'fallback_plan')) db.exec('ALTER TABLE sa_worker_execution_state ADD COLUMN fallback_plan TEXT');
-  if (!db.prepare('PRAGMA table_info(sa_worker_execution_state)').all().some(column => column.name === 'route_origin')) db.exec("ALTER TABLE sa_worker_execution_state ADD COLUMN route_origin TEXT NOT NULL DEFAULT 'work-role'");
+    updated_at TEXT NOT NULL, fallback_plan TEXT)`);
   const state = runId => {
     const row = db.prepare('SELECT * FROM sa_worker_execution_state WHERE run_id=?').get(runId);
-    return row ? { models: JSON.parse(row.models), index: row.model_index, selfCheck: row.self_check ? JSON.parse(row.self_check) : null,
-      fallbackPlan: row.fallback_plan ? JSON.parse(row.fallback_plan) : null, routeOrigin: row.route_origin } : null;
+    return row ? { models: JSON.parse(row.models), index: row.model_index,
+      fallbackPlan: row.fallback_plan ? JSON.parse(row.fallback_plan) : null } : null;
   };
   const identity = ({ assignmentId, runId, owner, fence }) => {
     const assignment = api.getAssignment(assignmentId), run = api.runs(assignmentId).find(item => item.id === runId);
@@ -30,8 +28,7 @@ export function installWorkerExecutionStore({ db, tx, api }) {
         if (prior) return prior;
         if (!Array.isArray(input.models) || !input.models.length || input.models.some(model => !model?.providerId || !model?.modelId)
           || !Number.isSafeInteger(input.index) || !input.models[input.index]) throw fail('WORKER_MODEL_ROUTE', 'Invalid frozen Worker model route');
-        if (!['work-role', 'legacy-queue', 'legacy-selection'].includes(input.routeOrigin || 'work-role')) throw fail('WORKER_MODEL_ROUTE', 'Invalid model migration origin');
-        db.prepare('INSERT INTO sa_worker_execution_state VALUES (?,?,?,?,?,?,?)').run(input.runId, json(input.models), input.index, null, new Date().toISOString(), null, input.routeOrigin || 'work-role');
+        db.prepare('INSERT INTO sa_worker_execution_state(run_id,models,model_index,updated_at,fallback_plan) VALUES (?,?,?,?,?)').run(input.runId, json(input.models), input.index, new Date().toISOString(), null);
         return state(input.runId);
       });
     },
@@ -42,14 +39,6 @@ export function installWorkerExecutionStore({ db, tx, api }) {
         if (!prior || !Number.isSafeInteger(input.index) || !prior.models[input.index]) throw fail('WORKER_MODEL_ROUTE', 'Worker model is outside its frozen queue');
         db.prepare('UPDATE sa_worker_execution_state SET model_index=?,updated_at=? WHERE run_id=?').run(input.index, new Date().toISOString(), input.runId);
         return state(input.runId);
-      });
-    },
-    recordWorkerSelfCheck(input) {
-      return tx(() => {
-        identity(input);
-        if (!state(input.runId)) throw fail('WORKER_MODEL_ROUTE', 'Frozen Worker route is unavailable');
-        db.prepare('UPDATE sa_worker_execution_state SET self_check=?,updated_at=? WHERE run_id=?').run(json(input.value), new Date().toISOString(), input.runId);
-        return state(input.runId).selfCheck;
       });
     },
     recordWorkerFallback(input) {

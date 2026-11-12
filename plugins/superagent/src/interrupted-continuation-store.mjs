@@ -9,7 +9,7 @@ export function installInterruptedContinuationStore({ db, tx, api }) {
         const assignment = api.getAssignment(assignmentId), ticket = assignment && api.getTicket(assignment.ticketId);
         const run = api.runs(assignmentId).find(item => item.id === runId && item.fence === fence);
         if (!assignment || assignment.state !== 'uncertain' || assignment.fence !== fence || !run || run.state !== 'uncertain'
-          || assignment.stopRequest || assignment.retiredExecution) throw fail('FENCING_CONFLICT', 'Interrupted execution ownership changed');
+          || assignment.stopRequest) throw fail('FENCING_CONFLICT', 'Interrupted execution ownership changed');
         if ((!ticket || ticketExecutionBlocked(ticket)) || typeof validateMandate !== 'function' || !validateMandate(ticket.mandate)
           || JSON.stringify(ticket.mandate) !== JSON.stringify(mandate)) throw fail('MANDATE_REVOKED', 'Original execution authorization changed');
         if (ticket.instructionRevision !== instructionRevision || assignment.instructionRevision !== instructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Interrupted execution requirements changed');

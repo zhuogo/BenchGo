@@ -34,7 +34,7 @@ function fixture(t, { listening = true, generate } = {}) {
   const leases = new CallLeases(), listeners = new Set(), requests = [], records = [], events = [];
   const store = { value: { call: true, conversation: { providerId: 'provider', model: 'model' }, tts: { speed: 1.2, voice: 'voice' } } };
   const bridge = {
-    describe: async () => ({ kind: 'ordinary' }), history: async () => [], handoffContext: async () => [], status: () => null,
+    describe: async () => ({ kind: 'ordinary' }), history: async () => [], status: () => null,
     append: async (_id, record) => { records.push(record); },
     subscribe(_id, listener) { listeners.add(listener); return () => listeners.delete(listener); }, dispose() {},
   };

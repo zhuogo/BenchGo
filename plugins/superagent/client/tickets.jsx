@@ -12,7 +12,7 @@ import { TaskListRow, TaskDetail, TaskIconButton, TaskStatusTitle, TicketFacts }
 import { ResourceState } from './resource-state.jsx';
 import { TicketAttention } from './ticket-attention.jsx';
 import { TicketWaiting } from './ticket-waiting.jsx';
-import { continuationRecovery, ticketSnapshot, ticketWaiting, ticketLabels, ticketResultSummary } from './ticket-state.mjs';
+import { continuationRecovery, ticketSnapshot, ticketWaiting, ticketLabels } from './ticket-state.mjs';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
 import { activityTask, archivedActivityTicket } from './activity-data.mjs';
 import { TaskExecution } from './task-execution.jsx';
@@ -69,7 +69,7 @@ export function Tickets({ api, onDirtyChange, onDetailChange, onSchedule, onOpen
   const [selectedId, setSelectedId] = useState(null), [changeId, setChangeId] = useState(null), [detailDirty, setDetailDirty] = useState(false);
   const [detailTab, setDetailTab] = useState('execution');
   const detailTabsId = useId();
-  const detailTabs = [['execution', '记录', '执行记录', 'schedules'], ['requirements', '要求', '任务要求', 'edit'], ['result', '结果', '结果与证据', 'box']].map(([value, label, ariaLabel, icon]) => ({ value, label, ariaLabel, icon: <UIIcon name={icon} size={16} />, panelId: `${detailTabsId}-panel-${value}` }));
+  const detailTabs = [['execution', '记录', '执行记录', 'schedules'], ['requirements', '要求', '任务要求', 'edit'], ['result', '结果', '执行结果', 'box']].map(([value, label, ariaLabel, icon]) => ({ value, label, ariaLabel, icon: <UIIcon name={icon} size={16} />, panelId: `${detailTabsId}-panel-${value}` }));
   const [cleanup, setCleanup] = useState(null);
   useLayoutEffect(() => { onDetailChange?.(!!selectedId || !!cleanup); return () => onDetailChange?.(false); }, [selectedId, cleanup, onDetailChange]);
   const [archiveScope, setArchiveScope] = useState('active');
@@ -134,8 +134,7 @@ export function Tickets({ api, onDirtyChange, onDetailChange, onSchedule, onOpen
   const openChange = id => { setDetailTab('requirements'); setChangeId(id); };
   const renderTicket = (row, detailOnly = false) => {
       const { result, delivery, safetyWait } = ticketSnapshot(row);
-      const resultText = result?.delivery?.text || result?.finalSummary;
-      const resultSummary = ticketResultSummary(result);
+      const resultText = result?.summary || result?.delivery?.text;
       const activity = activityTask(row, 'ticket'), status = activity.status;
       const waiting = ticketWaiting(row);
       const deliveryLabel = delivery?.receipt?.status === 'suppressed' ? '回复已取消' : delivery?.state === 'sent' ? '已送达'
@@ -178,11 +177,7 @@ export function Tickets({ api, onDirtyChange, onDetailChange, onSchedule, onOpen
         <section id={`${detailTabsId}-panel-result`} role="tabpanel" aria-labelledby={`${detailTabsId}-result`} hidden={detailTab !== 'result'} tabIndex={0} className="ba-ticket-detail-panel">
           {result ? <>
             {(result.instructionRevision ?? 1) !== (row.instructionRevision ?? 1) && <p className="ba-note">这是旧要求的结果，当前版本尚待执行。</p>}
-            {(!resultText || resultSummary !== resultText.trim()) && <TaskDocument title={status === 'completed' ? '结果摘要' : '最近结果'} icon="box" meta={!resultText && `要求版本 ${result.instructionRevision ?? 1}`}><TaskMarkdown text={resultSummary || '当前结果没有文字摘要。'} /></TaskDocument>}
-            {resultText && <TaskDocument title="结果正文" icon="document" meta={`要求版本 ${result.instructionRevision ?? 1}`}><TaskMarkdown text={resultText} /></TaskDocument>}
-            {result.selfCheck && <TaskDocument title="自检" icon="check"><TaskMarkdown text={result.selfCheck.summary} /></TaskDocument>}
-            {result.failure && <TaskDocument title="未完成说明" icon="bulb"><section><h4>无法完成</h4><TaskMarkdown text={result.failure.cause} /></section><section><h4>已尝试</h4><TaskMarkdown text={result.failure.attempted} /></section><section><h4>继续条件</h4><TaskMarkdown text={result.failure.resumeConditions} /></section></TaskDocument>}
-            {!!result.evidenceRefs?.length && <TaskDocument title="证据来源" icon="link" meta={`${result.evidenceRefs.length} 项`}><ul className="ba-ticket-evidence">{result.evidenceRefs.map((ref, index) => <li key={index}><UIIcon name="link" size={16} /><dl><div><dt>会话</dt><dd>{ref.sessionId || '—'}</dd></div>{ref.runId && <div><dt>执行</dt><dd>{ref.runId}</dd></div>}</dl></li>)}</ul></TaskDocument>}
+            <TaskDocument title="结果" icon="document" meta={`要求版本 ${result.instructionRevision ?? 1}`}><TaskMarkdown text={resultText || '当前结果没有文字内容。'} /></TaskDocument>
           </> : <ResourceState title="尚无结果" description="执行结果保存后会显示在这里。" />}
           {delivery?.lastError && <p role="status" className="ba-note">{delivery.lastError}</p>}
         </section>

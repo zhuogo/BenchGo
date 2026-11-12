@@ -33,12 +33,12 @@ export function createAssessmentRunner({ database, llm, readPolicy, authorize, r
     const cards = await abortable(Promise.all(candidates.map(async row => {
       const context = buildAssessmentContextWindow({ ...database.assessmentContext(row.triggerId), triggerId: row.triggerId,
         maxContentLength: Math.min(4000, Math.floor(68000 / (17 * candidates.length))) });
-      context.recentReplies = (database.directReplies?.({ threadId, limit: 6 }) || []).filter(reply => reply.state === 'sent')
+      context.recentReplies = database.directReplies({ threadId, limit: 6 }).filter(reply => reply.state === 'sent')
         .map(({ triggerId, kind, text, createdAt }) => ({ triggerId, kind, text: text.slice(0, 2000), createdAt })).reverse();
       const target = context.messages.find(message => message.triggerId === row.triggerId);
       const original = database.readIntakeEvent(row.triggerId);
       context.freshness = { assessedAt: new Date().toISOString(), sourceCreatedAt: original.createdAt,
-        newerSourceMessageExists: database.sourceMessageSuperseded?.(original) === true };
+        newerSourceMessageExists: database.sourceMessageSuperseded(original) };
       const externalReference = await readSourceReference({ readContext, source: target?.pointer?.source, signal, maxCharacters: Math.floor(12000 / candidates.length) });
       if (externalReference) context.externalReference = externalReference;
       return { candidateId: row.id, trigger: { id: row.triggerId, threadId, ...target }, context, gate: row.gate, tickets };

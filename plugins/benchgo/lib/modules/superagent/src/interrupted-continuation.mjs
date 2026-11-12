@@ -53,7 +53,7 @@ export async function requestInterruptedContinuation({ ctx, database, assignment
   const assignment = database.getAssignment(assignmentId), ticket = assignment && database.getTicket(assignment.ticketId);
   const run = database.runs(assignmentId).find(item => item.fence === fence);
   if (!assignment || assignment.state !== 'uncertain' || assignment.fence !== fence || !run || run.state !== 'uncertain'
-    || assignment.stopRequest || assignment.retiredExecution || !ticket || ticketExecutionBlocked(ticket)) throw fail('FENCING_CONFLICT', 'Original execution is not available for continuation');
+    || assignment.stopRequest || !ticket || ticketExecutionBlocked(ticket)) throw fail('FENCING_CONFLICT', 'Original execution is not available for continuation');
   if (ticket.instructionRevision !== instructionRevision || assignment.instructionRevision !== instructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Original execution requirements changed');
   if (!database.getWorkerExecutionState(run.id)?.models?.length) throw fail('WORKER_MODEL_ROUTE', 'Original frozen Worker model is unavailable');
   if (database.attentions(ticket.id).some(row => row.state === 'waiting')) throw fail('EXECUTION_PAUSE_UNVERIFIED', 'Original execution is waiting for a user answer');

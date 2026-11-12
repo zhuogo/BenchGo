@@ -1,6 +1,6 @@
 .bg-segments-scroll{box-sizing:border-box;min-width:0;max-width:100%;overflow-x:auto;padding:3px;margin:0 0 14px;scrollbar-width:thin}
 .bg-segments{box-sizing:border-box;position:relative;isolation:isolate;display:flex;gap:2px;width:max-content;max-width:none;padding:4px;border:0;border-radius:8px;background:color-mix(in srgb,currentColor 5%,transparent)}
-.bg-segments-indicator{position:absolute;left:0;pointer-events:none;z-index:-1;transition:transform 180ms ease,width 180ms ease,height 180ms}
+.bg-segments-indicator{position:absolute;left:0;pointer-events:none;z-index:-1;transition:transform 160ms cubic-bezier(.2,.7,.25,1)}
 .bg-segments.bg-segments button{display:flex;align-items:center;justify-content:center;gap:7px;flex:none;min-height:36px;padding:7px 14px;border:0;border-radius:6px;background:transparent;color:var(--ba-muted,var(--dsw-alias-label-secondary,#737373));white-space:nowrap;transition:background 160ms,color 160ms}
 .bg-segments.bg-segments button[aria-selected=true]{color:var(--dsw-alias-label-primary,inherit);font-weight:600}
 .bg-segments.bg-segments button[data-icon-only]{width:36px;padding:7px}

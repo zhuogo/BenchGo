@@ -3,101 +3,72 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createAssistantScheduler } from '../src/scheduler.mjs';
+import { createGoalChecklist } from '../src/goal-checklist.mjs';
 import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
-import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createTaskManagement } from '../src/task-management.mjs';
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'assistant-goal-'));
-  const database = createAssistantRuntimeStore({ filename: join(directory, 'assistant.db') });
-  const store = { paths: { database: join(directory, 'assistant.db') } };
-  let scheduler = createAssistantScheduler({ store, database });
-  t.after(async () => { await scheduler.dispose(); database.close(); store.orchestration?.close?.(); await rm(directory, { recursive: true, force: true }); });
-  return { database, store, get scheduler() { return scheduler; },
-    async restart() { await scheduler.dispose(); scheduler = createAssistantScheduler({ store, database }); },
-    goal(id, patch = {}) { return database.insertGoal({ id, requestId: id, objective: id, status: 'active', projectId: 'p', provider: 'opaque', model: 'exact', text: 'current instruction', childGoalIds: [], ticketIds: [], ...patch }); } };
+  let database = createAssistantRuntimeStore({ filename: join(directory, 'assistant.db') });
+  let goals = createGoalChecklist({ database });
+  t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
+  return { get database() { return database; }, get goals() { return goals; },
+    restart() { database.close(); database = createAssistantRuntimeStore({ filename: join(directory, 'assistant.db') }); goals = createGoalChecklist({ database }); } };
 }
 
-test('goal usage API reads authoritative totals and exposes no quota controls', async t => {
+test('checklist goals persist as one sentence and a done flag without projects or Tickets', async t => {
   const f = await fixture(t);
-  const ledger = createAssistantOrchestrationStore({ filename: f.store.paths.database });
-  f.store.orchestration = ledger;
-  f.goal('goal', { executionKind: 'ticket', budgetGoalId: 'ledger' });
-  ledger.ensureGoalBudget({ goalId: 'ledger' });
-  ledger.bindTicketGoal({ ticketId: 'ticket', goalId: 'ledger' });
-  for (let index = 0; index < 3; index++) ledger.reserveGoalRequest({ ticketId: 'ticket', requestId: `request-${index}` });
-  assert.equal(f.scheduler.getGoalBudget('goal').usage.requests, 3);
-  assert.equal(f.scheduler.getGoal('goal').budgetState.usage.requests, 3);
-  assert.equal(f.scheduler.updateGoalBudget, undefined);
-  assert.equal(f.scheduler.resumeGoalBudget, undefined);
-  f.goal('history');
-  assert.equal(f.scheduler.getGoalBudget('history'), null);
-});
-
-test('invalid goal trees do not leave a partially created parent', async t => {
-  const f = await fixture(t);
-  await assert.rejects(f.scheduler.createGoal({ objective: 'parent', children: [{ objective: 'invalid' }] }), /目标缺少/u);
-  assert.deepEqual(f.scheduler.goals(), []);
-});
-
-test('checklist goals persist without projects, Tickets or scheduler execution', async t => {
-  const f = await fixture(t);
-  const goal = f.scheduler.createChecklistGoal({ objective: '  长期整理知识库  ', requestId: 'checklist' });
-  assert.equal(goal.executionKind, 'checklist');
+  const goal = f.goals.createGoal({ objective: '  长期整理知识库  ', requestId: 'checklist' });
   assert.equal(goal.objective, '长期整理知识库');
-  assert.deepEqual(goal.ticketIds, []);
-  assert.equal(goal.projectId, undefined);
-  assert.equal(f.scheduler.createChecklistGoal({ objective: goal.objective, requestId: 'checklist', ownerSessionId: 'new-main' }).id, goal.id);
-  assert.throws(() => f.scheduler.createChecklistGoal({ objective: 'different', requestId: 'checklist' }), { code: 'IDEMPOTENCY_CONFLICT' });
-  const before = f.scheduler.getGoal(goal.id);
-  await f.scheduler.tick();
-  assert.deepEqual(f.scheduler.getGoal(goal.id), before);
-  await f.restart();
-  assert.equal(f.scheduler.goals()[0].objective, goal.objective);
-  const completed = f.scheduler.updateGoal(goal.id, { status: 'completed' }, { rowVersion: goal.rowVersion });
+  assert.equal(goal.title, goal.objective);
+  assert.equal(goal.status, 'active');
+  for (const key of ['executionKind', 'ticketIds', 'childGoalIds', 'projectId', 'budgetGoalId']) assert.equal(goal[key], undefined);
+  assert.equal(f.goals.createGoal({ objective: goal.objective, requestId: 'checklist', ownerSessionId: 'new-main' }).id, goal.id);
+  assert.throws(() => f.goals.createGoal({ objective: 'different', requestId: 'checklist' }), { code: 'IDEMPOTENCY_CONFLICT' });
+  f.restart();
+  assert.equal(f.goals.goals()[0].objective, goal.objective);
+  const completed = f.goals.updateGoal(goal.id, { status: 'completed' }, { rowVersion: goal.rowVersion });
   assert.equal(completed.status, 'completed');
   assert.ok(completed.completedAt);
-  assert.throws(() => f.scheduler.updateGoal(goal.id, { objective: 'stale' }, { rowVersion: goal.rowVersion }), { code: 'ROW_CONFLICT' });
-  assert.throws(() => f.scheduler.updateGoal(goal.id, { status: 'active' }), /rowVersion/);
-  const reopened = f.scheduler.updateGoal(goal.id, { status: 'active', objective: '整理产品知识库' }, { rowVersion: completed.rowVersion });
+  assert.throws(() => f.goals.updateGoal(goal.id, { objective: 'stale' }, { rowVersion: goal.rowVersion }), { code: 'ROW_CONFLICT' });
+  assert.throws(() => f.goals.updateGoal(goal.id, { status: 'active' }), /rowVersion/);
+  const reopened = f.goals.updateGoal(goal.id, { status: 'active', objective: '整理产品知识库' }, { rowVersion: completed.rowVersion });
   assert.equal(reopened.completedAt, null);
   assert.equal(reopened.title, reopened.objective);
-  f.scheduler.updateGoal(goal.id, { deleted: true }, { rowVersion: reopened.rowVersion });
-  assert.deepEqual(f.scheduler.goals(), []);
-  assert.equal(f.scheduler.getGoal(goal.id), null);
-  assert.equal(f.scheduler.createChecklistGoal({ objective: goal.objective, requestId: 'checklist' }).deleted, true, 'a delayed creation retry never resurrects a deleted item');
-  assert.throws(() => f.scheduler.updateGoal(goal.id, { status: 'active' }, { rowVersion: reopened.rowVersion + 1 }), /不存在/);
-  await f.restart();
-  assert.deepEqual(f.scheduler.goals(), []);
+  f.goals.updateGoal(goal.id, { deleted: true }, { rowVersion: reopened.rowVersion });
+  assert.deepEqual(f.goals.goals(), []);
+  assert.equal(f.goals.getGoal(goal.id), null);
+  assert.equal(f.goals.createGoal({ objective: goal.objective, requestId: 'checklist' }).deleted, true, 'a delayed creation retry never resurrects a deleted item');
+  assert.throws(() => f.goals.updateGoal(goal.id, { status: 'active' }, { rowVersion: reopened.rowVersion + 1 }), /不存在/);
+  f.restart();
+  assert.deepEqual(f.goals.goals(), []);
 });
 
-test('checklist validation rejects execution fields and never bypasses legacy completion', async t => {
+test('checklist validation rejects execution fields, model overrides and unknown states', async t => {
   const f = await fixture(t);
-  for (const objective of ['', ' '.repeat(5), 'x'.repeat(2001), 1]) assert.throws(() => f.scheduler.createChecklistGoal({ objective, requestId: 'invalid' }));
-  for (const key of ['projectId', 'text', 'children', 'model', 'budget']) assert.throws(() => f.scheduler.createChecklistGoal({ objective: '目标', requestId: 'invalid', [key]: 'unsupported' }));
-  assert.deepEqual(f.scheduler.goals(), []);
-  const goal = f.scheduler.createChecklistGoal({ objective: '目标', requestId: 'valid' });
-  assert.throws(() => f.scheduler.updateGoal(goal.id, { status: 'paused' }, { rowVersion: 1 }));
-  assert.throws(() => f.scheduler.updateGoal(goal.id, { projectId: 'p' }, { rowVersion: 1 }));
-  await assert.rejects(f.scheduler.cancelGoal(goal.id, { rowVersion: 1 }), /没有执行控制/);
-  f.goal('legacy', { executionKind: 'ticket' });
-  assert.throws(() => f.scheduler.updateGoal('legacy', { status: 'completed' }, { rowVersion: 1 }), /不能直接标记完成/);
+  for (const objective of ['', ' '.repeat(5), 'x'.repeat(2001), 1]) assert.throws(() => f.goals.createGoal({ objective, requestId: 'invalid' }));
+  for (const key of ['projectId', 'text', 'children', 'model', 'budget']) assert.throws(() => f.goals.createGoal({ objective: '目标', requestId: 'invalid', [key]: 'unsupported' }));
+  for (const requestId of [undefined, '', ' ', 'x'.repeat(2049)]) assert.throws(() => f.goals.createGoal({ objective: '目标', requestId }), /请求标识/);
+  assert.deepEqual(f.goals.goals(), []);
+  const goal = f.goals.createGoal({ objective: '目标', requestId: 'valid' });
+  for (const patch of [{ status: 'paused' }, { status: 'cancelled' }, { projectId: 'p' }, { deleted: false }, {}]) assert.throws(() => f.goals.updateGoal(goal.id, patch, { rowVersion: 1 }));
+  for (const name of ['cancelGoal', 'advanceGoal', 'tick', 'getGoalBudget', 'createChecklistGoal']) assert.equal(f.goals[name], undefined);
+  assert.deepEqual(f.goals.getGoal(goal.id), goal);
 });
 
 test('shared task projection organizes checklist goals through their actual versioned state', async t => {
   const f = await fixture(t);
-  const goal = f.scheduler.createChecklistGoal({ objective: '共享清单', requestId: 'task-projection' });
-  const tasks = createTaskManagement({ database: f.database, scheduler: f.scheduler });
-  const projected = tasks.project('goal', f.scheduler.goals())[0];
+  const goal = f.goals.createGoal({ objective: '共享清单', requestId: 'task-projection' });
+  const tasks = createTaskManagement({ database: f.database, goals: f.goals });
+  const projected = tasks.project('goal', f.goals.goals())[0];
   assert.equal(projected.taskCanOrganize, true);
   assert.equal(projected.taskMeta.version, goal.rowVersion);
   const completed = tasks.update({ kind: 'goal', id: goal.id, operation: 'complete', version: goal.rowVersion });
-  assert.equal(f.scheduler.getGoal(goal.id).status, 'completed');
+  assert.equal(f.goals.getGoal(goal.id).status, 'completed');
   assert.equal(completed.taskMeta.completed, true);
   assert.throws(() => tasks.update({ kind: 'goal', id: goal.id, operation: 'rename', title: '旧页面', version: goal.rowVersion }), { code: 'REVISION_CONFLICT' });
   const reopened = tasks.update({ kind: 'goal', id: goal.id, operation: 'reopen', version: completed.taskMeta.version });
-  assert.equal(f.scheduler.getGoal(goal.id).status, 'active');
+  assert.equal(f.goals.getGoal(goal.id).status, 'active');
   tasks.update({ kind: 'goal', id: goal.id, operation: 'delete', version: reopened.taskMeta.version });
-  assert.deepEqual(tasks.project('goal', f.scheduler.goals()), []);
+  assert.deepEqual(tasks.project('goal', f.goals.goals()), []);
 });

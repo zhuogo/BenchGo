@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { requestAssistantApproval } from './approval.mjs';
 import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
 
@@ -35,7 +34,7 @@ export function createModelActionTicketExecutor({ ctx, database, readPolicy, per
   const pending = new Map();
 
   async function execute(input = {}) {
-    const { name: toolName, args = {}, exec, ownerAgent, threadId = 'main', reason } = input;
+    const { name: toolName, args = {}, exec, ownerAgent, threadId = 'main' } = input;
     if (!validName(toolName)) throw new Error('Unsupported model persistent action');
     if (!ownerAgent || exec?.agent !== ownerAgent) throw new Error('Model action owner mismatch');
     const sessionId = validId(String(ownerAgent.id || ownerAgent.session?.id || ''), 'session identity');
@@ -50,12 +49,12 @@ export function createModelActionTicketExecutor({ ctx, database, readPolicy, per
       if (existingPending.binding !== binding) throw Object.assign(new Error('Model action identity conflict'), { code: 'IDEMPOTENCY_CONFLICT' });
       return existingPending.promise;
     }
-    const promise = run({ toolName, args: frozen.value, serializedArgs: frozen.serialized, argsHash, exec, ownerAgent, threadId, sessionId, callId, reason, instruction });
+    const promise = run({ toolName, args: frozen.value, argsHash, exec, ownerAgent, threadId, sessionId, callId, instruction });
     pending.set(requestKey, { binding, promise });
     try { return await promise; } finally { if (pending.get(requestKey)?.promise === promise) pending.delete(requestKey); }
   }
 
-  async function run({ toolName, args, serializedArgs, argsHash, exec, ownerAgent, threadId, sessionId, callId, reason, instruction }) {
+  async function run({ toolName, args, argsHash, exec, ownerAgent, threadId, sessionId, callId, instruction }) {
     const sourceMessage = instruction.message;
     const instructionHash = digest(JSON.stringify([instruction.turn, sourceMessage]));
     const prior = database.getRouterAction(sessionId, callId);
@@ -67,11 +66,6 @@ export function createModelActionTicketExecutor({ ctx, database, readPolicy, per
     }
 
     exec.signal?.throwIfAborted();
-    if (!await requestAssistantApproval(ctx, { ...exec, authorized: false }, toolName, reason || `Persistent action ${toolName}: ${serializedArgs}`)) throw Object.assign(new Error('Model action was not approved'), { code: 'MODEL_ACTION_DENIED' });
-    exec.signal?.throwIfAborted();
-    const currentInstruction = currentHumanInstruction(ctx, ownerAgent);
-    if (!currentInstruction || digest(JSON.stringify([currentInstruction.turn, currentInstruction.message])) !== instructionHash) throw Object.assign(new Error('User instruction changed during model-action approval'), { code: 'MODEL_ACTION_INSTRUCTION_CHANGED' });
-
     const policy = await readPolicy();
     const policyReadInstruction = currentHumanInstruction(ctx, ownerAgent);
     if (!policyReadInstruction || digest(JSON.stringify([policyReadInstruction.turn, policyReadInstruction.message])) !== instructionHash) throw Object.assign(new Error('User instruction changed before model-action reservation'), { code: 'MODEL_ACTION_INSTRUCTION_CHANGED' });
@@ -85,7 +79,6 @@ export function createModelActionTicketExecutor({ ctx, database, readPolicy, per
       policyVersion: desktopVersion, admission: 'desktop-model-action',
       controlledActions: 'model-persistent-action',
       action: { toolName, callId, argsHash, threadId },
-      approval: { kind: 'harness', callId, toolName },
     };
     const owner = `model-action:${randomUUID()}`;
     const validateMandate = value => value?.admission === 'desktop-model-action'

@@ -14,18 +14,6 @@ async function fixture(t) {
   return { dataDirectory, store: await openStore(), openStore };
 }
 
-test('legacy side-chat model overrides are removed durably without losing conversation state', async t => {
-  const { store, openStore } = await fixture(t);
-  const state = await store.getState();
-  await writeFile(store.paths.state, JSON.stringify({ ...state, threads: [{ id: 'side', sessionId: 'kept', title: 'Topic', pinned: true, models: [{ providerId: 'legacy', modelId: 'old' }] }] }));
-  const reopened = await openStore();
-  const next = await reopened.getState();
-  assert.deepEqual(next.threads, [{ id: 'side', sessionId: 'kept', title: 'Topic', pinned: true }]);
-  assert.equal(next.revision, state.revision + 1);
-  assert.equal('models' in JSON.parse(await readFile(store.paths.state, 'utf8')).threads[0], false);
-  const saved = await reopened.updateState({ threads: [{ ...next.threads[0], models: [{ providerId: 'stale', modelId: 'stale' }] }] });
-  assert.equal('models' in saved.threads[0], false);
-});
 test('independent configuration survives restart and preserves opaque models and unrelated fields', async (t) => {
   const { store, openStore } = await fixture(t);
   assert.ok((await stat(store.paths.workspace)).isDirectory());
@@ -44,10 +32,10 @@ test('independent configuration survives restart and preserves opaque models and
 test('session context survives store restart and new sessions receive current documents', async t => {
   const { store, openStore } = await fixture(t);
   const identity = 'frozen identity ' + 'x'.repeat(13000);
-  await store.updateProfile({ identity });
+  await store.documents.mutate('IDENTITY.md', () => identity, { source: { type: 'user-edit' } });
   const original = await store.getSessionContext('session-a');
   original.documents[0].content = 'caller mutation';
-  await store.updateProfile({ identity: 'changed identity' });
+  await store.documents.mutate('IDENTITY.md', () => 'changed identity', { source: { type: 'user-edit' } });
   store.close();
   const restarted = await openStore();
   const restored = await restarted.getSessionContext('session-a');
@@ -177,8 +165,8 @@ test('video selection migrates legacy configs and preserves image/model settings
 });
 test('profiles, thread metadata and explicit memories persist and corrected/deleted memories disappear', async (t) => {
   const { store, openStore } = await fixture(t);
-  await store.updateProfile({ identity: 'Assistant identity', user: 'User facts' });
-  await store.updateProfile({ identity: 'Corrected identity' });
+  await store.documents.mutate('IDENTITY.md', () => 'Assistant identity', { source: { type: 'user-edit' } }); await store.documents.mutate('USER.md', () => 'User facts', { source: { type: 'user-edit' } });
+  await store.documents.mutate('IDENTITY.md', () => 'Corrected identity', { source: { type: 'user-edit' } });
   await store.updateState({ mainSessionId: 'main', threads: [{ id: 'side', sessionId: 's1' }] }, { revision: 0 });
   const entry = await store.saveMemory({ content: 'Old preference', source: { sessionId: 's1', messageId: 'm1' } });
   await assert.rejects(store.saveMemory({ ...entry, content: 'Conflict' }, { revision: 0 }), /reload/);
@@ -190,7 +178,7 @@ test('profiles, thread metadata and explicit memories persist and corrected/dele
   assert.equal((await restarted.listMemories())[0].source.messageId, 'm1');
   await restarted.deleteMemory(entry.id, { revision: 2 });
   assert.deepEqual(await store.listMemories(), []);
-  assert.ok(!(await readFile(join(store.paths.memory, 'entries.json'), 'utf8')).includes('Old preference'));
+  assert.ok(!(await readFile(join(store.paths.directory, 'MEMORY.md'), 'utf8')).includes('Old preference'));
 });
 
 test('runtime freezes five ordered documents while management preserves six', async t => {

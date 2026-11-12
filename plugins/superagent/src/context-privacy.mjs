@@ -5,8 +5,8 @@ import { cleanMemoryContext } from './memory.mjs';
 export function createContextRedactor(agent, name, memory) {
   let previous;
   return () => {
-    const revision = memory?.forgottenRevision?.();
-    if (revision !== undefined && revision === previous) return;
+    const revision = memory.forgottenRevision();
+    if (revision === previous) return;
     const visible = new Set(agent.session.surface.nodes);
     for (const event of agent.session.snapshotEvents()) {
       if (!visible.has(event.seq) || event.type !== 'user/message' || event.data.source?.kind !== 'runtime-context') continue;
@@ -14,7 +14,7 @@ export function createContextRedactor(agent, name, memory) {
       const sections = event.data.source.sections?.map(section => {
         if (section.name !== name) return section;
         const parsed = JSON.parse(section.text);
-        const cleaned = cleanMemoryContext(memory?.redactForgottenContext?.(parsed) ?? parsed);
+        const cleaned = cleanMemoryContext(memory.redactForgottenContext(parsed));
         const text = JSON.stringify(cleaned);
         if (text === JSON.stringify(parsed)) return section;
         changed = true;

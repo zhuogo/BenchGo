@@ -5,11 +5,13 @@ import { Button } from '../../shared/client/ui/button.jsx';
 import { ModelSettings } from './model-settings.jsx';
 import { retainAssistantSession, assistantBackgroundSessions } from './session-retain.mjs';
 import { identityConfigPatch, validateModelSettings } from './model-settings.mjs';
-import React, { useEffect, useRef, useState, useId, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useId, useSyncExternalStore } from 'react';
 import { Tooltip, Modal, Menu, IconPinOutlineMedium, IconPinFillMedium, IconArchiveOutlineMedium, IconArchiveOffOutlineMedium, IconEllipsisOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives';
 import { UIIcon as BaseIcon } from '../../benchgo/client/iconsax.jsx';
 import { BrandLogo } from '../../link/client/brand.jsx';
 import { readJsonResponse } from '../../benchgo/client/http-response.mjs';
+import { perfTrace } from '../../shared/client/perf-trace.mjs';
+import { structuralShare } from './structural-share.mjs';
 import { assistantModelCatalog } from '../../benchgo/client/model-catalog.mjs';
 import css from './style.css';
 import documentsCss from './documents.css';
@@ -28,7 +30,7 @@ import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 import { CustomSelect } from '../../shared/client/custom-select.jsx';
 import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
 import { ChannelBrandIcon } from '../../shared/client/channel-brand-icon.jsx';
-import { sidebarListStorageKey, readSidebarList, channelIsConnected, isFixedChannelThread, sidebarThreads, channelThreadTitle } from './sidebar-lists.mjs';
+import { sidebarListStorageKey, readSidebarList, channelIsConnected, isFixedChannelThread, sidebarThreads, channelThreadTitle, createSidebarThreadTimeFormatter } from './sidebar-lists.mjs';
 import { MemoryPage } from './memory.jsx';
 import { Goals } from './goals.jsx';
 import { Tickets } from './tickets.jsx';
@@ -113,29 +115,36 @@ export function AssistantSidebarEntry({ ctx, showArchived = false }) {
   const panel = useSyncExternalStore(fn => ctx.layout.panelInfo.subscribe(fn), () => ctx.layout.panelInfo.getSnapshot());
   useEffect(() => {
     const controller = new AbortController();
-    let latest = 0;
-    const refresh = async (force = false) => {
-      if (document.hidden && force !== true) return;
-      const request = ++latest;
+    let latest = 0, pending, queued = false, queuedManual = false, changeTimer;
+    const refresh = (force = false) => {
+      if (controller.signal.aborted || (document.hidden && force !== true)) return;
       if (force === true) { setLoadError(''); setChannelsError(''); setRefreshing(true); }
-      try {
-        const [stateResult, catalogResult] = await Promise.allSettled([api('state', {}, controller.signal), ...(imList ? [api('connectionCatalog', {}, controller.signal)] : [])]);
-        if (controller.signal.aborted || request !== latest) return;
-        if (imList) {
-          if (catalogResult.status === 'fulfilled') { setChannels(catalogResult.value.channels || []); setChannelsLoaded(true); setChannelsError(''); }
-          else setChannelsError(catalogResult.reason.message || '渠道连接状态暂时不可用');
+      if (pending) { queued = true; queuedManual ||= force === true; return pending; }
+      const request = ++latest;
+      pending = (async () => {
+        try {
+          const [stateResult, catalogResult] = await Promise.allSettled([api('state', {}, controller.signal), ...(imList ? [api('connectionCatalog', {}, controller.signal)] : [])]);
+          if (controller.signal.aborted || request !== latest) return;
+          if (imList) {
+            if (catalogResult.status === 'fulfilled') { setChannels(previous => structuralShare(previous, catalogResult.value.channels || [])); setChannelsLoaded(true); setChannelsError(''); }
+            else setChannelsError(catalogResult.reason.message || '渠道连接状态暂时不可用');
+          }
+          if (stateResult.status === 'rejected') throw stateResult.reason;
+          const value = stateResult.value;
+          if (!controller.signal.aborted && request === latest) {
+            setThreads(previous => structuralShare(previous, value.state.threads || [])); setMainSessionId(value.state.mainSessionId || null); setLoaded(true); setLoadError('');
+          }
+        } catch (cause) {
+          if (!controller.signal.aborted && request === latest) setLoadError(cause.message || '连接暂时不可用');
+        } finally {
+          if (!controller.signal.aborted && request === latest) setRefreshing(false);
+          pending = null;
+          if (queued && !controller.signal.aborted) { const manual = queuedManual; queued = queuedManual = false; await refresh(manual); }
         }
-        if (stateResult.status === 'rejected') throw stateResult.reason;
-        const value = stateResult.value;
-        if (!controller.signal.aborted && request === latest) {
-          setThreads(value.state.threads || []); setMainSessionId(value.state.mainSessionId || null); setLoaded(true); setLoadError('');
-        }
-      } catch (cause) {
-        if (!controller.signal.aborted && request === latest) setLoadError(cause.message || '连接暂时不可用');
-      } finally {
-        if (!controller.signal.aborted && request === latest) setRefreshing(false);
-      }
+      })();
+      return pending;
     };
+    const changed = () => { if (changeTimer) return; changeTimer = setTimeout(() => { changeTimer = null; void refresh(); }, 80); };
     refreshRef.current = refresh;
     const selectedThread = event => { setSelected(event.detail); setSelectedTab('chat'); };
     const selectedTabChanged = event => setSelectedTab(event.detail);
@@ -143,9 +152,9 @@ export function AssistantSidebarEntry({ ctx, showArchived = false }) {
     document.addEventListener('benchgo:assistant-thread', selectedThread);
     document.addEventListener('benchgo:assistant-tab', selectedTabChanged);
     const clearArchived = () => { if (!showArchived) return; setSaving(true); setError(''); api('deleteArchivedThreads').then(() => { if (selectionRef.current !== 'main') openAssistantThread(ctx, 'main'); refresh(); }).catch(cause => setError(cause.message)).finally(() => setSaving(false)); };
-    document.addEventListener('benchgo:assistant-changed', refresh);
+    document.addEventListener('benchgo:assistant-changed', changed);
     document.addEventListener('benchgo:clear-archived-threads', clearArchived);
-    return () => { controller.abort(); refreshRef.current = null; clearInterval(timer); document.removeEventListener('benchgo:assistant-thread', selectedThread); document.removeEventListener('benchgo:assistant-tab', selectedTabChanged); document.removeEventListener('benchgo:assistant-changed', refresh); document.removeEventListener('benchgo:clear-archived-threads', clearArchived); document.dispatchEvent(new CustomEvent('benchgo:archived-thread-count', { detail: 0 })); };
+    return () => { controller.abort(); refreshRef.current = null; clearInterval(timer); clearTimeout(changeTimer); document.removeEventListener('benchgo:assistant-thread', selectedThread); document.removeEventListener('benchgo:assistant-tab', selectedTabChanged); document.removeEventListener('benchgo:assistant-changed', changed); document.removeEventListener('benchgo:clear-archived-threads', clearArchived); document.dispatchEvent(new CustomEvent('benchgo:archived-thread-count', { detail: 0 })); };
   }, [showArchived, imList]);
   const createThread = async () => {
     if (creating) return;
@@ -163,6 +172,7 @@ export function AssistantSidebarEntry({ ctx, showArchived = false }) {
   const hasConnectedChannels = channels.some(channel => channelIsConnected(channel.status));
   useEffect(() => { document.dispatchEvent(new CustomEvent('benchgo:archived-thread-count', { detail: sidebarThreads(threads, { archived: true }).length })); }, [threads]);
   const current = visible.find(thread => thread.id === menu) || null;
+  const formatTime = createSidebarThreadTimeFormatter();
   const row = thread => {
     const fixedSource = isFixedChannelThread(thread);
     const channel = fixedSource && channels.find(item => item.id === thread.source.channel);
@@ -174,12 +184,10 @@ export function AssistantSidebarEntry({ ctx, showArchived = false }) {
     const state = thread.archived ? 'archived' : !thread.sessionId ? 'idle' : status?.pendingInteraction ? 'pending' : running === true ? 'running' : running === false || status?.completionUnread ? 'idle' : 'unknown';
     const stateLabel = { archived: '已归档', pending: '待确认', running: '忙碌', idle: '空闲', unknown: '状态未知' }[state];
     const updatedAt = session?.updatedAt || thread.createdAt;
-    const date = new Date(updatedAt), hasDate = !!updatedAt && !Number.isNaN(date.getTime());
-    const today = new Date();
-    const timeLabel = hasDate ? date.toDateString() === today.toDateString() ? date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric', ...(date.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}) }) : '—';
+    const { hasDate, timeLabel, dateTime, detail } = formatTime(updatedAt);
     const archive = () => void mutate(async () => { await api('archiveThread', { threadId: thread.id, archived: !showArchived }); if (!showArchived && selected === thread.id) openAssistantThread(ctx, 'main'); });
     return <div className={`cmd-session-row ${showArchived ? 'is-archived' : ''} ${active ? 'is-selected' : ''}`} data-source={fixedSource ? 'im' : 'side'} data-menu-open={menu === thread.id || undefined} key={thread.id}>
-      <Button variant="ghost" type="button" className={`cmd-session ${active ? 'cmd-selected' : ''}`} title={fixedSource ? `${title}，${sourceLabel}` : undefined} aria-label={fixedSource ? `${title}，${sourceLabel}` : undefined} aria-current={active ? 'page' : undefined} onClick={() => { setMenu(null); openAssistantThread(ctx, thread.id); }}><span className="ba-thread-copy">{fixedSource && <ChannelBrandIcon channel={thread.source.channel} available size={14} />}<span className="ba-thread-title">{title}</span><span className="ba-thread-meta"><Hint label={hasDate ? `${session?.updatedAt ? '最近活动' : '创建于'} ${date.toLocaleString('zh-CN')}` : '时间暂不可用'}><time className="ba-thread-time" dateTime={hasDate ? date.toISOString() : undefined}>{timeLabel}</time></Hint>{!fixedSource && <span className="ba-thread-status" data-status={state}><i aria-hidden="true" />{stateLabel}</span>}</span></span></Button>
+      <Button variant="ghost" type="button" className={`cmd-session ${active ? 'cmd-selected' : ''}`} title={fixedSource ? `${title}，${sourceLabel}` : undefined} aria-label={fixedSource ? `${title}，${sourceLabel}` : undefined} aria-current={active ? 'page' : undefined} onClick={() => { setMenu(null); openAssistantThread(ctx, thread.id); }}><span className="ba-thread-copy">{fixedSource && <ChannelBrandIcon channel={thread.source.channel} available size={14} />}<span className="ba-thread-title">{title}</span><span className="ba-thread-meta"><Hint label={hasDate ? `${session?.updatedAt ? '最近活动' : '创建于'} ${detail}` : '时间暂不可用'}><time className="ba-thread-time" dateTime={dateTime}>{timeLabel}</time></Hint>{!fixedSource && <span className="ba-thread-status" data-status={state}><i aria-hidden="true" />{stateLabel}</span>}</span></span></Button>
       {!fixedSource && <div className="ba-thread-actions">
         {!showArchived && <Hint label={thread.pinned ? '取消置顶' : '置顶'}><Button variant="ghost" type="button" className="cmd-session-quick" aria-label={thread.pinned ? '取消置顶' : '置顶会话'} aria-pressed={!!thread.pinned} disabled={saving} onClick={event => { event.stopPropagation(); void mutate(() => api('pinThread', { threadId: thread.id, pinned: !thread.pinned })); }}>{thread.pinned ? <IconPinFillMedium size={16} /> : <IconPinOutlineMedium size={16} />}</Button></Hint>}
         <Hint label={showArchived ? '取消归档' : '归档'}><Button variant="ghost" type="button" className="cmd-session-quick" aria-label={showArchived ? '取消归档对话' : '归档对话'} disabled={saving} onClick={event => { event.stopPropagation(); archive(); }}>{showArchived ? <IconArchiveOffOutlineMedium size={16} /> : <IconArchiveOutlineMedium size={16} />}</Button></Hint>
@@ -313,7 +321,7 @@ function Studio({ snapshot, ctx, refresh, threadId, SessionProvider, renderSlot,
     <div hidden={section !== 'models'} style={section !== 'models' ? { display: 'none' } : undefined}>{(section === 'models' || dirtySections.includes('models')) && <Identity modelsOnly snapshot={snapshot} refresh={refresh} onDirtyChange={dirtyEditor('models')} />}</div>
     <div hidden={section !== 'documents'} style={section !== 'documents' ? { display: 'none' } : undefined}>{(section === 'documents' || dirtySections.includes('documents')) && <AssistantDocuments api={api} refresh={refresh} onDirtyChange={dirtyEditor('documents')} requestedDocument={documentTabs[requestedTab]} />}</div>
     <div hidden={section !== 'tasks'} style={section !== 'tasks' ? { display: 'none' } : undefined}>{(section === 'tasks' || dirtySections.includes('tasks')) && <section className="ba-group"><div id={taskTabsId + '-panel'} role="tabpanel" aria-labelledby={taskTab === 'tasks' && taskDetailOpen ? undefined : taskTabsId + '-' + (taskTab === 'tasks' ? 'tickets' : taskTab)} aria-label={taskTab === 'tasks' && taskDetailOpen ? '工单详情' : undefined}>{taskTab === 'tasks' ? <Tickets api={api} onDetailChange={setTaskDetailOpen} onOpenExecution={execution => openExecutionSession(ctx, execution)} onSchedule={() => ctx.layout.selectPanel('schedules')} requestedTicket={requestedTicket} onDirtyChange={dirtyEditor('tasks')} /> : (visible ? <ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} onOpenReminder={id => openAssistantThread(ctx, id)} /> : null)}</div></section>}</div>
-    <div hidden={section !== 'goals'} style={section !== 'goals' ? { display: 'none' } : undefined}>{(section === 'goals' || dirtySections.includes('goals')) && <Goals api={api} onDirtyChange={dirtyEditor('goals')} onViewTickets={() => { choose('tasks'); setTaskTab('tasks'); }} />}</div>
+    <div hidden={section !== 'goals'} style={section !== 'goals' ? { display: 'none' } : undefined}>{(section === 'goals' || dirtySections.includes('goals')) && <Goals api={api} onDirtyChange={dirtyEditor('goals')} />}</div>
     <div hidden={section !== 'memory'} style={section !== 'memory' ? { display: 'none' } : undefined}>{(section === 'memory' || dirtySections.includes('memory')) && <MemoryPage api={api} refresh={refresh} onDirtyChange={dirtyEditor('memory')} entries={snapshot.memories || []} threadId={threadId} />}</div>
     <div hidden={section !== 'artifacts'} style={section !== 'artifacts' ? { display: 'none' } : undefined}>{(section === 'artifacts' || dirtySections.includes('artifacts')) && <Artifacts api={api} />}</div>
     <div hidden={section !== 'connections'} style={section !== 'connections' ? { display: 'none' } : undefined}>{(section === 'connections' || dirtySections.includes('connections')) && <Connections api={api} active={visible && section === 'connections'} onDirtyChange={dirtyEditor('connections')} />}</div>
@@ -376,14 +384,55 @@ function UIIcon({ name, ...props }) {
   const icon = <BaseIcon name={mapped[name] || name} {...props} />;
   return name === 'arrow-up' ? <span style={{ display: 'inline-flex', transform: 'rotate(180deg)' }}>{icon}</span> : icon;
 }
+async function request(action, args, signal) {
+  const url = new URL('api/commander/assistant', document.baseURI), done = perfTrace.time('assistant:' + action);
+  try { return await readJsonResponse(await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...args }), signal }), url); }
+  finally { done(); }
+}
+// Frequent reads leave the state snapshot valid; every other action may change it.
+const STATE_PRESERVING = new Set(['history', 'ensure', 'tickets', 'approvalOrigins', 'executionSessions', 'executionSummaryActivity', 'petCatalog', 'goalList', 'connectionCatalog', 'connectionStatus']);
+const ensuredSessions = new Map();
+let stateEpoch = 0, stateRead = null;
+/** A reader arriving after this point never shares a state read that began before it. */
+function invalidateAssistantState() { stateEpoch++; }
+function abortable(promise, signal) {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+    // The shared read always has a handler, including after this caller left.
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+// Sidebar, page, board and sounds react to the same invalidation; they share its one read.
+function readState(signal) {
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  let read = stateRead;
+  if (!read || read.epoch !== stateEpoch) {
+    const order = assistantConfigSync.begin();
+    read = stateRead = { epoch: stateEpoch };
+    read.promise = request('state', {}).then(response => ({ ...response, config: assistantConfigSync.accept(response.config, order) }))
+      .finally(() => { if (stateRead === read) stateRead = null; });
+  }
+  return abortable(read.promise, signal);
+}
 async function api(action, args = {}, signal) {
-  const url = new URL('api/commander/assistant', document.baseURI);
+  if (action === 'state' && !Object.keys(args).length) return readState(signal);
   const order = assistantConfigSync.begin();
-  const response = await readJsonResponse(await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...args }), signal }), url);
-  if (signal?.aborted && (action === 'state' || action === 'config')) signal.throwIfAborted();
-  if (action === 'state') return { ...response, config: assistantConfigSync.accept(response.config, order) };
+  let response;
+  try { response = await request(action, args, signal); }
+  finally { if (!STATE_PRESERVING.has(action)) invalidateAssistantState(); }
+  if (signal?.aborted && action === 'config') signal.throwIfAborted();
   if (['config', 'petApply', 'petRestore'].includes(action)) return assistantConfigSync.accept(response.config || response, order);
-  if (['ensure', 'resetMain'].includes(action)) document.dispatchEvent(new Event('benchgo:assistant-changed'));
+  // Every poll and background retain ensures its thread. Only a first or replaced
+  // session changes what the sidebar, ownership and review lists must reread.
+  const threadId = args.threadId ?? 'main';
+  if (action === 'resetMain') ensuredSessions.delete('main');
+  if (action === 'resetMain' || (action === 'ensure' && ensuredSessions.get(threadId) !== response.sessionId)) {
+    if (action === 'ensure') ensuredSessions.set(threadId, response.sessionId);
+    invalidateAssistantState();
+    document.dispatchEvent(new Event('benchgo:assistant-changed'));
+  }
   return response;
 }
 function Hint({ label, children }) { return <Tooltip label={label} delayMs={450} portal>{children}</Tooltip>; }
@@ -476,47 +525,9 @@ function mergeHistory(previous, incoming, earlier = false) {
     images: unique(earlier ? [...(incoming.images || []), ...(previous.images || [])] : [...(previous.images || []), ...(incoming.images || [])]),
     hasMore: pagination.hasMore, nextBefore: pagination.nextBefore };
 }
-export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
-  const execution = useSyncExternalStore(executionSessionNavigation.subscribe, executionSessionNavigation.getSnapshot);
-  const [snapshot, setSnapshot] = useState(null), [error, setError] = useState(''), [tab, setTab] = useState(selectedAssistantTab);
-  const [threadId, setThreadId] = useState(selectedAssistantThread), [history, replaceHistory] = useState({ messages: [], running: false });
-  const [requestedTicket, setRequestedTicket] = useState(selectedAssistantTicket);
-  useEffect(() => {
-    const openThread = event => select(event.detail);
-    document.addEventListener('benchgo:assistant-thread', openThread);
-    return () => document.removeEventListener('benchgo:assistant-thread', openThread);
-  }, []);
-  useEffect(() => {
-    const openTab = event => { setTab(event.detail || 'chat'); setRequestedTicket(selectedAssistantTicket); };
-    document.addEventListener('benchgo:assistant-tab', openTab);
-    return () => document.removeEventListener('benchgo:assistant-tab', openTab);
-  }, []);
-  const current = useRef(threadId), epoch = useRef(0), latestRequest = useRef(0);
-  const setHistory = value => { if (!value.threadId || value.threadId === current.current) replaceHistory(previous => mergeHistory(previous, value)); };
-  const refreshHistory = async (id, signal) => {
-    const requestEpoch = epoch.current, request = ++latestRequest.current;
-    const value = await api('history', { threadId: id }, signal);
-    if (current.current === id && epoch.current === requestEpoch && latestRequest.current === request) setHistory(value);
-  };
-  const loadEarlier = async () => {
-    if (!history.hasMore || history.nextBefore == null) return;
-    const id = threadId, requestEpoch = epoch.current;
-    const page = await api('history', { threadId: id, before: history.nextBefore });
-    if (current.current === id && epoch.current === requestEpoch) replaceHistory(previous => mergeHistory(previous, page, true));
-  };
-  useEffect(() => {
-    if (tab !== 'chat' || !history.sessionId) return;
-    let timer, disposed = false;
-    const changed = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        if (document.hidden) return;
-        void refreshHistory(threadId).catch(cause => { if (!disposed) setError(cause.message); });
-      }, 100);
-    };
-    document.addEventListener('benchgo:assistant-history-changed', changed);
-    return () => { disposed = true; clearTimeout(timer); document.removeEventListener('benchgo:assistant-history-changed', changed); };
-  }, [threadId, tab, history.sessionId]);
+// Background retention follows every session's status and activity. Owning those
+// subscriptions here keeps unrelated sessions from re-rendering the open transcript.
+function BackgroundSessions({ ctx, state, selectedSessionId }) {
   const retained = useRef(new Map());
   const statusSource = ctx.uiSession?.sessionStatus, sessionSource = ctx.sessions?.list;
   const statuses = useSyncExternalStore(listener => statusSource?.subscribe(listener) || (() => {}), () => statusSource?.getSnapshot() || EMPTY_STATUSES);
@@ -534,13 +545,81 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
   };
   useEffect(() => () => { for (const scope of retained.current.values()) scope.release(); retained.current.clear(); }, [ctx]);
   useEffect(() => {
-    const background = assistantBackgroundSessions(snapshot?.state, history.sessionId, statuses, sessions);
+    const background = assistantBackgroundSessions(state, selectedSessionId, statuses, sessions);
     for (const [sessionId, scope] of retained.current) if (!background.has(sessionId)) { scope.release(); retained.current.delete(sessionId); }
     for (const [sessionId, id] of background) void ensureScope(sessionId, id).catch(cause => { console.warn('[BenchGo] background session connection failed', cause); });
-  }, [snapshot?.state?.threads, snapshot?.state?.mainSessionId, history.sessionId, statuses, sessions]);
+  }, [state?.threads, state?.mainSessionId, selectedSessionId, statuses, sessions]);
+  return null;
+}
+export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
+  const execution = useSyncExternalStore(executionSessionNavigation.subscribe, executionSessionNavigation.getSnapshot);
+  const [snapshot, setSnapshot] = useState(null), [error, setError] = useState(''), [tab, setTab] = useState(selectedAssistantTab);
+  const [threadId, setThreadId] = useState(selectedAssistantThread), [history, replaceHistory] = useState({ messages: [], running: false });
+  const [requestedTicket, setRequestedTicket] = useState(selectedAssistantTicket);
+  useEffect(() => {
+    const openThread = event => select(event.detail);
+    document.addEventListener('benchgo:assistant-thread', openThread);
+    return () => document.removeEventListener('benchgo:assistant-thread', openThread);
+  }, []);
+  useEffect(() => {
+    const openTab = event => { setTab(event.detail || 'chat'); setRequestedTicket(selectedAssistantTicket); };
+    document.addEventListener('benchgo:assistant-tab', openTab);
+    return () => document.removeEventListener('benchgo:assistant-tab', openTab);
+  }, []);
+  const current = useRef(threadId), epoch = useRef(0), historyReads = useRef(new Map());
+  // Unchanged messages keep their identity, so a poll re-renders only rows whose data moved.
+  const setHistory = value => { if (!value.threadId || value.threadId === current.current) replaceHistory(previous => structuralShare(previous, mergeHistory(previous, value))); };
+  const readHistory = async id => {
+    const requestEpoch = epoch.current;
+    const value = await api('history', { threadId: id });
+    if (current.current === id && epoch.current === requestEpoch) setHistory(value);
+  };
+  // One read per thread at a time. Callers arriving meanwhile share a single
+  // trailing read, which starts after their change and therefore observes it.
+  const refreshHistory = (id, signal) => {
+    const reads = historyReads.current, active = reads.get(id);
+    const start = () => {
+      const entry = { queued: null };
+      entry.running = readHistory(id).finally(() => { if (reads.get(id) === entry) reads.delete(id); });
+      reads.set(id, entry);
+      return entry.running;
+    };
+    if (!active) return abortable(start(), signal);
+    active.queued ||= active.running.then(start, start);
+    return abortable(active.queued, signal);
+  };
+  const latestHistory = useRef(history);
+  latestHistory.current = history;
+  // The conversation context is memoized on these callbacks; they outlive history commits.
+  const loadEarlier = useCallback(async () => {
+    const { hasMore, nextBefore } = latestHistory.current;
+    if (!hasMore || nextBefore == null) return;
+    const id = current.current, requestEpoch = epoch.current;
+    const page = await api('history', { threadId: id, before: nextBefore });
+    if (current.current === id && epoch.current === requestEpoch) replaceHistory(previous => structuralShare(previous, mergeHistory(previous, page, true)));
+  }, []);
+  const openExecution = useCallback(target => openExecutionSession(ctx, target), [ctx]);
+  const openResources = useCallback((next, selection) => openAssistantTab(ctx, next, selection), [ctx]);
+  useEffect(() => {
+    if (tab !== 'chat' || !history.sessionId) return;
+    let timer, disposed = false;
+    const changed = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (document.hidden) return;
+        void refreshHistory(threadId).catch(cause => { if (!disposed) setError(cause.message); });
+      }, 100);
+    };
+    document.addEventListener('benchgo:assistant-history-changed', changed);
+    return () => { disposed = true; clearTimeout(timer); document.removeEventListener('benchgo:assistant-history-changed', changed); };
+  }, [threadId, tab, history.sessionId]);
   current.current = threadId;
+  const refreshCurrent = useRef(null);
+  refreshCurrent.current = () => refreshHistory(threadId);
+  // Message controls are memoized on this callback; it must outlive history commits.
+  const onRefresh = useCallback(() => refreshCurrent.current(), []);
   const stateRequest = useRef(0);
-  const refresh = async (signal) => { const request = ++stateRequest.current; const value = await api('state', {}, signal); if (request === stateRequest.current) setSnapshot({ ...value, config: assistantConfigSync.getSnapshot() || value.config }); return value; };
+  const refresh = async (signal) => { const request = ++stateRequest.current; const value = await api('state', {}, signal); if (request === stateRequest.current) setSnapshot(previous => structuralShare(previous, { ...value, config: assistantConfigSync.getSnapshot() || value.config })); return value; };
   const execute = async (operation) => { try { setError(''); await operation(); return true; } catch (cause) { setError(cause.message || String(cause)); return false; } };
   const retryLoad = async () => { try { setError(''); await refresh(); if (tab === 'chat') { await api('ensure', { threadId }); await refreshHistory(threadId); } } catch (cause) { setError(cause.message || String(cause)); } };
   const clearingMain = useRef(false), clearCommand = useRef(null);
@@ -611,9 +690,15 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
   const threads = snapshot?.state?.threads || [];
   const selected = threads.find(thread => thread.id === threadId);
   const view = tab === 'chat' ? 'chat' : 'studio';
-  return <ActivityProvider><div className="ba-root"><main className="ba-main"><div className="ba-assistant-content" hidden={!!execution}>{error && snapshot && <div className="ba-error" role="alert"><span>{error}</span><Button variant="ghost" type="button" onClick={retryLoad}>重试加载</Button><IconButton icon="close" label="关闭错误" onClick={() => setError('')} /></div>}{snapshot && <PendingInteractions ctx={ctx} currentSessionId={tab === 'chat' ? history.sessionId : undefined} threads={[...(snapshot.state.mainSessionId && !threads.some(thread => thread.id === 'main') ? [{ id: 'main', title: '主聊天', sessionId: snapshot.state.mainSessionId }] : []), ...threads.filter(thread => thread.sessionId), ...(!threads.some(thread => thread.sessionId === history.sessionId) && history.sessionId ? [{ id: threadId, title: selected?.title, sessionId: history.sessionId }] : [])]} />}{!snapshot ? <div className="ba-resource-initial"><ResourceState kind={error ? 'error' : 'loading'} title={error ? '暂时无法加载助手' : '正在准备助手'} description={error || '正在读取配置与资源，请稍候。'} onAction={error ? retryLoad : undefined} /></div> : <><RetainedPane active={!execution && view === 'studio'}><Studio active={!execution && view === 'studio'} requestedTab={tab} requestedTicket={requestedTicket} initialSection={['tasks', 'goals', 'memory', 'connections'].includes(tab) ? tab : 'identity'} initialIdentityTab={['models', 'pet'].includes(tab) ? tab : 'info'} snapshot={snapshot} ctx={ctx} refresh={refresh} threadId={threadId} SessionProvider={SessionProvider} renderSlot={renderSlot} /></RetainedPane>{view === 'chat' && <>{!snapshot.config.models?.length && <ModelSetupNotice onOpen={() => { selectedAssistantTab = 'models'; setTab('models'); }} />}<HistoryNotice history={history} threadId={threadId} onClear={clearMain} />{history.sessionId ? <AssistantConversation onOpenExecution={execution => openExecutionSession(ctx, execution)} key={threadId} ctx={ctx} sessionId={history.sessionId} threadId={threadId} history={history} onLoadEarlier={loadEarlier} onRefresh={() => refreshHistory(threadId)} SessionProvider={SessionProvider} renderSlot={renderSlot} api={api} assistantName={snapshot.config.name} assistantConfig={snapshot.config} petExpression={snapshot.petExpression} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} /> : <div className="ba-resource-initial">{error ? <ResourceState kind="error" title="聊天暂未连接" description={error} actionLabel="重新连接" onAction={retryLoad} /> : <Loading label={`正在打开${threadId === 'main' ? '主聊天' : '旁聊'}`} />}</div>}<Images images={history.images} /></>}</>}</div>{execution && <ExecutionSessionPanel ctx={ctx} execution={execution} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} onClose={() => executionSessionNavigation.close()} onOpenTicket={ticketId => openAssistantTab(ctx, 'tasks', { ticketId })} />}</main>{!execution && snapshot && tab === 'chat' && <ActivityPanel onOpenReminder={id => openAssistantThread(ctx, id)} api={api} ctx={ctx} sessionId={history.sessionId} SessionProvider={SessionProvider} renderSlot={renderSlot} onOpenExecution={execution => openExecutionSession(ctx, execution)} assistantConfig={snapshot.config} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} />}</div></ActivityProvider>;
+  return <ActivityProvider><BackgroundSessions ctx={ctx} state={snapshot?.state} selectedSessionId={history.sessionId} /><div className="ba-root"><main className="ba-main"><div className="ba-assistant-content" hidden={!!execution}>{error && snapshot && <div className="ba-error" role="alert"><span>{error}</span><Button variant="ghost" type="button" onClick={retryLoad}>重试加载</Button><IconButton icon="close" label="关闭错误" onClick={() => setError('')} /></div>}{snapshot && <PendingInteractions ctx={ctx} currentSessionId={tab === 'chat' ? history.sessionId : undefined} threads={[...(snapshot.state.mainSessionId && !threads.some(thread => thread.id === 'main') ? [{ id: 'main', title: '主聊天', sessionId: snapshot.state.mainSessionId }] : []), ...threads.filter(thread => thread.sessionId), ...(!threads.some(thread => thread.sessionId === history.sessionId) && history.sessionId ? [{ id: threadId, title: selected?.title, sessionId: history.sessionId }] : [])]} />}{!snapshot ? <div className="ba-resource-initial"><ResourceState kind={error ? 'error' : 'loading'} title={error ? '暂时无法加载助手' : '正在准备助手'} description={error || '正在读取配置与资源，请稍候。'} onAction={error ? retryLoad : undefined} /></div> : <><RetainedPane active={!execution && view === 'studio'}><Studio active={!execution && view === 'studio'} requestedTab={tab} requestedTicket={requestedTicket} initialSection={['tasks', 'goals', 'memory', 'connections'].includes(tab) ? tab : 'identity'} initialIdentityTab={['models', 'pet'].includes(tab) ? tab : 'info'} snapshot={snapshot} ctx={ctx} refresh={refresh} threadId={threadId} SessionProvider={SessionProvider} renderSlot={renderSlot} /></RetainedPane>{view === 'chat' && <>{!snapshot.config.models?.length && <ModelSetupNotice onOpen={() => { selectedAssistantTab = 'models'; setTab('models'); }} />}<HistoryNotice history={history} threadId={threadId} onClear={clearMain} />{history.sessionId ? <AssistantConversation onOpenExecution={openExecution} key={threadId} ctx={ctx} sessionId={history.sessionId} threadId={threadId} history={history} onLoadEarlier={loadEarlier} onRefresh={onRefresh} SessionProvider={SessionProvider} renderSlot={renderSlot} api={api} assistantName={snapshot.config.name} assistantConfig={snapshot.config} petExpression={snapshot.petExpression} onOpenResources={openResources} /> : <div className="ba-resource-initial">{error ? <ResourceState kind="error" title="聊天暂未连接" description={error} actionLabel="重新连接" onAction={retryLoad} /> : <Loading label={`正在打开${threadId === 'main' ? '主聊天' : '旁聊'}`} />}</div>}<Images images={history.images} /></>}</>}</div>{execution && <ExecutionSessionPanel ctx={ctx} execution={execution} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} onClose={() => executionSessionNavigation.close()} onOpenTicket={ticketId => openAssistantTab(ctx, 'tasks', { ticketId })} />}</main>{!execution && snapshot && tab === 'chat' && <ActivityPanel onOpenReminder={id => openAssistantThread(ctx, id)} api={api} ctx={ctx} sessionId={history.sessionId} SessionProvider={SessionProvider} renderSlot={renderSlot} onOpenExecution={execution => openExecutionSession(ctx, execution)} assistantConfig={snapshot.config} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} />}</div></ActivityProvider>;
 }
 export function mountAssistant(ctx) {
+  // Other modules announce changes with this event. Capture runs before every
+  // consumer's listener, so none of them shares a read older than the change.
+  ctx.effect(() => {
+    document.addEventListener('benchgo:assistant-changed', invalidateAssistantState, true);
+    return () => document.removeEventListener('benchgo:assistant-changed', invalidateAssistantState, true);
+  });
   mountReplySound(ctx, api);
   mountAssistantActivity(ctx, api);
   mountSessionRoleControls(ctx, api, async role => {

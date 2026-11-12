@@ -48,7 +48,7 @@ for (const scenario of ['auto', 'manual', 'unknown-rule', 'ignore', 'revoked', '
   }
   let executions = 0, sends = 0;
   runtime = createOrchestrationRuntime({ ctx: {}, store,
-    execute: async (_assignment, context) => { executions++; if (scenario === 'revoked-during-run') { store.connections.update({ enabledRuleIds: [] }, { revision: 1 }); await context.renew(); } return { summary: 'CI inspected', outcome: 'completed', selfCheck: { summary: 'Checked CI evidence and current requirements' }, evidenceRefs: ['test:evidence'] }; },
+    execute: async (_assignment, context) => { executions++; if (scenario === 'revoked-during-run') { store.connections.update({ enabledRuleIds: [] }, { revision: 1 }); await context.renew(); } return { summary: 'CI inspected', outcome: 'completed', evidenceRefs: ['test:evidence'] }; },
     prepareTicketReply: async delivery => {
       assert.equal(delivery.payload.text, undefined);
       assert.equal(delivery.payload.publication, undefined);

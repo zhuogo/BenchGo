@@ -32,7 +32,7 @@ export function channelSourceAllowed(config, source, row) {
 }
 export function connectionPolicy(row) {
   const config = row.config;
-  return { version: `${row.channel}:${row.revision}`, routeDirect: true, config, connection: row,
+  return { version: `${row.channel}:${row.revision}`, config, connection: row,
     ownerIds: config.ownerOpenIds || config.ownerIds || [], actorIds: config.ownerOpenIds || config.ownerIds || [],
     machineIds: config.machineOpenIds || config.machineIds || [], allowHumanRequests: config.accessMode === 'platform' };
 }

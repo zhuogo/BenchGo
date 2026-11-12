@@ -33,8 +33,8 @@ test('task organization persists without rewriting execution state and detects s
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-task-management-'));
   let database = createAssistantRuntimeStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
-  const rows = { ticket: { id: 't', status: 'waiting', executionControl: { stopped: true }, target: 'original instruction' }, goal: { id: 'g', status: 'cancelled' }, evaluation: { id: 'e', status: 'unavailable' } };
-  const create = () => createTaskManagement({ database, orchestration: { getTicket: id => id === 't' && rows.ticket, getEvaluation: id => id === 'e' && rows.evaluation }, scheduler: { getGoal: id => id === 'g' && rows.goal } });
+  const rows = { ticket: { id: 't', status: 'waiting', executionControl: { stopped: true }, target: 'original instruction' }, evaluation: { id: 'e', status: 'unavailable' } };
+  const create = () => createTaskManagement({ database, orchestration: { getTicket: id => id === 't' && rows.ticket, getEvaluation: id => id === 'e' && rows.evaluation } });
   let tasks = create();
   tasks.update({ kind: 'ticket', id: 't', operation: 'rename', title: 'My title', version: 0 });
   assert.throws(() => tasks.update({ kind: 'ticket', id: 't', operation: 'rename', title: 'stale', version: 0 }), { code: 'REVISION_CONFLICT' });
@@ -48,10 +48,8 @@ test('task organization persists without rewriting execution state and detects s
   assert.throws(() => tasks.update({ kind: 'ticket', id: 't', operation: 'delete', version: 1 }), { code: 'CLEANUP_PREVIEW_REQUIRED' });
   assert.equal(tasks.project('ticket', [rows.ticket], { archived: true }).length, 0);
   assert.equal(tasks.project('ticket', [rows.ticket], { archived: false }).length, 1);
-  for (const kind of ['goal', 'evaluation']) {
-    tasks.update({ kind, id: rows[kind].id, operation: 'complete', version: 0 });
-    assert.equal(tasks.project(kind, [rows[kind]])[0].taskMeta.completed, true);
-  }
+  tasks.update({ kind: 'evaluation', id: 'e', operation: 'complete', version: 0 });
+  assert.equal(tasks.project('evaluation', [rows.evaluation])[0].taskMeta.completed, true);
   assert.equal(rows.evaluation.status, 'unavailable');
 });
 
@@ -59,12 +57,12 @@ test('active work cannot be hidden or marked completed; metadata writes validate
   const metadata = new Map();
   const row = { id: 'active', status: 'running' };
   const database = { transaction: fn => fn(), meta: key => metadata.get(key), setMeta: (key, value) => metadata.set(key, value) };
-  const tasks = createTaskManagement({ database, orchestration: { getTicket: id => id === row.id && row, getEvaluation: () => ({ status: 'queued' }) }, scheduler: { getGoal: () => ({ status: 'paused' }) } });
-  for (const kind of ['ticket', 'goal', 'evaluation']) for (const operation of kind === 'ticket' ? ['complete'] : ['complete', 'delete']) {
+  const tasks = createTaskManagement({ database, orchestration: { getTicket: id => id === row.id && row, getEvaluation: () => ({ status: 'queued' }) } });
+  for (const kind of ['ticket', 'evaluation']) for (const operation of kind === 'ticket' ? ['complete'] : ['complete', 'delete']) {
     assert.throws(() => tasks.update({ kind, id: 'active', operation, version: 0 }), { code: kind === 'ticket' ? 'TICKET_COMPLETION_MANAGED' : 'EXECUTION_PENDING' });
   }
   assert.equal(tasks.project('ticket', [row])[0].taskCanOrganize, false);
-  assert.equal(tasks.project('goal', [{ id: 'g', status: 'cancelled' }])[0].taskCanOrganize, true);
+  assert.equal(tasks.project('goal', [{ id: 'g', status: 'active', objective: '长期目标', rowVersion: 1 }])[0].taskCanOrganize, true, 'checklist goals have no execution to wait for');
   assert.equal(tasks.project('evaluation', [{ id: 'e', status: 'unavailable' }])[0].taskCanOrganize, true);
   assert.throws(() => tasks.update({ kind: 'ticket', id: 'missing', operation: 'rename', title: 'x', version: 0 }), /不存在/);
   assert.throws(() => tasks.update({ kind: 'ticket', id: 'active', operation: 'rename', title: ' ', version: 0 }), /名称/);
@@ -92,7 +90,9 @@ test('ticket names are capped in storage and legacy projections without truncati
   const ticket = { id: 't', status: 'running', target: '完整任务要求不能因为标题变短而被修改或截断', acceptance: '验收标准也必须完整保留' };
   const before = structuredClone(ticket);
   const database = { transaction: fn => fn(), meta: key => stored.get(key), setMeta: (key, value) => stored.set(key, value) };
-  const tasks = createTaskManagement({ database, orchestration: { getTicket: () => ticket }, scheduler: { getGoal: () => ({ id: 'g', status: 'active' }) } });
+  const goal = { id: 'g', status: 'active', objective: '旧目标', rowVersion: 1 };
+  const goals = { getGoal: () => goal, updateGoal: (_id, patch, { rowVersion }) => Object.assign(goal, patch, { rowVersion: rowVersion + 1 }) };
+  const tasks = createTaskManagement({ database, orchestration: { getTicket: () => ticket }, goals });
   const projected = tasks.project('ticket', [ticket])[0];
   assert.equal(projected.taskMeta.title, '历史自定义工单标题超');
   assert.equal(stored.get('task-presentation:ticket:t').title, '历史自定义工单标题超过十个字');
@@ -101,5 +101,6 @@ test('ticket names are capped in storage and legacy projections without truncati
   assert.equal(stored.get('task-presentation:ticket:t').title, updated.taskMeta.title);
   assert.deepEqual(ticket, before);
   const goalTitle = '持续目标标题不沿用工单十字限制';
-  assert.equal(tasks.update({ kind: 'goal', id: 'g', operation: 'rename', title: goalTitle, version: 0 }).taskMeta.title, goalTitle);
+  assert.equal(tasks.update({ kind: 'goal', id: 'g', operation: 'rename', title: goalTitle, version: 1 }).taskMeta.title, goalTitle);
+  assert.equal(goal.objective, goalTitle);
 });

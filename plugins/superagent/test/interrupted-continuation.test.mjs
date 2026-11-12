@@ -153,7 +153,6 @@ test('executor uses official resume and followup in the original session with it
       queueMicrotask(async () => {
         try {
           hooks.get('agent/status')({ status: 'running' });
-          await tools.get('assistant_task_result').execute({ selfCheck: { summary: 'Verified saved file' } }, { agent, signal: f.input.signal, callId: 'self-check' });
           transcript.push({ seq: transcript.length, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'continued result' }] } } }, { seq: transcript.length + 1, type: 'turn/end', data: { reason: { kind: 'completed' } } });
           hooks.get('agent/status')({ status: 'idle' });
         } catch (error) { hooks.get('agent/error')({ error }); }

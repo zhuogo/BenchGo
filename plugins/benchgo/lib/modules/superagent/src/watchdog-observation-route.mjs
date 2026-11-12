@@ -4,7 +4,7 @@ export const WATCHDOG_OBSERVATION_PATH = '/benchgo/watchdog/observation';
 export const WATCHDOG_SIGNAL_PATH = '/benchgo/watchdog/signals';
 export const WATCHDOG_SIGNAL_REASONS = Object.freeze(['TARGET_UNREACHABLE', 'TARGET_IDENTITY_MISMATCH',
   'FACTS_STALE', 'SCHEDULER_STALLED', 'EXECUTION_INACTIVE', 'LEASE_EXPIRED', 'REQUEST_DEADLINE_EXCEEDED',
-  'STOP_UNCONFIRMED', 'MODEL_NO_PROGRESS', 'MODEL_OFF_TARGET']);
+  'STOP_UNCONFIRMED']);
 const headerPrefix = 'x-benchgo-watchdog-';
 const executionFields = ['ticketId', 'assignmentId', 'runId', 'sessionId', 'fence', 'instructionRevision'];
 const signalFields = ['id', 'incidentKey', 'phase', 'kind', 'targetId', 'observedAt', 'checkId', 'evidenceCursor',
@@ -40,7 +40,7 @@ function limit(value, fallback, min, max) {
 export function validateWatchdogSignal(value, targetId) {
   if (!object(value) || Object.keys(value).some(key => !signalFields.includes(key))
     || !text(value.id, 200) || !text(value.incidentKey, 512) || !text(value.checkId, 200)
-    || !['opened', 'escalated', 'resolved'].includes(value.phase) || !['host', 'execution', 'model'].includes(value.kind)
+    || !['opened', 'escalated', 'resolved'].includes(value.phase) || !['host', 'execution'].includes(value.kind)
     || value.targetId !== targetId || !instant(value.observedAt)
     || !(value.evidenceCursor === null || integer(value.evidenceCursor))
     || !WATCHDOG_SIGNAL_REASONS.includes(value.reasonCode) || !text(value.summary, 1000)) {
@@ -55,7 +55,7 @@ export function validateWatchdogSignal(value, targetId) {
       throw fail('WATCHDOG_SIGNAL_INVALID');
     }
   }
-  if ((value.kind === 'execution' || value.kind === 'model') && !value.execution) throw fail('WATCHDOG_SIGNAL_INVALID');
+  if (value.kind === 'execution' && !value.execution) throw fail('WATCHDOG_SIGNAL_INVALID');
   return structuredClone(value);
 }
 

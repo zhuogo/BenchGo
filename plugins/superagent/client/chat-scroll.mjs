@@ -11,9 +11,20 @@ export function createChatScroll({ scroller, content, sessionKey, onChange, redu
   const floor = () => Math.max(0, scroller.scrollHeight - scroller.clientHeight);
   const emit = () => onChange({ visible: !following && floor() - scroller.scrollTop > NEAR_BOTTOM, unread });
   const elements = () => [...content.querySelectorAll('[data-chat-key]')];
+  // Rows stack in document order, so the first one crossing the top edge is a
+  // binary search rather than a rectangle read for every message above it.
+  function firstVisible(top) {
+    const rows = elements();
+    let low = 0, high = rows.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (rows[middle].getBoundingClientRect().bottom > top) high = middle; else low = middle + 1;
+    }
+    return rows[low];
+  }
   function capture() {
     const top = scroller.getBoundingClientRect().top;
-    const row = elements().find(element => element.getBoundingClientRect().bottom > top);
+    const row = firstVisible(top);
     anchor = { key: row?.getAttribute('data-chat-key'), offset: row ? row.getBoundingClientRect().top - top : 0, top: scroller.scrollTop };
   }
   function save() {

@@ -44,7 +44,7 @@ for (const cancelled of [false, true]) test(`ordinary Router text uses live offi
   const store = { paths: { workspace: process.cwd() }, orchestration: createAssistantOrchestrationStore({ filename: ':memory:' }), getState: async () => structuredClone(state),
     updateState: async (patch, { revision }) => { assert.equal(revision, state.revision); state = { ...state, ...structuredClone(patch), revision: revision + 1 }; return state; },
     getConfig: async () => ({ models: [{ providerId: 'stream-test', modelId: 'opaque' }] }),
-    getProfile: async () => ({ identity: '', user: '' }), listMemories: async () => [],
+    memory: { forgottenRevision: () => 0, redactForgottenContext: value => value }, ledger: { append: () => ({}) }, getSessionContext: async () => ({ documents: [], memories: [] }),
   };
   ctx.provide('sessionQuery', { listSessions: async () => ctx.sessions.list().map(session => ({ header: session.header })), readSession: async id => ({ events: ctx.sessions.get(id).snapshotEvents() }) });
   const engine = await createAssistantEngine({ ctx, store, compactionPlugin: Compaction, appendChatRecord: modules[0].appendPluginRecord });

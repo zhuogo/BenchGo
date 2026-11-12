@@ -5,13 +5,14 @@ import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import { CallOrb, CallStage, CallStageIcon, callTranscriptRows, mergeCallMessages } from './call-stage.jsx';
 import { FloatingTranscript } from './floating-transcript.jsx';
 import { useCallDrag } from './use-call-drag.jsx';
+import { MIC_SHORTCUT_KEYS } from './mic-shortcut.mjs';
 
 const emptyStatuses = new Map();
 const absent = () => emptyStatuses;
 const noSubscribe = () => () => {};
 const labels = { starting: '正在连接', listening: '我在听', transcribing: '正在识别', thinking: '正在思考', speaking: '正在回应', waiting: '等待确认' };
 
-export function VoiceCallHost({ controller, callView, sessionStatus }) {
+export function VoiceCallHost({ controller, callView, sessionStatus, openSettings }) {
   const state = useSyncExternalStore(controller.state.subscribe, controller.state.getSnapshot);
   const view = useSyncExternalStore(callView.subscribe, callView.getSnapshot);
   const dock = useRef(null), [transcriptVisible, setTranscriptVisible] = useState(true);
@@ -50,14 +51,14 @@ export function VoiceCallHost({ controller, callView, sessionStatus }) {
   };
   if (!visible) return null;
   return <>
-    <CallStage state={state} controller={controller} sessionId={view.sessionId} open={view.expanded} interactionPending={waiting} historyOnly={view.historyOnly} origin={view.origin} pending={view.pending} error={error} returnFocusRef={dock} onMute={() => controller.toggleMute()} onHangup={() => callView.hangup()} onRetry={() => callView.retry()} onMinimize={() => waiting ? callView.returnToSession() : callView.minimize()} />
+    <CallStage state={state} controller={controller} sessionId={view.sessionId} open={view.expanded} interactionPending={waiting} historyOnly={view.historyOnly} origin={view.origin} pending={view.pending} error={error} returnFocusRef={dock} onMute={() => controller.toggleMute()} onHangup={() => callView.hangup()} onRetry={() => callView.retry()} onMinimize={() => waiting ? callView.returnToSession() : callView.minimize()} onOpenSettings={openSettings && (() => { openSettings(); callView.minimize(); })} />
     {!view.expanded && !view.historyOnly && createPortal(<aside ref={dock} style={drag.style} onKeyDown={dockKeyboard} className={'voice-activity voice-global-call' + (error ? ' has-error' : '') + (!calling && !starting ? ' is-disconnected' : '')} aria-label={'语音通话：' + view.title}>
       {calling && transcriptVisible && <FloatingTranscript rows={recent} />}
       <div className="voice-global-controls">
       <Tooltip label={'拖动调整位置，点击展开 · ' + view.title} portal><button type="button" {...drag.handle} className="voice-global-open" aria-label={'展开语音通话：' + view.title} aria-description="可拖动调整位置；方向键移动，Home 恢复默认位置" onClick={event => drag.open(event, () => callView.expand())}><CallOrb state={{ ...state, phase: starting ? 'starting' : state.phase }} /><span className="voice-global-copy"><strong>{view.title}</strong><span role="status">{caption}</span></span></button></Tooltip>
       {waiting && <Tooltip label="返回原会话处理确认" portal><button type="button" className="voice-icon-button" aria-label="处理确认" onClick={() => callView.returnToSession()}><CallStageIcon name="expand" /></button></Tooltip>}
       <Tooltip label={transcriptVisible ? '隐藏语音文字' : '显示语音文字'} portal><button type="button" className="voice-icon-button voice-global-transcript-toggle" aria-label={transcriptVisible ? '隐藏语音文字' : '显示语音文字'} aria-pressed={transcriptVisible} disabled={!calling || starting} onClick={() => setTranscriptVisible(value => !value)}><CallStageIcon name="curtain" /></button></Tooltip>
-      <Tooltip label={state.muted ? '开启麦克风' : '关闭麦克风'} portal><button type="button" className="voice-icon-button" aria-label={state.muted ? '开启麦克风' : '关闭麦克风'} aria-pressed={!!state.muted} disabled={!calling || starting} onClick={() => controller.toggleMute()}><span className={'voice-microphone-icon' + (state.muted ? ' voice-microphone-muted' : '')}><IconMicrophoneOutlineMedium size={18} /></span></button></Tooltip>
+      <Tooltip label={state.muted ? '开启麦克风' : '关闭麦克风'} shortcutKeys={MIC_SHORTCUT_KEYS} portal><button type="button" className="voice-icon-button" aria-label={state.muted ? '开启麦克风' : '关闭麦克风'} aria-pressed={!!state.muted} disabled={!calling || starting} onClick={() => controller.toggleMute()}><span className={'voice-microphone-icon' + (state.muted ? ' voice-microphone-muted' : '')}><IconMicrophoneOutlineMedium size={18} /></span></button></Tooltip>
       <Tooltip label={calling || starting ? '结束通话' : '关闭提示'} portal><button type="button" className="voice-icon-button voice-global-end" aria-label={calling || starting ? '结束语音通话' : '关闭通话提示'} onClick={() => callView.hangup()}><IconStopFillRegular size={16} /></button></Tooltip>
       </div>
     </aside>, document.body)}

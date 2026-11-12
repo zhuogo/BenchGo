@@ -70,7 +70,12 @@ test('decision settings are neutral, preserve selections and credentials, and re
       return route.abort();
     });
     await page.goto('http://localhost/');
-    const navigate = async scenario => { await page.evaluate(scenario => window.renderSettings(scenario), scenario); await page.getByRole('tab', { name: '语音', exact: true }).click(); await page.getByRole('tab', { name: '实时通话', exact: true }).click(); await page.getByRole('tab', { name: '决策', exact: true }).click(); };
+    const navigate = async scenario => { await page.evaluate(scenario => window.renderSettings(scenario), scenario); await page.getByRole('tab', { name: '语音', exact: true }).click(); await page.getByRole('tab', { name: '实时通话', exact: true }).click();
+      // Decision settings stay collapsed under the interaction model until the call uses them.
+      const entry = page.getByRole('button', { name: '决策（未接入通话）', exact: true });
+      assert.equal(await page.getByRole('tab', { name: '决策', exact: true }).count(), 0); assert.equal(await entry.getAttribute('aria-expanded'), 'false');
+      assert.equal(await page.getByLabel('决策接口地址', { exact: true }).count(), 0);
+      await entry.click(); };
     for (const width of [1440, 390]) for (const dark of [false, true]) {
       await page.setViewportSize({ width, height: 1000 }); await page.evaluate(dark => document.documentElement.dataset.dark = dark, dark);
       await navigate('empty');

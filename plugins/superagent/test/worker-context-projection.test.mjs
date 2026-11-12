@@ -29,6 +29,8 @@ test('official Worker requests carry context once in the applied task package, i
     try { return await handle.read(); } finally { await handle.close(); }
   } });
 
+  ctx.tools.register({ name: 'inspect_requirements', description: 'Test inspection', parameters: { type: 'object', properties: {} },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => 'inspected' });
   const database = store.orchestration;
   const source = { channel: 'desktop', sessionId: 'owner', messageId: 'original' };
   const mandate = { actorId: 'desktop-owner', source, instruction: 'Original explicit user requirements', policyVersion: 'current', admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval' };
@@ -52,7 +54,7 @@ test('official Worker requests carry context once in the applied task package, i
       if (requests.length === 1) {
         revise(3, 'LIVE_CONTEXT_INPUT');
         yield { type: 'block-start', index: 0, blockType: 'tool-call' };
-        yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'record-check', name: 'assistant_task_result', arguments: JSON.stringify({ selfCheck: { summary: 'Inspected current requirements' } }) } };
+        yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'inspect', name: 'inspect_requirements', arguments: '{}' } };
         yield { type: 'finish', reason: { kind: 'tool-calls' } };
         return;
       }
@@ -68,7 +70,8 @@ test('official Worker requests carry context once in the applied task package, i
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: models[0], workerModels: models }), authorizeAction: async () => ({ allowed: true }) });
   const result = await executor(assignment, { ticket: database.getTicket(ticket.id), signal: AbortSignal.timeout(15000), renew: async () => {} });
-  assert.equal(result.outcome, 'completed');
+  assert.equal(result.summary, 'Completed revised task');
+  assert.equal(result.completion.kind, 'completed');
   assert.equal(requests.length, 2);
   for (const [index, request] of requests.entries()) {
     const runtime = request.messages.findLast(message => message.source?.kind === 'runtime-context');

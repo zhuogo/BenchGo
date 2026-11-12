@@ -22,10 +22,10 @@ test('Router public text stays mounted across tool and reasoning steps, completi
     await page.setContent(html);
     for (const path of ['tool', 'reasoning', 'tool-end']) {
       await page.evaluate(path => window.renderTurn('text',path),path);
-      const message = page.locator('[data-chat-key="message:reply:human"]');
+      const message = page.locator('[data-chat-key^="message:reply:human"]').first();
       await message.getByText('先看资料。',{exact:true}).waitFor();
       await page.evaluate(() => {
-        window.turnMessage = document.querySelector('[data-chat-key="message:reply:human"]');
+        window.turnMessage = document.querySelector('[data-chat-key^="message:reply:human"]');
         window.turnRemoved = false;
         window.turnObserver = new MutationObserver(records => {
           if(records.some(record => [...record.removedNodes].some(node => node === window.turnMessage || node.contains?.(window.turnMessage)))) window.turnRemoved = true;
@@ -36,7 +36,7 @@ test('Router public text stays mounted across tool and reasoning steps, completi
       for(const phase of phases) {
         await page.evaluate(({phase,path}) => window.renderTurn(phase,path),{phase,path});
         await message.getByText('先看资料。',{exact:true}).waitFor();
-        if(path !== 'tool-end' && ['next-text','settled','completed','history'].includes(phase)) await message.getByText('找到结果。',{exact:true}).waitFor();
+        if(path !== 'tool-end' && ['next-text','settled','completed','history'].includes(phase)) await page.locator('[data-chat-key^="message:reply:human"]').getByText('找到结果。',{exact:true}).waitFor();
         assert.equal(await message.count(),1);
         assert(await message.evaluate(node => node === window.turnMessage),`${path}/${phase}: the reply article stays mounted`);
         assert.equal(await page.evaluate(() => window.turnRemoved),false,`${path}/${phase}: earlier text never disappears`);
@@ -52,7 +52,7 @@ test('Router public text stays mounted across tool and reasoning steps, completi
       await page.evaluate(() => window.renderTurn('reasoning','tool'));
       await page.getByText('先看资料。',{exact:true}).waitFor();
       await page.evaluate(reason => window.renderTurn(reason,'tool'),reason);
-      await page.locator('[data-chat-key="message:reply:human"]').waitFor({state:'detached'});
+      await page.locator('[data-chat-key^="message:reply:human"]').waitFor({state:'detached'});
       await page.evaluate(reason => window.renderTurn(reason,'published'),reason);
       await page.getByText('已正式发表。',{exact:true}).waitFor();
     }
@@ -60,7 +60,7 @@ test('Router public text stays mounted across tool and reasoning steps, completi
       await page.evaluate(() => window.renderTurn('reasoning','tool'));
       await page.getByText('先看资料。',{exact:true}).waitFor();
       await page.evaluate(phase => window.renderTurn(phase,'tool'),phase);
-      await page.locator('[data-chat-key="message:reply:human"]').waitFor({state:'detached'});
+      await page.locator('[data-chat-key^="message:reply:human"]').waitFor({state:'detached'});
       assert.equal(await page.getByText(/PRIVATE|LATE/).count(),0);
     }
     assert.deepEqual(errors,[]);
@@ -77,18 +77,18 @@ test('Router streaming message keeps its mounted identity through official settl
     for (const width of [1440,390]) for (const kind of ['text', 'assistant_reply']) {
       await page.setViewportSize({width,height:500});
       await page.evaluate(kind => window.renderHandoff('stream', kind), kind);
-      const message = page.locator('[data-chat-key="message:reply:human"]');
+      const message = page.locator('[data-chat-key^="message:reply:human"]').first();
       await message.getByText('同一条完整回复',{exact:true}).waitFor();
       await page.evaluate(() => window.handoffLayout = () => {
         const feed=document.querySelector('.ba-chat-feed');
-        const row=feed.querySelector('[data-chat-key="message:reply:human"]');
+        const row=feed.querySelector('[data-chat-key^="message:reply:human"]');
         const box=node=>{const r=node.getBoundingClientRect();return {left:r.left,top:r.top+feed.scrollTop,width:r.width,height:r.height}};
-        return {scrollHeight:feed.scrollHeight,scrollTop:feed.scrollTop,row:box(row),body:box(row.querySelector('.ba-chat-body')),content:box(row.querySelector('.ba-chat-content'))};
+        return {distanceFromBottom:feed.scrollHeight-feed.scrollTop-feed.clientHeight,row:box(row),body:box(row.querySelector('.ba-chat-body')),content:box(row.querySelector('.ba-chat-content'))};
       });
       const baseline=await page.evaluate(()=>window.handoffLayout()), frames=[{phase:'stream',...baseline}];
       assert.equal(await message.locator('.ba-message-toolbar').getByRole('button').count(),0,'streaming controls stay inaccessible until the reply settles');
       await page.evaluate(() => {
-        window.streamMessage = document.querySelector('[data-chat-key="message:reply:human"]');
+        window.streamMessage = document.querySelector('[data-chat-key^="message:reply:human"]');
         window.streamParagraph = window.streamMessage.querySelector('p');
         window.streamToolbar = window.streamMessage.querySelector('.ba-message-toolbar');
         window.removedStream = false;
@@ -128,7 +128,7 @@ test('Router streaming message keeps its mounted identity through official settl
     }
     for(const reason of ['aborted','error']) {
       await page.evaluate(reason=>window.renderHandoff(reason,'text'),reason);
-      await page.locator('[data-chat-key="message:reply:human"]').waitFor({state:'detached'});
+      await page.locator('[data-chat-key^="message:reply:human"]').waitFor({state:'detached'});
     }
     assert.deepEqual(errors,[],'no browser runtime errors during the handoff');
   } finally { await browser.close(); }
@@ -144,10 +144,10 @@ test('streaming reveals only new Markdown blocks without replaying existing text
       document.addEventListener('animationstart',event=>{if(event.animationName==='ba-chat-reveal') window.blockReveals.push(event.target.tagName)});
       window.renderHandoff('stream','text','第一段正文');
     });
-    const message=page.locator('[data-chat-key="message:reply:human"]');
+    const message=page.locator('[data-chat-key^="message:reply:human"]').first();
     await message.getByText('第一段正文',{exact:true}).waitFor();
     await page.waitForFunction(()=>window.blockReveals.length===1);
-    await page.evaluate(()=>window.firstRevealParagraph=document.querySelector('[data-chat-key="message:reply:human"] p'));
+    await page.evaluate(()=>window.firstRevealParagraph=document.querySelector('[data-chat-key^="message:reply:human"] p'));
     await page.evaluate(()=>window.renderHandoff('stream','text','第一段正文，继续补充。'));
     await message.getByText('第一段正文，继续补充。',{exact:true}).waitFor();
     assert(await message.locator('p').evaluate(node=>node===window.firstRevealParagraph),'appending text keeps its actual paragraph node');
@@ -172,9 +172,80 @@ test('streaming reveals only new Markdown blocks without replaying existing text
     if(captureDir) {
       await mkdir(captureDir,{recursive:true});
       await page.screenshot({path:join(captureDir,'streaming-reduced-motion.png'),fullPage:true});
-      await writeFile(join(captureDir,'streaming-animation-evidence.json'),JSON.stringify(await page.evaluate(()=>({animationStarts:window.blockReveals,firstParagraphRetained:window.firstRevealParagraph===document.querySelector('[data-chat-key="message:reply:human"] p')})),null,2));
+      await writeFile(join(captureDir,'streaming-animation-evidence.json'),JSON.stringify(await page.evaluate(()=>({animationStarts:window.blockReveals,firstParagraphRetained:window.firstRevealParagraph===document.querySelector('[data-chat-key^="message:reply:human"] p')})),null,2));
     }
   } finally { await browser.close(); }
+});
+
+test('token updates keep history controls cached and leave no global text paints or animation loop', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html=await fixture(), browser=await chromium.launch({headless:true,executablePath});
+  try {
+    const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'no-preference'}), errors=[];
+    page.on('pageerror',error=>errors.push(error.message));
+    await page.setContent(html);
+    for(const count of [200,600]) {
+      const evidence=await page.evaluate(async count=>{
+        window.preparePerformance(count);window.renderPerformance(0);
+        await document.fonts.ready;await new Promise(requestAnimationFrame);
+        const oldParagraph=document.querySelector('[data-chat-key="message:history-1"] p');
+        const originalFormat=Date.prototype.toLocaleString,originalFrame=window.requestAnimationFrame,originalCancel=window.cancelAnimationFrame;
+        let formats=0,requested=0;const frames=new Set();
+        Date.prototype.toLocaleString=function(...args){formats++;return originalFormat.apply(this,args)};
+        window.requestAnimationFrame=callback=>{requested++;let id;id=originalFrame.call(window,time=>{frames.delete(id);callback(time)});frames.add(id);return id};
+        window.cancelAnimationFrame=id=>{frames.delete(id);return originalCancel.call(window,id)};
+        const samples=[];
+        try{
+          for(let i=1;i<=30;i++){
+            const start=performance.now();window.renderPerformance(i);samples.push(performance.now()-start);
+            await new Promise(resolve=>originalFrame.call(window,resolve));
+          }
+          const requestsAfterInput=requested;
+          await new Promise(resolve=>setTimeout(resolve,350));
+          return {count,formats,requested,requestsAfterInput,pending:frames.size,
+            sameParagraph:oldParagraph===document.querySelector('[data-chat-key="message:history-1"] p'),
+            highlights:[...CSS.highlights.keys()].filter(name=>name.startsWith('ba-stream-')).length,
+            paintStyles:document.querySelectorAll('style[data-benchgo-stream-reveal]').length,
+            samples};
+        }finally{Date.prototype.toLocaleString=originalFormat;window.requestAnimationFrame=originalFrame;window.cancelAnimationFrame=originalCancel;}
+      },count);
+      assert.equal(evidence.formats,0,'unchanged timestamps, including the streaming reply, are never formatted per token');
+      assert(evidence.sameParagraph,'history retains its actual Markdown nodes');
+      assert.equal(evidence.highlights,0);assert.equal(evidence.paintStyles,0);
+      assert.equal(evidence.pending,0);assert.equal(evidence.requested,evidence.requestsAfterInput,'idle chat schedules no continuing JavaScript animation');
+      if(captureDir){await mkdir(captureDir,{recursive:true});await writeFile(join(captureDir,`token-performance-${count}.json`),JSON.stringify(evidence,null,2));}
+    }
+    await page.evaluate(()=>window.renderScenario('empty'));
+    await page.locator('.ba-home-starters').waitFor();
+    assert.equal(await page.locator('style[data-benchgo-stream-reveal]').count(),0);
+    assert.deepEqual(errors,[]);
+  } finally {await browser.close();}
+});
+
+test('cached message controls use current callbacks, saved reaction, text, timestamp and usage', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html=await fixture(),browser=await chromium.launch({headless:true,executablePath});
+  try{
+    const page=await browser.newPage({reducedMotion:'reduce'});
+    await page.route('http://localhost/',route=>route.fulfill({contentType:'text/html',body:html}));
+    await page.goto('http://localhost/');
+    await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:'http://localhost'});
+    await page.evaluate(()=>window.renderActionRevision(1));
+    const message=page.locator('[data-chat-key="message:action"]');
+    await message.getByText('消息版本1',{exact:true}).waitFor();
+    const previousTime=await message.locator('time').getAttribute('datetime');
+    await page.evaluate(()=>window.renderActionRevision(2));
+    await message.getByText('消息版本2',{exact:true}).waitFor();
+    assert.notEqual(await message.locator('time').getAttribute('datetime'),previousTime);
+    // The mount-time history reconcile fires about 100ms after the first render; let it land before the click it would race.
+    await page.waitForFunction(()=>window.actionCalls.some(call=>call[0]==='refresh'));
+    assert.deepEqual(await page.evaluate(()=>window.actionCalls.splice(0).map(call=>call[0])),['refresh']);
+    await message.getByRole('button',{name:'取消回应 ❤️',exact:true}).click();
+    assert.deepEqual(await page.evaluate(()=>window.actionCalls),[['api',2,'messageReaction',{threadId:'revision-2',messageKey:'message:action',emoji:null}],['refresh',2]]);
+    await message.hover();
+    await message.getByRole('button',{name:'复制消息',exact:true}).click();
+    assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'消息版本2');
+    await message.getByRole('button',{name:'本条回复用量',exact:true}).click();
+    assert.equal(await page.locator('[data-action-panel=usage] dd').innerText(),'2');
+  }finally{await browser.close();}
 });
 
 test('Router natural chat excludes execution metadata, deduplicates delivery and retains real questions', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
@@ -198,8 +269,10 @@ test('Router natural chat excludes execution metadata, deduplicates delivery and
           assert.equal(await page.locator('.ba-chat-message').count(),0,'legacy system records and Worker drafts stay in task details');
         } else if(state==='send-error') {
           await page.getByRole('alert').getByText('连接中断，消息发送失败',{exact:true}).waitFor();
+          await page.waitForFunction(()=>window.refreshes>=1);
+          const refreshes=await page.evaluate(()=>window.refreshes);
           await page.getByRole('button',{name:'重新核实',exact:true}).click();
-          assert.equal(await page.evaluate(()=>window.refreshes),1,'failed sends can recheck the original receipt without replay');
+          assert.equal(await page.evaluate(()=>window.refreshes),refreshes+1,'failed sends can recheck the original receipt without replay');
           assert.deepEqual(await page.evaluate(()=>window.apiCalls),[]);
         } else {
           await page.getByText('调研任务暂时受阻，已有记录已保留。',{exact:true}).waitFor();
@@ -238,10 +311,31 @@ async function fixture() {
     stdin: { resolveDir: root, loader: 'jsx', contents: `
       import React from 'react';
       import { createRoot } from 'react-dom/client';
+      import { flushSync } from 'react-dom';
       import { QuietChat } from './plugins/superagent/client/quiet-chat.jsx';
       import { AssistantHome } from './plugins/superagent/client/home.jsx';
       import { PartialArguments } from '@deepseek-ai/dsh-util-values';
       const root = createRoot(document.getElementById('root'));
+      const performanceSession={running:true};
+      window.preparePerformance=count=>{
+        window.performanceHistory={sessionId:'performance',activeReply:{turn:2,requestId:'human'},messages:Array.from({length:count},(_,i)=>({
+          id:'history-'+i,role:i%2?'assistant':'user',kind:i%2?'final':undefined,seq:i,
+          text:'历史消息 '+i+'。'+'这一条历史消息包含普通段落和需要阅读的内容。'.repeat(5),time:1793700000000+i*1000
+        }))};
+        window.performanceHistory.messages.push({id:'human',role:'user',seq:10000,text:'请继续',time:1793808000000});
+      };
+      window.renderPerformance=index=>{
+        const home={sessionId:'performance',threadId:'main',assistantName:'BenchGo',history:window.performanceHistory};
+        const chat={legacy:{nodes:[{kind:'user',messageId:'human',seq:10000,source:{kind:'user'}}],turnEnds:new Map(),partial:{turn:2,step:1,blocks:[{kind:'text',text:'流式新增正文：'+'此处新增一段文本。'.repeat(index+1)}]}},timeline:{turnOrder:[2],turns:new Map([[2,{turn:2,start:{seq:9999}}]])}};
+        flushSync(()=>root.render(<div className="ba-root ba-official-conversation" data-assistant-chat=""><div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll=""><QuietChat home={home} session={performanceSession} chat={chat}/></div></div></div>));
+      };
+      window.renderActionRevision=revision=>{
+        if(revision===1)window.actionCalls=[];
+        const home={sessionId:'actions',threadId:'revision-'+revision,assistantName:'BenchGo',
+          api:async(name,args)=>window.actionCalls.push(['api',revision,name,args]),onRefresh:async()=>window.actionCalls.push(['refresh',revision]),
+          history:{messages:[{id:'action',role:'assistant',kind:'final',text:'消息版本'+revision,time:1793808000000+revision*60000,usage:{outputTokens:revision}}],reactions:{'message:action':revision===1?'👍':'❤️'}}};
+        flushSync(()=>root.render(<div className="ba-root ba-official-conversation" data-assistant-chat=""><div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll=""><QuietChat home={home} session={{running:false}}/></div></div></div>));
+      };
       window.renderTurn = (phase, path) => {
         const first='先看资料。', second='找到结果。';
         const user={id:'human',role:'user',seq:8,text:'请检查',time:1793808000000};
@@ -265,7 +359,7 @@ async function fixture() {
         }
         if(path==='published') legacy.nodes.push({kind:'tool-result',name:'assistant_reply',turn:2,args:PartialArguments.fromObject({text:'已正式发表。'}),content:[{type:'text',text:JSON.stringify({published:true,requestId:'human'})}]});
         const history={sessionId:'turn-session',activeReply:ended?null:{turn:2,requestId:'human'},messages:[user]};
-        if(phase==='history') history.messages.push({id:'reply:human',requestId:'human',role:'assistant',kind:'final',text:path==='tool-end'?first:first+'\\n\\n'+second,time:1793808001000});
+        if(phase==='history') history.messages.push({id:'reply:human:2:1',requestId:'human',segment:true,role:'assistant',kind:'final',text:first,time:1793808001000},...(path==='tool-end'?[]:[{id:'reply:human:2:2',requestId:'human',segment:true,role:'assistant',kind:'final',text:second,time:1793808001000}]));
         const timeline={turnOrder:[2],turns:new Map([[2,turn]])};
         if(phase==='next-request') {
           const next={id:'next',role:'user',seq:21,text:'下一次问题',time:1793808002000};
@@ -280,7 +374,7 @@ async function fixture() {
       window.renderHandoff = (phase, kind, textOverride) => {
         const text = textOverride || '同一条完整回复\\n\\n'+'这是一段完整的长回复，用于核对最终接管前后相同内容的折行与滚动位置。'.repeat(8)+'\\n\\n~~~js\\nconst message = "BenchGo keeps your messages readable";\\nconsole.log(message);\\n~~~\\n\\n| 项目 | 结果 |\\n| --- | --- |\\n| 暗主题 | 文字和气泡清晰可辨 |\\n| 操作 | 复制、表情、用量 |';
         const user = { id:'human', role:'user', seq:8, text:'请回复', time:1793808000000 };
-        const reply = { id:'reply:human', requestId:'human', role:'assistant', kind:'final', text, time:1793808060000 };
+        const reply = { id:kind==='text'?'reply:human:2:1':'reply:human', requestId:'human', ...(kind==='text'?{segment:true}:{}), role:'assistant', kind:'final', text, time:1793808060000 };
         const running = ['stream','settled'].includes(phase);
         const end = running ? undefined : {seq:12,time:1793808001000,data:{reason:{kind:['aborted','error'].includes(phase)?phase:'completed'}}};
         const turn = {turn:2,start:{seq:7},...(end?{end}:{})};
@@ -288,7 +382,7 @@ async function fixture() {
         const legacy = {nodes:[{kind:'user',messageId:'human',seq:8,source:{kind:'user'}}],turnEnds:new Map(end?[[2,12]]:[])};
         if(phase==='stream') {
           if(kind==='assistant_reply') legacy.runningCalls=[{name:kind,turn:2,args}];
-          else legacy.partial={turn:2,blocks:[{kind:'reasoning',text:'PRIVATE'},{kind:'text',text}]};
+          else legacy.partial={turn:2,step:1,blocks:[{kind:'reasoning',text:'PRIVATE'},{kind:'text',text}]};
         } else if(kind==='assistant_reply') legacy.nodes.push({kind:'tool-result',name:kind,turn:2,args,content:[{type:'text',text:JSON.stringify({published:true,requestId:'human'})}]});
         else legacy.nodes.push({kind:'assistant',messageId:'model-message',seq:10,turn:2,step:1,blocks:[{kind:'reasoning',text:'PRIVATE'},{kind:'text',text}]});
         const home = {sessionId:'handoff',threadId:'main',assistantName:'BenchGo',history:{sessionId:'handoff',activeReply:running?{turn:2,requestId:'human'}:null,messages:phase==='history'?[user,reply]:[user]}};

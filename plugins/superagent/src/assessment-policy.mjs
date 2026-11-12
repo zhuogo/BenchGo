@@ -10,10 +10,10 @@ export async function readAssessmentPolicy(store, workspaceRegistry, threadId) {
   // Channel revisions belong to their adapter; unrelated channels never revoke work.
   const projects = (workspaceRegistry?.list() || []).map(({ id, path, title }) => ({ id, path, title }));
   const bindings = projects.map(({ id, path }) => [id, path]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-  const connections = store.connections.list?.() || [{ channel: 'feishu', ...connection }];
+  const connections = store.connections.list();
   const version = createHash('sha256').update(JSON.stringify([document.hash, bindings])).digest('hex');
   const desktopVersion = createHash('sha256').update(JSON.stringify(['desktop', document.hash, bindings])).digest('hex');
-  const channel = threadId ? store.orchestration?.getThread(threadId)?.source?.type : 'feishu';
+  const channel = threadId ? store.orchestration.getThread(threadId)?.source?.type : 'feishu';
   const selected = connections.find(row => row.channel === channel) || connection;
   const enabled = new Set(selected.config.enabledRuleIds || []);
   const writtenRules = readAdmissionRules(document.content).filter(rule => enabled.has(rule.id));
@@ -64,8 +64,8 @@ export function validateTicketMandate(mandate, { policy }) {
     && mandate.policyVersion === policy.version && mandate.desktopPolicyVersion === policy.desktopVersion
     && mandate.controlledActions === 'require-current-policy-and-harness-approval'
     && (!mandate.project || policy.projects?.some(project => project.id === mandate.project.id && project.path === mandate.project.path));
-  // Legacy external mandates hashed every channel revision. Revalidate their
-  // original source against its adapter's current policy instead of that global hash.
+  // Desktop mandates pin the desktop policy version; channel mandates are revalidated
+  // against their own adapter's current policy.
   if (desktop && mandate.policyVersion !== policy.desktopVersion) return false;
   if (mandate.project && !policy.projects?.some(project => project.id === mandate.project.id && project.path === mandate.project.path)) return false;
   const source = mandate.source;

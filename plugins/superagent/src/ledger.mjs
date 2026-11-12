@@ -31,19 +31,9 @@ export function createAssistantLedger({ directory } = {}) {
     CREATE TABLE IF NOT EXISTS ledger_links(from_id TEXT NOT NULL REFERENCES ledger_records(id), to_id TEXT NOT NULL REFERENCES ledger_records(id), relation TEXT NOT NULL, PRIMARY KEY(from_id,to_id,relation));
     CREATE INDEX IF NOT EXISTS ledger_links_target ON ledger_links(to_id);`);
   const transaction = fn => { db.exec('BEGIN IMMEDIATE'); try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; } };
-  // Keep old citation identities/links, but retire their copied text and index.
-  if (db.prepare('PRAGMA user_version').get().user_version < 1) transaction(() => {
-    db.exec(`DELETE FROM ledger_fts WHERE id IN (SELECT id FROM ledger_records WHERE kind='session-event');
-      UPDATE ledger_records SET kind='session-reference', content='',
-        metadata=json_object('sessionId',json_extract(metadata,'$.sessionId'),'eventSeq',json_extract(metadata,'$.eventSeq'))
-        WHERE kind='session-event';
-      DROP TABLE IF EXISTS ledger_watermarks;
-      PRAGMA user_version=1;`);
-  });
   const decode = row => row && ({ id: row.id, kind: row.kind, sourceKey: row.source_key, content: row.content, metadata: JSON.parse(row.metadata), createdAt: row.created_at });
   function insert(input) {
     required(input?.id, 'id'); required(input.kind, 'kind'); required(input.sourceKey, 'sourceKey');
-    if (['session-event', 'session-reference'].includes(input.kind)) throw failure('LEDGER_HISTORY_RETIRED', 'Conversation text must be read from its official source');
     if (typeof input.content !== 'string') throw new Error('Ledger requires original content');
     const metadata = JSON.stringify(input.metadata ?? {});
     const existing = db.prepare('SELECT * FROM ledger_records WHERE id=? OR source_key=?').all(input.id, input.sourceKey);
@@ -64,7 +54,6 @@ export function createAssistantLedger({ directory } = {}) {
   }
   function read(id, { cursor = 0, limit = 16000 } = {}) {
     const row = get(id);
-    if (row.kind === 'session-reference') throw failure('LEDGER_SOURCE_REQUIRED', 'Read this historical reference from its official session');
     const chars = [...row.content];
     if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > chars.length) throw new Error('Invalid ledger cursor');
     const end = Math.min(chars.length, cursor + bound(limit, 16000, 100000));
@@ -78,22 +67,12 @@ export function createAssistantLedger({ directory } = {}) {
   return {
     append(input, links = []) { return transaction(() => { const record = insert(input); for (const target of links) link(input.id, target.id, target.relation); return record; }); },
     read,
-    reference(id) {
-      // Every business read probes this seam too; never copy its full body here.
-      const row = db.prepare('SELECT kind,metadata FROM ledger_records WHERE id=?').get(required(id, 'id'));
-      if (!row) throw failure('LEDGER_NOT_FOUND', `Ledger reference not found: ${id}`);
-      if (row.kind !== 'session-reference') return null;
-      const { sessionId, eventSeq } = JSON.parse(row.metadata);
-      if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 2048 || !Number.isSafeInteger(eventSeq) || eventSeq < 0)
-        throw failure('LEDGER_REFERENCE_INVALID', 'Historical source position is unavailable');
-      return { sessionId, seq: eventSeq };
-    },
     search(query, { limit = 20, kind, sessionId } = {}) {
       required(query, 'query');
       const terms = memorySearchTerms(query);
       if (!terms.length) return [];
       const match = terms.map(term => `"${term.replaceAll('"', '""')}"`).join(' AND ');
-      const sql = `SELECT r.* FROM ledger_fts f JOIN ledger_records r ON r.id=f.id WHERE ledger_fts MATCH ? AND r.kind NOT IN ('session-event','session-reference')${kind ? ' AND r.kind=?' : ''}${sessionId ? " AND json_extract(r.metadata,'$.sessionId')=?" : ''} ORDER BY rank LIMIT ?`;
+      const sql = `SELECT r.* FROM ledger_fts f JOIN ledger_records r ON r.id=f.id WHERE ledger_fts MATCH ?${kind ? ' AND r.kind=?' : ''}${sessionId ? " AND json_extract(r.metadata,'$.sessionId')=?" : ''} ORDER BY rank LIMIT ?`;
       return db.prepare(sql).all(...[match, ...(kind ? [required(kind, 'kind')] : []), ...(sessionId ? [required(sessionId, 'sessionId')] : []), bound(limit, 20, 100)]).map(decode);
     },
     link,
@@ -101,7 +80,7 @@ export function createAssistantLedger({ directory } = {}) {
       get(id);
       return db.prepare('SELECT from_id AS fromId,to_id AS toId,relation FROM ledger_links WHERE from_id=? OR to_id=? ORDER BY from_id,to_id,relation LIMIT ?').all(id, id, bound(limit, 100, 1000));
     },
-    rebuildIndex() { return transaction(() => { db.exec('DELETE FROM ledger_fts'); for (const row of db.prepare("SELECT id,content FROM ledger_records WHERE kind NOT IN ('session-event','session-reference')").all()) db.prepare('INSERT INTO ledger_fts VALUES (?,?)').run(row.id, memorySearchTerms(row.content).join(' ')); }); },
+    rebuildIndex() { return transaction(() => { db.exec('DELETE FROM ledger_fts'); for (const row of db.prepare('SELECT id,content FROM ledger_records').all()) db.prepare('INSERT INTO ledger_fts VALUES (?,?)').run(row.id, memorySearchTerms(row.content).join(' ')); }); },
     close() { db.close(); },
   };
 }

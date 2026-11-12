@@ -32,11 +32,10 @@ const required = (value, name, max = 100000) => {
 export function createDesktopDelegationService({ ctx, store, database = store.orchestration,
   readPolicy = () => readAssessmentPolicy(store, ctx.workspaceRegistry) }) {
   const pending = new Map();
-  async function admit(input, exec, { ownerAgent, threadId = 'main', budgetGoalId, goalLeaf } = {}, form) {
+  async function admit(input, exec, { ownerAgent, threadId = 'main' } = {}) {
     rejectModelOverride(input);
     input = structuredClone(input);
     if (!ownerAgent || exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可委派桌面工单');
-    if (goalLeaf !== undefined) required(goalLeaf, '目标子项路径', 512);
     const sessionId = required(ownerAgent.id, '会话标识');
     const projectId = input.projectId == null ? undefined : required(input.projectId, '项目标识');
     const duplicateOfTicketId = input.duplicateOfTicketId === undefined ? undefined : required(input.duplicateOfTicketId, '重复工单标识', 512);
@@ -45,14 +44,14 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
     assertSpecificTicketDescription({ title: input.title ?? title, target });
     const acceptance = input.acceptance ?? '';
     if (typeof acceptance !== 'string' || acceptance.length > 100000) throw new Error('无效验收条件');
-    const fingerprint = digest([projectId, target, acceptance, ...(input.title !== undefined ? [title] : []), ...(budgetGoalId ? [budgetGoalId] : []), ...(duplicateOfTicketId ? [duplicateOfTicketId] : [])]);
-    const instruction = structuredClone(form || currentHumanInstruction(ctx, ownerAgent));
+    const fingerprint = digest([projectId, target, acceptance, ...(input.title !== undefined ? [title] : []), ...(duplicateOfTicketId ? [duplicateOfTicketId] : [])]);
+    const instruction = structuredClone(currentHumanInstruction(ctx, ownerAgent));
     const message = instruction?.message;
     const instructionFingerprint = digest(instruction);
     if (!message?.id) throw new Error('桌面委派缺少当前原始用户消息');
     const source = { channel: 'desktop', sessionId, messageId: message.id, threadId };
     // Host-derived identity survives retries without requiring model-generated IDs.
-    const requestId = input.requestId === undefined ? digest([source, fingerprint, goalLeaf ?? null]) : required(input.requestId, '请求标识', 200);
+    const requestId = input.requestId === undefined ? digest([source, fingerprint, null]) : required(input.requestId, '请求标识', 200);
     const requestKey = JSON.stringify([sessionId, requestId]);
     const prior = () => {
       const existing = database.desktopRequest(requestKey);
@@ -89,11 +88,11 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       exec.signal?.throwIfAborted();
       const current = await readPolicy();
       exec.signal?.throwIfAborted();
-      const latest = form || currentHumanInstruction(ctx, ownerAgent);
+      const latest = currentHumanInstruction(ctx, ownerAgent);
       if (!latest || digest(latest) !== instructionFingerprint) throw new Error('派工期间当前用户指令已变化，请重试');
       if (current.desktopVersion !== policy.desktopVersion || (project && !current.projects.some(item => item.id === projectId && item.path === project.path))) throw new Error('派工期间项目或授权规则已变化，请重试');
       if (digest(configuredWorkModel(current)) !== digest(selectedModel)) throw new Error('派工期间工作角色模型已变化，请重试');
-      return database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, budgetGoalId, duplicateOfTicketId, model: selectedModel, mandate: {
+      return database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, duplicateOfTicketId, model: selectedModel, mandate: {
         actorId: 'desktop-owner', source, instruction: original, policyVersion: policy.desktopVersion,
         target, acceptance: taskAcceptance,
         admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval', ...(project ? { project: { id: project.id, path: project.path } } : {}),
@@ -104,14 +103,5 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
   }
   return {
     delegate: (input, exec, options) => admit(input, exec, options),
-    // Called only by the authenticated resource dispatcher, never exposed as a model tool.
-    submitForm(input, { ownerAgent, threadId, requestId, original, budgetGoalId, goalLeaf }) {
-      if (ctx.agents?.get(ownerAgent?.id) !== ownerAgent) throw new Error('表单缺少真实主助手会话');
-      required(requestId, '表单请求标识', 200);
-      required(original, '表单原文');
-      return admit(input, { agent: ownerAgent }, { ownerAgent, threadId, budgetGoalId, goalLeaf }, {
-        message: { id: `goal-form:${requestId}`, content: [{ type: 'text', text: original }] },
-      });
-    },
   };
 }

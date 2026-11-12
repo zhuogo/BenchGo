@@ -399,21 +399,9 @@
                 },
                 "additionalProperties": true
               },
-              "goalAdvance": {
-                "type": "object",
-                "additionalProperties": true
-              },
-              "goalBudgetGet": {
-                "type": "object",
-                "additionalProperties": true
-              },
-              "goalCancel": {
-                "type": "object",
-                "additionalProperties": true
-              },
               "goalCreate": {
                 "type": "object",
-                "description": "仅提交 objective/requestId 时创建持久清单目标（executionKind=checklist，status=active），不初始化会话、不派工、不要求项目；旧工单目标请求保持兼容。返回 id、objective、status、rowVersion。",
+                "description": "创建清单目标：goal 只含 objective（1–2000 字）与 requestId。不初始化会话、不派工、不要求项目。返回 id、objective、status、rowVersion。",
                 "additionalProperties": true
               },
               "goalGet": {
@@ -424,17 +412,9 @@
                 "type": "object",
                 "additionalProperties": true
               },
-              "goalPause": {
-                "type": "object",
-                "additionalProperties": true
-              },
-              "goalResume": {
-                "type": "object",
-                "additionalProperties": true
-              },
               "goalUpdate": {
                 "type": "object",
-                "description": "清单目标请求携带 id、当前 rowVersion 和 patch；patch 接受 objective（1–2000 字）、status=active/completed 或 deleted=true。完成更新真实目标状态，删除退出列表与上下文。旧工单目标仍拒绝人工完成。",
+                "description": "携带 id、当前 rowVersion 和 patch；patch 接受 objective（1–2000 字）、status=active/completed 或 deleted=true。删除后退出列表与上下文。",
                 "additionalProperties": true
               },
               "history": {
@@ -505,24 +485,6 @@
               "ledgerRead": {
                 "type": "object",
                 "additionalProperties": true
-              },
-              "memoryCandidateAccept": {
-                "type": "object",
-                "additionalProperties": true,
-                "deprecated": true,
-                "description": "已弃用，仅兼容旧版记忆候选管理；合格记忆现在自动保存，新客户端无需逐条确认。"
-              },
-              "memoryCandidateReject": {
-                "type": "object",
-                "additionalProperties": true,
-                "deprecated": true,
-                "description": "已弃用，仅兼容旧版记忆候选管理；合格记忆现在自动保存，新客户端无需逐条确认。"
-              },
-              "memoryCandidates": {
-                "type": "object",
-                "additionalProperties": true,
-                "deprecated": true,
-                "description": "已弃用，仅兼容旧版记忆候选管理；合格记忆现在自动保存，新客户端无需逐条确认。"
               },
               "memoryDelete": {
                 "type": "object",
@@ -667,10 +629,6 @@
                 "additionalProperties": true
               },
               "pinThread": {
-                "type": "object",
-                "additionalProperties": true
-              },
-              "profile": {
                 "type": "object",
                 "additionalProperties": true
               },
@@ -2276,20 +2234,12 @@
               "evaluationHistory",
               "evaluations",
               "executionSessions",
-              "goalAdvance",
-              "goalBudgetGet",
-              "goalCancel",
               "goalCreate",
               "goalGet",
               "goalList",
-              "goalPause",
-              "goalResume",
               "goalUpdate",
               "history",
               "ledgerRead",
-              "memoryCandidateAccept",
-              "memoryCandidateReject",
-              "memoryCandidates",
               "memoryDelete",
               "memoryForget",
               "memoryLearning",
@@ -2317,7 +2267,6 @@
               "petRestore",
               "petUpload",
               "pinThread",
-              "profile",
               "profileDocuments",
               "profileExport",
               "profileImport",
@@ -2986,9 +2935,7 @@
                 "action": {
                   "enum": [
                     "memoryDelete",
-                    "memoryForget",
-                    "memoryCandidateAccept",
-                    "memoryCandidateReject"
+                    "memoryForget"
                   ]
                 }
               }
@@ -3373,11 +3320,6 @@
               }
             }
           }
-        ],
-        "x-deprecated-actions": [
-          "memoryCandidates",
-          "memoryCandidateAccept",
-          "memoryCandidateReject"
         ],
         "description": "主人管理接口。注册配置通过通用 schema/路径读写，页面与 Router 共用权威存储、CAS、脱敏审计和回滚。高风险确认绑定本次差异；工单清理须先持久预览，再确认精确子集，归档保留墓碑与成果，恢复不重开执行。"
       },
@@ -3944,14 +3886,6 @@
             "minLength": 1,
             "pattern": "\\S"
           },
-          "legacyIds": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "pattern": "\\S"
-            }
-          },
           "supersedes": {
             "$ref": "#/components/schemas/AssistantMemoryVersionReference"
           },
@@ -3963,7 +3897,7 @@
           }
         },
         "additionalProperties": true,
-        "description": "已保存记忆。candidateId/legacyIds 为可选来源与旧 ID 别名；supersedes 指向上一版，versionChain 累计版本引用，不含历史正文。可选字段缺失时省略。"
+        "description": "已保存记忆。candidateId 为可选的学习来源标识；supersedes 指向上一版，versionChain 累计版本引用，不含历史正文。可选字段缺失时省略。"
       },
       "AssistantModelSelection": {
         "type": "object",
@@ -4077,12 +4011,7 @@
           "auxiliary": {
             "$ref": "#/components/schemas/AssistantAuxiliaryModels"
           },
-          "keyPools": {
-            "type": "array",
-            "maxItems": 0,
-            "deprecated": true,
-            "description": "已移除；仅接受旧客户端空数组并丢弃，不保存凭据路由池。"
-          }
+          "keyPools": false
         },
         "additionalProperties": true,
         "description": "models 为 Router 首选与备用；workerModels 为 Worker 独立队列，缺省或空数组继承 Router；auxiliary 仅对启用用途使用辅助队列，失败回 Router，不混入 Worker。显式模型选择优先；providerId/modelId 原样保存，局部修改保留其他配置。"
@@ -4446,7 +4375,6 @@
           "state": {
             "enum": [
               "delivery_wait",
-              "budget_wait",
               "continuation_wait",
               "action_verified"
             ]
@@ -4660,19 +4588,6 @@
           "instructionRevision": {
             "type": "integer",
             "minimum": 1
-          },
-          "selfCheck": {
-            "type": "object",
-            "required": [
-              "summary"
-            ],
-            "properties": {
-              "summary": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "additionalProperties": true
           }
         },
         "additionalProperties": true,
@@ -5006,7 +4921,6 @@
               "mandate-unavailable",
               "model-unavailable",
               "timeout",
-              "budget-exhausted",
               "triage-unavailable"
             ]
           }
@@ -5320,57 +5234,24 @@
       "AssistantGoalInput": {
         "type": "object",
         "required": [
-          "objective"
+          "objective",
+          "requestId"
         ],
         "properties": {
           "objective": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 2000
           },
           "requestId": {
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
             "description": "网页创建的稳定请求标识；同标识同内容复用原目标，不因主会话重置重新创建。"
-          },
-          "children": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AssistantGoalInput"
-            }
           }
         },
-        "not": {
-          "anyOf": [
-            {
-              "required": [
-                "provider"
-              ]
-            },
-            {
-              "required": [
-                "model"
-              ]
-            },
-            {
-              "required": [
-                "providerId"
-              ]
-            },
-            {
-              "required": [
-                "modelId"
-              ]
-            },
-            {
-              "required": [
-                "workerModel"
-              ]
-            }
-          ]
-        },
-        "additionalProperties": true,
-        "description": "新目标仅需 objective（1–2000 字）与 requestId，形成跨会话保留的轻量清单，不要求项目/执行要求，不自动派工。旧式带 projectId/text 的工单目标及递归子目标继续兼容，使用系统工作角色模型；不接受节点级 provider/model 覆盖。"
+        "additionalProperties": false,
+        "description": "清单目标：一句目标文字，跨会话保留，不派工。"
       },
       "ManagedSettingOperation": {
         "type": "object",

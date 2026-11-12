@@ -24,7 +24,7 @@ async function fixture(t, { send, execute, onDelivered, prepareTicketReply, chan
   const deliver = async delivery => { sends++; return send ? send(delivery, db) : { status: 'accepted', messageId: 'durable-message' }; };
   const runtime = createOrchestrationRuntime({ ctx: { llm: { stream() { throw new Error('No content review model may be called'); } }, ...ctx }, store, onDelivered, ...(now ? { now } : {}),
     prepareTicketReply: async delivery => prepareTicketReply ? prepareTicketReply(delivery, db, store) : { status: 'ready', text: '已完成，我整理好了结果。' },
-    execute: async (assignment, context) => { executions++; return execute ? execute(assignment, context, db) : { summary: original, completion: { kind: 'completed' }, selfCheck: { summary: '已检查数量、格式与明确要求' }, evidenceRefs: [], ...patch }; },
+    execute: async (assignment, context) => { executions++; return execute ? execute(assignment, context, db) : { summary: original, completion: { kind: 'completed' }, evidenceRefs: [], ...patch }; },
     deliverDesktop: deliver,
     ...(channel === 'feishu' ? { feishu: { send: async input => deliver({ payload: input, ticketId: ticket.id }) } } : {}),
   });
@@ -280,30 +280,6 @@ test('completed result delivery does not rerun task admission when connection co
   assert.deepEqual(app.counts(), { executions: 1, sends: 1 });
 });
 
-test('structural failure report stays waiting after delivery and never reruns automatically', async t => {
-  const failure = { attempted: '检查来源与已有备份', cause: '来源数据永久丢失', resumeConditions: '取得原数据后可继续' };
-  const app = await fixture(t, { result: { outcome: 'failed', failure }, send(delivery, db) {
-    assert.equal(db.getTicket(delivery.ticketId).status, 'waiting');
-    assert.equal(delivery.payload.outcome, 'failed');
-    return { status: 'accepted', messageId: 'failure-receipt' };
-  } });
-  await app.advance();
-  assert.equal(app.db.getTicket(app.ticket.id).status, 'waiting');
-  assert.equal(app.db.getTicket(app.ticket.id).continuationWait.code, 'EXECUTION_FAILED');
-  assert.deepEqual(app.db.results(app.ticket.id)[0].failure, failure);
-  await app.advance();
-  assert.equal(app.counts().executions, 1);
-});
-
-test('missing optional self-check does not hide completed work', async t => {
-  const app = await fixture(t, { result: { selfCheck: undefined } });
-  await app.advance();
-  assert.equal(app.db.getTicket(app.ticket.id).status, 'completed');
-  assert.equal(app.db.results(app.ticket.id).length, 1);
-  assert.equal(app.counts().executions, 1);
-  assert.equal(app.db.getAssignment('work').state, 'completed');
-});
-
 test('normal Worker completion retains effect diagnostics without blocking completion or rerunning', async t => {
   const app = await fixture(t, { result: { executionEffects: { effectsVerified: false, unknownCallIds: ['send'] } } });
   await app.advance(); await app.advance();
@@ -322,7 +298,7 @@ test('confirmed delivery stays completed while mirror retries and never archives
       const identity = { owner: assignment.owner, fence: assignment.fence };
       const run = db.prepareRun(assignment.id, { ...identity, sessionId: 'execution', directory: 'fixture' });
       db.updateRun(run.id, { ...identity, state: 'submitted' });
-      const result = { runId: run.id, sessionId: 'execution', summary: 'original', completion: { kind: 'completed' }, selfCheck: { summary: 'checked' }, outcome: 'completed', evidenceRefs: [] };
+      const result = { runId: run.id, sessionId: 'execution', summary: 'original', completion: { kind: 'completed' }, evidenceRefs: [] };
       db.updateRun(run.id, { ...identity, state: 'verifying', evidence: result });
       return result;
     },
@@ -429,7 +405,7 @@ test('results saved during this process recover after commit or executor cleanup
     await app.runtime.tick();
     assert.equal(app.db.getTicket(app.ticket.id).status, 'completed');
     assert.equal(app.db.results(app.ticket.id).length, stage === 'commit' ? 2 : 1, 'retain the provisional draft and its later known completion');
-    assert.equal(app.db.results(app.ticket.id).at(-1).finalSummary, '真实完成的结果');
+    assert.equal(app.db.results(app.ticket.id).at(-1).summary, '真实完成的结果');
     assert.equal(app.db.getAssignment('work').attempts, 1);
     assert.equal(app.counts().executions, 1);
   });
@@ -447,7 +423,7 @@ test('storage recovery retains raw drafts and retries without a permanent attemp
     assert.equal(recovery.attempts, attempt);
     assert.equal(recovery.state, 'retrying');
     assert.equal(app.db.getTicket(app.ticket.id).status, 'running');
-    assert.equal(app.db.results(app.ticket.id)[0].finalSummary, recoveryEvents[0].data.message.content[0].text);
+    assert.equal(app.db.results(app.ticket.id)[0].summary, recoveryEvents[0].data.message.content[0].text);
     await app.runtime.tick(); assert.equal(reads, attempt);
     clock = recovery.nextAttemptAt + 1;
   }

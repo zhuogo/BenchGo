@@ -3,7 +3,6 @@ import { chatPublicationRecordOf } from '../../../../shared/public-chat-record.m
 import { appendPluginRecord } from '@deepseek-ai/dsh-session';
 import { fallbackRequestIds, readModelFallbacks, modelFallbackType } from './model-fallback.mjs';
 import { questionBatch, questionAnswers, questionReplyText, readQuestionReply } from './question-reply.mjs';
-import { ticketStateSource } from './ticket-state-report.mjs';
 import { ticketReplySource } from './ticket-reply.mjs';
 import { approvalChatBinding } from './approval-chat-binding.mjs';
 
@@ -12,14 +11,13 @@ export const executionInputSource = 'benchgo-execution-input';
 const fail = message => Object.assign(new Error(message), { code: 'CHAT_PUBLICATION_REJECTED' });
 const userEvent = (event, events) => event.type === 'user/message' && (event.data?.source?.kind === 'user' || readQuestionReply(event.data, events));
 const internalReply = request => request?.source?.kind === ticketReplySource;
-const legacyReply = request => request?.source?.kind === ticketStateSource;
 const executionReply = request => request?.source?.kind === executionInputSource;
-const replyEvent = (event, events) => userEvent(event, events) || event.type === 'user/message' && [ticketStateSource, ticketReplySource, executionInputSource].includes(event.data?.source?.kind);
-// Resolve internal and retired notices to their original identity so neither
-// can accidentally become a reply to the preceding human message.
+const replyEvent = (event, events) => userEvent(event, events) || event.type === 'user/message' && [ticketReplySource, executionInputSource].includes(event.data?.source?.kind);
+// Resolve internal notices to their original identity so they cannot
+// accidentally become a reply to the preceding human message.
 const replyContinuations = events => {
   const result = fallbackRequestIds(events);
-  const states = new Set(events.filter(event => event.type === 'user/message' && (legacyReply(event.data) || internalReply(event.data) || executionReply(event.data))).map(event => event.data.id));
+  const states = new Set(events.filter(event => event.type === 'user/message' && (internalReply(event.data) || executionReply(event.data))).map(event => event.data.id));
   for (const plan of readModelFallbacks(events).values()) {
     if (!plan.cancelled && states.has(plan.requestId)
       && events.some(event => event.type === 'user/message' && event.data?.id === plan.message.id
@@ -45,7 +43,7 @@ export function activeChatReply(events, { includeInternal = false } = {}) {
     else if (event.type === 'turn/end' && event.data?.turn === turn) { turn = undefined; requestId = undefined; }
   }
   const request = events.find(event => event.type === 'user/message' && event.data?.id === requestId)?.data;
-  return turn !== undefined && requestId && (includeInternal || !internalReply(request) && !legacyReply(request)) ? { turn, requestId } : null;
+  return turn !== undefined && requestId && (includeInternal || !internalReply(request)) ? { turn, requestId } : null;
 }
 
 /** A projection, never a replacement for the private execution transcript. */
@@ -57,7 +55,7 @@ export function projectChatMessages(events) {
   for (const event of events) {
     if (replyEvent(event, events)) users.add(event.data.id);
     else if (event.type === chatPublicationType && event.ignorable === true && event.data?.kind === 'final'
-      && users.has(event.data.requestId) && !legacyReply(requests.get(event.data.requestId)) && !internalReply(requests.get(event.data.requestId))
+      && users.has(event.data.requestId) && !internalReply(requests.get(event.data.requestId))
       && typeof event.data.text === 'string' && event.data.text.trim() && event.data.text.length <= 16000) explicit.add(event.data.requestId);
   }
   users.clear();
@@ -90,7 +88,7 @@ export function projectChatMessages(events) {
       users.add(event.data.id);
       request = event.data;
       lastAssistant = undefined; publicParts = [];
-      if (legacyReply(request) || internalReply(request) || executionReply(request)) continue;
+      if (internalReply(request) || executionReply(request)) continue;
       const question = readQuestionReply(event.data, events);
       if (question) {
         const row = { seq: event.seq, id: event.data.id, role: 'user', kind: 'question-reply', ...question,
@@ -143,7 +141,7 @@ export function projectChatMessages(events) {
       if (text.trim()) publicParts.push(event);
     } else if (event.type === 'turn/end') {
       if (turn !== undefined && event.data?.turn === turn && event.data?.reason?.kind === 'completed'
-        && request?.id && !internalReply(request) && !legacyReply(request) && !executionReply(request) && !explicit.has(request.id) && !published.has(request.id)) {
+        && request?.id && !internalReply(request) && !executionReply(request) && !explicit.has(request.id) && !published.has(request.id)) {
         if (publicParts.length) {
           published.add(request.id);
           appendParts(request.id);
@@ -172,7 +170,7 @@ export function chatNotificationIdentities(events, event) {
 
 /** Only the owner Router can publish; Worker/tool output has no publication authority. */
 export function installChatPublication(scope, agent, { onPublish, canPublish, appendRecord = appendPluginRecord } = {}) {
-  const permitted = request => !legacyReply(request) && (!(internalReply(request) || executionReply(request)) || (canPublish ? canPublish(request) : false));
+  const permitted = request => !(internalReply(request) || executionReply(request)) || (canPublish ? canPublish(request) : false);
   scope.on?.('agent/turn-stopping', async ({ agent: subject, turn, signal }) => {
     if (subject !== agent) return;
     const events = agent.session.snapshotEvents(), active = activeChatReply(events, { includeInternal: true });
@@ -212,7 +210,6 @@ export function installChatPublication(scope, agent, { onPublish, canPublish, ap
       const active = activeChatReply(events, { includeInternal: true });
       const request = events.findLast(event => replyEvent(event, events) && (!active || event.data.id === active.requestId))?.data;
       if (!request?.id) throw fail('没有可回复的用户请求');
-      if (legacyReply(request)) throw fail('旧工单状态发布路径已停用');
       const internal = internalReply(request), kind = internal ? 'ticket-reply' : 'final';
       if (suppress && (!internal || !['state', 'approval'].includes(request.source.replyKind) || text !== undefined)) throw fail('仅内部状态或审批提醒可选择静默');
       if (!suppress && (typeof text !== 'string' || !text.trim() || text.length > 16000)) throw fail('正式回复正文无效');

@@ -22,10 +22,9 @@ export function installTicketRevisions({ db, tx, api, insertTicket }) {
     operation TEXT NOT NULL, snapshot TEXT NOT NULL, created_at TEXT NOT NULL,
     PRIMARY KEY(ticket_id,revision));
     CREATE TABLE IF NOT EXISTS sa_ticket_revision_requests(
-    request_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, ticket_id TEXT NOT NULL REFERENCES sa_tickets(id), revision INTEGER NOT NULL);
+    request_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, ticket_id TEXT NOT NULL REFERENCES sa_tickets(id), revision INTEGER NOT NULL, request_payload TEXT);
     CREATE TABLE IF NOT EXISTS sa_ticket_authorization_approvals(
     approval_id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL REFERENCES sa_tickets(id), fingerprint TEXT NOT NULL, payload TEXT NOT NULL);`);
-  if (!db.prepare('PRAGMA table_info(sa_ticket_revision_requests)').all().some(row => row.name === 'request_payload')) db.exec('ALTER TABLE sa_ticket_revision_requests ADD COLUMN request_payload TEXT');
   const history = ticketId => db.prepare('SELECT * FROM sa_ticket_revisions WHERE ticket_id=? ORDER BY revision').all(ticketId)
     .map(row => ({ ...JSON.parse(row.snapshot), instructionRevision: row.revision, operation: row.operation, createdAt: row.created_at }));
   return {

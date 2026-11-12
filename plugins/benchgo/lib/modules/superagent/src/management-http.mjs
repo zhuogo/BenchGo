@@ -61,7 +61,7 @@ export function createManagementHttp({ settings, taskManagement, profileId, read
       const ids = input.ticketIds;
       if (!Array.isArray(ids) || !ids.length) throw fail('CLEANUP_INPUT_INVALID', '请选择需要恢复展示的工单');
       const rows = taskManagement.cleanupHistory({ ticketId: ids[0] });
-      const receipt = rows.find(row => ['archive', 'legacy-migration'].includes(row.operation)
+      const receipt = rows.find(row => row.operation === 'archive'
         && ids.every(id => row.items.some(item => item.id === id)));
       if (!receipt) throw fail('CLEANUP_RECEIPT_NOT_FOUND', '归档记录不存在');
       return { excluded: [], ...taskManagement.previewRestore({ scope, receiptId: receipt.receiptId, ids }) };

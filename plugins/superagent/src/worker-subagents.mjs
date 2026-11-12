@@ -1,5 +1,3 @@
-import { installGoalBudgetUsage, installGoalUsageMeter } from './goal-budget-usage.mjs';
-
 /** Official Harness owns delegation, context inheritance, tools and child lifecycle. */
 export function installWorkerSubagents(scope, worker, { ctx, database, assignment }) {
   const children = new Set();
@@ -8,8 +6,8 @@ export function installWorkerSubagents(scope, worker, { ctx, database, assignmen
   const listen = ({ agent }) => {
     const header = agent.session?.header;
     if (header?.origin !== 'subagent') return;
-    const parent = database.getSessionRole?.(header.parentSession);
-    const root = database.getSessionRole?.(worker.id);
+    const parent = database.getSessionRole(header.parentSession);
+    const root = database.getSessionRole(worker.id);
     const ownedParent = parent?.role === 'child-worker' && root && parent.runId === root.runId
       && parent.assignmentId === root.assignmentId && parent.ticketId === root.ticketId;
     if (header.parentSession !== worker.id && !children.has(header.parentSession) && !ownedParent) return;
@@ -20,10 +18,6 @@ export function installWorkerSubagents(scope, worker, { ctx, database, assignmen
         parentSessionId: header.parentSession, expected: {} });
       database.recordSessionRole(agent.id, { status: 'ready', actual: null });
     }
-    // Accounting observes official events; it neither selects nor gates child capabilities.
-    installGoalBudgetUsage(agent.ctx, agent, { database, ticketId: assignment.ticketId });
-    const usage = installGoalUsageMeter(agent.ctx, { database, ticketId: assignment.ticketId, sessionId: agent.id });
-    agent.ctx.effect?.(() => () => usage.dispose());
   };
   const dispose = ctx.on('agent/created', listen, { global: true });
   scope.effect?.(() => dispose);

@@ -6,7 +6,7 @@ import { installWorkerPermissionGate } from '../src/worker-permissions.mjs';
 test('desktop tools ignore channel revisions but stop on desktop authority changes', async () => {
   let wrapper, desktopVersion = 'd1', version = 'f1', changeDesktop = false;
   installWorkerPermissionGate({ on(_name, fn) { wrapper = fn; } }, {
-    database: { getTicket: () => ({ mandate: { source: { channel: 'desktop' } } }), renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }) },
+    database: { getTicket: () => ({ mandate: { source: { channel: 'desktop' } } }), appliedTicketSnapshot: () => ({}), renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }) },
     assignment: { id: 'assignment', ticketId: 'ticket' },
     readPolicy: async () => ({ desktopVersion, version }),
     authorizeAction: async () => { version += 'changed'; if (changeDesktop) desktopVersion = 'd2'; return { allowed: true }; },
@@ -45,7 +45,7 @@ test('cancellation while rereading policy cannot enter tool dispatch', async t =
   const controller = new AbortController();
   let wrapper, reads = 0, dispatched = false, renewed = false;
   installWorkerPermissionGate({ on(_name, fn) { wrapper = fn; } }, {
-    database: { getTicket: () => ({ mandate: {} }), renewAssignment: () => { renewed = true; return { allowed: true }; } },
+    database: { getTicket: () => ({ mandate: {} }), appliedTicketSnapshot: () => ({}), renewAssignment: () => { renewed = true; return { allowed: true }; } },
     assignment: { id: 'assignment', ticketId: 'ticket' },
     readPolicy: async () => { if (++reads === 2) controller.abort(new Error('cancelled')); return { version: 1 }; },
     authorizeAction: async () => ({ allowed: true }),
@@ -53,22 +53,6 @@ test('cancellation while rereading policy cannot enter tool dispatch', async t =
   await assert.rejects(wrapper({ signal: controller.signal }, () => { dispatched = true; }), /cancelled/);
   assert.equal(renewed, false);
   assert.equal(dispatched, false);
-});
-
-test('budget continuation blocks replay of a completed action while permitting fresh authorized correction', async () => {
-  let wrapper, dispatches = 0;
-  installWorkerPermissionGate({ on(_name, fn) { wrapper = fn; } }, {
-    database: { getTicket: () => ({ mandate: {} }), renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }) },
-    assignment: { id: 'original', ticketId: 'ticket', pauseContinuation: { kind: 'execution-budget', runId: 'original-run' } },
-    priorToolEvents: [{ type: 'assistant/message', data: { message: { content: [
-      { type: 'tool-call', id: 'sent', name: 'opaque_send', arguments: '{"body":"already completed"}' },
-    ] } } }, { type: 'tool/result', data: { message: { toolCallId: 'sent', content: [] } } }],
-    readPolicy: async () => ({ version: 'current' }), authorizeAction: async () => ({ allowed: true }),
-  });
-  const signal = new AbortController().signal;
-  await assert.rejects(wrapper({ name: 'opaque_send', arguments: { body: 'already completed' }, signal }, () => dispatches++), { code: 'ACTION_REPLAY_BLOCKED' });
-  await wrapper({ name: 'web_fetch', arguments: { url: 'https://source.invalid' }, signal }, () => dispatches++);
-  assert.equal(dispatches, 1);
 });
 
 for (const nested of [false, true]) test(`interrupted continuation mechanically blocks completed action replay (nested=${nested})`, async () => {
@@ -81,7 +65,7 @@ for (const nested of [false, true]) test(`interrupted continuation mechanically 
     { type: 'tool/result', data: { message: { toolCallId: 'sent', content: [] } } },
   ];
   installWorkerPermissionGate({ on(_name, fn) { wrapper = fn; } }, {
-    database: { getTicket: () => ({ mandate: {} }), renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }) },
+    database: { getTicket: () => ({ mandate: {} }), appliedTicketSnapshot: () => ({}), renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }) },
     assignment: { id: 'original', ticketId: 'ticket', interruptedContinuation: { runId: 'same-run' } },
     priorToolEvents: prior, readPolicy: async () => ({ version: 'current' }), authorizeAction: async () => ({ allowed: true }),
   });
@@ -98,7 +82,7 @@ for (const failed of [false, true]) test(`unknown previous effects block changed
   ] } } }];
   if (failed) events.push({ type: 'tool/result', data: { message: { toolCallId: 'old-send', isError: true, content: [] }, error: { code: 'TIMEOUT' } } });
   installWorkerPermissionGate({ on(_name, fn) { wrapper = fn; } }, {
-    database: { getTicket: () => ({ mandate: {} }), renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }) },
+    database: { getTicket: () => ({ mandate: {} }), appliedTicketSnapshot: () => ({}), renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }) },
     assignment: { id: 'original', ticketId: 'ticket', interruptedContinuation: { runId: 'original-run' } },
     priorToolEvents: events, readPolicy: async () => ({ version: 'current' }), authorizeAction: async () => ({ allowed: true }),
   });
@@ -133,7 +117,7 @@ test('batch snapshot keeps ordinary edits stable while live tool narrowing and s
  test('resumed permissions reuse the saved official deterministic error receipt', async () => {
   let wrapper, dispatched = false;
   installWorkerPermissionGate({ on(_name, fn) { wrapper = fn; } }, {
-    database: { getTicket: () => ({ mandate: {} }), renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }) },
+    database: { getTicket: () => ({ mandate: {} }), appliedTicketSnapshot: () => ({}), renewAssignment: (_id, args) => ({ allowed: args.validateMandate() }) },
     assignment: { id: 'original', ticketId: 'ticket' },
     priorToolEvents: [{ type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'bad', name: 'missing_tool', arguments: '{}' }] } } },
       { type: 'tool/result', data: { message: { toolCallId: 'bad', isError: true, content: [] } } }],

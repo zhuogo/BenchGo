@@ -20,9 +20,13 @@ test('confirmed close feeds background queue once; crash after saving resumes th
   const triggerId = accepted.trigger?.id ?? accepted.id;
   assert.ok(triggerId);
   const ticket = store.orchestration.createTicket({ threadId: 'main-thread', target: '中文任务', sourceTriggerIds: [triggerId], mandate: { source } });
-  store.orchestration.commitResult(ticket.id, { uniqueKey: 'worker-result', result: { outcome: 'completed', finalSummary: '检查完成',
-    selfCheck: { summary: '检查通过' }, toolEvidence: { entries: [{ name: 'test', text: 'tests passed', isError: false }] } }, now: 1 });
-  assert.equal(store.orchestration.getTicket(ticket.id).status, 'waiting');
+  store.orchestration.createAssignment(ticket.id, { id: 'work' });
+  const [assignment] = store.orchestration.claimAssignments('worker', { validateMandate: () => true });
+  const run = store.orchestration.prepareRun(assignment.id, { ...assignment, sessionId: 'worker-session', directory: '/task' });
+  store.orchestration.updateRun(run.id, { ...assignment, state: 'submitted' });
+  store.orchestration.commitResult(ticket.id, { assignment, uniqueKey: 'worker-result', now: 1,
+    result: { summary: '检查完成', runId: run.id, sessionId: run.sessionId, instructionRevision: 1, completion: { kind: 'completed' } } });
+  assert.equal(store.orchestration.getTicket(ticket.id).status, 'completed', 'execution completion does not wait for delivery');
   const ctx = { sessionQuery: { readSession() { throw new Error('Router read forbidden'); } }, llm: { async *stream(request) {
     requests.push(request);
     const material = JSON.parse(request.messages[1].content[0].text);
@@ -41,7 +45,8 @@ test('confirmed close feeds background queue once; crash after saving resumes th
   store.orchestration.reconcileOutbox(outbox.id, { attempts: 1, outcome: 'sent', evidence: '原来源确认', receipt: { status: 'accepted', messageId: 'delivered' }, now: 4 });
   assert.equal(store.orchestration.getTicket(ticket.id).status, 'completed');
   const learningMaterial = store.orchestration.learningSources().items;
-  assert.equal(learningMaterial[0].result.finalSummary, '检查完成');
+  assert.equal(learningMaterial.length, 1, 'a confirmed delivery registers the completed Ticket for learning');
+  assert.deepEqual(learningMaterial[0].result, { summary: '检查完成' });
   assert(!JSON.stringify(learningMaterial).includes('你的任务检查好了。'));
   store.learning.request({ scope: 'another-router', eventId: 'after-delivery' });
   const propose = store.memory.propose;

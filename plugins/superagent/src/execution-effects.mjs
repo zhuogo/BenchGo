@@ -44,7 +44,7 @@ export function executionEffects(log, receipts = new Map()) {
     if (call) {
       call.result = { failed: result.failed, code: result.code,
         ...(call.name === 'assistant_external_action' ? { value: output(result.content) } : {}) };
-      // A settled PTC event may exist without its start in a legacy log.
+      // A settled PTC event may be logged without its start.
       if (pending.get(key)?.[0] === call) pending.get(key).shift();
     }
   };

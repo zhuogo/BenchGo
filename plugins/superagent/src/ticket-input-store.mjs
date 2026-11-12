@@ -95,20 +95,6 @@ export function installTicketInputStore({ db, tx, api }) {
     }), row.id);
     return value(db.prepare('SELECT * FROM sa_ticket_inputs WHERE id=?').get(row.id));
   }
-  // Additive migration of the existing source inbox into the single input ledger.
-  for (const row of db.prepare('SELECT o.* FROM sa_message_ownership o LEFT JOIN sa_ticket_inputs i ON i.ticket_id=o.ticket_id AND i.trigger_id=o.trigger_id WHERE i.id IS NULL').all()) {
-    const prior = db.prepare('SELECT * FROM sa_subscription_applied WHERE trigger_id=?').get(row.trigger_id);
-    const payload = prior && db.prepare('SELECT payload FROM sa_assignments WHERE id=?').get(prior.assignment_id);
-    const original = payload && JSON.parse(payload.payload);
-    const receipt = record({ ticketId: row.ticket_id, triggerId: row.trigger_id, kind: 'context', idempotencyKey: `trigger:${row.trigger_id}`,
-      ...(original ? { instructionRevision: original.instructionRevision ?? 1, authorizationVersion: original.authorizationVersion ?? 1 } : {}) });
-    db.prepare('UPDATE sa_ticket_inputs SET received_at=? WHERE id=?').run(row.delivered_at, receipt.id);
-    if (prior && receipt.state !== 'applied') {
-      const run = api.runs(prior.assignment_id).find(run => run.sessionId === prior.session_id);
-      db.prepare("UPDATE sa_ticket_inputs SET state='applied',application=? WHERE id=?").run(JSON.stringify({ assignmentId: prior.assignment_id,
-        runId: run?.id ?? null, sessionId: prior.session_id, messageId: prior.message_id, boundaryId: `message:${prior.message_id}`, at: prior.applied_at, migrated: true }), receipt.id);
-    }
-  }
   return {
     recordTicketInput: input => tx(() => record(input)),
     recordTicketInputInTransaction: record,

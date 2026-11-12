@@ -6,6 +6,7 @@ import { CallOrb, CallStageIcon } from './call-stage.jsx';
 import { createCallPresentation } from './call-presentation.mjs';
 import { VoiceCallHost } from './call-host.jsx';
 import { CallEntry } from './call-entry.jsx';
+import { MIC_SHORTCUT_KEYS, createMicTargets, installMicShortcut } from './mic-shortcut.mjs';
 import { registerVoiceConversationRows } from './conversation-records.jsx';
 import { callStreamingReason } from '../src/call-streaming.mjs';
 import { generatedMediaDraft, generatedMediaPatch, voiceSettingsPatch, listeningDraft } from './settings-state.mjs';
@@ -26,9 +27,12 @@ export function apply(ctx) {
   const controller = createVoiceController(ctx);
   const callView = createCallPresentation(controller, { title: id => ctx.sessions.list.getSnapshot().byId[id]?.title, subscribeTitle: listener => ctx.sessions.list.subscribe(listener), openSession: id => ctx.uiWorkspace.openSession(id) });
   activeController = controller;
+  const micTargets = createMicTargets();
   ctx.effect(() => async () => { if (activeController === controller) activeController = undefined; callView.dispose(); await controller.dispose(); });
-  ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'benchgo-voice-call', inject: () => ({ controller, callView, sessionStatus: ctx.uiSession.sessionStatus }) }, VoiceCallHost));
-  ctx.slots.inject('conversation.input.activity', () => ctx.slots.register({ name: 'conversation.input.activity', priority: -10, inject: () => ({ controller, callView, sessionStatus: ctx.uiSession.sessionStatus, openSettings: () => { const shell = ctx.slots.entries('sidebar.settings').find(entry => entry.children?.['settings.section']); const actions = shell?.store?.create().actions; if (!actions?.openSection) throw Error('请从侧栏设置 → 媒体 → 语音打开配置。'); actions.openSection('media'); } }) }, VoiceActivity));
+  const openSettings = () => { const shell = ctx.slots.entries('sidebar.settings').find(entry => entry.children?.['settings.section']); const actions = shell?.store?.create().actions; if (!actions?.openSection) throw Error('请从侧栏设置 → 媒体 → 语音打开配置。'); actions.openSection('media'); };
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'benchgo-voice-call', inject: () => ({ controller, callView, sessionStatus: ctx.uiSession.sessionStatus, openSettings }) }, VoiceCallHost));
+  ctx.slots.inject('conversation.input.activity', () => ctx.slots.register({ name: 'conversation.input.activity', priority: -10, inject: () => ({ controller, callView, sessionStatus: ctx.uiSession.sessionStatus, openSettings, micTargets }) }, VoiceActivity));
+  ctx.inject(['shortcuts'], scope => { scope.effect(() => installMicShortcut({ shortcuts: scope.shortcuts, controller, targets: micTargets }), 'voice: microphone shortcut'); });
   void controller.load().catch(() => {});
 }
 /** Base owns the shared settings entry; optional modules own their working forms. */
@@ -38,7 +42,7 @@ export function mountMediaSettings(ctx) {
   ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'media', order: 35, label: () => '媒体' }, MediaSettings));
 }
 function useVoice(controller) { return useSyncExternalStore(fn => controller.state.subscribe(fn), () => controller.state.getSnapshot()); }
-function Hint({ label, children }) { return <Tooltip label={label} delayMs={450} portal>{children}</Tooltip>; }
+function Hint({ label, shortcutKeys, children }) { return <Tooltip label={label} shortcutKeys={shortcutKeys} delayMs={450} portal>{children}</Tooltip>; }
 const speakerAssets = {"on": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\"><path d=\"M2 10v4c0 2 1 3 3 3h1.43c.37 0 .74.11 1.06.3l2.92 1.83c2.52 1.58 4.59.43 4.59-2.54V7.41c0-2.98-2.07-4.12-4.59-2.54L7.49 6.7c-.32.19-.69.3-1.06.3H5c-2 0-3 1-3 3Z\" stroke-width=\"1.5\" stroke=\"currentColor\"/><path d=\"M18 8a6.66 6.66 0 0 1 0 8M19.83 5.5a10.83 10.83 0 0 1 0 13\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke=\"currentColor\"/></svg>", "off": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\"><path d=\"M15 8.37v-.96c0-2.98-2.07-4.12-4.59-2.54L7.49 6.7c-.32.19-.69.3-1.06.3H5c-2 0-3 1-3 3v4c0 2 1 3 3 3h2M10.41 19.13c2.52 1.58 4.59.43 4.59-2.54v-3.64M18.81 9.42c.9 2.15.63 4.66-.81 6.58M21.15 7.8a10.82 10.82 0 0 1-1.32 10.7M22 2 2 22\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke=\"currentColor\"/></svg>"};
 function Speaker({ active }) { return <span className="voice-speaker-icon" aria-hidden="true" dangerouslySetInnerHTML={{ __html: speakerAssets[active ? 'on' : 'off'] }} />; }
 const callAsset = "<svg viewBox=\"0 0 24 24\" fill=\"none\"><path d=\"M3 8.25v7.5M7.5 5.75v12.5M12 3.25v17.5M16.5 5.75v12.5M21 8.25v7.5\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke=\"currentColor\"/></svg>";
@@ -50,10 +54,11 @@ export function normalizeTtsSpeed(value) {
   return Number.isFinite(speed) && speed >= TTS_SPEED_MIN && speed <= TTS_SPEED_MAX ? Math.round(speed * 100) / 100 : DEFAULT_TTS_SPEED;
 }
 const phaseLabels = { idle: '准备中', starting: '正在连接', listening: '正在聆听', transcribing: '正在识别', thinking: '正在思考', speaking: '正在回应', waiting: '等待授权或交互' };
-function VoiceActivity({ controller, callView, sessionStatus, sessionId, inputActions, locked, onActiveChange, openSettings }) {
+function VoiceActivity({ controller, callView, sessionStatus, sessionId, inputActions, locked, onActiveChange, openSettings, micTargets }) {
   const state = useVoice(controller), [pending, setPending] = useState(false), [error, setError] = useState('');
   const [hasHistory, setHasHistory] = useState(false);
-  const generation = useRef(0), activityRef = useRef(null);
+  const generation = useRef(0), activityRef = useRef(null), mic = useRef(null);
+  mic.current = null;
   const own = state.sessionId === sessionId, active = own && state.mode !== 'idle';
   const recording = active && state.mode === 'dictation', calling = active && state.mode === 'call';
   const reading = own && state.readEnabled && state.phase === 'speaking';
@@ -92,6 +97,8 @@ function VoiceActivity({ controller, callView, sessionStatus, sessionId, inputAc
     controller.readConversationHistory(sessionId, { signal: abort.signal }).then(result => { if (!abort.signal.aborted) setHasHistory(!!result.items?.length); }).catch(() => {});
     return () => abort.abort();
   }, [controller, sessionId]);
+  // The M shortcut drives this composer's dictation through the same operations as its buttons.
+  useEffect(() => micTargets?.add({ element: () => activityRef.current, actions: () => mic.current }), [micTargets]);
   const startCall = event => {
     const rect = event?.currentTarget?.getBoundingClientRect();
     return callView.start({ sessionId, inputActions, origin: rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null });
@@ -102,12 +109,15 @@ function VoiceActivity({ controller, callView, sessionStatus, sessionId, inputAc
   const unavailable = [!asrReady && 'ASR', !ttsReady && 'TTS'].filter(Boolean).join('、');
   const callReason = callStreamingReason(config), callReady = asrReady && ttsReady && !callReason;
   const canStart = !locked && !pending && state.mode === 'idle';
+  mic.current = { sessionId, ready: () => !!config.dictation && asrReady && canStart,
+    start: () => run(() => controller.startDictation({ sessionId, inputActions, hold: true })), keep: () => controller.keepDictation(inputActions),
+    send: () => run(() => controller.sendDictation()), stop: () => run(() => controller.stopDictation()) };
   const message = error || (own ? state.error : '');
   if (calling) return <div ref={activityRef} className={'voice-activity voice-expanded voice-calling voice-call-phase-' + state.phase}>
     <div className="voice-call-capsule"><button type="button" className="voice-call-restore" aria-label="返回语音通话" onClick={() => callView.expand()}><CallOrb state={state} /><span>{waiting ? '等待确认 · 请在对话中处理' : message ? '通话遇到问题' : state.muted ? '麦克风已关闭' : phaseLabels[state.phase] || '返回通话'}</span><CallStageIcon name="expand" /></button></div>
   </div>;
   return <div ref={activityRef} className={'voice-activity ' + (active ? 'voice-expanded ' : '') + (recording ? 'voice-dictating' : '')}>
-    {recording ? <div className="voice-recording-strip"><span className="voice-recording-pulse" role="img" aria-label="麦克风实时音量" style={{ '--voice-level': state.level || 0 }}>{Array.from({ length: 31 }, (_, i) => <i key={i} style={{ '--voice-band': .22 + .78 * Math.abs(Math.sin(i * 1.7)) }} />)}</span><span className="voice-recording-caption" role="status">{state.transcript || '正在聆听'}</span><Hint label="停止转录"><button type="button" className="voice-icon-button voice-stop-recording" aria-label="停止语音转录" onClick={() => run(() => controller.stopDictation())}><IconStopFillRegular size={16} /></button></Hint></div> : config.dictation && !calling && <Hint label={asrReady ? '语音转文本' : '请先在设置 → 媒体 → 语音中配置 ASR 模型'}><button type="button" className="voice-icon-button" data-available={asrReady} aria-label="语音转文本" disabled={!canStart || !asrReady} onClick={() => run(() => controller.startDictation({ sessionId, inputActions }))}><IconMicrophoneOutlineMedium size={18} /></button></Hint>}
+    {recording ? <div className="voice-recording-strip"><span className="voice-recording-pulse" role="img" aria-label="麦克风实时音量" style={{ '--voice-level': state.level || 0 }}>{Array.from({ length: 31 }, (_, i) => <i key={i} style={{ '--voice-band': .22 + .78 * Math.abs(Math.sin(i * 1.7)) }} />)}</span><span className="voice-recording-caption" role="status">{state.transcript || (state.phase === 'starting' ? '正在准备麦克风…' : state.dictationHold ? '正在聆听 · 松开发送' : '正在聆听')}</span><Hint label="停止转录"><button type="button" className="voice-icon-button voice-stop-recording" aria-label="停止语音转录" onClick={() => run(() => controller.stopDictation())}><IconStopFillRegular size={16} /></button></Hint></div> : config.dictation && !calling && <Hint label={!asrReady ? '请先在设置 → 媒体 → 语音中配置 ASR 模型' : micTargets ? '语音转文本；按住 M 说话，松开发送' : '语音转文本'} shortcutKeys={asrReady && micTargets ? MIC_SHORTCUT_KEYS : undefined}><button type="button" className="voice-icon-button" data-available={asrReady} aria-label="语音转文本" disabled={!canStart || !asrReady} onClick={() => run(() => controller.startDictation({ sessionId, inputActions }))}><IconMicrophoneOutlineMedium size={18} /></button></Hint>}
     {config.readAloud && <Hint label={state.mode === 'call' ? '通话期间由原会话播放语音' : !ttsReady ? 'TTS 不可用，请打开设置 → 媒体 → 语音' : state.readEnabled ? '自动朗读开启' : '自动朗读关闭'}><button type="button" className="voice-icon-button voice-read-button" data-available={ttsReady} aria-label={!ttsReady ? 'TTS 不可用，请打开设置 → 媒体 → 语音' : state.readEnabled ? '自动朗读开启' : '自动朗读关闭'} aria-pressed={!!state.readEnabled} disabled={state.mode === 'call' || !ttsReady && !state.readEnabled} onClick={() => run(() => controller.toggleRead(sessionId))}><Speaker active={!!state.readEnabled} /></button></Hint>}
     {!recording && (config.call || hasHistory || own && state.conversationMessages?.length > 0) && <CallEntry available={!!config.call && callReady} disabled={state.mode !== 'call' && (!config.call || !canStart || !callReady)} hint={state.mode === 'call' ? '查看正在进行的通话；结束后可在此开始新通话' : callReady && config.call ? '开始通话' : callReason || unavailable + ' 不可用，请打开设置 → 媒体 → 语音'} onStart={startCall} onHistory={() => callView.history(sessionId)}><CallIcon /></CallEntry>}
     {!recording && (active || reading) && <div className={'voice-status voice-phase-' + state.phase} role="status"><span className="voice-status-dot" /><span className="voice-status-text">{state.transcript || phaseLabels[state.phase] || '语音处理中'}</span></div>}
@@ -223,7 +233,7 @@ function ProviderSettings({ name, draft, config, providers, update, clearKey, to
   </fieldset>;
 }
 const voiceTabs = [{ id: 'dictation', label: '语音转文本', detail: '转为草稿，确认后发送', kinds: ['asr'] }, { id: 'readAloud', label: '朗读', detail: '自动朗读新的回复', kinds: ['tts'] }, { id: 'call', label: '实时通话', detail: '直接交谈，随时打断', kinds: ['asr', 'tts'] }];
-const callSettingsTabs = [{ value: 'conversation', label: '交互模型' }, { value: 'asr', label: '语音识别' }, { value: 'tts', label: '语音合成' }, { value: 'listening', label: '决策' }];
+const callSettingsTabs = [{ value: 'conversation', label: '交互模型' }, { value: 'asr', label: '语音识别' }, { value: 'tts', label: '语音合成' }];
 function ListeningSettings({ draft, config, update, clearKey, toggleClear, disabled }) {
   const [checking, setChecking] = useState(false), [result, setResult] = useState(null), [error, setError] = useState('');
   const operation = useRef(null), identity = JSON.stringify([draft, !!clearKey]);
@@ -247,7 +257,8 @@ function ListeningSettings({ draft, config, update, clearKey, toggleClear, disab
   const routeChanged = draft.endpoint !== (config?.endpoint ?? listeningDraft().endpoint);
   const canTest = !!draft.endpoint.trim() && !clearKey && !!(draft.apiKey.trim() || config?.apiKeyConfigured && !routeChanged);
   return <fieldset disabled={disabled} aria-label="决策设置" className="voice-provider-settings voice-listening-settings">
-    <Toggle label="判断是否在对我说话" detail="暂未接入通话，当前通话直接交流。" checked={draft.enabled} onChange={enabled => update({ enabled })} />
+    <p className="voice-provider-hint">仅保存配置并支持固定示例测试，通话内容不会发送到决策服务。</p>
+    <Toggle label="判断是否在对我说话" checked={draft.enabled} onChange={enabled => update({ enabled })} />
     <label>决策接口地址<input type="url" inputMode="url" autoComplete="off" spellCheck={false} value={draft.endpoint} placeholder="填写完整决策接口地址" onChange={event => update({ endpoint: event.target.value })} /></label>
     <label>决策模型 ID<input autoComplete="off" spellCheck={false} value={draft.model} placeholder="填写模型 ID（接口支持时可留空）" onChange={event => update({ model: event.target.value })} /></label>
     <label>决策 API Key<div className="voice-key-field"><input aria-label="决策 API Key" type="password" autoComplete="new-password" spellCheck={false} placeholder={clearKey ? '保存后清除密钥' : config?.apiKeyConfigured ? '已配置，留空保留' : '填写 API Key'} value={draft.apiKey} onChange={event => update({ apiKey: event.target.value })} />{(config?.apiKeyConfigured || clearKey) && <button type="button" onClick={toggleClear}>{clearKey ? '撤销清除' : '清除密钥'}</button>}</div></label>
@@ -258,7 +269,6 @@ function ListeningSettings({ draft, config, update, clearKey, toggleClear, disab
     {draft.wakeSource === 'custom' && <label>唤醒词<input autoComplete="off" maxLength={100} value={draft.wakeWord} placeholder="填写称呼；留空仅依据上下文判断" onChange={event => update({ wakeWord: event.target.value })} /></label>}
     <p className="voice-listening-word" role="status">{draft.wakeSource === 'superagent' && !availableName ? 'SuperAgent 称呼暂不可用，请设置称呼或选择自定义。' : wakeWord ? `当前称呼：${wakeWord}` : '未设置称呼，仅依据上下文判断。'}</p>
     {config?.unavailableReason && draft.enabled && <p role="status" className="voice-provider-hint">当前保存的配置：{config.unavailableReason}</p>}
-    <Disclosure title="使用说明" className="voice-connection-settings"><p className="voice-provider-hint">当前仅保留决策配置与固定示例测试，通话内容不发送到决策服务。说话对象判断待设计确认后再接入。</p></Disclosure>
   </fieldset>;
 }
 function ConversationSettings({ draft, config, providers, update, disabled }) {
@@ -361,7 +371,7 @@ function VoiceSettings({ controller, providers = [], catalogError = '', selected
     {!navigationId && <SegmentedControl options={voiceTabs.map(item => ({ value: item.id, label: item.label }))} value={tab} onChange={setTab} label="语音交互方式" tabIdPrefix={tabsId} panelId={tabsId + '-panel'} />}
     <div className="voice-tab-panel" key={tab} id={tabsId + '-panel'} role="tabpanel" aria-labelledby={tabsId + '-' + tab}>
       <fieldset disabled={busy} className="voice-mode-settings"><Toggle label={current.label} detail={current.detail} checked={draft[tab]} onChange={value => update(tab, value)} /></fieldset>
-      {tab === 'call' ? <>{callStreamingReason(draft) && <p role="status" className="voice-settings-error">{callStreamingReason(draft)}，请调整高级设置。</p>}<SegmentedControl options={callSettingsTabs} value={callSection} onChange={setCallSection} label="通话设置" tabIdPrefix={callTabsId} panelId={callTabsId + '-panel'} /><div className="voice-call-settings-panel" id={callTabsId + '-panel'} role="tabpanel" aria-labelledby={callTabsId + '-' + callSection}>{callSection === 'conversation' ? <ConversationSettings draft={draft.conversation} config={state.config?.conversation} providers={providers} update={patch => endpoint('conversation', patch)} disabled={busy} /> : callSection === 'listening' ? <ListeningSettings draft={draft.listening} config={state.config?.listening} update={patch => endpoint('listening', patch)} clearKey={clearKeys.listening} toggleClear={() => { setClearKeys(value => ({ ...value, listening: !value.listening })); endpoint('listening', { apiKey: '' }); }} disabled={busy} /> : providerSettings(callSection)}</div></> : current.kinds.map(providerSettings)}
+      {tab === 'call' ? <>{callStreamingReason(draft) && <p role="status" className="voice-settings-error">{callStreamingReason(draft)}，请调整高级设置。</p>}<SegmentedControl options={callSettingsTabs} value={callSection} onChange={setCallSection} label="通话设置" tabIdPrefix={callTabsId} panelId={callTabsId + '-panel'} /><div className="voice-call-settings-panel" id={callTabsId + '-panel'} role="tabpanel" aria-labelledby={callTabsId + '-' + callSection}>{callSection === 'conversation' ? <><ConversationSettings draft={draft.conversation} config={state.config?.conversation} providers={providers} update={patch => endpoint('conversation', patch)} disabled={busy} /><Disclosure title="决策（未接入通话）" className="voice-connection-settings"><ListeningSettings draft={draft.listening} config={state.config?.listening} update={patch => endpoint('listening', patch)} clearKey={clearKeys.listening} toggleClear={() => { setClearKeys(value => ({ ...value, listening: !value.listening })); endpoint('listening', { apiKey: '' }); }} disabled={busy} /></Disclosure></> : providerSettings(callSection)}</div></> : current.kinds.map(providerSettings)}
     </div>
     {catalogError && <p role="status" className="voice-provider-hint">暂时无法读取已有供应商：{catalogError}。仍可独立配置。</p>}
     <footer><button className="voice-save" type="submit" disabled={busy || !dirty}>{busy ? '保存中…' : '保存设置'}</button><span role="status">{saved ? '已保存' : dirty ? '有未保存的修改' : ''}</span></footer>{(error || state.error) && <p role="alert" className="voice-settings-error">{error || state.error}</p>}

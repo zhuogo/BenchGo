@@ -84,8 +84,6 @@ function validateConfig(value) {
   if (value.video === undefined) value.video = null;
   if (value.auxiliary === undefined) value.auxiliary = null;
   if (value.workerModels === undefined) value.workerModels = [];
-  // Retired credential pools must not survive a legacy configuration load.
-  delete value.keyPools;
   if (value.workerConcurrency === undefined) value.workerConcurrency = 2;
   if (!Number.isSafeInteger(value.workerConcurrency) || value.workerConcurrency < 1) throw new Error('Worker 并发数量必须是正整数');
   validateAssistantModels(value.models);
@@ -106,7 +104,6 @@ function validateConfig(value) {
 }
 function validateState(value) {
   if (value.schemaVersion !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 0) throw new Error('Unsupported assistant state version');
-  for (const thread of value.threads || []) delete thread.models;
 }
 async function json(path, fallback) {
   try { return JSON.parse(await readFile(path, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return copy(fallback); throw error; }
@@ -134,9 +131,8 @@ export async function createAssistantStore({ dataDirectory } = {}) {
   if (typeof dataDirectory !== 'string' || !dataDirectory) throw new Error('dataDirectory is required');
   const rootDirectory = resolve(dataDirectory, 'assistant');
   const directory = rootDirectory;
-  const paths = { directory, workspace: join(directory, 'workspace'), config: join(directory, 'config.json'), state: join(directory, 'state.json'), identity: join(directory, 'IDENTITY.md'), user: join(directory, 'USER.md'), memory: join(directory, 'memory'), database: join(directory, 'assistant.db') };
+  const paths = { directory, workspace: join(directory, 'workspace'), config: join(directory, 'config.json'), state: join(directory, 'state.json'), identity: join(directory, 'IDENTITY.md'), user: join(directory, 'USER.md'), database: join(directory, 'assistant.db') };
   await mkdir(paths.workspace, { recursive: true });
-  await mkdir(paths.memory, { recursive: true });
   const defaults = { schemaVersion: 1, revision: 0, name: '', cardHtml: null, models: [], image: null, video: null, tts: null, asr: null, capabilities: { proactive: false } };
   const initialState = { schemaVersion: 1, revision: 0, mainSessionId: null, threads: [] };
   async function readVersioned(path, fallback, validate) {
@@ -157,12 +153,6 @@ export async function createAssistantStore({ dataDirectory } = {}) {
     });
   }
   await serialize(directory, async () => {
-    const legacyState = await json(paths.state, initialState);
-    if (legacyState.threads?.some(thread => Object.hasOwn(thread, 'models'))) {
-      validateState(legacyState);
-      legacyState.revision++;
-      await atomic(paths.state, JSON.stringify(legacyState, null, 2) + '\n');
-    }
     for (const [path, fallback, validate] of [[paths.config, defaults, validateConfig], [paths.state, initialState, validateState]]) {
       const value = await readVersioned(path, fallback, validate);
       try { await writeFile(path, JSON.stringify(value, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -181,7 +171,7 @@ export async function createAssistantStore({ dataDirectory } = {}) {
     return serialize(directory, async () => {
       if (!object(patch) || 'schemaVersion' in patch || 'revision' in patch) throw new Error('Invalid update');
       if (!options.petWrite && ['pet', 'petPrevious', 'petHasPrevious'].some(key => Object.hasOwn(patch, key))) throw new Error('请通过宠物预览与应用操作修改形象');
-      if (Object.hasOwn(patch, 'keyPools') && (!Array.isArray(patch.keyPools) || patch.keyPools.length)) throw Object.assign(new Error('凭据路由池已移除，请使用首选和备用模型'), { code: 'KEY_POOL_REMOVED', status: 400 });
+      if (Object.hasOwn(patch, 'keyPools')) throw Object.assign(new Error('凭据路由池已移除，请使用首选和备用模型'), { code: 'KEY_POOL_REMOVED', status: 400 });
       const current = await readConfig();
       checkRevision(current, options.revision);
       if (options.expected || options.settingsOps) assertSettingsExpected(await configurationSnapshot(), options.expected, options.signal);
@@ -338,8 +328,8 @@ export async function createAssistantStore({ dataDirectory } = {}) {
     profileInfo,
     profileExport,
     profileImport,
-    // Ordered five-document context for the assistant runtime. Keep getProfile
-    // as the legacy identity/user projection used by existing callers.
+    // Ordered five-document context for the assistant runtime. getProfile is
+    // the two-field identity/user projection.
     async getContext() {
       // memory.context() applies USER.md learning exclusions and tombstones
       // before data is exposed to the prompt. Do not use memory.list() here:
@@ -349,26 +339,6 @@ export async function createAssistantStore({ dataDirectory } = {}) {
     async getSessionContext(sessionId) {
       return await documents.sessionContext(sessionId, memory.redactForgottenContext)
         ?? documents.freezeSessionContext(sessionId, await memory.context(), memory.redactForgottenContext);
-    },
-    async updateProfile(patch) {
-      if (!object(patch) || Object.keys(patch).some((key) => !['identity', 'user'].includes(key))) throw new Error('Invalid profile update');
-      for (const value of Object.values(patch)) if (typeof value !== 'string' || value.length > 64000) throw new Error('Invalid profile text');
-      return serialize(directory, async () => {
-        const completed = [];
-        try {
-          for (const [key, value] of Object.entries(patch)) {
-            const name = key === 'identity' ? 'IDENTITY.md' : 'USER.md';
-            await documents.mutate(name, current => {
-              // Legacy identity text editors do not rename. Preserve concurrent name edits;
-              // full-document edits remain available through the hash-checked document API.
-              const currentName = name === 'IDENTITY.md' ? identityName(current) : null;
-              return currentName ? withIdentityName(value, currentName) : value;
-            }, { source: { type: 'user-edit', entrypoint: 'profile' } });
-            completed.push(name);
-          }
-        } catch (error) { error.completedDocuments = completed; throw error; }
-        return getProfile();
-      });
     },
     listMemories: () => memory.list(),
     saveMemory: (input, options) => memory.save(input, options),

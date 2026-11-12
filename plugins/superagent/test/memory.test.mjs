@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile, writeFile, readdir, unlink } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { createAssistantStore } from '../src/store.mjs';
-import { ASSISTANT_DOCUMENTS, ASSISTANT_CONTEXT_DOCUMENTS, documentHash } from '../src/documents.mjs';
-import { cleanMemoryContext, createAssistantMemory } from '../src/memory.mjs';
+import { ASSISTANT_CONTEXT_DOCUMENTS, documentHash } from '../src/documents.mjs';
+import { cleanMemoryContext } from '../src/memory.mjs';
 
 test('context uses the ordered five-document chain while preserving legacy tool notes', async t => {
   const { store } = await fixture(t);
@@ -26,37 +26,13 @@ test('context uses the ordered five-document chain while preserving legacy tool 
   assert.equal(next.documents[0].content, 'New personality');
 });
 
-async function fixture(t, prepare) {
+async function fixture(t) {
   const dataDirectory = await mkdtemp(join(tmpdir(), 'assistant-memory-'));
   const stores = [];
   const open = async () => { const store = await createAssistantStore({ dataDirectory }); stores.push(store); return store; };
   t.after(async () => { stores.forEach(store => store.close()); await rm(dataDirectory, { recursive: true, force: true }); });
-  await prepare?.(join(dataDirectory, 'assistant'));
   return { dataDirectory, open, store: await open() };
 }
-
-test('six Chinese documents keep existing configuration and legacy sources through an idempotent migration', async t => {
-  const legacy = { id: 'legacy-1', content: '项目使用中文检索', scope: 'project:benchgo', source: { sessionId: 's1', messageId: 'm1' }, revision: 4, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-02-01T00:00:00Z' };
-  const { store, open } = await fixture(t, async directory => {
-    await mkdir(join(directory, 'memory'), { recursive: true });
-    await writeFile(join(directory, 'identity.md'), '已有身份与工作习惯');
-    await writeFile(join(directory, 'user.md'), '已有用户资料');
-    await writeFile(join(directory, 'memory', 'entries.json'), JSON.stringify({ schemaVersion: 1, revision: 7, entries: [legacy] }));
-  });
-  const documents = await store.documents.list();
-  assert.deepEqual(documents.map(row => row.name), ASSISTANT_DOCUMENTS);
-  assert.equal(documents.find(row => row.name === 'IDENTITY.md').content, '已有身份与工作习惯');
-  assert.match(documents.find(row => row.name === 'AGENTS.md').content, /已交代/);
-  const entries = await store.listMemories();
-  assert.equal(entries.length, 1);
-  for (const [key, value] of Object.entries(legacy)) assert.deepEqual(entries[0][key], value);
-  assert.equal((await (await open()).listMemories()).length, 1);
-  assert.equal(await readFile(join(store.paths.directory, 'migration-v1', 'identity.md'), 'utf8'), '已有身份与工作习惯');
-  assert.match(await readFile(join(store.paths.directory, 'migration-v1', 'entries.json'), 'utf8'), /中文检索/);
-  assert.doesNotMatch(await readFile(join(store.paths.memory, 'entries.json'), 'utf8'), /中文检索/);
-  assert.equal((await store.memory.migration()).imported, 1);
-  assert.ok((await readdir(store.paths.directory)).includes('IDENTITY.md'));
-});
 
 test('document edits use hashes across stores, import external edits and restore exact versions', async t => {
   const { store, open } = await fixture(t);
@@ -135,8 +111,6 @@ test('verified learning saves immediately without approval flags and obeys curre
   assert.equal((await store.listMemories())[0].candidateId, saved.id);
   assert.equal((await store.listMemories())[0].document, 'USER.md');
   assert.equal((await store.memory.search({ query: '简洁中文' }))[0].id, saved.memoryId);
-  assert.deepEqual(await store.memory.candidates(), []);
-  await assert.rejects(store.memory.reject(saved.id), /已保存/);
   await store.memory.configureLearning({ enabled: false, excludedScopes: ['private'], excludedTerms: ['私人电话'] });
   assert.equal((await store.memory.propose({ ...input, content: '保存私人电话' }, { verifiedSource: evidence })).status, 'excluded');
   assert.equal((await store.memory.propose({ ...input, content: '另一项私人事实', scope: 'private' }, { verifiedSource: evidence })).status, 'excluded');
@@ -151,7 +125,7 @@ test('verified learning saves immediately without approval flags and obeys curre
   assert.equal((await store.memory.propose({ ...input, content: '以后用紧凑列表' }, { verifiedSource: evidence })).status, 'accepted');
 });
 
-function legacyCandidate(store, { id = randomUUID(), content = '已有的待确认记忆', status = 'pending', evidence = { role: 'user', sessionId: 's', messageId: id }, source = evidence || { type: 'review' } } = {}) {
+function storedCandidate(store, { id = randomUUID(), content = '已有的待确认记忆', status = 'pending', evidence = { role: 'user', sessionId: 's', messageId: id }, source = evidence || { type: 'review' } } = {}) {
   const candidate = { id, status, input: { content, source }, evidence, createdAt: new Date().toISOString() };
   const db = new DatabaseSync(store.paths.database);
   const key = documentHash(content.normalize('NFKC').toLocaleLowerCase().replace(/\s+/gu, ' ').trim());
@@ -159,35 +133,39 @@ function legacyCandidate(store, { id = randomUUID(), content = '已有的待确�
   db.close();
   return candidate;
 }
+function candidateRows(store, status) {
+  const db = new DatabaseSync(store.paths.database);
+  try { return db.prepare('SELECT payload FROM memory_candidates WHERE status=? ORDER BY created_at').all(status).map(row => JSON.parse(row.payload)); }
+  finally { db.close(); }
+}
 
-test('legacy pending and interrupted writes recover once while rejected and untrusted records stay inactive', async t => {
+test('pending and interrupted writes recover once while rejected and untrusted records stay inactive', async t => {
   const { store, open } = await fixture(t);
-  const pending = legacyCandidate(store);
-  const interrupted = legacyCandidate(store, { content: '已有的未完成写入', status: 'saving' });
-  legacyCandidate(store, { content: '用户已经拒绝', status: 'rejected' });
-  legacyCandidate(store, { content: '没有可信来源', evidence: null });
+  const pending = storedCandidate(store);
+  const interrupted = storedCandidate(store, { content: '已有的未完成写入', status: 'saving' });
+  storedCandidate(store, { content: '用户已经拒绝', status: 'rejected' });
+  storedCandidate(store, { content: '没有可信来源', evidence: null });
   const restarted = await open();
   const entries = await restarted.listMemories();
   assert.deepEqual(new Set(entries.map(row => row.candidateId)), new Set([pending.id, interrupted.id]));
   assert.ok(entries.every(row => !row.id.startsWith('candidate-')));
-  assert.deepEqual(await restarted.memory.candidates(), []);
-  assert.equal((await restarted.memory.accept(pending.id)).status, 'accepted');
+  assert.deepEqual(candidateRows(store, 'pending'), []);
+  assert.deepEqual(candidateRows(store, 'saving'), []);
+  assert.deepEqual(new Set(candidateRows(store, 'accepted').map(row => row.id)), new Set([pending.id, interrupted.id]));
   assert.equal((await (await open()).listMemories()).length, 2);
   await restarted.memory.forget(entries.find(row => row.candidateId === pending.id).id);
   assert.equal((await restarted.memory.propose(pending.input, { verifiedSource: pending.evidence })).status, 'excluded');
 });
 
-test('legacy resolution respects disabled learning and cannot revive rejected evidence', async t => {
+test('recovery respects disabled learning and does not revive an excluded record later', async t => {
   const { store, open } = await fixture(t);
   await store.memory.configureLearning({ enabled: false });
-  const paused = legacyCandidate(store, { content: '停用学习时不能写入' });
-  const rejected = legacyCandidate(store, { content: '用户拒绝的旧记录' });
-  await store.memory.reject(rejected.id);
+  const paused = storedCandidate(store, { content: '停用学习时不能写入' });
   const restarted = await open();
   assert.equal((await restarted.listMemories()).length, 0);
-  assert.equal((await restarted.memory.accept(paused.id)).status, 'excluded');
+  assert.deepEqual(candidateRows(store, 'excluded').map(row => row.id), [paused.id]);
   await restarted.memory.configureLearning({ enabled: true });
-  assert.equal((await restarted.memory.propose(rejected.input, { verifiedSource: rejected.evidence })).status, 'excluded');
+  assert.equal((await (await open()).listMemories()).length, 0);
 });
 
 test('failed automatic persistence is reported and retries reuse the same durable identity', async t => {
@@ -197,7 +175,7 @@ test('failed automatic persistence is reported and retries reuse the same durabl
   const mutate = store.documents.mutate;
   store.documents.mutate = async (...args) => { await mutate(...args); throw new Error('write receipt interrupted'); };
   await assert.rejects(store.memory.propose(input, { verifiedSource: evidence }), /write receipt interrupted/);
-  const [retry] = await store.memory.candidates({ status: 'saving' });
+  const [retry] = candidateRows(store, 'saving');
   assert.match(retry.error, /write receipt interrupted/);
   store.documents.mutate = mutate;
   const restarted = await open();
@@ -279,47 +257,6 @@ test('concurrent automatic learning across stores creates one durable memory', a
   assert.equal((await other.memory.propose(input, { verifiedSource: evidence })).memoryId, results[0].memoryId);
 });
 
-test('legacy candidate IDs migrate once, repair an interrupted receipt and remain editable and forgettable by alias', async t => {
-  const { store, open } = await fixture(t);
-  const candidate = legacyCandidate(store, { status: 'saving', content: '旧版学习得到的长期偏好' });
-  const legacyId = `candidate-${candidate.id}`;
-  const metadata = { id: legacyId, source: candidate.evidence, scope: 'personal', revision: 4, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' };
-  await store.documents.mutate('MEMORY.md', body => body + `\n<!-- benchgo-memory ${JSON.stringify(metadata)} -->\n${candidate.input.content}\n<!-- /benchgo-memory -->\n`);
-  await store.listMemories(); // Seed the previous index, which must not treat ID migration as correction.
-  await store.getSessionContext('pre-migration');
-  const mutate = store.documents.mutate;
-  let interrupted = false;
-  const documents = { ...store.documents, async mutate(...args) {
-    const result = await mutate(...args);
-    if (!interrupted && args[2]?.source?.type === 'memory-id-migration') { interrupted = true; throw new Error('migration receipt interrupted'); }
-    return result;
-  } };
-  await assert.rejects(createAssistantMemory({ directory: store.paths.directory, documents }), /migration receipt interrupted/);
-  const restarted = await open(), [entry] = await restarted.listMemories();
-  assert.notEqual(entry.id, legacyId);
-  assert.doesNotMatch(entry.id, /candidate-/u);
-  assert.deepEqual(entry.legacyIds, [legacyId]);
-  assert.equal(entry.candidateId, candidate.id);
-  assert.equal(entry.revision, metadata.revision);
-  assert.equal(entry.updatedAt, metadata.updatedAt);
-  assert.deepEqual(entry.source, candidate.evidence);
-  assert.equal(entry.source.excerpt, undefined);
-  const accepted = await restarted.memory.accept(candidate.id);
-  assert.equal(accepted.status, 'accepted');
-  assert.equal(accepted.memoryId, entry.id);
-  assert.deepEqual((await (await open()).listMemories()).map(row => row.id), [entry.id]);
-  const db = new DatabaseSync(store.paths.database);
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memory_tombstones').get().n, 0);
-  db.close();
-  const edited = await restarted.saveMemory({ id: legacyId, content: '修正后的偏好', source: { type: 'user-edit' } }, { revision: entry.revision });
-  assert.equal(edited.id, entry.id);
-  assert.equal(edited.supersedes.id, entry.id);
-  await restarted.memory.forget(legacyId, { revision: edited.revision });
-  assert.equal((await restarted.listMemories()).length, 0);
-  assert.doesNotMatch(JSON.stringify(await restarted.getSessionContext('pre-migration')), /旧版学习得到的长期偏好/u);
-  assert.deepEqual(await restarted.memory.candidates({ status: 'accepted' }), []);
-});
-
 test('manual source excerpts use current input and corrections retain ID and version references', async t => {
   const { store } = await fixture(t);
   const first = await store.saveMemory({ content: '最初的原文', source: { kind: 'user', excerpt: '不应复用的摘要' } });
@@ -363,7 +300,7 @@ test('forget removes verified excerpts from managed documents, versions, candida
   assert.doesNotMatch(JSON.stringify(await store.documents.list()), /用户原话中的私人事实|整理后的私人记忆/u);
   assert.doesNotMatch(JSON.stringify(await store.documents.versions('MEMORY.md')), /用户原话中的私人事实|整理后的私人记忆/u);
   assert.doesNotMatch(JSON.stringify(await store.getSessionContext('excerpt-forget')), /用户原话中的私人事实|整理后的私人记忆/u);
-  assert.deepEqual(await store.memory.candidates({ status: 'accepted' }), []);
+  assert.deepEqual(candidateRows(store, 'accepted'), []);
 });
 
 test('forget scrubs clean full documents even when selected memories are absent, truncated or an older revision', async t => {
@@ -398,22 +335,6 @@ test('profile import without memories preserves all target memory documents', as
     assert.ok(!result.documents.includes(document));
   }
   assert.doesNotMatch(JSON.stringify(await target.listMemories()), /source-secret/);
-});
-
-test('only exact broken templates are repaired and custom content survives reopen', async t => {
-  const broken = '# 闀挎湡璁板繂\n\n璁板綍鏈夋潵婧愮殑闀挎湡浜嬪疄銆佸喅瀹氬拰缁忛獙锛涗笉淇濆瓨鍘熷鑱婂ぉ鎴栧綋鍓嶄换鍔＄姸鎬併€俓n';
-  const { store, open } = await fixture(t, async directory => {
-    await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, 'MEMORY.md'), broken);
-    await writeFile(join(directory, 'SOUL.md'), '用户自己的表达约定');
-  });
-  assert.equal((await store.listMemories()).length, 0);
-  assert.match((await store.documents.read('MEMORY.md')).content, /长期记忆/);
-  assert.equal((await store.documents.read('SOUL.md')).content, '用户自己的表达约定');
-  const history = await store.documents.versions('MEMORY.md');
-  assert.ok(history.some(row => row.content === broken));
-  const reopened = await open();
-  assert.equal((await reopened.documents.versions('MEMORY.md')).length, history.length);
 });
 
 test('forget removes managed history and blocks old sources without claiming deletion of original conversations', async t => {

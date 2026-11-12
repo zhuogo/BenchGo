@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from '../../shared/client/ui/button.jsx';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
@@ -79,7 +79,9 @@ export function useApprovalIndex({ ctx, api, enabled = true, ownerThreadId }) {
   const [lastFailure, setLastFailure] = useState('');
   const originsSnapshot = useRef(null), manualRetry = useRef(false);
   const source = ctx?.uiSession?.sessionStatus;
-  const statuses = useSyncExternalStore(listener => source?.subscribe(listener) || (() => {}), () => source?.getSnapshot() || EMPTY_STATUSES);
+  const subscribe = useCallback(listener => enabled && source ? source.subscribe(listener) : () => {}, [enabled, source]);
+  const getStatuses = useCallback(() => enabled ? source?.getSnapshot() || EMPTY_STATUSES : EMPTY_STATUSES, [enabled, source]);
+  const statuses = useSyncExternalStore(subscribe, getStatuses);
   const retained = useRef(new Map()), current = useRef([]);
   const retry = () => {
     for (const [id, item] of retained.current) if (item.error) { releaseConnection(item); retained.current.delete(id); }
@@ -89,7 +91,7 @@ export function useApprovalIndex({ ctx, api, enabled = true, ownerThreadId }) {
     if (!enabled) {
       for (const item of retained.current.values()) releaseConnection(item);
       retained.current.clear(); originsSnapshot.current = null; setConnections(new Map());
-      setOrigins([]); setError(''); setLastFailure(''); return;
+      setOrigins(null); setError(''); setLastFailure(''); return;
     }
     const controller = new AbortController(); let timer, inFlight = false, dirty = false, manual = manualRetry.current;
     manualRetry.current = false;
@@ -149,12 +151,12 @@ export function useApprovalIndex({ ctx, api, enabled = true, ownerThreadId }) {
   });
   current.current = error ? [] : entries;
   const connectionErrors = [...connections.values()].filter(item => item.error), connecting = origins?.some(origin => !connections.get(origin.sessionId)?.ready && !connections.get(origin.sessionId)?.error);
-  const count = error || lastFailure || origins === null || connecting || connectionErrors.length ? null : entries.length;
+  const count = !enabled || error || lastFailure || origins === null || connecting || connectionErrors.length ? null : entries.length;
   return { origins, error, lastFailure, entries, current, statuses, connections, connectionErrors, connecting, count, retry };
 }
 
 export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact = false, active = true, onCountChange, onOpenReminder }) {
-  const { origins, error, lastFailure, entries, current, statuses, connectionErrors, connecting, count, retry } = useApprovalIndex({ ctx, api });
+  const { origins, error, lastFailure, entries, current, statuses, connectionErrors, connecting, count, retry } = useApprovalIndex({ ctx, api, enabled: active });
   const [selectedKey, setSelectedKey] = useState(null), back = useRef(null), navigation = useRef(null);
   const openDetail = (key, event) => {
     const positions = [];

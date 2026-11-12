@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {isRecentWorkspace,projectWorkspaces,recentRows,startSidebarSession,isSidebarSessionSelected,sidebarWorkspaces,ensureSidebarWorkspace,sidebarSessionStatus,sidebarSessionTitle,sidebarCapabilityWarning} from '../client/sidebar-state.mjs';
+import {isRecentWorkspace,projectWorkspaces,recentRows,startSidebarSession,isSidebarSessionSelected,sidebarWorkspaces,ensureSidebarWorkspace,sidebarSessionStatus,sidebarSessionTitle,sidebarCapabilityWarning,latestSidebarNativeSessions} from '../client/sidebar-state.mjs';
 const projects=[{id:'auto',isDefault:true,title:'default-workspace',path:'/home/user/Documents/deepseek-harness/default-workspace'},{id:'user',title:'default-workspace',path:'/projects/default-workspace'},{id:'named',title:'自己的项目',path:'/projects/named'}];
+
+test('native owner index keeps the newest eligible original object and stable ties without mutating history',()=>{
+ const sessions=[{id:'old',ownerSessionId:'official',updatedAt:1},{id:'new',ownerSessionId:'official',updatedAt:3},{id:'child',ownerSessionId:'official',parentId:'parent',updatedAt:9},{id:'adopted',ownerSessionId:'adopted-owner',parentId:'parent',harnessAdopted:true,updatedAt:5},{id:'tie',ownerSessionId:'official',updatedAt:3},{id:'legacy',updatedAt:10}];
+ const before=[...sessions],index=latestSidebarNativeSessions(sessions);
+ assert.strictEqual(index.get('official'),sessions[1]);
+ assert.strictEqual(index.get('adopted-owner'),sessions[3]);
+ assert.equal(index.size,2);assert.deepEqual(sessions,before);
+});
 
 test('voice title replaces cwd fallback while preserving explicit titles and ordinary session display',()=>{
  const voice={displayTitle:'default-workspace',projectionValues:{benchgoVoice:{used:true}}};

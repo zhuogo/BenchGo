@@ -3,15 +3,18 @@ import { chatPublicationRecordOf, channelMessageRecordOf } from '../../benchgo/s
 import { questionBatch, readBoundQuestionReply } from '../../benchgo/shared/question-reply.mjs';
 import { fallbackRequestIds, modelFallbackType, modelFallbackSource } from '../../benchgo/shared/model-fallback.mjs';
 
-/** Only fresh append publications are eligible for automatic speech. */
+/** Fresh public text may stream; internal turns still require a publication. */
 export class AgentFeed {
-  constructor({onText,onPublication,onStart,onEnd,onReset,onRecord,publicOnly=false}={}) { Object.assign(this,{onText,onPublication,onStart,onEnd,onReset,onRecord,publicOnly}); this.attempts=new Map();this.steps=new Map();this.seen=new Set();this.publications=new Set();this.requests=new Map();this.questions=new Map();this.continuations=[];this.publicationEchoes=[];this.fallback=[];this.revision=null;this.restart=false; }
+  constructor({onText,onPublication,onStart,onEnd,onReset,onRecord,publicOnly=false,streamPublicText=false}={}) { Object.assign(this,{onText,onPublication,onStart,onEnd,onReset,onRecord,publicOnly,streamPublicText}); this.attempts=new Map();this.steps=new Map();this.settledSteps=new Set();this.seen=new Set();this.publications=new Set();this.requests=new Map();this.questions=new Map();this.continuations=[];this.publicationEchoes=[];this.fallback=[];this.revision=null;this.restart=false; }
   key(event){return event.data?.attemptId??String(event.data?.turn??'')+':'+String(event.data?.step??'');}
   step(event){const {turn,step}=event.data||{};return turn!==undefined&&step!==undefined?turn+':'+step:undefined;}
   track(event){const key=this.key(event),step=this.step(event);if(step!==undefined)this.steps.set(step,key);return key;}
   forget(key){this.attempts.delete(key);for(const [step,id]of this.steps)if(id===key)this.steps.delete(step);}
-  clear(){this.attempts.clear();this.steps.clear();this.publicationEchoes=[];this.fallback=[];}
+  clear(keepSettled=false){this.attempts.clear();this.steps.clear();if(!keepSettled)this.settledSteps.clear();this.publicationEchoes=[];this.fallback=[];}
   isPublicOnly(){return typeof this.publicOnly==='function'?this.publicOnly():this.publicOnly;}
+  canStreamPublicText(event){return (typeof this.streamPublicText==='function'?this.streamPublicText():this.streamPublicText)&&Number.isSafeInteger(this.turn)&&event.data?.turn===this.turn&&Number.isSafeInteger(event.data.step)
+    &&!event.data.parentCallId&&['user','user-question-reply'].includes(this.request?.source?.kind)
+    &&!this.publications.has(`request:${this.request.id}`)&&!this.settledSteps.has(this.step(event));}
   observe(event){
     // Reuse the host's exact persisted-fallback identity rules. Retain only
     // bounded metadata, never fallback prompts or private execution content.
@@ -29,11 +32,11 @@ export class AgentFeed {
     if(event.type==='user/message'&&event.data?.id&&(event.surfaceOp===undefined||event.surfaceOp==='append')){
       const request={id:event.data.id,source:event.data.source};
       if(request.source?.kind===modelFallbackSource){const original=fallbackRequestIds([...this.continuations].sort((a,b)=>a.seq-b.seq)).get(request.id);if(original)this.request=this.requests.get(original)||null;return;}
-      if(!['user','user-question-reply','benchgo-ticket-reply','benchgo-ticket-state','benchgo-execution-input'].includes(request.source?.kind))return;
+      if(!['user','user-question-reply','benchgo-ticket-reply','benchgo-execution-input'].includes(request.source?.kind))return;
       if(request.source.kind==='user-question-reply'&&!readBoundQuestionReply(event.data,this.questions.get(request.source.callId)))return;
       this.requests.set(request.id,request);
       if(this.requests.size>4096)this.requests.delete(this.requests.keys().next().value);
-      if(['user','user-question-reply','benchgo-ticket-reply','benchgo-ticket-state','benchgo-execution-input'].includes(request.source?.kind))this.request=request;
+      if(['user','user-question-reply','benchgo-ticket-reply','benchgo-execution-input'].includes(request.source?.kind))this.request=request;
     }
   }
   publication(event){return chatPublicationRecordOf(event,this.requests.get(event.data?.requestId));}
@@ -47,11 +50,11 @@ export class AgentFeed {
     this.onRecord?.(event,{role:'assistant',text});
   }
   remember(event){const key=event.type+':'+event.seq+':'+this.key(event);if(this.seen.has(key))return false;this.seen.add(key);if(this.seen.size>4096)this.seen.delete(this.seen.values().next().value);return true;}
-  baseline(window) { this.revision=window.revision;this.clear();this.seen.clear();this.publications.clear();this.requests.clear();this.questions.clear();this.continuations=[];this.turn=undefined;this.request=null;this.restart=false;for(const {event}of window.entries||[]){this.observe(event);this.remember(event);if(this.publication(event)||channelMessageRecordOf(event))this.rememberPublication(event);if(event.type==='assistant/live-chunk'&&event.data?.chunk?.type==='text-delta'){const key=this.track(event);this.attempts.set(key,(this.attempts.get(key)||'')+event.data.chunk.text);}if(event.type==='turn/end'){this.turn=undefined;this.request=null;}} }
+  baseline(window) { this.revision=window.revision;this.clear();this.seen.clear();this.publications.clear();this.requests.clear();this.questions.clear();this.continuations=[];this.turn=undefined;this.request=null;this.restart=false;for(const {event}of window.entries||[]){if(event.type==='turn/start')this.clear();this.observe(event);this.remember(event);if(this.publication(event)||channelMessageRecordOf(event))this.rememberPublication(event);if(event.type==='assistant/live-chunk'&&event.data?.chunk?.type==='text-delta'&&!this.settledSteps.has(this.step(event))){const key=this.track(event);this.attempts.set(key,(this.attempts.get(key)||'')+event.data.chunk.text);}if(event.type==='assistant/message'&&event.data?.turn===this.turn&&!event.data.parentCallId&&(event.surfaceOp===undefined||event.surfaceOp==='append')){this.settledSteps.add(this.step(event));this.forget(this.steps.get(this.step(event))??this.key(event));}if(event.type==='turn/end'){this.turn=undefined;this.request=null;}} }
   accept(window) {
     if(window.revision!==undefined&&window.revision===this.revision)return;this.revision=window.revision;
     const change=window.change;
-    if(change.kind==='replace') { this.onReset?.(); this.baseline(window); return; }
+    if(change.kind==='replace') { this.onReset?.(); this.baseline(window); this.restart=true; return; }
     if(change.kind==='prepend'){const turn=this.turn,request=this.request,fallback=this.fallback;for(const {event}of change.entries||[]){this.observe(event);this.remember(event);if(this.publication(event)||channelMessageRecordOf(event))this.rememberPublication(event);}this.turn=turn;this.request=request;this.fallback=fallback;return;}
     if(change.kind==='settle-assistant'&&!change.entry){this.forget(change.attemptId);return;}
     const entries=change.kind==='settle-assistant'?[change.entry].filter(Boolean):change.entries||[];
@@ -59,7 +62,7 @@ export class AgentFeed {
       if(!this.remember(event))continue;
       this.observe(event);
       if(event.type==='assistant/live-chunk') {
-        if(this.isPublicOnly())continue;
+        if(this.isPublicOnly()&&!this.canStreamPublicText(event))continue;
         const {chunk}=event.data;const key=this.track(event);
         if(chunk.type==='text-delta') {if(this.restart){this.restart=false;this.onStart?.(event);}this.attempts.set(key,(this.attempts.get(key)||'')+chunk.text); this.onText?.(chunk.text,event); }
         continue;
@@ -78,13 +81,20 @@ export class AgentFeed {
         this.publish(event,event.data.text);
         continue;
       }
-      if(event.type==='llm/retry'||event.type==='assistant/attempt') { this.onReset?.(); this.clear();this.restart=true; }
+      if(event.type==='llm/retry'||event.type==='assistant/attempt') { this.onReset?.(); this.clear(true);this.restart=true; }
       if(event.type==='assistant/message') {
         if(event.surfaceOp!==undefined&&event.surfaceOp!=='append')continue;
         const text=(event.data.message?.content||[]).filter(x=>x.type==='text').map(x=>x.text).join('');
+        let fallback;
         if(this.isPublicOnly()){
-          if(event.data.turn===this.turn&&!event.data.interrupted&&!event.data.parentCallId&&event.data.message?.source?.kind==='model'&&text.trim())this.fallback.push({event,text});
-          continue;
+          if(this.streamPublicText&&this.settledSteps.has(this.step(event)))continue;
+          if(event.data.turn===this.turn&&!event.data.interrupted&&!event.data.parentCallId&&event.data.message?.source?.kind==='model'&&text.trim()){
+            fallback={event,text};this.fallback.push(fallback);
+          }
+          if(!fallback||!this.canStreamPublicText(event))continue;
+          // The durable message settles this public step, rather than holding
+          // the whole request until turn/end. Its live prefix is consumed below.
+          fallback.streamed=true;this.settledSteps.add(this.step(event));
         }
         // Successful messages append before step/end retires the transient attempt.
         // Durable messages carry turn/step, while live chunks carry attemptId.
@@ -99,10 +109,10 @@ export class AgentFeed {
       }
       if(event.type==='turn/end'){
         if(this.isPublicOnly()&&event.data?.turn===this.turn&&event.data?.reason?.kind==='completed'&&['user','user-question-reply'].includes(this.request?.source?.kind)&&!this.publications.has(`request:${this.request.id}`)&&this.fallback.length){
-          const text=this.fallback.map(row=>row.text).join('\n\n');
+          const pending=this.fallback.filter(row=>!row.streamed),text=pending.map(row=>row.text).join('\n\n');
           const projected={...event,data:{...event.data,requestId:this.request.id}};
           this.rememberPublication(projected);
-          (this.onPublication||this.onText)?.(text,projected);this.onRecord?.(projected,{role:'assistant',text});
+          if(text){(this.onPublication||this.onText)?.(text,projected);this.onRecord?.(projected,{role:'assistant',text});}
         }
         this.fallback=[];this.turn=undefined;this.request=null;this.onEnd?.(event);
       }

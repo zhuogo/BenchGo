@@ -159,6 +159,7 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
       if (input.action === 'open') return Response.json(await conversations.open(input), { headers });
       if (input.action === 'turn') return Response.json(await conversations.turn(input), { headers });
       if (input.action === 'interrupt') return Response.json(conversations.interrupt(input), { headers });
+      if (input.action === 'resume') return Response.json(conversations.resume(input), { headers });
       if (input.action === 'close') return Response.json(conversations.close(input), { headers });
       if (input.action === 'events') {
         const stream = conversations.events(input);

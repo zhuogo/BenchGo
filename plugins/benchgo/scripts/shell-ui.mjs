@@ -47,6 +47,13 @@ export function shellUi(){return {name:'commander-shell-ui',setup(build){
   build.onLoad({filter:/ui-layout[\\/]src[\\/]client[\\/]AppFrame\.tsx$/},async({path})=>{
     let source=(await readFile(path,'utf8')).replaceAll('\r\n','\n');source=once(source,'className={css.frame}', "className={css.frame + ' cmd-shell-frame'}");
     source=once(source,'data-animating={animateTracks || undefined}', 'data-animating={animateTracks || undefined}\n      data-plus-shell');
+    // Only the fullscreen right panel consumes this axis. Updating an inherited
+    // variable on the frame invalidates styles throughout the conversation on
+    // every pointer move, even though that content does not use the variable.
+    source=once(source,'function RightbarColumn(props: { children?: ReactNode; inert: boolean })', 'function RightbarColumn(props: { children?: ReactNode; inert: boolean; sidebarWidth?: number })');
+    source=once(source,'<div className={css.rightbarCol} data-rightbar-col', '<div className={css.rightbarCol} style={props.sidebarWidth === undefined ? undefined : { ...{ \'--dsh-windows-sidebar-width\': `${props.sidebarWidth}px` } }} data-rightbar-col');
+    source=once(source,"        ...(windowsTitlebar\n          ? { '--dsh-windows-sidebar-width': `${cols.sidebar}px` } : {}),\n",'');
+    source=once(source,'<RightbarColumn inert={drawerOpen}>', '<RightbarColumn inert={drawerOpen} sidebarWidth={windowsTitlebar ? cols.sidebar : undefined}>');
     return {contents:source,loader:'tsx',resolveDir:dirname(path)};
   });
   build.onLoad({filter:/(?:ui-layout|ui-sidebar|ui-settings-general)[\\/]src[\\/]client[\\/].*\.module\.css$/},async({path})=>{

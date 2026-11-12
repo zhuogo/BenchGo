@@ -33,6 +33,21 @@ function conversationalNotification(row) {
   return false;
 }
 
+/**
+ * Sequence of the newest node that can change durable history: an admitted
+ * input, a publication, a channel mirror or a turn-level notice. Settled steps
+ * and ordinary tool results arrive many times per turn and are already rendered
+ * from the live projection.
+ */
+export function historyReconcileSeq(chat) {
+  const nodes = chat?.legacy?.nodes || [];
+  for (let index = nodes.length - 1; index >= 0; index--) {
+    const node = nodes[index];
+    if (node.kind !== 'assistant' && (node.kind !== 'tool-result' || node.name === 'assistant_reply')) return node.seq;
+  }
+  return undefined;
+}
+
 /** Defence in depth: only the server publication projection can supply assistant rows. */
 export function quietChatRows(history = {}, threadId = 'main', session = {}, chat, inbox) {
   const rows = (history.messages || []).filter(row => !row.streaming &&

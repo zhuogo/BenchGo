@@ -14,7 +14,7 @@
   "title": "实时语音",
   "eyebrow": "VOICE / REALTIME",
   "subtitle": "同一套媒体管线连接草稿、正式回复与实时通话；通话固定绑定原会话，全局胶囊承载跨页面控制。",
-  "boundary": "已存在采集、ASR/TTS、租约、通话分流与官方会话接线。增强通话已接入语音层完整任务整理、最多最近5条必要证据、来源去重和修订增量；task 正式消息与聊天补充共用预算，原始口述仅保留在语音记录，真实模型整理质量仍待通话验收。native 复用 SuperAgent 对话层，不叠加这套任务整理。RealtimeASR 指识别传输，不代表端到端语音模型；真实设备及供应商须单独验收。",
+  "boundary": "已存在采集、ASR/TTS、租约、通话分流与官方会话接线。增强通话已接入语音层完整任务整理与修订增量；task 作为正式任务消息，本次用户原话由宿主逐字随行供核对，原始口述保留在语音记录，真实模型整理质量仍待通话验收。native 复用 SuperAgent 对话层，不叠加这套任务整理；direct 是未配置交互模型时的降级路径。RealtimeASR 指识别传输，不代表端到端语音模型；真实设备及供应商须单独验收。",
   "nodes": [
     {
       "id": "entry",
@@ -107,10 +107,10 @@
       "title": "按真实身份分流",
       "kicker": "SESSION CAPABILITY",
       "kind": "orchestration",
-      "sub": "Router 原层 / 普通会话增强或直通",
+      "sub": "Router 原层 / 普通会话增强，未配置降级直通",
       "symbol": "createConversationBridge().describe()",
       "plain": "总助手继续用原来的 Router；普通会话可选择额外的轻量接话模型。",
-      "role": "通过 assistant.sessionRole 核实 Router；普通会话验证 sessions、agents、sessionController 接缝。native 复用 Router，ordinary 配置完整时 enhanced，未配置时 direct。",
+      "role": "通过 assistant.sessionRole 核实 Router；普通会话验证 sessions、agents、sessionController 接缝。native 复用 Router，ordinary 配置完整时 enhanced，未配置时降级为 direct；新能力只保证 native 与 enhanced。",
       "input": "真实 Session 归属、交互模型配置",
       "output": "native / enhanced / direct 模式",
       "sources": [
@@ -130,7 +130,7 @@
       "sub": "快速接话；先整理完整任务再委派",
       "symbol": "createVoiceConversations()",
       "plain": "同一个 BenchGo 快速接话并承担工作，内部执行分工不变成两个对外助手。",
-      "role": "enhanced 模型先整理目标、对象、必要事实、约束与交付要求，通过 delegate 的 task 提交自包含任务；关键信息缺失先简短澄清。最近5条发言只是可选证据，早期有效约束写进任务；revise_execution 只提交变化。",
+      "role": "enhanced 模型先整理目标、对象、必要事实、约束与交付要求，通过 delegate 的 task 提交自包含任务；关键信息缺失先简短澄清。早期有效约束写进任务；revise_execution 只提交变化。委派时先简短接话再调用工具，已接话且交接被接受即结束本轮，不再二次生成。",
       "input": "最终用户原话、标明来源的历史参考、准确 currentModel、工作状态与事件",
       "output": "口头回复；完整任务或关联修订增量",
       "sources": [
@@ -138,7 +138,7 @@
         "plugins/voice/src/conversation-model.mjs",
         "plugins/voice/src/conversation-prompt.mjs"
       ],
-      "note": "精简系统提示仅维护交流、行动、事实与权限，每次回复读取权威 Markdown；候选数量、预算和参数规则由工具定义与宿主承载，正文不重复。恢复的旧助手发言作为历史资料，不重标为当前模型自述。currentModel 跟随实际路由，task 与 contextSourceSeqs 合同不变；真实口吻与任务整理质量待通话验收。SuperAgent 不叠加此模型；细则见实时通话.md。",
+      "note": "精简系统提示仅维护交流、行动、事实与权限，每次回复读取权威 Markdown；预算和参数规则由工具定义与宿主承载，正文不重复。恢复的旧助手发言作为历史资料，不重标为当前模型自述。currentModel 跟随实际路由，交接工具只有 task 参数；真实口吻与任务整理质量待通话验收。SuperAgent 不叠加此模型；细则见实时通话.md与通话表达.md。",
       "state": "implemented",
       "x": 820,
       "y": 450
@@ -148,16 +148,16 @@
       "title": "原会话执行桥",
       "kicker": "HANDOFF / EVENTS",
       "kind": "execution",
-      "sub": "完整任务 + 最多5条必要补充",
+      "sub": "完整任务 + 本次原话随行",
       "symbol": "createConversationBridge()",
       "plain": "原会话执行语音层整理的任务，保留原模型、工具和审批，避免反复读整段聊天。",
-      "role": "校验可信会话归属、requestId幂等与执行回执。从当前句之前最近5条双方发言中按需选择补充，按原始事件标识排除执行层已有或已接收内容；补充最多4000字符，task 正式消息与聊天补充合计最多16000字符。送达未知先核对，修订关联原执行。",
-      "input": "完整任务、当前原话来源、requestId；最多5条补充",
-      "output": "正式 prompt / steer 正文为 task；可选聊天 inject；执行回执",
+      "role": "校验可信会话归属、requestId幂等与执行回执。task 作为正式任务消息提交，本次用户原话逐字随行供执行层核对，与 task 完全相同时不重复；原话与 task 各自最多16000字符，不截断。送达未知先核对，修订关联原执行。",
+      "input": "完整任务、本次用户原话及来源、requestId",
+      "output": "正式 prompt / steer 正文为 task；原话 inject；执行回执",
       "sources": [
         "plugins/voice/src/conversation-bridge.mjs"
       ],
-      "note": "官方 prompt / steer 直接发送 task 纯文本，工作层记录显示任务；不重复提交用户口述，不注入任务 JSON 或固定说明。仅必要聊天证据经 model-only inject 补充。原话保留语音记录并绑定来源；接受回执后才标记来源已送达。",
+      "note": "官方 prompt / steer 直接发送 task 纯文本，工作层记录显示任务；不注入任务 JSON 或固定说明。本次原话经官方 inject 随行，来源标记 benchgo-voice-evidence 并带请求标识，标明转录可能有误、仅用于核对、不是额外指令；不转发近期聊天。原话保留语音记录并绑定来源；接受回执后才记为已交接。",
       "state": "implemented",
       "x": 440,
       "y": 450
@@ -212,7 +212,7 @@
       "sub": "正式回复 / 增强回复 → 有序合成",
       "symbol": "createVoiceController() / speech",
       "plain": "读出已经生成的回复；用户插话时先清掉过时播放。",
-      "role": "客户端按正式回复或 enhanced 文字事件组织有序语音请求；用户说话与续说等待期间暂存新正式消息，输入交接后依次播报。Router 复用公开发布与渠道镜像，屏蔽内部草稿；媒体取消与执行停止分开。",
+      "role": "客户端按正式回复或 enhanced 文字事件组织有序语音请求；用户说话与续说等待期间暂存新正式消息，输入交接后依次播报；插话未形成有效转录时恢复暂存结果的表达。Router 复用公开发布与渠道镜像，屏蔽内部草稿；媒体取消与执行停止分开。",
       "input": "已生成的正式文字、插话和静音事件",
       "output": "有序 TTS 请求与取消信号",
       "sources": [
@@ -310,7 +310,7 @@
     {
       "a": "conversation",
       "b": "bridge",
-      "label": "完整任务 + ≤5条证据",
+      "label": "完整任务（task）",
       "from": "l",
       "to": "r"
     },
@@ -398,13 +398,13 @@
     {
       "node": "routing",
       "title": "确认采用哪条对话路径",
-      "text": "普通会话已配置轻量交互模型时走 enhanced；总助手会话复用原 Router，未配置增强的普通会话明确直通原 Agent。",
+      "text": "普通会话已配置轻量交互模型时走 enhanced；总助手会话复用原 Router，未配置增强的普通会话降级直通原 Agent。",
       "edge": 3
     },
     {
       "node": "conversation",
-      "title": "先整理完整任务，再有界委派",
-      "text": "语音层消解指代，保留目标、对象和约束，整理 task 作为执行层正式消息。最近最多5条必要聊天单独补充；原始口述留在语音记录，不重复派发。修订只发增量，任务质量仍需真实通话验收。",
+      "title": "先整理完整任务，原话随行委派",
+      "text": "语音层消解指代，保留目标、对象和约束，整理 task 作为执行层正式消息。宿主把本次用户原话逐字随行供核对，不转发近期聊天；原始口述留在语音记录。修订只发增量，任务质量仍需真实通话验收。",
       "edge": 5
     },
     {
@@ -438,6 +438,18 @@
     {
       "label": "实时通话",
       "path": "docs/03-实时语音/实时通话.md"
+    },
+    {
+      "label": "通话界面",
+      "path": "docs/03-实时语音/通话界面.md"
+    },
+    {
+      "label": "通话表达",
+      "path": "docs/03-实时语音/通话表达.md"
+    },
+    {
+      "label": "说话对象判断",
+      "path": "docs/03-实时语音/说话对象判断.md"
     }
   ],
   "version": "2026-11-11-1"

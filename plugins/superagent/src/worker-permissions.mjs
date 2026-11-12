@@ -13,8 +13,7 @@ export function workerAppliedTicket(database, assignment, execution) {
   const current = database.getTicket(assignment.ticketId);
   if (!current) throw new Error('Worker 工单不存在');
   if (ticketExecutionBlocked(current)) throw fail('WORKER_TICKET_INACTIVE', '工单已暂停、停止或结束');
-  const snapshot = database.appliedTicketSnapshot?.(assignment.id);
-  const ticket = snapshot ? { ...current, ...snapshot, status: current.status, executionControl: current.executionControl } : current;
+  const ticket = { ...current, ...database.appliedTicketSnapshot(assignment.id), status: current.status, executionControl: current.executionControl };
   for (const names of [ticket.toolScope, current.mandate?.toolScope, current.mandate?.scope?.toolNames]) {
     if (names == null) continue;
     if (!Array.isArray(names) || !names.every(name => typeof name === 'string') || !names.includes(execution.name)) throw fail('WORKER_TOOL_SCOPE', '当前工单工具范围不允许此动作');
@@ -38,7 +37,7 @@ export function installWorkerPermissionGate(scope, { database, assignment, readP
     if (assignment.interruptedContinuation && previousEffects.effectsVerified === false && !isReadOnlyWorkerTool(execution.name)) {
       throw Object.assign(new Error('Previous external effects remain unverified; only read-only verification is permitted'), { code: 'EXECUTION_EFFECTS_UNKNOWN' });
     }
-    if ((assignment.pauseContinuation?.kind === 'execution-budget' || assignment.interruptedContinuation) && !isReadOnlyWorkerTool(execution.name)
+    if (assignment.interruptedContinuation && !isReadOnlyWorkerTool(execution.name)
       && previousCalls.has(signature(execution.name, execution.arguments))) {
       throw Object.assign(new Error('A previously dispatched action cannot be replayed during correction; inspect its saved outcome before proceeding'), { code: 'ACTION_REPLAY_BLOCKED' });
     }

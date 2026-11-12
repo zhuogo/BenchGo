@@ -35,8 +35,8 @@ async function fixture() {
           ...(state==='markdown'?{instructionRevision:2,target:${JSON.stringify(longRequirements)},acceptance:'- 验证通过\\n- 保留证据',
             revisions:[{instructionRevision:1,operation:'original',target:'# 初始要求\\n\\n- 检查基础服务',createdAt:'2026-11-07T08:00:00Z'},
               {instructionRevision:2,operation:'revise',target:${JSON.stringify(longRequirements)},acceptance:'- 验证通过\\n- 保留证据',reason:'补充完整验证范围',createdAt:'2026-11-07T08:05:00Z'}],
-            results:[{version:1,instructionRevision:2,summary:'已完成检查并整理证据。',finalSummary:${JSON.stringify(resultMarkdown)},evidenceRefs:[]}]}:{})}]);
-        const goals=state==='empty'?[]:[{id:'goal-one',objective:'推进发布准备',executionKind:'checklist',status:'active',rowVersion:1,updatedAt:'2026-11-07T08:05:00Z'}];
+            results:[{version:1,instructionRevision:2,summary:${JSON.stringify(resultMarkdown)},evidenceRefs:[{sessionId:'worker-session',runId:'run'}]}]}:{})}]);
+        const goals=state==='empty'?[]:[{id:'goal-one',objective:'推进发布准备',status:'active',rowVersion:1,updatedAt:'2026-11-07T08:05:00Z'}];
         window.fetch=async(_url,options)=>{
           const input=JSON.parse(options.body);window.calls.push(input);
           if(window.resourceState==='loading')return new Promise(()=>{});
@@ -152,7 +152,7 @@ test('task heading aligns category tabs and icon tools remain usable in four res
       assert.equal(await detail.getByText(/桌面 ·|渠道已接收|执行尚未结束或已中断，已有记录保留/).count(), 0);
       const contentTabs = detail.getByRole('tablist', { name: '工单详情内容', exact: true });
       assert(await detail.locator('.ba-task-inline-head').getByRole('tablist', { name: '工单详情内容', exact: true }).isVisible(), 'content tabs live beside the ticket title');
-      for (const [name, label] of [['执行记录', '记录'], ['任务要求', '要求'], ['结果与证据', '结果']]) {
+      for (const [name, label] of [['执行记录', '记录'], ['任务要求', '要求'], ['执行结果', '结果']]) {
         const tab = contentTabs.getByRole('tab', { name, exact: true });
         assert.equal((await tab.innerText()).trim(), label);
         assert(await tab.locator('svg').count() >= 1, 'each short tab retains its icon');
@@ -164,7 +164,7 @@ test('task heading aligns category tabs and icon tools remain usable in four res
       }
       assert.equal(await contentTabs.getByRole('tab', { name: '执行记录', exact: true }).getAttribute('aria-selected'), 'true');
       await noOverflow(); await capture(`detail-${width}-${dark ? 'dark' : 'light'}`);
-      for (const label of ['任务要求', '结果与证据', '执行记录']) {
+      for (const label of ['任务要求', '执行结果', '执行记录']) {
         const tab = contentTabs.getByRole('tab', { name: label, exact: true });
         await tab.click();
         const panel = detail.getByRole('tabpanel', { name: label, exact: true });
@@ -225,9 +225,11 @@ test('task heading aligns category tabs and icon tools remain usable in four res
       await noOverflow();
       await capture(`requirements-markdown-scroll-${width}-${dark ? 'dark' : 'light'}`);
       await scroller.evaluate(node => { node.scrollTop = 0; });
-      await detail.getByRole('tab', { name: '结果与证据', exact: true }).click();
-      const result = detail.getByRole('tabpanel', { name: '结果与证据', exact: true });
+      await detail.getByRole('tab', { name: '执行结果', exact: true }).click();
+      const result = detail.getByRole('tabpanel', { name: '执行结果', exact: true });
       await result.getByRole('heading', { name: '交付结果', level: 1, exact: true }).waitFor();
+      assert.deepEqual(await result.locator('.ba-ticket-document').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))), ['结果'], 'the result page is one block: the Worker\'s last message');
+      assert.equal(await result.getByText(/结果摘要|结果正文|自检|未完成说明|证据来源/).count(), 0);
       assert.equal(await result.getByRole('table').count(), 1);
       assert.equal(await result.getByRole('listitem').filter({ hasText: '环境检查完成' }).count(), 1);
       assert.equal(await result.locator('pre code').filter({ hasText: '"status":"completed"' }).count(), 1);

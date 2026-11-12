@@ -11,12 +11,13 @@ import * as sidebarLists from '../client/sidebar-lists.mjs';
 import * as modelSettings from '../client/model-settings.mjs';
 import { petActionForSession, petExpressionForAction } from '../client/pet-state.mjs';
 import { createConfigSync, saveConfigPatch } from '../client/config-sync.mjs';
+import { structuralShare } from '../client/structural-share.mjs';
 const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
-const code = transformSync(readFileSync(new URL('../client/index.jsx', import.meta.url), 'utf8') + '\nexport { mergeHistory, Images, loadCatalog, messageText, HistoryNotice, retainSession, PendingCard, PendingInteractions, UIIcon, Identity, Studio, ResourceTabs, RetainedPane };', { loader: 'jsx', format: 'cjs' }).code;
+const code = transformSync(readFileSync(new URL('../client/index.jsx', import.meta.url), 'utf8') + '\nexport { mergeHistory, Images, loadCatalog, messageText, HistoryNotice, retainSession, PendingCard, PendingInteractions, UIIcon, Identity, Studio, ResourceTabs, RetainedPane, api, BackgroundSessions };', { loader: 'jsx', format: 'cjs' }).code;
 const settingsCode = transformSync(readFileSync(new URL('../client/model-settings.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 function harness(options = {}) {
   let cursor = 0, refCursor = 0; const state = [...(options.state || [])], refs = [], effects = [], calls = [];
-  const react = { createElement: (type, props, ...children) => type?.name === 'ModelSettings' ? type(props) : ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value !== false && value != null) }), useState: initial => { const index = cursor++; if (!(index in state)) state[index] = Array.isArray(initial) && options.threads ? options.threads : typeof initial === 'function' ? initial() : initial; return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value; }]; }, useRef: initial => refs[refCursor++] ||= { current: initial }, useEffect: (effect, deps) => effects.push({ effect, deps }), useId: () => 'id' };
+  const react = { createElement: (type, props, ...children) => type?.name === 'ModelSettings' ? type(props) : ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value !== false && value != null) }), useState: initial => { const index = cursor++; if (!(index in state)) state[index] = Array.isArray(initial) && options.threads ? options.threads : typeof initial === 'function' ? initial() : initial; return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value; }]; }, useRef: initial => refs[refCursor++] ||= { current: initial }, useCallback: callback => callback, useEffect: (effect, deps) => effects.push({ effect, deps }), useId: () => 'id' };
   react.useLayoutEffect = () => {};
   react.useSyncExternalStore = (_subscribe, snapshot) => snapshot();
   const settingsModule = { exports: {} };
@@ -27,7 +28,7 @@ function harness(options = {}) {
   const module = { exports: {} };
   const assistantConfigSync = createConfigSync();
   const assistantModelCatalog = createModelCatalogLoader(async () => { calls.push({ action: 'catalog' }); return typeof options.response === 'function' ? options.response(calls.at(-1)) : options.response || { providers: [], models: [] }; });
-  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, localStorage: options.storage, queueMicrotask, setTimeout: options.setTimeout || (fn => fn()), clearTimeout: () => {}, setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { const call = JSON.parse(options.body); calls.push(call); return { benchgoCall: call }; }, require: id => id.endsWith('model-catalog.mjs') ? { assistantModelCatalog } : id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('execution-session-navigation.mjs') ? { executionSessionNavigation } : id.endsWith('session-retain.mjs') ? { retainAssistantSession, assistantBackgroundSessions } : id === 'react' ? react : id.endsWith('sidebar-lists.mjs') ? sidebarLists : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async response => typeof options.response === 'function' ? options.response(response.benchgoCall) : options.response || ({ providers: [], models: [] }) } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
+  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, localStorage: options.storage, queueMicrotask, setTimeout: options.setTimeout || (fn => fn()), clearTimeout: () => {}, setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { const call = JSON.parse(options.body); calls.push(call); return { benchgoCall: call }; }, require: id => id.endsWith('model-catalog.mjs') ? { assistantModelCatalog } : id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('execution-session-navigation.mjs') ? { executionSessionNavigation } : id.endsWith('session-retain.mjs') ? { retainAssistantSession, assistantBackgroundSessions } : id === 'react' ? react : id.endsWith('sidebar-lists.mjs') ? sidebarLists : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('structural-share.mjs') ? { structuralShare } : id.endsWith('perf-trace.mjs') ? { perfTrace: { time: () => () => {} } } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async response => typeof options.response === 'function' ? options.response(response.benchgoCall) : options.response || ({ providers: [], models: [] }) } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
   return { listeners, documentListeners, intervals, exports: module.exports, render(name, props) { cursor = 0; refCursor = 0; effects.length = 0; return module.exports[name](props); }, calls, effects };
 }
 const walk = node => node && typeof node === 'object' ? [node, ...node.children.flatMap(walk)] : [];
@@ -203,6 +204,54 @@ test('sidebar shows one title with real activity time and independent status, wi
   assert(!fresh.some(node => node.props.className === 'ba-thread-summary' || node.children.includes('开始一个新话题')));
 });
 
+test('sidebar preparation for a long list keeps all localized activity times', t => {
+  const threads = Array.from({ length: 500 }, (_, index) => ({ id: 'side-' + index, title: '旁聊 ' + index, createdAt: Date.now() - index * 60000 }));
+  const h = harness({ threads });
+  const props = { ctx: { layout: { panelInfo: { getSnapshot: () => ({ activePanelId: null }), subscribe: () => () => {} } } } };
+  const started = performance.now();
+  const nodes = walk(h.render('AssistantSidebarEntry', props));
+  t.diagnostic(`500 side threads: ${(performance.now() - started).toFixed(2)}ms data and JSX preparation`);
+  assert.equal(nodes.filter(node => node.props.className === 'ba-thread-time').length, 500);
+});
+
+test('sidebar coalesces rapid invalidations and rereads the final state after an in-flight response', async () => {
+  const pending = [], timers = new Map();let serial = 0;
+  const h = harness({ response: call => new Promise(resolve => pending.push({ call, resolve })), setTimeout: fn => { const id = ++serial; timers.set(id, fn); return id; } });
+  const props = { ctx: { layout: { panelInfo: { getSnapshot: () => ({ activePanelId: null }), subscribe: () => () => {} } } } };
+  h.render('AssistantSidebarEntry', props);
+  const cleanups = h.effects.map(({ effect }) => effect()).filter(Boolean);
+  await new Promise(setImmediate);
+  const changed = h.documentListeners.get('benchgo:assistant-changed');
+  for(let index=0;index<20;index++)changed(new Event('benchgo:assistant-changed'));
+  for(const [id,fn] of [...timers]){timers.delete(id);fn();}
+  await new Promise(setImmediate);
+  assert.equal(pending.length, 1, 'an active state read is shared across all invalidations');
+  pending[0].resolve({state:{threads:[{id:'old',title:'旧旁聊'}]}});
+  await new Promise(setImmediate);
+  assert.equal(pending.length, 2, 'one trailing read observes the final invalidation');
+  pending[1].resolve({state:{threads:[{id:'latest',title:'最新旁聊'}]}});
+  await new Promise(setImmediate);
+  const nodes=walk(h.render('AssistantSidebarEntry',props));
+  assert(nodes.some(node=>node.props.className==='ba-thread-title'&&node.children.includes('最新旁聊')));
+  cleanups.forEach(dispose=>dispose());
+});
+
+test('sidebar cleanup fences scheduled invalidations and late responses', async () => {
+  const pending=[],timers=[];
+  const h=harness({response:()=>new Promise(resolve=>pending.push(resolve)),setTimeout:fn=>{timers.push(fn);return timers.length;}});
+  const props={ctx:{layout:{panelInfo:{getSnapshot:()=>({activePanelId:null}),subscribe:()=>()=>{}}}}};
+  h.render('AssistantSidebarEntry',props);
+  const cleanups=h.effects.map(({effect})=>effect()).filter(Boolean);
+  await new Promise(setImmediate);
+  h.documentListeners.get('benchgo:assistant-changed')(new Event('benchgo:assistant-changed'));
+  cleanups.forEach(dispose=>dispose());
+  timers.forEach(fn=>fn());
+  pending[0]({state:{threads:[{id:'retired',title:'已卸载的响应'}]}});
+  await new Promise(setImmediate);
+  assert.equal(h.calls.length,1,'a queued callback cannot read through a retired scope');
+  assert(!walk(h.render('AssistantSidebarEntry',props)).some(node=>node.props.className==='ba-thread-title'&&node.children.includes('已卸载的响应')));
+});
+
 test('sidebar collapse state and chevron structure follow shared rotation styles', () => {
   const h = harness(), props = { ctx: { layout: { panelInfo: { getSnapshot: () => ({ activePanelId: 'benchgo-assistant' }), subscribe: () => () => {} } } } };
   let nodes = walk(h.render('AssistantSidebarEntry', props));
@@ -366,16 +415,19 @@ test('resource navigation includes vault and system files last without settings 
   assert.equal(nodes.some(node => node.props.className === 'ba-segment'), false);
 });
 
-test('goal management returns to tickets without a goal creation entry', () => {
+// The harness leaves unstubbed imports untyped, so the page is the editor inside the visible section container.
+const visiblePage = nodes => nodes.find(node => node.type === 'div' && node.props.hidden === false && node.children.some(child => child?.props?.onDirtyChange))
+  ?.children.find(child => child?.props?.onDirtyChange);
+
+test('the goals page is a checklist without a goal creation or ticket entry', () => {
   const h = harness(), props = { initialSection: 'goals', snapshot: { config: { models: [] } }, ctx: {} };
   const nodes = walk(h.render('Studio', props));
-  const goals = nodes.find(node => node.props.onViewTickets);
-  assert.equal(goals.props.initialCreating, undefined);
   assert.equal(nodes.find(node => node.props['data-section']).props['data-section'], 'goals');
-  goals.props.onViewTickets();
-  const tickets = walk(h.render('Studio', props));
-  assert.equal(tickets.find(node => node.props['data-section']).props['data-section'], 'tasks');
-  assert.equal(tickets.some(node => node.props.onCreateGoal), false);
+  const goals = visiblePage(nodes);
+  assert.ok(goals, 'the goals section renders the checklist');
+  assert.equal(goals.props.initialCreating, undefined);
+  assert.equal(goals.props.onViewTickets, undefined, 'a checklist goal has no bound tickets to open');
+  assert.equal(nodes.some(node => node.props.onCreateGoal), false);
 });
 
 test('the goals resource link opens its workspace page and tasks retain only tickets and approvals', () => {
@@ -388,7 +440,8 @@ test('the goals resource link opens its workspace page and tasks retain only tic
   chat.effects.find(item => item.deps?.[0] === 'goals').effect();
   const goalNodes = walk(chat.render('Studio', requested));
   assert.equal(goalNodes.find(node => node.props['data-section']).props['data-section'], 'goals');
-  assert.equal(goalNodes.find(node => node.props.onViewTickets).props.initialCreating, undefined);
+  const goals = visiblePage(goalNodes);
+  assert.equal(goals.props.initialCreating, undefined); assert.equal(goals.props.onViewTickets, undefined);
 });
 test('linked task navigation carries its ticket through the page and existing Studio detail entry', () => {
   const snapshot = { config: { models: [] }, state: { threads: [] } };
@@ -496,6 +549,44 @@ test('opening a chat reads its history while unrelated state resources are still
   assert(nodes.some(node => node.props.sessionId === 'main-session'));
   dispose(); finishState(snapshot); await new Promise(setImmediate);
 });
+test('state reads are shared until an invalidation and ensure announces only a new session', async () => {
+  const pending = []; let sessionId = 'side-1', announced = 0;
+  const h = harness({ response: call => call.action === 'state' ? new Promise(resolve => pending.push(resolve)) : call.action === 'ensure' ? { sessionId } : {} });
+  h.documentListeners.set('benchgo:assistant-changed', () => { announced++; });
+  const { api } = h.exports, states = () => h.calls.filter(call => call.action === 'state').length;
+  const aborted = new AbortController(); aborted.abort(new Error('left'));
+  await assert.rejects(api('state', {}, aborted.signal), /left/);
+  assert.equal(states(), 0, 'an already aborted reader starts no request');
+  const leaving = new AbortController();
+  const first = api('state'), second = api('state'), left = api('state', {}, leaving.signal);
+  await new Promise(setImmediate);
+  assert.equal(states(), 1, 'concurrent readers share one request');
+  leaving.abort(new Error('unmounted'));
+  await assert.rejects(left, /unmounted/);
+  pending[0]({ config: { revision: 1, name: 'A' }, state: { threads: [] } });
+  assert.equal(await first, await second, 'a reader leaving does not cancel the shared read');
+  const stale = api('state');
+  await new Promise(setImmediate);
+  await api('pinThread', { threadId: 'side', pinned: true });
+  const fresh = api('state');
+  await new Promise(setImmediate);
+  assert.equal(states(), 3, 'a read that began before a mutation is not shared after it');
+  pending[1]({ config: { revision: 1 }, state: { threads: [] } }); pending[2]({ config: { revision: 1 }, state: { threads: [{ id: 'side', pinned: true }] } });
+  assert.equal((await stale).state.threads.length, 0);
+  assert.equal((await fresh).state.threads[0].pinned, true);
+  await api('history', { threadId: 'side' });
+  const afterRead = api('state'), sharedRead = api('state');
+  await new Promise(setImmediate);
+  assert.equal(states(), 4, 'ordinary reads leave the shared state valid');
+  pending[3]({ config: { revision: 1 }, state: { threads: [] } }); await afterRead; await sharedRead;
+  await api('ensure', { threadId: 'side' }); await api('ensure', { threadId: 'side' }); await api('ensure', { threadId: 'side' });
+  assert.equal(announced, 1, 'repeated polls of the same session announce nothing');
+  sessionId = 'side-2';
+  await api('ensure', { threadId: 'side' });
+  assert.equal(announced, 2, 'a replaced session is announced');
+  await api('resetMain'); await api('ensure', { threadId: 'main' });
+  assert.equal(announced, 4, 'clearing the main chat and opening its new session are both announced');
+});
 test('released or replaced assistant sessions never open a stale official writer', async () => {
   for (const released of [false, true]) {
     let finishEnsure, retained = false;
@@ -523,6 +614,20 @@ test('failed assistant initialization does not activate an official session and 
   await retried.ready;
   assert.equal(retained, 1);
   retried.release();
+});
+test('the page does not follow every session; background retention owns those feeds', () => {
+  let reads = 0;
+  const feed = value => ({ getSnapshot: () => { reads++; return value; }, subscribe: () => () => {} });
+  const snapshot = { config: { models: [] }, state: { mainSessionId: 'chat', threads: [{ id: 'side', sessionId: 'side-session' }] } };
+  const h = harness({ state: [snapshot, '', 'chat', 'main', { sessionId: 'chat', messages: [] }] });
+  const ctx = { uiSession: { sessionStatus: feed(new Map([['side-session', { running: true }]])) }, sessions: { list: feed({ byId: {} }) } };
+  const nodes = walk(h.render('AssistantPage', { ctx }));
+  assert.equal(reads, 0, 'unrelated session activity cannot re-render the open transcript');
+  const background = nodes.find(node => node.type === h.exports.BackgroundSessions);
+  assert.equal(background.props.selectedSessionId, 'chat');
+  assert.equal(background.props.state, snapshot.state);
+  assert.equal(h.render('BackgroundSessions', background.props), null);
+  assert.equal(reads, 2);
 });
 test('background assistant thread approval is reserved for the unified review page', () => {
   const h = harness(); const pending = { key: 'a', kind: 'approval' };

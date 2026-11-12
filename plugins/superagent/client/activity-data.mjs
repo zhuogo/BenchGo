@@ -48,8 +48,8 @@ export function activityTask(row, kind) {
   const execution = kind === 'ticket' ? currentExecution(row, assignment) : undefined;
   const status = kind === 'goal' ? row.status : ticketStatus;
   const waiting = kind === 'ticket' ? ticketWaiting(domain) : null;
-  const detail = kind === 'goal' ? row.error || ({ building_children: '正在拆分子目标', verify: '正在同步目标状态' })[row.nextStep] : waiting?.reason || ticketResultSummary(result) || undefined;
-  const phase = kind === 'goal' ? `${row.ticketIds?.length || 0} 项关联工单`
+  const detail = kind === 'goal' ? undefined : waiting?.reason || ticketResultSummary(result) || undefined;
+  const phase = kind === 'goal' ? '长期目标'
     : status === 'completed' ? delivery?.state === 'sent' ? '执行完成 · 结果已交付' : '执行完成'
     : waiting ? waiting.reason
     : delivery?.state === 'sent' ? '结果已交付' : delivery ? '结果交付阶段'

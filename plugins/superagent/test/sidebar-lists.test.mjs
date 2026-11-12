@@ -1,10 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { channelSessionKey } from '../src/channel-policy.mjs';
-import { sidebarThreads, channelIsConnected, sourceConnectionMismatch, readSidebarList, channelThreadTitle } from '../client/sidebar-lists.mjs';
+import { sidebarThreads, channelIsConnected, sourceConnectionMismatch, readSidebarList, channelThreadTitle, sidebarThreadTime, createSidebarThreadTimeFormatter } from '../client/sidebar-lists.mjs';
 
 const status = { enabled: true, authentication: 'verified', connection: { state: 'connected' } };
 const fixed = (id, source) => ({ id, sessionId: `session-${id}`, source, sourceKey: channelSessionKey(source) });
+
+test('cached thread time formatters preserve local date, year and full tooltip labels', () => {
+  const now = new Date(2026, 10, 12, 12, 23, 45);
+  for(const value of [now.getTime(),new Date(2026,10,11,8).getTime(),new Date(2025,11,31,23,59).toISOString()]){
+    const date=new Date(value),sameDay=date.toDateString()===now.toDateString();
+    const expected=sameDay?date.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false}):date.toLocaleDateString('zh-CN',{month:'numeric',day:'numeric',...(date.getFullYear()!==now.getFullYear()?{year:'numeric'}:{})});
+    assert.deepEqual(sidebarThreadTime(value,now),{hasDate:true,timeLabel:expected,dateTime:date.toISOString(),detail:date.toLocaleString('zh-CN')});
+  }
+  for(const value of [null,undefined,'invalid',0,Infinity])assert.deepEqual(sidebarThreadTime(value,now),{hasDate:false,timeLabel:'—',dateTime:undefined,detail:''});
+});
+
+test('the next sidebar render refreshes cached formatters after the system time zone changes', () => {
+  const previous=process.env.TZ,value='2026-11-12T03:24:45Z';
+  try{
+    process.env.TZ='Etc/UTC';const first=createSidebarThreadTimeFormatter(new Date(value))(value);
+    process.env.TZ='Asia/Shanghai';const next=createSidebarThreadTimeFormatter(new Date(value))(value),date=new Date(value);
+    assert.notEqual(next.timeLabel,first.timeLabel);
+    assert.equal(next.timeLabel,date.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false}));
+    assert.equal(next.detail,date.toLocaleString('zh-CN'));
+    assert.equal(next.dateTime,first.dateTime);
+  }finally{if(previous===undefined)delete process.env.TZ;else process.env.TZ=previous;}
+});
 test('IM titles use contact or group names without repeating labels or exposing opaque IDs', () => {
   const direct = fixed('direct', { channel: 'feishu', sourceType: 'direct', conversationId: 'oc_opaque', senderName: ' 李四\n ' });
   assert.equal(channelThreadTitle(direct, { label: '飞书' }), '飞书私聊 · 李四');

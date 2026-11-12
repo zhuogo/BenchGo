@@ -32,7 +32,7 @@ async function fixture() {
       window.otherCall=()=>view.start({sessionId:'B'});
       window.beginCall=()=>view.start({sessionId:'A'});
       function Conversation({id}){useEffect(()=>()=>{window.actions.push(['leave',id]);view.leave(id)},[id]);return <section data-conversation-session={id}><div className="conversation-body"><h2>{id==='A'?'官网改版':'其他会话'}</h2><p>原会话与执行记录</p><div data-composer-card><textarea aria-label="输入消息" defaultValue="保留草稿"/></div><div className="work-output">{Array.from({length:12},(_,i)=><p key={i}>已读取项目文件，正在核对首页布局与交互。<span>src / components / workspace · {i+1}</span></p>)}</div></div></section>}
-      function App(){const[current,setCurrent]=useState('A'),[settingsOpen,setSettingsOpen]=useState(false);route=setCurrent;window.goTo=setCurrent;window.openSettingsModal=()=>setSettingsOpen(true);return <><nav><button onClick={()=>setCurrent('A')}>原会话</button><button onClick={()=>setCurrent('B')}>其他会话</button><button onClick={()=>setCurrent('settings')}>切换设置</button></nav>{current==='settings'?<section><h2>设置</h2><p>媒体与外观</p></section>:<Conversation key={current} id={current}/>}<Modal open={settingsOpen} onClose={()=>setSettingsOpen(false)} title="设置面板" closeLabel="关闭设置" shortcutModal="settings"><button>外观设置</button><button>媒体设置</button></Modal><VoiceCallHost controller={controller} callView={view} sessionStatus={statuses}/></>}
+      function App(){const[current,setCurrent]=useState('A'),[settingsOpen,setSettingsOpen]=useState(false);route=setCurrent;window.goTo=setCurrent;window.openSettingsModal=()=>setSettingsOpen(true);return <><nav><button onClick={()=>setCurrent('A')}>原会话</button><button onClick={()=>setCurrent('B')}>其他会话</button><button onClick={()=>setCurrent('settings')}>切换设置</button></nav>{current==='settings'?<section><h2>设置</h2><p>媒体与外观</p></section>:<Conversation key={current} id={current}/>}<Modal open={settingsOpen} onClose={()=>setSettingsOpen(false)} title="设置面板" closeLabel="关闭设置" shortcutModal="settings"><button>外观设置</button><button>媒体设置</button></Modal><VoiceCallHost controller={controller} callView={view} sessionStatus={statuses} openSettings={()=>{window.actions.push(['settings']);setSettingsOpen(true)}}/></>}
       root.render(<App key={key}/>);
       await new Promise(requestAnimationFrame);
       if(scenario!=='empty'){const start=view.start({sessionId:'A'});if(scenario!=='loading')await start;view.minimize();if(scenario==='error')state.set({...state.getSnapshot(),mode:'idle',phase:'idle',error:'网络连接已中断，请重新连接'});}
@@ -150,6 +150,26 @@ test('global call survives conversation unmount, stays bound, handles controls a
     await page.keyboard.press('Tab');
     assert(await settings.evaluate(node=>node.contains(document.activeElement)));
     if(screenshots)await page.screenshot({path:join(screenshots,'settings-modal-call.png')});
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('direct wait hint opens settings and keeps the call running in the dock', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } }), errors = []; page.setDefaultTimeout(6000); page.on('pageerror', error => errors.push(error.message));
+    const html = await fixture(); await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort()); await page.goto('http://localhost/');
+    await page.evaluate(() => window.renderScenario('active'));
+    await page.getByRole('button', { name: '展开语音通话：官网改版', exact: true }).click();
+    const stage = page.getByRole('dialog', { name: '实时语音通话', exact: true }); await stage.waitFor();
+    assert.equal(await stage.getByRole('button', { name: '去设置', exact: true }).count(), 0);
+    await page.evaluate(() => window.patchCall({ phase: 'thinking', conversationReason: '未配置通话交互模型，当前直接使用原会话模型', conversationConfigurable: true }));
+    await stage.getByRole('button', { name: '去设置', exact: true }).click();
+    const settings = page.getByRole('dialog', { name: '设置面板', exact: true }); await settings.waitFor(); await stage.waitFor({ state: 'hidden' });
+    assert(await page.locator('.voice-global-call').isVisible());
+    assert.equal(await page.evaluate(() => window.voiceSnapshot().mode), 'call');
+    assert.deepEqual(await page.evaluate(() => window.actions.filter(row => ['settings', 'hangup'].includes(row[0]))), [['settings']]);
+    assert(await settings.evaluate(node => node.contains(document.activeElement)), 'focus moves into settings');
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

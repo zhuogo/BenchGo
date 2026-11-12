@@ -8,7 +8,7 @@ export const ticketReplyIdentity = value => value?.kind === 'watchdog' ? watchdo
   : JSON.stringify({ ...value, title: undefined, status: undefined });
 
 export function ticketReplySignal(database, delivery) {
-  const payload = delivery?.payload, ticket = database?.getTicket(delivery?.ticketId);
+  const payload = delivery?.payload, ticket = database.getTicket(delivery?.ticketId);
   if (!delivery?.uniqueKey || !ticket || payload?.type !== 'ticket.result'
     || payload.ticketId && payload.ticketId !== ticket.id
     || JSON.stringify(payload.source) !== JSON.stringify(ticket.mandate.source)) return null;
@@ -26,7 +26,7 @@ export function ticketReplySignal(database, delivery) {
   const result = database.results(ticket.id).find(row => row.version === payload.resultVersion);
   if (!result || result.instructionRevision !== payload.instructionRevision
     || result.outcome !== payload.outcome || !['completed', 'failed'].includes(result.outcome)) return null;
-  const text = result.finalSummary ?? result.summary;
+  const text = result.summary;
   if (typeof text !== 'string' || !text.trim()) return null;
   return { eventKey: delivery.uniqueKey, ticketId: ticket.id, kind: 'result', title: ticket.title,
     instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion,

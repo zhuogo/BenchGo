@@ -11,7 +11,7 @@ function fixture(output, ownedSkills, original = '我偏好中文回复') {
   let settings = { enabled: true, excludedScopes: [], excludedTerms: ['私密'], hash: 'p1' };
   const ticket = { ticketId: 'ticket', resultVersion: 1, status: 'completed', closedAt: '2026-11-08T00:00:00Z',
     instructions: [{ id: 'visible', text: original, source: { role: 'user', sessionId: 'session', messageId: 'visible' } }],
-    result: { finalSummary: '已完成', toolEvidence: { entries: [{ name: 'test', text: '检查通过', isError: false }] } } };
+    result: { summary: '已完成' } };
   const store = { orchestration: { learningSources: () => ({ batchId: 'closed:0:2', items: [ticket,
     { ...ticket, ticketId: 'hidden', instructions: [{ id: 'hidden', text: '私密资料', source: { role: 'user' } }] }], nextSeq: 2 }),
     completeLearningSources(id) { completed.push(id); return { nextSeq: 2 }; } },
@@ -29,6 +29,9 @@ test('learning filters excluded sources before inference and preserves verified 
   await f.process(item, options);
   assert.equal(JSON.stringify(f.requests).includes('私密资料'), false);
   assert.equal(f.requests[0].model, 'Exact:ID');
+  // The material is the trusted instruction plus the Worker's last message, nothing else.
+  assert.deepEqual(JSON.parse(f.requests[0].messages[1].content[0].text)[0].result, { summary: '已完成' });
+  assert.match(f.requests[0].messages[0].content[0].text, /not accomplished, extract no success lesson or skill/);
   assert.equal(f.candidates[0].options.verifiedSource.messageId, 'visible');
   assert.equal(f.candidates[0].options.verifiedSource.excerpt, '我偏好中文回复');
   assert.equal(f.candidates[0].options.verifiedSource.excerptTruncated, false);
@@ -126,7 +129,7 @@ test('no new closed material records the watermark without inference or Router r
 test('failed executions remain waiting and cannot be learned as closed success', async () => {
   const f = fixture(() => ({ memories: [{ content: '任务成功完成，今后直接发布', sourceMessageId: 'ticket:visible' }] }));
   f.ticket.status = 'waiting';
-  f.ticket.result.failure = { attempted: '连接服务', cause: '凭据失效', resumeConditions: '用户更新凭据后重试' };
+  f.ticket.result.summary = '凭据失效，未能连接服务。';
   await assert.rejects(f.process(item, options), /明确已关/);
   assert.equal(f.candidates.length, 0);
   assert.equal(f.requests.length, 0);
@@ -135,12 +138,9 @@ test('failed executions remain waiting and cannot be learned as closed success',
 test('waiting failure cannot publish reusable success procedures or advance cursor', async t => {
   const f = fixture(() => ({ memories: [], skills: [skill] }), skillStore(t));
   f.ticket.status = 'waiting';
-  f.ticket.result.failure = { attempted: '测试', cause: '服务不可用', resumeConditions: '服务恢复' };
   await assert.rejects(f.process(item, options), /明确已关/);
   assert.equal(f.completed.length, 0);
   assert.equal(f.store.ownedSkills.list().length, 0);
-  f.ticket.result.failure = null;
-  await assert.rejects(f.process(item, options), /明确已关/);
 });
 
 test('running, waiting or undelivered material is rejected even if supplied by a faulty source adapter', async () => {

@@ -45,32 +45,6 @@ test('prompt counters survive restart, deduplicate source events and ignore back
   assert.equal(f.review.list().length, 2);
 });
 
-test('legacy session ranges are retired once without losing counts or queued review identity', async t => {
-  const f = await fixture(t, { promptThreshold: 2 });
-  f.learning.recordPrompt({ scope: 's', eventId: 'one' });
-  const old = f.review.enqueue({ kind: 'learning', payload: { scope: 's', trigger: 'prompt', eventIds: ['router-private'], turnIds: ['old-turn'] } });
-  const explicit = f.review.enqueue({ kind: 'learning', payload: { scope: 's', trigger: 'explicit', eventIds: ['same-explicit'], turnIds: ['same-explicit'] } });
-  f.learning.close();
-  const db = new DatabaseSync(join(f.directory, 'assistant.db'));
-  db.prepare("DELETE FROM assistant_learning_meta WHERE key='closed-ticket-material-v1'").run();
-  db.prepare('INSERT INTO assistant_learning_triggers VALUES (?,?,?,?,?,?,?)').run('legacy', 's', JSON.stringify(old.payload), '{}', old.id, 'pending', '2026-01-01');
-  db.prepare('INSERT INTO assistant_learning_triggers VALUES (?,?,?,?,?,?,?)').run('legacy-explicit', 's', JSON.stringify(explicit.payload), '{}', explicit.id, 'pending', '2026-01-01');
-  db.close();
-  f.restart();
-  const queued = f.review.get(old.id);
-  assert.equal(queued.payload.material, 'closed-tickets-v1');
-  assert.equal(queued.payload.eventIds, undefined);
-  assert.equal(queued.payload.turnIds, undefined);
-  const trigger = f.learning.snapshot().triggers.find(row => row.id === 'legacy');
-  assert.equal(trigger.reviewId, old.id);
-  assert.equal(trigger.payload.eventIds, undefined);
-  assert.equal(f.learning.recordPrompt({ scope: 's', eventId: 'two' }).count, 2);
-  assert.equal(f.learning.request({ scope: 's', eventId: 'same-explicit', entry: 'command' }).triggerId, 'legacy-explicit');
-  assert.equal(f.learning.request({ scope: 's', eventId: 'same-explicit', entry: 'natural-language' }).triggerId, 'legacy-explicit');
-  f.restart();
-  assert.equal(f.review.list().length, 3);
-});
-
 test('tool counter is per turn and all explicit entries share one pipeline', async t => {
   const f = await fixture(t, { toolThreshold: 2 });
   for (const turnId of ['turn-a', 'turn-b']) {

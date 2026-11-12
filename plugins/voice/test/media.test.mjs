@@ -288,6 +288,22 @@ test('playback rejects brief close-mic transients and sustained ambiguous noise 
   await c.dispose();
 });
 
+test('repeated playback state updates preserve the onset and never extend the echo tail',async()=>{
+  let now=1000;
+  const c=new Capture({now:()=>now,transcribe:async()=>''});
+  try{
+    c.setPlaybackActive(false);assert.equal(c.echoUntil,0,'idle notifications are not a playback tail');
+    c.setPlaybackActive(true);
+    for(let i=0;i<15;i++){c.setPlaybackActive(true);c.accept(frame(),.9);}
+    assert.equal(c.attack,300);
+    c.setPlaybackActive(false);const tail=c.echoUntil;
+    now+=200;c.setPlaybackActive(false);assert.equal(c.echoUntil,tail);
+    now=tail+1;c.setPlaybackActive(false);
+    for(let i=0;i<5;i++)c.accept(frame(100),.6);
+    assert.ok(c.segment,'ordinary speech resumes after the original bounded tail');
+  }finally{await c.dispose();}
+});
+
 test('playback boundary candidates reset without delaying ordinary listening',async t=>{
   let now=1000;t.mock.method(Date,'now',()=>now);
   const c=new Capture({transcribe:async()=>''});

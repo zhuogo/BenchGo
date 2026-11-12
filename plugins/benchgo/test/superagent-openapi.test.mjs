@@ -60,8 +60,10 @@ test('P0 inbox reconciliation and quota-free continuation keep the public contra
   valid(request, { action: 'ticketPause', ticketId: 't' });
   valid(request, { action: 'ticketResume', ticketId: 't', expectedResultVersion: 0 });
   assert.equal(request({ action: 'ticketResume', ticketId: 't', expectedResultVersion: -1 }), false);
-  // Budget gates were removed on 2026-11-06: no added-time field or Goal quota actions remain in the contract.
-  assert.doesNotMatch(JSON.stringify(document), /additionalExecutionMs|goalBudgetUpdate|goalBudgetResume/);
+  // Goals are a checklist: no quota, execution-control or self-check contract exists.
+  assert.doesNotMatch(JSON.stringify(document), /additionalExecutionMs|goalBudget|goalCancel|goalPause|goalResume|goalAdvance|selfCheck|memoryCandidate/);
+  valid(request, { action: 'goalCreate', goal: { objective: '把语音体验做稳', requestId: 'r' } });
+  for (const goal of [{ objective: '缺少请求标识' }, { objective: 'x', requestId: 'r', projectId: 'p' }, { objective: 'x', requestId: 'r', children: [] }]) assert.equal(request({ action: 'goalCreate', goal }), false);
   valid(response(path, 'ticketResume'), { queued: false, code: 'EXECUTION_EFFECTS_UNKNOWN' });
   assert.equal(request({ action: 'ticketRetryReview', ticketId: 't' }), false);
   assert.equal(document.paths[path].post.responses['200']['x-action-schemas'].ticketRetryReview, undefined);
@@ -75,7 +77,7 @@ test('history exposes only optional structured active reply identity', () => {
   assert.equal(validate({ activeReply: { requestId: 'u', turn: 2, reasoning: 'private' } }), false);
 });
 
-test('memory writes are immediate and keep revision and legacy compatibility contracts', () => {
+test('memory writes are immediate and keep their revision contract', () => {
   valid(request, { action: 'memorySave', memory: { content: '偏好简洁中文' } });
   valid(request, { action: 'memorySave', revision: 2, memory: { id: 'saved', content: '偏好完整说明' } });
   valid(request, { action: 'memoryDelete', id: 'saved', revision: 3 });
@@ -85,10 +87,6 @@ test('memory writes are immediate and keep revision and legacy compatibility con
   valid(response(path, 'memorySearch'), { memories: [entry] });
   valid(response(path, 'memoryDelete'), { removed: true });
   assert.equal(response(path, 'memorySave')({ ...entry, revision: 0 }), false);
-  for (const action of ['memoryCandidates', 'memoryCandidateAccept', 'memoryCandidateReject']) {
-    assert.equal(document.paths[path].post.responses['200']['x-action-schemas'][action].deprecated, true);
-    valid(request, { action, id: 'legacy' });
-  }
 });
 
 test('notification options require a source-bound event and return ordinary send receipt', () => {
@@ -115,7 +113,7 @@ test('OpenAPI descriptions retain UTF-8 and channel actions require scoped write
 });
 
 test('new documented actions exist in production and require their actual CAS fields', async () => {
-  const service = await readFile(new URL('../../superagent/src/service.mjs', import.meta.url), 'utf8');
+  const service = await readFile(new URL('../../superagent/src/assistant-dispatch.mjs', import.meta.url), 'utf8');
   for (const action of ['taskCancel', 'taskResult', 'taskTakeover', 'taskVerify']) {
     assert.doesNotMatch(service, new RegExp(`case '${action}':`));
     assert.equal(document.components.schemas.AssistantRequest.properties.action.enum.includes(action), false);
@@ -137,7 +135,7 @@ test('new documented actions exist in production and require their actual CAS fi
 });
 
 test('removed file-backup actions are unavailable', async () => {
-  const service = await readFile(new URL('../../superagent/src/service.mjs', import.meta.url), 'utf8');
+  const service = await readFile(new URL('../../superagent/src/assistant-dispatch.mjs', import.meta.url), 'utf8');
   for (const action of ['checkpointList', 'checkpointPreview', 'checkpointRestore']) {
     assert.equal(request({ action, ticketId: 'ticket', runId: 'run', token: hash }), false);
     assert.equal(document.paths[path].post.responses['200']['x-action-schemas'][action], undefined);
@@ -239,7 +237,7 @@ test('real memory responses retain bounded sources and correction version refere
   const changed = await store.saveMemory({ id: first.id, content: '保存修订事实', source: { type: 'user-edit' } }, { revision: 1 });
   valid(response(path, 'memorySave'), changed);
   assert.equal(changed.supersedes.revision, 1); assert.deepEqual(changed.versionChain, [changed.supersedes]);
-  valid(response(path, 'memorySearch'), { memories: [{ ...changed, legacyIds: ['candidate-legacy'] }] });
+  valid(response(path, 'memorySearch'), { memories: [changed] });
   for (const source of [{ excerpt: 'x'.repeat(6001) }, { excerptTruncated: 'true' }]) {
     assert.equal(request({ action: 'memorySave', memory: { content: 'fact', source } }), false);
     assert.equal(response(path, 'memorySave')({ ...changed, source }), false);
@@ -249,7 +247,7 @@ test('real memory responses retain bounded sources and correction version refere
 });
 
 test('owner delivery reconciliation requests enforce attempts, evidence and sent-only receipts', async () => {
-  const service = await readFile(new URL('../../superagent/src/service.mjs', import.meta.url), 'utf8');
+  const service = await readFile(new URL('../../superagent/src/assistant-dispatch.mjs', import.meta.url), 'utf8');
   const branch = service.slice(service.indexOf("case 'directReplyReconcile':"), service.indexOf("case 'evaluations':"));
   assert.match(branch, /peer\?\.principal\?\.kind !== 'owner'/);
   assert.match(branch, /status: 403, code: 'OWNER_REQUIRED'/);
@@ -279,7 +277,12 @@ test('delivery response contracts accept persisted reconciliation records withou
   const [reply] = db.claimDirectReplies({ owner: 'sender', now: 2 });
   db.finishDirectReply(reply.id, { owner: 'sender', uncertain: true, now: 3 });
   const ticket = db.createTicket({ threadId: 'thread', target: 'saved task', mandate: {} });
-  const commit = { result: { text: 'done' }, uniqueKey: 'result', outboxPayload: { text: 'done' }, now: 10 };
+  db.createAssignment(ticket.id, { id: 'work' });
+  const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
+  const run = db.prepareRun(assignment.id, { ...assignment, sessionId: 'session', directory: '/task' });
+  db.updateRun(run.id, { ...assignment, state: 'submitted' });
+  const commit = { assignment, uniqueKey: 'result', outboxPayload: { text: 'done' }, now: 10,
+    result: { summary: 'done', runId: run.id, sessionId: run.sessionId, instructionRevision: 1, completion: { kind: 'completed' } } };
   db.commitResult(ticket.id, commit);
   const [delivery] = db.claimOutbox('sender', { now: 11 });
   db.finishOutbox(delivery.id, { owner: 'sender', uncertain: true, now: 12 });
@@ -290,7 +293,7 @@ test('delivery response contracts accept persisted reconciliation records withou
     valid(response(path, action), sent);
     assert.equal(sent.reconciliations.length, 2);
     if (action === 'outboxReconcile') {
-      assert.deepEqual(sent.payload, commit.outboxPayload); assert.equal(sent.payload.reconciliations, undefined);
+      assert.deepEqual(sent.payload, delivery.payload); assert.equal(sent.payload.reconciliations, undefined);
       assert.equal(db.commitResult(ticket.id, commit).duplicate, true);
       const { reconciliations, ...missing } = sent; assert.equal(response(path, action)(missing), false);
     }
@@ -306,7 +309,7 @@ test('history accepts four real schedule lifecycle facts and current ticket proj
   for (const action of ['notifications', 'notificationSync']) valid(response(path, action), { events, cursor: 4, hasMore: false, resyncRequired: false });
   const verified = systemStateDelivery({ state: 'action_verified', code: 'ACTION_VERIFIED', stage: 'action' });
   const result = { type: 'ticket.result', ticketId: 'ticket', text: verified.text, publication: verified, origin: 'system', systemState: verified.systemState,
-    currentInstructionRevision: 2, currentResultVersion: 1, currentResult: { version: 1, instructionRevision: 2, selfCheck: { summary: '已按当前要求检查执行结果' } },
+    currentInstructionRevision: 2, currentResultVersion: 1, currentResult: { version: 1, instructionRevision: 2, outcome: 'completed' },
     currentAttention: null, currentPauseReason: { code: 'EXECUTION_EFFECTS_UNKNOWN' } };
   valid(response(path, 'history'), { notifications: [result] });
   valid(response(path, 'history'), { notifications: [{ ...result, currentResult: null, currentPauseReason: null }] });
@@ -347,7 +350,12 @@ test('delegation rejects per-ticket model overrides and completed changes return
   const thread = { id: 'thread', source: { type: 'desktop', id: 'owner' } };
   db.ingest({ dedupeKey: 'original', thread, source, actor, content: '原任务', mode: 'direct' });
   const ticket = db.createTicket({ threadId: thread.id, target: '原任务', mandate: { source, actorId: actor.id } });
-  db.commitResult(ticket.id, { result: { summary: '原成果' }, uniqueKey: 'original-result' });
+  db.createAssignment(ticket.id, { id: 'original-work' });
+  const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
+  const run = db.prepareRun(assignment.id, { ...assignment, sessionId: 'session', directory: '/task' });
+  db.updateRun(run.id, { ...assignment, state: 'submitted' });
+  db.commitResult(ticket.id, { assignment, uniqueKey: 'original-result',
+    result: { summary: '原成果', runId: run.id, sessionId: run.sessionId, instructionRevision: 1, completion: { kind: 'completed' } } });
   assert.equal(db.getTicket(ticket.id).status, 'completed');
   for (const delivery of db.claimOutbox('test-delivery')) {
     db.saveOutboxReply(delivery.id, { owner: 'test-delivery', publication: { action: 'deliver', origin: 'router', text: '原任务已完成，成果已整理。' } });

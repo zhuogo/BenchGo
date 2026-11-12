@@ -25,7 +25,7 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
     eventThreshold: bounded(config.eventThreshold, 12, 1, 200), timeoutMs: bounded(config.timeoutMs, 20000, 1, 90000) };
   const request = requestText || createExecutionAuxiliaryRequester({ llm, getConfig });
   const pending = new Map(), active = new Map(), lastStarted = new Map(), tasks = new Set();
-  let timer, retryTimer, retryDelay = 250, closed = false, lastGlobalStarted = -Infinity, cursor = store.executionSummaryCursor?.() ?? 0, liveAfter = Infinity, draining, unsubscribe;
+  let timer, retryTimer, retryDelay = 250, closed = false, lastGlobalStarted = -Infinity, cursor = store.executionSummaryCursor(), liveAfter = Infinity, draining, unsubscribe;
   const error = cause => { try { onError(cause); } catch {} };
   const safeNotify = ticketId => { try { onChange(ticketId); } catch (cause) { error(cause); } };
   const audit = record => store.recordAuxiliaryActivity({ kind: 'summary', ...record });
@@ -53,7 +53,7 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
     const phase = `${ticket.status || 'unknown'}:${controlPhase}:${['user', 'approval', 'background-job', 'long-operation'].includes(waitKind) ? waitKind : 'none'}`;
     const previous = store.executionSummary(ticketId);
     if (!lastStarted.has(ticketId)) {
-      const last = store.latestAuxiliaryActivity?.({ kind: 'summary', ticketId, runId, instructionRevision });
+      const last = store.latestAuxiliaryActivity({ kind: 'summary', ticketId, runId, instructionRevision });
       if (Number.isFinite(last?.startedAt)) lastStarted.set(ticketId, last.startedAt);
     }
     const progressReports = model ? await readExecutionProgressReports({ sessionQuery, facts, ticketId, runId, instructionRevision, signal }) : [];
@@ -80,7 +80,7 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
     if (!current || closed) return;
     observeLatest(current);
     if (!model) return current;
-    store.markExecutionSummaryPending?.(ticketId, current.watermark);
+    store.markExecutionSummaryPending(ticketId, current.watermark);
     const old = pending.get(ticketId), at = now(), eventCount = (old?.eventCount || 0) + 1;
     const firstAt = old?.firstAt ?? at;
     pending.set(ticketId, { ...current, automatic: old?.automatic === false ? false : automatic, firstAt, eventCount,
@@ -102,7 +102,7 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
       if (row.automatic && (!row.input.progressReports.length || previous?.phase === row.phase
         && previous.reportRefs?.length === row.input.progressReports.length
         && row.input.progressReports.every((report, index) => previous.reportRefs[index] === report.evidenceRef))) {
-        store.clearExecutionSummaryPending?.(row.ticketId, row.watermark); return;
+        store.clearExecutionSummaryPending(row.ticketId, row.watermark); return;
       }
       inputCharacters = JSON.stringify(row.input).length;
       audit({ ...b, status: 'started', startedAt, inputCharacters });
@@ -167,7 +167,7 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
         const next = page.cursor ?? page.nextCursor ?? entries.at(-1)?.seq ?? through;
         if (next <= cursor && cursor < through) throw Object.assign(new Error('Execution summary cursor did not advance'), { code: 'SUMMARY_CURSOR_STALLED' });
         cursor = next;
-        store.advanceExecutionSummaryCursor?.(cursor);
+        store.advanceExecutionSummaryCursor(cursor);
       } while (!closed && cursor < through);
     })().catch(cause => { failed = true; error(cause); }).finally(() => { draining = undefined; });
     await draining;
@@ -193,7 +193,7 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
     unsubscribe = executionFacts.subscribe(() => { void drain(); });
     // Pending requests from a previous process are not fresh user demand.
     // Refresh their visible state without replaying model calls.
-    for (const row of store.pendingExecutionSummaries?.() || []) await observe(row.ticketId);
+    for (const row of store.pendingExecutionSummaries()) await observe(row.ticketId);
     await drain();
   }).catch(error);
   return { ready, observe, request: ticketId => observe(ticketId, { model: true }), config: options, current: ticketId => store.executionSummary(ticketId),

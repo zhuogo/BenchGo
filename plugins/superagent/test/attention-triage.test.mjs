@@ -82,31 +82,27 @@ test('Attention Router requests excerpt IDs and resolves them in one request wit
     ] }) };
     yield { type: 'finish', reason: { kind: 'stop' } };
   } };
-  const result = await triageWorkerQuestions({ llm, database: { ticketGoalBudget: () => false }, ticket: { id: 't', mandate: { instruction } }, questions, policy });
+  const result = await triageWorkerQuestions({ llm, ticket: { id: 't', mandate: { instruction } }, questions, policy });
   assert.equal(calls, 1);
   assert.equal(result[0].answer.custom, '使用简体中文。');
   assert.equal(result[1].route, 'user');
 });
 
-test('Attention uses a single budgeted Router request and times out a stalled adapter without retry', async () => {
-  const calls = [], charged = [];
-  const database = { ticketGoalBudget: () => true, reserveGoalRequest: input => { charged.push(input); return { allowed: true }; }, recordGoalRequestUsage() {} };
+test('Attention uses a single Router request and times out a stalled adapter without retry', async () => {
+  const calls = [];
   const llm = { async *stream(options) { calls.push(options); yield { type: 'text-delta', text: JSON.stringify({ decisions }) }; yield { type: 'finish', reason: { kind: 'stop' } }; } };
-  const result = await triageWorkerQuestions({ llm, database, ticket: { id: 't', mandate: { instruction } }, questions, policy });
+  const result = await triageWorkerQuestions({ llm, ticket: { id: 't', mandate: { instruction } }, questions, policy });
   assert.deepEqual(result.map(row => row.route), ['self', 'default']);
-  assert.equal(calls.length, 1); assert.equal(charged.length, 1);
+  assert.equal(calls.length, 1);
   assert.equal(calls[0].model, 'Opaque Router/1'); assert.deepEqual(calls[0].tools, []); assert.equal(calls[0].sessionId, undefined);
   let attempts = 0;
   const stalled = { async *stream() { attempts++; await new Promise(() => {}); } };
-  const timed = await triageWorkerQuestions({ llm: stalled, database, ticket: { id: 't', mandate: { instruction } }, questions, policy, timeoutMs: 10 });
+  const timed = await triageWorkerQuestions({ llm: stalled, ticket: { id: 't', mandate: { instruction } }, questions, policy, timeoutMs: 10 });
   assert.equal(attempts, 1); assert.ok(timed.every(row => row.route === 'user' && row.systemState === 'timeout'));
 });
 
 for (const kind of ['error', 'blocked', 'aborted', 'max-tokens', 'tool-calls']) test(`Attention stops at terminal ${kind} without waiting for a stalled stream tail`, async () => {
   let attempts = 0, pulledAfterFinish = false, closed = false, requestSignal;
-  const charged = [], settled = [];
-  const database = { ticketGoalBudget: () => true, reserveGoalRequest: input => { charged.push(input); },
-    recordGoalRequestUsage: input => settled.push(input) };
   const llm = { async *stream({ signal }) {
     attempts++; requestSignal = signal;
     try {
@@ -116,15 +112,14 @@ for (const kind of ['error', 'blocked', 'aborted', 'max-tokens', 'tool-calls']) 
       await new Promise(() => {});
     } finally { closed = true; }
   } };
-  const result = await triageWorkerQuestions({ llm, database, ticket: { id: 't', mandate: { instruction } }, questions, policy, timeoutMs: 30 });
+  const result = await triageWorkerQuestions({ llm, ticket: { id: 't', mandate: { instruction } }, questions, policy, timeoutMs: 30 });
   assert.ok(result.every(row => row.route === 'user' && row.systemState === 'triage-unavailable'));
-  assert.equal(attempts, 1); assert.equal(charged.length, 1);
+  assert.equal(attempts, 1);
   assert.equal(pulledAfterFinish, false, 'a terminal failure must not request another stream chunk');
   assert.equal(requestSignal.aborted, true, 'finished triage cancels the underlying request');
-  // Closing the accounting wrapper runs on the cleanup microtask.
+  // Closing the provider stream runs on the cleanup microtask.
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(closed, true);
-  assert.deepEqual(settled.map(row => row.tokens), [7]);
 });
 
 test('Attention stores host resolutions separately and assembles mixed batches without forged human triggers', t => {
@@ -167,7 +162,7 @@ for (const channel of ['desktop', 'feishu']) test(`failed Attention triage keeps
   const question = { id: 'format', question: '交付用列表还是短句？', detail: '请按阅读习惯选择。',
     options: [{ label: '列表', description: '逐项阅读' }, { label: '短句' }] };
   const llm = { async *stream() { yield { type: 'finish', reason: { kind: 'error' } }; } };
-  const decisions = await triageWorkerQuestions({ llm, database, ticket, questions: [question], policy });
+  const decisions = await triageWorkerQuestions({ llm, ticket, questions: [question], policy });
   assert.deepEqual(decisions, [{ questionId: question.id, route: 'user', basis: 'Router 自动核对未完成，需用户补充', systemState: 'triage-unavailable' }]);
   const batch = { ...ownership, sessionId: run.sessionId, callId: 'failed-triage', questions: [question] };
   database.saveAttentionResolutions(assignment.id, { ...batch, decisions });

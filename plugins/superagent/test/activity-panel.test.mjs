@@ -7,13 +7,13 @@ test('task phases exclude old requirements and match delivery to the current res
   assert.equal(task(row, 'ticket').status, 'running');
   assert.equal(task(row, 'ticket').detail, undefined);
   assert.equal(task(row, 'ticket').phase, '执行阶段 · 执行中');
-  row.results.push({ instructionRevision: 2, version: 2, summary: 'current', selfCheck: { summary: 'checked' } });
+  row.results.push({ instructionRevision: 2, version: 2, summary: 'current' });
   row.deliveries.push({ state: 'sent', payload: { result: { instructionRevision: 2, version: 2 } } });
   assert.equal(task(row, 'ticket').phase, '结果已交付');
 });
 test('completed tasks show the automatic report and only its current delivery state', () => {
   const row = { id: 't', status: 'completed', instructionRevision: 2,
-    results: [{ instructionRevision: 2, version: 3, summary: '原文', selfCheck: { summary: 'checked' }, delivery: { action: 'deliver', text: '正式完成报告' } }],
+    results: [{ instructionRevision: 2, version: 3, summary: '原文', delivery: { action: 'deliver', text: '正式完成报告' } }],
     deliveries: [{ state: 'sent', payload: { type: 'ticket.result', instructionRevision: 1, resultVersion: 3 } }, { state: 'sent', payload: { type: 'ticket.result', instructionRevision: 2, resultVersion: 2 } }],
   };
   assert.equal(task(row, 'ticket').status, 'completed');

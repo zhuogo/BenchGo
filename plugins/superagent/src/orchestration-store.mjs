@@ -1,5 +1,4 @@
 import { assertTicketStatus, ticketExecutionBlocked, ticketStopped, ticketPaused, executionStatusText } from './ticket-lifecycle.mjs';
-import { migrateTicketStates } from './ticket-state-migration.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { ticketArchiveSql, ticketExecutionExitedSql, ticketIsArchived, ticketPresentationKey } from './ticket-archive.mjs';
 import { initializeTicketCleanup } from './task-cleanup-store.mjs';
@@ -8,14 +7,12 @@ import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { installAttentionStore } from './attention-store.mjs';
 import { installDesktopTicketStore } from './desktop-ticket-store.mjs';
-import { installGoalBudgetStore } from './goal-budget-store.mjs';
 import { installEvalDispositionStore } from './eval-disposition-store.mjs';
 import { installTicketRevisions } from './ticket-revisions.mjs';
 import { installRouterActionStore } from './router-action-store.mjs';
 import { installDirectReplyStore } from './direct-reply-store.mjs';
 import { enqueueTicketAck } from './ticket-ack.mjs';
 import { systemStateDelivery } from './result-delivery.mjs';
-import { retireContentReview } from './retire-content-review.mjs';
 import { installLearningSourceStore } from './learning-source-store.mjs';
 import { installWorkerExecutionStore } from './worker-execution-store.mjs';
 import { installInterruptedContinuationStore } from './interrupted-continuation-store.mjs';
@@ -25,7 +22,6 @@ import { installExecutionFactsStore } from './execution-facts-store.mjs';
 import { installExecutionSummaryStore } from './execution-summary-store.mjs';
 import { redactExecutionText } from './execution-summary-input.mjs';
 import { hasSavedCompletion } from './execution-uncertainty.mjs';
-import { migrateLegacyExecutionRelease } from './legacy-execution-release.mjs';
 
 const json = value => JSON.stringify(value);
 const parse = value => JSON.parse(value);
@@ -54,7 +50,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     CREATE TABLE IF NOT EXISTS sa_triggers(
       seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, dedupe_key TEXT NOT NULL UNIQUE,
       thread_id TEXT NOT NULL REFERENCES sa_threads(id), source TEXT NOT NULL, actor TEXT NOT NULL, content TEXT NOT NULL,
-      content_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+      content_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+      subscription_eligible INTEGER NOT NULL DEFAULT 0, intake_stage TEXT NOT NULL DEFAULT 'admitted');
     CREATE INDEX IF NOT EXISTS sa_triggers_thread_seq ON sa_triggers(thread_id,seq);
     CREATE INDEX IF NOT EXISTS sa_triggers_feishu_context ON sa_triggers(json_extract(source,'$.channel'),json_extract(source,'$.appId'),json_extract(source,'$.chatId'),seq);
     CREATE TABLE IF NOT EXISTS sa_trigger_admissions(trigger_id TEXT PRIMARY KEY REFERENCES sa_triggers(id), policy_version TEXT, gate TEXT NOT NULL);
@@ -76,7 +73,9 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     CREATE TABLE IF NOT EXISTS sa_tickets(
       id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES sa_threads(id), target TEXT NOT NULL, status TEXT NOT NULL,
       mandate TEXT NOT NULL, created_by_decision TEXT REFERENCES sa_decisions(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-      result_version INTEGER NOT NULL DEFAULT 0);
+      result_version INTEGER NOT NULL DEFAULT 0, pause_reason TEXT, continuation_wait TEXT, title TEXT NOT NULL DEFAULT '',
+      instruction_revision INTEGER NOT NULL DEFAULT 1, adjustment_of_ticket_id TEXT REFERENCES sa_tickets(id),
+      acceptance TEXT NOT NULL DEFAULT '', execution_control TEXT NOT NULL DEFAULT '{}');
     CREATE TABLE IF NOT EXISTS sa_ticket_triggers(
       ticket_id TEXT NOT NULL REFERENCES sa_tickets(id), trigger_id TEXT NOT NULL REFERENCES sa_triggers(id),
       PRIMARY KEY(ticket_id,trigger_id));
@@ -117,33 +116,13 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     CREATE TABLE IF NOT EXISTS sa_subscription_applied(
       trigger_id TEXT PRIMARY KEY REFERENCES sa_triggers(id), assignment_id TEXT NOT NULL REFERENCES sa_assignments(id),
       session_id TEXT NOT NULL, message_id TEXT NOT NULL, applied_at TEXT NOT NULL);`);
-  // Additive migration preserves existing Tickets and their original work version.
-  const triggerColumns = new Set(db.prepare('PRAGMA table_info(sa_triggers)').all().map(row => row.name));
-  if (!triggerColumns.has('subscription_eligible')) db.exec('ALTER TABLE sa_triggers ADD COLUMN subscription_eligible INTEGER NOT NULL DEFAULT 0');
-  if (!triggerColumns.has('intake_stage')) db.exec("ALTER TABLE sa_triggers ADD COLUMN intake_stage TEXT NOT NULL DEFAULT 'admitted'");
-  const ticketColumns = new Set(db.prepare('PRAGMA table_info(sa_tickets)').all().map(row => row.name));
-  if (!ticketColumns.has('pause_reason')) db.exec('ALTER TABLE sa_tickets ADD COLUMN pause_reason TEXT');
-  // Legacy review state is removed; historical result payloads remain immutable.
-  if (!ticketColumns.has('continuation_wait')) db.exec('ALTER TABLE sa_tickets ADD COLUMN continuation_wait TEXT');
-  if (!ticketColumns.has('title')) db.exec("ALTER TABLE sa_tickets ADD COLUMN title TEXT NOT NULL DEFAULT ''");
-  if (!ticketColumns.has('instruction_revision')) db.exec('ALTER TABLE sa_tickets ADD COLUMN instruction_revision INTEGER NOT NULL DEFAULT 1');
-  if (!ticketColumns.has('adjustment_of_ticket_id')) db.exec('ALTER TABLE sa_tickets ADD COLUMN adjustment_of_ticket_id TEXT REFERENCES sa_tickets(id)');
-  if (!ticketColumns.has('acceptance')) db.exec(`ALTER TABLE sa_tickets ADD COLUMN acceptance TEXT NOT NULL DEFAULT '';
-    UPDATE sa_tickets SET acceptance=json_extract(mandate,'$.acceptance') WHERE json_type(mandate,'$.acceptance')='text';`);
   let closed = false, executionFacts;
   const tx = fn => {
     if (closed) throw new Error('Orchestration store is closed');
     db.exec('BEGIN IMMEDIATE');
     try { const result = fn(); db.exec('COMMIT'); executionFacts?.flushExecutionFactChanges(); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
   };
-  migrateTicketStates({ db, tx });
-  tx(() => migrateLegacyExecutionRelease(db));
-  // Old evidence-only queues must never become fresh executor work after removing
-  // their polling path. Keep their original uncertain Run for explicit acceptance.
-  tx(() => db.exec(`UPDATE sa_assignments SET state=CASE WHEN state='queued' THEN 'uncertain' ELSE state END,
-    payload=json_remove(payload,'$.verificationOnly','$.verificationAttempts','$.verificationAfter','$.verificationInspectionAttempts','$.verificationError','$.verificationCancelled')
-    WHERE json_type(payload,'$.verificationOnly') IS NOT NULL OR json_type(payload,'$.verificationAfter') IS NOT NULL;`));
-  initializeTicketCleanup({ db, transaction: tx });
+  initializeTicketCleanup({ db });
   const executionExited = db.prepare(`SELECT ${ticketExecutionExitedSql()} AS exited FROM sa_tickets WHERE id=?`);
   const ticketMetadata = db.prepare('SELECT value FROM task_meta WHERE key=?');
   const threadRow = threadId => db.prepare('SELECT * FROM sa_threads WHERE id=?').get(threadId);
@@ -219,7 +198,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
 
   function savedResultPending(row) {
     const ticket = api.getTicket(row.ticket_id), payload = parse(row.payload);
-    return !ticketExecutionBlocked(ticket) && !payload.stopRequest && !payload.retiredExecution
+    return !ticketExecutionBlocked(ticket) && !payload.stopRequest
       && (payload.instructionRevision ?? 1) === ticket.instructionRevision
       && api.runs(row.id).some(run => run.fence === row.fence && ['verifying', 'uncertain'].includes(run.state) && hasSavedCompletion(run));
   }
@@ -232,7 +211,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     hasAnsweredAttention: () => !!db.prepare("SELECT 1 FROM sa_assignments a JOIN sa_attentions q ON q.assignment_id=a.id WHERE a.state='waiting' AND q.answer_trigger_id IS NOT NULL LIMIT 1").get(),
     hasPendingResultRecovery: ({ now = Date.now() } = {}) => !!db.prepare(`SELECT 1 FROM sa_assignments a JOIN sa_runs r ON r.assignment_id=a.id AND r.fence=a.fence
       WHERE (a.state!='claimed' OR COALESCE(a.lease_until,0)<=?) AND r.state IN ('uncertain','cancelled','verifying','submitted','running','completed','failed')
-      AND (length(COALESCE(json_extract(r.payload,'$.evidence.summary'),''))>0 OR length(COALESCE(json_extract(r.payload,'$.evidence.finalSummary'),''))>0)
+      AND length(COALESCE(json_extract(r.payload,'$.evidence.summary'),''))>0
       AND COALESCE(json_extract(a.payload,'$.savedResultRecovery.nextAttemptAt'),0)<=?
       AND (json_extract(r.payload,'$.resultSaved') IS NULL OR json_extract(r.payload,'$.resultSaved.completionPending')=1 OR json_extract(r.payload,'$.resultSaved.notificationPending')=1) LIMIT 1`).get(now, now),
     schedulingTickets: ({ limit = 1000 } = {}) => db.prepare(`SELECT t.* FROM sa_tickets t WHERE t.status!='completed' AND t.result_version=0
@@ -397,9 +376,9 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           const triggerOwner = db.prepare('SELECT ticket_id FROM sa_ticket_triggers WHERE trigger_id=? AND ticket_id<>? LIMIT 1').get(candidate.trigger_id, ticketId);
           if (triggerOwner) throw fail('TRIGGER_ALREADY_ASSIGNED', 'Decision cannot reassign another Ticket source Trigger');
           if (input.outcome === 'stop') {
-            api.recordTicketInputInTransaction?.({ ticketId, triggerId: candidate.trigger_id, kind: 'stop', idempotencyKey: `trigger:${candidate.trigger_id}` });
+            api.recordTicketInputInTransaction({ ticketId, triggerId: candidate.trigger_id, kind: 'stop', idempotencyKey: `trigger:${candidate.trigger_id}` });
             cancelTicketInternal(ticketId);
-            api.applyTicketStopInputInTransaction?.(ticketId, candidate.trigger_id);
+            api.applyTicketStopInputInTransaction(ticketId, candidate.trigger_id);
           }
           if (['revise', 'adjustment'].includes(input.outcome)) {
             const original = api.getTicket(ticketId), change = input.change;
@@ -469,10 +448,6 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           db.prepare("UPDATE sa_assignments SET state='queued',payload=?,updated_at=? WHERE id=?").run(json(payload), at, row.id);
         }
         db.prepare("UPDATE sa_tickets SET status='running',execution_control='{}',pause_reason=NULL,updated_at=? WHERE id=?").run(at, ticketId);
-        for (const delivery of db.prepare("SELECT * FROM sa_outbox WHERE ticket_id=? AND state='sent'").all(ticketId)) {
-          const receipt = db.prepare('SELECT payload FROM sa_delivery_receipts WHERE outbox_id=?').get(delivery.id);
-          if (receipt) closeDeliveredTicket(delivery, parse(receipt.payload), Date.now());
-        }
         return api.getTicket(ticketId);
       });
     },
@@ -484,7 +459,6 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (!run || run.state !== 'verifying' || !result.waitingPause || !result.transcript || JSON.stringify(run.evidence) !== JSON.stringify(result)) throw fail('RUN_CONFLICT', 'Pause requires saved execution evidence');
         const stopped = parse(assignment.payload).executionStopped;
         if (stopped?.owner !== owner || stopped?.fence !== fence) throw fail('PAUSE_PENDING', 'Execution cleanup is not confirmed');
-        if (result.waitingExecutionBudget || result.waitingBudget) throw fail('PAUSE_CONFLICT', 'Budget pauses were removed on 2026-11-06');
         const at = timestamp(now);
         db.prepare("UPDATE sa_runs SET state='waiting',updated_at=? WHERE id=?").run(at, run.id);
         db.prepare("UPDATE sa_assignments SET state='paused',owner=NULL,lease_until=NULL,updated_at=? WHERE id=?").run(at, assignmentId);
@@ -597,7 +571,6 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (!row || run.fence !== row.fence) throw fail('FENCING_CONFLICT', 'Original Worker execution is no longer current');
         if (row.state === 'claimed' && row.lease_until > now) throw fail('FENCING_CONFLICT', 'Original Worker still has an active execution owner');
         const ticket = api.getTicket(row.ticket_id), payload = parse(row.payload), evidence = parse(run.payload).evidence;
-        if (payload.retiredExecution) throw fail('FENCING_CONFLICT', 'Original Worker execution has been replaced');
         if (validateMandate(copy(ticket.mandate), { ticketId: ticket.id, assignmentId: row.id }) !== true) throw fail('MANDATE_REVOKED', 'Worker authorization changed');
         if (!evidence?.transcript?.hash || run.state !== 'completed' && evidence.executionEffects?.effectsVerified !== true) throw fail('EXECUTION_EFFECTS_UNKNOWN', 'Original execution requires verified effects before continuation');
         for (const key of ['attentionContinuation', 'pauseContinuation', 'contextContinuation', 'interruptedContinuation', 'executionStopped', 'stopRequest']) delete payload[key];
@@ -630,9 +603,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const rows = db.prepare(`SELECT a.*,t.mandate FROM sa_assignments a JOIN sa_tickets t ON t.id=a.ticket_id WHERE ${filters.join(' AND ')} ORDER BY a.priority DESC,a.created_at,a.id LIMIT ?`).all(...queryArgs, safeLimit(limit, 1, 100));
         const claimed = [];
         for (let row of rows) {
-          api.applyQueuedTicketRevisionInTransaction?.(row.id, { now });
+          api.applyQueuedTicketRevisionInTransaction(row.id, { now });
           row = { ...row, ...db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(row.id) };
-          if (parse(row.payload).retiredExecution) continue;
           const mandate = api.getTicket(row.ticket_id).mandate;
           if ((parse(row.payload).instructionRevision ?? 1) !== api.getTicket(row.ticket_id).instructionRevision || validateMandate(copy(mandate), { ticketId: row.ticket_id, assignmentId: row.id }) !== true) {
             db.prepare("UPDATE sa_assignments SET state='blocked',updated_at=? WHERE id=?").run(timestamp(now), row.id);
@@ -655,8 +627,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
                 && !!api.getWorkerExecutionState(run.id)?.models?.length
               : payload.contextContinuation
               ? ['verifying', 'uncertain', 'completed'].includes(run?.state) && saved?.transcript?.hash && !saved.waitingPause && !saved.waitingAttention
-              : run?.state === 'waiting' && (payload.pauseContinuation ? saved?.waitingPause : saved?.waitingAttention)
-                && (!payload.pauseContinuation || !saved?.waitingExecutionBudget || saved.waitingExecutionBudget.effectsVerified === true);
+              : run?.state === 'waiting' && (payload.pauseContinuation ? saved?.waitingPause : saved?.waitingAttention);
             if (!ready) {
               db.prepare('UPDATE sa_assignments SET state=?,updated_at=? WHERE id=?').run('blocked', timestamp(now), row.id);
               continue;
@@ -865,7 +836,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         db.prepare("UPDATE sa_triggers SET intake_stage='admitted' WHERE id=?").run(triggerId);
         const now = new Date().toISOString();
         db.prepare('INSERT INTO sa_message_ownership VALUES (?,?,?,?,?)').run(triggerId, subscription.id, subscription.ticket_id, trigger.seq, now);
-        api.recordTicketInputInTransaction?.({ ticketId: subscription.ticket_id, triggerId, kind: 'context', idempotencyKey: `trigger:${triggerId}` });
+        api.recordTicketInputInTransaction({ ticketId: subscription.ticket_id, triggerId, kind: 'context', idempotencyKey: `trigger:${triggerId}` });
         db.prepare('UPDATE sa_subscriptions SET cursor_seq=?,updated_at=? WHERE id=?').run(trigger.seq, now, subscription.id);
         db.prepare('INSERT OR IGNORE INTO sa_ticket_triggers VALUES (?,?)').run(subscription.ticket_id, triggerId);
         return { triggerId, ticketId: subscription.ticket_id, subscriptionId: subscription.id, cursor: trigger.seq, deliveredAt: now, duplicate: false, contextOnly: true };
@@ -896,7 +867,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const old = db.prepare('SELECT * FROM sa_subscription_applied WHERE trigger_id=?').get(triggerId);
         if (old && (old.session_id !== sessionId || old.message_id !== messageId)) throw fail('MESSAGE_RECEIPT_CONFLICT', 'Message already has another application receipt');
         db.prepare('INSERT OR IGNORE INTO sa_subscription_applied VALUES (?,?,?,?,?)').run(triggerId, assignmentId, sessionId, messageId, timestamp(now));
-        api.applyTicketInputInTransaction?.(triggerId, { assignmentId, owner, fence, runId: run.id, boundaryId: `message:${messageId}`, sessionId, messageId });
+        api.applyTicketInputInTransaction(triggerId, { assignmentId, owner, fence, runId: run.id, boundaryId: `message:${messageId}`, sessionId, messageId });
         return { triggerId, applied: true, sessionId, messageId };
       });
     },
@@ -984,7 +955,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (resultRevision !== ticket.instructionRevision) diagnostics.push('SUPERSEDED_INSTRUCTION');
         if (assignment && (!current || current.fence !== assignment.fence || (parse(current.payload).instructionRevision ?? 1) !== resultRevision)) diagnostics.push('ASSIGNMENT_CHANGED');
         if ((draft.runId || runId) && (!activeRun || activeRun.fence !== current.fence || draft.sessionId && activeRun.sessionId !== draft.sessionId)) diagnostics.push('RUN_CHANGED');
-        if (api.pendingSubscriptionMessages(ticketId, { limit: 1 }).length || api.pendingTicketInputs?.(ticketId)?.some(row => ['revision', 'authorization'].includes(row.kind))) diagnostics.push('PENDING_INPUT');
+        if (api.pendingSubscriptionMessages(ticketId, { limit: 1 }).length || api.pendingTicketInputs(ticketId).some(row => ['revision', 'authorization'].includes(row.kind))) diagnostics.push('PENDING_INPUT');
         const isCurrent = !diagnostics.some(code => code !== 'IDEMPOTENCY_CONTENT_CHANGED') && (ticket.status !== 'completed' || ticket.resultVersion === duplicate?.version);
         // A completed official turn, not tool/effect/hash diagnostics, proves the
         // execution boundary. Raw text alone never proves successful completion.
@@ -1018,7 +989,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const latestAssignment = current && db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(current.id);
         const latestRun = activeRun && api.runs(activeRun.assignmentId).find(row => row.id === activeRun.id);
         const newInput = api.pendingSubscriptionMessages(ticketId, { limit: 1 }).length > 0
-          || api.pendingTicketInputs?.(ticketId)?.some(row => ['revision', 'authorization'].includes(row.kind));
+          || api.pendingTicketInputs(ticketId).some(row => ['revision', 'authorization'].includes(row.kind));
         const snapshotCurrent = latest && latest.instructionRevision === ticket.instructionRevision && latest.resultVersion === ticket.resultVersion
           && latest.status === ticket.status && json(latest.executionControl) === json(ticket.executionControl)
           && (!current || latestAssignment && latestAssignment.fence === current.fence && latestAssignment.state === current.state);
@@ -1033,8 +1004,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           if (!blocked && !draft.waitingPause && !draft.waitingAttention) {
             nextStatus = pending ? 'running' : completed ? 'completed' : 'waiting';
             continuation = completed || pending ? null : { code: 'EXECUTION_FAILED', sourceResultVersion: version,
-              reason: String(draft.failure?.cause || draft.completion?.kind || '执行未正常完成，已有内容已保存').slice(0, 2000),
-              resumeConditions: draft.failure?.resumeConditions || '请查看原执行记录及实际阻塞后继续' };
+              reason: String(draft.completion?.kind || '执行未正常完成，已有内容已保存').slice(0, 2000),
+              resumeConditions: '请查看原执行记录及实际阻塞后继续' };
           }
           db.prepare('UPDATE sa_tickets SET status=?,result_version=?,continuation_wait=?,updated_at=? WHERE id=?')
             .run(nextStatus, version, continuation ? json(continuation) : null, at, ticketId);
@@ -1047,7 +1018,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
             if (ticket.executionControl?.stopped || ticket.executionControl?.stopRequested)
               db.prepare("UPDATE sa_tickets SET execution_control='{}' WHERE id=?").run(ticketId);
             db.prepare("UPDATE sa_subscriptions SET state='closed',updated_at=? WHERE ticket_id=?").run(at, ticketId);
-            api.recordClosedTicket?.(ticketId, { closedAt: at, inTransaction: true });
+            api.recordClosedTicket(ticketId, { closedAt: at, inTransaction: true });
           }
         }
         if (continueCurrent) {
@@ -1058,7 +1029,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           db.prepare("UPDATE sa_tickets SET status='running',continuation_wait=NULL,updated_at=? WHERE id=?").run(at, ticketId);
         }
         markerOwned = snapshotCurrent && latestAssignment?.fence === assignment?.fence && latestRun?.fence === assignment?.fence
-          && latestRun?.evidence?.summary === draft.summary && latestRun?.evidence?.finalSummary === draft.finalSummary;
+          && latestRun?.evidence?.summary === draft.summary;
         if (markerOwned) {
           const payload = parse(db.prepare('SELECT payload FROM sa_runs WHERE id=?').get(activeRun.id).payload);
           payload.resultSaved = { version, completionPending: pending, notificationPending: lifecycleCurrent && !blocked && !pending && !draft.waitingPause && !draft.waitingAttention };
@@ -1289,7 +1260,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     for (const message of messages) {
       db.prepare("UPDATE sa_triggers SET intake_stage='admitted' WHERE id=?").run(message.id);
       db.prepare('INSERT INTO sa_message_ownership VALUES (?,?,?,?,?)').run(message.id, subscriptionId, subscription.ticket_id, message.seq, now);
-      api.recordTicketInputInTransaction?.({ ticketId: subscription.ticket_id, triggerId: message.id, kind: 'context', idempotencyKey: `trigger:${message.id}` });
+      api.recordTicketInputInTransaction({ ticketId: subscription.ticket_id, triggerId: message.id, kind: 'context', idempotencyKey: `trigger:${message.id}` });
       db.prepare('INSERT INTO sa_ticket_triggers VALUES (?,?)').run(subscription.ticket_id, message.id);
     }
     if (messages.length) db.prepare('UPDATE sa_subscriptions SET cursor_seq=MAX(cursor_seq,?),updated_at=? WHERE id=?').run(messages.at(-1).seq, now, subscriptionId);
@@ -1297,7 +1268,6 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   function parseOutbox(row) { return row && ({ receipt: parse(db.prepare('SELECT payload FROM sa_delivery_receipts WHERE outbox_id=?').get(row.id)?.payload || 'null'), reconciliations: db.prepare('SELECT payload FROM sa_outbox_reconciliations WHERE outbox_id=? ORDER BY seq').all(row.id).map(entry => parse(entry.payload)), id: row.id, uniqueKey: row.unique_key, ticketId: row.ticket_id, payload: parse(row.payload), state: row.state, attempts: row.attempts, nextAt: row.next_at, owner: row.owner, leaseUntil: row.lease_until, sentAt: row.sent_at, lastError: row.last_error, createdAt: row.created_at }); }
 
   Object.assign(api, installAttentionStore({ db, tx, api, ownedAssignment }));
-  Object.assign(api, installGoalBudgetStore({ db, tx }));
   Object.assign(api, installEvalDispositionStore({ db, tx, api }));
   Object.assign(api, installDesktopTicketStore({ db, tx, api, insertTicket }));
   Object.assign(api, installTicketRevisions({ db, tx, api, insertTicket }));
@@ -1307,28 +1277,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   Object.assign(api, installWorkerExecutionStore({ db, tx, api }));
   Object.assign(api, installInterruptedContinuationStore({ db, tx, api }));
   Object.assign(api, installRouterQuestionStore({ db, tx, api }));
-  retireContentReview({ db, tx });
   Object.assign(api, installLearningSourceStore({ db, tx, api }));
-  if (!db.prepare("SELECT 1 FROM sa_migrations WHERE id='execution-delivery-separation-v1'").get()) tx(() => {
-    const at = timestamp(Date.now());
-    for (const row of db.prepare("SELECT t.id FROM sa_tickets t JOIN sa_results r ON r.ticket_id=t.id AND r.version=t.result_version WHERE t.status='waiting' AND json_extract(r.payload,'$.outcome')='completed' AND COALESCE(json_extract(r.payload,'$.instructionRevision'),1)=t.instruction_revision AND t.execution_control='{}' AND NOT EXISTS(SELECT 1 FROM sa_assignments a WHERE a.ticket_id=t.id AND a.state IN ('claimed','uncertain','queued','waiting'))").all()) {
-      db.prepare("UPDATE sa_tickets SET status='completed',continuation_wait=NULL,updated_at=? WHERE id=?").run(at, row.id);
-      db.prepare("UPDATE sa_subscriptions SET state='closed',updated_at=? WHERE ticket_id=?").run(at, row.id);
-      api.recordClosedTicket?.(row.id, { closedAt: at, inTransaction: true });
-    }
-    db.prepare('INSERT INTO sa_migrations VALUES (?,?)').run('execution-delivery-separation-v1', at);
-  });
-  if (!db.prepare("SELECT 1 FROM sa_migrations WHERE id='queued-ticket-running-v1'").get()) tx(() => {
-    const at = timestamp(Date.now());
-    // Repair only mechanically queued work; explicit pauses, unresolved effects,
-    // failed assignments and human questions retain their existing blockers.
-    db.prepare(`UPDATE sa_tickets SET status='running',updated_at=? WHERE status='waiting'
-      AND execution_control='{}' AND continuation_wait IS NULL AND pause_reason IS NULL
-      AND EXISTS(SELECT 1 FROM sa_assignments a WHERE a.ticket_id=sa_tickets.id AND a.state='queued')
-      AND NOT EXISTS(SELECT 1 FROM sa_attentions a WHERE a.ticket_id=sa_tickets.id AND a.instruction_revision=sa_tickets.instruction_revision AND a.answer_trigger_id IS NULL)
-      AND NOT EXISTS(SELECT 1 FROM sa_assignments a WHERE a.ticket_id=sa_tickets.id AND a.state IN ('blocked','failed','uncertain','waiting','paused'))`).run(at);
-    db.prepare('INSERT INTO sa_migrations VALUES (?,?)').run('queued-ticket-running-v1', at);
-  });
   executionFacts = installExecutionFactsStore({ db, tx, api });
   Object.assign(api, executionFacts);
   Object.assign(api, installExecutionSummaryStore({ db, tx }));

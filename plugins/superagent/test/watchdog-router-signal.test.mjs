@@ -85,14 +85,3 @@ test('rejected recovery evidence cannot retire the accepted original observation
   const f = fixture(), resolved = watchdogRouterSignal(f.database, { ...f.observation, phase: 'resolved' }, f.principal);
   assert.equal(watchdogNoticeCurrent(f.signal, [{ ticketReply: resolved, suppressed: true }]), true);
 });
-
-test('legacy model observations remain readable but cannot trigger notices', () => {
-  const f = fixture(); f.signal.observation.kind = 'model';
-  assert.equal(f.inspect().reason, 'legacy-model-observation-retired');
-});
-
-test('legacy recovery inspection observations cannot trigger notices', () => {
-  const f = fixture(); f.signal.observation.reasonCode = 'RECOVERY_NOT_CONVERGING';
-  assert.equal(f.inspect().reason, 'legacy-recovery-observation-retired');
-  assert.throws(() => watchdogRouterSignal(f.database, f.signal.observation, f.principal));
-});

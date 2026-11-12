@@ -37,7 +37,8 @@ test('desktop acceptance stays durable and idempotent without a host-authored re
 
 test('failed admission produces neither a Ticket nor an acknowledgement', t => {
   const db = createAssistantOrchestrationStore({ filename: ':memory:' }); t.after(() => db.close());
-  assert.throws(() => db.acceptDesktop({ ...request(db), budgetGoalId: 'missing' }));
+  const input = request(db);
+  assert.throws(() => db.acceptDesktop({ ...input, mandate: { ...input.mandate, instruction: 'rewritten instruction' } }), /可信原始指令/);
   assert.equal(db.listTickets().length, 0);
   assert.equal(db.pendingOutbox().length, 0);
 });
@@ -120,7 +121,7 @@ test('acknowledgement cannot follow a completed, paused, stopped or already save
 
 test('legacy host acknowledgements are suppressed instead of replayed', () => {
   const payload = { type: 'ticket.accepted', ticketId: 'ticket', requestId: 'request', text: 'legacy host text' };
-  assert.equal(deliverySuppression({}, { ticketId: 'ticket', payload }), 'legacy-or-invalid-ack');
+  assert.equal(deliverySuppression({}, { ticketId: 'ticket', payload }), 'invalid-ack');
   assert.equal(notificationPublication(payload), null);
 });
 

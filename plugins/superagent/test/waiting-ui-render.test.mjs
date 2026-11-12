@@ -33,7 +33,7 @@ async function fixture() {
         const control=window.control={state,fail:false};
         const ticket={id:'original',title:'核验工作结果',target:'核验工作结果',status:'waiting',instructionRevision:2,resultVersion:3,
           mandate:{source:{channel:'desktop'}}, createdAt:'2026-11-05T10:00:00Z',updatedAt:'2026-11-05T10:02:00Z',
-          results:[{instructionRevision:2,version:3,summary:'原结果正文',outcome:'completed',selfCheck:{summary:'已按要求自检'}}],...overrides};
+          results:[{instructionRevision:2,version:3,summary:'原结果正文',outcome:'completed'}],...overrides};
         const api=async(name,input)=>{
           window.calls.push([name,input]);
           if(control.state==='loading') return new Promise(()=>{});
@@ -171,7 +171,7 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     await page.locator('.ba-task-list').getByText('核验工作结果', { exact: true }).click();
     await detail.waitFor();
     await detail.getByRole('radio', { name: '全部', exact: true }).check();
-    for (const name of ['任务要求', '结果与证据', '执行记录']) {
+    for (const name of ['任务要求', '执行结果', '执行记录']) {
       await detail.getByRole('tab', { name, exact: true }).click();
       assert(await detail.getByLabel('工单等待状态', { exact: true }).isVisible(), 'waiting guidance remains outside detail tabs');
       assert(await detail.getByRole('region', { name: '工单问题', exact: true }).isVisible(), 'the original question remains available in every tab');

@@ -1,5 +1,32 @@
 export const sidebarListStorageKey = 'benchgo.assistant.sidebarList';
 
+// Reuse ICU formatters across rows and session-status updates. Date.toLocale*
+// constructs a new formatter on each call, twice for every rendered thread.
+let threadTimeFormats, threadTimeZone;
+export function createSidebarThreadTimeFormatter(now = new Date()) {
+  // Check the system zone once per sidebar render, never once per row.
+  const timeZone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!threadTimeFormats || timeZone !== threadTimeZone) {
+    threadTimeZone = timeZone;
+    threadTimeFormats = {
+      time: new Intl.DateTimeFormat('zh-CN', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false }),
+      date: new Intl.DateTimeFormat('zh-CN', { timeZone, month: 'numeric', day: 'numeric' }),
+      year: new Intl.DateTimeFormat('zh-CN', { timeZone, month: 'numeric', day: 'numeric', year: 'numeric' }),
+      detail: new Intl.DateTimeFormat('zh-CN', { timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }),
+    };
+  }
+  const formats = threadTimeFormats;
+  return value => {
+    const date = new Date(value), hasDate = !!value && Number.isFinite(date.getTime());
+    if (!hasDate) return { hasDate: false, timeLabel: '—', dateTime: undefined, detail: '' };
+    const format = date.toDateString() === now.toDateString() ? formats.time : date.getFullYear() !== now.getFullYear() ? formats.year : formats.date;
+    return { hasDate: true, timeLabel: format.format(date), dateTime: date.toISOString(), detail: formats.detail.format(date) };
+  };
+}
+export function sidebarThreadTime(value, now) {
+  return createSidebarThreadTimeFormatter(now)(value);
+}
+
 export function readSidebarList(storage) {
   try { return storage?.getItem(sidebarListStorageKey) === 'im' ? 'im' : 'side'; } catch { return 'side'; }
 }

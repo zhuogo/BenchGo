@@ -7,6 +7,7 @@ import { transformSync } from 'esbuild';
 import { createModuleSource, startModuleLifecycle } from '../client/modules.mjs';
 import { readJsonResponse } from '../client/http-response.mjs';
 import { ensureSidebarWorkspace } from '../client/sidebar-state.mjs';
+import { perfTrace } from '../../shared/client/perf-trace.mjs';
 
 const response = enabled => ({ modules: Object.fromEntries(['base', 'harness', 'superagent', 'voice', 'link'].map(name => [name, { available: enabled.includes(name) }])) });
 
@@ -136,6 +137,7 @@ test('the actual client entry defers base UI requests and releases its sidebar p
     } : id.endsWith('sidebar-refresh.mjs') ? {startSidebarPolling: () => {sidebarStarts++; return () => {sidebarStops++;};}}
       : id.endsWith('sidebar-state.mjs') ? {ensureSidebarWorkspace}
       : id.endsWith('http-response.mjs') ? {readJsonResponse}
+      : id.endsWith('perf-trace.mjs') ? {perfTrace}
       : noopExports,
   });
   const fiber = ctx.plugin({inject: ['slots', 'workspaces'], apply: module.exports.apply});

@@ -32,10 +32,10 @@ async function fixture() {
     }}/>;}
     window.renderScenario=(mode='data')=>{
       window.answers=[];window.calls=[];window.retains=[];window.releases=[];window.trace=[];window.reviewCounts=[];window.mode=mode;const listeners=new Set();
-      const controller=new AbortController();
+      const controller=new AbortController();window.reviewListenerCount=()=>listeners.size;
       const frozen={actionId:'action-original',category:'external-send',origin:null,target:{channel:'feishu',chatId:'private-chat'},content:{text:'BENCHGO_APPROVAL_ONCE'}};
       const worker=new PendingApproval('worker-session',{toolName:'assistant_external_action',callId:'call-original',reason:'批准本次具体外部动作（仅本次有效）：\\n'+JSON.stringify(frozen),signal:controller.signal});
-      const router=new PendingApproval('router-side',{toolName:'assistant_ticket_change',callId:'router-call',reason:'扩大任务范围以调查新的站点？'});
+      const router=new PendingApproval('router-side',{toolName:'assistant_settings',callId:'router-call',reason:'关闭审批提示？'});
       const unrelated=new PendingApproval('unrelated-session',{toolName:'other',reason:'不得出现的无来源审批'});unrelated.result.catch(()=>{});
       let statuses=new Map([['worker-session',{pendingInteraction:worker}],['router-side',{pendingInteraction:router}],['unrelated-session',{pendingInteraction:unrelated}],['question-session',{pendingInteraction:{kind:'question',answerable:true,sessionId:'question-session'}}]]);
       const publish=()=>{for(const listener of listeners)listener();};
@@ -115,7 +115,7 @@ test('review Tab renders official Worker and Router approvals in four states; de
     assert(await page.evaluate(() => window.calls.some(call => call.action === 'approvalOrigins' && call.input.sessionId === 'worker-session' && call.input.toolName === 'assistant_external_action')));
     await page.evaluate(() => window.renderScenario('data'));
     await page.getByRole('button', { name: /扩展调研范围 客户研究旁聊/ }).click();
-    await page.getByText('扩大任务范围以调查新的站点？', { exact: true }).waitFor();
+    await page.getByText('关闭审批提示？', { exact: true }).waitFor();
     assert.equal(await page.locator('[data-session-scope="router-side"]').count(), 1);
     await page.getByRole('button', { name: '拒绝', exact: true }).click();
     await page.waitForFunction(() => window.answers.length === 1);
@@ -273,8 +273,9 @@ test('review preserves its list through compact detail navigation and shares one
     await page.evaluate(() => window.setReviewActive(false));
     await page.locator('.ba-approval-review').waitFor({ state: 'hidden' });
     await page.evaluate(() => window.answerElsewhere());
-    await page.waitForFunction(() => window.reviewCounts.at(-1) === 25);
+    await page.waitForFunction(() => window.reviewCounts.at(-1) === null);
     await page.evaluate(() => window.setReviewActive(true));
+    await page.waitForFunction(() => window.reviewCounts.at(-1) === 25);
     await page.getByText('此审核已处理或失效', { exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '允许本次', exact: true }).count(), 0, 'a hidden, settled card cannot revive');
     await page.evaluate(() => window.renderScenario('double'));
@@ -291,4 +292,24 @@ test('review preserves its list through compact detail navigation and shares one
     assert.equal(await page.getByRole('button', { name: '允许本次', exact: true }).count(), 0);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
+});
+
+test('inactive review releases sessions and ignores background activity until reopened', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const browser=await chromium.launch({headless:true,executablePath});
+  try{
+    const page=await browser.newPage({viewport:{width:1440,height:900}});
+    await page.setContent(await fixture());await page.evaluate(()=>window.renderScenario('data'));
+    await page.getByRole('button',{name:/发送飞书验证消息 主聊天/}).waitFor();
+    assert.equal(await page.evaluate(()=>window.retains.length),3);
+    await page.evaluate(()=>window.setReviewActive(false));
+    await page.waitForFunction(()=>window.releases.length===3 && window.reviewListenerCount()===0);
+    const reads=await page.evaluate(()=>window.calls.length);
+    await page.evaluate(()=>{for(let i=0;i<20;i++)document.dispatchEvent(new Event('benchgo:assistant-changed'));});
+    await page.waitForTimeout(250);
+    assert.equal(await page.evaluate(()=>window.calls.length),reads,'hidden review starts no background origin reads');
+    assert.equal(await page.evaluate(()=>window.reviewCounts.at(-1)),null,'a dormant index never reports a stale complete count');
+    await page.evaluate(()=>window.setReviewActive(true));
+    await page.getByRole('button',{name:/发送飞书验证消息 主聊天/}).waitFor();
+    assert.equal(await page.evaluate(()=>window.retains.length),6,'reopening reconnects to current official sessions');
+  }finally{await browser.close();}
 });

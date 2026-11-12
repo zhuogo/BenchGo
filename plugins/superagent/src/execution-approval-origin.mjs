@@ -36,7 +36,7 @@ export function executionApprovalOrigins({ database, ownerScope, ownerSessionId,
         try {
           // Listing candidate sessions never grants a tool. At decision time the
           // actual PendingApproval tool name must pass the live capability gate.
-          applied = toolName === null ? { ...ticket, ...database.appliedTicketSnapshot?.(assignment.id) }
+          applied = toolName === null ? { ...ticket, ...database.appliedTicketSnapshot(assignment.id) }
             : workerAppliedTicket(database, assignment, { name: toolName });
         }
         catch { continue; }

@@ -268,7 +268,7 @@ test('real assistant engine selects image admission models and preserves busy fi
   let model = 'text/opaque';
   const store = { orchestration, paths: { workspace: process.cwd() }, getState: async () => structuredClone(state),
     updateState: async (patch, { revision }) => { assert.equal(revision, state.revision); state = { ...state, ...structuredClone(patch), revision: revision + 1 }; return state; },
-    getConfig: async () => ({ models: [{ providerId: 'native/test', modelId: model }] }), getProfile: async () => ({}), listMemories: async () => [],
+    getConfig: async () => ({ models: [{ providerId: 'native/test', modelId: model }] }), memory: { forgottenRevision: () => 0, redactForgottenContext: value => value }, ledger: { append: () => ({}) }, getSessionContext: async () => ({ documents: [], memories: [] }),
   };
   engine = await createAssistantEngine({ ctx, store, compactionPlugin: Compaction, appendChatRecord: modules[0].appendPluginRecord });
   const agent = await engine.ensureSession();

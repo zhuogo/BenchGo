@@ -61,7 +61,7 @@ export function createAuxiliaryOperations({ ctx, store, artifacts, shutdown = ne
         messages: [{ role: 'system', content: [{ type: 'text', text: instructions }] }, { role: 'user', content }] },
     });
     const id = `auxiliary:${randomUUID()}`;
-    store.ledger?.append({ id, sourceKey: id, kind: 'auxiliary-request', content: capability === 'vision' ? '辅助看图' : '辅助总结', metadata: { threadId, source, ...result.routing } });
+    store.ledger.append({ id, sourceKey: id, kind: 'auxiliary-request', content: capability === 'vision' ? '辅助看图' : '辅助总结', metadata: { threadId, source, ...result.routing } });
     return { ...result, source, referenceId: id };
   }
   return { summarize: input => execute('summary', input), analyzeImage: input => execute('vision', input) };

@@ -4,7 +4,7 @@ export const stopConfirmationNoticeMs = 30_000;
 
 export function hasSavedCompletion(run) {
   const evidence = run?.evidence;
-  return !!(evidence?.summary || evidence?.finalSummary) && (!evidence.completion || evidence.completion.kind === 'completed')
+  return !!evidence?.summary && (!evidence.completion || evidence.completion.kind === 'completed')
     && !evidence.interrupted && !evidence.waitingPause && !evidence.waitingAttention;
 }
 

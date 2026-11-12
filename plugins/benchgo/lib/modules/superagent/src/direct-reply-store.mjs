@@ -27,18 +27,6 @@ export function installDirectReplyStore({ db, tx }) {
       id INTEGER PRIMARY KEY, reply_id TEXT NOT NULL REFERENCES sa_direct_replies(id), attempts INTEGER NOT NULL,
       outcome TEXT NOT NULL, evidence TEXT NOT NULL, receipt TEXT, created_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS sa_direct_reply_reconciliation_reply ON sa_direct_reply_reconciliations(reply_id,id);`);
-  // Owner-authored replies have a real local Trigger, but never a fabricated Eval candidate.
-  if (db.prepare('PRAGMA table_info(sa_direct_replies)').all().find(column => column.name === 'candidate_id')?.notnull) {
-    const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='sa_direct_replies'").get().sql;
-    db.exec('PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE');
-    try {
-      db.exec(schema.replace(/CREATE TABLE(?: IF NOT EXISTS)? sa_direct_replies/u, 'CREATE TABLE sa_direct_replies_migration').replace('candidate_id TEXT NOT NULL UNIQUE', 'candidate_id TEXT UNIQUE'));
-      db.exec('INSERT INTO sa_direct_replies_migration SELECT * FROM sa_direct_replies; DROP TABLE sa_direct_replies; ALTER TABLE sa_direct_replies_migration RENAME TO sa_direct_replies; CREATE INDEX sa_direct_replies_ready ON sa_direct_replies(state,next_at,created_at)');
-      if (db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Direct reply migration violates existing references');
-      db.exec('COMMIT');
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
-    finally { db.exec('PRAGMA foreign_keys=ON'); }
-  }
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS sa_direct_reply_owner_trigger ON sa_direct_replies(trigger_id) WHERE kind='owner'");
   const get = id => db.prepare('SELECT * FROM sa_direct_replies WHERE id=?').get(id);
   const value = row => row && ({ id: row.id, candidateId: row.candidate_id, triggerId: row.trigger_id,

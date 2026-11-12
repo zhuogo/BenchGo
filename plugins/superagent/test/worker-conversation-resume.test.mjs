@@ -85,8 +85,6 @@ test('two completed official Workers accept concurrent native prompts without cr
           await release.promise;
           answer = `Continued ${agent.id}`;
         }
-        const checked = await ctx.tools.execute({ agent, signal: new AbortController().signal, calls: [{ type: 'tool-call', id: `check-${requests.length}`, name: 'assistant_task_result', arguments: JSON.stringify({ selfCheck: { summary: 'Verified independent result', checks: ['Original session identity'] }, outcome: 'completed' }) }] });
-        assert.equal(checked.results[0].result.isError, false);
       }
       yield { type: 'block-start', index: 0, blockType: 'text' };
       yield { type: 'text-delta', index: 0, text: answer };

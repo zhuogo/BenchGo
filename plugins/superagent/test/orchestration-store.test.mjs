@@ -28,27 +28,6 @@ test('new and queued Tickets are in progress without pretending to need a user d
   assert.equal(db.resumeTicket(ticket.id).status, 'running');
 });
 
-test('upgrading old queued Tickets preserves real blockers and explicit pause', async t => {
-  const db = await fixture(t);
-  db.createThread({ id: 'legacy-queue', source: { type: 'desktop', id: 'owner' } });
-  for (const id of ['queued', 'paused', 'blocked']) {
-    db.createTicket({ id, threadId: 'legacy-queue', target: id, mandate: {} });
-    db.createAssignment(id, { id: `${id}-work` });
-  }
-  db.pauseTicket('paused');
-  const raw = new DatabaseSync(db.path);
-  raw.prepare("UPDATE sa_tickets SET status='waiting'").run();
-  raw.prepare("UPDATE sa_assignments SET state='blocked' WHERE id='blocked-work'").run();
-  raw.prepare("DELETE FROM sa_migrations WHERE id='queued-ticket-running-v1'").run();
-  raw.close();
-  const reopened = createAssistantOrchestrationStore({ filename: db.path });
-  try {
-    assert.equal(reopened.getTicket('queued').status, 'running');
-    assert.equal(reopened.getTicket('paused').status, 'waiting');
-    assert.equal(reopened.getTicket('blocked').status, 'waiting');
-  } finally { reopened.close(); }
-});
-
 test('known execution failure preserves its first cause and terminates its original run', async t => {
   const db = await fixture(t);
   db.createThread({ id: 'failure-thread', source: { type: 'desktop', id: 'owner' } });
@@ -214,36 +193,6 @@ test('requirement edits fence stale results while preserving leases and queued A
   assert.equal(db.commitResult(ticket.id, { assignment: queued, result: { summary: 'new requirement met', completion: { kind: 'completed' } }, uniqueKey: 'new', now: 6 }).duplicate, true);
 });
 
-test('existing database migrates Ticket requirements without rewriting legacy Assignments', async t => {
-  const db = await fixture(t);
-  db.ingest({ ...input('migration'), mode: 'direct' });
-  const ticket = db.createTicket({ threadId: 'thread', target: 'preserved', mandate: { acceptance: 'preserved acceptance' } });
-  assert.equal(ticket.acceptance, 'preserved acceptance');
-  db.createAssignment(ticket.id, { id: 'legacy' });
-  const filename = db.path;
-  db.close();
-  const old = new DatabaseSync(filename);
-  // This schema predates the execution-fact journal and its column-bound triggers.
-  for (const { name } of old.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name GLOB 'sa_execution_fact_*'").all())
-    old.exec(`DROP TRIGGER "${name.replaceAll('"', '""')}"`);
-  old.exec('DROP TABLE sa_execution_facts; DROP TABLE sa_execution_projection');
-  old.exec('ALTER TABLE sa_tickets DROP COLUMN instruction_revision; ALTER TABLE sa_tickets DROP COLUMN acceptance');
-  old.prepare('UPDATE sa_assignments SET payload=? WHERE id=?').run('{}', 'legacy');
-  old.close();
-  const reopened = createAssistantOrchestrationStore({ filename });
-  try {
-    assert.equal(reopened.getTicket(ticket.id).target, 'preserved');
-    assert.equal(reopened.getTicket(ticket.id).instructionRevision, 1);
-    assert.equal(reopened.getTicket(ticket.id).acceptance, 'preserved acceptance');
-    const migrated = new DatabaseSync(filename);
-    try { assert.equal(migrated.prepare('SELECT payload FROM sa_assignments WHERE id=?').get('legacy').payload, '{}'); }
-    finally { migrated.close(); }
-    const [assignment] = reopened.claimAssignments('worker', { validateMandate: () => true, now: 0 });
-    reopened.commitResult(ticket.id, { assignment, result: { summary: 'legacy complete', completion: { kind: 'completed' } }, uniqueKey: 'legacy-result', now: 1 });
-    assert.equal(reopened.getTicket(ticket.id).status, 'completed');
-  } finally { reopened.close(); }
-});
-
 async function savedUncertainResult(t, { stopped = false } = {}) {
   const db = await fixture(t);
   db.ingest({ ...input('recovery'), mode: 'direct' });
@@ -291,24 +240,6 @@ test('recovered drafts retain their content without crossing newer execution or 
   db.acceptRecoveredResult(ticket.id, { ...options, assignment });
   assert.equal(db.results(ticket.id).length, 1);
   assert.equal(db.getTicket(ticket.id).status, 'waiting');
-});
-
-test('legacy evidence-only queued work becomes uncertain on reopen instead of executing again', async t => {
-  const { db, ticket, assignment, run, evidence } = await savedUncertainResult(t);
-  const raw = new DatabaseSync(db.path);
-  raw.prepare("UPDATE sa_assignments SET state='queued',payload=json_set(payload,'$.verificationOnly',json(?),'$.verificationAfter',999) WHERE id=?")
-    .run(JSON.stringify({ runId: run.id }), assignment.id);
-  raw.close();
-  const reopened = createAssistantOrchestrationStore({ filename: db.path });
-  try {
-    assert.equal(reopened.getAssignment(assignment.id).state, 'uncertain');
-    assert.equal(reopened.getAssignment(assignment.id).verificationOnly, undefined);
-    assert.equal(reopened.claimAssignments('must-not-replay', { validateMandate: () => true }).length, 0);
-    assert.equal(reopened.runs(assignment.id).length, 1);
-    reopened.acceptRecoveredResult(ticket.id, { assignment, runId: run.id, result: evidence,
-      uniqueKey: 'legacy-recovered', validateMandate: () => true });
-    assert.equal(reopened.getTicket(ticket.id).status, 'completed');
-  } finally { reopened.close(); }
 });
 
 test('execution identity persists before submission and expired runs cannot be replayed', async t => {
@@ -524,41 +455,4 @@ test('subscribed handback preserves its original machine gate across reopen and 
     assert.equal(handback.gate.strength, 'inferred');
     assert.equal(handback.gate.originalReason, 'machine-list');
   } finally { reopened.close(); }
-});
-
-test('goal usage never blocks resume and budget pause reasons are rejected', async t => {
-  const db = await fixture(t);
-  db.ingest({ ...input('usage-pause'), mode: 'direct' });
-  const ticket = db.createTicket({ threadId: 'thread', target: 'usage work', mandate: {} });
-  db.createAssignment(ticket.id, { id: 'usage-work' });
-  db.ensureGoalBudget({ goalId: 'parent' });
-  db.ensureGoalBudget({ goalId: 'child', parentGoalId: 'parent' });
-  db.bindTicketGoal({ ticketId: ticket.id, goalId: 'child' });
-  for (let index = 0; index < 5; index++) assert.equal(db.reserveGoalRequest({ ticketId: ticket.id, requestId: `r-${index}` }).allowed, true);
-  for (const kind of ['budget', 'execution-budget']) assert.throws(() => db.pauseTicket(ticket.id, { reason: { kind, goalId: 'parent', reason: 'requests' } }), { code: 'INVALID_PAUSE_REASON' });
-  assert.deepEqual(db.pauseTicket(ticket.id).pauseReason, { kind: 'manual' });
-  const reopened = createAssistantOrchestrationStore({ filename: db.path });
-  try {
-    assert.deepEqual(reopened.getTicket(ticket.id).pauseReason, { kind: 'manual' });
-    assert.equal(reopened.goalBudget('parent').usage.requests, 5);
-    assert.equal(reopened.resumeTicket(ticket.id).pauseReason, null);
-    assert.equal(reopened.getTicket(ticket.id).status, 'running');
-  } finally { reopened.close(); }
-});
-
-test('new pause evidence cannot carry a removed budget ending', async t => {
-  const db = await fixture(t);
-  db.createThread({ id: 'pause-thread', source: { type: 'desktop', id: 'owner' } });
-  const ticket = db.createTicket({ threadId: 'pause-thread', target: 'work', mandate: { source: { channel: 'desktop', sessionId: 'owner' } } });
-  db.createAssignment(ticket.id, { id: 'pause-work' });
-  const [assignment] = db.claimAssignments('owner', { validateMandate: () => true });
-  const ownership = { owner: assignment.owner, fence: assignment.fence };
-  const run = db.prepareRun(assignment.id, { ...ownership, sessionId: 'session', directory: 'directory' });
-  db.updateRun(run.id, { ...ownership, state: 'submitted' });
-  db.pauseTicket(ticket.id);
-  const result = { runId: run.id, sessionId: run.sessionId, waitingPause: true, checkpoint: { manifestHash: 'saved' }, transcript: { hash: 'saved', lastSeq: 8 },
-    waitingExecutionBudget: { kind: 'execution-time', effectsVerified: true, terminal: { kind: 'aborted', reason: { kind: 'hook', reason: 'benchgo-execution-budget-exhausted' } } } };
-  db.updateRun(run.id, { ...ownership, state: 'verifying', evidence: result });
-  db.confirmExecutionStopped(assignment.id, ownership);
-  assert.throws(() => db.parkPause(assignment.id, { ...ownership, result }), { code: 'PAUSE_CONFLICT' });
 });

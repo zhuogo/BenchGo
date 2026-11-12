@@ -16,7 +16,7 @@ async function fixture(t) {
   const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
   const run = db.prepareRun(assignment.id, { ...assignment, sessionId: 'session', directory: '/task' });
   db.updateRun(run.id, { ...assignment, state: 'submitted' });
-  const result = { summary: 'Original draft', finalSummary: 'Original final', runId: run.id, sessionId: run.sessionId,
+  const result = { summary: 'Original draft', runId: run.id, sessionId: run.sessionId,
     instructionRevision: 1, completion: { kind: 'completed' }, executionEffects: { effectsVerified: false, unknownCallIds: ['unresolved-read'] } };
   db.saveWorkerDraft(assignment.id, { runId: run.id, ...assignment, result });
   db.updateRun(run.id, { ...assignment, state: 'verifying', evidence: result });
@@ -26,11 +26,11 @@ async function fixture(t) {
   return { db, raw, ticket, assignment, run, result, commit };
 }
 
-test('normal results complete without optional self-check, hashes, or effect approval', async t => {
+test('normal results complete without hashes or effect approval', async t => {
   const f = await fixture(t);
   f.commit();
   assert.equal(f.db.getTicket(f.ticket.id).status, 'completed');
-  assert.equal(f.db.results(f.ticket.id)[0].finalSummary, f.result.finalSummary);
+  assert.equal(f.db.results(f.ticket.id)[0].summary, f.result.summary);
   assert.deepEqual(f.db.results(f.ticket.id)[0].executionEffects, f.result.executionEffects);
   assert.equal(f.db.deliveries(f.ticket.id).length, 1);
 });
@@ -135,24 +135,4 @@ test('a state change between raw retention and finalization cannot overwrite a n
   assert.equal(f.db.getTicket(f.ticket.id).status, 'waiting');
   assert.equal(f.db.getTicket(f.ticket.id).resultVersion, 0);
   assert.equal(f.db.deliveries(f.ticket.id).length, 0);
-});
-
-test('historical verification fences migrate only an exact original executor release', async t => {
-  for (const valid of [true, false]) await t.test(String(valid), async t => {
-    const f = await fixture(t);
-    f.db.confirmExecutionStopped(f.assignment.id, f.assignment);
-    const assignment = JSON.parse(f.raw.prepare('SELECT payload FROM sa_assignments WHERE id=?').get(f.assignment.id).payload);
-    assignment.lastFailure = { stage: 'result', code: 'EXECUTION_EFFECTS_UNKNOWN' };
-    assignment.stopRequest = { owner: f.assignment.owner, fence: 4, at: new Date().toISOString() };
-    if (!valid) assignment.executionStopped.owner = 'different-executor';
-    f.raw.prepare("UPDATE sa_assignments SET fence=4,state='uncertain',owner=NULL,lease_until=NULL,payload=? WHERE id=?").run(JSON.stringify(assignment), f.assignment.id);
-    f.raw.prepare("UPDATE sa_runs SET fence=4,state='uncertain',payload=json_set(payload,'$.executionFence',1,'$.executionOwner',?) WHERE id=?").run(f.assignment.owner, f.run.id);
-    f.raw.prepare("UPDATE sa_tickets SET status='waiting',execution_control=? WHERE id=?").run(JSON.stringify({ stopRequested: true, stopped: false }), f.ticket.id);
-    const reopened = createAssistantOrchestrationStore({ filename: f.db.path });
-    try {
-      assert.equal(reopened.getTicket(f.ticket.id).executionControl.stopped, valid);
-      assert.equal(reopened.getAssignment(f.assignment.id).executionStopped.fence, valid ? 4 : 1);
-      assert.equal(reopened.getTicket(f.ticket.id).executionExited, valid);
-    } finally { reopened.close(); }
-  });
 });

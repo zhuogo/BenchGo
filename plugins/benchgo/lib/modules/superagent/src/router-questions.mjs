@@ -8,8 +8,7 @@ export function installRouterQuestions(scope, agent, { database, threadId = 'mai
   const sourceMatches = ticket => ticket?.mandate.source?.channel === 'desktop'
     && (ticket.mandate.source.threadId || 'main') === threadId;
   function apply(callId, answers, requestId) {
-    if (!database) return [];
-    const binding = database.routerQuestionBinding?.(agent.id, callId);
+    const binding = database.routerQuestionBinding(agent.id, callId);
     if (!binding) return [];
     if (binding.sessionId !== agent.id || binding.threadId !== threadId) throw rejected('问题答复来源不匹配');
     return binding.entries.map(entry => {
@@ -24,7 +23,7 @@ export function installRouterQuestions(scope, agent, { database, threadId = 'mai
     });
   }
   scope.on('tools/pre-execute', async (execution, next) => {
-    if (!database?.saveRouterQuestionBinding || execution.agent !== agent || execution.name !== 'ask_user_question' || execution.parent) return next();
+    if (execution.agent !== agent || execution.name !== 'ask_user_question' || execution.parent) return next();
     const decision = await next();
     if (decision?.kind !== 'allow') return decision;
     const questions = questionBatch(execution.arguments);
@@ -70,7 +69,7 @@ export function installRouterQuestions(scope, agent, { database, threadId = 'mai
   return {
     read(message) {
       if (message?.source?.kind !== 'user-question-reply') return null;
-      const binding = database?.routerQuestionBinding?.(agent.id, message.source.callId);
+      const binding = database.routerQuestionBinding(agent.id, message.source.callId);
       return binding?.threadId === threadId ? readBoundQuestionReply(message, binding.questions) : null;
     },
     accept(message) {

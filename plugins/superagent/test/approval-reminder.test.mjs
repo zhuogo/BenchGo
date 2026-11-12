@@ -33,7 +33,7 @@ function fixture() {
     mandate: { actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'router-side', threadId: 'side', messageId: 'human' } } };
   const assignment = { id: 'assignment', ticketId: ticket.id, state: 'claimed', owner: 'owner', fence: 1, leaseUntil: 2000 };
   const run = { id: 'run', owner: 'owner', fence: 1, sessionId: 'worker', state: 'running' };
-  const database = { getAssignment: () => assignment, getTicket: () => ticket, runs: () => [run] };
+  const database = { getAssignment: () => assignment, getTicket: () => ticket, runs: () => [run], appliedTicketSnapshot: () => ({}) };
   const call = { type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'call', name: 'assistant_external_action',
     arguments: JSON.stringify({ operation: 'submit', actionId: 'action' }) }] } } };
   const asked = { type: 'approval/asked', data: { id: 'official-ask', toolName: 'assistant_external_action', callId: 'call', reason: 'PRIVATE EXACT BODY' } };

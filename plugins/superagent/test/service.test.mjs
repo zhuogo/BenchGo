@@ -143,8 +143,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const sharedGoalResponse = await call({ action: 'goalCreate', goal: { objective: '长期维护知识库', requestId: 'shared-checklist' } });
   assert.equal(sharedGoalResponse.status, 200);
   let sharedGoal = await sharedGoalResponse.json();
-  assert.equal(sharedGoal.executionKind, 'checklist');
-  assert.deepEqual(sharedGoal.ticketIds, []);
+  assert.equal(sharedGoal.status, 'active');
   assert.equal((await app.store.getState()).mainSessionId, mainBeforeGoal, 'creating a checklist does not initialize a model session');
   assert.equal((await (await call({ action: 'goalCreate', goal: { objective: '长期维护知识库', requestId: 'shared-checklist' } })).json()).id, sharedGoal.id);
   assert.equal((await call({ action: 'goalUpdate', id: sharedGoal.id, patch: { status: 'completed' } })).status, 400);
@@ -265,8 +264,15 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const outboxClaims = t.mock.method(app.store.orchestration, 'claimOutbox', () => []);
   let committed, prepared;
   try {
-    committed = commitWorkerResult({ database: app.store.orchestration, ticket: resultTicket, uniqueKey: 'scoped-worker-result',
-      result: { outcome: 'completed', finalSummary: '原始成果已保存', selfCheck: { summary: '已核对成果' } } });
+    app.store.orchestration.createAssignment(resultTicket.id, { id: 'scoped-worker-assignment' });
+    const [resultAssignment] = app.store.orchestration.claimAssignments('test-worker', { validateMandate: () => true, assignmentId: 'scoped-worker-assignment' });
+    const resultOwnership = { owner: resultAssignment.owner, fence: resultAssignment.fence };
+    const resultRun = app.store.orchestration.prepareRun(resultAssignment.id, { ...resultOwnership, sessionId: 'scoped-worker-session', directory });
+    app.store.orchestration.updateRun(resultRun.id, { ...resultOwnership, state: 'submitted' });
+    const workerResult = { summary: '原始成果已保存', runId: resultRun.id, sessionId: resultRun.sessionId, instructionRevision: 1, completion: { kind: 'completed' } };
+    app.store.orchestration.saveWorkerDraft(resultAssignment.id, { runId: resultRun.id, ...resultOwnership, result: workerResult });
+    app.store.orchestration.updateRun(resultRun.id, { ...resultOwnership, state: 'verifying', evidence: workerResult });
+    committed = commitWorkerResult({ database: app.store.orchestration, ticket: resultTicket, assignment: resultAssignment, uniqueKey: 'scoped-worker-result', result: workerResult });
     assert.equal(app.store.orchestration.getTicket(resultTicket.id).status, 'completed');
     for (let attempt = 0; attempt < 120; attempt++) {
       prepared = await app.engine.prepareTicketReply(committed.outbox);
@@ -293,36 +299,15 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal(agent.session.snapshotEvents().filter(event => event.type === 'plugin:benchgo-plugin/chat-publication'
     && event.data?.kind === 'ticket-reply' && event.data.ticketReplyEventKey === committed.outbox.uniqueKey).length, 1);
   assert.equal(app.database.notifications().events.filter(event => event.taskId === resultTicket.id).length, 1);
-  // This section validates Goal usage HTTP contracts against a mounted runtime.
-  // Its empty project is not an executable Git/worktree fixture: reserve claims
-  // while exercising queued pause/resume so a timer cannot start unrelated work.
+  // The empty project is not an executable fixture: reserve claims so a timer
+  // cannot start unrelated work during the cleanup and lifecycle checks.
   const claimAssignments = app.store.orchestration.claimAssignments;
   app.store.orchestration.claimAssignments = () => [];
   t.after(() => { app.store.orchestration.claimAssignments = claimAssignments; });
-  const formGoal = { requestId: 'form-goal', objective: 'Resource goal', projectId: 'project', text: 'Resource task', acceptance: 'Evidence' };
-  assert.equal((await call({ action: 'goalCreate', goal: { ...formGoal, requestId: 'budgeted-goal', budget: { requests: 1 } } })).status, 400);
-  const formCreatedResponse = await call({ action: 'goalCreate', goal: formGoal });
-  assert.equal(formCreatedResponse.status, 200);
-  assert.equal((await call({ action: 'goalCreate', goal: { ...formGoal, requestId: 'legacy-model-goal', provider: 'mounted', model: 'exact' } })).status, 400);
-  const formCreated = await formCreatedResponse.json();
-  assert.equal(formCreated.executionKind, 'ticket');
-  assert.equal((await (await call({ action: 'goalCreate', goal: formGoal })).json()).id, formCreated.id);
-  assert.equal((await call({ action: 'goalCreate', goal: { ...formGoal, text: 'Changed' } })).status, 409);
-  const formTicket = app.store.orchestration.getTicket(formCreated.ticketIds[0]);
-  assert.equal(formTicket.mandate.instruction, JSON.stringify(formGoal));
-  assert.equal(formTicket.mandate.source.messageId, 'goal-form:form-goal');
-  const initialUsage = await (await call({ action: 'goalBudgetGet', id: formCreated.id })).json();
-  assert.equal(initialUsage.usage.requests, 0);
-  for (let index = 0; index < 3; index++) assert.equal(app.store.orchestration.reserveGoalRequest({ ticketId: formTicket.id, requestId: `form-use-${index}` }).allowed, true);
-  for (const action of ['goalBudgetUpdate', 'goalBudgetResume']) assert.notEqual((await call({ action, id: formCreated.id, expectedVersion: 1, budget: { requests: 2 } })).status, 200);
-  assert.equal(app.store.orchestration.getTicket(formTicket.id).status, formTicket.status, 'usage never changes the unclaimed Ticket state');
-  const budgetResumed = await (await call({ action: 'goalGet', id: formCreated.id })).json();
-  assert.equal(budgetResumed.budgetState.usage.requests, 3);
-  const cancelledForm = await call({ action: 'goalCancel', id: formCreated.id, rowVersion: budgetResumed.rowVersion });
-  assert.equal(cancelledForm.status, 200);
-  assert.equal((await cancelledForm.json()).status, 'cancelled');
-  assert.equal(app.store.orchestration.getTicket(formTicket.id).executionControl.stopped, true);
-  const cleanupIds = [queryTicket.id, formTicket.id];
+  const stoppedTicket = app.store.orchestration.cancelTicket(app.store.orchestration.createTicket({ threadId: 'query-test', target: 'Stopped proof',
+    mandate: { source: { channel: 'desktop', sessionId: String(agent.id) }, project: { id: 'project' } } }).id);
+  assert.equal(stoppedTicket.executionControl.stopped, true);
+  const cleanupIds = [queryTicket.id, stoppedTicket.id];
   const beforeCleanup = cleanupIds.map(id => app.store.orchestration.getTicket(id));
   const readCleanupDomain = () => {
     const db = new DatabaseSync(app.store.orchestration.path, { readOnly: true });
@@ -353,7 +338,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.deepEqual(readCleanupDomain(), beforeCleanupDomain, 'archive preserves every stored Ticket domain column');
   assert.equal(app.store.orchestration.listTickets({ archived: true }).some(row => row.id === queryTicket.id), true);
   assert.equal(app.store.orchestration.listTickets({ archived: false }).some(row => row.id === queryTicket.id), false);
-  assert.equal(app.store.orchestration.listTickets({ archived: false }).some(row => row.id === formTicket.id), true);
+  assert.equal(app.store.orchestration.listTickets({ archived: false }).some(row => row.id === stoppedTicket.id), true);
   const cleanupHistory = await (await call({ action: 'taskCleanupHistory', ticketId: queryTicket.id })).json();
   assert.deepEqual(cleanupHistory.history, [cleanupReceipt]);
   const restorePreviewResponse = await call({ action: 'taskCleanupRestorePreview', ticketIds: [queryTicket.id] });
@@ -405,20 +390,9 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   await goalTool.execute({ op: 'delete', id: sharedGoal.id, rowVersion: sharedGoal.rowVersion }, { agent });
   assert.equal((await (await call({ action: 'goalList' })).json()).goals.some(row => row.id === sharedGoal.id), false);
   const toolChecklist = await goalTool.execute({ op: 'create', goal: { objective: '下次整理目标' } }, { agent });
-  assert.equal(toolChecklist.executionKind, 'checklist');
+  assert.equal(toolChecklist.status, 'active');
   assert.equal((await goalTool.execute({ op: 'create', goal: { objective: '下次整理目标' } }, { agent })).id, toolChecklist.id);
   await goalTool.execute({ op: 'delete', id: toolChecklist.id, rowVersion: toolChecklist.rowVersion }, { agent });
-  const goalInput = { requestId: 'owned-goal', objective: 'Deferred work', projectId: 'project', text: 'Wait' };
-  const ownedGoal = await goalTool.execute({ op: 'create', goal: goalInput }, { agent, authorized: true });
-  assert.equal(ownedGoal.ownerSessionId, agent.id);
-  assert.equal(ownedGoal.executionKind, 'ticket');
-  assert.equal(ownedGoal.ticketIds.length, 1);
-  assert.equal((await goalTool.execute({ op: 'list' }, { agent })).goals.length, 2);
-  assert.equal((await goalTool.execute({ op: 'create', goal: goalInput }, { agent, authorized: true })).id, ownedGoal.id);
-  const pausedGoal = await (await call({ action: 'goalPause', id: ownedGoal.id, rowVersion: ownedGoal.rowVersion })).json();
-  assert.equal((await call({ action: 'goalResume', id: ownedGoal.id, rowVersion: ownedGoal.rowVersion })).status, 409);
-  assert.equal((await call({ action: 'goalResume', id: ownedGoal.id, rowVersion: pausedGoal.rowVersion })).status, 200);
-  app.store.orchestration.cancelTicket(ownedGoal.ticketIds[0]);
   } catch (error) { streamFailure = error; } };
   await call({ action: 'send', text: '创建项目延后工作目标', requestId: 'current-goal-authority-turn' });
   await agent.whenIdle();

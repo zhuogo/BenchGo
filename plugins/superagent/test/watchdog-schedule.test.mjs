@@ -73,7 +73,7 @@ test('official Schedule receipt is durable before the mechanical Watchdog check 
   await host.bridge.reconcile();
   assert.equal(host.store.snapshot().checks[0].status, 'completed');
   assert.ok(host.store.snapshot().checks[0].completedAt);
-  assert.ok(host.watchdog.readLog().degraded.includes('MODEL_JUDGE_UNCONFIGURED'), 'mechanical checks remain available while model judgment is explicitly degraded');
+  assert.deepEqual(host.watchdog.readLog().degraded, []);
   host.ctx.emit('schedule/changed'); host.ctx.emit('schedule/changed');
   await host.bridge.reconcile();
   assert.equal(probes, 1, 'duplicate Schedule notifications do not repeat a completed probe');

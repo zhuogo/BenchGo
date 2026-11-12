@@ -30,8 +30,7 @@ function queueSignal(state, incident, phase, check, at) {
         : incident.reasonCode === 'TARGET_IDENTITY_MISMATCH' ? '主系统监督目标身份已重新核实，原身份告警已关闭。'
           : incident.reasonCode === 'FACTS_STALE' ? '主系统执行事实已恢复更新，原过期告警已关闭。'
             : incident.reasonCode === 'SCHEDULER_STALLED' ? '主系统调度心跳已恢复，原告警已关闭。'
-              : incident.kind === 'model' ? '当前事实已解除该次模型疑似告警，原判断保留在监督历史。'
-                : '当前事实已解除该次执行告警，原异常保留在监督历史。',
+              : '当前事实已解除该次执行告警，原异常保留在监督历史。',
     state: 'pending', attempts: 0, nextAttemptAt: null });
 }
 
@@ -73,7 +72,7 @@ export function createWatchdogRuntime({ store, config, client, now = Date.now })
   const shutdown = new AbortController();
   let pending, queued;
   async function deliver() {
-    const rows = store.snapshot().signals.filter(row => row.state === 'pending' && row.kind !== 'model' && row.reasonCode !== 'RECOVERY_NOT_CONVERGING' && (!row.nextAttemptAt || Date.parse(row.nextAttemptAt) <= now())).slice(0, 4);
+    const rows = store.snapshot().signals.filter(row => row.state === 'pending' && (!row.nextAttemptAt || Date.parse(row.nextAttemptAt) <= now())).slice(0, 4);
     await Promise.all(rows.map(async row => {
       const startedAt = iso(now());
       await store.update(state => {

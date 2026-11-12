@@ -9,10 +9,10 @@ const code = transformSync(readFileSync(new URL('../client/message-actions.jsx',
 function render({ panel = '', saved = null, usage, clipboard = async () => true } = {}) {
   let index = 0;
   const changes = [], calls = [];
-  const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null && x !== false) }), useState: value => { const slot = index++; return [slot === 0 ? panel : value, next => changes.push([slot, next])]; }, useRef: () => ({ current: null }), useEffect() {} };
+  const react = { createElement: (type, props, ...children) => typeof type === 'function' ? type(props || {}) : ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null && x !== false) }), memo: component => component, useMemo: read => read(), useState: value => { const slot = index++; return [slot === 0 ? panel : value, next => changes.push([slot, next])]; }, useRef: () => ({ current: null }), useEffect() {} };
   const module = { exports: {} };
   runInNewContext(code, { module, exports: module.exports, setTimeout: () => 1, clearTimeout() {}, require: id => id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id === 'react' ? react : { writeClipboard: clipboard, Menu: 'Menu' } });
-  const tree = module.exports.MessageActions({ row: { key: 'message:m', role: 'assistant', text: '结果', usage }, home: { threadId: 'side', history: { reactions: { 'message:m': saved } }, api: async (...args) => calls.push(args) } });
+  const tree = module.exports.MessageActions({ row: { key: 'message:m', role: 'assistant', text: '结果', usage }, saved, threadId: 'side', api: async (...args) => calls.push(args) });
   const walk = node => node && typeof node === 'object' ? [node, ...(node.children || []).flatMap(walk)] : [];
   return { nodes: walk(tree), calls, changes };
 }

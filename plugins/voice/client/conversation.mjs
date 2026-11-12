@@ -77,6 +77,13 @@ export class VoiceConversation {
     void run.finally(() => { if (this.interrupting === run) this.interrupting = null; }).catch(() => {});
     return run;
   }
+  /** Release results held by an interruption that produced no utterance. */
+  async resume() {
+    if (this.interrupting) await this.interrupting.catch(() => {});
+    if (this.closed) return;
+    const response = await this.post('resume');
+    return response.json();
+  }
   async dispose() {
     if (this.closed) return;
     this.closed = true;

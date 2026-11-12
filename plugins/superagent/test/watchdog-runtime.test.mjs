@@ -248,11 +248,3 @@ test('invalid receipts do not probe and shutdown interrupts an uncooperative in-
   assert.deepEqual(await f.runtime.check(f.receipt(epoch + 60000)), { status: 'stopped' });
   assert.equal(f.calls.probes, 1);
 });
-
-for (const legacy of [{ kind: 'model', reasonCode: 'MODEL_NO_PROGRESS' }, { kind: 'execution', reasonCode: 'RECOVERY_NOT_CONVERGING' }]) test('retired signals remain in history without delivery: ' + legacy.reasonCode, async t => {
-  const f = await fixture(t);
-  await f.store.update(state => state.signals.push({ id: 'legacy', ...legacy, state: 'pending', incidentKey: 'old' }));
-  await f.runtime.check(f.receipt());
-  assert.equal(f.calls.signals.length, 0);
-  assert.equal(f.store.snapshot().signals.find(row => row.id === 'legacy').state, 'pending');
-});

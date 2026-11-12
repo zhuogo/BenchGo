@@ -22,7 +22,7 @@ export function watchdogRouterSignal(database, observation, principal) {
     throw Object.assign(new Error('Watchdog 信号缺少已认证机器来源'), { code: 'WATCHDOG_PRINCIPAL_REQUIRED' });
   }
   observation = validateWatchdogSignal(observation, principal.targetId);
-  if (observation.kind === 'host' && observation.execution || observation.kind === 'model' !== observation.reasonCode.startsWith('MODEL_'))
+  if (observation.kind === 'host' && observation.execution)
     throw Object.assign(new Error('Watchdog 观察类别与身份不一致'), { code: 'WATCHDOG_SIGNAL_INVALID' });
   const ticket = observation.execution && database.getTicket(observation.execution.ticketId);
   return { kind: 'watchdog', eventKey: `watchdog:${hash([observation.targetId, observation.incidentKey, observation.phase])}`,
@@ -43,8 +43,6 @@ export function watchdogNoticeCurrent(signal, requests) {
 export function inspectWatchdogRouterSignal(database, signal, snapshot, { now = Date.now() } = {}) {
   const observation = signal?.observation, identity = observation?.execution;
   const invalid = reason => ({ valid: false, reason });
-  if (observation?.kind === 'model') return invalid('legacy-model-observation-retired');
-  if (observation?.reasonCode === 'RECOVERY_NOT_CONVERGING') return invalid('legacy-recovery-observation-retired');
   if (signal?.kind !== 'watchdog' || !snapshot || !Number.isSafeInteger(snapshot.currentCursor ?? snapshot.cursor))
     return invalid('execution-facts-unavailable');
   if (observation.evidenceCursor !== null && observation.evidenceCursor > (snapshot.currentCursor ?? snapshot.cursor))

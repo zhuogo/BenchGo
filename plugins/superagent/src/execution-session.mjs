@@ -18,13 +18,13 @@ export function superagentSessionInventory({ state, database, records = [] }) {
   add(state.mainSessionId);
   for (const thread of state.threads || []) add(thread.sessionId);
   for (const ids of Object.values(state.sessionLineage || {})) for (const id of ids) add(id);
-  const roles = new Map((database?.listSessionRoles?.() || []).map(role => [role.sessionId, role]));
+  const roles = new Map(database.listSessionRoles().map(role => [role.sessionId, role]));
   for (const id of roles.keys()) add(id);
   const privateIds = new Set([...owned].filter(id => !roles.has(id) || roles.get(id).role === 'router'));
   const headers = new Map(records.map(row => [row.header.id, row.header]));
-  const projections = new Map((database?.executionProjections?.() || []).map(row => [row.sessionId, row]));
+  const projections = new Map(database.executionProjections().map(row => [row.sessionId, row]));
   for (const id of projections.keys()) add(id);
-  for (let offset = 0; database?.listTickets; offset += 100) {
+  for (let offset = 0; ; offset += 100) {
     const tickets = database.listTickets({ limit: 100, offset });
     for (const ticket of tickets) for (const assignment of database.assignments(ticket.id)) for (const run of database.runs(assignment.id)) {
       add(run.sessionId);
@@ -72,7 +72,7 @@ export function superagentSessionInventory({ state, database, records = [] }) {
 /** Cold owned sessions stay owned even before their first assembly audit. */
 export async function readOwnedSessionRole({ store, sessionId, listSessions }) {
   if (typeof sessionId !== 'string' || !sessionId) return null;
-  const database = store.orchestration, saved = database?.getSessionRole?.(sessionId);
+  const database = store.orchestration, saved = database.getSessionRole(sessionId);
   if (saved) return saved;
   const state = await store.getState();
   const threadOf = id => state.mainSessionId === id ? 'main' : state.threads?.find(row => row.sessionId === id)?.id

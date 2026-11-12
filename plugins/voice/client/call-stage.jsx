@@ -38,8 +38,8 @@ export function callTranscriptRows(messages, state, sessionId) {
   return [...rows, { id: 'transcript:' + state.transcriptId, renderId: 'transcript:' + state.transcriptId, role: 'user', text: state.transcript, partial: true, transcribing: true }];
 }
 
-export function CallStage({ state, controller, sessionId, open, historyOnly = false, interactionPending = false, origin, pending, error, returnFocusRef, onMute, onHangup, onRetry, onMinimize }) {
-  const [recordsOpen, setRecordsOpen] = useState(historyOnly), [history, setHistory] = useState([]), [loading, setLoading] = useState(false), [historyError, setHistoryError] = useState(''), [page, setPage] = useState(null), [revision, setRevision] = useState(0);
+export function CallStage({ state, controller, sessionId, open, historyOnly = false, interactionPending = false, origin, pending, error, returnFocusRef, onMute, onHangup, onRetry, onMinimize, onOpenSettings }) {
+  const [recordsOpen, setRecordsOpen] = useState(historyOnly), [history, setHistory] = useState([]), [loading, setLoading] = useState(false), [historyError, setHistoryError] = useState(''), [page, setPage] = useState(null), [revision, setRevision] = useState(0), [settingsError, setSettingsError] = useState('');
   const root = useRef(null), list = useRef(null), follow = useRef(true), paging = useRef(false), historyAbort = useRef(null), previousFocus = useRef(null);
   const curtainButton = useRef(null), recordsId = useId();
   const closeRecords = () => { setRecordsOpen(false); curtainButton.current?.focus(); };
@@ -48,6 +48,9 @@ export function CallStage({ state, controller, sessionId, open, historyOnly = fa
   const active = state.mode === 'call', starting = state.phase === 'starting' || pending && !active;
   const phase = starting ? 'starting' : interactionPending ? 'waiting' : active ? state.phase : 'idle';
   const caption = error ? '语音遇到问题' : state.muted && phase === 'listening' ? '麦克风已关闭' : labels[phase] || '语音处理中';
+  // Direct calls wait on the session model; explain the pause only while it thinks.
+  const directReason = !error && phase === 'thinking' && state.conversationMode === 'direct' && state.conversationReason?.trim() || '';
+  const openSettings = () => { try { onOpenSettings(); } catch (failure) { setSettingsError(failure.message || '请打开设置 → 媒体 → 语音'); } };
   useLayoutEffect(() => {
     const orbit = root.current?.querySelector('.voice-stage-orbit');
     if (!open || !orbit || !origin) return;
@@ -107,10 +110,10 @@ export function CallStage({ state, controller, sessionId, open, historyOnly = fa
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
   };
   if (!open) return null;
-  return createPortal(<section ref={root} className={'voice-call-stage' + (historyOnly ? ' voice-stage-history-only' : '') + (showRecords ? ' voice-stage-with-records' : '')} role="dialog" aria-modal="true" aria-label={historyOnly ? '语音记录' : '实时语音通话'} onKeyDown={keyboard} style={origin ? { '--voice-origin-x': origin.x + 'px', '--voice-origin-y': origin.y + 'px' } : undefined}>
+  return createPortal(<section ref={root} className={'voice-call-stage' + (historyOnly ? ' voice-stage-history-only' : '') + (showRecords ? ' voice-stage-with-records' : '')} role="dialog" aria-modal="true" data-shortcut-modal="voice-call" aria-label={historyOnly ? '语音记录' : '实时语音通话'} onKeyDown={keyboard} style={origin ? { '--voice-origin-x': origin.x + 'px', '--voice-origin-y': origin.y + 'px' } : undefined}>
     <header className="voice-stage-header"><button type="button" className="voice-stage-nav" aria-label={historyOnly ? '关闭语音记录' : interactionPending ? '处理确认' : '收起通话'} onClick={onMinimize}><CallStageIcon name={historyOnly ? 'close' : 'minimize'} /><span>{historyOnly ? '关闭' : interactionPending ? '处理确认' : '收起'}</span></button></header>
     <div className="voice-stage-body">
-      {!historyOnly && <main className="voice-stage-main"><div className="voice-stage-orbit"><div className="voice-stage-orb-arrival"><CallOrb state={{ ...state, phase }} /></div></div><div className="voice-stage-caption" role="status"><h2>{caption}</h2>{(error || phase === 'waiting') && <p>{error || '请返回对话完成确认'}</p>}</div>{!showRecords && <div className={'voice-stage-subtitle' + (error ? ' is-error' : '')}>{!error && <p>{state.phase === 'speaking' ? state.replyText || state.transcript : state.transcript || ''}</p>}</div>}</main>}
+      {!historyOnly && <main className="voice-stage-main"><div className="voice-stage-orbit"><div className="voice-stage-orb-arrival"><CallOrb state={{ ...state, phase }} /></div></div><div className="voice-stage-caption" role="status"><h2>{caption}</h2>{error || phase === 'waiting' ? <p>{error || '请返回对话完成确认'}</p> : directReason && <p>{directReason}{state.conversationConfigurable && <>&ensp;{settingsError || onOpenSettings && <button type="button" className="voice-text-button" onClick={openSettings}>去设置</button>}</>}</p>}</div>{!showRecords && <div className={'voice-stage-subtitle' + (error ? ' is-error' : '')}>{!error && <p>{state.phase === 'speaking' ? state.replyText || state.transcript : state.transcript || ''}</p>}</div>}</main>}
       {showRecords && <aside id={recordsId} className="voice-stage-records" aria-label="完整语音记录"><div ref={list} tabIndex={0} className="voice-stage-message-list" role="log" aria-label="语音对话内容" aria-live="off" onScroll={event => { const node = event.currentTarget; follow.current = node.scrollHeight - node.scrollTop - node.clientHeight < 56; }}>
         {page?.hasMore && <button type="button" className="voice-stage-load" disabled={loading} onClick={older}>{loading ? '正在加载…' : '查看更早记录'}</button>}
         {!messages.length && (loading ? <Loading className="voice-stage-loading" label="正在读取语音记录…" /> : <div className="voice-stage-empty" role="status"><CallStageIcon name="records" /><p>{historyError ? '暂时无法读取记录' : '对话从这里开始'}</p><span>{historyError || '通话内容会保存在这里。'}</span>{historyError && <button type="button" className="voice-text-button" onClick={() => setRevision(value => value + 1)}>重新加载</button>}</div>)}

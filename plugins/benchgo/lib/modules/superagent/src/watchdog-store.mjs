@@ -29,7 +29,7 @@ export async function createWatchdogStore({ directory, config, now = Date.now })
       if (error.code !== 'ENOENT') throw error;
       state = { schemaVersion: 1, targetId: config.targetId, sessionId: config.sessionId || `benchgo-watchdog-${randomUUID()}`,
         scheduleId: config.scheduleId || null, configRevision: 0, configHistory: [], checks: [], incidents: [], signals: [], candidates: {},
-        lastCheckAt: null, nextProbeAt: null, probeFailures: 0, degraded: ['MODEL_JUDGE_UNCONFIGURED'] };
+        lastCheckAt: null, nextProbeAt: null, probeFailures: 0, degraded: [] };
     }
     state.auxiliaryActivity ??= [];
     if (!Array.isArray(state.auxiliaryActivity)) throw invalid();

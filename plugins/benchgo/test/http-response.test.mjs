@@ -63,9 +63,10 @@ test('body cancellation and stream failures propagate unchanged', async () => {
 test('sidebar preserves POST fields and cancellation signal and never retries failed writes', async () => {
   const source = readFileSync(new URL('../client/index.jsx', import.meta.url), 'utf8');
   const code = transformSync(source + '\nexport { api };', { loader: 'jsx', format: 'cjs' }).code;
-  const calls = [], module = { exports: {} };
+  const calls = [], timed = [], module = { exports: {} };
+  const perfTrace = { time: label => () => timed.push(label) };
   let next = () => new Response('not found', { status: 404 });
-  runInNewContext(code, { module, exports: module.exports, URL, document: { baseURI: 'https://desktop.example/link/' }, localStorage: { getItem: () => null }, require: id => id === './http-response.mjs' ? { readJsonResponse } : {}, fetch: async (target, options) => { calls.push({ target, options }); return next(); } });
+  runInNewContext(code, { module, exports: module.exports, URL, document: { baseURI: 'https://desktop.example/link/' }, localStorage: { getItem: () => null }, require: id => id === './http-response.mjs' ? { readJsonResponse } : id.endsWith('perf-trace.mjs') ? { perfTrace } : {}, fetch: async (target, options) => { calls.push({ target, options }); return next(); } });
   const controller = new AbortController();
   await assert.rejects(module.exports.api('create', { projectId: 'existing' }, controller.signal), /请求失败（HTTP 404 · \/link\/api\/commander）/);
   assert.equal(calls.length, 1);
@@ -82,4 +83,5 @@ test('sidebar preserves POST fields and cancellation signal and never retries fa
   next = () => { throw offline; };
   await assert.rejects(module.exports.api('create'), error => error === offline);
   assert.equal(calls.length, 3);
+  assert.deepEqual(timed, ['commander:create', 'commander:state', 'commander:create'], 'every request is timed once, including failures');
 });

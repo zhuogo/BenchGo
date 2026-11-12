@@ -20,7 +20,8 @@ function inventoryFixture() {
  const roles = [{ sessionId: 'forgotten-router', role: 'router', threadId: 'deleted' },
    { sessionId: 'child', role: 'child-worker', ticketId: 't', assignmentId: 'a', runId: 'r', parentSessionId: 'worker' }];
  const projections = [{ sessionId: 'projected-only', rootSessionId: 'worker', parentSessionId: 'worker', ticketId: 't', assignmentId: 'a', runId: 'r' }];
- const database = { listTickets: () => [ticket], assignments: () => [assignment], runs: () => [historical, run], listSessionRoles: () => roles, executionProjections: () => projections };
+ const database = { listTickets: () => [ticket], assignments: () => [assignment], runs: () => [historical, run], listSessionRoles: () => roles, executionProjections: () => projections,
+   getSessionRole: () => null }; // Cold sessions: no assembly audit has been saved yet.
  const records = [
    { id: 'grandchild', origin: 'subagent', parentSession: 'child' },
    { id: 'child', origin: 'subagent', parentSession: 'worker' },

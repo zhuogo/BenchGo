@@ -84,14 +84,14 @@ test('status distinguishes absent checks, incomplete checks and delivery backlog
   await mkdir(join(installation.dataDir, 'watchdog'));
   const at = '2026-11-09T00:00:00.000Z';
   await writeFile(join(installation.dataDir, 'watchdog/state.json'), JSON.stringify({ schemaVersion: 1, targetId: 'main-fixture', lastCheckAt: at,
-    checks: [{ id: 'completed', completedAt: at, degraded: ['MODEL_JUDGE_UNCONFIGURED'], raw: secret },
+    checks: [{ id: 'completed', completedAt: at, degraded: ['SAMPLE_DEGRADED_CODE'], raw: secret },
       { id: 'working', status: 'running', startedAt: at, raw: secret }],
     signals: [{ state: 'pending', raw: secret }, { state: 'accepted' }, { state: 'superseded' }],
     config: { token: secret }, transcript: secret,
   }));
   status = await watchdogProfileStatus({ directory });
   assert.equal(status.lastCheckAt, at); assert.equal(status.currentCheck.id, 'working');
-  assert.equal(status.incomplete, 1); assert.equal(status.pendingSignals, 1); assert.deepEqual(status.degraded, ['MODEL_JUDGE_UNCONFIGURED']);
+  assert.equal(status.incomplete, 1); assert.equal(status.pendingSignals, 1); assert.deepEqual(status.degraded, ['SAMPLE_DEGRADED_CODE']);
   assert.equal(JSON.stringify(status).includes(secret), false);
 });
 

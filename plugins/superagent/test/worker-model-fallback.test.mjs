@@ -38,17 +38,7 @@ async function fixture(t, script, { install, models = [primary, backup], persist
     async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: 131072 }, reasoning: { efforts: [{ id: 'high', name: 'High' }] } }; }
     async *stream(request) {
       requests.push(request);
-      const events = await script(request, requests.length);
-      // The scripted Worker signs its own self-check before final completion.
-      // Injecting it from readSession is too late and forces a repair turn.
-      if (events.some(event => event.type === 'finish' && event.reason?.kind === 'stop')) {
-        const agent = ctx.agents.get(request.sessionId);
-        const batch = await agent.ctx.tools.execute({ agent, signal: new AbortController().signal,
-          calls: [{ type: 'tool-call', id: `fixture-self-check:${requests.length}`, name: 'assistant_task_result',
-            arguments: JSON.stringify({ selfCheck: { summary: 'Verified fixture transcript', checks: ['Scripted output matches the saved evidence'] }, outcome: 'completed' }) }] });
-        assert.equal(batch.results[0].result.isError, false, JSON.stringify(batch.results));
-      }
-      yield* events;
+      yield* await script(request, requests.length);
     }
   }
   ctx.llm.registerAdapter(['test'], new Adapter());
@@ -114,7 +104,7 @@ test('Worker fallback clears effort, rebuilds model tools and prompt, and never 
     },
   });
   const result = await f.executor(f.assignment, f.context);
-  assert.equal(result.finalSummary, 'Complete from saved evidence');
+  assert.equal(result.summary, 'Complete from saved evidence');
   assert.deepEqual(f.requests.map(request => request.model), [primary.modelId, primary.modelId, backup.modelId, backup.modelId]);
   assert.equal(f.requests[0].reasoningEffort, 'high');
   assert.equal(f.requests[2].reasoningEffort, undefined);

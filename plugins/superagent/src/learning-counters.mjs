@@ -28,21 +28,6 @@ export function createLearningCounters({ directory, review, promptThreshold = 10
       review_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS assistant_learning_meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);`);
-  // Retire the old session-message ranges while preserving counts, deduplication
-  // keys and pending review identities. There was no reusable closed-ticket cursor.
-  if (!db.prepare("SELECT 1 FROM assistant_learning_meta WHERE key='closed-ticket-material-v1'").get()) {
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      const migrate = value => { const { eventIds, turnIds, ...rest } = JSON.parse(value); return JSON.stringify({ ...rest, material: 'closed-tickets-v1',
-        ...(rest.trigger === 'explicit' && eventIds?.[0] ? { requestEventId: eventIds[0] } : {}) }); };
-      for (const row of db.prepare('SELECT id,payload FROM assistant_learning_triggers').all()) db.prepare('UPDATE assistant_learning_triggers SET payload=? WHERE id=?').run(migrate(row.payload), row.id);
-      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assistant_review_queue'").get()) {
-        for (const row of db.prepare("SELECT id,payload FROM assistant_review_queue WHERE kind='learning'").all()) db.prepare('UPDATE assistant_review_queue SET payload=? WHERE id=?').run(migrate(row.payload), row.id);
-      }
-      db.prepare("INSERT INTO assistant_learning_meta VALUES ('closed-ticket-material-v1','retired-session-ranges')").run();
-      db.exec('COMMIT');
-    } catch (error) { db.exec('ROLLBACK'); db.close(); throw error; }
-  }
   db.exec("CREATE INDEX IF NOT EXISTS assistant_learning_request_event ON assistant_learning_triggers(scope,json_extract(payload,'$.requestEventId')) WHERE json_extract(payload,'$.trigger')='explicit'");
   let closed = false;
   const tx = fn => {

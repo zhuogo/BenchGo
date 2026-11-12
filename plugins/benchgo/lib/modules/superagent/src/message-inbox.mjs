@@ -81,7 +81,7 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
         if (isStopped() || agent?.status === 'running') return;
         await reconcile(threadId, agent);
         const queued = ((await getState()).requests || []).filter(item => item.threadId === threadId && item.status === 'queued');
-        const row = queued.find(item => !item.ticketState && !item.ticketReply && !item.executionInput) || queued[0];
+        const row = queued.find(item => !item.ticketReply && !item.executionInput) || queued[0];
         if (!row || isStopped()) return;
         agent ||= await ensureSession({ threadId });
         if (isStopped() || agent.status === 'running') return;
@@ -227,7 +227,7 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
     },
     async hasPending(threadId) { return ((await getState()).requests || []).some(row => row.threadId === threadId && active.has(row.status)); },
     async state(threadId) {
-      return ((await getState()).requests || []).filter(row => row.threadId === threadId && !row.ticketState && !row.ticketReply && !row.executionInput).map(row => ({ ...receipt(row), createdAt: row.createdAt, updatedAt: row.updatedAt,
+      return ((await getState()).requests || []).filter(row => row.threadId === threadId && !row.ticketReply && !row.executionInput).map(row => ({ ...receipt(row), createdAt: row.createdAt, updatedAt: row.updatedAt,
         ...(row.questionReply ? { questionReply: row.questionReply, text: row.questionReply.text }
           : row.message ? { text: row.message.content?.filter(block => block.type === 'text').map(block => block.text).join('') ?? '' } : {}) }));
     },

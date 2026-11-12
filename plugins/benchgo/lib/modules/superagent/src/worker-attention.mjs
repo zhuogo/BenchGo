@@ -9,7 +9,7 @@ export function attentionAnswer(database, entry) {
 }
 
 export function attentionBatchAnswers(database, ticketId, { sessionId, callId, questions }) {
-  const resolved = database.attentionResolutions?.(ticketId, { sessionId, callId }) || [];
+  const resolved = database.attentionResolutions(ticketId, { sessionId, callId });
   const entries = database.attentions(ticketId).filter(entry => entry.sessionId === sessionId && entry.callId === callId);
   const expected = questions || (resolved.length ? resolved.map(row => row.question) : entries.map(row => row.question));
   if (!expected.length) throw new Error('Attention batch is missing');
@@ -23,7 +23,7 @@ export function attentionBatchAnswers(database, ticketId, { sessionId, callId, q
     return attentionAnswer(database, entry);
   });
   for (const entry of consumed) {
-    if (!database.applyTicketInput || !database.ticketInputs?.(ticketId).some(row => row.triggerId === entry.answerTriggerId)) continue;
+    if (!database.ticketInputs(ticketId).some(row => row.triggerId === entry.answerTriggerId)) continue;
     const assignment = database.getAssignment(entry.assignmentId), run = database.runs(entry.assignmentId).find(row => row.sessionId === sessionId && row.fence === assignment.fence);
     if (!run) throw new Error('Attention answer execution is missing');
     database.applyTicketInput(entry.answerTriggerId, { assignmentId: assignment.id, owner: assignment.owner, fence: assignment.fence,
@@ -44,8 +44,8 @@ export function installWorkerAttention(scope, agent, { database, assignment, sig
     let hold, holdAbort;
     try {
       const callId = request.wait?.callId || `foreground:${++sequence}`;
-      let resolutions = database.attentionResolutions?.(assignment.ticketId, { sessionId: agent.id, callId }) || [];
-      if (!resolutions.length && database.saveAttentionResolutions) {
+      let resolutions = database.attentionResolutions(assignment.ticketId, { sessionId: agent.id, callId });
+      if (!resolutions.length) {
         if (request.wait?.timed && scope.get?.('userQuestions')?.attachWait) {
           holdAbort = new AbortController();
           hold = scope.get('userQuestions').attachWait(agent, callId, AbortSignal.any([waitSignal, holdAbort.signal]))[Symbol.asyncIterator]();
@@ -53,7 +53,7 @@ export function installWorkerAttention(scope, agent, { database, assignment, sig
         }
         let policy;
         try { policy = await readPolicy?.() || {}; } catch { policy = {}; }
-        const decisions = await triageWorkerQuestions({ llm, database, ticket, questions: request.questions, policy, signal: waitSignal });
+        const decisions = await triageWorkerQuestions({ llm, ticket, questions: request.questions, policy, signal: waitSignal });
         waitSignal.throwIfAborted();
         resolutions = database.saveAttentionResolutions(assignment.id, { owner: assignment.owner, fence: assignment.fence,
           sessionId: agent.id, callId, questions: request.questions, decisions });
@@ -99,7 +99,7 @@ export function installWorkerAttention(scope, agent, { database, assignment, sig
       const existing = database.attentions(assignment.ticketId).filter(entry =>
         entry.sessionId === agent.id && entry.callId === call.callId);
       const existingIds = new Set(existing.map(entry => entry.question.id));
-      for (const row of database.attentionResolutions?.(assignment.ticketId, { sessionId: agent.id, callId: call.callId }) || []) {
+      for (const row of database.attentionResolutions(assignment.ticketId, { sessionId: agent.id, callId: call.callId })) {
         if (row.route !== 'user' && row.instructionRevision === database.getTicket(assignment.ticketId)?.instructionRevision) existingIds.add(row.questionId);
       }
       const missing = call.questions.filter(question => !existingIds.has(question.id));

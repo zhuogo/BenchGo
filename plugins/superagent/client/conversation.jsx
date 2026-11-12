@@ -1,5 +1,5 @@
 import { Button } from '../../shared/client/ui/button.jsx';
-import React, { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AssistantHome } from './home.jsx';
 import { quietChatRows } from './quiet-chat.mjs';
 import { QuietChat } from './quiet-chat.jsx';
@@ -121,11 +121,15 @@ export function AssistantConversation({ ctx, sessionId, SessionProvider, renderS
     })().catch(cause => { if (!controller.signal.aborted) { console.warn('[BenchGo] conversation connection failed', cause); setError(execution ? '执行会话暂未连接，重试即可继续。' : '聊天暂未连接，重试即可继续。'); } });
     return () => { controller.abort(); reference?.release(); };
   }, [ctx, sessionId, retry, execution]);
-  const reconnect = () => setRetry(value => value + 1);
+  const reconnect = useCallback(() => setRetry(value => value + 1), []);
+  const sessionStatus = ctx.uiSession?.sessionStatus;
+  // Every consumer of this context re-renders when its value changes identity.
+  const home = useMemo(() => api ? { ctx, api, SessionProvider, renderSlot, assistantName, assistantConfig, petExpression, onOpenResources, onOpenExecution, threadId, history, onLoadEarlier, onRefresh, reconnect, sessionStatus, sessionId } : null,
+    [ctx, api, SessionProvider, renderSlot, assistantName, assistantConfig, petExpression, onOpenResources, onOpenExecution, threadId, history, onLoadEarlier, onRefresh, reconnect, sessionStatus, sessionId]);
   if (error) return <div className="ba-resource-initial"><ResourceState kind="error" title={execution ? "执行会话暂未连接" : "聊天暂未连接"} description={error} actionLabel="重新连接" onAction={reconnect} /></div>;
   if (!retained || retained.sessionId !== sessionId) return <div className="ba-resource-initial"><ResourceState kind="loading" title={execution ? "正在连接执行会话" : "正在连接聊天"} /></div>;
   return <div className="ba-official-conversation" data-assistant-chat="" style={{ display: 'flex', flex: '1 1 0', minHeight: 0, minWidth: 0, flexDirection: 'column' }}>
-    <SuperAgentSurfaceContext.Provider value={true}><HomeContext.Provider value={api ? { ctx, api, SessionProvider, renderSlot, assistantName, assistantConfig, petExpression, onOpenResources, onOpenExecution, threadId, history, onLoadEarlier, onRefresh, reconnect, sessionStatus: ctx.uiSession?.sessionStatus, sessionId } : null}><SessionProvider session={retained.reference}>
+    <SuperAgentSurfaceContext.Provider value={true}><HomeContext.Provider value={home}><SessionProvider session={retained.reference}>
       {renderSlot(ASSISTANT_CONVERSATION_SLOT, {})}
     </SessionProvider></HomeContext.Provider></SuperAgentSurfaceContext.Provider>
   </div>;
