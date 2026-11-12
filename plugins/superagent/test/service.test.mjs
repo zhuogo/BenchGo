@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import { publicConfig } from '../../voice/src/config.mjs';
 import { createSettingsManagement } from '../../benchgo/src/settings-management.mjs';
-import { installRoleHost } from './role-host-fixture.mjs';
+import { installRoleHost, loadRolePackage } from './role-host-fixture.mjs';
 
 const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
 const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
@@ -33,7 +33,7 @@ const SessionPersistence = await load('@deepseek-ai/dsh-session-persistence-json
 const queryRequire = createRequire(new URL('../../../deepseek-harness/packages/session-query/session-query-sqlite/package.json', import.meta.url));
 const SessionQuery = await import(pathToFileURL(queryRequire.resolve('@deepseek-ai/dsh-session-query-sqlite')).href);
 
-test('mounted assistant HTTP routes execute real Harness and register scoped tools', async t => {
+test('mounted assistant HTTP routes execute real Harness and register scoped tools', { timeout: 120_000 }, async t => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     if (url === 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal') return Response.json({ code: 0, tenant_access_token: 'test-token', expire: 7200 });
@@ -49,6 +49,10 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   for (let i = 0; i < modules.length; i++) await ctx.plugin(modules[i].default, i === modules.length - 1 ? { agents: [] } : undefined);
   await ctx.plugin(TypertRegistry);
   await installRoleHost(ctx);
+  await ctx.plugin((await loadRolePackage('fs/fs-local', '@deepseek-ai/dsh-fs-local')).default);
+  await ctx.plugin((await loadRolePackage('session/working-directory', '@deepseek-ai/dsh-working-directory')).default, { defaultDirectory: directory });
+  await ctx.plugin((await loadRolePackage('subagent/subagent', '@deepseek-ai/dsh-subagent')).default);
+  assert.ok(ctx.get('subagents'), 'the official subagent service must be ready before mounting SuperAgent');
   await ctx.plugin(SessionPersistence.default || SessionPersistence, { root: join(directory, 'official-sessions'), compression: 'none' });
   await ctx.plugin(SessionQuery.default || SessionQuery, { path: ':memory:', openAt: 'first-search' });
   const tokenRequire = createRequire(new URL('../../../deepseek-harness/packages/llm/token-meter/package.json', import.meta.url));
@@ -111,13 +115,15 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.ok(assistantInject.includes('sessions'), 'the real plugin must retain the session flush dependency');
   assert.ok(assistantInject.includes('benchgoSettings'), 'the scoped plugin must receive the real settings manager');
   let appFiber;
+  let mountTimer;
   const app = await new Promise((resolve, reject) => {
+    mountTimer = setTimeout(() => reject(new Error('SuperAgent fixture mount timed out after 15s; missing dependencies: ' + assistantInject.filter(name => !['benchgo', 'commander', 'settings'].includes(name) && !ctx.get(name)).join(', '))), 15_000);
     // BenchGo/Commander/settings are supplied directly by this fixture; all
     // actual service access uses the production plugin dependency declaration.
     appFiber = ctx.inject(assistantInject.filter(name => !['benchgo', 'commander', 'settings'].includes(name)), child => {
       mountAssistant(child, commander, providers).then(resolve, reject);
     });
-  });
+  }).finally(() => clearTimeout(mountTimer));
   const ownerPeer = { principal: { kind: 'owner' } };
   const call = async (input, ...peers) => {
     // Official exact Fetch routes expose the authenticated peer through the
@@ -133,6 +139,17 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     assert.equal((await call({ ...input, attempts: 0 }, { principal: { kind: 'owner' } })).status, 400);
   }
   await assert.rejects(mountAssistant(ctx, commander, providers), { code: 'BENCHGO_DATA_LOCKED' });
+  const mainBeforeGoal = (await app.store.getState()).mainSessionId;
+  const sharedGoalResponse = await call({ action: 'goalCreate', goal: { objective: '长期维护知识库', requestId: 'shared-checklist' } });
+  assert.equal(sharedGoalResponse.status, 200);
+  let sharedGoal = await sharedGoalResponse.json();
+  assert.equal(sharedGoal.executionKind, 'checklist');
+  assert.deepEqual(sharedGoal.ticketIds, []);
+  assert.equal((await app.store.getState()).mainSessionId, mainBeforeGoal, 'creating a checklist does not initialize a model session');
+  assert.equal((await (await call({ action: 'goalCreate', goal: { objective: '长期维护知识库', requestId: 'shared-checklist' } })).json()).id, sharedGoal.id);
+  assert.equal((await call({ action: 'goalUpdate', id: sharedGoal.id, patch: { status: 'completed' } })).status, 400);
+  sharedGoal = await (await call({ action: 'goalUpdate', id: sharedGoal.id, rowVersion: sharedGoal.rowVersion, patch: { objective: '长期维护产品知识库' } })).json();
+  assert.equal(sharedGoal.objective, '长期维护产品知识库');
   const connectionInitial = await (await call({ action: 'connections' })).json();
   assert.equal((await (await call({ action: 'ownedSkills' })).json()).available, false);
   assert.notEqual((await call({ action: 'ownedSkillApprove', id: 'missing', revision: 1 })).status, 200);
@@ -183,6 +200,8 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal(deviceStatusTool.parameters.additionalProperties, false);
   assert.equal((await deviceStatusTool.execute({}, { agent })).code, 'OWNER_REQUIRED');
   ctx.provide('benchgoLink', { status: () => ({ enabled: true, devices: [{ id: 'phone', name: '手机', deviceType: 'mobile', lastSeenAt: 123, tokenHash: 'PRIVATE' }], pending: [] }) });
+  const executionTool = ctx.tools.get('assistant_execution_manage', agent);
+  assert.deepEqual(executionTool.parameters.properties.operation.enum, ['resume']);
   const ticketsTool = ctx.tools.get('assistant_tickets', agent);
   assert.ok(ticketsTool);
   assert.deepEqual(await ticketsTool.execute({}, { agent }), { tickets: [], nextOffset: null });
@@ -230,6 +249,8 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   await assert.rejects(scheduleTool.execute({ title: 'forged', prompt: 'forged', after_seconds: 60 }, { agent: { id: 'child' } }), /只有总助手/);
   assert.equal((await ctx.tools.get('schedule_delete', agent).execute({ id: scheduled.id }, scheduleExec)).deleted, true);
   response = await call({ action: 'send', text: 'hello', requestId: 'mounted-request' }); assert.equal(response.status, 200); await agent.whenIdle();
+  assert.match(JSON.stringify(modelRequests.at(-1)), /persistentGoals/);
+  assert.match(JSON.stringify(modelRequests.at(-1)), /长期维护产品知识库/, 'the actual model request sees current unfinished goals');
   response = await call({ action: 'send', text: 'hello', requestId: 'mounted-request' }); assert.equal((await response.json()).duplicate, true);
   // A committed Worker result must pass through this injected Router context,
   // durably flush its natural draft, then receive the original desktop receipt.
@@ -246,7 +267,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   try {
     committed = commitWorkerResult({ database: app.store.orchestration, ticket: resultTicket, uniqueKey: 'scoped-worker-result',
       result: { outcome: 'completed', finalSummary: '原始成果已保存', selfCheck: { summary: '已核对成果' } } });
-    assert.equal(app.store.orchestration.getTicket(resultTicket.id).status, 'waiting');
+    assert.equal(app.store.orchestration.getTicket(resultTicket.id).status, 'completed');
     for (let attempt = 0; attempt < 120; attempt++) {
       prepared = await app.engine.prepareTicketReply(committed.outbox);
       if (prepared.status === 'ready') break;
@@ -260,7 +281,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   } finally {
     outboxClaims.mock.restore();
   }
-  for (let attempt = 0; attempt < 100 && app.store.orchestration.getTicket(resultTicket.id).status !== 'completed'; attempt++) await new Promise(resolve => setTimeout(resolve, 25));
+  for (let attempt = 0; attempt < 100 && app.store.orchestration.deliveries(resultTicket.id)[0]?.state !== 'sent'; attempt++) await new Promise(resolve => setTimeout(resolve, 25));
   const delivered = app.store.orchestration.deliveries(resultTicket.id);
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].state, 'sent');
@@ -365,7 +386,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.deepEqual(deviceStatus.devices, [{ id: 'phone', name: '手机', type: 'mobile', lastSeenAt: 123 }]);
   assert.doesNotMatch(JSON.stringify(deviceStatus), /PRIVATE/);
   const delegateTool = ctx.tools.get('assistant_delegate', agent);
-  assert.ok(delegateTool.parameters.required.includes('acceptance'));
+  assert.deepEqual(delegateTool.parameters.required, ['text']);
   assert.equal(delegateTool.parameters.required.includes('provider'), false);
   assert.equal(delegateTool.parameters.required.includes('model'), false);
   assert.equal(delegateTool.parameters.properties.duplicateOfTicketId.type, 'string');
@@ -376,6 +397,17 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.ok(delegateTool.parameters.properties.title);
   const goalTool = ctx.tools.get('assistant_goals', agent);
   await assert.rejects(goalTool.execute({ op: 'list' }, { agent: { id: 'child' } }), /只有总助手/);
+  assert.equal((await goalTool.execute({ op: 'get', id: sharedGoal.id }, { agent })).objective, sharedGoal.objective, 'the AI sees a goal created without a session');
+  sharedGoal = await goalTool.execute({ op: 'complete', id: sharedGoal.id, rowVersion: sharedGoal.rowVersion }, { agent });
+  assert.equal(sharedGoal.status, 'completed');
+  sharedGoal = await goalTool.execute({ op: 'reopen', id: sharedGoal.id, rowVersion: sharedGoal.rowVersion }, { agent });
+  assert.equal(sharedGoal.status, 'active');
+  await goalTool.execute({ op: 'delete', id: sharedGoal.id, rowVersion: sharedGoal.rowVersion }, { agent });
+  assert.equal((await (await call({ action: 'goalList' })).json()).goals.some(row => row.id === sharedGoal.id), false);
+  const toolChecklist = await goalTool.execute({ op: 'create', goal: { objective: '下次整理目标' } }, { agent });
+  assert.equal(toolChecklist.executionKind, 'checklist');
+  assert.equal((await goalTool.execute({ op: 'create', goal: { objective: '下次整理目标' } }, { agent })).id, toolChecklist.id);
+  await goalTool.execute({ op: 'delete', id: toolChecklist.id, rowVersion: toolChecklist.rowVersion }, { agent });
   const goalInput = { requestId: 'owned-goal', objective: 'Deferred work', projectId: 'project', text: 'Wait' };
   const ownedGoal = await goalTool.execute({ op: 'create', goal: goalInput }, { agent, authorized: true });
   assert.equal(ownedGoal.ownerSessionId, agent.id);
@@ -393,12 +425,13 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   if (streamFailure) throw streamFailure;
   duringStream = async () => { try {
   const delegateTool = ctx.tools.get('assistant_delegate', agent);
-  const delegation = { projectId: 'project', title: '检查项目', text: 'Inspect project', acceptance: 'Report project findings with evidence; preserve the original human requirements.', requestId: 'desktop-delegation' };
+  const delegation = { projectId: 'project', title: '检查项目', text: 'Inspect project', requestId: 'desktop-delegation' };
   await assert.rejects(delegateTool.execute(delegation, { agent: { id: 'child' }, authorized: true }), /只有总助手/);
   await assert.rejects(delegateTool.execute({ ...delegation, provider: 'mounted', model: 'exact' }, { agent, authorized: true }));
   const requestsBeforeDelegation = modelRequests.length;
   const ticket = await delegateTool.execute(delegation, { agent, authorized: true });
   assert.equal(ticket.mandate.instruction, 'Inspect project');
+  assert.equal(ticket.acceptance, delegation.text);
   assert.equal(modelRequests.length, requestsBeforeDelegation, 'mounted admission does not request another model');
   assert.equal(ticket.mandate.scopeCheck, undefined);
   assert.equal((await delegateTool.execute(delegation, { agent, authorized: true })).id, ticket.id);
@@ -539,8 +572,8 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     toolResult = readback.value;
     assert.equal(readback.revision, toolReceipt.revision);
     const history = await settingsTool.execute({ op: 'history', ...settingsRef }, toolExec);
-    assert.equal(history[0].id, toolReceipt.historyId);
-    assert.equal(history[0].actor.sessionId, agent.id);
+    assert.equal(history.history[0].id, toolReceipt.historyId);
+    assert.equal(history.history[0].actor.sessionId, agent.id);
   } catch (error) { streamFailure = error; } };
   await call({ action: 'send', text: '把卡片改为斜体 Tool card 并关闭卡片动效，保留其他设置。', requestId: 'service-settings-owner-turn' });
   await agent.whenIdle();
@@ -723,7 +756,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     skillFiber = ctx.inject(assistantInject.filter(name => !['benchgo', 'commander', 'settings'].includes(name)), child => {
       mountAssistant(child, commander, providers).then(resolve, reject);
     });
-  });
+  }).finally(() => clearTimeout(mountTimer));
   const afterSettingsRemount = await settingsRead();
   assert.deepEqual(afterSettingsRemount.value, beforeSettingsRemount.value, 'saved settings survive service disposal and reload');
   assert.equal(afterSettingsRemount.backendRevision, beforeSettingsRemount.backendRevision);
@@ -737,6 +770,14 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal((await (await call({ action: 'ownedSkillAudit', id: candidate.id })).json()).events.length, 1);
   assert.equal((await call({ action: 'ownedSkillPin', id: candidate.id, revision: active.revision, pinned: true })).status, 200);
   assert.notEqual((await call({ action: 'ownedSkillPin', id: candidate.id, revision: active.revision, pinned: false })).status, 200);
+  const resetGoal = await (await call({ action: 'goalCreate', goal: { objective: '跨主会话保留', requestId: 'reset-checklist' } })).json();
+  const beforeResetAgent = await withSkills.engine.ensureSession();
+  await beforeResetAgent.whenIdle();
+  await withSkills.engine.resetMain();
+  const afterResetAgent = await withSkills.engine.ensureSession();
+  assert.notEqual(afterResetAgent.id, beforeResetAgent.id);
+  const afterResetGoals = await ctx.tools.get('assistant_goals', afterResetAgent).execute({ op: 'list' }, { agent: afterResetAgent });
+  assert.ok(afterResetGoals.goals.some(row => row.id === resetGoal.id && row.objective === '跨主会话保留'));
   await skillFiber.dispose();
   assert.equal(await ctx.skills.get(candidate.name), undefined);
 });

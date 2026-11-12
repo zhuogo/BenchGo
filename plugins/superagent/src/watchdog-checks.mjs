@@ -8,7 +8,6 @@ const summaries = Object.freeze({
   LEASE_EXPIRED: '执行租约持续过期，原分派仍未被既有机制处理',
   REQUEST_DEADLINE_EXCEEDED: '正在进行的模型请求已超过其真实截止时间',
   STOP_UNCONFIRMED: '停止请求已超过原系统确认期限，执行端尚未确认',
-  RECOVERY_NOT_CONVERGING: '既有自动核查或恢复多次尝试后仍未收敛',
 });
 const hostReasons = new Set(['FACTS_STALE', 'SCHEDULER_STALLED']);
 const executionReasons = Object.keys(summaries).filter(code => !hostReasons.has(code));
@@ -55,8 +54,7 @@ function priorCandidate(value, key) {
     ...(execution ? { execution } : {}), bootId: value.bootId,
     firstObservedAt: value.firstObservedAt, lastObservedAt: value.lastObservedAt,
     observations: value.observations, evidenceCursor: integer(value.evidenceCursor) ? value.evidenceCursor : null,
-    reachedWindow: value.reachedWindow === true, interrupted: value.interrupted === true,
-    ...(typeof value.conditionKey === 'string' && /^[a-f0-9]{64}$/u.test(value.conditionKey) ? { conditionKey: value.conditionKey } : {}) };
+    reachedWindow: value.reachedWindow === true, interrupted: value.interrupted === true };
 }
 
 /** Tri-state wait: true is an evidenced exemption; null cannot prove either work or a hang. */
@@ -65,10 +63,6 @@ function legitimateWait(row, now) {
   if (row.wait?.kind === 'none') return false;
   if (['background-job', 'long-operation'].includes(row.wait?.kind)) {
     const until = time(row.wait.expectedUntil);
-    return Number.isFinite(until) && until > now ? true : null;
-  }
-  if (row.wait?.kind === 'continuation') {
-    const until = time(row.recovery?.nextCheckAt);
     return Number.isFinite(until) && until > now ? true : null;
   }
   return null;
@@ -81,9 +75,8 @@ function legitimateWait(row, now) {
  */
 export function inspectWatchdogFacts({ facts, previous = {}, config = {}, now = Date.now() } = {}) {
   const windowMs = config.observationWindowMs ?? 120_000;
-  const escalationAttempts = config.escalationAttempts ?? 3;
   const intervalMs = (config.intervalSeconds ?? 60) * 1000;
-  if (!integer(now, 1) || !integer(windowMs, 1000) || !integer(escalationAttempts, 1)
+  if (!integer(now, 1) || !integer(windowMs, 1000)
     || !integer(intervalMs, 1000)) throw new TypeError('Invalid Watchdog observation configuration');
   const continuityMs = Math.max(windowMs, intervalMs * 2);
   const observedAt = time(facts?.observedAt), bootId = id(facts?.bootId) ? facts.bootId : null;
@@ -120,7 +113,7 @@ export function inspectWatchdogFacts({ facts, previous = {}, config = {}, now = 
 
   // A null predicate neither closes a prior fault nor contributes elapsed time
   // to its continuous observation window. Repeated old snapshots count once.
-  function inspect(reasonCode, execution, condition, delayed = false, conditionKey) {
+  function inspect(reasonCode, execution, condition, delayed = false) {
     const key = keyFor(reasonCode, execution), stored = candidates[key];
     checked.add(key);
     condition = !bootId || !timestampKnown ? null : condition === true ? true : condition === false ? false : null;
@@ -134,14 +127,14 @@ export function inspectWatchdogFacts({ facts, previous = {}, config = {}, now = 
       complete = false; unknown('candidates', 'limit-exceeded', execution); return;
     }
     const original = priorCandidate(previous?.[key], key);
-    const consecutive = original && original.bootId === bootId && !original.interrupted && original.conditionKey === conditionKey
+    const consecutive = original && original.bootId === bootId && !original.interrupted
       && observedAt >= time(original.lastObservedAt)
       && observedAt - time(original.lastObservedAt) <= continuityMs;
     const next = { key, reasonCode, kind: execution ? 'execution' : 'host',
       ...(execution ? { execution } : {}), bootId,
       firstObservedAt: consecutive ? original.firstObservedAt : iso(observedAt), lastObservedAt: iso(observedAt),
       observations: consecutive ? original.observations + Number(observedAt > time(original.lastObservedAt)) : 1,
-      evidenceCursor: cursor(facts), interrupted: false, ...(conditionKey ? { conditionKey } : {}) };
+      evidenceCursor: cursor(facts), interrupted: false };
     next.reachedWindow = !delayed || next.observations >= 2 && observedAt - time(next.firstObservedAt) >= windowMs;
     if (!stored) candidateCount++;
     candidates[key] = next;
@@ -206,12 +199,6 @@ export function inspectWatchdogFacts({ facts, previous = {}, config = {}, now = 
     inspect('STOP_UNCONFIRMED', execution, ended || explicitlyPaused || stopConfirmed ? false
       : stop?.requestedAt === null && stop?.confirmationOverdue === false ? false
         : !Number.isFinite(requested) || requested > now || typeof stop?.confirmationOverdue !== 'boolean' ? null : stop.confirmationOverdue);
-    const recovery = row.recovery;
-    const recovering = recovery && id(recovery.reasonCode) && integer(recovery.attempts)
-      && (recovery.automatic === true || recovery.escalated === true);
-    inspect('RECOVERY_NOT_CONVERGING', execution, suspended || recovery === null ? false
-      : !recovery || !integer(recovery.attempts) ? null
-        : recovering && recovery.attempts >= escalationAttempts, true, recovering ? digest(recovery.reasonCode) : undefined);
     // A fresh authoritative replacement or explicit terminal state retires
     // alerts belonging to the former execution; omission alone cannot do so.
     for (const key of previousByTicket.get(execution.ticketId) || []) {

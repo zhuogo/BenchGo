@@ -63,3 +63,71 @@ export function prepareChannelExternalSend(readConnection, readTrigger, channel,
   const source = structuredClone(trigger.source), text = input.text;
   return { origin: null, target: structuredClone(source), content: { text }, submission: { input: { targetTriggerId: input.targetTriggerId, text }, source, text } };
 }
+
+/** Adapter admission: platform identities and conversation policy stay at this boundary. */
+export function channelAdmissionCheck(event, policy) {
+  const source = event?.source;
+  const owner = event?.actor?.kind === 'human' && policy.ownerIds?.includes(event.actor.id);
+  const platformHuman = event?.actor?.kind === 'human' && policy.allowHumanRequests === true;
+  const machine = event?.actor?.kind === 'machine';
+  const allowedActor = !source?.selfOrigin && !source?.replyLoop && !!(owner || platformHuman || (machine ? policy.machineIds : policy.actorIds)?.includes(event?.actor?.id));
+  const valid = !!source && sourceTypes.includes(source.sourceType) && source.channel === event.channel && (!event.sourceType || event.sourceType === source.sourceType)
+    && (source.sourceType === 'system' || typeof source.conversationId === 'string' && !!source.conversationId && typeof source.chatId === 'string' && !!source.chatId)
+    && (source.sourceType !== 'topic' || typeof source.topicId === 'string' && !!source.topicId);
+  const allowedThread = valid && (policy.config ? channelSourceAllowed(policy.config, source, policy.connection)
+    : policy.sourceAllowed !== false && (!policy.threadIds || policy.threadIds.includes(source.conversationId)));
+  const direct = source?.sourceType === 'direct' && allowedActor;
+  const requested = direct || machine || event.mentioned === true;
+  const allowed = !!allowedThread && allowedActor && (direct || machine || (['group', 'topic'].includes(source?.sourceType) && event.mentioned === true));
+  return { explicit: allowed && event?.actor?.kind === 'human', requested, direct, allowed, allowedActor, allowedThread, valid,
+    strength: allowed ? (machine ? 'inferred' : 'explicit') : 'ignore',
+    reason: !allowedThread ? 'channelDenied' : !allowedActor ? 'actorDenied' : !requested ? 'notMentioned' : 'allowed' };
+
+}
+
+
+export function assessChannelAdmission({ policy, candidate, trigger, decision }) {
+  const channel = trigger.source?.channel || 'feishu';
+  const config = channel === 'feishu' ? policy.connection : policy.connections?.[channel]?.config;
+  if (!config) return { allowed: false, reason: 'unknown-channel' };
+  if (!['direct', 'group', 'topic', 'system'].includes(trigger.source?.sourceType)) return { allowed: false, reason: 'source-evidence-expired-recollect-required' };
+  if (decision.outcome === 'accept' && trigger.source.sourceType === 'group' && trigger.source.mentioned !== true) return { allowed: false, reason: 'group-new-task-requires-mention' };
+  const channelAllowed = channelScope(config, trigger.source, policy.connections?.[channel]);
+  const platformHuman = connectionPolicy({ config }).allowHumanRequests && trigger.actor.kind === 'human';
+  const explicit = trigger.actor.kind === 'human' && (platformHuman || (config.ownerOpenIds || config.ownerIds || []).includes(trigger.actor.id)) && candidate.gate.strength === 'explicit';
+  const inferred = trigger.actor.kind === 'machine' && (config.machineOpenIds || config.machineIds || []).includes(trigger.actor.id)
+    && candidate.gate.strength === 'inferred' && decision.outcome === 'accept' && (channel === 'feishu' ? policy.mode : config.admissionMode) === 'auto'
+    && validRuleReferences(decision.ruleIds, channel === 'feishu' ? policy.enabledRuleIds : policy.connections?.[channel]?.enabledRuleIds);
+  const machineAttention = decision.outcome === 'stop' && trigger.source.sourceType !== 'direct'
+    && trigger.actor.kind === 'machine' && (config.machineOpenIds || config.machineIds || []).includes(trigger.actor.id)
+    && candidate.gate.allowed === true && candidate.gate.strength === 'inferred' && candidate.gate.evidence?.sourceVerified === true;
+  if (!channelAllowed || candidate.gate.allowed === false || (!explicit && !inferred && !machineAttention)) return { allowed: false, reason: 'current-channel-actor-or-rule-denied' };
+  if (['answer', 'ask'].includes(decision.outcome)) {
+    if (!explicit || decision.ticketId !== undefined) return { allowed: false, reason: 'direct-reply-requires-explicit-human-source' };
+    return { allowed: true, reason: 'authenticated-direct-reply' };
+  }
+
+  const evidence = candidate.gate.evidence;
+  if (decision.outcome === 'stop' && trigger.source.sourceType !== 'direct') return { allowed: true, outcome: 'attach', routerAttention: true, reason: 'non-direct-stop-router-attention' };
+  if (decision.outcome === 'stop' && !(evidence?.sourceVerified === true && ['sourceType', 'connectionId', 'conversationId'].every(key => evidence[key] === trigger.source[key]))) return { allowed: false, reason: 'stop-requires-verified-source' };
+  return { allowed: true, reason: inferred ? 'enabled-written-rules' : 'authenticated-platform-request', mandate: {
+    ...(inferred ? { admission: 'enabled-rules', strength: 'inferred', actorKind: trigger.actor.kind, ruleIds: [...decision.ruleIds] } : { admission: 'platform-request', actorKind: trigger.actor.kind }),
+  } };
+}
+export function validateChannelMandate(mandate, policy) {
+  const source = mandate.source, channel = source?.channel || 'feishu';
+  const config = channel === 'feishu' ? policy.connection : policy.connections?.[channel]?.config;
+  if (!channelScope(config, source, policy.connections?.[channel])) return false;
+  const admitted = channelAdmissionCheck({ channel, source, actor: { id: mandate.actorId, kind: mandate.actorKind || 'human' } }, connectionPolicy({ ...policy.connections?.[channel], channel, config }));
+  return admitted.allowedActor && (mandate.admission !== 'enabled-rules' || mandate.strength === 'inferred'
+    && (channel === 'feishu' ? policy.mode : config.admissionMode) === 'auto'
+    && validRuleReferences(mandate.ruleIds, channel === 'feishu' ? policy.enabledRuleIds : policy.connections?.[channel]?.enabledRuleIds))
+    && mandate.controlledActions === 'require-current-policy-and-harness-approval';
+}
+function validRuleReferences(ruleIds, enabledRuleIds) {
+  return Array.isArray(ruleIds) && ruleIds.length > 0 && new Set(ruleIds).size === ruleIds.length
+    && Array.isArray(enabledRuleIds) && ruleIds.every(id => typeof id === 'string' && enabledRuleIds.includes(id));
+}
+function channelScope(config, source, row) {
+  return !!config?.enabled && channelSourceAllowed(config, source, row);
+}

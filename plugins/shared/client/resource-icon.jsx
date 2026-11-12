@@ -10,6 +10,7 @@ export function ResourceIcon({ name, size = 18 }) {
     feed: <><rect x="4" y="3" width="16" height="8" rx="2" /><rect x="4" y="15" width="16" height="6" rx="2" /><path d="M8 7h8" /></>,
     key: <><circle cx="8" cy="15" r="3" /><path d="m10.2 12.8 7.8-7.8m-2 2 2 2m-4 0 2 2" /></>,
     shield: <><path d="M12 3 4 6v6c0 4 4 7 8 9 4-2 8-5 8-9V6l-8-3Z" /><path d="m8.5 12 2.5 2.5 4.5-5" /></>,
+    target: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none" /></>,
   };
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>{shapes[name] || shapes.document}</svg>;
 }

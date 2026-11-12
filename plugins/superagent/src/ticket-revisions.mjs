@@ -64,25 +64,27 @@ export function installTicketRevisions({ db, tx, api, insertTicket }) {
           || JSON.stringify(trigger.source) !== JSON.stringify(mandate.source) || trigger.content !== mandate.instruction
           || validateMandate(mandate) !== true) throw fail('MANDATE_REVOKED', '工单变更需要当前有效的主人原始授权');
         const bound = db.prepare('SELECT ticket_id FROM sa_ticket_triggers WHERE trigger_id=? AND ticket_id<>? LIMIT 1').get(triggerId, ticketId);
-        if (bound) throw fail('TRIGGER_ALREADY_ASSIGNED', '当前指令已归属另一工单，请挂靠或使用新的调整指令');
+        const repeatedAdjustment = adjustment && db.prepare('SELECT 1 FROM sa_ticket_triggers tt JOIN sa_tickets t ON t.id=tt.ticket_id WHERE tt.trigger_id=? AND t.adjustment_of_ticket_id=? LIMIT 1').get(triggerId, ticketId);
+        if (bound && trigger.source.channel !== 'desktop' || repeatedAdjustment) throw fail('TRIGGER_ALREADY_ASSIGNED', '当前指令已归属另一工单，请挂靠或使用新的调整指令');
         if (!adjustment && JSON.stringify(mandate.project ?? null) !== JSON.stringify(ticket.mandate.project ?? null)
           && api.assignments(ticketId).some(row => api.runs(row.id).length)) throw fail('PROJECT_REQUIRES_ADJUSTMENT', '已有真实执行会话不能原地切换工作区；请停止原工单后创建关联调整');
         // A follow-up is not a new grant. Natural-language text never changes the
         // immutable source Mandate; structured authority changes require a host receipt.
-        let appliedMandate = { ...(adjustment ? mandate : api.currentTicketMandate(ticket.id, ticket.mandate)) };
-        if (ticketMandateDifference(ticket.mandate, mandate)) {
-          if (isTicketMandateNarrowing(ticket.mandate, mandate)) appliedMandate = { ...appliedMandate, ...(mandate.scope ? { scope: mandate.scope } : {}), ...(mandate.toolScope ? { toolScope: mandate.toolScope } : {}) };
+        const currentMandate = api.currentTicketMandate(ticket.id, ticket.mandate);
+        let appliedMandate = { ...(adjustment ? mandate : currentMandate) };
+        if (ticketMandateDifference(currentMandate, mandate)) {
+          if (isTicketMandateNarrowing(currentMandate, mandate)) appliedMandate = { ...appliedMandate, ...(mandate.scope ? { scope: mandate.scope } : {}), ...(mandate.toolScope ? { toolScope: mandate.toolScope } : {}) };
           else {
-            const difference = ticketMandateDifference(ticket.mandate, mandate);
+            const difference = ticketMandateDifference(currentMandate, mandate);
             const approval = typeof authorizeExpansion === 'function' && authorizeExpansion({ ticket, trigger, mandate, difference });
             if (!approval || approval.approved !== true || approval.triggerId !== trigger.id || approval.actorId !== trigger.actor.id
               || typeof approval.id !== 'string' || !approval.id) throw fail('MANDATE_EXPANSION_REQUIRED', '结构化授权范围发生变化，需要真实用户确认具体差异');
-            const approvalFingerprint = createHash('sha256').update(JSON.stringify([ticketId, ticket.mandate.authorizationVersion ?? 1, trigger.id, trigger.source, trigger.actor, difference])).digest('hex');
+            const approvalFingerprint = createHash('sha256').update(JSON.stringify([ticketId, currentMandate.authorizationVersion ?? 1, trigger.id, trigger.source, trigger.actor, difference])).digest('hex');
             const prior = db.prepare('SELECT fingerprint FROM sa_ticket_authorization_approvals WHERE approval_id=?').get(approval.id);
             if (prior && prior.fingerprint !== approvalFingerprint) throw fail('AUTHORIZATION_APPROVAL_CONFLICT', '授权回执已经绑定另一份范围差异');
             db.prepare('INSERT OR IGNORE INTO sa_ticket_authorization_approvals VALUES (?,?,?,?)').run(approval.id, ticketId, approvalFingerprint,
               JSON.stringify({ triggerId: trigger.id, actorId: trigger.actor.id, source: trigger.source, difference }));
-            appliedMandate = { ...mandate, authorizationVersion: (ticket.mandate.authorizationVersion ?? 1) + 1,
+            appliedMandate = { ...mandate, authorizationVersion: (currentMandate.authorizationVersion ?? 1) + 1,
               authorizationApproval: { id: approval.id, triggerId: trigger.id, actorId: trigger.actor.id, difference } };
           }
         }
@@ -90,7 +92,7 @@ export function installTicketRevisions({ db, tx, api, insertTicket }) {
           if (db.prepare('SELECT 1 FROM sa_ticket_triggers WHERE ticket_id=? AND trigger_id=?').get(ticketId, triggerId)) throw fail('TRIGGER_ALREADY_ASSIGNED', '关联调整需要新的用户指令');
           const next = insertTicket({ threadId: trigger.threadId, target, acceptance,
             title: `调整：${ticket.title}`, adjustmentOfTicketId: ticketId,
-            mandate: { ...appliedMandate, adjustment: { ticketId, resultVersion: ticket.resultVersion, instructionRevision: ticket.instructionRevision, reason } }, sourceTriggerIds: [triggerId] });
+            mandate: { ...appliedMandate, adjustment: { ticketId, resultVersion: ticket.resultVersion, instructionRevision: ticket.instructionRevision, reason } }, sourceTriggerIds: [triggerId], allowSharedDesktopSource: trigger.source.channel === 'desktop' });
           const at = new Date().toISOString();
           db.prepare('INSERT INTO sa_ticket_revisions VALUES (?,?,?,?,?)').run(next.id, 1, 'adjustment', JSON.stringify({ target, acceptance, mandate: next.mandate, reason, triggerId, adjustmentOfTicketId: ticketId }), at);
           db.prepare("INSERT INTO sa_assignments(id,ticket_id,payload,state,priority,created_at,updated_at) VALUES (?,?,?,'queued',0,?,?)").run(randomUUID(), next.id,
@@ -110,7 +112,7 @@ export function installTicketRevisions({ db, tx, api, insertTicket }) {
           JSON.stringify(completeSnapshot), at);
         db.prepare('UPDATE sa_tickets SET target=?,acceptance=?,instruction_revision=?,updated_at=? WHERE id=?').run(target, acceptance, revision, at, ticketId);
         db.prepare('INSERT OR IGNORE INTO sa_ticket_triggers VALUES (?,?)').run(ticketId, triggerId);
-        api.recordTicketInputInTransaction({ ticketId, triggerId, kind: 'revision', idempotencyKey: `trigger:${triggerId}`,
+        api.recordTicketInputInTransaction({ ticketId, triggerId, kind: 'revision', idempotencyKey: `trigger:${triggerId}:ticket:${ticketId}`,
           instructionRevision: revision, authorizationVersion: appliedMandate.authorizationVersion ?? 1,
           snapshot: { ...completeSnapshot, instructionRevision: revision, operation, createdAt: at } });
         db.prepare('INSERT INTO sa_ticket_revision_requests(request_key,fingerprint,ticket_id,revision,request_payload) VALUES (?,?,?,?,?)').run(requestKey, fingerprint, ticketId, revision, requestPayload ? JSON.stringify(requestPayload) : null);

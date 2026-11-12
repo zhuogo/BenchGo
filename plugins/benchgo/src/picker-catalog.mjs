@@ -26,7 +26,8 @@ export function createPickerCatalog({ commander, installer, profiles, providers,
   let installCache, installAt = 0, installationJob, catalogJob;
   const installations = async () => {
     if (installCache && Date.now() - installAt < cacheMs) return installCache;
-    if (!installationJob) installationJob = Promise.resolve(installer?.list?.() ?? []).then(rows => { installCache = rows; installAt = Date.now(); return rows; }).finally(() => { installationJob = undefined; });
+    // Model selection needs executable availability, not CLI versions or package-manager provenance.
+    if (!installationJob) installationJob = Promise.resolve(installer?.list?.({ includeDetails: false }) ?? []).then(rows => { installCache = rows; installAt = Date.now(); return rows; }).finally(() => { installationJob = undefined; });
     return installationJob;
   };
   const capability = tool => { const value = (routeService ?? commander?.routeService)?.supports?.(tool); return tool === 'deepseek' ? { supported: true } : value === true ? { supported: true } : value && typeof value === 'object' ? value : { supported: false }; };

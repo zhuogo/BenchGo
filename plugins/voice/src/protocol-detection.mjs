@@ -10,6 +10,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 // A fixed synthetic phrase never uploads the user's microphone recording during discovery.
 const probeAudio = () => readFile(new URL('./protocols/shared/protocol-probe.wav', import.meta.url));
 const ATTEMPT_TIMEOUT = 8000;
+const PLAYABLE_PCM_BYTES = 3840; // The common player's minimum 80 ms, 24 kHz PCM16 mono reserve.
+const PCM_BYTES_PER_MS = 48;
+const PROBE_TEXT = 'Hello. This is a voice connection test. Speech should continue smoothly from the first sentence to the next.';
 const apiType = config => config.apiType === 'stepfun' || config.apiType !== 'openai' && new URL(config.baseURL).hostname === 'api.stepfun.com' ? 'stepfun' : 'openai';
 const keyFor = (kind, config, requirement, explicit) => {
   const realtime = config.realtime || {};
@@ -39,7 +42,17 @@ export function protocolCandidates(kind, config, requirement = 'any', explicit =
 
 function capabilityRank(kind, descriptor) {
   if (kind === 'asr') return descriptor.transport === 'websocket' ? 0 : descriptor.transport === 'sse' ? 1 : 2;
-  return descriptor.inputStreaming ? 0 : descriptor.outputStreaming || descriptor.streaming ? 1 : 2;
+  // Sentence requests finish their text before synthesis. Incremental text
+  // input is therefore no playback advantage over another streaming output.
+  return descriptor.outputStreaming || descriptor.streaming ? 0 : 1;
+}
+
+function playbackRisk(attempt) {
+  if (!Number.isFinite(attempt.observedPlaybackGapMs)) return Infinity;
+  // Ignore sub-frame jitter; compare nearby continuity samples by start time.
+  // A packet gap alone is not an underrun: preceding PCM may cover it fully.
+  const gaps = Math.ceil(Math.max(0, attempt.observedPlaybackGapMs - 40) / 80);
+  return gaps + (attempt.audioSupplyRatio !== null && attempt.audioSupplyRatio < 0.95 ? 1 : 0);
 }
 
 /** Exercise the existing websocket adapter through an actual synthetic utterance. */
@@ -100,7 +113,8 @@ export class ProtocolDetection {
     if (!descriptor || !protocol || protocol === 'auto') throw new VoiceError('Unknown voice protocol', 409);
     const selected = { ...config, protocol }, started = this.now(); let firstOutputMs = null;
     const output = () => { if (firstOutputMs === null) firstOutputMs = Math.max(0, Math.round(this.now() - started)); };
-    let message, bytes = 0;
+    let message, bytes = 0, firstPlayableMs = null, maxAudioGapMs = 0, previousAudioAt = null;
+    let firstAudioAt = null, remainingAudioMs = 0, observedPlaybackGapMs = 0, audioSupplyRatio = null;
     if (kind === 'asr' && descriptor.transport === 'websocket') {
       if (!this.websocketProbe) throw new VoiceError('WebSocket detection unavailable', 409);
       await this.websocketProbe(selected, await this.audio(), signal, output); output();
@@ -110,7 +124,7 @@ export class ProtocolDetection {
       if (!result.text?.trim()) throw new VoiceError('No test transcription', 502, 'asr_no_speech');
       output(); message = '测试语音已识别，响应格式有效。';
     } else {
-      const upstream = await requestSpeech(this.fetcher, selected, 'Hello.', signal);
+      const upstream = await requestSpeech(this.fetcher, selected, PROBE_TEXT, signal);
       const type = upstream.headers.get('content-type') || '';
       const rate = upstream.headers.get('x-voice-sample-rate') || /(?:rate|samplerate|sample_rate)\s*=\s*"?(\d+)/iu.exec(type)?.[1];
       const channels = upstream.headers.get('x-voice-channels') || /channels\s*=\s*"?(\d+)/iu.exec(type)?.[1];
@@ -122,15 +136,34 @@ export class ProtocolDetection {
       try {
         while (true) {
           signal.throwIfAborted(); const { value, done } = await reader.read(); if (done) break;
-          if (value.byteLength) { bytes += value.byteLength; output(); }
+          if (value.byteLength) {
+            const receivedAt = this.now(); bytes += value.byteLength; output();
+            firstAudioAt ??= receivedAt;
+            if (previousAudioAt !== null) maxAudioGapMs = Math.max(maxAudioGapMs, Math.max(0, Math.round(receivedAt - previousAudioAt)));
+            if (firstPlayableMs !== null) {
+              const elapsed = Math.max(0, receivedAt - previousAudioAt);
+              observedPlaybackGapMs += Math.max(0, elapsed - remainingAudioMs);
+              remainingAudioMs = Math.max(0, remainingAudioMs - elapsed) + value.byteLength / PCM_BYTES_PER_MS;
+            } else if (bytes >= PLAYABLE_PCM_BYTES) {
+              firstPlayableMs = Math.max(0, Math.round(receivedAt - started));
+              remainingAudioMs = bytes / PCM_BYTES_PER_MS;
+            }
+            previousAudioAt = receivedAt;
+          }
           if (bytes > 12 * 1024 * 1024) throw new VoiceError('TTS test exceeds audio limit', 502, 'tts_pcm_format');
         }
       } finally { signal.removeEventListener('abort', cancel); cancel(); reader.releaseLock(); }
       signal.throwIfAborted();
       if (!bytes || bytes % 2) throw new VoiceError('Incomplete PCM response', 502, 'tts_pcm_format');
+      // A complete short utterance plays immediately even below the watermark.
+      firstPlayableMs ??= Math.max(0, Math.round(this.now() - started));
+      // Supply is measured over actual PCM arrival, excluding a late done event.
+      // A single burst has no measurable arrival interval, so its ratio is null.
+      if (previousAudioAt > firstAudioAt) audioSupplyRatio = Math.round(bytes / PCM_BYTES_PER_MS / (previousAudioAt - firstAudioAt) * 1000) / 1000;
+      observedPlaybackGapMs = Math.round(observedPlaybackGapMs);
       message = '已验证首段 PCM 音频与完整结束；时延仅代表本次测试。';
     }
-    return { message, firstOutputMs, completionMs: Math.max(0, Math.round(this.now() - started)), ...(kind === 'tts' ? { bytes } : {}) };
+    return { message, firstOutputMs, completionMs: Math.max(0, Math.round(this.now() - started)), ...(kind === 'tts' ? { bytes, firstPlayableMs, maxAudioGapMs, audioSupplyRatio, observedPlaybackGapMs } : {}) };
   }
   async detect(kind, config, { requirement = 'any', explicit = false, signal = new AbortController().signal } = {}) {
     if (!['asr', 'tts'].includes(kind) || !['any', 'streaming', 'http'].includes(requirement)) throw new VoiceError('Invalid protocol matching request');
@@ -168,10 +201,14 @@ export class ProtocolDetection {
       }
     }
     const supported = attempts.filter(attempt => attempt.status === 'supported').sort((left, right) => capabilityRank(kind, protocolDescriptor(kind, left.protocol)) - capabilityRank(kind, protocolDescriptor(kind, right.protocol))
+      || (kind === 'tts' ? playbackRisk(left) - playbackRisk(right) : 0)
+      || (kind === 'tts' ? (left.firstPlayableMs ?? Infinity) - (right.firstPlayableMs ?? Infinity) : 0)
       || (left.firstOutputMs ?? Infinity) - (right.firstOutputMs ?? Infinity) || (left.completionMs ?? Infinity) - (right.completionMs ?? Infinity));
     if (supported.length) {
       const best = supported[0];
-      return { status: 'supported', protocol: best.protocol, apiType: protocolDescriptor(kind, best.protocol).apiType, attempts, firstOutputMs: best.firstOutputMs, completionMs: best.completionMs, message: explicit ? '当前协议验证通过。' : '已比较可用协议，按用途能力与本次首输出时间匹配；请保存所选协议。' };
+      return { status: 'supported', protocol: best.protocol, apiType: protocolDescriptor(kind, best.protocol).apiType, attempts, firstOutputMs: best.firstOutputMs, completionMs: best.completionMs,
+        ...(kind === 'tts' ? { firstPlayableMs: best.firstPlayableMs, maxAudioGapMs: best.maxAudioGapMs, audioSupplyRatio: best.audioSupplyRatio, observedPlaybackGapMs: best.observedPlaybackGapMs } : {}),
+        message: explicit ? '当前协议验证通过。' : kind === 'tts' ? '已比较可用协议，优先参考本次音频供给连续性，再比较起播时间；请保存所选协议。' : '已比较可用协议，按用途能力与本次首输出时间匹配；请保存所选协议。' };
     }
     const inconclusive = attempts.some(attempt => attempt.status === 'inconclusive');
     return { status: inconclusive ? 'inconclusive' : 'unsupported', protocol: '', apiType: '', attempts, message: inconclusive ? '暂时无法匹配，请检查配置后重试或手动选择。' : '没有符合当前用途的协议，请检查接口类型和模型。' };

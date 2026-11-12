@@ -25,16 +25,14 @@ test('goal completion retains version and refreshes only after success without h
   assert.equal(h.opened, 1);
   assert.equal(h.calls.length, 1);
 });
-test('goal and evaluation deletion retain their versioned update contract', async () => {
-  for (const kind of ['goal', 'evaluation']) {
-    const h = harness();
-    h.render({ kind }).find(n => n.props.label === '删除').props.onClick();
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [['taskUpdate', { kind, id: 't1', operation: 'delete', version: 4 }]]);
-    assert.equal(h.changed, 1);
-    assert.deepEqual(h.archived, []);
-    assert.deepEqual(h.restored, []);
-  }
+test('goal deletion retains its versioned update contract', async () => {
+  const h = harness();
+  h.render({ kind: 'goal' }).find(n => n.props.label === '删除').props.onClick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [['taskUpdate', { kind: 'goal', id: 't1', operation: 'delete', version: 4 }]]);
+  assert.equal(h.changed, 1);
+  assert.deepEqual(h.archived, []);
+  assert.deepEqual(h.restored, []);
 });
 test('terminal tickets open archive review with the exact row instead of deleting it', async () => {
   for (const state of [{ status: 'completed' }, { status: 'waiting', executionControl: { stopped: true } }]) {

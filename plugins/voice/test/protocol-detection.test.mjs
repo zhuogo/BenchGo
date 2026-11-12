@@ -17,6 +17,22 @@ const json = input => new Request('http://app.test/api/voice', { method: 'POST',
 const wav = () => readFile(new URL('../src/protocols/shared/protocol-probe.wav', import.meta.url));
 const store = () => ({ value: { dictation: true, readAloud: true, call: true, asr: endpoint({ baseURL: 'https://api.stepfun.com/v1', apiType: 'stepfun', protocol: 'stepfun-sse' }), tts: endpoint({ voice: 'original-voice', speed: 1.2, stream: true, apiType: 'openai', protocol: 'speech' }) }, snapshot() { return publicConfig(this.value); }, async configure(patch) { this.value = updateConfig(this.value, patch); return this.snapshot(); } });
 
+async function measurePcm(chunks, completedAt = chunks.at(-1)[0]) {
+  let now = 0, source, requestedText;
+  const service = new ProtocolDetection({ now: () => now, fetcher: async (_url, options) => {
+    requestedText = JSON.parse(options.body).input;
+    return new Response(new ReadableStream({ start(controller) { source = controller; } }), { headers: { 'content-type': 'audio/pcm' } });
+  } });
+  const pending = service.probe('tts', endpoint(), 'speech', new AbortController().signal);
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  await settle();
+  for (const [at, duration] of chunks) {
+    now = at; source.enqueue(new Uint8Array(duration * 48)); await settle();
+  }
+  now = completedAt; source.close();
+  return { ...await pending, requestedText };
+}
+
 test('matching candidates honor exact host or selected type and purpose without using model names', () => {
   assert.deepEqual(protocolCandidates('asr', endpoint()), ['openai-websocket', 'transcriptions-sse', 'transcriptions']);
   assert.deepEqual(protocolCandidates('asr', endpoint(), 'http'), ['transcriptions-sse', 'transcriptions']);
@@ -33,12 +49,94 @@ test('matching tests all candidates and prefers capability before latency', asyn
   assert.equal(result.protocol, 'openai-websocket'); assert.equal(result.firstOutputMs, 400); assert.equal(result.attempts.length, 3);
 });
 
-test('later same-capability TTS format can beat earlier successful formats by measured first output', async () => {
+test('later same-capability TTS format can beat earlier successful formats by measured playable PCM', async () => {
   const visited = [];
-  class Measured extends ProtocolDetection { async probe(_kind, _config, protocol) { visited.push(protocol); if (protocol === 'stepfun-speech-websocket') throw new VoiceError('No WS', 502, 'tts_http_404'); return { message: 'valid', firstOutputMs: protocol === 'speech' ? 5 : 200, completionMs: 300 }; } }
+  class Measured extends ProtocolDetection { async probe(_kind, _config, protocol) { visited.push(protocol); if (protocol === 'stepfun-speech-websocket') throw new VoiceError('No WS', 502, 'tts_http_404'); return { message: 'valid', firstOutputMs: protocol === 'speech' ? 5 : 200, firstPlayableMs: protocol === 'speech' ? 30 : 240, maxAudioGapMs: 20, observedPlaybackGapMs: 0, audioSupplyRatio: 2, completionMs: 300 }; } }
   const result = await new Measured().detect('tts', endpoint({ apiType: 'stepfun' }), { requirement: 'streaming' });
   assert.ok(visited.includes('stepfun-speech-sse')); assert.ok(visited.includes('speech-stream'));
   assert.equal(result.protocol, 'speech'); assert.equal(result.firstOutputMs, 5); assert.equal(result.attempts.length, visited.length);
+  assert.equal(result.firstPlayableMs,30);assert.equal(result.maxAudioGapMs,20);
+});
+
+test('nominal WebSocket text streaming and tiny first packets do not beat earlier playable audio',async()=>{
+  const visited=[],measured={
+    'stepfun-speech-websocket':{firstOutputMs:5,firstPlayableMs:700,completionMs:900,maxAudioGapMs:695},
+    'stepfun-speech-sse':{firstOutputMs:80,firstPlayableMs:100,completionMs:300,maxAudioGapMs:20},
+    speech:{firstOutputMs:20,firstPlayableMs:150,completionMs:250,maxAudioGapMs:130},
+    'speech-stream':{firstOutputMs:80,firstPlayableMs:100,completionMs:350,maxAudioGapMs:20},
+  };
+  class Measured extends ProtocolDetection {async probe(_kind,_config,protocol){visited.push(protocol);return {message:'valid',observedPlaybackGapMs:0,audioSupplyRatio:2,...measured[protocol]};}}
+  const config=endpoint({apiType:'stepfun',protocol:'stepfun-speech-websocket'}),service=new Measured();
+  const result=await service.detect('tts',config,{requirement:'streaming'});
+  assert.equal(visited.length,4);assert.equal(result.protocol,'stepfun-speech-sse');assert.equal(result.firstPlayableMs,100);
+  assert.equal(result.attempts.find(row=>row.protocol==='stepfun-speech-websocket').firstOutputMs,5);
+  visited.length=0;const explicit=await service.detect('tts',config,{requirement:'streaming',explicit:true});
+  assert.deepEqual(visited,['stepfun-speech-websocket']);assert.equal(explicit.protocol,'stepfun-speech-websocket');assert.equal(explicit.firstPlayableMs,700);
+});
+
+test('TTS matching prefers continuous supply over an earlier 80ms burst without overriding explicit selection', async () => {
+  const early = await measurePcm([[100, 80], [500, 80], [900, 80]]);
+  const steady = await measurePcm([[200, 160], [300, 160], [400, 160]]);
+  assert.equal(early.observedPlaybackGapMs, 640); assert.equal(early.audioSupplyRatio, 0.3);
+  assert.equal(steady.observedPlaybackGapMs, 0); assert.equal(steady.audioSupplyRatio, 2.4);
+  assert.ok(early.requestedText.length > 100); assert.equal(early.requestedText, steady.requestedText);
+  class Measured extends ProtocolDetection { async probe(_kind, _config, protocol) { return protocol === 'speech' ? early : steady; } }
+  const service = new Measured(), config = endpoint({ apiType: 'openai', protocol: 'speech' }), saved = structuredClone(config);
+  const result = await service.detect('tts', config, { requirement: 'streaming' });
+  assert.equal(result.protocol, 'speech-stream'); assert.equal(result.firstPlayableMs, 200);
+  assert.equal(result.observedPlaybackGapMs, 0); assert.equal(result.audioSupplyRatio, 2.4);
+  const explicit = await service.detect('tts', config, { explicit: true });
+  assert.equal(explicit.protocol, 'speech'); assert.equal(explicit.observedPlaybackGapMs, 640);
+  assert.deepEqual(config, saved);
+});
+
+test('large PCM bursts cover packet gaps and a delayed done event is not a playback shortfall', async () => {
+  const result = await measurePcm([[100, 1000], [900, 1000]], 3000);
+  assert.equal(result.maxAudioGapMs, 800); assert.equal(result.observedPlaybackGapMs, 0);
+  assert.equal(result.audioSupplyRatio, 2.5); assert.equal(result.completionMs, 3000);
+});
+
+test('supply statistics expose below-realtime delivery and near-risk candidates still compare playable latency', async () => {
+  const slow = await measurePcm([[100, 80], [300, 80], [500, 80]]);
+  assert.equal(slow.audioSupplyRatio, 0.6); assert.equal(slow.observedPlaybackGapMs, 240);
+  class Measured extends ProtocolDetection { async probe(_kind, _config, protocol) {
+    return { firstOutputMs: 100, firstPlayableMs: protocol === 'speech' ? 100 : 180, observedPlaybackGapMs: protocol === 'speech' ? 20 : 0, audioSupplyRatio: 1.5, completionMs: 500 };
+  } }
+  assert.equal((await new Measured().detect('tts', endpoint())).protocol, 'speech');
+});
+
+test('TTS playable time uses accumulated 80ms PCM and gaps between nonempty audio chunks',async()=>{
+  let now=1000,source;
+  const service=new ProtocolDetection({now:()=>now,fetcher:async()=>new Response(new ReadableStream({start(controller){source=controller;}}),{headers:{'content-type':'audio/pcm'}})});
+  const pending=service.detect('tts',endpoint({protocol:'speech'}),{explicit:true});
+  const settle=()=>new Promise(resolve=>setImmediate(resolve));await settle();
+  now=1010;source.enqueue(new Uint8Array(2));await settle();
+  now=1080;source.enqueue(new Uint8Array(3838));await settle();
+  now=1130;source.close();const result=await pending;
+  assert.equal(result.firstOutputMs,10);assert.equal(result.firstPlayableMs,80);assert.equal(result.completionMs,130);assert.equal(result.maxAudioGapMs,70);
+  assert.deepEqual(result.attempts[0].firstPlayableMs,result.firstPlayableMs);
+});
+
+test('a validated complete short utterance becomes playable at completion without waiting for 80ms PCM',async()=>{
+  let now=0,source;
+  const service=new ProtocolDetection({now:()=>now,fetcher:async()=>new Response(new ReadableStream({start(controller){source=controller;}}),{headers:{'content-type':'audio/pcm'}})});
+  const pending=service.detect('tts',endpoint({protocol:'speech'}),{explicit:true});
+  await new Promise(resolve=>setImmediate(resolve));now=20;source.enqueue(new Uint8Array([1,0]));await new Promise(resolve=>setImmediate(resolve));
+  now=75;source.close();const result=await pending;
+  assert.equal(result.firstOutputMs,20);assert.equal(result.firstPlayableMs,75);assert.equal(result.completionMs,75);assert.equal(result.maxAudioGapMs,0);
+  assert.equal(result.audioSupplyRatio,null);assert.equal(result.observedPlaybackGapMs,0);
+});
+
+test('protocol test HTTP results expose playable and supply measurements without altering saved selection',async()=>{
+  const value=store(),saved=structuredClone(value.value);let requests=0;
+  const handlers=createVoiceHandlers(value,{fetcher:async()=>{requests++;return pcm();}});
+  try{
+    const response=await handlers.config(json({action:'protocol.test',kind:'tts'}));assert.equal(response.status,200);
+    const {result}=await response.json();assert.equal(requests,1);assert.equal(result.protocol,'speech');
+    assert.equal(typeof result.firstPlayableMs,'number');assert.equal(result.attempts[0].firstPlayableMs,result.firstPlayableMs);assert.equal(result.maxAudioGapMs,0);
+    assert.equal(result.audioSupplyRatio,null);assert.equal(result.observedPlaybackGapMs,0);assert.equal(result.attempts[0].observedPlaybackGapMs,0);
+    assert.deepEqual(value.value,saved);
+  }finally{handlers.dispose();}
 });
 
 test('authentication, limits and no-speech stop safely with remaining candidates marked not-tested', async () => {

@@ -16,7 +16,7 @@ export function conciseTicketSummary(ticket) {
     : [concise(reason?.reason || live?.blocker, 120),
       reason?.resumeConditions || reason?.nextStep ? `继续条件：${concise(reason.resumeConditions || reason.nextStep, 120)}` : '',
       reason?.code === 'EXECUTION_FAILED' ? '下一步：补充条件后明确继续或修订要求。' : concise(live?.progress, 60)].filter(Boolean).join('；');
-  return concise(summary || ({ running: '正在推进。', waiting: '等待执行条件。', completed: '已完成并交付。' })[ticket.status]);
+  return concise(summary || ({ running: '正在推进。', waiting: '等待执行条件。', completed: '已完成。' })[ticket.status]);
 }
 
 /** Read current desktop conversation tickets from the orchestration store. */
@@ -41,8 +41,8 @@ export function createDesktopTicketAccess(database) {
           id: ticket.id, title: normalizeTicketTitle(ticket.title, ticket.target), status: ticket.status,
           liveSummary: conciseTicketSummary(ticket),
           result: ticket.resultVersion > 0 ? { ticketId: ticket.id, version: ticket.resultVersion } : null,
-          adjustmentOfTicketId: ticket.adjustmentOfTicketId,
-          project: ticket.mandate.project, threadId: ticket.threadId,
+          adjustmentOfTicketId: ticket.adjustmentOfTicketId ?? null,
+          project: ticket.mandate.project ?? null, threadId: ticket.threadId,
           instructionRevision: ticket.instructionRevision,
           createdAt: ticket.createdAt, updatedAt: ticket.updatedAt,
         })),

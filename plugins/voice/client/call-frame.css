@@ -1,4 +1,0 @@
-.voice-call-frame,.voice-call-frame-content{position:relative;display:flex;flex:1;flex-direction:column;min-width:0;min-height:0}
-.voice-call-frame-target{position:absolute;inset:0;display:none;min-width:0;min-height:0;z-index:12}
-.voice-call-frame.is-active>.voice-call-frame-content{visibility:hidden;pointer-events:none}
-.voice-call-frame.is-active>.voice-call-frame-target{display:flex;flex-direction:column}

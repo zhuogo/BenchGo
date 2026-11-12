@@ -109,6 +109,21 @@ test('real Session events project phases and safe counters without private tool/
   end(session); assert.equal(f.read().worker.activity, '本轮执行已结束'); assert.equal(f.read().watermark.sessionSeq, session.seq - 1);
 });
 
+test('persisted completion overrides stale session activity and exposes no saving stage', async t => {
+  const f = await fixture(t), session = f.worker.agent.session;
+  turn(session); call(session);
+  const evidence = { outcome: 'completed', completion: { kind: 'completed' }, instructionRevision: 1, runId: f.run.id, sessionId: session.id, summary: '完成结果' };
+  f.database.updateRun(f.run.id, { ...f.ownership, state: 'verifying', evidence });
+  assert.notEqual(f.read().phase, 'verifying');
+  assert.doesNotMatch(f.read().worker.activity, /正在保存执行结果/);
+  f.database.commitResult(f.ticket.id, { assignment: f.assignment, uniqueKey: 'completed-projection',
+    status: 'completed', result: evidence });
+  const projection = f.read();
+  assert.equal(projection.phase, 'finished');
+  assert.equal(projection.worker.status, 'completed');
+  assert.equal(projection.worker.activity, '执行已结束');
+});
+
 test('events arriving after the immutable recovery cut survive startup and duplicate/late notifications', async t => {
   const f = await fixture(t, { begin: false }), session = f.worker.agent.session;
   turn(session); const old = call(session);
@@ -227,11 +242,6 @@ test('runtime evidence uses the shared source and domain commit signals with red
     assert.equal(evidence.assignment.fence, f.assignment.fence); assert.equal(typeof evidence.assignment.leaseUntil, 'number');
     assert.equal(evidence.executionAlive.status, 'idle'); assert.equal(evidence.request.state, 'unknown');
     assert.equal(evidence.request.deadline, null);
-    assert.equal(evidence.modelEvidence.outputObservation, 'unknown', 'tool activity alone does not prove observed artifact changes');
-    assert.deepEqual(evidence.modelEvidence.outputChanges, []);
-    assert.equal(evidence.artifactCoverage.known, false); assert.equal(evidence.artifactCoverage.complete, false);
-    assert.equal(evidence.modelEvidence.target, '检查执行 token=[秘密已隐藏]');
-    assert.deepEqual(evidence.modelEvidence.acceptance, ['验证结果 api_key=[秘密已隐藏]']);
     assert.equal(evidence.watermarks[0].sourceSeq, session.seq - 1);
     assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE|arguments|opaque-provider|opaque\/model/);
     assert.throws(() => runtime.executionFacts.evidence({ ticketId: f.ticket.id, runId: 'foreign-run' }), { code: 'EXECUTION_FACT_BINDING' });
@@ -273,9 +283,6 @@ test('official live jobs prove only execution-owned background work, without inv
     assert.deepEqual(read().wait, { kind: 'background-job', since: expectedSince, expectedUntil: null });
     const evidence = read();
     assert.equal(evidence.request.deadline, null);
-    assert.equal(evidence.modelEvidence.outputObservation, 'unknown', 'an owned background job does not prove observed artifact changes');
-    assert.deepEqual(evidence.modelEvidence.outputChanges, []);
-    assert.equal(evidence.artifactCoverage.known, false); assert.equal(evidence.artifactCoverage.complete, false);
     assert.doesNotMatch(JSON.stringify(read()), /PRIVATE|label|progress|spillPaths/);
     await own.settle();
     assert.equal(read().wait.kind, 'none');

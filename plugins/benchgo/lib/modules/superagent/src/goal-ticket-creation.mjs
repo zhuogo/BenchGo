@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { rejectModelOverride } from './work-role-policy.mjs';
 
 /** Host-only composition: approved live owner -> durable Tickets -> Goal aggregate. */
@@ -6,7 +7,6 @@ export async function createGoalTickets({ goal, exec, ownerAgent, threadId, dele
   // Capture the entire submitted tree before the first asynchronous validation.
   goal = structuredClone(goal);
   if (!ownerAgent || exec.agent !== ownerAgent) throw new Error('目标缺少所属主助手会话');
-  if (typeof goal?.requestId !== 'string' || !goal.requestId.trim()) throw new Error('目标缺少稳定请求标识');
   // A leaf's own complete instruction is the compatibility criterion when an
   // older caller omits acceptance. Normalize before matching/reserving so the
   // Goal and its Ticket share an exact contract on every idempotent retry.
@@ -20,6 +20,14 @@ export async function createGoalTickets({ goal, exec, ownerAgent, threadId, dele
     else if ((node.acceptance == null || (typeof node.acceptance === 'string' && !node.acceptance.trim())) && typeof node.text === 'string') node.acceptance = node.text;
   };
   normalize(goal);
+  if (goal.requestId === undefined) {
+    const messageId = currentHumanInstruction(ctx, ownerAgent)?.message?.id;
+    if (!messageId) throw new Error('目标缺少当前原始用户消息');
+    goal.requestId = createHash('sha256').update(JSON.stringify([ownerAgent.id, messageId, goal], (_key, value) =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value)).digest('hex');
+  }
+  if (typeof goal.requestId !== 'string' || !goal.requestId.trim()) throw new Error('目标请求标识无效');
   const existing = scheduler.matchGoalRequest(goal);
   if (existing && existing.nextStep !== 'building_children') return existing;
   const seen = new Set();

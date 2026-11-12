@@ -51,7 +51,7 @@ test('durable intake binds connection evidence, queues direct assessment and pro
     assert.equal(result.requiresEval, true);
     assert.equal(result.trigger, null);
     assert.equal(result.intakeEvent.intakeStage, 'pending');
-    assert.equal(result.candidate.gate.evidence.ownerVerified, true);
+    assert.equal(Object.hasOwn(result.candidate.gate.evidence, 'ownerVerified'), false);
     assert.equal(result.candidate.gate.evidence.sourceVerified, true);
     assert.equal(result.intakeEvent.source.connectionId, 'feishu');
     assert.equal((await f.ingress.receive('feishu', event)).duplicate, true);

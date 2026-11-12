@@ -11,7 +11,7 @@ function catalogFixture(overrides = {}) {
   const state = { bindings: { shared: ['codex', 'claude'] } };
   const rows = [{ id: 'model-a', name: 'Model A' }];
   const service = createPickerCatalog({
-    installer: { list: async () => { calls.installations++; return ['codex', 'claude'].map(id => ({ id, installed: true, chatSupported: true })); } },
+    installer: { list: async options => { assert.deepEqual(options, { includeDetails: false }); calls.installations++; return ['codex', 'claude'].map(id => ({ id, installed: true, chatSupported: true })); } },
     profiles: { list: async () => { calls.profiles++; return structuredClone(state); } },
     providers: { list: async () => { calls.providers++; return [{ id: 'shared', name: 'Shared' }]; } },
     routeService: { supports: () => true },

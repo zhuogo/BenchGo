@@ -12,9 +12,10 @@ function activityTime(row) {
 /** Human list organization is separate from execution and acceptance state. */
 export function createTaskManagement({ database, orchestration, scheduler }) {
   const key = (kind, id) => `task-presentation:${kind}:${id}`;
-  const settled = (kind, row) => kind === 'ticket' ? ticketIsSettled(row) : (kind === 'goal' ? ['completed', 'failed', 'cancelled'] : ['unavailable', 'decided']).includes(row.status);
+  const settled = (kind, row) => kind === 'ticket' ? ticketIsSettled(row) : (kind === 'goal' && row.executionKind === 'checklist') || (kind === 'goal' ? ['completed', 'failed', 'cancelled'] : ['unavailable', 'decided']).includes(row.status);
   const executionRevision = (kind, row) => kind === 'ticket' ? row.instructionRevision ?? 1 : kind === 'goal' ? row.rowVersion ?? 0 : row.dispositionRevision ?? 0;
   const meta = (kind, row) => {
+    if (kind === 'goal' && row.executionKind === 'checklist') return { version: row.rowVersion, title: row.objective, completed: row.status === 'completed', deleted: !!row.deleted };
     const stored = database.meta(key(kind, row.id)) || { version: 0 };
     if (kind === 'ticket') {
       const value = ticketPresentation(row, stored);
@@ -44,6 +45,10 @@ export function createTaskManagement({ database, orchestration, scheduler }) {
       const current = meta(kind, row);
       if (!Number.isSafeInteger(version) || version !== current.version) throw Object.assign(new Error('任务已变化，请刷新后重试'), { code: 'REVISION_CONFLICT' });
       if (kind !== 'ticket' && current.deleted) throw new Error('任务已删除');
+      if (kind === 'goal' && row.executionKind === 'checklist') {
+        const goal = scheduler.updateGoal(id, operation === 'rename' ? { objective: title } : operation === 'delete' ? { deleted: true } : { status: operation === 'complete' ? 'completed' : 'active' }, { rowVersion: version });
+        return { id, kind, goal, taskMeta: meta(kind, goal) };
+      }
       if (operation === 'rename' && (typeof title !== 'string' || !title.trim() || kind !== 'ticket' && title.trim().length > 200)) throw new Error(kind === 'ticket' ? '名称不能为空' : '名称须为 1 至 200 字');
       if (['complete', 'delete'].includes(operation)) {
         if (!settled(kind, row)) throw Object.assign(new Error('任务仍在执行或等待执行，请先停止，再进行此操作'), { code: 'EXECUTION_PENDING' });

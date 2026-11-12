@@ -41,6 +41,21 @@ test('unexpected event EOF reports disconnection without replaying an accepted t
   assert.equal(h.requests.filter(row => row.action === 'turn').length, 1); await h.client.dispose();
 });
 
+test('late errors for interrupted reply are isolated without hiding a later execution reply for the same request', async () => {
+  const h = fixture(); await h.client.start();
+  h.emit({ type: 'start', messageId: 'old', requestId: 'task' }); await tick();
+  await h.client.interrupt();
+  h.emit({ type: 'error', messageId: 'old', requestId: 'task', error: 'old model error' });
+  h.emit({ type: 'start', messageId: 'result', requestId: 'task' });
+  h.emit({ type: 'text', messageId: 'result', requestId: 'task', text: '任务已完成。' });
+  h.emit({ type: 'error', messageId: 'result', requestId: 'task', error: 'current provider error' });
+  await tick();
+  assert.equal(h.events.some(event => event.error === 'old model error'), false);
+  assert.ok(h.events.some(event => event.text === '任务已完成。'));
+  assert.ok(h.events.some(event => event.error === 'current provider error'));
+  await h.client.dispose();
+});
+
 test('conversation closes a pending stream and never emits callbacks after dispose', async () => {
   const h = fixture(); await h.client.start(); await h.client.dispose();
   assert.equal(h.client.closed, true); assert.equal(h.events.length, 0); assert.equal(h.errors.length, 0);

@@ -26,8 +26,29 @@ test('claims an assignment once and commits execution before completing its leas
   assert.equal((await worker.runOnce()).claimed, 0);
 });
 
+test('idle worker skips policy reads but an expired lease still triggers reconciliation', async t => {
+  const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+  let reads = 0;
+  const worker = createAssistantAssignmentWorker({ database, readPolicy: async () => { reads++; return {}; },
+    validateMandate: () => true, execute: async () => ({ summary: 'done' }), onResult: async () => {} });
+  t.after(async () => { await worker.stop(); database.close(); });
+  assert.equal((await worker.runOnce()).claimed, 0);
+  assert.equal(reads, 0);
+  database.createThread({ id: 'thread', source: { type: 'desktop', id: 'thread' } });
+  const ticket = database.createTicket({ threadId: 'thread', target: 'work', mandate: {} });
+  database.createAssignment(ticket.id, {});
+  assert.equal(database.hasAssignmentWork(), true);
+  const [assignment] = database.claimAssignments('expired-owner', { validateMandate: () => true, now: Date.now() - 2000, leaseMs: 1000 });
+  assert.equal(database.hasAssignmentWork(), true);
+  assert.equal((await worker.runOnce()).claimed, 0);
+  assert.equal(reads, 1);
+  assert.equal(database.getAssignment(assignment.id).state, 'uncertain');
+  assert.equal((await worker.runOnce()).claimed, 0);
+  assert.equal(reads, 1);
+});
+
 test('execution failure is uncertain and never blindly retried', async t => {
-  const { database, ticket, worker } = fixture(t, { execute: async () => { throw new Error('connection lost after action'); } });
+  const { database, ticket, worker } = fixture(t, { execute: async () => { throw Object.assign(new Error('connection lost after action'), { executionEffects: { effectsVerified: false, unknownCallIds: ['send'] } }); } });
   assert.equal((await worker.runOnce()).results[0].status, 'uncertain');
   assert.equal(database.assignments(ticket.id)[0].state, 'uncertain');
   assert.equal((await worker.runOnce()).claimed, 0);
@@ -44,7 +65,7 @@ test('a parked Attention releases its single slot without being marked completed
   const worker = createAssistantAssignmentWorker({ database, readPolicy: async () => ({}), validateMandate: () => true,
     execute: async assignment => {
       executions++;
-      if (assignment.ticketId !== first.id) return { summary: 'independent done' };
+      if (assignment.ticketId !== first.id) return { summary: 'independent done', completion: { kind: 'completed' } };
       const ownership = { owner: assignment.owner, fence: assignment.fence };
       const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'session', directory: 'directory' });
       database.updateRun(run.id, { ...ownership, state: 'submitted' });
@@ -75,7 +96,7 @@ test('a parked Attention releases its single slot without being marked completed
   assert.equal(database.queueAnsweredAttention({ validateMandate: () => true }), 0);
 });
 
-test('policy narrowing after execution prevents result delivery', async t => {
+test('global policy changes after normal execution do not block saving its result', async t => {
   let permitted = true, delivered = false;
   const { database, ticket, worker } = fixture(t, {
     validateMandate: () => permitted,
@@ -83,8 +104,8 @@ test('policy narrowing after execution prevents result delivery', async t => {
     onResult: async () => { delivered = true; },
   });
   await worker.runOnce();
-  assert.equal(delivered, false);
-  assert.equal(database.assignments(ticket.id)[0].state, 'uncertain');
+  assert.equal(delivered, true);
+  assert.equal(database.assignments(ticket.id)[0].state, 'completed');
 });
 
 test('shutdown aborts active execution and preserves uncertainty', async t => {
@@ -92,7 +113,7 @@ test('shutdown aborts active execution and preserves uncertainty', async t => {
   const started = new Promise(resolve => { ready = resolve; });
   const { database, ticket, worker } = fixture(t, {
     execute: async (_assignment, { signal }) => new Promise((_resolve, reject) => {
-      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      signal.addEventListener('abort', () => reject(Object.assign(signal.reason, { executionEffects: { effectsVerified: false, unknownCallIds: ['pending'] } })), { once: true });
       ready();
     }),
   });
@@ -102,6 +123,22 @@ test('shutdown aborts active execution and preserves uncertainty', async t => {
   await pending;
   assert.equal(database.assignments(ticket.id)[0].state, 'uncertain');
   assert.equal((await worker.runOnce()).skipped, true);
+});
+
+test('a produced failure draft survives unavailable diagnostic reads without becoming successful', async t => {
+  let saved;
+  const { database, worker } = fixture(t, {
+    execute: async () => { throw Object.assign(new Error('storage unavailable'), {
+      resultDraft: { summary: 'Partial failure report', outcome: 'failed', failure: { cause: 'actual failure' }, completion: { kind: 'completed' } },
+    }); },
+    onResult: async result => { saved = result; },
+  });
+  const runs = database.runs;
+  database.runs = () => { throw new Error('database read unavailable'); };
+  try { await worker.runOnce(); } finally { database.runs = runs; }
+  assert.equal(saved.outcome, 'failed');
+  assert.equal(saved.failure.cause, 'actual failure');
+  assert.equal(saved.summary, 'Partial failure report');
 });
 
 test('a free slot starts new work while another execution remains busy', async t => {
@@ -122,4 +159,15 @@ test('a free slot starts new work while another execution remains busy', async t
   assert.equal(second.results[0].status, 'completed');
   assert.equal(count, 2);
   release(); await first;
+});
+
+ test('verified ordinary execution failure terminates without reconciliation or replay', async t => {
+  const { database, ticket, worker } = fixture(t, { execute: async () => {
+    throw Object.assign(new Error('Configured project unavailable'), { code: 'ENOENT', executionEffects: { effectsVerified: true, unknownCallIds: [] } });
+  } });
+  assert.equal((await worker.runOnce()).results[0].status, 'failed');
+  const assignment = database.assignments(ticket.id)[0];
+  assert.equal(assignment.state, 'failed');
+  assert.equal(assignment.firstFailure.message, 'Configured project unavailable');
+  assert.equal((await worker.runOnce()).claimed, 0);
 });

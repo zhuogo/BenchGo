@@ -1,12 +1,10 @@
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
-import { useConfirmation } from '../../shared/client/ui/confirmation.jsx';
-import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDirtyRegistry } from './dirty-registry.mjs';
-import { TicketCheckpoints } from './checkpoints.jsx';
 import { Modal } from '@deepseek-ai/dsh-client-ui-primitives';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
 import taskCss from './tasks.css';
 import { TicketBoard, TicketViewControls } from './ticket-board.jsx';
 import { filterTickets } from './ticket-board.mjs';
@@ -20,15 +18,14 @@ import { activityTask, archivedActivityTicket } from './activity-data.mjs';
 import { TaskExecution } from './task-execution.jsx';
 import { useAssistantActivity } from './use-activity.jsx';
 import { TicketCleanup } from './ticket-cleanup.jsx';
+import { TaskDocument, TaskMarkdown } from './task-document.jsx';
 
-const deliveryStates = { queued: '等待交付', claimed: '正在交付', sent: '渠道已接收', uncertain: '发送结果待核实' };
-const terminalStates = ['completed'];
 const activityTime = row => {
   const updated = Date.parse(row.updatedAt), created = Date.parse(row.createdAt);
   return Number.isFinite(updated) ? updated : Number.isFinite(created) ? created : -Infinity;
 };
 
-export function TicketChange({ api, ticket, reload, onDirtyChange, startOpen = false }) {
+export function TicketChange({ api, ticket, reload, onDirtyChange, startOpen = false, hideTrigger = false, onClose }) {
   const [draft, setDraft] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const request = useRef(null);
   useEffect(() => { onDirtyChange?.(!!draft); return () => onDirtyChange?.(false); }, [!!draft, onDirtyChange]);
@@ -43,10 +40,11 @@ export function TicketChange({ api, ticket, reload, onDirtyChange, startOpen = f
   const submit = async event => {
     event.preventDefault(); if (busy || !draft?.target.trim() || !draft.reason.trim()) return;
     setBusy(true); setError(''); request.current ||= crypto.randomUUID();
-    try { await api('ticketChange', { id: ticket.id, ...draft, requestId: request.current }); setDraft(null); await reload(); }
+    try { await api('ticketChange', { id: ticket.id, ...draft, requestId: request.current }); setDraft(null); onClose?.(); await reload(); }
     catch (cause) { setError(cause.message); }
     finally { setBusy(false); }
   };
+  if (hideTrigger && !draft) return null;
   return <section className="ba-stack" aria-label="工单要求管理">
     {draft ? <form className="ba-stack" onSubmit={submit}><h3>{draft.operation === 'adjustment' ? '创建关联调整单' : '修订工单'} · 要求版本 {draft.expectedInstructionRevision}</h3>
       <p className="ba-note">{terminal ? '保留原工单成果与记录，按当前授权创建关联调整单。' : '补充会在下一工具边界应用，在途操作继续按已提交要求执行。'}</p>
@@ -54,14 +52,12 @@ export function TicketChange({ api, ticket, reload, onDirtyChange, startOpen = f
         <label className="ba-connection-field"><span>验收条件</span><textarea rows={3} value={draft.acceptance} onChange={event => update({ acceptance: event.target.value })} /></label>
         <label className="ba-connection-field"><span>变更原因</span><textarea required maxLength={10000} rows={2} value={draft.reason} onChange={event => update({ reason: event.target.value })} /></label></fieldset>
       {ticket.instructionRevision !== draft.expectedInstructionRevision && <p role="status" className="ba-note">工单已有新版本。请保留所需内容，关闭表单后重新打开。</p>}
-      {error && <p role="alert">{error}</p>}<div className="ba-row-actions"><Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={() => setDraft(null)}>取消</Button><Button type="submit" className="ba-primary" disabled={busy || pending || ticket.instructionRevision !== draft.expectedInstructionRevision || !draft.target.trim() || !draft.reason.trim()}>{busy ? '提交中…' : '保存并排队'}</Button></div>
-    </form> : <div><TaskIconButton icon={terminal ? 'refresh' : 'edit'} label={terminal ? '创建关联调整单' : '修订要求'} disabled={pending} onClick={open} />{pending && <p className="ba-note">系统正在自动核查停止状态或外部效果，核查结束后可调整要求。</p>}</div>}
-    {!!ticket.revisions?.length && <Disclosure title={<>要求修订历史</>}><ol>{ticket.revisions.map(row => <li key={row.instructionRevision}><strong>版本 {row.instructionRevision} · {({ original: '原始要求', revise: '修订', adjustment: '关联调整' })[row.operation] || row.operation}</strong><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.target}</p>{row.acceptance && <p>验收条件：{row.acceptance}</p>}{row.reason && <p>原因：{row.reason}</p>}<small>{row.createdAt}</small></li>)}</ol></Disclosure>}
+      {error && <p role="alert">{error}</p>}<div className="ba-row-actions"><Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={() => { setDraft(null); onClose?.(); }}>取消</Button><Button type="submit" className="ba-primary" disabled={busy || pending || ticket.instructionRevision !== draft.expectedInstructionRevision || !draft.target.trim() || !draft.reason.trim()}>{busy ? '提交中…' : '保存并排队'}</Button></div>
+    </form> : !hideTrigger && <div><TaskIconButton icon={terminal ? 'refresh' : 'edit'} label={terminal ? '创建关联调整单' : '修订要求'} disabled={pending} onClick={open} />{pending && <p className="ba-note">执行尚未结束或已中断，已有记录保留。</p>}</div>}
   </section>;
 }
 
-export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenExecution, requestedTicket }) {
-  const [confirm, confirmation] = useConfirmation();
+export function Tickets({ api, onDirtyChange, onDetailChange, onSchedule, onOpenExecution, requestedTicket }) {
   const [listDirty, setListDirty] = useState(false);
   const dirtyEditor = useDirtyRegistry((dirty, keys) => { setListDirty(keys.some(key => key.startsWith('rename:'))); onDirtyChange?.(dirty, keys); });
   const { rows: activityRows, error: activityError, refresh, refreshTickets } = useAssistantActivity(api, { live: true });
@@ -71,7 +67,11 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
   const error = actionError || activityError;
   const [concurrency, setConcurrency] = useState(''), [configRevision, setConfigRevision] = useState(null), [settingsOpen, setSettingsOpen] = useState(false), [configError, setConfigError] = useState('');
   const [selectedId, setSelectedId] = useState(null), [changeId, setChangeId] = useState(null), [detailDirty, setDetailDirty] = useState(false);
+  const [detailTab, setDetailTab] = useState('execution');
+  const detailTabsId = useId();
+  const detailTabs = [['execution', '记录', '执行记录', 'schedules'], ['requirements', '要求', '任务要求', 'edit'], ['result', '结果', '结果与证据', 'box']].map(([value, label, ariaLabel, icon]) => ({ value, label, ariaLabel, icon: <UIIcon name={icon} size={16} />, panelId: `${detailTabsId}-panel-${value}` }));
   const [cleanup, setCleanup] = useState(null);
+  useLayoutEffect(() => { onDetailChange?.(!!selectedId || !!cleanup); return () => onDetailChange?.(false); }, [selectedId, cleanup, onDetailChange]);
   const [archiveScope, setArchiveScope] = useState('active');
   const [loadedDetailId, setLoadedDetailId] = useState(null);
   const [view, setView] = useState('list'), [query, setQuery] = useState('');
@@ -84,7 +84,7 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
   }, []);
   const openDetail = useCallback((id, change = false) => {
     rememberListPosition(); setCleanup(null);
-    setChangeId(change ? id : null); setSelectedId(id); setLoadedDetailId(id); setError('');
+    setChangeId(change ? id : null); setDetailTab(change ? 'requirements' : 'execution'); setSelectedId(id); setLoadedDetailId(id); setError('');
   }, [rememberListPosition]);
   const openCleanup = (mode, ticketIds) => { rememberListPosition(); setSelectedId(null); setCleanup({ mode, ticketIds }); setError(''); };
   const closeDetail = () => { setSelectedId(null); setChangeId(null); setError(''); };
@@ -124,13 +124,6 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
     } catch (cause) { setConfigError(cause.message); }
     finally { setBusy(null); }
   };
-  const stop = async row => {
-    if (!await confirm({ title: `停止“${normalizeTicketTitle(row.taskMeta?.title || row.title, row.target)}”？`, description: '停止后将拦截后续动作，并等待执行端结束当前执行；已发生的外部操作仍会保留。', confirmLabel: '停止工单', destructive: true })) return;
-    setBusy(row.id);
-    try { await api('ticketStop', { ticketId: row.id }); await refreshTickets([row.id]); }
-    catch (cause) { setError(cause.message); }
-    finally { setBusy(null); }
-  };
   const visibleRows = rows?.filter(row => !row.taskMeta?.deleted && archivedActivityTicket(row) === (archiveScope === 'archived'));
   const filteredRows = filterTickets(visibleRows || [], query);
   const cleanupCandidates = filteredRows.filter(row => (row.status === 'completed' || row.executionControl?.stopped) && !row.cleanup?.id && !row.taskMeta?.archived);
@@ -138,57 +131,70 @@ export function Tickets({ api, onDirtyChange, onCreateGoal, onSchedule, onOpenEx
   const switchArchiveScope = value => {
     setError(''); setArchiveScope(value);
   };
+  const openChange = id => { setDetailTab('requirements'); setChangeId(id); };
   const renderTicket = (row, detailOnly = false) => {
       const { result, delivery, safetyWait } = ticketSnapshot(row);
+      const resultText = result?.delivery?.text || result?.finalSummary;
+      const resultSummary = ticketResultSummary(result);
       const activity = activityTask(row, 'ticket'), status = activity.status;
       const waiting = ticketWaiting(row);
-      const stateLabel = ticketLabels[status] || '等待';
+      const deliveryLabel = delivery?.receipt?.status === 'suppressed' ? '回复已取消' : delivery?.state === 'sent' ? '已送达'
+        : delivery?.state === 'uncertain' ? '发送待核实' : delivery?.payload?.replyState === 'pending' ? '待生成回复' : '待送达';
+      const stateLabel = status === 'completed' ? `执行完成${delivery ? ` · ${deliveryLabel}` : ''}` : ticketLabels[status] || '等待';
       const control = row.executionControl || {};
+      const changeBlocked = safetyWait || control.pauseRequested || control.stopRequested || row.assignments?.some(item => item.state === 'uncertain');
+      const changeLabel = row.status === 'completed' || control.stopped ? '创建关联调整单' : '修订要求';
       const recovery = continuationRecovery(row);
       const title = normalizeTicketTitle(row.taskMeta?.title || row.title, row.target);
       const summary = waiting?.reason || activity.progressSummary || activity.detail || activity.phase;
       const updatedLabel = row.updatedAt ? new Date(row.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
       const actions = [];
-      const canPause = row.status === 'running' && !Object.values(control).some(Boolean);
       if (row.status !== 'completed' && !control.stopped) {
         if (recovery) actions.push({ icon: 'play', label: recovery.label, onClick: () => lifecycle(row, 'ticketResume', recovery.input), disabled: busy !== null });
         else if (control.paused && !control.stopRequested && !safetyWait) actions.push({ icon: 'play', label: '继续工单', onClick: () => lifecycle(row, 'ticketResume'), disabled: busy !== null });
-        if (canPause) actions.push({ icon: 'pause', label: '暂停工单', onClick: () => lifecycle(row, 'ticketPause'), disabled: busy !== null });
-        if (!control.stopRequested && !control.stopped) actions.push({ icon: 'stop', label: '停止工单', onClick: () => stop(row), disabled: busy !== null });
       } else actions.push({ icon: 'refresh', label: '创建关联调整单', onClick: () => openDetail(row.id, true), disabled: busy !== null });
-      return <React.Fragment key={row.id}>{!detailOnly && <TaskListRow api={api} kind="ticket" row={row} title={title} verification={waiting?.verificationSummary} summary={<><span className="ba-task-state" data-state={status}>{stateLabel}</span><Tooltip label={summary} onlyWhenClipped><span className="ba-task-summary" tabIndex={0}>{summary}</span></Tooltip>{updatedLabel && <time className="ba-task-updated" dateTime={row.updatedAt}>更新 {updatedLabel}</time>}{row.cleanup?.archivedAt && <time className="ba-task-updated" dateTime={row.cleanup.archivedAt}>归档整理于 {new Date(row.cleanup.archivedAt).toLocaleString('zh-CN')}</time>}</>} onChanged={() => refreshTickets([row.id])} onOpen={() => openDetail(row.id)} onArchive={() => openCleanup('archive', [row.id])} onRestore={() => openCleanup('restore', [row.id])} actions={actions} onDirtyChange={dirtyEditor(`rename:${row.id}`)} />}
-      {detailOnly && <TaskDetail inline open title={<TaskStatusTitle title={title} status={status} label={stateLabel} />} dirty={detailDirty} onClose={closeDetail} footer={(row.executionSession?.available || canPause || (!terminalStates.includes(row.status) && !waiting)) && <div className="ba-row-actions">
-        {row.executionSession?.available && <Button variant="ghost" disabled={!onOpenExecution || busy !== null} onClick={async () => {
+      return <React.Fragment key={row.id}>{!detailOnly && <TaskListRow api={api} kind="ticket" row={row} title={title} summary={<><span className="ba-task-state" data-state={status}>{stateLabel}</span><Tooltip label={summary} onlyWhenClipped><span className="ba-task-summary" tabIndex={0}>{summary}</span></Tooltip>{updatedLabel && <time className="ba-task-updated" dateTime={row.updatedAt}>更新 {updatedLabel}</time>}{row.cleanup?.archivedAt && <time className="ba-task-updated" dateTime={row.cleanup.archivedAt}>归档整理于 {new Date(row.cleanup.archivedAt).toLocaleString('zh-CN')}</time>}</>} onChanged={() => refreshTickets([row.id])} onOpen={() => openDetail(row.id)} onArchive={() => openCleanup('archive', [row.id])} onRestore={() => openCleanup('restore', [row.id])} actions={actions} onDirtyChange={dirtyEditor(`rename:${row.id}`)} />}
+      {detailOnly && <TaskDetail inline open title={<TaskStatusTitle title={title} status={status} label={stateLabel} />} headerActions={<><div className="ba-ticket-detail-tabs"><SegmentedControl options={detailTabs} value={detailTab} onChange={setDetailTab} label="工单详情内容" tabIdPrefix={detailTabsId} /></div><TaskIconButton icon={row.status === 'completed' || control.stopped ? 'refresh' : 'edit'} label={changeLabel} tooltip={changeBlocked ? '执行尚未结束或已中断，已有记录保留。' : changeLabel} disabled={changeBlocked || detailDirty || busy !== null} onClick={() => openChange(row.id)} /></>} dirty={detailDirty} onClose={closeDetail} footer={row.executionSession?.available && <div className="ba-row-actions">
+        {row.executionSession?.available && <TaskIconButton icon="external" label={busy === `execution:${row.id}` ? '正在打开执行会话…' : '查看执行会话'} disabled={!onOpenExecution || busy !== null} onClick={async event => {
+          event.currentTarget.closest('.ba-task-inline')?.focus({ preventScroll: true });
           setBusy(`execution:${row.id}`); setError('');
           try { await onOpenExecution(row.executionSession); } catch (cause) { setError(`执行会话暂时无法打开：${cause.message || cause}`); }
           finally { setBusy(null); }
-        }}>{busy === `execution:${row.id}` ? '正在打开执行会话…' : '查看执行会话'}</Button>}
-        {canPause && <Button variant="ghost" disabled={busy !== null} onClick={() => lifecycle(row, 'ticketPause')}>{busy === row.id ? '正在提交暂停…' : '暂停工单'}</Button>}
-        {!terminalStates.includes(row.status) && !waiting && <Button variant="outline" disabled={busy !== null} onClick={() => stop(row)}>{busy === row.id ? '正在提交停止…' : '停止工单'}</Button>}
+        }} />}
       </div>}>
         {error && <p role="alert">{error}</p>}
         {row.cleanup?.id && <section className="ba-cleanup-record" aria-label="归档记录"><div><strong>已归档整理</strong>{row.cleanup.archivedAt && <time dateTime={row.cleanup.archivedAt}>{new Date(row.cleanup.archivedAt).toLocaleString('zh-CN')}</time>}<p className="ba-note">成果与执行记录仍保留。恢复展示不会重新执行工单。</p></div><Button variant="outline" disabled={detailDirty || busy !== null} onClick={() => openCleanup('restore', [row.id])}>恢复展示</Button></section>}
-        <TicketWaiting key={`${row.id}:${row.instructionRevision}:${row.resultVersion}`} api={api} ticket={row} onRefresh={() => refreshTickets([row.id])} onOpenResources={() => setChangeId(row.id)} showQuestion={false} />
-        {!safetyWait && !row.assignments?.some(item => item.state === 'uncertain') && <section className="ba-stack" aria-label="待处理交互">{row.attentions?.map(attention => <TicketAttention key={`${attention.id}:${row.instructionRevision}`} api={api} ticket={row} attention={attention} onAnswered={() => refreshTickets([row.id])} />)}</section>}
-        {result && <section className="ba-ticket-result-summary"><h3>{status === 'completed' ? '结果摘要' : '最近结果'}</h3><p>{ticketResultSummary(result) || '当前结果没有文字摘要。'}</p></section>}
-        {!result && !waiting && summary && <section className="ba-ticket-result-summary"><h3>当前进展</h3><p>{summary}</p></section>}
-        <TaskExecution key={row.id} execution={activity.execution} ticketStatus={status} executionControl={row.executionControl} stale={!!error} />
-        <TicketFacts ticket={row} />
-        {!row.executionSession?.available && <p className="ba-note">当前未能定位执行会话，工单记录仍可查看。</p>}
-        <p className="ba-note">{row.mandate?.source?.channel === 'feishu' ? '飞书' : '桌面'} · {delivery ? deliveryStates[delivery.state] || delivery.state : '尚无交付结果'}</p>
-        {result && <Disclosure title={<>查看结果与证据 · 要求版本 {result.instructionRevision ?? 1}</>}>{(result.instructionRevision ?? 1) !== (row.instructionRevision ?? 1) && <p className="ba-note">这是旧要求的结果，当前版本尚待执行。</p>}{(result.delivery?.text || result.finalSummary) && <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result.delivery?.text || result.finalSummary}</p>}{result.selfCheck && <p>自检：{result.selfCheck.summary}</p>}{result.failure && <p>无法完成：{result.failure.cause}<br />已尝试：{result.failure.attempted}<br />继续条件：{result.failure.resumeConditions}</p>}<ul>{result.evidenceRefs?.map((ref, index) => <li key={index}>会话：{ref.sessionId || '—'}{ref.runId ? ` · 执行：${ref.runId}` : ''}</li>)}</ul></Disclosure>}
-        {delivery?.lastError && <p role="status" className="ba-note">{delivery.lastError}</p>}
-        <section className="ba-stack" aria-label="工单操作"><TicketChange api={api} ticket={row} reload={reload} onDirtyChange={detailChanged} startOpen={changeId === row.id} />
-        <TicketCheckpoints ticket={row} list={async input => (await api('checkpointList', input)).checkpoints} preview={input => api('checkpointPreview', input)} restore={input => api('checkpointRestore', input)} reload={reload} /></section>
+        <TicketWaiting singleLine key={`${row.id}:${row.instructionRevision}:${row.resultVersion}`} api={api} ticket={row} onRefresh={() => refreshTickets([row.id])} onOpenResources={() => openChange(row.id)} showQuestion={false} />
+        {!!row.attentions?.length && !safetyWait && !row.assignments?.some(item => item.state === 'uncertain') && <section className="ba-stack" aria-label="待处理交互">{row.attentions.map(attention => <TicketAttention key={`${attention.id}:${row.instructionRevision}`} api={api} ticket={row} attention={attention} onAnswered={() => refreshTickets([row.id])} />)}</section>}
+        <section id={`${detailTabsId}-panel-execution`} role="tabpanel" aria-labelledby={`${detailTabsId}-execution`} hidden={detailTab !== 'execution'} tabIndex={0} className="ba-ticket-detail-panel">
+          {!result && !waiting && summary && !activity.execution?.summary?.text && <section className="ba-ticket-result-summary"><h3>当前进展</h3><p>{summary}</p></section>}
+          <TaskExecution key={row.id} execution={activity.execution} ticketStatus={status} executionControl={row.executionControl} stale={!!error} sessionAvailable={row.executionSession?.available} />
+          {!row.executionSession?.available && <p className="ba-note">当前未能定位执行会话，工单记录仍可查看。</p>}
+        </section>
+        <section id={`${detailTabsId}-panel-requirements`} role="tabpanel" aria-labelledby={`${detailTabsId}-requirements`} hidden={detailTab !== 'requirements'} tabIndex={0} className="ba-ticket-detail-panel">
+          <TicketFacts key={`requirements:${row.id}`} ticket={row} />
+          <TicketChange key={`change:${row.id}`} api={api} ticket={row} reload={reload} onDirtyChange={detailChanged} startOpen={changeId === row.id} hideTrigger onClose={() => setChangeId(null)} />
+        </section>
+        <section id={`${detailTabsId}-panel-result`} role="tabpanel" aria-labelledby={`${detailTabsId}-result`} hidden={detailTab !== 'result'} tabIndex={0} className="ba-ticket-detail-panel">
+          {result ? <>
+            {(result.instructionRevision ?? 1) !== (row.instructionRevision ?? 1) && <p className="ba-note">这是旧要求的结果，当前版本尚待执行。</p>}
+            {(!resultText || resultSummary !== resultText.trim()) && <TaskDocument title={status === 'completed' ? '结果摘要' : '最近结果'} icon="box" meta={!resultText && `要求版本 ${result.instructionRevision ?? 1}`}><TaskMarkdown text={resultSummary || '当前结果没有文字摘要。'} /></TaskDocument>}
+            {resultText && <TaskDocument title="结果正文" icon="document" meta={`要求版本 ${result.instructionRevision ?? 1}`}><TaskMarkdown text={resultText} /></TaskDocument>}
+            {result.selfCheck && <TaskDocument title="自检" icon="check"><TaskMarkdown text={result.selfCheck.summary} /></TaskDocument>}
+            {result.failure && <TaskDocument title="未完成说明" icon="bulb"><section><h4>无法完成</h4><TaskMarkdown text={result.failure.cause} /></section><section><h4>已尝试</h4><TaskMarkdown text={result.failure.attempted} /></section><section><h4>继续条件</h4><TaskMarkdown text={result.failure.resumeConditions} /></section></TaskDocument>}
+            {!!result.evidenceRefs?.length && <TaskDocument title="证据来源" icon="link" meta={`${result.evidenceRefs.length} 项`}><ul className="ba-ticket-evidence">{result.evidenceRefs.map((ref, index) => <li key={index}><UIIcon name="link" size={16} /><dl><div><dt>会话</dt><dd>{ref.sessionId || '—'}</dd></div>{ref.runId && <div><dt>执行</dt><dd>{ref.runId}</dd></div>}</dl></li>)}</ul></TaskDocument>}
+          </> : <ResourceState title="尚无结果" description="执行结果保存后会显示在这里。" />}
+          {delivery?.lastError && <p role="status" className="ba-note">{delivery.lastError}</p>}
+        </section>
       </TaskDetail>}</React.Fragment>;
 
   };
-  return <section className="ba-group ba-tasks" aria-label="工单">{confirmation}<style>{taskCss}</style><div ref={listContainer} hidden={!!selectedId || !!cleanup} style={selectedId || cleanup ? { display: 'none' } : undefined} className="ba-task-list-container"><div className="ba-group-head"><div><h2>工单</h2><p>查看执行进展，确认结果与下一步。</p></div><div className="ba-task-actions"><TaskIconButton icon="archive" label="归档已结束工单" disabled={!cleanupCandidates.length || listDirty || detailDirty || busy !== null} onClick={() => openCleanup('archive', cleanupCandidates.map(row => row.id))} />{onSchedule && <TaskIconButton icon="schedules" label="定时任务" onClick={onSchedule} />}<TaskIconButton icon="settings" label="设置" onClick={() => { setSettingsOpen(true); setConfigRevision(null); void loadConfig(); }} />{onCreateGoal && <Button type="button" className="ba-primary" onClick={onCreateGoal}><UIIcon name="plus" size={16} />新建持续目标</Button>}</div></div>
+  return <section className="ba-group ba-tasks" aria-label="工单"><style>{taskCss}</style><div ref={listContainer} hidden={!!selectedId || !!cleanup} style={selectedId || cleanup ? { display: 'none' } : undefined} className="ba-task-list-container">
     <Modal open={settingsOpen} onClose={closeSettings} title="工单设置" closeLabel="关闭" footer={<><Button variant="ghost" className="cmd-dialog-button" disabled={busy === 'configuration'} onClick={closeSettings}>取消</Button><Button className="cmd-dialog-button cmd-dialog-primary" type="submit" form="ba-worker-settings" disabled={configRevision === null || busy === 'configuration' || !Number.isInteger(Number(concurrency)) || Number(concurrency) < 1}>{busy === 'configuration' ? '保存中…' : '保存'}</Button></>}><form id="ba-worker-settings" className="cmd-rename-form ba-worker-settings" aria-label="并发执行设置" onSubmit={saveConcurrency}><div className="ba-worker-settings-intro"><UIIcon name="settings" size={22} /><div><strong>执行容量</strong><p id="ba-worker-concurrency-help">设置同时执行的工单数量，按设备性能与模型额度调整。</p></div></div><label htmlFor="ba-worker-concurrency">并发数</label><div className="ba-worker-settings-input"><input id="ba-worker-concurrency" aria-describedby="ba-worker-concurrency-help" autoFocus type="number" min="1" step="1" required value={concurrency} disabled={configRevision === null || busy === 'configuration'} onChange={event => setConcurrency(event.target.value)} /><span>项工单</span></div>{configRevision === null && !configError && <p className="ba-worker-settings-status" role="status"><UIIcon name="refresh" size={16} />正在读取执行设置…</p>}{configError && <p className="ba-worker-settings-error" role="alert"><UIIcon name="close" size={16} /><span>{configError}</span><Button variant="ghost" type="button" disabled={busy === 'configuration'} onClick={loadConfig}>重新读取</Button></p>}</form></Modal>
-    <TicketViewControls disabled={listDirty || detailDirty} view={view} onViewChange={setView} archiveScope={archiveScope} onArchiveScopeChange={switchArchiveScope} query={query} onQueryChange={setQuery} count={filteredRows.length} total={visibleRows?.length} panelId={`${viewId}-panel`} tabIdPrefix={`${viewId}-tab`} />
+    <TicketViewControls disabled={listDirty || detailDirty} view={view} onViewChange={setView} archiveScope={archiveScope} onArchiveScopeChange={switchArchiveScope} query={query} onQueryChange={setQuery} archiveAction={<TaskIconButton icon="archive" label="归档已结束工单" tooltip={rows === null ? '正在同步可归档工单' : cleanupCandidates.length ? `归档已结束工单 · ${cleanupCandidates.length} 项可归档` : '暂无可归档工单'} disabled={!cleanupCandidates.length || listDirty || detailDirty || busy !== null} onClick={() => openCleanup('archive', cleanupCandidates.map(row => row.id))} />} panelId={`${viewId}-panel`} tabIdPrefix={`${viewId}-tab`}><div className="ba-task-actions ba-task-list-actions">{onSchedule && <TaskIconButton icon="schedules" label="定时任务" onClick={onSchedule} />}<TaskIconButton icon="settings" label="设置" onClick={() => { setSettingsOpen(true); setConfigRevision(null); void loadConfig(); }} /></div></TicketViewControls>
     {error && (rows === null ? <ResourceState kind="error" title="工单暂时无法读取" description={error} onAction={reload} /> : <div className="ba-task-feedback" role="alert"><UIIcon name="close" size={18} /><span tabIndex={0} aria-label="工单错误详情">工单未能更新：{error}</span><Button variant="ghost" type="button" className="ba-quiet" onClick={reload}>重试读取</Button></div>)}
     {rows === null && !error && <ResourceState kind="loading" title="正在读取工单" description="正在同步执行进展与交付结果。" />}
-    {visibleRows?.length === 0 && !error && <ResourceState icon="box" title={archiveScope === 'archived' ? '暂无归档工单' : '暂无工单'} description={archiveScope === 'archived' ? '手动归档的工单保存在这里，成果与执行记录仍可查看。' : '在聊天中交办任务，或创建一个持续目标。完成的工单会保留在当前列表。'} actionLabel={archiveScope === 'archived' ? '查看当前工单' : '新建持续目标'} onAction={archiveScope === 'archived' ? () => switchArchiveScope('active') : onCreateGoal} />}
+    {visibleRows?.length === 0 && !error && <ResourceState icon="box" title={archiveScope === 'archived' ? '暂无归档工单' : '暂无工单'} description={archiveScope === 'archived' ? '手动归档的工单保存在这里，成果与执行记录仍可查看。' : '在 SuperAgent 对话中交办任务。完成的工单会保留在当前列表。'} actionLabel={archiveScope === 'archived' ? '查看当前工单' : undefined} onAction={archiveScope === 'archived' ? () => switchArchiveScope('active') : undefined} />}
     {visibleRows?.length > 0 && <div id={`${viewId}-panel`} role="tabpanel" aria-labelledby={`${viewId}-tab-${view}`}>
       {!filteredRows.length ? <ResourceState icon="search" title="没有匹配的工单" description="换个关键词，或清除搜索查看全部工单。" actionLabel="清除搜索" onAction={() => setQuery('')} />
         : view === 'board' ? <TicketBoard rows={filteredRows} renderTicket={row => renderTicket(row)} />

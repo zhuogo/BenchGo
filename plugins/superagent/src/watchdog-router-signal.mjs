@@ -4,7 +4,7 @@ import { ticketPaused } from './ticket-lifecycle.mjs';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const phases = { opened: 0, escalated: 1, resolved: 2 };
-const passiveReasons = new Set(['EXECUTION_INACTIVE', 'LEASE_EXPIRED', 'REQUEST_DEADLINE_EXCEEDED', 'MODEL_NO_PROGRESS', 'MODEL_OFF_TARGET']);
+const passiveReasons = new Set(['EXECUTION_INACTIVE', 'LEASE_EXPIRED', 'REQUEST_DEADLINE_EXCEEDED']);
 const terminal = new Set(['cancelled', 'completed', 'failed', 'closed']);
 
 export const watchdogIncidentIdentity = signal => signal?.kind === 'watchdog'
@@ -43,6 +43,8 @@ export function watchdogNoticeCurrent(signal, requests) {
 export function inspectWatchdogRouterSignal(database, signal, snapshot, { now = Date.now() } = {}) {
   const observation = signal?.observation, identity = observation?.execution;
   const invalid = reason => ({ valid: false, reason });
+  if (observation?.kind === 'model') return invalid('legacy-model-observation-retired');
+  if (observation?.reasonCode === 'RECOVERY_NOT_CONVERGING') return invalid('legacy-recovery-observation-retired');
   if (signal?.kind !== 'watchdog' || !snapshot || !Number.isSafeInteger(snapshot.currentCursor ?? snapshot.cursor))
     return invalid('execution-facts-unavailable');
   if (observation.evidenceCursor !== null && observation.evidenceCursor > (snapshot.currentCursor ?? snapshot.cursor))
@@ -68,9 +70,6 @@ export function inspectWatchdogRouterSignal(database, signal, snapshot, { now = 
     && row.assignment.fence === identity.fence && row.run?.id === run.id && row.run.sessionId === identity.sessionId
     && row.ticket.instructionRevision === identity.instructionRevision && row.run.instructionRevision === identity.instructionRevision);
   if (!facts || observation.evidenceCursor === null) return invalid('execution-evidence-unavailable');
-  if (observation.kind === 'model' && (!Number.isSafeInteger(facts.evidenceCursor) || facts.evidenceCursor > observation.evidenceCursor
-    || !facts.watermarks?.some(mark => mark.sessionId === identity.sessionId && mark.complete)
-    || facts.wait?.kind === 'unknown')) return invalid('model-evidence-superseded-or-incomplete');
   const ended = ticket.status === 'completed' || ticket.executionControl?.stopped || terminal.has(run.state);
   if (observation.phase !== 'resolved') {
     if (passiveReasons.has(observation.reasonCode) && (facts.wait?.kind !== 'none' || ended
@@ -81,8 +80,6 @@ export function inspectWatchdogRouterSignal(database, signal, snapshot, { now = 
     if (observation.reasonCode === 'REQUEST_DEADLINE_EXCEEDED' && !(facts.request?.state === 'inflight'
       && facts.request.deadline && Date.parse(facts.request.deadline) <= now)) return invalid('request-deadline-not-exceeded');
     if (observation.reasonCode === 'STOP_UNCONFIRMED' && facts.stop?.confirmationOverdue !== true) return invalid('stop-not-overdue');
-    if (observation.reasonCode === 'RECOVERY_NOT_CONVERGING' && !(facts.recovery?.attempts > 0
-      && (facts.recovery.automatic === true || facts.recovery.escalated === true))) return invalid('recovery-not-active');
   } else if (observation.kind === 'execution') {
     const waiting = ['user', 'approval', 'paused'].includes(facts.wait?.kind) || ticketPaused(ticket)
       || ['background-job', 'long-operation'].includes(facts.wait?.kind) && Date.parse(facts.wait.expectedUntil) > now;
@@ -91,16 +88,8 @@ export function inspectWatchdogRouterSignal(database, signal, snapshot, { now = 
       || observation.reasonCode === 'LEASE_EXPIRED' && (waiting || assignment.state !== 'claimed' || assignment.leaseUntil > now)
       || observation.reasonCode === 'REQUEST_DEADLINE_EXCEEDED' && (waiting || facts.request?.state === 'settled'
         || facts.request?.state === 'inflight' && Date.parse(facts.request.deadline) > now)
-      || observation.reasonCode === 'STOP_UNCONFIRMED' && facts.stop?.confirmationOverdue === false
-      || observation.reasonCode === 'RECOVERY_NOT_CONVERGING' && (waiting || facts.recovery === null || facts.recovery?.attempts === 0);
+      || observation.reasonCode === 'STOP_UNCONFIRMED' && facts.stop?.confirmationOverdue === false;
     if (!cleared) return invalid('recovery-observation-not-current');
   }
   return { valid: true, facts: structuredClone(facts) };
-}
-
-/** A Watchdog turn can ask the existing recovery seam only for a read-only check. */
-export function assertWatchdogInspection(signal, { ticketId, operation }) {
-  if (!signal?.observation?.execution || signal.ticketId !== ticketId || operation !== 'check-now') {
-    throw Object.assign(new Error('外部观察通知只允许对原执行发起一次只读核查'), { code: 'WATCHDOG_INSPECTION_ONLY' });
-  }
 }

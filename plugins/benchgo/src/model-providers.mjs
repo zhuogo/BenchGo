@@ -85,13 +85,13 @@ export function createModelProviders(ctx) {
     setNativeAuth(value) { nativeAuth = value; },
     async list() {
       // describe() projects every plugin schema/config; do it once per directory read.
-      const documents = new Map(ctx.settings.describe().map(row => [row.ns, row.value])), list = [];
-      for (const entry of entries()) {
+      const documents = new Map(ctx.settings.describe().map(row => [row.ns, row.value]));
+      const list = await Promise.all(entries().map(async entry => {
         const value = pathValue(documents.get(entry.settingsNs), entry.settingsPath) || {}, baseURL = address(entry, value), identity = await access(entry, value);
-        if (identity.authMode !== 'subscription' && (!baseURL || !identity.configured)) continue;
-        list.push({ ...identity, name: builtinProvider(entry.provider)?.name || value.displayName || entry.displayName || entry.provider, ...(baseURL ? { baseURL: endpoint(baseURL) } : {}), ...(entry.declared === true && !builtinProvider(entry.provider) ? { declared: true } : {}) });
-      }
-      return list.sort((a, b) => Number(/routergo/iu.test(b.id + b.name + b.baseURL)) - Number(/routergo/iu.test(a.id + a.name + a.baseURL)) || a.name.localeCompare(b.name));
+        if (identity.authMode !== 'subscription' && (!baseURL || !identity.configured)) return null;
+        return { ...identity, name: builtinProvider(entry.provider)?.name || value.displayName || entry.displayName || entry.provider, ...(baseURL ? { baseURL: endpoint(baseURL) } : {}), ...(entry.declared === true && !builtinProvider(entry.provider) ? { declared: true } : {}) };
+      }));
+      return list.filter(Boolean).sort((a, b) => Number(/routergo/iu.test(b.id + b.name + b.baseURL)) - Number(/routergo/iu.test(a.id + a.name + a.baseURL)) || a.name.localeCompare(b.name));
     },
     async accessList() {
       const documents = new Map(ctx.settings.describe().map(row => [row.ns, row.value]));

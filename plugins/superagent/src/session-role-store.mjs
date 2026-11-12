@@ -14,6 +14,8 @@ export function installSessionRoleStore({ db, tx, api }) {
   };
   return {
     getSessionRole: read,
+    listSessionRoles: () => db.prepare('SELECT session_id,identity FROM sa_session_roles ORDER BY rowid').all()
+      .map(row => ({ sessionId: row.session_id, ...JSON.parse(row.identity) })),
     bindSessionRole(input) {
       return tx(() => {
         if (!input.sessionId || !['router', 'worker', 'child-worker'].includes(input.role)) throw fail('Invalid owned session role');
@@ -25,7 +27,8 @@ export function installSessionRoleStore({ db, tx, api }) {
           if (input.role === 'worker' && run.sessionId !== input.sessionId) throw fail('Worker session differs from its Run');
           if (input.role === 'child-worker') {
             const parent = read(input.parentSessionId);
-            if (!parent || parent.role !== 'worker' || parent.runId !== input.runId || parent.sessionId !== run.sessionId) throw fail('Child has no persisted direct Worker parent');
+            if (!parent || !['worker', 'child-worker'].includes(parent.role) || parent.runId !== input.runId
+              || parent.assignmentId !== input.assignmentId || parent.ticketId !== input.ticketId) throw fail('Child has no persisted Worker ancestry');
           }
         }
         const identity = Object.fromEntries(identityKeys.filter(key => input[key] !== undefined).map(key => [key, input[key]]));
@@ -39,7 +42,10 @@ export function installSessionRoleStore({ db, tx, api }) {
       });
     },
     recordSessionRole(sessionId, { status, actual, reason = null }) {
-      if (!read(sessionId) || !['ready', 'blocked'].includes(status)) throw fail('Unknown owned session or observation status');
+      const prior = read(sessionId);
+      if (!prior || !['ready', 'blocked'].includes(status)) throw fail('Unknown owned session or observation status');
+      if (prior.status === status && JSON.stringify(prior.actual) === JSON.stringify(actual || null)
+        && JSON.stringify(prior.reason) === JSON.stringify(reason)) return prior;
       db.prepare('UPDATE sa_session_roles SET status=?,actual=?,reason=?,updated_at=? WHERE session_id=?')
         .run(status, actual ? JSON.stringify(actual) : null, reason ? JSON.stringify(reason) : null, new Date().toISOString(), sessionId);
       return read(sessionId);

@@ -1,5 +1,3 @@
-import { isAbsolute, relative } from 'node:path';
-
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const id = (value, label) => {
@@ -57,28 +55,6 @@ function safeFact(value) {
     ...(Array.isArray(value.evidenceRefs) ? { evidenceRefs: value.evidenceRefs.slice(0, 64).filter(row => object(row) && typeof row.sessionId === 'string' && Number.isSafeInteger(row.seq) && row.seq >= 0)
       .map(row => ({ sessionId: text(row.sessionId, 512), seq: row.seq })) } : {}) };
 }
-function artifactObservation(input) {
-  const observationId = id(input.observationId, 'observationId'), sequence = integer(input.sequence, 'sequence');
-  const callId = input.callId == null ? null : id(input.callId, 'callId');
-  const startedAt = date(input.startedAt), completedAt = date(input.completedAt);
-  if (!startedAt || !completedAt || completedAt < startedAt) throw fail('EXECUTION_FACT_INPUT', 'Invalid observation interval');
-  const coverage = { kind: 'protected-workspace-files', complete: true, truncated: false, exclusionsVersion: 1,
-    externalEffects: 'not-observed', conversationOutputs: 'not-observed' };
-  if (!object(input.coverage) || Object.entries(coverage).some(([key, value]) => input.coverage[key] !== value)) {
-    throw fail('EXECUTION_FACT_INPUT', 'Artifact observation requires complete protected workspace coverage');
-  }
-  if (!object(input.comparison)) throw fail('EXECUTION_FACT_INPUT', 'Artifact comparison is required');
-  const comparison = Object.fromEntries(['beforeFiles', 'afterFiles', 'added', 'modified', 'deleted', 'unchanged']
-    .map(key => [key, integer(input.comparison[key], key)]));
-  comparison.netChanged = comparison.added + comparison.modified + comparison.deleted > 0;
-  if (input.comparison.netChanged !== comparison.netChanged
-    || comparison.beforeFiles !== comparison.modified + comparison.deleted + comparison.unchanged
-    || comparison.afterFiles !== comparison.added + comparison.modified + comparison.unchanged) {
-    throw fail('EXECUTION_FACT_INPUT', 'Artifact comparison counts are inconsistent');
-  }
-  return { observationId, callId, sequence, startedAt, completedAt, coverage, comparison };
-}
-
 /** Rebuildable execution projections and a display journal in the existing DB.
  * Ticket/Assignment/Run retain every lifecycle decision; this store only observes.
  */
@@ -90,7 +66,8 @@ export function installExecutionFactsStore({ db, tx }) {
       kind TEXT NOT NULL, observed_at TEXT NOT NULL, data TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS sa_execution_facts_ticket ON sa_execution_facts(ticket_id,seq);
     CREATE INDEX IF NOT EXISTS sa_execution_facts_run ON sa_execution_facts(run_id,seq);
-    CREATE UNIQUE INDEX IF NOT EXISTS sa_execution_facts_artifact_observation ON sa_execution_facts(json_extract(data,'$.observationId')) WHERE kind='artifact-observation';
+    CREATE UNIQUE INDEX IF NOT EXISTS sa_execution_facts_chat_publication
+      ON sa_execution_facts(session_id,json_extract(data,'$.publicationKey')) WHERE kind='chat' AND source_seq IS NOT NULL;
     CREATE INDEX IF NOT EXISTS sa_execution_projection_run ON sa_execution_projection(json_extract(payload,'$.runId'));
     CREATE INDEX IF NOT EXISTS sa_execution_projection_ticket ON sa_execution_projection(json_extract(payload,'$.ticketId'));`);
   db.exec("CREATE INDEX IF NOT EXISTS sa_runs_execution_session ON sa_runs(json_extract(payload,'$.sessionId'))");
@@ -168,6 +145,26 @@ export function installExecutionFactsStore({ db, tx }) {
   }
   function installRuntimeSources() {
     const currentTables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
+    // Runtime notifications can commit after the official Session turn ends.
+    // Reuse the existing fact stream to wake chat readers without exporting text.
+    if (currentTables.has('task_events')) {
+      for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
+        const row = operation === 'DELETE' ? 'OLD' : 'NEW';
+        const payload = `CASE WHEN json_valid(${row}.payload) THEN ${row}.payload ELSE '{}' END`;
+        // Replace only these projection triggers so existing databases gain identities;
+        // the durable journal and historical notification rows remain untouched.
+        db.exec(`DROP TRIGGER IF EXISTS sa_execution_fact_task_events_${operation.toLowerCase()};
+          CREATE TRIGGER sa_execution_fact_task_events_${operation.toLowerCase()}
+          AFTER ${operation} ON task_events
+          BEGIN INSERT INTO sa_execution_facts(ticket_id,kind,observed_at,data)
+          VALUES (NULL,'chat',strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+          json_patch(json_object('operation','${operation.toLowerCase()}','eventId',${row}.id), json_object(
+            'threadId',json_extract(${payload},'$.threadId'),
+            'requestId',json_extract(${payload},'$.requestId'),
+            'sourceEventId',json_extract(${payload},'$.sourceEventId'),
+            'ticketStateEventKey',json_extract(${payload},'$.ticketStateEventKey')))); END;`);
+      }
+    }
     for (const table of ['task_meta', 'assistant_goals']) {
       if (!currentTables.has(table)) continue;
       for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
@@ -189,6 +186,20 @@ export function installExecutionFactsStore({ db, tx }) {
   installRuntimeSources();
   return {
     executionFactCursor: cursor,
+    recordChatPublication(input) {
+      if (!object(input)) throw fail('EXECUTION_FACT_INPUT', 'Chat publication identity is required');
+      const sessionId = id(input.sessionId, 'sessionId'), sourceSeq = integer(input.sourceSeq, 'sourceSeq');
+      const threadId = id(input.threadId, 'threadId');
+      const identity = input.mirrorKey !== undefined ? { mirrorKey: id(input.mirrorKey, 'mirrorKey') } : { requestId: id(input.requestId, 'requestId') };
+      const publicationKey = JSON.stringify(identity);
+      return tx(() => {
+        const prior = db.prepare("SELECT seq FROM sa_execution_facts WHERE kind='chat' AND session_id=? AND source_seq IS NOT NULL AND json_extract(data,'$.publicationKey')=?").get(sessionId, publicationKey);
+        if (prior) return { seq: prior.seq, duplicate: true };
+        const inserted = db.prepare("INSERT INTO sa_execution_facts(session_id,source_seq,kind,observed_at,data) VALUES (?,?,'chat',?,?)")
+          .run(sessionId, sourceSeq, new Date().toISOString(), JSON.stringify({ operation: 'insert', publicationKey, threadId, ...identity }));
+        return { seq: Number(inserted.lastInsertRowid), duplicate: false };
+      });
+    },
     getExecutionBinding: binding,
     executionTicketCursor(ticketId) {
       return Number(db.prepare("SELECT COALESCE(MAX(seq),0) AS cursor FROM sa_execution_facts WHERE ticket_id=? AND kind<>'summary'").get(id(ticketId, 'ticketId')).cursor);
@@ -199,35 +210,6 @@ export function installExecutionFactsStore({ db, tx }) {
     },
     getExecutionProjection: get,
     executionProjections: projections,
-    recordExecutionArtifactObservation(input) {
-      if (!object(input)) throw fail('EXECUTION_FACT_INPUT', 'Artifact observation is required');
-      const ticketId = id(input.ticketId, 'ticketId'), assignmentId = id(input.assignmentId, 'assignmentId'), runId = id(input.runId, 'runId');
-      const fence = integer(input.fence, 'fence', 1), instructionRevision = integer(input.instructionRevision, 'instructionRevision', 1);
-      if (!isAbsolute(input.directory || '')) throw fail('EXECUTION_FACT_BINDING', 'Artifact observation requires a bound workspace');
-      const data = artifactObservation(input), encoded = stable(data);
-      return tx(() => {
-        const bound = db.prepare(`${bindingQuery} WHERE r.id=?`).get(runId);
-        const persisted = db.prepare(`SELECT a.fence AS assignmentFence,
-          COALESCE(json_extract(a.payload,'$.instructionRevision'),1) AS assignmentRevision,
-          json_extract(r.payload,'$.directory') AS directory FROM sa_runs r JOIN sa_assignments a ON a.id=r.assignment_id WHERE r.id=?`).get(runId);
-        if (!bound || bound.ticketId !== ticketId || bound.assignmentId !== assignmentId || bound.fence !== fence
-          || persisted.assignmentFence !== fence || bound.instructionRevision !== instructionRevision || persisted.assignmentRevision !== instructionRevision
-          || !isAbsolute(persisted.directory || '') || relative(persisted.directory, input.directory) !== '') {
-          throw fail('EXECUTION_FACT_BINDING', 'Artifact observation no longer matches its persisted execution');
-        }
-        const previous = db.prepare("SELECT * FROM sa_execution_facts WHERE kind='artifact-observation' AND json_extract(data,'$.observationId')=?").get(data.observationId);
-        if (previous) {
-          if (previous.ticket_id !== ticketId || previous.assignment_id !== assignmentId || previous.run_id !== runId
-            || previous.fence !== fence || previous.instruction_revision !== instructionRevision || previous.data !== encoded) {
-            throw fail('EXECUTION_FACT_CONFLICT', 'Artifact observation identity cannot be rewritten');
-          }
-          return { ...decode(previous), duplicate: true };
-        }
-        const inserted = db.prepare('INSERT INTO sa_execution_facts(ticket_id,assignment_id,run_id,fence,instruction_revision,session_id,source_seq,kind,observed_at,data) VALUES (?,?,?,?,?,?,NULL,?,?,?)')
-          .run(ticketId, assignmentId, runId, fence, instructionRevision, bound.sessionId, 'artifact-observation', new Date().toISOString(), encoded);
-        return decode(db.prepare('SELECT * FROM sa_execution_facts WHERE seq=?').get(inserted.lastInsertRowid));
-      });
-    },
     recordExecutionDisplayChange(input) {
       if (!object(input) || input.kind !== 'summary') throw fail('EXECUTION_FACT_INPUT', 'Only summary display changes are supported');
       const ticketId = id(input.ticketId, 'ticketId');

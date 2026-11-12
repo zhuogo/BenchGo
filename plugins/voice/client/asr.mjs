@@ -17,10 +17,10 @@ const cancelled = () => new DOMException('Voice input cleared', 'AbortError');
 const FRAME_SAMPLES = 480, MAX_QUEUED_FRAMES = 30, MAX_AGE_MS = 600, WINDOW = 12;
 /** Frames never wait for an HTTP response. Only commit/final forms a turn barrier. */
 export class RealtimeRecognizer {
-  constructor({ request, endpoint, headers, openSocket, onError = () => {}, onWarning = () => {}, now = Date.now }) {
-    Object.assign(this, { request, endpoint, headers, openSocket, onError, onWarning, now });
+  constructor({ request, endpoint, headers, openSocket, onError = () => {}, now = Date.now }) {
+    Object.assign(this, { request, endpoint, headers, openSocket, onError, now });
     this.abort = new AbortController(); this.utterances = new Map(); this.queue = []; this.inflight = new Map();
-    this.epoch = 0; this.sequence = 0; this.closed = false; this.ready = false; this.committing = 0; this.dropped = 0;
+    this.epoch = 0; this.sequence = 0; this.closed = false; this.ready = false; this.committing = 0;
   }
   async action(action, extra = {}, signal = this.abort.signal) {
     const response = await this.request(this.endpoint('api/voice'), {
@@ -59,7 +59,7 @@ export class RealtimeRecognizer {
       }
       if (event.type === 'ack') {
         if (!this.inflight.delete(event.sequence)) return;
-        if (!event.accepted) this.drop(1);
+        if (!event.accepted) { this.fail(Error('实时语音上行拥堵，音频未完整接收；请重新开始语音')); return; }
         this.pump(); return;
       }
       const u = this.utterances.get(event.utteranceId); if (!u) return;
@@ -78,20 +78,18 @@ export class RealtimeRecognizer {
     for (const u of this.utterances.values()) { clearTimeout(u.timer); u.reject(error); }
     const report = !!this.pulse; void this.close(); if (report) this.onError(error);
   }
-  drop(count) {
-    this.dropped += count;
-    if (!this.warnedAt || this.now() - this.warnedAt >= 2000) {
-      this.warnedAt = this.now(); this.onWarning({ droppedFrames: this.dropped, message: '网络拥堵，已跳过过期语音；请重说未识别内容' });
+  checkBacklog() {
+    const now = this.now(); let total = 0;
+    for (const item of this.queue) {
+      if (item.type !== 'audio') continue;
+      if (++total > MAX_QUEUED_FRAMES || now - item.at > MAX_AGE_MS) {
+        // A truncated utterance must never become a successful final result.
+        // Preserve its visible preview through the controller's failure path.
+        this.fail(Error('实时语音网络或识别响应过慢，音频积压超过 600ms；请重新开始语音'));
+        return false;
+      }
     }
-  }
-  prune() {
-    const now = this.now(); let count = 0, total = this.queue.reduce((n, item) => n + (item.type === 'audio'), 0);
-    this.queue = this.queue.filter(item => {
-      if (item.type !== 'audio') return true;
-      if (now - item.at > MAX_AGE_MS || total > MAX_QUEUED_FRAMES) { total--; count++; return false; }
-      return true;
-    });
-    if (count) this.drop(count);
+    return true;
   }
   append(frames, id, partial) {
     this.abort.signal.throwIfAborted();
@@ -108,11 +106,10 @@ export class RealtimeRecognizer {
     for (let at = 0; at < samples.length; at += FRAME_SAMPLES) {
       this.queue.push({ type: 'audio', id, pcm: samples.slice(at, at + FRAME_SAMPLES), at: this.now() });
     }
-    this.prune(); this.pump();
+    if (this.checkBacklog()) this.pump();
   }
   pump() {
-    if (this.closed) return;
-    this.prune();
+    if (this.closed || !this.checkBacklog()) return;
     if (this.inflight.size && this.now() - this.inflight.values().next().value > 12000) { this.fail(Error('实时语音网络响应超时')); return; }
     if (!this.ready || this.committing || this.ws?.readyState !== 1) return;
     try {

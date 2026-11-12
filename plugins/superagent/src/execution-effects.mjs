@@ -7,6 +7,10 @@ const object = value => {
   try { value = typeof value === 'string' ? JSON.parse(value) : value; } catch { return null; }
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 };
+const beforeDispatchCodes = new Set(['ABORTED_BEFORE_DISPATCH', 'FS_SANDBOX_DENIED', 'UNKNOWN_TOOL', 'INVALID_TOOL_ARGS', 'INVALID_ARGUMENTS',
+  'ACTION_TARGET_NOT_FOUND', 'WORKER_TOOL_SCOPE', 'WORKER_AUTHORIZATION_CHANGED', 'WORKER_TICKET_INACTIVE',
+  'MANAGEMENT_OWNER_REQUIRED', 'MANAGEMENT_APPROVAL_UNAVAILABLE', 'MANAGEMENT_APPROVAL_DENIED', 'SETTINGS_UNAVAILABLE', 'CLEANUP_UNAVAILABLE']);
+const unknownFailure = result => result?.failed && !beforeDispatchCodes.has(result.code);
 const output = content => object((content || []).filter(block => block.type === 'text').map(block => block.text).join('\n'));
 
 /** This exact host tool separates local preparation from one-time submission. */
@@ -14,13 +18,14 @@ function externalActionUnknown(call) {
   const operation = object(call.arguments)?.operation, result = call.result;
   if (result?.value?.requiresReconciliation === true || ['submitted', 'uncertain'].includes(result?.value?.state)) return true;
   if (operation === 'catalog' || operation === 'prepare') return false;
-  if (operation !== 'submit') return true;
+  if (operation !== 'submit') return false;
   if (result?.code === 'ABORTED_BEFORE_DISPATCH') return false;
-  return !result || result.failed || !['completed', 'denied', 'handoff'].includes(result.value?.state);
+  if (result?.failed) return unknownFailure(result);
+  return !result || !['completed', 'denied', 'handoff'].includes(result.value?.state);
 }
 
 /** Analyze the complete official log, including nested PTC dispatches. */
-export function executionEffects(log) {
+export function executionEffects(log, receipts = new Map()) {
   const calls = [], pending = new Map();
   const addCall = (kind, id, name, args) => {
     const call = { id: id ?? `unidentified:${kind}:${calls.length}`, name, arguments: args };
@@ -51,12 +56,12 @@ export function executionEffects(log) {
     if (event.type === 'tool/result') {
       const callId = message?.toolCallId ?? message?.source?.callId;
       settle('tool', callId, { failed: message?.isError === true || !!event.data?.error,
-        code: event.data?.error?.code ?? event.data?.error?.info?.code, content: message?.content });
+        code: event.data?.error?.code ?? event.data?.error?.info?.code ?? receipts.get(callId)?.code, content: message?.content });
     }
     if (event.type === 'tool/ptc-dispatch-start' || event.type === 'tool/ptc-dispatch') {
       if (event.type === 'tool/ptc-dispatch-start') addCall('ptc', event.data.subCallId, event.data.name, event.data.arguments);
       else settle('ptc', event.data.subCallId, {
-        failed: event.data.isError === true || !!event.data.error, code: event.data.error?.code, content: event.data.content,
+        failed: event.data.isError === true || !!event.data.error, code: event.data.error?.code ?? event.data.error?.info?.code, content: event.data.content,
       }, event.data.name, event.data.arguments);
     }
   }
@@ -64,7 +69,7 @@ export function executionEffects(log) {
     const { name, result } = call;
     if (isReadOnlyWorkerTool(name)) return false;
     if (name === 'assistant_external_action') return externalActionUnknown(call);
-    return !result || (result.failed && result.code !== 'ABORTED_BEFORE_DISPATCH');
+    return !result || unknownFailure(result);
   }).map(({ id }) => id))];
   return { effectsVerified: !unknownCallIds.length, unknownCallIds };
 }

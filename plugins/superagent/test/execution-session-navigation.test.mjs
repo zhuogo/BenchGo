@@ -1,18 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { openExecutionSession, registerExecutionSessionDiscovery } from '../client/execution-session-navigation.mjs';
+import { openExecutionSession, executionSessionNavigation, registerExecutionSessionDiscovery } from '../client/execution-session-navigation.mjs';
 
-test('running and completed Ticket entries navigate to the same Session without restoring archive', async () => {
-  const calls = [], ctx = { sessions: { list: { getSnapshot: () => ({ ids: ['same'] }) }, refresh: async () => calls.push(['refresh']) }, uiWorkspace: { unarchiveSession: async id => calls.push(['restore', id]), openSession: id => calls.push(['open', id]) } };
+test('running and completed Ticket entries select the same Session in the official workspace or restoring archive', async () => {
+  const calls = [], ctx = { sessions: { list: { getSnapshot: () => ({ ids: ['same'] }) }, refresh: async () => calls.push(['refresh']) }, uiWorkspace: { openSession: id => calls.push(['panel', id]) }, uiWorkspace: { openSession: id => calls.push(['session', id]) } };
   await openExecutionSession(ctx, { available: true, sessionId: 'same', closed: false });
   await openExecutionSession(ctx, { available: true, sessionId: 'same', closed: true });
-  assert.deepEqual(calls, [['refresh'], ['open', 'same'], ['refresh'], ['open', 'same']]);
+  assert.deepEqual(calls, [['refresh'], ['session', 'same'], ['refresh'], ['session', 'same']]);
+  assert.equal(executionSessionNavigation.getSnapshot(), null);
+  executionSessionNavigation.close(); assert.equal(executionSessionNavigation.getSnapshot(), null);
 });
 
 test('missing entries and failed restore/navigation have actionable errors and never create another Session', async () => {
   await assert.rejects(openExecutionSession({}, { available: false }), /无法定位/);
   await assert.rejects(openExecutionSession({}, { available: true, sessionId: 'same' }), /入口不可用/);
-  const ctx = { sessions: { list: { getSnapshot: () => ({ ids: ['same'] }) }, refresh: async () => {} }, uiWorkspace: { unarchiveSession: async () => assert.fail('navigation must never restore archive'), openSession: () => {} } };
+  const ctx = { sessions: { list: { getSnapshot: () => ({ ids: ['same'] }) }, refresh: async () => {} }, uiWorkspace: { openSession: () => {} } };
   ctx.uiWorkspace.openSession = () => { throw new Error('记录不存在'); };
   await assert.rejects(openExecutionSession(ctx, { available: true, sessionId: 'same' }), /无法打开执行会话：记录不存在/);
   ctx.sessions.refresh = async () => { throw new Error('目录读取失败'); };

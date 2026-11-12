@@ -29,6 +29,11 @@ async function checked(root, path, required = false) {
 
 /** Publish browser resources and plugin display locales into the managed Desktop release. */
 export async function syncDesktopBrowserArtifacts({ root, profile = desktopProfile(), write = writeArtifact }) {
+  return syncDesktopArtifacts({ root, profile, write, runtime: false });
+}
+
+/** Publish runtime sources alongside browser artifacts; package/dependency changes still require dev enrollment. */
+export async function syncDesktopArtifacts({ root, profile = desktopProfile(), write = writeArtifact, runtime = true }) {
   profile = resolve(profile);
   const state = await getInstallState(profile);
   if (!state.managed || !state.enabled) return { synced: false, reason: state.managed ? 'disabled' : 'unmanaged', profile };
@@ -60,9 +65,14 @@ export async function syncDesktopBrowserArtifacts({ root, profile = desktopProfi
     if (entry.isDirectory()) for (const child of await readdir(from)) await visit(join(name, child), destination);
     else plan.push({ from, to, destination });
   };
+  const patch = join(profile, 'cordis.patch.yml');
+  // Official HMR compares the exact patch text and reconciles installed modules.
+  // A trailing blank line requests that lifecycle without changing YAML settings.
+  const patchEntry = runtime ? await checked(profile, patch) : null;
+  if (patchEntry && !patchEntry.isFile()) throw new Error('Desktop profile patch must be a regular file');
   // Validate the complete plan before publishing anything. Do not remove old
   // files: an already-open preview may still request its previous assets.
-  for (const name of [...directories, ...files, 'locale']) await visit(name);
+  for (const name of [...(runtime ? ['shared', 'lib/modules', 'src'] : []), ...directories, ...files, 'locale']) await visit(name);
   // The plugin manager names the enrolled wrapper, not its implementation package.
   await visit('locale', wrapper);
   await visit('lib/client.js');
@@ -70,5 +80,9 @@ export async function syncDesktopBrowserArtifacts({ root, profile = desktopProfi
     await checked(destination, to);
     await write(to, await readFile(from));
   }
-  return { synced: true, target, profile, files: plan.length };
+  if (patchEntry) {
+    await checked(profile, patch, true);
+    await write(patch, Buffer.concat([await readFile(patch), Buffer.from('\n')]));
+  }
+  return { synced: true, target, profile, files: plan.length, runtime, reloadRequested: !!patchEntry };
 }

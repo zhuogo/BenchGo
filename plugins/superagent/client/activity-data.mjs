@@ -1,6 +1,7 @@
 import { ticketSnapshot, ticketWaiting, ticketResultSummary, shortTicketText } from './ticket-state.mjs';
 import { normalizeTicketTitle } from '../src/ticket-title.mjs';
 import { transientRefreshError } from './refresh-error.mjs';
+import { executionStatusText } from '../src/ticket-lifecycle.mjs';
 
 export const terminalActivityStates = new Set(['completed', 'failed', 'cancelled']);
 // Goal controls retain their own lifecycle; Ticket activity uses only three states.
@@ -28,7 +29,7 @@ function currentExecution(row, assignment) {
 
 function executionSummary(execution) {
   if (!execution) return '';
-  const parts = [execution.worker?.activity];
+  const parts = [execution.worker?.status === 'completed' ? '执行已结束' : execution.worker?.activity];
   const children = execution.children || [];
   if (children.length) {
     const returned = children.filter(child => child.status === 'completed').length;
@@ -49,16 +50,16 @@ export function activityTask(row, kind) {
   const waiting = kind === 'ticket' ? ticketWaiting(domain) : null;
   const detail = kind === 'goal' ? row.error || ({ building_children: '正在拆分子目标', verify: '正在同步目标状态' })[row.nextStep] : waiting?.reason || ticketResultSummary(result) || undefined;
   const phase = kind === 'goal' ? `${row.ticketIds?.length || 0} 项关联工单`
-    : status === 'completed' ? '已完成并交付'
-    : execution?.phase === 'verifying' && status === 'running' ? 'Worker 已交回结果，正在保存'
+    : status === 'completed' ? delivery?.state === 'sent' ? '执行完成 · 结果已交付' : '执行完成'
     : waiting ? waiting.reason
     : delivery?.state === 'sent' ? '结果已交付' : delivery ? '结果交付阶段'
     : result ? '结果已保存'
     : assignment ? `执行阶段 · ${({ claimed: '执行中', queued: '等待执行', waiting: '等待后续', uncertain: '待核实', blocked: '授权已变更' })[assignment.state] || '已记录'}` : '已接收 · 等待分配';
   const progressing = status === 'running';
-  const summaryText = shortTicketText(execution?.summary?.text || (typeof row.currentSummary === 'string' ? row.currentSummary : row.currentSummary?.text));
-  const progressSummary = progressing ? summaryText || (execution?.phase === 'verifying' ? phase : executionSummary(execution)) : '';
-  return { ...row, domainStatus: row.domainStatus ?? row.status, execution, stateLabel: waiting?.label || activityLabels[status] || status, executionNotice: waiting?.executionNotice, verificationSummary: waiting?.verificationSummary, summaryText, progressSummary, key: `${kind}:${row.id}`, kind, status, detail, phase, title: kind === 'ticket' ? normalizeTicketTitle(row.taskMeta?.title || row.title, row.target) : row.target || row.title || row.objective || '未命名任务', time: row.updatedAt || row.createdAt };
+  const summaryText = progressing
+    ? shortTicketText(executionStatusText(execution?.summary?.text || (typeof row.currentSummary === 'string' ? row.currentSummary : row.currentSummary?.text))) : '';
+  const progressSummary = progressing ? summaryText || executionSummary(execution) : '';
+  return { ...row, domainStatus: row.domainStatus ?? row.status, execution, stateLabel: waiting?.label || activityLabels[status] || status, executionNotice: waiting?.executionNotice, summaryText, progressSummary, key: `${kind}:${row.id}`, kind, status, detail, phase, title: kind === 'ticket' ? normalizeTicketTitle(row.taskMeta?.title || row.title, row.target) : row.target || row.title || row.objective || '未命名任务', time: row.updatedAt || row.createdAt };
 }
 
 export function groupHomeActivity(rows = []) {

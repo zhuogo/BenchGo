@@ -44,7 +44,7 @@ for (const protocol of ['transcriptions', 'transcriptions-sse', 'openai-websocke
           ws.close = () => { ws.readyState = 3; }; queueMicrotask(() => ws.dispatchEvent(new Event('open'))); return ws;
         } },
         uiSession: { sessionStatus: { getSnapshot: () => new Map(), subscribe: () => () => {} } },
-        sessions: { binding: sessionId => ({ sessionId, eventSource: { getSnapshot: () => ({ revision: 0, entries: [] }), subscribe: () => () => {} } }) },
+        sessions: { binding: sessionId => ({ sessionId, eventSource: { getSnapshot: () => ({ revision: 0, entries: [] }), subscribe: () => () => {} } }), retain(sessionId) { const binding = this.binding(sessionId); return { sessionId, binding, ready: Promise.resolve(binding), release() {} }; } },
       };
       const api = createVoiceController(ctx, {
         window: { addEventListener() {}, removeEventListener() {} },

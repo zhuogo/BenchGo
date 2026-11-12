@@ -34,18 +34,3 @@ export function workerRequest(inherited, model) {
     temperature: _temperature, stop: _stop, ...controls } = inherited;
   return { ...controls, ...(model.options || {}), provider: model.providerId, model: model.modelId };
 }
-
-export function installWorkerChildModelRoute(scope, agent, { worker, models, currentModel }) {
-  if (!Array.isArray(models) || typeof currentModel !== 'function') throw fail('Child Worker has no parent work route');
-  const model = structuredClone(currentModel());
-  if (!model || !models.some(item => JSON.stringify(item) === JSON.stringify(model))) throw fail('Child Worker model is outside the frozen work role');
-  const selected = agent.model?.current?.();
-  if (selected && !sameWorkerModel(model, selected)) throw fail('Child Worker model override is unsupported');
-  selectWorkerModel(agent, model);
-  scope.on('agent/request', async (_payload, next) => {
-    if (!worker?.session) throw fail('Parent Worker is unavailable');
-    const inherited = await next();
-    if (inherited.provider !== undefined && (inherited.provider !== model.providerId || inherited.model !== model.modelId)) throw fail('Child Worker model override is unsupported');
-    return workerRequest(inherited, model);
-  }, { prepend: true });
-}

@@ -132,6 +132,20 @@ for (const operation of ['pause', 'cancel']) test(`one explicit owner message ca
   }
 });
 
+for (const operation of ['pause', 'cancel']) test(`conversation-scoped ${operation} handles multiple selected tickets and retries without global capability`, t => {
+  const f = fixture(t), tickets = [f.ticket(), f.ticket()];
+  for (const row of tickets) {
+    const first = f.control(row.id, operation);
+    const again = f.control(row.id, operation);
+    assert.equal(first.triggerId, again.triggerId);
+    const [input] = f.database.ticketInputs(row.id);
+    assert.equal(f.database.ticketInputs(row.id).length, 1);
+    assert.equal(input.state, 'applied');
+    assert.equal(input.idempotencyKey, `trigger:${first.triggerId}:ticket:${row.id}`);
+    assert.equal(input.source.messageId, 'followup');
+  }
+});
+
 test('internal notifications and non-root callers cannot control tickets', t => {
   const f = fixture(t), ticket = f.ticket();
   f.events[1].data.source.kind = 'benchgo-subscription';

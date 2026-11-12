@@ -32,11 +32,11 @@ async function fixture() {
         window.updateConfig = config => { assistantConfigSync.accept({...config,revision:++serial},assistantConfigSync.begin());setConfig(config); };
         return <ActivityProvider><style>{css}</style><div className="ba-root">
           <main className="ba-main fixture-chat"><header><h1>主聊天</h1><ActivityTrigger api={api}/></header><p>BenchGo · 看板组件验收</p><div className="ba-assistant-section" style={{width:200}}><div className="ba-assistant-heading"><AssistantCard name="BenchGo" status="running" action="focus" onOpen={()=>{}}/></div></div><div data-composer-seat style={{position:'absolute',bottom:0,left:0,right:0,zIndex:7,background:'white',padding:12}}><textarea aria-label="发送内容" defaultValue="保留草稿"/><button type="button" aria-label="发送消息" onClick={()=>window.sentMessages=(window.sentMessages||0)+1}>发送</button></div></main>
-          <ActivityPanel api={api} sessionId={window.scenarioControl.state==='stream'?'router-main':undefined} assistantConfig={config} onOpenResources={(tab,selection)=>{window.resourceCalls.push(tab);window.resourceSelections.push(selection);}}/>
+          <ActivityPanel api={api} sessionId={window.scenarioControl.state==='stream'?'router-main':undefined} assistantConfig={config} onOpenResources={(tab,selection)=>{window.resourceCalls.push(tab);window.resourceSelections.push(selection);}} onOpenExecution={session=>window.executionCalls.push(session)}/>
         </div></ActivityProvider>;
       }
       window.renderScenario = (state='data', supplied=true) => {
-        window.apiCalls=[];window.resourceCalls=[];window.resourceSelections=[];
+        window.apiCalls=[];window.resourceCalls=[];window.resourceSelections=[];window.executionCalls=[];
         const control=window.scenarioControl={state,fail:false};
         const now=new Date(), at=minutes=>new Date(+now-minutes*60000).toISOString();
         const tickets=[
@@ -64,6 +64,7 @@ async function fixture() {
             children.splice(0,children.length,...Array.from({length:32},(_,index)=>({id:'long-'+index,label:index===0?'需要核实的远端资源 '+ 'long-segment-'.repeat(18):'执行步骤 '+(index+1),status:index<24?'completed':index===24?'failed':'running',activity:index===24?'读取失败：'+ 'network-response-'.repeat(35):index<24?'已核对当前项目并返回父 Worker':'正在读取项目与检查链接',updatedAt:at(0)})));
           }
           Object.assign(row,{status:finished?'completed':step==='paused'?'waiting':'running',executionControl:step==='paused'?{paused:true}:{},instructionRevision:1,resultVersion:finished?1:0,updatedAt:at(0),
+            executionSession:{available:true,sessionId:'worker-main',ticketId:'running'},
             assignments:[{id:'assignment-main',instructionRevision:1,state:finished?'completed':'claimed'}],results:finished?[{instructionRevision:1,version:1,summary:'内部结果',selfCheck:{summary:'已检查要求与执行结果'},outcome:'completed',delivery:{text:'已完成调研，来源与限制随结果交付。'}}]:[],
             deliveries:finished?[{state:'sent',payload:{type:'ticket.result',instructionRevision:1,resultVersion:1}}]:[],
             execution:{assignmentId:'assignment-main',runId:'run-main',sessionId:'worker-main',instructionRevision:1,phase:verifying?'verifying':'executing',updatedAt:at(0),observed:step!=='unknown',worker,children,
@@ -72,6 +73,13 @@ async function fixture() {
           document.dispatchEvent(new Event('benchgo:assistant-changed'));
         };
         if(state==='dynamic'){tickets.splice(1);goals.splice(0);window.updateExecution('running');}
+        window.updateSummary = (text,historyTruncated=false) => {
+          const previous=tickets[0].execution.summary?.history||[];
+          const entry={text,generatedAt:Date.now(),watermark:previous.length+1,source:'model'};
+          tickets[0].execution.summary={...entry,history:[...previous,entry],historyTruncated};
+          tickets[0].execution.milestones=[{seq:1,kind:'step/end',time:at(1)},{seq:2,kind:'step/end',time:at(0)}];
+          document.dispatchEvent(new Event('benchgo:assistant-changed'));
+        };
         window.updateUncertainty = stopping => {
           const row=tickets.find(row=>row.id==='uncertain');
           Object.assign(row,{status:'waiting',executionControl:stopping?{stopRequested:true}:{},instructionRevision:1,updatedAt:at(0),
@@ -80,11 +88,12 @@ async function fixture() {
               worker:{id:'uncertain-worker',label:'主 Worker',status:'running',activity:'停止前正在读取资料',updatedAt:at(1)}}});
           document.dispatchEvent(new Event('benchgo:assistant-changed'));
         };
-        const config={name:'',models:[{modelId:'provider/opaque-model@2026-11'}],cardMotion:false};
+        const config=state==='empty'?{}:{name:'',models:[{modelId:'provider/opaque-model@2026-11'}],cardMotion:false};
         const api=async(name,args)=>{
           window.apiCalls.push([name,args]);
           if(control.state==='loading') return new Promise(()=>{});
           if(control.state==='error'||control.fail) throw new TypeError('Failed to fetch');
+          if(name==='tickets'&&control.holdRefresh) await new Promise(resolve=>{window.finishRefresh=()=>{control.holdRefresh=false;resolve();};});
           if(name==='state') return {config};
           if(name==='ticketStop'){Object.assign(tickets.find(row=>row.id===args.ticketId),{status:'waiting',executionControl:{stopped:true}});return {};}
           if(name==='goalCancel'){goals.find(row=>row.id===args.id).status='cancelled';return {};}
@@ -233,8 +242,8 @@ test('activity board renders honest states, keyboard navigation and responsive t
         await shot(`${dark?'dark':'light'}-${width}-${{'任务':'tasks','身份':'identity'}[name]}`);
       }
     }
-    assert(await panel.getByText('5 条 · 进行中 1',{exact:true}).isVisible(),'active ticket count excludes completed, archived, deleted tickets and goals');
-    assert(await panel.getByText('1 个',{exact:true}).isVisible(),'goal count is reported separately');
+    assert.deepEqual(await panel.locator('.ba-board-card').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-label'))),['形象','SO','目标','记忆','Identity']);
+    assert.equal(await panel.getByText(/身份与概览|你的助手，你的工作方式|首选模型|持续目标|待处理|条 · 进行中/).count(),0,'identity cards replace repeated profile facts and task statistics');
     await tab('审核').focus();await page.keyboard.press('ArrowRight');
     assert.equal(await tab('身份').getAttribute('aria-selected'),'true','arrow key changes the active tab');
     await page.keyboard.press('End');assert.equal(await tab('身份').getAttribute('aria-selected'),'true');
@@ -258,8 +267,10 @@ test('activity board renders honest states, keyboard navigation and responsive t
     await panel.locator('[data-task-key="ticket:running"] .ba-board-task-open').click({position:{x:4,y:4}});
     await page.getByRole('region',{name:'任务详情',exact:true}).waitFor();
     assert.equal(Array.from(await page.getByRole('region',{name:'任务详情',exact:true}).getByRole('heading',{level:2}).innerText()).length,10,'ticket display titles have at most ten Unicode characters');
-    assert.equal(await page.getByRole('region',{name:'任务详情',exact:true}).getByText(/任务要求|验收条件/).count(),2,'details keep the original requirements visible');
-    assert.equal(await page.getByRole('region',{name:'任务详情',exact:true}).locator('.ba-task-execution').count(),0,'unobserved execution does not create an empty activity section');
+    assert.equal(await page.getByRole('region',{name:'任务详情',exact:true}).getByRole('button',{name:'任务要求',exact:true}).count(),0,'the board only presents progress');
+    assert.equal(await page.getByRole('region',{name:'任务详情',exact:true}).getByText('验收条件',{exact:true}).count(),0);
+    assert.equal(await page.getByRole('region',{name:'任务详情',exact:true}).locator('.ba-task-execution').count(),1,'unobserved execution has a truthful empty progress state');
+    await page.getByRole('region',{name:'任务详情',exact:true}).getByText('还没有执行记录',{exact:true}).waitFor();
     assert.equal(await page.getByRole('region',{name:'任务详情',exact:true}).locator('.ba-activity-detail-status').count(),1,'task state is beside its title');
     const actionAlignment=await page.getByRole('region',{name:'任务详情',exact:true}).locator('.ba-activity-detail-actions').evaluate(node=>({justify:getComputedStyle(node).justifyContent,footer:!!node.closest('.ba-task-dialog-footer')}));
     assert.deepEqual(actionAlignment,{justify:'flex-end',footer:true},'detail actions stay together in the fixed bottom footer');
@@ -268,19 +279,14 @@ test('activity board renders honest states, keyboard navigation and responsive t
     await page.waitForFunction(()=>document.activeElement?.closest('[data-task-key]')?.dataset.taskKey==='ticket:running');
     assert(await focusedTask.evaluate(node=>node===document.activeElement),'closing details restores focus to the task');
     await focusedTask.press('Enter');
-    await page.getByRole('region',{name:'任务详情',exact:true}).getByRole('button',{name:'停止任务',exact:true}).click();
-    const stopConfirm = page.getByRole('dialog').filter({hasText:'停止后将拦截这项任务的后续执行。'});
-    await stopConfirm.getByRole('button',{name:'继续执行',exact:true}).click();
-    await page.getByRole('region',{name:'任务详情',exact:true}).getByRole('button',{name:'停止任务',exact:true}).click();
-    await stopConfirm.getByRole('button',{name:'停止任务',exact:true}).click();
-    await page.waitForFunction(()=>window.apiCalls.some(([name,args])=>name==='ticketStop'&&args.ticketId==='running'));
+    assert.equal(await page.getByRole('region',{name:'任务详情',exact:true}).getByRole('button',{name:/停止任务|暂停工单/}).count(),0);
     await page.keyboard.press('Escape');await page.getByRole('region',{name:'任务详情',exact:true}).waitFor({state:'hidden'});
-    await panel.locator('[data-task-key="ticket:running"]').getByText('等待',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.apiCalls.some(([name])=>['ticketStop','ticketPause'].includes(name))),false);
     assert.equal(await panel.locator('[data-task-key="ticket:done"]').count(),0,'completed records are available through task management instead of the current board');
     assert(!await page.evaluate(()=>window.apiCalls.some(([name])=>name==='taskUpdate')),'activity polling never changes completion');
     await tab('身份').click();
     assert.equal(await panel.locator('.ba-board-identity strong').innerText(),'未命名','an empty name is a placeholder, never the product brand');
-    assert(await panel.getByText('provider/opaque-model@2026-11',{exact:true}).isVisible(),'model ID remains opaque and unchanged');
+    assert.equal(await panel.getByText('provider/opaque-model@2026-11',{exact:true}).count(),0,'the identity board no longer exposes the preferred model');
     for(const dark of [false,true])for(const state of ['empty','loading','error']){
       await page.setViewportSize({width:390,height:900});
       await page.evaluate(dark=>document.body.toggleAttribute('data-ds-dark-theme',dark),dark);
@@ -288,7 +294,7 @@ test('activity board renders honest states, keyboard navigation and responsive t
       for(const name of ['任务','身份']){
         await tab(name).click();
         if(state==='loading') assert(await panel.locator('[aria-busy="true"]').count()>0,'loading has an explicit pending region');
-        if(name==='身份'&&state!=='empty')assert.deepEqual(await panel.locator('.ba-board-facts dd').allTextContents(),['—','—','—'],'unavailable counts stay unknown instead of becoming zero');
+        if(name==='身份')assert.equal(await panel.locator('.ba-board-card').count(),state==='loading'?0:5,'loading waits for identity; empty and failed identity retain all five resource entrances');
         if(state==='error'){
           await panel.getByRole('alert').first().waitFor();
           assert(await panel.getByRole('button',{name:/重试/}).count()>0,'error offers a direct retry');
@@ -309,14 +315,18 @@ test('activity board renders honest states, keyboard navigation and responsive t
     await tab('身份').click();
     await page.evaluate(()=>window.updateConfig({name:'小伴 · 已保存的新身份',models:[{modelId:'tenant/custom:model#v2'}],pet:{kind:'builtin',expression:'happy'}}));
     await panel.getByText('小伴 · 已保存的新身份',{exact:true}).first().waitFor();
-    assert(await panel.getByText('tenant/custom:model#v2',{exact:true}).isVisible(),'saved config updates without reopening');
+    assert.equal(await panel.getByText('tenant/custom:model#v2',{exact:true}).count(),0,'saved model configuration does not recreate removed fields');
     assert(await panel.locator('.benchgo-pet-avatar img').first().evaluate(node=>node.complete&&node.naturalWidth>0),'updated builtin pet renders');
     await page.evaluate(()=>window.updateConfig({name:'',models:[],cardMotion:false}));
     await panel.locator('.ba-board-identity strong').filter({hasText:'未命名'}).waitFor();
     assert.equal(await panel.getByText('小伴 · 已保存的新身份',{exact:true}).count(),0,'clearing a saved name does not revive a cached name');
-    await panel.getByRole('button',{name:/助手形象/}).click();
-    await panel.waitFor({state:'hidden'});
-    assert.deepEqual(await page.evaluate(()=>window.resourceCalls),['pet'],'identity appearance action opens the correct resource');
+    for(const [label,resource] of [['形象','pet'],['SO','soul'],['目标','goals'],['记忆','memory'],['Identity','identity-document']]){
+      const card=panel.getByRole('button',{name:label,exact:true});
+      await card.focus();await page.keyboard.press('Enter');
+      await panel.waitFor({state:'hidden'});
+      assert.equal((await page.evaluate(()=>window.resourceCalls)).at(-1),resource,'each card opens its own resource through keyboard activation');
+      await open();await tab('身份').click();
+    }
     assert.deepEqual(errors,[],'no browser runtime errors');
   }finally{await browser.close();}
 });
@@ -350,7 +360,7 @@ test('activity board updates Worker and child execution in place without declari
     assert.equal(await detail.locator('[data-worker-status="running"]').count(),3);
     assert.equal(await detail.getByRole('progressbar').count(),0,'observed work has no estimated completion percentage');
     assert.equal(await detail.locator('.ba-execution-timeline').count(),1,'execution uses a single task line');
-    assert.equal(await detail.locator('.ba-task-execution time').count(),1,'task line has one shared freshness stamp');
+    assert.equal(await detail.locator('.ba-task-execution time').count(),3,'each observed node carries its own time');
     assert.equal(await detail.locator('.ba-execution-status').count(),0,'current activity replaces repeated running labels');
     assert(await detail.getByRole('img',{name:'进行',exact:true}).isVisible(),'execution phase is accessible on the title status icon');
     assert.equal(await detail.getByText('正在执行',{exact:true}).count(),0,'no standalone phase paragraph remains');
@@ -358,12 +368,9 @@ test('activity board updates Worker and child execution in place without declari
     assert.equal(await detail.locator('.ba-execution-mark').first().evaluate(node=>getComputedStyle(node).backgroundColor),'rgba(0, 0, 0, 0)','execution marks have no white background');
     const handle=await detail.locator('[data-worker-id="child-search"]').elementHandle();
     await page.evaluate(()=>window.updateExecution('child-completed'));
-    await detail.getByRole('button',{name:'已结束步骤 · 1',exact:true}).waitFor();
-    assert(!await handle.evaluate(node=>node.isConnected),'completed steps move into a collapsed history group');
-    assert.equal(await detail.locator('[data-worker-id="child-search"]').count(),0,'completed steps are collapsed by default');
-    await detail.getByRole('button',{name:'已结束步骤 · 1',exact:true}).click();
+    assert(await handle.evaluate(node=>node.isConnected),'completed workers stay in the same timeline');
     await detail.locator('[data-worker-id="child-search"][data-worker-status="completed"]').waitFor();
-    assert(await detail.locator('[data-worker-id="child-check"]').getByText('执行失败',{exact:true}).first().isVisible());
+    assert(await detail.locator('[data-worker-id="child-check"]').getByText('执行失败',{exact:true}).isVisible());
     assert.equal(await detail.getByText('已完成',{exact:true}).count(),0,'one child ending does not complete the ticket');
     for(const dark of [false,true])for(const width of [1440,768,390]){
       await page.setViewportSize({width,height:900});
@@ -379,26 +386,26 @@ test('activity board updates Worker and child execution in place without declari
     assert.equal(await detail.locator('[data-worker-id]').count(),3,'refresh errors keep observed children with a stale-state notice');
     await page.evaluate(()=>{window.scenarioControl.fail=false;window.updateExecution('verifying');});
     await detail.getByText('动态更新暂不可用，以下保留上次记录。',{exact:true}).waitFor({state:'hidden'});
-    await row.getByText('Worker 已交回结果，正在保存',{exact:true}).waitFor({state:'attached'});
+    await row.getByText('执行已结束',{exact:true}).waitFor({state:'attached'});
     assert.equal(await detail.locator('[data-worker-status="completed"]').count(),3);
-    assert.equal(await detail.getByText('已完成',{exact:true}).count(),0,'Worker completion still waits for ticket result persistence and delivery');
+    assert.equal(await detail.getByText('正在保存结果',{exact:true}).count(),0,'completed Worker records override stale session activity');
     if(captureDir)await page.screenshot({path:join(captureDir,'verifying-detail.png')});
     await page.evaluate(()=>window.updateExecution('delivered'));
     await detail.getByRole('img',{name:'完成',exact:true}).waitFor();
     assert(await detail.getByText('内部结果',{exact:true}).isVisible());
     await row.waitFor({state:'detached'});
     assert(await detail.isVisible(),'closing record keeps its existing detail readable');
-    assert(await detail.locator('.ba-activity-detail').evaluate(node=>node.getBoundingClientRect().top<node.parentElement.querySelector('.ba-task-execution').getBoundingClientRect().top),'finished result summary precedes execution history');
+    assert.equal(await detail.locator('.ba-activity-detail').count(),0,'the result belongs to the unified timeline');
     assert.equal(await detail.getByRole('button',{name:'停止任务',exact:true}).count(),0);
     if(captureDir)await page.screenshot({path:join(captureDir,'delivered-detail.png')});
     await page.evaluate(()=>window.updateExecution('paused'));
-    await detail.getByRole('heading',{name:'最近执行记录',exact:true}).waitFor();
-    assert(await detail.getByText('以下为最近一次执行记录，不代表 Worker 当前仍在运行。',{exact:true}).isVisible(),'paused tickets label old activity as historical');
-    assert(await detail.locator('[data-worker-id="worker-main"]').getByText('上次记录为运行中',{exact:true}).isVisible(),'paused ticket does not present its previous Worker state as live');
+    await detail.getByRole('heading',{name:'全执行记录',exact:true}).waitFor();
+    await page.keyboard.press('Tab');await detail.locator('[data-worker-id="worker-main"] strong').focus();
+    await page.getByRole('tooltip').getByText('上次记录为运行中',{exact:true}).waitFor();
     await page.evaluate(()=>window.updateExecution('unknown'));
     await detail.locator('[data-worker-id="child-check"][data-worker-status="unknown"]').waitFor();
     assert(await detail.getByText('历史会话尚未加载，部分执行状态无法确认。',{exact:true}).isVisible());
-    assert(await detail.locator('[data-worker-id="worker-main"]').getByText('等待后续',{exact:true}).isVisible(),'idle worker does not become completed');
+    assert.equal(await detail.locator('[data-worker-id="worker-main"]').getAttribute('data-worker-status'),'waiting','idle worker does not become completed');
     await page.evaluate(()=>window.updateExecution('main-only'));
     await detail.getByText('等待新的执行动态',{exact:true}).waitFor();
     assert.equal(await detail.getByRole('heading',{name:'子 Worker',exact:true}).count(),0,'no empty child Worker section remains');
@@ -410,7 +417,105 @@ test('activity board updates Worker and child execution in place without declari
   }finally{await browser.close();}
 });
 
-test('long activity details keep current work and actions reachable while finished steps stay collapsed', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
+test('task details lead with real progress, retain summary history and expose icon actions with tooltips', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
+  const browser=await chromium.launch({headless:true,executablePath});
+  try{
+    const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'});
+    page.setDefaultTimeout(5000);
+    const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    await page.setContent(await fixture());
+    await page.evaluate(()=>{window.renderScenario('dynamic');window.updateSummary('已读取项目说明，确认服务器使用 SSH 连接。');window.updateSummary('已连通目标服务器，正在核对磁盘与关键服务。');});
+    await page.getByRole('button',{name:'展开看板',exact:true}).click();
+    await page.locator('[data-task-key="ticket:running"] .ba-board-task-open').click();
+    const detail=page.getByRole('region',{name:'任务详情',exact:true});
+    await detail.getByRole('heading',{name:'全执行记录',exact:true}).waitFor();
+    assert.equal(await detail.locator('.ba-task-dialog-body').evaluate(node=>node.firstElementChild.className),'ba-task-execution','progress is the first content');
+    assert.equal(await detail.getByRole('button',{name:'任务要求',exact:true}).count(),0);
+    assert.equal(await detail.getByText(/最近执行记录|关键工作流|完成一个执行阶段|系统状态/).count(),0,'neither duplicate timelines nor generic step labels are shown');
+    assert.equal(await detail.getByText('已连通目标服务器，正在核对磁盘与关键服务。',{exact:true}).count(),1,'latest summary is not repeated in history');
+    await detail.getByRole('list',{name:'执行时间线',exact:true}).getByText('已读取项目说明，确认服务器使用 SSH 连接。',{exact:true}).waitFor();
+    const execution=detail.getByRole('button',{name:'查看执行会话',exact:true}), management=detail.getByRole('button',{name:'前往任务管理',exact:true});
+    for(const [button,label] of [[execution,'查看执行会话'],[management,'前往任务管理']]){
+      assert.equal((await button.innerText()).trim(),'','secondary actions display only icons');
+      await page.keyboard.press('Tab');await button.focus();await page.getByRole('tooltip').getByText(label,{exact:true}).waitFor();
+      await button.blur();
+    }
+    await execution.click();
+    assert.deepEqual(await page.evaluate(()=>window.executionCalls),[{available:true,sessionId:'worker-main',ticketId:'running'}]);
+    await page.evaluate(()=>window.updateSummary('磁盘与关键服务检查完成，正在整理报告。',true));
+    await detail.getByText('磁盘与关键服务检查完成，正在整理报告。',{exact:true}).waitFor();
+    assert.equal(await detail.getByRole('list',{name:'执行时间线',exact:true}).getByText('已连通目标服务器，正在核对磁盘与关键服务。',{exact:true}).count(),1);
+    await detail.getByRole('button',{name:'记录范围',exact:true}).click();
+    await page.getByRole('tooltip').getByText(/仅保留最近的阶段进展/).waitFor();
+    await page.keyboard.press('Tab');
+    assert.equal(await detail.getByText('检查桌面与窄屏的任务入口、键盘导航及四种状态。',{exact:true}).count(),0,'long requirements do not enter the progress view');
+    assert.deepEqual(await detail.locator('.ba-execution-timeline > li:not([data-worker-id]) p').allTextContents(),['磁盘与关键服务检查完成，正在整理报告。','已连通目标服务器，正在核对磁盘与关键服务。','已读取项目说明，确认服务器使用 SSH 连接。'],'newest progress appears first even when timestamps coincide');
+    await detail.focus();await page.mouse.move(0,0);
+    for(const dark of [false,true])for(const width of [1440,390]){
+      await page.setViewportSize({width,height:900});await page.evaluate(dark=>document.body.toggleAttribute('data-ds-dark-theme',dark),dark);
+      assert(await detail.evaluate(node=>node.scrollWidth<=node.clientWidth),'progress fits the board');
+      assert((await management.boundingBox()).width>=36,'icon action remains a full touch target');
+      const alignment=await detail.locator('.ba-task-inline-head').evaluate(node=>{
+        const center=element=>{const box=element.getBoundingClientRect();return box.top+box.height/2;};
+        return [center(node.querySelector('button')),center(node.querySelector('h2')),center(node.querySelector('.ba-activity-detail-status'))];
+      });
+      assert(Math.max(...alignment)-Math.min(...alignment)<1,'back icon, title and status share the same vertical center');
+      if(captureDir){await mkdir(captureDir,{recursive:true});await page.screenshot({path:join(captureDir,`${dark?'dark':'light'}-${width}-progress-detail.png`)});}
+    }
+    await management.click();
+    assert.deepEqual(await page.evaluate(()=>window.resourceSelections),[{ticketId:'running'}]);
+    assert.deepEqual(errors,[]);
+  }finally{await browser.close();}
+});
+
+test('running and waiting details refresh once from the footer with icon motion and retained focus', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
+  const browser=await chromium.launch({headless:true,executablePath});
+  try{
+    const page=await browser.newPage({viewport:{width:390,height:900},reducedMotion:'no-preference'});
+    page.setDefaultTimeout(5000);
+    await page.setContent(await fixture());
+    for(const id of ['running','waiting']){
+      await page.evaluate(()=>window.renderScenario('data'));
+      await page.getByRole('button',{name:'展开看板',exact:true}).click();
+      await page.locator(`[data-task-key="ticket:${id}"] .ba-board-task-open`).click();
+      const detail=page.getByRole('region',{name:'任务详情',exact:true});
+      const refresh=detail.getByRole('button',{name:'刷新记录',exact:true});
+      assert.equal(await refresh.count(),1);
+      assert(await refresh.evaluate(node=>!!node.closest('.ba-task-dialog-footer')),'all task states use the fixed footer');
+      assert.equal(await detail.locator('.ba-task-dialog-body').getByRole('button',{name:'刷新记录',exact:true}).count(),0);
+      await page.evaluate(()=>{window.apiCalls=[];window.scenarioControl.holdRefresh=true;});
+      await refresh.click();
+      await page.waitForFunction(()=>document.querySelector('.ba-task-dialog-footer [aria-label="刷新记录"]')?.getAttribute('aria-busy')==='true');
+      assert.equal((await refresh.innerText()).trim(),'');
+      const icon=refresh.locator('.cmd-ui-icon');
+      assert.equal(await icon.evaluate(node=>getComputedStyle(node).animationName),'ba-task-icon-spin');
+      const first=await icon.evaluate(node=>getComputedStyle(node).transform);
+      await page.waitForTimeout(100);
+      assert.notEqual(await icon.evaluate(node=>getComputedStyle(node).transform),first,'the visible icon rotates');
+      if(captureDir){await mkdir(captureDir,{recursive:true});await page.screenshot({path:join(captureDir,`${id}-refreshing-390.png`)});}
+      await refresh.click({force:true});
+      assert.deepEqual(await page.evaluate(()=>window.apiCalls.filter(([name])=>name==='tickets')), [['tickets',{ticketId:id}]],'a second click never starts another request');
+      assert.equal(await detail.getByText(/正在处理，请稍候|更新中/).count(),0,'refresh produces no progress paragraph');
+      await page.evaluate(()=>window.finishRefresh());
+      await page.waitForFunction(()=>!document.querySelector('.ba-task-dialog-footer [aria-label="刷新记录"]')?.hasAttribute('aria-busy'));
+      assert.equal(await icon.evaluate(node=>getComputedStyle(node).animationName),'none');
+      assert(await refresh.evaluate(node=>node===document.activeElement),'refresh preserves the action focus');
+      await page.emulateMedia({reducedMotion:'reduce'});
+      await refresh.click();
+      assert.equal(await icon.evaluate(node=>getComputedStyle(node).animationName),'none','reduced motion is respected');
+      await page.waitForFunction(()=>!document.querySelector('.ba-task-dialog-footer [aria-label="刷新记录"]')?.hasAttribute('aria-busy'));
+      await page.emulateMedia({reducedMotion:'no-preference'});
+    }
+    await page.evaluate(()=>{window.renderScenario('dynamic');window.updateSummary('Saved result is awaiting persistence');});
+    await page.getByRole('button',{name:'展开看板',exact:true}).click();
+    await page.locator('[data-task-key="ticket:running"] .ba-board-task-open').click();
+    const detail=page.getByRole('region',{name:'任务详情',exact:true});
+    assert.equal(await detail.getByText('Saved result is awaiting persistence',{exact:true}).count(),0);
+    assert.equal(await detail.getByText('执行结果已暂存，尚未完成正式保存。',{exact:true}).count(),1,'legacy summary history is translated without duplication');
+  }finally{await browser.close();}
+});
+
+test('long activity timelines keep all worker nodes and icon actions reachable', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
   const html=await fixture();
   const browser=await chromium.launch({headless:true,executablePath});
   try{
@@ -424,10 +529,9 @@ test('long activity details keep current work and actions reachable while finish
       await page.locator('[data-task-key="ticket:running"] .ba-board-task-open').click();
       const detail=page.getByRole('region',{name:'任务详情',exact:true}), body=detail.locator('.ba-task-dialog-body');
       await detail.waitFor();
-      assert.equal(await detail.locator('[data-worker-id]').count(),9,'only live and abnormal steps appear by default');
+      assert.equal(await detail.locator('[data-worker-id]').count(),33,'all worker facts share the timeline');
       assert.equal(await detail.locator('[data-worker-status=failed]').count(),1,'failed steps are never hidden with completion history');
-      const history=detail.getByRole('button',{name:'已结束步骤 · 24',exact:true});
-      assert.equal(await history.getAttribute('aria-expanded'),'false');
+      assert.equal(await detail.getByRole('list',{name:'执行时间线',exact:true}).count(),1);
       const footer=detail.locator('.ba-task-dialog-footer');
       const bounds=await detail.evaluate(node=>{
         const outer=node.getBoundingClientRect();
@@ -437,14 +541,13 @@ test('long activity details keep current work and actions reachable while finish
       assert(bounds.children.every(child=>child.left>=bounds.left&&child.right<=bounds.right+1),'dialog body and footer fit the outer width: '+JSON.stringify(bounds));
       const before=await footer.boundingBox();
       assert(before.y+before.height<=900,'actions fit the viewport before scrolling');
-      await history.scrollIntoViewIfNeeded();await history.click();
-      assert.equal(await detail.locator('[data-worker-id]').count(),33,'all completed steps remain available on demand');
       await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
       const expanded=await footer.boundingBox();
       await body.evaluate(node=>{node.scrollTop=node.scrollHeight;});
       const after=await footer.boundingBox();
       assert(Math.abs(expanded.y-after.y)<1&&after.y+after.height<=900,'footer stays in place as expanded history scrolls');
-      assert(await detail.getByRole('button',{name:'停止任务',exact:true}).isVisible());
+      assert(await detail.getByRole('button',{name:'前往任务管理',exact:true}).isVisible());
+      assert.equal(await detail.getByRole('button',{name:/停止任务|暂停工单/}).count(),0);
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'long step labels and errors never widen the viewport');
       assert(await body.evaluate(node=>node.scrollWidth<=node.clientWidth),'long step summaries wrap inside the body');
       if(captureDir)await page.screenshot({path:join(captureDir,`${dark?'dark':'light'}-${width}-long-history.png`)});
@@ -468,15 +571,14 @@ test('activity board keeps verification facts visible and distinguishes a stoppe
     await page.evaluate(()=>window.updateUncertainty(false));
     const row=page.locator('[data-task-key="ticket:uncertain"]');
     await row.getByText('执行回合缺少完整结束记录',{exact:true}).waitFor();
-    await row.locator('.ba-board-verification').getByText(/自动核查已查 3 次.*下次/).waitFor();
-    assert(await row.locator('.ba-board-verification').isVisible(),'inspection facts are visible without opening details');
+    assert.equal(await row.getByText(/自动核查|下次核查|已查 3 次/).count(),0,'interrupted execution adds no verification stage');
     await row.getByText('等待',{exact:true}).waitFor();
     if(captureDir)await page.screenshot({path:join(captureDir,'verification-visible-390.png'),fullPage:true});
     await page.evaluate(()=>window.updateUncertainty(true));
     await row.getByText(/后续动作已拦截，但执行端仍未确认退出/).waitFor();
     await row.getByRole('button').click();
     const detail=page.getByRole('region',{name:'任务详情',exact:true});
-    await detail.getByText('等待执行端退出',{exact:true}).waitFor();
+    await detail.getByLabel('主 Worker · 等待执行端退出',{exact:true}).waitFor();
     assert.equal(await detail.getByRole('button',{name:'停止工单',exact:true}).count(),0);
     await detail.getByText(/后续动作已拦截，但执行端仍未确认退出/).waitFor();
     assert.equal(await page.evaluate(()=>window.apiCalls.some(([name])=>['ticketStop','ticketResume'].includes(name))),false);

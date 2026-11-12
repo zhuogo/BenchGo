@@ -4,7 +4,7 @@ const failure = message => Object.assign(new Error(message), { code: 'WATCHDOG_S
 
 /** Observe official durable delivery receipts; this bridge owns no clock or task scheduler. */
 export function createWatchdogScheduleBridge({ ctx, watchdog, store, config, ensureSession }) {
-  const schedule = ctx.get?.('schedule') ?? ctx.schedule;
+  const schedule = ctx.get ? ctx.get('schedule') : ctx.schedule;
   if (!schedule?.catalog || !schedule?.history || !schedule?.create || !schedule?.edit) throw failure('官方 Schedule 服务不可用');
   let pending, starting, dirty = false, stopped = false, unsubscribe;
   async function configure() {

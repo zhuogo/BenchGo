@@ -314,18 +314,6 @@
                 "type": "object",
                 "additionalProperties": true
               },
-              "checkpointList": {
-                "type": "object",
-                "additionalProperties": true
-              },
-              "checkpointPreview": {
-                "type": "object",
-                "additionalProperties": true
-              },
-              "checkpointRestore": {
-                "type": "object",
-                "additionalProperties": true
-              },
               "compact": {
                 "type": "object",
                 "additionalProperties": true
@@ -425,6 +413,7 @@
               },
               "goalCreate": {
                 "type": "object",
+                "description": "仅提交 objective/requestId 时创建持久清单目标（executionKind=checklist，status=active），不初始化会话、不派工、不要求项目；旧工单目标请求保持兼容。返回 id、objective、status、rowVersion。",
                 "additionalProperties": true
               },
               "goalGet": {
@@ -445,6 +434,7 @@
               },
               "goalUpdate": {
                 "type": "object",
+                "description": "清单目标请求携带 id、当前 rowVersion 和 patch；patch 接受 objective（1–2000 字）、status=active/completed 或 deleted=true。完成更新真实目标状态，删除退出列表与上下文。旧工单目标仍拒绝人工完成。",
                 "additionalProperties": true
               },
               "history": {
@@ -1098,7 +1088,7 @@
               },
               "executionSessions": {
                 "type": "object",
-                "description": "Trusted same-origin authenticated owner peer only.",
+                "description": "Trusted same-origin authenticated owner peer only. All persisted Worker runs and verified official subagents, including historical and archived sessions. Ordinary forks are excluded.",
                 "additionalProperties": true,
                 "properties": {
                   "sessions": {
@@ -1125,6 +1115,36 @@
                         },
                         "available": {
                           "const": true
+                        },
+                        "role": {
+                          "enum": [
+                            "worker",
+                            "child-worker"
+                          ]
+                        },
+                        "parentSessionId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "status": {
+                          "enum": [
+                            "running",
+                            "waiting",
+                            "completed"
+                          ]
+                        },
+                        "runState": {
+                          "type": "string"
+                        },
+                        "promptable": {
+                          "type": "boolean",
+                          "description": "Presentation only; submission must still pass the live nativePrompt gate."
+                        },
+                        "reason": {
+                          "type": "string",
+                          "description": "Chinese explanation when this execution is read-only."
                         }
                       },
                       "additionalProperties": true
@@ -1134,21 +1154,6 @@
                 "required": [
                   "sessions"
                 ]
-              },
-              "actionPermissions": {
-                "type": "object",
-                "description": "Trusted same-origin authenticated owner peer only.",
-                "additionalProperties": true
-              },
-              "actionPermissionCreate": {
-                "type": "object",
-                "description": "Trusted same-origin authenticated owner peer only.",
-                "additionalProperties": true
-              },
-              "actionPermissionRevoke": {
-                "type": "object",
-                "description": "Trusted same-origin authenticated owner peer only.",
-                "additionalProperties": true
               },
               "approvalOrigins": {
                 "type": "object",
@@ -2244,9 +2249,6 @@
           "action": {
             "type": "string",
             "enum": [
-              "actionPermissionCreate",
-              "actionPermissionRevoke",
-              "actionPermissions",
               "analyzeImage",
               "approvalOrigins",
               "archiveThread",
@@ -2255,9 +2257,6 @@
               "cancel",
               "capabilities",
               "catalog",
-              "checkpointList",
-              "checkpointPreview",
-              "checkpointRestore",
               "compact",
               "config",
               "connectionAction",
@@ -2358,9 +2357,6 @@
               "directReplyReconcile",
               "outboxReconcile",
               "executionSessions",
-              "actionPermissions",
-              "actionPermissionCreate",
-              "actionPermissionRevoke",
               "sessionHistory",
               "sessionList"
             ]
@@ -2423,9 +2419,6 @@
             "type": "string"
           },
           "model": {
-            "type": "string"
-          },
-          "token": {
             "type": "string"
           },
           "runId": {
@@ -2711,22 +2704,6 @@
                 "disposition",
                 "expectedRevision",
                 "expectedUpdatedAt"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "checkpointRestore"
-                }
-              }
-            },
-            "then": {
-              "required": [
-                "ticketId",
-                "runId",
-                "token"
               ]
             }
           },
@@ -3059,38 +3036,6 @@
             },
             "then": {
               "$ref": "#/components/schemas/AssistantDeliveryReconciliationInput"
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "actionPermissionCreate"
-                }
-              }
-            },
-            "then": {
-              "required": [
-                "origin",
-                "categories",
-                "expiresAt",
-                "requestId"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "actionPermissionRevoke"
-                }
-              }
-            },
-            "then": {
-              "required": [
-                "id",
-                "requestId"
-              ]
             }
           },
           {
@@ -3446,58 +3391,42 @@
             "type": "integer",
             "minimum": 1
           },
-          "label": {
+          "address": {
             "type": "string"
-          },
-          "target": {
-            "type": "string",
-            "format": "uri"
-          },
-          "method": {
-            "type": "string"
-          },
-          "placement": {
-            "type": "string"
-          },
-          "field": {
-            "type": "string"
-          },
-          "prefix": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "expiresAt": {
-            "type": [
-              "integer",
-              "null"
-            ]
           },
           "updatedAt": {
             "type": "integer"
           },
-          "configured": {
-            "type": "boolean"
-          },
-          "available": {
-            "type": "boolean"
+          "credentials": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "configured": {
+                  "const": true
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "configured"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
           "handle",
           "revision",
-          "label",
-          "target",
-          "method",
-          "placement",
-          "field",
-          "prefix",
-          "kind",
-          "expiresAt",
+          "address",
           "updatedAt",
-          "configured",
-          "available"
+          "credentials"
         ],
         "additionalProperties": false
       },
@@ -3569,36 +3498,56 @@
             "type": "integer",
             "minimum": 1
           },
-          "label": {
-            "type": "string",
-            "minLength": 1
-          },
-          "secret": {
+          "address": {
             "type": "string",
             "minLength": 1,
-            "writeOnly": true
+            "maxLength": 2048
           },
-          "target": {
-            "type": "string",
-            "format": "uri"
-          },
-          "method": {
-            "type": "string"
-          },
-          "placement": {
-            "type": "string"
-          },
-          "field": {
-            "type": "string"
-          },
-          "prefix": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
+          "credentials": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "value": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 16384,
+                  "writeOnly": true
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "not": {
+                      "required": [
+                        "id"
+                      ]
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "value"
+                    ]
+                  }
+                }
+              ]
+            }
           }
         },
-        "additionalProperties": true,
+        "additionalProperties": false,
         "allOf": [
           {
             "if": {
@@ -3610,12 +3559,8 @@
             },
             "then": {
               "required": [
-                "label",
-                "secret",
-                "target",
-                "method",
-                "placement",
-                "field"
+                "address",
+                "credentials"
               ]
             }
           },
@@ -3623,10 +3568,10 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "save"
-                },
-                "handle": {
-                  "type": "string"
+                  "enum": [
+                    "save",
+                    "remove"
+                  ]
                 }
               },
               "required": [
@@ -5224,8 +5169,7 @@
         "type": "object",
         "required": [
           "text",
-          "acceptance",
-          "requestId"
+          "acceptance"
         ],
         "properties": {
           "projectId": {
@@ -5259,7 +5203,7 @@
           }
         },
         "additionalProperties": true,
-        "description": "assistant_delegate 工具输入；执行仅使用系统工作角色模型队列，创建会话时冻结，不接受单工单 provider/model 覆盖。duplicateOfTicketId 只关联同来源当前在办工单，不扩大授权、不重复派工。",
+        "description": "assistant_delegate 工具输入；执行仅使用系统工作角色模型队列，创建会话时冻结，不接受单工单 provider/model 覆盖。duplicateOfTicketId 只关联同来源当前在办工单，不扩大授权、不重复派工。 请求标识与当前要求版本由宿主根据真实输入持有，模型无需填写。",
         "not": {
           "anyOf": [
             {
@@ -5295,8 +5239,6 @@
         "required": [
           "id",
           "operation",
-          "expectedInstructionRevision",
-          "requestId",
           "reason"
         ],
         "properties": {
@@ -5344,7 +5286,7 @@
           }
         },
         "additionalProperties": true,
-        "description": "进行中仅允许 revise，原执行会话在下一工具边界整份应用；终态使用 adjustment 创建关联新单，原结果保持不变。模型仅由系统工作角色配置决定，不接受单工单覆盖。",
+        "description": "进行中仅允许 revise，原执行会话在下一工具边界整份应用；终态使用 adjustment 创建关联新单，原结果保持不变。模型仅由系统工作角色配置决定，不接受单工单覆盖。 请求标识与当前要求版本由宿主根据真实输入持有，模型无需填写。",
         "not": {
           "anyOf": [
             {
@@ -5385,6 +5327,12 @@
             "type": "string",
             "minLength": 1
           },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "网页创建的稳定请求标识；同标识同内容复用原目标，不因主会话重置重新创建。"
+          },
           "children": {
             "type": "array",
             "items": {
@@ -5422,7 +5370,7 @@
           ]
         },
         "additionalProperties": true,
-        "description": "持续目标及递归子目标只使用系统工作角色模型；不接受节点级 provider/model 覆盖。"
+        "description": "新目标仅需 objective（1–2000 字）与 requestId，形成跨会话保留的轻量清单，不要求项目/执行要求，不自动派工。旧式带 projectId/text 的工单目标及递归子目标继续兼容，使用系统工作角色模型；不接受节点级 provider/model 覆盖。"
       },
       "ManagedSettingOperation": {
         "type": "object",

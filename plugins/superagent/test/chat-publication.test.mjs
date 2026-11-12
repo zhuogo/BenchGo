@@ -1,7 +1,7 @@
 import { channelMessageRecordType } from '../src/channel-session-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { activeChatReply, chatPublicationType, executionInputSource, installChatPublication, projectChatMessages } from '../src/chat-publication.mjs';
+import { activeChatReply, chatPublicationType, executionInputSource, installChatPublication, projectChatMessages, chatNotificationIdentities } from '../src/chat-publication.mjs';
 import { ticketStateSource } from '../src/ticket-state-report.mjs';
 import { ticketReplySource } from '../src/ticket-reply.mjs';
 
@@ -10,6 +10,22 @@ const reply = (seq, data = {}, extra = {}) => ({ seq, type: chatPublicationType,
 const start = (turn = 1) => ({ type: 'turn/start', seq: 0, data: { turn } });
 const answer = (content, turn = 1) => ({ type: 'assistant/message', seq: 2, data: { turn, message: { source: { kind: 'model' }, content } } });
 const end = (kind = 'completed', turn = 1) => ({ type: 'turn/end', seq: 3, data: { turn, reason: { kind } } });
+
+test('notification identities reflect only newly public replies, including short completion and explicit cancellation', () => {
+  const events = [start(), user, answer([{ type: 'text', text: 'Short reply' }, { type: 'reasoning', text: 'PRIVATE' }])];
+  assert.deepEqual(chatNotificationIdentities(events, events.at(-1)), []);
+  for (const kind of ['error', 'aborted']) assert.deepEqual(chatNotificationIdentities([...events, end(kind)], end(kind)), []);
+  assert.deepEqual(chatNotificationIdentities([...events, end()], end()), [{ requestId: 'human-1' }]);
+  const explicit = reply(3);
+  assert.deepEqual(chatNotificationIdentities([...events, explicit], explicit), [{ requestId: 'human-1' }]);
+  assert.deepEqual(chatNotificationIdentities([...events, explicit, end('aborted')], end('aborted')), [{ requestId: 'human-1' }]);
+  const privateNotice = { ...user, data: { ...user.data, source: { kind: ticketReplySource, replyKind: 'result' } } };
+  assert.deepEqual(chatNotificationIdentities([start(), privateNotice, explicit], explicit), []);
+  assert.deepEqual(chatNotificationIdentities([start(), user, { ...explicit, ignorable: false }], explicit), []);
+  const old = [start(), user, events[2], end()];
+  const laterStart = { ...start(2), seq: 10 }, laterEnd = { ...end('completed', 2), seq: 12 };
+  assert.deepEqual(chatNotificationIdentities([...old, laterStart, laterEnd], laterEnd), [], 'an empty new turn cannot notify for old replies');
+});
 
 test('approval reminder publishes only after host validation and preserves its historical natural reply after approval is decided', async () => {
   for (const allowed of [true, false]) {
@@ -24,6 +40,7 @@ test('approval reminder publishes only after host validation and preserves its h
     await stopping({ agent, turn: 1 }); await stopping({ agent, turn: 1 });
     const restored = projectChatMessages(JSON.parse(JSON.stringify([...events, end(), { type: 'approval/decided', data: { id: 'ask', outcome: 'allowed-once' } }])));
     assert.equal(restored.length, allowed ? 1 : 0);
+    assert.deepEqual(chatNotificationIdentities([...events, end()], end()), allowed ? [{ requestId: 'approval-request' }] : []);
     if (allowed) assert.match(restored[0].text, /任务审核/);
     assert.doesNotMatch(JSON.stringify(restored), /PRIVATE HOST SIGNAL/);
   }
@@ -127,7 +144,7 @@ test('normal completed answer is visible without a publication tool and survives
   const rows = projectChatMessages(JSON.parse(JSON.stringify(events)));
   assert.equal(rows[1].text, '我是当前配置的模型。');
   assert.equal(rows[1].kind, 'final');
-  assert.equal(rows[1].seq, 3);
+  assert.equal(rows[1].seq, 2);
   assert.doesNotMatch(JSON.stringify(rows), /PRIVATE/);
 });
 
@@ -148,7 +165,7 @@ test('completed turns preserve public text across tools and reasoning but discar
   const rows = projectChatMessages([start(), user, narration, reasoning,
     { type: 'tool/result', data: { message: { content: [{ type: 'text', text: 'PRIVATE_RESULT' }] } } },
     answer([{ type: 'text', text: 'Final answer' }]), end()]);
-  assert.deepEqual(rows.map(row => row.text), ['question', '先检查资料。\n\nFinal answer']);
+  assert.deepEqual(rows.map(row => row.text), ['question', '先检查资料。', 'Final answer']);
   assert.doesNotMatch(JSON.stringify(rows), /PRIVATE/);
 });
 
@@ -339,6 +356,8 @@ test('channel mirrors appear in actual Router history as public rows without bec
       text: event.data.text, content: [{ type: 'text', text: event.data.text }], time: event.time });
   }
   assert.equal(activeChatReply([inbound]), null, 'display-only channel input never activates a Router request');
+  assert.deepEqual(chatNotificationIdentities(events, inbound), []);
+  assert.deepEqual(chatNotificationIdentities(events, delivered), [{ mirrorKey: delivered.data.mirrorKey }]);
   assert.equal(JSON.stringify(events), before, 'reading history never rewrites the stored mirrors');
   assert.deepEqual(rows.filter(row => row.seq < 8).slice(-2).map(row => row.id), ['human-1', 'reply:human-1'], 'public sequence pagination retains channel ordering');
 });

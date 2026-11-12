@@ -86,9 +86,11 @@ test('native WebSocket accepts incremental text, streams before final and never 
   assert.equal(new URL(request.url, baseURL).searchParams.get('model'), config.model);
   assert.equal(request.headers.authorization, 'Bearer private-fixture');
   assert.deepEqual(sent[0], { type: 'tts.create', data: { session_id: 'session-1', voice_id: config.voice, response_format: 'pcm', sample_rate: 24000, speed_ratio: 1.25, mode: 'sentence' } });
-  assert.equal(sent.filter(item => item.type === 'tts.text.delta').length, 2);
+  assert.equal(sent.filter(item => item.type === 'tts.text.delta').length, 1);
   assert.equal(sent.filter(item => item.type === 'tts.text.delta').map(item => item.data.text).join(''), '第一句。第二句。');
-  assert.deepEqual(sent.slice(-2).map(item => item.type), ['tts.text.flush', 'tts.text.done']);
+  assert.equal(sent.some(item => item.type === 'tts.text.flush'), false);
+  assert.equal(sent.at(-1).type, 'tts.text.done');
+  assert.equal(response.headers.get('x-voice-start-buffer-ms'), null);
   finish(); assert.deepEqual([...((await reader.read()).value)], [3, 4]); assert.equal((await reader.read()).done, true);
   assert.ok(socket);
 });
@@ -108,6 +110,22 @@ for (const mode of ['truncated', 'error', 'wrong-session', 'empty']) test('WebSo
   });
   const response = await requestSpeech(null, { ...config, baseURL, protocol: 'stepfun-speech-websocket' }, '测试', AbortSignal.timeout(1000));
   await assert.rejects(consume(response), error => error.status === 502 && !error.message.includes('private-fixture'));
+});
+
+test('WebSocket splits only at the protocol text limit and preserves Unicode without an extra flush', async t => {
+  const sent=[],text='你'.repeat(999)+'🌤'+'好'.repeat(1001);
+  const baseURL=await server(t,ws=>{
+    const send=(type,data)=>ws.send(JSON.stringify({type,data:{session_id:'long-text',...data}}));
+    ws.on('message',raw=>{const value=JSON.parse(String(raw));sent.push(value);
+      if(value.type==='tts.create')send('tts.response.created');
+      if(value.type==='tts.text.done')send('tts.response.audio.done',{audio:encode([1,2])});
+    });send('tts.connection.done');
+  });
+  const response=await websocketSpeech(null,{...config,baseURL},text,AbortSignal.timeout(2000));
+  assert.deepEqual([...new Uint8Array(await response.arrayBuffer())],[1,2]);
+  const chunks=sent.filter(value=>value.type==='tts.text.delta').map(value=>value.data.text);
+  assert.deepEqual(chunks.map(value=>Array.from(value).length),[1000,1000,1]);
+  assert.equal(chunks.join(''),text);assert.equal(sent.some(value=>value.type==='tts.text.flush'),false);
 });
 
 test('WebSocket timeouts and cancellation close the media connection', async t => {

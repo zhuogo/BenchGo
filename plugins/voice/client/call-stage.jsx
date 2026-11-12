@@ -38,23 +38,23 @@ export function callTranscriptRows(messages, state, sessionId) {
   return [...rows, { id: 'transcript:' + state.transcriptId, renderId: 'transcript:' + state.transcriptId, role: 'user', text: state.transcript, partial: true, transcribing: true }];
 }
 
-export function CallStage({ state, controller, sessionId, open, historyOnly = false, inlineTarget, interactionPending = false, origin, pending, error, recovery, returnFocusRef, onMute, onHangup, onRetry, onMinimize, onExpand }) {
+export function CallStage({ state, controller, sessionId, open, historyOnly = false, interactionPending = false, origin, pending, error, returnFocusRef, onMute, onHangup, onRetry, onMinimize }) {
   const [recordsOpen, setRecordsOpen] = useState(historyOnly), [history, setHistory] = useState([]), [loading, setLoading] = useState(false), [historyError, setHistoryError] = useState(''), [page, setPage] = useState(null), [revision, setRevision] = useState(0);
   const root = useRef(null), list = useRef(null), follow = useRef(true), paging = useRef(false), historyAbort = useRef(null), previousFocus = useRef(null);
   const curtainButton = useRef(null), recordsId = useId();
   const closeRecords = () => { setRecordsOpen(false); curtainButton.current?.focus(); };
   const current = state.sessionId === sessionId ? state.conversationMessages || [] : [];
-  const messages = callTranscriptRows(mergeCallMessages(history, current), state, sessionId), showRecords = historyOnly || recordsOpen || !!inlineTarget;
+  const messages = callTranscriptRows(mergeCallMessages(history, current), state, sessionId), showRecords = historyOnly || recordsOpen;
   const active = state.mode === 'call', starting = state.phase === 'starting' || pending && !active;
   const phase = starting ? 'starting' : interactionPending ? 'waiting' : active ? state.phase : 'idle';
   const caption = error ? '语音遇到问题' : state.muted && phase === 'listening' ? '麦克风已关闭' : labels[phase] || '语音处理中';
   useLayoutEffect(() => {
     const orbit = root.current?.querySelector('.voice-stage-orbit');
-    if (!open || inlineTarget || !orbit || !origin) return;
+    if (!open || !orbit || !origin) return;
     const rect = orbit.getBoundingClientRect();
     root.current.style.setProperty('--voice-travel-x', origin.x - rect.left - rect.width / 2 + 'px');
     root.current.style.setProperty('--voice-travel-y', origin.y - rect.top - rect.height / 2 + 'px');
-  }, [open, origin, inlineTarget]);
+  }, [open, origin]);
   useEffect(() => { setHistory([]); setPage(null); setHistoryError(''); follow.current = true; }, [sessionId, state.conversationMode]);
   useEffect(() => {
     if (!open || !showRecords || !controller.readConversationHistory) return;
@@ -71,7 +71,6 @@ export function CallStage({ state, controller, sessionId, open, historyOnly = fa
     if (!open) return;
     previousFocus.current = document.activeElement;
     root.current?.querySelector('button')?.focus();
-    if (inlineTarget) return;
     const previousOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = previousOverflow;
@@ -79,7 +78,7 @@ export function CallStage({ state, controller, sessionId, open, historyOnly = fa
       if (previous?.isConnected && previous !== document.body) previous.focus();
       else returnFocusRef?.current?.querySelector('button:not(:disabled)')?.focus();
     };
-  }, [open, returnFocusRef, inlineTarget]);
+  }, [open, returnFocusRef]);
   useEffect(() => {
     if (showRecords && follow.current && list.current) list.current.scrollTop = list.current.scrollHeight;
   }, [showRecords, current, history, state.transcript, state.transcriptId]);
@@ -99,26 +98,26 @@ export function CallStage({ state, controller, sessionId, open, historyOnly = fa
     finally { paging.current = false; if (!abort.signal.aborted) setLoading(false); }
   };
   const keyboard = event => {
-    if (inlineTarget) return;
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (!historyOnly && recordsOpen) closeRecords(); else onMinimize(); }
     if (event.key !== 'Tab') return;
+    event.stopPropagation();
     const buttons = [...root.current.querySelectorAll('button:not(:disabled),a[href],[tabindex="0"]')].filter(node => node.getClientRects().length && !node.closest('[inert],[aria-hidden="true"]'));
     const first = buttons[0], last = buttons.at(-1);
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
   };
   if (!open) return null;
-  return createPortal(<section ref={root} className={'voice-call-stage' + (inlineTarget ? ' voice-stage-inline' : '') + (historyOnly ? ' voice-stage-history-only' : '') + (showRecords ? ' voice-stage-with-records' : '')} role={inlineTarget ? 'region' : 'dialog'} aria-modal={inlineTarget ? undefined : 'true'} aria-label={historyOnly ? '语音记录' : inlineTarget ? '语音对话' : '实时语音通话'} onKeyDown={keyboard} style={origin ? { '--voice-origin-x': origin.x + 'px', '--voice-origin-y': origin.y + 'px' } : undefined}>
-    <header className="voice-stage-header"><div className="voice-stage-title"><span className={'voice-stage-live' + (active && !starting && !error && !historyOnly ? ' is-live' : '')} /><span>{historyOnly ? '语音记录' : inlineTarget ? '语音对话' : '实时语音'}</span></div><button type="button" className="voice-stage-nav" aria-label={inlineTarget ? '展开语音通话' : historyOnly ? '关闭语音记录' : interactionPending ? '处理确认' : '收起通话'} onClick={inlineTarget ? onExpand : onMinimize}><CallStageIcon name={inlineTarget ? 'expand' : historyOnly ? 'close' : 'minimize'} /><span>{inlineTarget ? '展开' : historyOnly ? '关闭' : interactionPending ? '处理确认' : '收起'}</span></button></header>
+  return createPortal(<section ref={root} className={'voice-call-stage' + (historyOnly ? ' voice-stage-history-only' : '') + (showRecords ? ' voice-stage-with-records' : '')} role="dialog" aria-modal="true" aria-label={historyOnly ? '语音记录' : '实时语音通话'} onKeyDown={keyboard} style={origin ? { '--voice-origin-x': origin.x + 'px', '--voice-origin-y': origin.y + 'px' } : undefined}>
+    <header className="voice-stage-header"><button type="button" className="voice-stage-nav" aria-label={historyOnly ? '关闭语音记录' : interactionPending ? '处理确认' : '收起通话'} onClick={onMinimize}><CallStageIcon name={historyOnly ? 'close' : 'minimize'} /><span>{historyOnly ? '关闭' : interactionPending ? '处理确认' : '收起'}</span></button></header>
     <div className="voice-stage-body">
-      {!historyOnly && <main className="voice-stage-main"><div className="voice-stage-orbit"><div className="voice-stage-orb-arrival"><CallOrb state={{ ...state, phase }} /></div></div><div className="voice-stage-caption" role="status"><h2>{caption}</h2>{(error || phase === 'waiting') && <p>{error || '请返回对话完成确认'}</p>}</div>{!showRecords && <div className={'voice-stage-subtitle' + (error ? ' is-error' : '')}>{!error && <p>{state.phase === 'speaking' ? state.replyText || state.transcript : state.transcript || ''}</p>}</div>}{recovery && <div className="voice-stage-recovery">{recovery}</div>}</main>}
-      {showRecords && <aside id={recordsId} className="voice-stage-records" aria-label="完整语音记录"><div ref={list} className="voice-stage-message-list" role="log" aria-label="语音对话内容" aria-live="off" onScroll={event => { const node = event.currentTarget; follow.current = node.scrollHeight - node.scrollTop - node.clientHeight < 56; }}>
+      {!historyOnly && <main className="voice-stage-main"><div className="voice-stage-orbit"><div className="voice-stage-orb-arrival"><CallOrb state={{ ...state, phase }} /></div></div><div className="voice-stage-caption" role="status"><h2>{caption}</h2>{(error || phase === 'waiting') && <p>{error || '请返回对话完成确认'}</p>}</div>{!showRecords && <div className={'voice-stage-subtitle' + (error ? ' is-error' : '')}>{!error && <p>{state.phase === 'speaking' ? state.replyText || state.transcript : state.transcript || ''}</p>}</div>}</main>}
+      {showRecords && <aside id={recordsId} className="voice-stage-records" aria-label="完整语音记录"><div ref={list} tabIndex={0} className="voice-stage-message-list" role="log" aria-label="语音对话内容" aria-live="off" onScroll={event => { const node = event.currentTarget; follow.current = node.scrollHeight - node.scrollTop - node.clientHeight < 56; }}>
         {page?.hasMore && <button type="button" className="voice-stage-load" disabled={loading} onClick={older}>{loading ? '正在加载…' : '查看更早记录'}</button>}
         {!messages.length && (loading ? <Loading className="voice-stage-loading" label="正在读取语音记录…" /> : <div className="voice-stage-empty" role="status"><CallStageIcon name="records" /><p>{historyError ? '暂时无法读取记录' : '对话从这里开始'}</p><span>{historyError || '通话内容会保存在这里。'}</span>{historyError && <button type="button" className="voice-text-button" onClick={() => setRevision(value => value + 1)}>重新加载</button>}</div>)}
         {messages.map(row => <article key={row.renderId} className={'voice-stage-message is-' + row.role + (row.transcribing ? ' is-transcribing' : '')} data-voice-row={row.renderId}><span>{row.role === 'user' ? '你' : '回复'}{row.partial && <i aria-label={row.transcribing ? '正在转录' : '正在更新'} />}</span><div className="voice-stage-markdown"><MarkdownText text={row.text} streaming={!!row.partial} labels={markdownLabels} omitHtml /></div></article>)}
         {historyError && !!messages.length && <div className="voice-stage-record-error" role="status"><p>{historyError}</p><button type="button" className="voice-text-button" onClick={() => setRevision(value => value + 1)}>重新加载</button></div>}
       </div></aside>}
-      {!historyOnly && <footer className="voice-stage-controls">{!inlineTarget && <div><button ref={curtainButton} type="button" className="voice-stage-control voice-curtain-toggle" aria-label={recordsOpen ? '收起幕布' : '展开幕布'} aria-expanded={recordsOpen} aria-controls={showRecords ? recordsId : undefined} onClick={() => setRecordsOpen(value => !value)}><CallStageIcon name="curtain" /></button><span>幕布</span></div>}{active || starting ? <><div><button type="button" className={'voice-stage-control voice-stage-mic' + (state.muted ? ' is-muted' : '')} aria-label={state.muted ? '开启麦克风' : '关闭麦克风'} aria-pressed={!!state.muted} disabled={pending || starting || !active} onClick={onMute}><span className={'voice-microphone-icon' + (state.muted ? ' voice-microphone-muted' : '')}><IconMicrophoneOutlineMedium size={22} /></span></button><span>{state.muted ? '开启麦克风' : '麦克风'}</span></div><div><button type="button" className="voice-stage-control voice-stage-hangup" aria-label="结束语音通话" onClick={onHangup}><IconStopFillRegular size={20} /></button><span>结束通话</span></div></> : <div><button type="button" className="voice-stage-retry" disabled={pending} onClick={onRetry}>重新连接</button></div>}</footer>}
+      {!historyOnly && <footer className="voice-stage-controls"><div><button ref={curtainButton} type="button" className="voice-stage-control voice-curtain-toggle" aria-label={recordsOpen ? '收起幕布' : '展开幕布'} aria-expanded={recordsOpen} aria-controls={showRecords ? recordsId : undefined} onClick={() => setRecordsOpen(value => !value)}><CallStageIcon name="curtain" /></button><span>幕布</span></div>{active || starting ? <><div><button type="button" className={'voice-stage-control voice-stage-mic' + (state.muted ? ' is-muted' : '')} aria-label={state.muted ? '开启麦克风' : '关闭麦克风'} aria-pressed={!!state.muted} disabled={pending || starting || !active} onClick={onMute}><span className={'voice-microphone-icon' + (state.muted ? ' voice-microphone-muted' : '')}><IconMicrophoneOutlineMedium size={22} /></span></button><span>{state.muted ? '开启麦克风' : '麦克风'}</span></div><div><button type="button" className="voice-stage-control voice-stage-hangup" aria-label="结束语音通话" onClick={onHangup}><IconStopFillRegular size={20} /></button><span>结束通话</span></div></> : <><div><button type="button" className="voice-stage-retry" disabled={pending} onClick={onRetry}>重新连接</button></div><div><button type="button" className="voice-stage-nav" onClick={onHangup}>关闭通话</button></div></>}</footer>}
     </div>
-  </section>, inlineTarget || document.body);
+  </section>, document.body);
 }

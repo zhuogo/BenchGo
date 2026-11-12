@@ -79,7 +79,7 @@ function applyExecutionEvent(state, event) {
     next.activity = data.message?.isError ? '工具调用失败，正在处理' : '正在处理任务';
   } else if (event.type === 'turn/end') {
     const reason = data.reason?.kind;
-    next.status = ['completed', 'blocked'].includes(reason) ? 'waiting' : stopStatus(reason);
+    next.status = reason === 'blocked' ? 'waiting' : stopStatus(reason);
     next.activity = reason === 'completed' ? '本轮执行已结束' : reason === 'blocked' ? '正在等待处理'
       : next.status === 'cancelled' ? '执行已停止' : next.status === 'failed' ? '执行遇到错误' : '执行状态待核实';
     next.request = { ...state.request, state: 'settled', settledAt: time };
@@ -189,12 +189,12 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
       if (!run) return null;
       const worker = records.get(run.sessionId), live = agents.get(run.sessionId);
       const current = worker?.runId === run.id && worker?.fence === assignment.fence;
-      const phase = run.state === 'prepared' ? 'preparing' : run.state === 'verifying' ? 'verifying'
+      const completed = ticket.status === 'completed' || run.state === 'completed';
+      const phase = completed ? 'finished' : run.state === 'prepared' ? 'preparing'
         : terminal.has(run.state) ? 'finished' : run.state === 'waiting' ? 'waiting' : run.state === 'uncertain' ? 'unknown' : 'executing';
-      let status = terminal.has(run.state) ? run.state : live?.status === 'running' ? 'running'
+      let status = completed ? 'completed' : terminal.has(run.state) ? run.state : live?.status === 'running' ? 'running'
         : live?.status === 'idle' ? 'waiting' : current && terminal.has(worker?.state?.status) ? worker.state.status : 'unknown';
-      if (run.state === 'verifying') status = 'waiting';
-      if (run.state === 'uncertain') status = 'unknown';
+      if (!completed && run.state === 'uncertain') status = 'unknown';
       const childRecords = [...records.values()].filter(row => row.parentSessionId === run.sessionId && row.runId === run.id);
       const childIndex = new Map((worker?.state?.children || []).filter(child => !records.has(child.sessionId)
         || records.get(child.sessionId).runId === run.id).map(child => [child.sessionId, { sessionId: child.sessionId, cursor: null }]));
@@ -214,7 +214,7 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
       const childCounts = { total: children.length, running: 0, completed: 0, failed: 0 };
       for (const child of children) if (child.status in childCounts) childCounts[child.status]++;
       const complete = !!current && worker.complete && children.every(child => records.get(child.id)?.complete);
-      const text = phase === 'verifying' ? '正在保存执行结果' : phase === 'preparing' ? '正在准备执行环境'
+      const text = completed ? '执行已结束' : phase === 'preparing' ? '正在准备执行环境'
         : run.state === 'completed' ? '执行已结束' : run.state === 'failed' ? '执行失败' : run.state === 'cancelled' ? '执行已停止'
           : status === 'unknown' ? '执行状态待核实' : current && worker.state?.activity || '执行动态暂不可用';
       return { ticketId: ticket.id, assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId, fence: assignment.fence,

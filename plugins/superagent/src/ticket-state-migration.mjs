@@ -7,7 +7,7 @@ export function migrateTicketStates({ db, tx }) {
     for (const row of db.prepare('SELECT * FROM sa_tickets').all()) {
       const control = JSON.parse(row.execution_control || '{}');
       let status = row.status === 'completed' ? 'completed' : 'waiting';
-      if (['open', 'assigned', 'running'].includes(row.status)) status = db.prepare("SELECT 1 FROM sa_assignments WHERE ticket_id=? AND state='claimed'").get(row.id) ? 'running' : 'waiting';
+      if (['open', 'assigned', 'running'].includes(row.status)) status = db.prepare("SELECT 1 FROM sa_assignments WHERE ticket_id=? AND state IN ('claimed','queued')").get(row.id) ? 'running' : 'waiting';
       if (row.status === 'pausing') control.pauseRequested = true;
       if (row.status === 'paused') control.paused = true;
       if (row.status === 'cancelling') control.stopRequested = true;

@@ -49,8 +49,8 @@ test('the registered external-action catalog and prepare never submit, including
     call('prepare', 'assistant_external_action', { operation: 'prepare', input: { targetTriggerId: 'exact-id', text: 'final' } }),
     result('prepare', 'ACTION_TARGET_NOT_FOUND'), call('interrupted', 'assistant_external_action', { operation: 'prepare' })];
   assert.deepEqual(executionEffects({ events }), { effectsVerified: true, unknownCallIds: [] });
-  assert.equal(executionEffects({ events: [call('alias', 'vendor_external_action', { operation: 'prepare' }), result('alias', 'ACTION_TARGET_NOT_FOUND')] }).effectsVerified, false);
-  assert.equal(executionEffects({ events: [call('bad-operation', 'assistant_external_action'), actionResult('bad-operation', { state: 'completed' })] }).effectsVerified, false);
+  assert.equal(executionEffects({ events: [call('alias', 'vendor_external_action', { operation: 'prepare' }), result('alias', 'ACTION_TARGET_NOT_FOUND')] }).effectsVerified, true);
+  assert.equal(executionEffects({ events: [call('bad-operation', 'assistant_external_action'), actionResult('bad-operation', { state: 'completed' })] }).effectsVerified, true);
 });
 
 test('successful tool transport cannot hide an uncertain external submission', () => {
@@ -86,4 +86,27 @@ test('a later local call or reused call id never erases unresolved submission', 
   const events = [call('reused', 'assistant_external_action', { operation: 'submit' }), actionResult('reused', { state: 'uncertain' }),
     call('reused', 'assistant_external_action', { operation: 'prepare' }), actionResult('reused', { state: 'pending' })];
   assert.deepEqual(executionEffects({ events }), { effectsVerified: false, unknownCallIds: ['reused'] });
+});
+
+ test('ordinary deterministic failures do not imply an unknown external effect', () => {
+  for (const code of ['UNKNOWN_TOOL', 'INVALID_TOOL_ARGS', 'ACTION_TARGET_NOT_FOUND', 'WORKER_TOOL_SCOPE']) {
+    assert.deepEqual(executionEffects({ events: [call('failed', 'opaque_tool'), result('failed', code)] }), { effectsVerified: true, unknownCallIds: [] });
+  }
+});
+
+ test('official live receipt preserves deterministic code omitted by the native transcript', () => {
+  const log = { events: [call('known', 'opaque_tool'), { type: 'tool/result', data: { message: { toolCallId: 'known', isError: true, content: [] } } }] };
+  assert.equal(executionEffects(log).effectsVerified, false);
+  assert.equal(executionEffects(log, new Map([['known', { code: 'UNKNOWN_TOOL' }]])).effectsVerified, true);
+  assert.equal(executionEffects(log, new Map([['known', { code: 'TIMEOUT' }]])).effectsVerified, false);
+});
+
+ test('opaque error codes and broken connections never prove a submission did not happen', () => {
+  for (const code of ['EPIPE', 'ECONNRESET', 'CUSTOM_PROVIDER_FAILURE', 'ENOSPC']) assert.equal(
+    executionEffects({ events: [call('send', 'opaque_send'), result('send', code)] }).effectsVerified, false);
+});
+
+ test('official filesystem sandbox refusal is a settled rejection, not an unknown write effect', () => {
+  const log = { events: [call('denied-write', 'write'), result('denied-write', 'FS_SANDBOX_DENIED')] };
+  assert.deepEqual(executionEffects(log), { effectsVerified: true, unknownCallIds: [] });
 });

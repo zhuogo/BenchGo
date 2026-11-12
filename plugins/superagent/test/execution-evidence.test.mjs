@@ -148,55 +148,51 @@ test('recovery holds the official exclusive handle through verification and alwa
   assert.equal(f.closed(), 2);
 });
 
-test('a retained project directory alone is insufficient recovery evidence', async () => {
+test('normal recovery preserves raw text despite identity and projection diagnostics', async () => {
   const f = fixture();
-  f.run.environment = { path: '/retained', branch: 'task', baseCommit: 'base' };
-  await assert.rejects(withRecoveredEvidence(f, () => assert.fail('unverified artifacts must not be accepted')), /verified artifact checkpoint/);
+  f.run.directory = '/artifacts';
+  f.run.evidence.directory = '/old-directory';
+  f.run.evidence.summary = 'Original draft';
+  f.run.evidence.finalSummary = 'Original final';
+  f.run.evidence.toolEvidence = { entries: [{ text: 'Original tool projection' }] };
+  f.run.evidence.executionEffects = { effectsVerified: false, unknownCallIds: ['missing'] };
+  f.run.evidence.transcript.hash = 'old-hash';
+  f.events.push({ seq: 3, type: 'session/end-seed' });
+  await withRecoveredEvidence(f, (saved, observation) => {
+    assert.equal(saved.summary, 'Original draft');
+    assert.equal(saved.finalSummary, 'Original final');
+    assert.equal(saved.completion.kind, 'completed');
+    assert.equal(observation.completed, true);
+    assert.deepEqual(saved.executionEffects, f.run.evidence.executionEffects);
+    assert.deepEqual(saved.recoveryObservation.diagnostics, ['TRANSCRIPT_CHANGED']);
+  });
   assert.equal(f.closed(), 1);
 });
 
-test('legacy results gain verified evidence on read-only retry and forged projections are rejected', async () => {
+test('partial interrupted text is retained without inventing a successful completion', async () => {
   const f = fixture();
-  delete f.run.evidence.toolEvidence;
-  await withRecoveredEvidence(f, saved => assert.deepEqual(saved.toolEvidence.entries, []));
-  f.run.evidence.toolEvidence = { entries: [{ text: 'forged success' }] };
-  await assert.rejects(withRecoveredEvidence(f, () => assert.fail('forged projection')), /tool evidence does not match/);
-  assert.equal(f.closed(), 2);
+  f.events.push({ seq: 3, type: 'turn/start' }, { seq: 4, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'partial' }] } } });
+  await withRecoveredEvidence(f, (saved, observation) => {
+    assert.equal(saved.summary, 'Evidence');
+    assert.equal(saved.completion, undefined);
+    assert.equal(observation.completed, false);
+  });
 });
 
-test('recovery derives legacy final text and rejects a forged current deliverable', async () => {
+test('a live busy writer is never mistaken for a completed execution', async () => {
   const f = fixture();
-  delete f.run.evidence.finalSummary;
-  await withRecoveredEvidence(f, saved => assert.equal(saved.finalSummary, 'Evidence'));
-  f.run.evidence.finalSummary = 'forged final result';
-  await assert.rejects(withRecoveredEvidence(f, () => assert.fail('forged deliverable')), /final result does not match/);
-});
-
-test('live writers, changed transcripts and incomplete endings never authorize recovery', async () => {
-  const f = fixture(); let called = false;
-  const action = () => { called = true; };
-  f.ctx.agents.get = () => ({});
-  await assert.rejects(withRecoveredEvidence(f, action), /still live/);
+  f.ctx.agents.get = () => ({ status: 'running' });
+  await assert.rejects(withRecoveredEvidence(f, () => assert.fail('busy')), /still live/);
   assert.equal(f.closed(), 0);
-  f.ctx.agents.get = () => undefined;
-  f.events.push({ seq: 3, type: 'user/message', data: { content: 'new instruction' } });
-  await assert.rejects(withRecoveredEvidence(f, action), /does not match/);
-  f.run.evidence = { ...f.run.evidence, ...executionEvidence({ events: f.events }) };
-  await assert.rejects(withRecoveredEvidence(f, action), /normal ending/);
-  assert.equal(called, false);
-  assert.equal(f.closed(), 2);
 });
 
-test('recovery derives legacy effects from the log and rejects forged effect safety', async () => {
-  const f = fixture();
-  await withRecoveredEvidence(f, saved => assert.deepEqual(saved.executionEffects, { effectsVerified: true, unknownCallIds: [] }));
-  f.run.evidence.executionEffects = { effectsVerified: false, unknownCallIds: ['invented'] };
-  await assert.rejects(withRecoveredEvidence(f, () => assert.fail('forged effects')), /execution effects do not match/);
-  assert.equal(f.closed(), 2);
-});
-
-test('mismatched official evidence exposes a bounded reason code to the recovery scheduler', async () => {
-  const f = fixture();
-  f.run.evidence.transcript.hash = 'changed';
-  await assert.rejects(withRecoveredEvidence(f, () => assert.fail('mismatch')), { code: 'EVIDENCE_MISMATCH' });
+test('idle official sessions are read without opening or disposing another writer', async () => {
+  const f = fixture(); let flushed = 0;
+  const agent = { status: 'idle', session: { id: 'session', snapshotEvents: () => f.events } };
+  f.ctx.agents.get = () => agent;
+  f.ctx.sessions = { flush: async () => { flushed++; } };
+  await withRecoveredEvidence(f, saved => assert.equal(saved.completion.kind, 'completed'));
+  assert.equal(flushed, 1); assert.equal(f.closed(), 0);
+  f.ctx.sessions.flush = async () => { agent.status = 'running'; };
+  await assert.rejects(withRecoveredEvidence(f, () => assert.fail('busy')), /still live/);
 });

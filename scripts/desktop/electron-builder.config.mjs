@@ -8,6 +8,7 @@ import { prepareDesktopBrand, prepareDesktopRenderer, startupArtwork } from './p
 import { verifyTrayBundle } from './prepare-tray.mjs';
 import { verifyStartupBundle } from './prepare-startup.mjs';
 import { verifyWorkbenchLoadingBundle } from './prepare-workbench-loading.mjs';
+import { verifyBackgroundBundle } from './prepare-background.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const version = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url))).version;
@@ -125,6 +126,7 @@ config.afterPack = async context => {
   verifyTrayBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
   verifyStartupBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
   verifyWorkbenchLoadingBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
+  verifyBackgroundBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
   const startupIcon = startupArtwork(await readFile(`${root}/assets/brand/benchgo-mark.svg`, 'utf8'));
   for (const name of ['welcome.html', 'splash.html']) {
     if (!extractFile(`${context.appOutDir}/resources/app.asar`, `renderer/${name}`).toString('utf8').includes(startupIcon)) {

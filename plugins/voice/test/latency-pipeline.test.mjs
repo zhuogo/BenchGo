@@ -9,7 +9,7 @@ test('ASR final reaches first PCM before LLM completion or TTS EOF; barge-in abo
   globalThis.document = { baseURI: 'https://voice.test/' };
   t.after(() => { globalThis.document = before; });
   let snapshot = { revision: 0, entries: [], change: { kind: 'replace' } }, sequence = 0, capture;
-  let status = { running: false, pendingInteraction: false }, firstAudio, synthSignal, cancelled = 0, cleared = 0;
+  let status = { running: false, pendingInteraction: false }, firstAudio, synthSignal, finishTurn, cancelled = 0, cleared = 0;
   const heard = new Promise(resolve => { firstAudio = resolve; });
   const listeners = new Set(), sent = [], requests = [], audio = [];
   const source = { getSnapshot: () => snapshot, subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); } };
@@ -21,16 +21,18 @@ test('ASR final reaches first PCM before LLM completion or TTS EOF; barge-in abo
   const conversation = {
     async send(text) {
       sent.push(text); status.running = true; publish('turn/start');
-      publish('assistant/live-chunk', { attemptId: 'attempt', turn: 1, step: 1, chunk: { type: 'text-delta', text: '好的，我马上帮你检查。' } });
+      publish('assistant/live-chunk', { attemptId: 'attempt', turn: 1, step: 1, chunk: { type: 'text-delta', text: '好的。' } });
+      publish('assistant/live-chunk', { attemptId: 'attempt', turn: 1, step: 1, chunk: { type: 'text-delta', text: '我马上帮你检查语音设置。' } });
       // No final assistant message or turn/end yet.
     },
     async cancel() { cancelled++; status.running = false; },
   };
   const controller = createVoiceController({
-    sessions: { binding: sessionId => ({ sessionId, eventSource: source }), scope: () => ({ get: () => conversation }) },
+    sessions: { binding: sessionId => ({ sessionId, eventSource: source }), scope: () => ({ get: () => conversation }), retain(sessionId) { const binding = this.binding(sessionId); return { sessionId, binding, ready: Promise.resolve(binding), release() {} }; } },
     uiSession: { sessionStatus: { getSnapshot: () => new Map([['session', status]]), subscribe: () => () => {} } },
   }, {
     window: { addEventListener() {}, removeEventListener() {} },
+    setTimeout: (fn, ms) => { assert.equal(ms, 0); finishTurn = fn; return 1; }, clearTimeout() { finishTurn = null; },
     json: async action => action === 'config' ? { config: { call: true, dictation: true, readAloud: false, asr: { protocol: 'transcriptions-sse', configured: true }, tts: { protocol: 'speech', configured: true } } } : action === 'call.start' ? { call: { callId: 'call' } } : {},
     createCapture: callbacks => { capture = callbacks; return { start: async () => {}, dispose: async () => {}, setPlaybackActive() {} }; },
     createPlayer: () => ({ start: async () => {}, enqueue: async (bytes, id) => { audio.push({ id, bytes: [...bytes] }); firstAudio(); }, segmentEnd() {}, clear() { cleared++; }, dispose: async () => {} }),
@@ -42,9 +44,10 @@ test('ASR final reaches first PCM before LLM completion or TTS EOF; barge-in abo
   t.after(() => controller.dispose());
   await controller.startCall({ sessionId: 'session' });
   capture.onSpeechStart(1); capture.onSpeechEnd(1); capture.onFinal('检查语音设置', { utteranceId: 1 });
+  assert.deepEqual(sent, []); finishTurn();
   await heard;
   assert.deepEqual(sent, ['检查语音设置']);
-  assert.deepEqual(requests, [{ text: '好的，我马上帮你检查。' }]);
+  assert.deepEqual(requests, [{ text: '好的。我马上帮你检查语音设置。' }]);
   assert.deepEqual(audio[0].bytes, [1, 0, 2, 0]);
   assert.equal(status.running, true); assert.equal(synthSignal.aborted, false);
   const previousClears = cleared;

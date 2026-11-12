@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PartialArguments } from '@deepseek-ai/dsh-util-values';
 import { activeChatReply, projectChatMessages } from '../src/chat-publication.mjs';
-import { projectReplyStream } from '../client/reply-stream.mjs';
+import { projectReplyStream, projectReplyRows, conversationActivity } from '../client/reply-stream.mjs';
 
 const history = { sessionId: 'session', activeReply: { requestId: 'human', turn: 2 }, messages: [{ id: 'human', role: 'user', time: 1 }] };
+const rows = (chat, extra = {}) => projectReplyRows({ history, sessionId: 'session', running: true, chat, ...extra });
 const call = args => ({ name: 'assistant_reply', turn: 2, time: 2, args });
 const run = (calls = [], extra = {}) => projectReplyStream({ history, sessionId: 'session', running: true, chat: { legacy: { runningCalls: calls } }, ...extra });
 
@@ -97,7 +98,7 @@ const settledChat = (reason = 'completed', changes = {}) => {
 };
 
 test('ordinary text survives partial → official settlement → history without a second reply store', () => {
-  const partial = run([], { chat: { legacy: { partial: { turn: 2, blocks: [{ kind: 'text', text: '完整' }] } } } });
+  const partial = run([], { chat: { legacy: { partial: { turn: 2, step: 1, blocks: [{ kind: 'text', text: '完整' }] } } } });
   const settling = run([], { chat: settledChat(null) });
   assert.equal(settling.text, '完整正文');
   assert.equal(settling.streaming, true, 'a settled step cannot claim the whole turn completed');
@@ -136,8 +137,8 @@ test('settlement requires a durable ordinary answer, the latest real turn and an
 
 test('new ordinary steps append while explicit publication may replace the public draft', () => {
   const chat = settledChat(null);
-  chat.legacy.partial = { turn: 2, blocks: [{ kind: 'text', text: '下一步正文' }] };
-  assert.equal(run([], { chat }).text, '完整正文\n\n下一步正文');
+  chat.legacy.partial = { turn: 2, step: 2, blocks: [{ kind: 'text', text: '下一步正文' }] };
+  assert.deepEqual(rows(chat).map(row => row.text), ['完整正文', '下一步正文']);
   chat.legacy.runningCalls = [call(PartialArguments.fromObject({ text: '显式正文' }))];
   assert.equal(run([], { chat }).text, '显式正文');
   chat.legacy.nodes.push({ ...call(PartialArguments.fromObject({ text: '已发表正文' })), kind: 'tool-result',
@@ -155,23 +156,24 @@ test('all public steps survive tools and reasoning, then hand off unchanged to c
     assert.equal(run([], { chat }).text, first.text, 'a content-free phase keeps earlier public text');
   }
   chat.legacy.partial.blocks.push({ kind: 'text', text: '找到结果。' });
-  assert.equal(run([], { chat }).text, '先看资料。\n\n找到结果。');
+  assert.deepEqual(rows(chat).map(row => row.text), ['先看资料。', '找到结果。']);
   chat.legacy.nodes.push({ kind: 'assistant', messageId: 'second', seq: 13, turn: 2, step: 2, blocks: chat.legacy.partial.blocks });
-  assert.equal(run([], { chat }).text, '先看资料。\n\n找到结果。', 'settled step wins over a delayed matching partial');
+  assert.deepEqual(rows(chat).map(row => row.text), ['先看资料。', '找到结果。'], 'settled step wins over a delayed matching partial');
   chat.legacy.partial = { turn: 2, step: 1, blocks: [{ kind: 'text', text: 'LATE_PARTIAL' }] };
-  assert.equal(run([], { chat }).text, '先看资料。\n\n找到结果。');
+  assert.deepEqual(rows(chat).map(row => row.text), ['先看资料。', '找到结果。']);
   const end = { seq: 14, time: 4, data: { turn: 2, reason: { kind: 'completed' } } };
   chat.timeline.turns.get(2).end = end;
   chat.legacy.turnEnds.set(2, 14);
   const completed = run([], { chat, running: false });
-  assert.equal(completed.text, '先看资料。\n\n找到结果。');
-  assert.equal(completed.key, first.key);
+  assert.equal(completed.text, '找到结果。');
+  assert.equal(rows(chat, { running: false })[0].key, first.key);
   const events = [{ type: 'turn/start', seq: 7, data: { turn: 2 } },
     { type: 'user/message', seq: 8, data: { id: 'human', source: { kind: 'user' }, content: [] } },
     ...chat.legacy.nodes.filter(node => node.kind === 'assistant').map(node => ({ type: 'assistant/message', seq: node.seq, data: {
       turn: node.turn, step: node.step, message: { id: node.messageId, source: { kind: 'model' }, content: node.blocks.map(({ kind, ...block }) => ({ type: kind, ...block })) },
     } })), { type: 'turn/end', ...end }];
   const messages = projectChatMessages(JSON.parse(JSON.stringify(events)));
+  assert.deepEqual(messages.filter(row => row.role === 'assistant').map(row => row.text), ['先看资料。', '找到结果。']);
   assert.equal(messages.at(-1).text, completed.text);
   assert.equal(messages.at(-1).id, completed.id);
   assert.equal(run([], { chat, running: false, history: { ...history, activeReply: null, messages } }), null);
@@ -223,4 +225,36 @@ test('server active reply identity requires an open user-owned turn', () => {
   assert.deepEqual(activeChatReply([start, user]), { turn: 2, requestId: 'human' });
   assert.equal(activeChatReply([start, { ...user, data: { ...user.data, source: { kind: 'system' } } }]), null);
   for (const kind of ['completed', 'aborted', 'error']) assert.equal(activeChatReply([start, user, { type: 'turn/end', data: { turn: 2, reason: { kind } } }]), null);
+});
+
+test('explicit final preserves earlier public steps in live view, accepted publication and reloaded history', () => {
+  const chat = settledChat(null, { blocks: [{ kind: 'text', text: '我先检查服务器。' }] });
+  const publish = { ...call(PartialArguments.fromObject({ text: '检查完成。' })), step: 2, seq: 12 };
+  chat.legacy.runningCalls = [publish];
+  const live = rows(chat);
+  assert.deepEqual(live.map(row => row.text), ['我先检查服务器。', '检查完成。']);
+  chat.legacy.nodes.push({ ...publish, kind: 'tool-result', content: [{ type: 'text', text: '{"published":true,"requestId":"human"}' }] });
+  const accepted = rows(chat, { running: false });
+  assert.deepEqual(accepted.map(row => row.id), live.map(row => row.id));
+  assert(accepted.every(row => !row.streaming));
+  const messages = projectChatMessages([
+    { type: 'turn/start', seq: 7, data: { turn: 2 } },
+    { type: 'user/message', seq: 8, data: { id: 'human', source: { kind: 'user' }, content: [] } },
+    { type: 'assistant/message', seq: 10, data: { turn: 2, step: 1, message: { id: 'model-message', source: { kind: 'model' }, content: [{ type: 'text', text: '我先检查服务器。' }] } } },
+    { type: 'tool/call', seq: 11, data: { turn: 2, step: 2, name: 'assistant_reply', callId: 'final', arguments: '{"text":"检查完成。"}' } },
+    { type: 'plugin:benchgo-plugin/chat-publication', ignorable: true, seq: 12, data: { kind: 'final', requestId: 'human', text: '检查完成。' } },
+  ]);
+  assert.deepEqual(messages.filter(row => row.role === 'assistant').map(row => row.id), accepted.map(row => row.id));
+  assert.deepEqual(rows(chat, { running: false, history: { ...history, messages } }), []);
+});
+
+test('activity uses public labels, subtle model waits and actual interaction or error facts', () => {
+  assert.deepEqual(conversationActivity({ running: true }, {}), { kind: 'waiting', label: '正在处理', subtle: true });
+  assert.deepEqual(conversationActivity({ running: true }, { legacy: { runningCalls: [{ name: 'assistant_memory_search' }] } }), { kind: 'search', label: '搜索中' });
+  assert.deepEqual(conversationActivity({ running: true }, { legacy: { runningCalls: [{ name: 'private_protocol_tool' }] } }), { kind: 'work', label: '工作中' });
+  assert.equal(conversationActivity({ running: true }, {}, { kind: 'question' }).label, '等待你的回答');
+  assert.equal(conversationActivity({ running: true }, {}, { kind: 'approval' }).label, '等待你的确认');
+  assert.equal(conversationActivity({ openState: 'error' }, {}).kind, 'error');
+  assert.equal(conversationActivity({ openState: 'loading' }, {}).kind, 'connecting');
+  assert.equal(conversationActivity({ running: false }, {}), null);
 });

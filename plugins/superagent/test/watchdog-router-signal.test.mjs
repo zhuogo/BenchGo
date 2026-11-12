@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { watchdogRouterSignal, inspectWatchdogRouterSignal, watchdogNoticeCurrent, assertWatchdogInspection } from '../src/watchdog-router-signal.mjs';
+import { watchdogRouterSignal, inspectWatchdogRouterSignal, watchdogNoticeCurrent } from '../src/watchdog-router-signal.mjs';
 import { createMessageInbox } from '../src/message-inbox.mjs';
 
 function fixture() {
@@ -8,8 +8,8 @@ function fixture() {
   const assignment = { id: 'assignment', ticketId: ticket.id, state: 'claimed', fence: 2, leaseUntil: 50 };
   const run = { id: 'run', sessionId: 'worker', fence: 2, instructionRevision: 1, state: 'running' };
   const database = { getTicket: id => id === ticket.id ? ticket : null, getAssignment: id => id === assignment.id ? assignment : null, runs: () => [run] };
-  const observation = { id: 'signal', incidentKey: 'incident', phase: 'opened', kind: 'model', targetId: 'host', checkId: 'check',
-    observedAt: new Date(100).toISOString(), evidenceCursor: 10, reasonCode: 'MODEL_NO_PROGRESS', summary: '疑似重复检查，尚无产出变化。',
+  const observation = { id: 'signal', incidentKey: 'incident', phase: 'opened', kind: 'execution', targetId: 'host', checkId: 'check',
+    observedAt: new Date(100).toISOString(), evidenceCursor: 10, reasonCode: 'LEASE_EXPIRED', summary: '疑似重复检查，尚无产出变化。',
     execution: { ticketId: ticket.id, assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId, fence: 2, instructionRevision: 1 } };
   const facts = { ticket: { ...ticket }, assignment: { ...assignment }, run: { ...run }, evidenceCursor: 9,
     executionAlive: { status: 'running' }, wait: { kind: 'none' }, watermarks: [{ sessionId: 'worker', complete: true, sourceSeq: 5 }] };
@@ -29,10 +29,9 @@ test('authenticated observation preserves claimed execution and rejects wire-sup
   assert.throws(() => watchdogRouterSignal(f.database, f.observation, { ...f.principal, actor: 'owner' }), { code: 'WATCHDOG_PRINCIPAL_REQUIRED' });
 });
 
-test('receiver rejects changed original execution identity and unobserved/future model watermarks', () => {
+test('receiver rejects changed original execution identity and future watermarks', () => {
   for (const change of [f => f.assignment.fence++, f => f.run.sessionId = 'replacement', f => f.run.id = 'replacement',
-    f => f.ticket.instructionRevision++, f => f.facts.evidenceCursor = 11, f => f.snapshot.currentCursor = 8,
-    f => f.facts.watermarks[0].complete = false]) {
+    f => f.ticket.instructionRevision++, f => f.snapshot.currentCursor = 8]) {
     const f = fixture(); change(f); assert.equal(f.inspect().valid, false);
   }
 });
@@ -55,15 +54,6 @@ test('host recovery binds a machine source and reports only the restored interfa
   signal = watchdogRouterSignal(f.database, { ...observation, phase: 'resolved' }, f.principal);
   assert.deepEqual(inspectWatchdogRouterSignal(f.database, signal, f.snapshot).facts,
     { interfaceReachable: true, observedAt: f.snapshot.observedAt });
-  assert.throws(() => assertWatchdogInspection(signal, { ticketId: 'ticket', operation: 'check-now' }), { code: 'WATCHDOG_INSPECTION_ONLY' });
-});
-
-test('watchdog tool authority is one read-only operation on the exact original ticket', () => {
-  const { signal } = fixture();
-  assert.doesNotThrow(() => assertWatchdogInspection(signal, { ticketId: 'ticket', operation: 'check-now' }));
-  for (const operation of ['resume', 'wait', 'fail'])
-    assert.throws(() => assertWatchdogInspection(signal, { ticketId: 'ticket', operation }), { code: 'WATCHDOG_INSPECTION_ONLY' });
-  assert.throws(() => assertWatchdogInspection(signal, { ticketId: 'another', operation: 'check-now' }), { code: 'WATCHDOG_INSPECTION_ONLY' });
 });
 
 test('same inbox persists phases once, retires queued old alarms and lets users go first', async () => {
@@ -94,4 +84,15 @@ test('same inbox persists phases once, retires queued old alarms and lets users 
 test('rejected recovery evidence cannot retire the accepted original observation', () => {
   const f = fixture(), resolved = watchdogRouterSignal(f.database, { ...f.observation, phase: 'resolved' }, f.principal);
   assert.equal(watchdogNoticeCurrent(f.signal, [{ ticketReply: resolved, suppressed: true }]), true);
+});
+
+test('legacy model observations remain readable but cannot trigger notices', () => {
+  const f = fixture(); f.signal.observation.kind = 'model';
+  assert.equal(f.inspect().reason, 'legacy-model-observation-retired');
+});
+
+test('legacy recovery inspection observations cannot trigger notices', () => {
+  const f = fixture(); f.signal.observation.reasonCode = 'RECOVERY_NOT_CONVERGING';
+  assert.equal(f.inspect().reason, 'legacy-recovery-observation-retired');
+  assert.throws(() => watchdogRouterSignal(f.database, f.signal.observation, f.principal));
 });

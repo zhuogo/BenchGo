@@ -23,11 +23,11 @@ export function workerAppliedTicket(database, assignment, execution) {
 }
 
 /** Install on a single Harness worker scope; never use frozen prompt context as authority. */
-export function installWorkerPermissionGate(scope, { database, assignment, readPolicy, authorizeAction, withCheckpoint, priorToolEvents = [], leaseMs = 60000 }) {
+export function installWorkerPermissionGate(scope, { database, assignment, readPolicy, authorizeAction, priorToolEvents = [], toolReceipts = new Map(), leaseMs = 60000 }) {
   const previousCalls = new Set(priorToolEvents.flatMap(event => event.type === 'assistant/message'
     ? (event.data?.message?.content || []).filter(block => block.type === 'tool-call').map(block => signature(block.name, block.arguments))
     : event.type === 'tool/ptc-dispatch-start' ? [signature(event.data.name, event.data.arguments)] : []));
-  const previousEffects = executionEffects({ events: priorToolEvents });
+  const previousEffects = executionEffects({ events: priorToolEvents }, toolReceipts);
   scope.systemPrompt?.section({ name: 'benchgo-external-action-boundary', order: -109, interpolate: false,
     text: 'Open terminal, scripts and browser tools remain available for normal work and preparation. Never submit payment/purchase, password changes, account deletion or additional external sending through these open tools, scripts or aliases. Submit these four categories only through a registered assistant_external_action adapter with exact frozen recipient/object/content and a fresh one-time approval. If no adapter is registered, prepare up to the final step and return a clear human handoff; never claim submission or approval. Public reading and normal authenticated replies/progress/questions/results to the original source use their existing owned paths. Tool-level checks cannot prove arbitrary commands or natural-language browser actions free of high-risk effects.' });
   scope.on('tools/pre-execute', (execution, next) => {
@@ -35,7 +35,7 @@ export function installWorkerPermissionGate(scope, { database, assignment, readP
   });
   return scope.on('tools/execute', async (execution, next) => {
     execution.signal.throwIfAborted();
-    if (previousEffects.effectsVerified === false && !isReadOnlyWorkerTool(execution.name)) {
+    if (assignment.interruptedContinuation && previousEffects.effectsVerified === false && !isReadOnlyWorkerTool(execution.name)) {
       throw Object.assign(new Error('Previous external effects remain unverified; only read-only verification is permitted'), { code: 'EXECUTION_EFFECTS_UNKNOWN' });
     }
     if ((assignment.pauseContinuation?.kind === 'execution-budget' || assignment.interruptedContinuation) && !isReadOnlyWorkerTool(execution.name)
@@ -46,7 +46,6 @@ export function installWorkerPermissionGate(scope, { database, assignment, readP
     const ticket = workerAppliedTicket(database, assignment, execution);
     const permission = await authorizeAction({ policy, mandate: ticket.mandate, ticket, execution });
     execution.signal.throwIfAborted();
-    const dispatch = async () => {
     const current = await readPolicy();
     const latest = workerAppliedTicket(database, assignment, execution);
     if (latest.authorizationVersion !== ticket.authorizationVersion) throw fail('WORKER_AUTHORIZATION_CHANGED', '提交前授权版本已变化');
@@ -59,9 +58,38 @@ export function installWorkerPermissionGate(scope, { database, assignment, readP
     if (!renewal.allowed) throw new Error('当前权限已变更或不允许此动作，Worker 已停止执行');
     // No await between the final lease/policy check and entering official dispatch.
     return next();
-    };
-    // Snapshot work may await disk IO: the final policy/fence validation must
-    // happen after it, immediately before entering the official dispatcher.
-    return permission?.allowed === true && withCheckpoint ? withCheckpoint(execution, dispatch) : dispatch();
   });
+}
+
+/** Stop a repeated shared prerequisite failure at the official step boundary.
+ * Argument errors remain correctable; successful work or new instructions resets the streak.
+ */
+export function installWorkerFailureConvergence(scope, agent, { database, assignment, revision = () => database.getTicket(assignment.ticketId)?.instructionRevision, onStop = () => {} }) {
+  const structural = new Set(['ENOSPC', 'EDQUOT', 'EROFS', 'WORKER_AUTHORIZATION_CHANGED', 'WORKER_TICKET_INACTIVE',
+    'ROLE_SERVICES_UNAVAILABLE', 'ROLE_PRESET_UNAVAILABLE', 'SESSION_ROLE_STORE_UNAVAILABLE',
+    'MANAGEMENT_OWNER_REQUIRED', 'MANAGEMENT_APPROVAL_UNAVAILABLE', 'MANAGEMENT_APPROVAL_DENIED', 'SETTINGS_UNAVAILABLE', 'CLEANUP_UNAVAILABLE']);
+  let prior, stopped;
+  const admittedUsers = new Set(), failures = new Map();
+  scope.on('tools/execute', async (execution, next) => {
+    try { return await next(); }
+    catch (error) { if (execution.agent === agent && error?.code) failures.set(execution.callId, error.code); throw error; }
+  });
+  scope.on('tools/result', (execution, result) => {
+    if (execution.agent !== agent) return;
+    const message = result.error?.message || (result.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
+    const code = result.error?.info?.code ?? result.error?.code ?? failures.get(execution.callId) ?? /^([A-Z_]+): /.exec(message)?.[1];
+    if (!result.isError || !structural.has(code)) { prior = undefined; return; }
+    const currentRevision = revision();
+    if (prior?.code === code && prior.message === message && prior.revision === currentRevision) stopped = prior;
+    else prior = { code, message, revision: currentRevision, toolName: execution.name, callId: execution.callId };
+  });
+  scope.on('agent/pre-step', (payload, next) => {
+    for (const message of payload.messages || []) if (message.source?.kind === 'user' && !admittedUsers.has(message.id)) {
+      admittedUsers.add(message.id); stopped = undefined; prior = undefined;
+    }
+    if (stopped && stopped.revision === revision()) { onStop(stopped); return { kind: 'reject' }; }
+    stopped = undefined;
+    return next();
+  });
+  return { failure: () => stopped && Object.assign(new Error(stopped.message), { code: stopped.code, toolName: stopped.toolName, callId: stopped.callId }) };
 }

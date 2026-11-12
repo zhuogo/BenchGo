@@ -120,6 +120,7 @@ test('official conversation rows navigate to their own Harness session after sel
 
 test('official workspaces render projects and conversations before Commander state returns', () => {
   const calls=[],nodes=render('first',{
+    modules:{superagent:false},
     commander:{loaded:false,projects:[],sessions:[]},defaultId:'recent',
     workspaces:{phase:'ready',archivedSessionIds:[],items:[{workspaceId:'recent',title:'default',sessionIds:['first','second']},{workspaceId:'fresh',title:'Fresh project',sessionIds:['third']}]},
     newSession:id=>calls.push(id),
@@ -160,19 +161,28 @@ test('ready empty official workspaces clear stale projects and rows', () => {
 const sessionRows = nodes => nodes.filter(node => node.props.className?.split(' ').includes('cmd-session'));
 const rowTitles = nodes => sessionRows(nodes).map(row => row.children.find(child => child.type === 'span')?.children[0]);
 
-test('private main, side and historical Routers stay out of ordinary lists while Worker and IM stay visible', () => {
-  const ids = ['main', 'side', 'old-side', 'worker', 'im'];
+test('Router surfaces stay private while Workers and official subagents remain in workspace lists', () => {
+  const ids = ['main', 'side', 'old-side', 'worker', 'child-worker', 'im', 'ordinary'];
   const options = {
     commander: { loaded: true, sessions: [], privateSessionIds: ['main', 'side', 'old-side', 'im'] },
     workspaces: { phase: 'ready', items: [], archivedSessionIds: [] },
     sessionSnapshot: { ids, byId: Object.fromEntries(ids.map(id => [id, { id, title: id, blank: false,
       projectionValues: id === 'im' ? { benchgoChannelSource: { channel: 'feishu' } } : {} }])) },
   };
-  assert.deepEqual(rowTitles(render(undefined, options)), ['worker', 'im']);
+  assert.deepEqual(rowTitles(render(undefined, options)), ['worker', 'child-worker', 'ordinary']);
   options.workspaces.archivedSessionIds = ids;
-  assert.deepEqual(rowTitles(render(undefined, { ...options, showArchived: true })), ['worker', 'im']);
+  assert.deepEqual(rowTitles(render(undefined, { ...options, showArchived: true })), ['worker', 'child-worker', 'ordinary']);
   options.workspaces.items = [{ workspaceId: 'project', title: 'Project', sessionIds: ids }];
-  assert.deepEqual(rowTitles(render(undefined, { ...options, showArchived: true })), ['worker', 'im']);
+  assert.deepEqual(rowTitles(render(undefined, { ...options, showArchived: true })), ['worker', 'child-worker', 'ordinary']);
+});
+
+test('ownership pending rows remain hidden until the current catalog identity was checked', () => {
+  const options = { commander: { loaded: false, sessions: [] } };
+  assert.deepEqual(rowTitles(render(undefined, options)), []);
+  options.commander = { loaded: true, sessions: [], ownershipVerifiedIds: ['first', 'second'], privateSessionIds: ['second'] };
+  assert.deepEqual(rowTitles(render(undefined, options)), ['first']);
+  options.commander.ownershipVerifiedIds.push('third');
+  assert.deepEqual(rowTitles(render(undefined, options)), ['first', 'third']);
 });
 
 test('official ungrouped sessions join Recent without attaching a Workspace or duplicating its members', () => {

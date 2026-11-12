@@ -1,6 +1,7 @@
-import { channelMessageRecordOf } from './channel-session-record.mjs';
+import { channelMessageRecordOf, channelMessageRecordType } from './channel-session-record.mjs';
+import { chatPublicationRecordOf } from '../../benchgo/shared/public-chat-record.mjs';
 import { appendPluginRecord } from '@deepseek-ai/dsh-session';
-import { fallbackRequestIds, readModelFallbacks } from './model-fallback.mjs';
+import { fallbackRequestIds, readModelFallbacks, modelFallbackType } from './model-fallback.mjs';
 import { questionBatch, questionAnswers, questionReplyText, readQuestionReply } from './question-reply.mjs';
 import { ticketStateSource } from './ticket-state-report.mjs';
 import { ticketReplySource } from './ticket-reply.mjs';
@@ -61,6 +62,15 @@ export function projectChatMessages(events) {
   }
   users.clear();
   let turn, request, lastAssistant, publicParts = [];
+  const appendParts = (requestId, beforeStep = Infinity) => {
+    for (const part of publicParts) {
+      if (beforeStep !== Infinity && !(Number.isSafeInteger(part.data.step) && part.data.step < beforeStep)) continue;
+      const text = textBlocks(part.data.message.content).map(block => block.text).join('\n');
+      const usage = publicUsage(part.data.usage);
+      rows.push({ seq: part.seq, id: `reply:${requestId}:${part.data.turn}:${part.data.step ?? part.data.message.id}`,
+        role: 'assistant', kind: 'final', requestId, segment: true, text, content: [{ type: 'text', text }], time: part.time, ...(usage ? { usage } : {}) });
+    }
+  };
   const asked = new Map(), answered = new Set();
   for (const event of events) {
     const channelRecord = channelMessageRecordOf(event);
@@ -99,8 +109,7 @@ export function projectChatMessages(events) {
     } else if (event.type === chatPublicationType && event.ignorable === true) {
       const row = event.data;
       if (row?.kind === 'ticket-reply' && internalReply(requests.get(row.requestId)) && ['approval', 'recovery', 'watchdog'].includes(requests.get(row.requestId).source.replyKind)) {
-        if (users.has(row.requestId) && !published.has(row.requestId) && !row.suppressed
-          && typeof row.text === 'string' && row.text.trim() && row.text.length <= 16000) {
+        if (users.has(row.requestId) && !published.has(row.requestId) && chatPublicationRecordOf(event, requests.get(row.requestId))) {
           published.add(row.requestId);
           const source = requests.get(row.requestId).source;
           const approval = source.replyKind === 'approval' && row.ticketReplyEventKey === source.eventKey
@@ -111,9 +120,11 @@ export function projectChatMessages(events) {
         }
         continue;
       }
-      if (row?.kind !== 'final' || !users.has(row.requestId) || published.has(row.requestId) || typeof row.text !== 'string' || !row.text.trim() || row.text.length > 16000) continue;
-      if (internalReply(requests.get(row.requestId)) || legacyReply(requests.get(row.requestId))) continue;
+      if (row?.kind !== 'final' || !users.has(row.requestId) || published.has(row.requestId) || !chatPublicationRecordOf(event, requests.get(row.requestId))) continue;
       published.add(row.requestId);
+      const publicationCall = events.findLast(item => item.seq < event.seq && item.type === 'tool/call'
+        && item.data?.name === 'assistant_reply' && item.data.turn === turn && !item.data.parentCallId);
+      if (request?.id === row.requestId) appendParts(row.requestId, publicationCall?.data?.step ?? -Infinity);
       const usage = request?.id === row.requestId ? publicUsage(lastAssistant?.data?.usage) : undefined;
       rows.push({ seq: event.seq, id: `reply:${row.requestId}`, role: 'assistant', kind: 'final', requestId: row.requestId, text: row.text, content: [{ type: 'text', text: row.text }], time: event.time, ...(usage ? { usage } : {}) });
     } else if (event.type === 'tool/call' && event.data?.name === 'ask_user_question' && !event.data.parentCallId) {
@@ -129,21 +140,34 @@ export function projectChatMessages(events) {
       && !event.data.interrupted && !event.data.parentCallId && event.data.message?.source?.kind === 'model') {
       lastAssistant = event;
       const text = textBlocks(event.data.message.content).map(block => block.text).join('\n');
-      if (text.trim()) publicParts.push(text);
+      if (text.trim()) publicParts.push(event);
     } else if (event.type === 'turn/end') {
       if (turn !== undefined && event.data?.turn === turn && event.data?.reason?.kind === 'completed'
         && request?.id && !internalReply(request) && !legacyReply(request) && !executionReply(request) && !explicit.has(request.id) && !published.has(request.id)) {
-        const text = publicParts.join('\n\n');
-        if (text.trim()) {
+        if (publicParts.length) {
           published.add(request.id);
-          rows.push({ seq: event.seq, id: `reply:${request.id}`, role: 'assistant', kind: 'final', requestId: request.id,
-            text, content: [{ type: 'text', text }], time: event.time, ...(publicUsage(lastAssistant.data.usage) ? { usage: publicUsage(lastAssistant.data.usage) } : {}) });
+          appendParts(request.id);
         }
       }
       turn = undefined; request = undefined; lastAssistant = undefined; publicParts = [];
     }
   }
   return rows;
+}
+
+/** Notification identities use the public projection; transcript text stays at this boundary. */
+export function chatNotificationIdentities(events, event) {
+  if (![chatPublicationType, channelMessageRecordType, 'turn/end'].includes(event.type)) return [];
+  const start = events.findLastIndex(row => row.type === 'turn/start');
+  const tail = event.type === channelMessageRecordType ? [event] : events.slice(Math.max(0, start));
+  // Questions, internal replies and fallback turns can reference earlier events.
+  // Ordinary human turns are self-contained and never fold old conversation history.
+  const source = tail.some(row => row.type === modelFallbackType
+    || row.type === 'user/message' && !['user', 'runtime-context'].includes(row.data?.source?.kind)) ? events : tail;
+  const rows = projectChatMessages(source).filter(row => row.role === 'assistant' && row.text?.trim()
+    && (event.type === chatPublicationType ? row.requestId === event.data?.requestId : row.seq >= (tail[0]?.seq ?? 0)));
+  return [...new Map(rows.map(row => row.kind === 'channel-message' ? [`channel:${row.mirrorKey}`, { mirrorKey: row.mirrorKey }]
+    : [`request:${row.requestId}`, { requestId: row.requestId }])).values()];
 }
 
 /** Only the owner Router can publish; Worker/tool output has no publication authority. */

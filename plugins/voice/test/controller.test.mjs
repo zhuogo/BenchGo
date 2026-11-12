@@ -36,21 +36,181 @@ test('idle voice does not poll; pending speech alone arms and drains the flush t
   h.publish('assistant/live-chunk',{attemptId:'a',chunk:{type:'text-delta',text:'remaining'}});assert.equal(timers.size,1);
   await h.api.hangup();assert.equal(timers.size,0);await h.api.dispose();
 });
+test('a tiny opening coalesces only same-task text and cancellation invalidates its microtask',async()=>{
+  const timers=new Map();let next=0;
+  const h=setup({setInterval:(fn,ms)=>{const id=++next;timers.set(id,{fn,ms});return id;},clearInterval:id=>timers.delete(id),createChunker:()=>new SpeakableChunker({now:()=>0})});
+  try{
+    await h.api.toggleRead('s');h.publish('turn/start');
+    h.publish('assistant/live-chunk',{attemptId:'a',chunk:{type:'text-delta',text:'好的。'}});
+    assert.equal(timers.size,0);
+    assert.deepEqual(h.queues[0].text,[]);
+    h.publish('assistant/live-chunk',{attemptId:'a',chunk:{type:'text-delta',text:'接下来检查语音设置。'}});
+    assert.deepEqual(h.queues[0].text,['好的。接下来检查语音设置。']);assert.equal(timers.size,0);
+    h.publish('turn/start');h.publish('assistant/live-chunk',{attemptId:'b',chunk:{type:'text-delta',text:'你好。'}});
+    assert.equal(timers.size,0);
+    await h.api.hangup();assert.equal(timers.size,0);
+    assert.deepEqual(h.queues[0].text,['好的。接下来检查语音设置。']);
+  }finally{await h.api.dispose();}
+});
 function setup(options={}){
-  let status={running:false,pendingInteraction:false},revision=0,snapshot={revision:0,entries:[],change:{kind:'replace'}};const listeners=new Set(),calls=[],sent=[],captures=[],players=[],queues=[];let cancelCalls=0;
+  let status={running:false,pendingInteraction:false},revision=0,snapshot={revision:0,entries:[],change:{kind:'replace'}};const listeners=new Set(),calls=[],sent=[],captures=[],players=[],queues=[],references=[],closedViews=new Set();let cancelCalls=0;
   const source={getSnapshot:()=>snapshot,subscribe:fn=>{listeners.add(fn);return ()=>listeners.delete(fn);}};
   const conversation={send:async(text,sessionId='s')=>{calls.push(text);sent.push({sessionId,text});await options.send?.(text,sessionId);},cancel:async()=>{cancelCalls++;await options.cancel?.();status.running=false;}};
   const cordisScope=options.cordisScope?new Context():null;if(cordisScope)cordisScope.provide('conversation',conversation);
   const statusListeners=new Set();
-  const ctx={uiSession:{sessionStatus:{getSnapshot:()=>new Map([['s',status]]),subscribe:fn=>{statusListeners.add(fn);return ()=>statusListeners.delete(fn);}}},sessions:{binding:id=>({sessionId:id,eventSource:source}),scope:sessionId=>cordisScope||({get:name=>name==='conversation'?{send:text=>conversation.send(text,sessionId),cancel:conversation.cancel}:undefined})}};
-  const deps={window:{addEventListener(){},removeEventListener(){}},setInterval:options.setInterval||globalThis.setInterval,clearInterval:options.clearInterval||globalThis.clearInterval,json:async(action,args,signal)=>{calls.push({action,args});if(options.json)return options.json(action,args,signal);if(action==='config')return {config:{dictation:true,readAloud:true,call:true,asr:{configured:true,protocol:'transcriptions-sse'},tts:{configured:true,protocol:'speech'}}};if(action==='call.start'){await options.callStart?.();return {call:{callId:'lease'},...(options.conversationMode?{conversation:{mode:options.conversationMode}}:{})};}if(action==='call.heartbeat')await options.heartbeat?.();return {};},
-    createCapture:callbacks=>{const c={callbacks,start:async()=>{await options.captureStart?.();},stop:async()=>'',dispose:async()=>{c.disposed=true;await options.captureDispose?.();}};captures.push(c);return c;},
-    createPlayer:callbacks=>{const p={callbacks,start:async()=>{await options.playerStart?.();},dispose:async()=>{p.disposed=true;},clear(){}};players.push(p);return p;},
-    createQueue:()=>{const q={items:[],sequence:0,text:[],push:t=>{q.sequence++;q.text.push(t);return true;},cancel(){q.cancelled=true;},dispose:async()=>{q.disposed=true;}};queues.push(q);return q;},
+  const ctx={uiSession:{sessionStatus:{getSnapshot:()=>new Map([['s',status]]),subscribe:fn=>{statusListeners.add(fn);return ()=>statusListeners.delete(fn);}}},sessions:{binding:id=>({sessionId:id,eventSource:source}),scope:sessionId=>closedViews.has(sessionId)&&!references.some(row=>row.sessionId===sessionId&&!row.released)?undefined:cordisScope||({get:name=>name==='conversation'?{send:text=>conversation.send(text,sessionId),cancel:conversation.cancel}:undefined}),retain(sessionId,request){if(options.retainError)throw options.retainError;const reference={sessionId,binding:this.binding(sessionId),release(){this.released=true;this.releases=(this.releases||0)+1;}};references.push(reference);reference.ready=options.retainReady?.(reference,request)||Promise.resolve(reference.binding);return reference;}}};
+  const deps={window:options.window||{addEventListener(){},removeEventListener(){}},...(options.fetch?{fetch:options.fetch}:{}),setInterval:options.setInterval||globalThis.setInterval,clearInterval:options.clearInterval||globalThis.clearInterval,json:async(action,args,signal)=>{calls.push({action,args});if(options.json)return options.json(action,args,signal);if(action==='config')return {config:{dictation:true,readAloud:true,call:true,asr:{configured:true,protocol:'transcriptions-sse'},tts:{configured:true,protocol:'speech'}}};if(action==='call.start'){await options.callStart?.();return {call:{callId:'lease'},...(options.conversationMode?{conversation:{mode:options.conversationMode}}:{})};}if(action==='call.heartbeat')await options.heartbeat?.();return {};},
+    createCapture:callbacks=>{const final=callbacks.onFinal;if(options.now)callbacks.onFinal=(text,meta={})=>final(text,{speechEndedAt:options.now(),...meta});const c={callbacks,start:async()=>{await options.captureStart?.();},stop:async()=>'',dispose:async()=>{c.disposed=true;await options.captureDispose?.();}};captures.push(c);return c;},
+    createPlayer:callbacks=>{const p={callbacks,start:async()=>{await options.playerStart?.();},dispose:async()=>{p.disposed=true;},resetSupply(){p.supplyResets=(p.supplyResets||0)+1;},clear(){}};players.push(p);return p;},
+    createQueue:callbacks=>{const q={callbacks,items:[],sequence:0,text:[],push:t=>{q.sequence++;q.text.push(t);return true;},cancel(){q.cancelled=true;},dispose:async()=>{q.disposed=true;}};queues.push(q);return q;},
     ...(options.createConversation?{createConversation:options.createConversation}:{}),createChunker:options.createChunker||(()=>({push:text=>[text],finish:()=>[]}))};
+  // Most existing cases exercise delivery, not elapsed silence. Dedicated
+  // continuation cases below inject the last voiced timestamp and a clock.
+  deps.now=options.now;
+  deps.setTimeout=options.setTimeout||(fn=>setTimeout(fn,0));deps.clearTimeout=options.clearTimeout||clearTimeout;
   const api=createVoiceController(ctx,deps);
-  return {api,calls,sent,captures,players,queues,get status(){return status;},set status(s){status=s;for(const fn of statusListeners)fn();},get cancelCalls(){return cancelCalls;},texts:()=>calls.filter(x=>typeof x==='string'),publish(type,data={},envelope={}){const e={type:'event',event:{seq:++revision,type,data,...envelope}};snapshot={revision,entries:[...snapshot.entries,e],change:{kind:'append',entries:[e]}};for(const fn of listeners)fn();}};
+  return {api,calls,sent,captures,players,queues,references,closeView:sessionId=>closedViews.add(sessionId),get status(){return status;},set status(s){status=s;for(const fn of statusListeners)fn();},get cancelCalls(){return cancelCalls;},texts:()=>calls.filter(x=>typeof x==='string'),publish(type,data={},envelope={}){const e={type:'event',event:{seq:++revision,type,data,...envelope}};snapshot={revision,entries:[...snapshot.entries,e],change:{kind:'append',entries:[e]}};for(const fn of listeners)fn();}};
 }
+
+function continuationClock(){
+  let now=0,next=0;const timers=new Map();
+  return {
+    timers,now:()=>now,setTimeout(fn,ms){const id=++next;timers.set(id,{fn,at:now+ms});return id;},clearTimeout(id){timers.delete(id);},
+    async advance(ms){now+=ms;for(const [id,timer]of [...timers].sort((a,b)=>a[1].at-b[1].at)){if(timer.at>now)continue;timers.delete(id);timer.fn();}await flush();}
+  };
+}
+
+test('turn submission spends VAD and ASR time inside the silence budget in every call mode',async()=>{
+  for(const conversationMode of ['direct','native','enhanced'])for(const asrMs of [80,700]){
+    const clock=continuationClock(),requests=[];
+    const h=setup({...clock,conversationMode,createConversation:()=>({start:async()=>{},interrupt:async()=>{},dispose:async()=>{},send:async text=>{requests.push(text);return {accepted:true};}})});
+    await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+    c.onSpeechStart(1);await clock.advance(320);c.onSpeechEnd(1,{speechEndedAt:0,endpointAt:320});
+    await clock.advance(asrMs);c.onFinal('检查设置',{utteranceId:1,speechEndedAt:0,endpointAt:320,finalizedAt:clock.now()});
+    const remaining=Math.max(0,450-clock.now());assert.equal([...clock.timers.values()][0].at,clock.now()+remaining);
+    if(remaining){await clock.advance(remaining-1);assert.deepEqual(h.texts(),[]);assert.deepEqual(requests,[]);}
+    await clock.advance(remaining?1:0);
+    assert.deepEqual(conversationMode==='enhanced'?requests:h.texts(),['检查设置']);
+    const metrics=h.api.state.getSnapshot().metrics.current;
+    assert.equal(metrics.endpoint_ms,320);assert.equal(metrics.transcript_ms,320+asrMs);assert.equal(metrics.submit_ms,Math.max(450,320+asrMs));
+    await h.api.dispose();
+  }
+});
+
+test('missing capture timing uses a cancellable zero-delay dispatch without inventing latency',async()=>{
+  const clock=continuationClock(),h=setup({...clock});await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+  c.onSpeechStart(1);c.onFinal('立即处理',{utteranceId:1,speechEndedAt:undefined});
+  assert.equal([...clock.timers.values()][0].at,clock.now());await clock.advance(0);
+  assert.deepEqual(h.texts(),['立即处理']);assert.equal(h.api.state.getSnapshot().metrics.current.transcript_ms,null);
+  assert.equal(h.api.state.getSnapshot().metrics.current.submit_ms,null);await h.api.dispose();
+});
+
+test('call metrics connect recognition, synthesis and rendered playback and isolate interrupted segments',async()=>{
+  const clock=continuationClock(),h=setup({...clock});await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+  c.onSpeechStart(1);await clock.advance(320);c.onSpeechEnd(1,{speechEndedAt:0,endpointAt:320});
+  await clock.advance(80);c.onFinal('检查设置',{utteranceId:1,speechEndedAt:0,endpointAt:320});await clock.advance(50);
+  await clock.advance(50);h.publish('turn/start');h.publish('assistant/live-chunk',{attemptId:'a',chunk:{type:'text-delta',text:'正在检查。'}});
+  const q=h.queues[0],p=h.players[0];await clock.advance(200);
+  q.callbacks.onMetrics({type:'tts.first_audio',id:1,at:clock.now(),first_byte_ms:180});
+  // An unrelated announcement may already be playing on the common queue.
+  p.callbacks.onPlaybackStart({id:999});assert.equal(h.api.state.getSnapshot().metrics.current.first_playback_ms,null);
+  await clock.advance(80);p.callbacks.onMetrics({type:'playback',event:'segment_started',id:1,buffer_ms:80,first_buffer_ms:80,underruns:0,gap_ms:0,bufferedSeconds:.08});
+  p.callbacks.onMetrics({type:'playback',id:1,buffer_ms:120,first_buffer_ms:80,underruns:1,gap_ms:45,bufferedSeconds:.12});
+  const metric=h.api.state.getSnapshot().metrics.current;
+  assert.equal(metric.first_token_ms,500);assert.equal(metric.first_audio_ms,700);assert.equal(metric.first_playback_ms,330);assert.equal(metric.speech_to_playback_ms,780);
+  assert.deepEqual(metric.tts_first_byte_ms,[{segment_id:1,first_byte_ms:180}]);assert.equal(metric.playback.underruns,1);assert.equal(metric.playback.gap_ms,45);
+  c.onSpeechStart(2);q.callbacks.onMetrics({type:'tts.first_audio',id:1,at:9999,first_byte_ms:9999});
+  const next=h.api.state.getSnapshot().metrics;assert.equal(next.current.turn_id,2);assert.equal(next.current.first_audio_ms,null);
+  assert.equal(next.history[0].interrupted,true);assert.equal(next.history[0].first_audio_ms,700);
+  assert.doesNotMatch(JSON.stringify(next),/检查|正在/);await h.api.dispose();
+});
+
+test('call sentences share one live draft and one delivery after a remaining 450 ms silence budget',async()=>{
+  for(const conversationMode of ['direct','native','enhanced']){
+    const clock=continuationClock(),requests=[];
+    const h=setup({...clock,conversationMode,createConversation:()=>({start:async()=>{},interrupt:async()=>{},dispose:async()=>{},send:async(text,id)=>{requests.push({text,id});return {accepted:true};}})});
+    await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+    c.onSpeechStart(1);const identity=h.api.state.getSnapshot().transcriptId;
+    c.onPartial('先检查',{utteranceId:1});c.onSpeechEnd(1);c.onFinal('先检查首页。',{utteranceId:1});
+    assert.equal(h.api.state.getSnapshot().turnPending,true);assert.equal(h.api.state.getSnapshot().phase,'listening');
+    assert.equal(clock.timers.size,1);const cancelled=[...clock.timers.values()][0].fn;
+    await clock.advance(449);assert.deepEqual(h.texts(),[]);assert.deepEqual(requests,[]);
+    c.onSpeechStart(2);c.onPartial('再看看',{utteranceId:2});
+    assert.equal(clock.timers.size,0);assert.equal(h.api.state.getSnapshot().transcriptId,identity);
+    assert.equal(h.api.state.getSnapshot().transcript,'先检查首页。\n再看看');
+    c.onSpeechEnd(2);c.onFinal('再看看设置。',{utteranceId:2});cancelled();
+    h.status={running:false,pendingInteraction:false};assert.equal(h.api.state.getSnapshot().phase,'listening');
+    await clock.advance(449);assert.deepEqual(h.texts(),[]);assert.deepEqual(requests,[]);
+    await clock.advance(1);
+    assert.deepEqual(conversationMode==='enhanced'?requests.map(row=>row.text):h.texts(),['先检查首页。\n再看看设置。']);
+    assert.equal(h.api.state.getSnapshot().turnPending,false);assert.equal(clock.timers.size,0);
+    if(conversationMode==='enhanced')assert.equal(h.api.state.getSnapshot().conversationMessages[0].transcriptIds[0],identity);
+    await h.api.dispose();
+  }
+});
+
+test('late earlier finals preserve the current partial and do not start the continuation clock early',async()=>{
+  const clock=continuationClock(),h=setup({...clock});await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+  c.onSpeechStart(1);const identity=h.api.state.getSnapshot().transcriptId;c.onPartial('前半',{utteranceId:1});c.onSpeechEnd(1);
+  c.onSpeechStart(2);c.onPartial('后半',{utteranceId:2});c.onFinal('前半句。',{utteranceId:1});
+  assert.equal(h.api.state.getSnapshot().transcript,'前半句。\n后半');assert.equal(h.api.state.getSnapshot().transcriptId,identity);assert.equal(clock.timers.size,0);
+  assert.equal(h.api.state.getSnapshot().phase,'listening');c.onSpeechEnd(2);assert.equal(h.api.state.getSnapshot().phase,'transcribing');
+  await clock.advance(3000);assert.deepEqual(h.texts(),[]);
+  c.onFinal('后半句。',{utteranceId:2});await clock.advance(450);assert.deepEqual(h.texts(),['前半句。\n后半句。']);await h.api.dispose();
+});
+
+test('muting and lifecycle exits cancel continuation without late delivery and retain final text',async()=>{
+  for(const ending of ['mute','hangup','offline','dispose']){
+    const clock=continuationClock(),environment=new EventTarget(),h=setup({...clock,window:environment});await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+    c.onSpeechStart(1);c.onFinal('尚未发送',{utteranceId:1});const stale=[...clock.timers.values()][0].fn;
+    if(ending==='mute')h.api.setMuted(true);else if(ending==='offline')environment.dispatchEvent(new Event('offline'));else await h.api[ending]();
+    assert.equal(clock.timers.size,0);stale();c.onFinal('迟到旧输入',{utteranceId:1});await clock.advance(1000);
+    assert.deepEqual(h.texts(),[]);assert.equal(h.api.state.getSnapshot().recoveryText,'尚未发送');
+    if(ending==='mute'){
+      h.api.setMuted(false);c.onFinal('解除静音后的迟到旧输入',{utteranceId:1});await clock.advance(1000);assert.deepEqual(h.texts(),[]);
+      c.onSpeechStart(2);c.onFinal('再接一句',{utteranceId:2});await clock.advance(450);assert.deepEqual(h.texts(),['尚未发送\n再接一句']);
+    }
+    await h.api.dispose();
+  }
+});
+
+test('approval completion cannot bypass a newer continuation window',async()=>{
+  const clock=continuationClock(),h=setup({...clock});await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+  h.status={running:true,pendingInteraction:true};c.onSpeechStart(1);c.onFinal('先检查',{utteranceId:1});await clock.advance(450);
+  assert.equal(h.api.state.getSnapshot().phase,'waiting');assert.deepEqual(h.texts(),[]);
+  c.onSpeechStart(2);c.onFinal('还有这里',{utteranceId:2});h.status={running:false,pendingInteraction:false};await flush();
+  assert.equal(h.api.state.getSnapshot().phase,'listening');assert.deepEqual(h.texts(),[]);
+  await clock.advance(449);assert.deepEqual(h.texts(),[]);await clock.advance(1);assert.deepEqual(h.texts(),['先检查\n还有这里']);await h.api.dispose();
+});
+
+test('enhanced dispatch starts a new draft immediately even before its acceptance arrives',async()=>{
+  const clock=continuationClock(),gate=deferred(),requests=[];
+  const h=setup({...clock,conversationMode:'enhanced',createConversation:()=>({start:async()=>{},interrupt:async()=>{},dispose:async()=>{},send:async(text,id)=>{requests.push({text,id});return requests.length===1?gate.promise:{accepted:true};}})});
+  await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;c.onSpeechStart(1);const first=h.api.state.getSnapshot().transcriptId;
+  c.onFinal('已发出的任务',{utteranceId:1});await clock.advance(450);assert.equal(requests.length,1);
+  c.onSpeechStart(2);c.onPartial('后续补充',{utteranceId:2});assert.notEqual(h.api.state.getSnapshot().transcriptId,first);assert.equal(h.api.state.getSnapshot().transcript,'后续补充');
+  c.onFinal('后续补充',{utteranceId:2});gate.resolve({accepted:true});await flush();await clock.advance(450);
+  assert.deepEqual(requests.map(row=>row.text),['已发出的任务','后续补充']);assert.equal(h.api.state.getSnapshot().conversationMessages.length,2);await h.api.dispose();
+});
+
+test('a failed continuation final preserves both the earlier sentence and live partial without sending',async()=>{
+  const clock=continuationClock(),h=setup({...clock});await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+  c.onSpeechStart(1);c.onFinal('已识别的前句',{utteranceId:1});c.onSpeechStart(2);c.onPartial('还没识别完的后句',{utteranceId:2});c.onError(Error('识别失败'));
+  await clock.advance(2000);assert.deepEqual(h.texts(),[]);assert.equal(clock.timers.size,0);assert.equal(h.api.state.getSnapshot().recoveryText,'已识别的前句\n还没识别完的后句');await h.api.dispose();
+});
+
+test('a pre-dispatch failure settles continuation and preserves a retryable draft',async()=>{
+  const clock=continuationClock(),h=setup({...clock,cancel:async()=>{throw Error('取消失败');}});await h.api.startCall({sessionId:'s'});
+  h.status={running:true,pendingInteraction:false};const c=h.captures[0].callbacks;c.onSpeechStart(1);c.onFinal('等待重试',{utteranceId:1});await clock.advance(450);
+  assert.deepEqual(h.texts(),[]);assert.equal(h.api.state.getSnapshot().turnPending,false);assert.equal(h.api.state.getSnapshot().canRetry,true);assert.equal(h.api.state.getSnapshot().recoveryText,'等待重试');await h.api.dispose();
+});
+
+test('dictation continues writing its captured draft immediately without a call continuation timer',async()=>{
+  const clock=continuationClock(),h=setup({...clock});let draft='',revision=0;
+  await h.api.startDictation({sessionId:'s',inputActions:{captureInsertion:()=>({start:0,end:draft.length,draftRev:revision}),insertText:text=>{draft=text;revision++;return true;},persistDraft(){}}});
+  const c=h.captures[0].callbacks;c.onSpeechStart(1);c.onFinal('第一句。',{utteranceId:1});assert.equal(draft,'第一句。');
+  c.onSpeechStart(2);c.onPartial('第二句',{utteranceId:2});assert.equal(draft,'第一句。第二句');assert.equal(clock.timers.size,0);assert.equal(h.api.state.getSnapshot().turnPending,false);await h.api.dispose();
+});
 
 test('native SuperAgent publication flushes a short reply once without reading tool arguments', async () => {
   const h = setup({ conversationMode: 'native', createChunker: () => new SpeakableChunker() });
@@ -59,16 +219,102 @@ test('native SuperAgent publication flushes a short reply once without reading t
   capture.onSpeechStart(1); capture.onFinal('你好', { utteranceId: 1 }); await flush();
   assert.deepEqual(h.texts(), ['你好']);
   h.publish('turn/start', { turn: 1 });
+  h.publish('user/message', { id: 'hello', source: { kind: 'user' }, content: [{ type: 'text', text: '你好' }] });
   h.publish('assistant/live-chunk', { turn: 1, step: 1, attemptId: 'a', chunk: { type: 'tool-call-delta', text: '{"text":"你好"}' } });
   assert.equal(h.queues.length, 0);
   h.publish('plugin:benchgo-plugin/chat-publication', { kind: 'final', requestId: 'hello', text: '你好' }, { ignorable: true });
-  assert.deepEqual(h.queues[0].text, []);
+  assert.deepEqual(h.queues[0].text, ['你好']);
   h.publish('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: '你好' }] } }, { surfaceOp: 'append' });
   h.publish('turn/end', { turn: 1, reason: { kind: 'completed' } });
   assert.deepEqual(h.queues[0].text, ['你好']);
   assert.equal(h.api.state.getSnapshot().replyText, '你好');
   assert.equal(h.api.state.getSnapshot().error, '');
   await h.api.dispose();
+});
+
+function publishNotice(h,id,text,{replyKind}={}){
+  h.publish('user/message',{id,source:replyKind?{kind:'benchgo-ticket-reply',replyKind}:{kind:'user'},content:[]});
+  h.publish('plugin:benchgo-plugin/chat-publication',{kind:replyKind?'ticket-reply':'final',requestId:id,text},{ignorable:true});
+}
+function publishDelivery(h,id,text){h.publish('plugin:benchgo-plugin/channel-message',{mirrorKey:id,direction:'delivery',text,source:{channel:'desktop',sourceType:'conversation'}},{ignorable:true});}
+
+test('formal messages wait through continued speech, stay ordered across navigation and do not duplicate records',async()=>{
+  const clock=continuationClock(),h=setup({...clock,conversationMode:'native'});await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+  c.onSpeechStart(1);publishNotice(h,'reminder','有项权限需要确认。',{replyKind:'approval'});
+  c.onFinal('我还要补充',{utteranceId:1});publishDelivery(h,'result','新的结果已经到了。');
+  h.api.selectSession('other');await h.api.releaseSessionView('s');
+  await clock.advance(449);assert.equal(h.queues.length,0);
+  c.onSpeechStart(2);publishNotice(h,'recovery','有项工作需要恢复。',{replyKind:'recovery'});c.onFinal('这一句。',{utteranceId:2});
+  await clock.advance(449);assert.equal(h.queues.length,0);await clock.advance(1);
+  assert.deepEqual(h.queues[0].text,['有项权限需要确认。','新的结果已经到了。','有项工作需要恢复。']);
+  assert.equal(h.api.state.getSnapshot().sessionId,'s');assert.deepEqual(h.texts(),['我还要补充\n这一句。']);
+  const assistant=h.api.state.getSnapshot().conversationMessages.filter(row=>row.role==='assistant');
+  assert.deepEqual(assistant.map(row=>row.text),h.queues[0].text);assert.ok(assistant.every(row=>!row.partial));
+  publishDelivery(h,'result','新的结果已经到了。');assert.equal(h.queues[0].text.length,3);
+  await h.api.dispose();
+});
+
+test('muting releases queued formal output while preserving the unsent draft',async()=>{
+  const clock=continuationClock(),h=setup({...clock,conversationMode:'native'});await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+  c.onSpeechStart(1);c.onFinal('还没有说完',{utteranceId:1});publishNotice(h,'n','需要你确认。',{replyKind:'watchdog'});
+  assert.equal(h.queues.length,0);h.api.setMuted(true);assert.deepEqual(h.queues[0].text,['需要你确认。']);
+  await clock.advance(1000);assert.deepEqual(h.texts(),[]);assert.equal(h.api.state.getSnapshot().recoveryText,'还没有说完');
+  publishDelivery(h,'d','另一条主动结果。');assert.deepEqual(h.queues[0].text,['需要你确认。','另一条主动结果。']);await h.api.dispose();
+});
+
+test('cancelled or empty speech releases pending notifications without sending an empty user turn',async()=>{
+  for(const cancelled of [true,false]){
+    const h=setup({conversationMode:'native'});await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;
+    c.onSpeechStart(1);publishNotice(h,'n','提醒仍然有效。');
+    if(cancelled)c.onSpeechEnd(1,{cancelled:true});else c.onFinal('',{utteranceId:1});
+    assert.deepEqual(h.queues[0].text,['提醒仍然有效。']);assert.deepEqual(h.texts(),[]);assert.equal(h.api.state.getSnapshot().turnPending,false);await h.api.dispose();
+  }
+});
+
+test('hangup clears pending formal speech and reopening never replays its baseline',async()=>{
+  const h=setup({conversationMode:'native'});await h.api.startCall({sessionId:'s'});
+  h.captures[0].callbacks.onSpeechStart(1);publishNotice(h,'old','上一通的提醒。');assert.equal(h.queues.length,0);
+  await h.api.hangup();await h.api.startCall({sessionId:'s'});h.api.setMuted(true);assert.equal(h.queues.length,0);
+  publishNotice(h,'new','这一通的新提醒。');assert.deepEqual(h.queues[0].text,['这一通的新提醒。']);await h.api.dispose();
+});
+
+test('pending speech is bounded and overflow stays visible in the original conversation',async()=>{
+  const h=setup({conversationMode:'native'});await h.api.startCall({sessionId:'s'});h.captures[0].callbacks.onSpeechStart(1);
+  for(let i=0;i<33;i++)publishDelivery(h,`n:${i}`,`提醒 ${i}。`);
+  assert.match(h.api.state.getSnapshot().error,/部分未朗读.*原对话/);
+  assert.equal(h.api.state.getSnapshot().conversationMessages.filter(row=>row.role==='assistant').length,33);
+  h.api.setMuted(true);assert.equal(h.queues[0].text.length,32);assert.equal(h.queues[0].text.at(-1),'提醒 31。');await h.api.dispose();
+});
+
+test('direct formal assistant output received while speaking is retained but interrupted drafts are not queued',async()=>{
+  const h=setup(),c=()=>h.captures[0].callbacks;await h.api.startCall({sessionId:'s'});c().onSpeechStart(1);
+  h.publish('assistant/live-chunk',{attemptId:'later',turn:1,step:1,chunk:{type:'text-delta',text:'新的正式结果。'}});
+  h.publish('assistant/message',{turn:1,step:1,message:{source:{kind:'model'},content:[{type:'text',text:'新的正式结果。'}]}});
+  h.publish('assistant/message',{turn:1,step:2,interrupted:true,message:{source:{kind:'model'},content:[{type:'text',text:'已取消的旧草稿'}]}});
+  assert.equal(h.queues.length,0);h.api.setMuted(true);assert.deepEqual(h.queues[0].text,['新的正式结果。']);await h.api.dispose();
+});
+
+test('interrupting a partially spoken direct reply never replays its durable prefix or late suffix',async()=>{
+  const h=setup();await h.api.startCall({sessionId:'s'});
+  h.publish('turn/start',{turn:1});h.publish('assistant/live-chunk',{attemptId:'old',turn:1,step:1,chunk:{type:'text-delta',text:'已听到的前半句。'}});await Promise.resolve();
+  h.captures[0].callbacks.onSpeechStart(1);
+  h.publish('assistant/message',{turn:1,step:1,message:{source:{kind:'model'},content:[{type:'text',text:'已听到的前半句。未听到的后半句。'}]}});
+  publishDelivery(h,'new','另一条新提醒。');h.api.setMuted(true);
+  h.publish('assistant/live-chunk',{attemptId:'old',turn:1,step:1,chunk:{type:'text-delta',text:'迟到的旧回复。'}});
+  assert.deepEqual(h.queues[0].text,['已听到的前半句。','另一条新提醒。']);await h.api.dispose();
+});
+
+test('native call never speaks or records internal reply drafts and enhanced keeps its single speaking channel',async()=>{
+  for(const conversationMode of ['native','enhanced']){
+    const h=setup({conversationMode,createConversation:()=>({start:async()=>{},interrupt:async()=>{},dispose:async()=>{}})});await h.api.startCall({sessionId:'s'});
+    h.publish('turn/start',{turn:1});h.publish('user/message',{id:'internal',source:{kind:'benchgo-ticket-reply',replyKind:'result'},content:[{type:'text',text:'PRIVATE NOTICE'}]});
+    h.publish('assistant/live-chunk',{attemptId:'private',turn:1,step:1,chunk:{type:'text-delta',text:'PRIVATE DRAFT'}});
+    h.publish('assistant/message',{turn:1,step:1,message:{source:{kind:'model'},content:[{type:'text',text:'PRIVATE DRAFT'}]}});
+    h.publish('plugin:benchgo-plugin/chat-publication',{kind:'ticket-reply',requestId:'internal',text:'PRIVATE OUTBOX DRAFT'},{ignorable:true});h.publish('turn/end',{turn:1,reason:{kind:'completed'}});
+    assert.ok(h.queues.every(queue=>!queue.text.length));assert.doesNotMatch(JSON.stringify(h.api.state.getSnapshot().conversationMessages),/PRIVATE/);
+    if(conversationMode==='enhanced'){publishDelivery(h,'ready','正式交付结果');assert.ok(h.queues.every(queue=>!queue.text.length));}
+    await h.api.dispose();
+  }
 });
 
 test('native call exposes a blocked or failed turn instead of silently returning to listening', async () => {
@@ -143,7 +389,7 @@ test('protocol detection metadata refresh preserves a running capture and read-a
   const h = setup({ json: async action => action === 'call.start' ? { call: { callId: 'lease' } } : { config: current } });
   await h.api.startCall({ sessionId: 's' });
   current = { ...config, asr: { ...config.asr, detection: { status: 'supported' }, resolvedProtocol: 'transcriptions-sse' }, tts: { ...config.tts, detection: { status: 'supported' }, resolvedProtocol: 'speech' } };
-  await h.api.load(); assert.equal(h.api.state.getSnapshot().mode, 'call'); assert.equal(h.captures[0].disposed, undefined);
+  await h.api.load(); assert.equal(h.api.state.getSnapshot().mode, 'call'); assert.equal(h.captures[0].disposed, undefined); assert.equal(h.players[0].supplyResets,undefined);
   await h.api.dispose();
 });
 test('older utterance final waits until current utterance final then merges once',async()=>{const h=setup();await h.api.startCall({sessionId:'s'});const c=h.captures[0].callbacks;c.onSpeechStart(1);c.onSpeechStart(2);c.onFinal('前半句',{utteranceId:1});await flush();assert.deepEqual(h.texts(),[]);c.onFinal('后半句',{utteranceId:2});await flush();assert.deepEqual(h.texts(),['前半句\n后半句']);await h.api.dispose();});
@@ -167,7 +413,7 @@ test('call remains connecting until microphone capture is actually ready',async(
 });
 test('hangup is reentrant and preserves running execution while releasing media in direct and native calls',async()=>{for(const conversationMode of ['direct','native']){const gate=deferred(),h=setup({conversationMode,captureDispose:()=>gate.promise});await h.api.startCall({sessionId:'s'});h.status={running:true,pendingInteraction:false};const a=h.api.hangup(),b=h.api.hangup();assert.equal(a,b);assert.equal(h.cancelCalls,0);gate.resolve();await a;assert.equal(h.calls.filter(x=>x.action==='call.end').length,1);assert.equal(h.players[0].disposed,true);assert.equal(h.status.running,true);await h.api.dispose();}});
 test('concurrent start rejected, late acquired lease ended after hangup',async()=>{const gate=deferred(),h=setup({callStart:()=>gate.promise});const start=h.api.startCall({sessionId:'s'});await flush();await assert.rejects(h.api.startCall({sessionId:'s'}),/正在启动/);await h.api.hangup();gate.resolve();await start;assert.equal(h.captures.length,0);assert.equal(h.calls.filter(x=>x.action==='call.end').length,1);assert.equal(h.api.state.getSnapshot().mode,'idle');await h.api.dispose();});
-test('automatic read keeps session binding and streams only fresh output after retry',async()=>{const h=setup();await h.api.toggleRead('s');assert.equal(h.api.state.getSnapshot().sessionId,'s');h.publish('turn/start');h.publish('assistant/live-chunk',{attemptId:'a',chunk:{type:'reasoning-delta',text:'hidden'}});h.publish('assistant/live-chunk',{attemptId:'a',chunk:{type:'text-delta',text:'首句'}});h.publish('llm/retry');h.publish('assistant/live-chunk',{attemptId:'b',chunk:{type:'text-delta',text:'重试'}});assert.deepEqual(h.queues[0].text,['首句','重试']);assert.equal(h.api.state.getSnapshot().readEnabled,true);await h.api.dispose();});
+test('automatic read keeps session binding and streams only fresh output after retry',async()=>{const h=setup();await h.api.toggleRead('s');assert.equal(h.api.state.getSnapshot().sessionId,'s');h.publish('turn/start');h.publish('assistant/live-chunk',{attemptId:'a',chunk:{type:'reasoning-delta',text:'hidden'}});h.publish('assistant/live-chunk',{attemptId:'a',chunk:{type:'text-delta',text:'首句'}});await Promise.resolve();h.publish('llm/retry');h.publish('assistant/live-chunk',{attemptId:'b',chunk:{type:'text-delta',text:'重试'}});await Promise.resolve();assert.deepEqual(h.queues[0].text,['首句','重试']);assert.equal(h.api.state.getSnapshot().readEnabled,true);await h.api.dispose();});
 test('automatic read and call each play a successful streamed reply once',async()=>{
  for(const call of [false,true]){
   const h=setup();await h.api.toggleRead('s');if(call)await h.api.startCall({sessionId:'s'});
@@ -233,15 +479,16 @@ test('failed transcript survives mute, retries once, and discard prevents failed
  assert.equal(h.api.state.getSnapshot().recoveryText,'');await h.api.dispose();
 });
 
-test('recovery remains isolated by session and must be handled before new recording',async()=>{
+test('new recording restores unsent text into its own draft without overwriting the selection',async()=>{
  const h=setup();await h.api.startCall({sessionId:'s'});h.status={running:true,pendingInteraction:true};
  const c=h.captures[0].callbacks;c.onSpeechStart(1);c.onFinal('unsent',{utteranceId:1});await flush();await h.api.hangup();
  h.api.selectSession('other');assert.equal(h.api.state.getSnapshot().recoveryText,'');h.api.selectSession('s');
- assert.equal(h.api.state.getSnapshot().recoveryText,'unsent');await assert.rejects(h.api.startCall({sessionId:'s'}),/恢复或丢弃/);
- assert.throws(()=>h.api.recoverToDraft({captureInsertion:()=>({}),insertText:()=>false}),/草稿已变化/);
- assert.equal(h.api.state.getSnapshot().recoveryText,'unsent');let draft='';
- assert.equal(h.api.recoverToDraft({captureInsertion:()=>({}),insertText:text=>{draft=text;return true;},persistDraft(){}}),true);
- assert.equal(draft,'unsent');assert.equal(h.api.state.getSnapshot().recoveryText,'');await h.api.dispose();
+ assert.equal(h.api.state.getSnapshot().recoveryText,'unsent');await assert.rejects(h.api.startCall({sessionId:'s'}),/返回原对话/);
+ assert.throws(()=>h.api.recoverToDraft({captureInsertion:()=>({}),insertText:()=>false}),/草稿暂时无法编辑/);
+ assert.equal(h.api.state.getSnapshot().recoveryText,'unsent');let draft='existing draft',persisted=0;
+ const inputActions={captureInsertion:()=>({start:0,end:8,draftRev:1}),insertText:(text,span)=>{assert.equal(span.start,8);assert.equal(span.end,8);assert.equal(span.draftRev,1);draft=draft.slice(0,span.start)+text+draft.slice(span.end);return true;},persistDraft(){persisted++;}};
+ await h.api.startCall({sessionId:'s',inputActions});
+ assert.equal(draft,'existingunsent draft');assert.equal(persisted,1);assert.equal(h.api.state.getSnapshot().recoveryText,'');assert.deepEqual(h.texts(),[]);await h.api.dispose();
 });
 
 test('dictation conflict retains all English segments with sentence spacing',async()=>{
@@ -272,7 +519,7 @@ test('TTS changes preserve dictation and call capture while ASR changes end capt
  let config={dictation:true,call:true,readAloud:false,asr:{configured:true,protocol:'transcriptions-sse',model:'a'},tts:{configured:true,protocol:'speech',speed:1}};
  const h=setup({json:async(action,args)=>action==='config'?{config}:action==='configure'?{config:config=args.config}:action==='call.start'?{call:{callId:'lease'}}:{}});
  await h.api.startCall({sessionId:'s'});await h.api.load();assert.equal(h.api.state.getSnapshot().mode,'call');
- await h.api.configure({...config,tts:{...config.tts,speed:2}});assert.equal(h.api.state.getSnapshot().mode,'call');assert.equal(h.captures[0].disposed,undefined);
+ await h.api.configure({...config,tts:{...config.tts,speed:2}});assert.equal(h.players[0].supplyResets,1);assert.equal(h.api.state.getSnapshot().mode,'call');assert.equal(h.captures[0].disposed,undefined);
  await h.api.configure({...config,asr:{...config.asr,model:'b'}});assert.equal(h.api.state.getSnapshot().mode,'idle');assert.equal(h.captures[0].disposed,true);await h.api.dispose();
 });
 
@@ -330,14 +577,14 @@ test('native and direct speech records follow official user and assistant source
   const h=setup({conversationMode});await h.api.startCall({sessionId:'s'});
   const c=h.captures[0].callbacks;c.onSpeechStart(1);c.onFinal('看一下首页',{utteranceId:1});await flush();
   assert.equal(h.api.state.getSnapshot().conversationMessages.length,0);
+  h.publish('turn/start',{turn:1});
   h.publish('user/message',{id:'official-user',source:{kind:'user'},content:[{type:'text',text:'看一下首页'}]});
-  h.publish('turn/start');
   h.publish('assistant/live-chunk',{attemptId:'a',turn:1,step:1,chunk:{type:'text-delta',text:'正在查看'}});
-  h.publish('assistant/message',{turn:1,step:1,message:{id:'official-assistant',content:[{type:'text',text:'正在查看首页。'}]}});
-  h.publish('turn/end');
+  h.publish('assistant/message',{turn:1,step:1,message:{id:'official-assistant',source:{kind:'model'},content:[{type:'text',text:'正在查看首页。'}]}});
+  h.publish('turn/end',{turn:1,reason:{kind:'completed'}});
   const rows=h.api.state.getSnapshot().conversationMessages;
   assert.equal(rows.length,2);assert.equal(rows[0].sourceId,'user:official-user');
-  assert.equal(rows[1].sourceId,'assistant:1:1');assert.equal(rows[1].partial,false);assert.equal(rows[1].text,'正在查看首页。');
+  assert.equal(rows[1].sourceId,conversationMode==='native'?'reply:official-user':'assistant:1:1');assert.equal(rows[1].partial,false);assert.equal(rows[1].text,'正在查看首页。');
   await h.api.dispose();
  }
 });
@@ -360,4 +607,96 @@ test('native successful delivery clears temporary subtitle identity and a new ut
  assert.equal(h.api.state.getSnapshot().transcriptId,null);
  c.onSpeechStart(2);assert.equal(h.api.state.getSnapshot().transcript,'');assert.ok(h.api.state.getSnapshot().transcriptId);
  c.onPartial('第二句',{utteranceId:2});assert.equal(h.api.state.getSnapshot().transcript,'第二句');await h.api.dispose();
+});
+
+test('navigation retains the original session scope and keeps sending and playing its conversation',async t=>{
+ const h=setup();t.after(()=>h.api.dispose());h.api.selectSession('s');await h.api.startCall({sessionId:'s'});
+ h.closeView('s');h.api.selectSession('other');await h.api.releaseSessionView('s');
+ assert.equal(h.api.state.getSnapshot().mode,'call');assert.equal(h.api.state.getSnapshot().sessionId,'s');assert.equal(h.references[0].released,undefined);
+ const c=h.captures[0].callbacks;c.onSpeechStart(1);c.onFinal('继续原来的任务',{utteranceId:1});await flush();
+ assert.deepEqual(h.sent,[{sessionId:'s',text:'继续原来的任务'}]);
+ h.publish('turn/start');h.publish('assistant/live-chunk',{attemptId:'a',chunk:{type:'text-delta',text:'原会话的回复'}});await Promise.resolve();
+ assert.deepEqual(h.queues[0].text,['原会话的回复']);assert.equal(h.captures[0].disposed,undefined);
+ await h.api.hangup();assert.equal(h.references[0].releases,1);assert.equal(h.cancelCalls,0);
+});
+
+test('starting a second call or dictation cannot replace the active call',async t=>{
+ const h=setup();t.after(()=>h.api.dispose());await h.api.startCall({sessionId:'s'});
+ await assert.rejects(h.api.startCall({sessionId:'other'}),/先结束当前通话/);
+ await assert.rejects(h.api.startCall({sessionId:'s'}),/先结束当前通话/);
+ await assert.rejects(h.api.startDictation({sessionId:'other'}),/先结束当前通话/);
+ assert.equal(h.api.state.getSnapshot().sessionId,'s');assert.equal(h.api.state.getSnapshot().mode,'call');assert.equal(h.references.length,1);
+ assert.equal(h.captures.length,1);assert.equal(h.captures[0].disposed,undefined);assert.equal(h.calls.filter(x=>x.action==='call.end').length,0);
+});
+
+test('navigation while the retained session opens cannot change startup ownership',async t=>{
+ const ready=deferred(),h=setup({retainReady:(_reference,options)=>{assert.equal(options.source,'controllerOperation');assert.equal(options.signal.aborted,false);return ready.promise;}});t.after(()=>h.api.dispose());
+ h.api.selectSession('s');const start=h.api.startCall({sessionId:'s'});await flush();
+ h.api.selectSession('other');h.closeView('s');await h.api.releaseSessionView('s');
+ assert.equal(h.captures.length,0);assert.equal(h.references[0].released,undefined);
+ ready.resolve();await start;assert.equal(h.api.state.getSnapshot().sessionId,'s');assert.equal(h.api.state.getSnapshot().phase,'listening');
+ assert.equal(h.calls.filter(x=>x.action==='call.start').length,1);
+});
+
+test('hangup releases a pending retained session and its late readiness cannot reopen audio',async t=>{
+ const ready=deferred(),h=setup({retainReady:()=>ready.promise});t.after(()=>h.api.dispose());
+ const start=h.api.startCall({sessionId:'s'});await flush();await h.api.hangup();h.api.selectSession('other');
+ assert.equal(h.references[0].releases,1);ready.resolve();await start;
+ assert.equal(h.captures.length,0);assert.equal(h.players.length,0);assert.equal(h.calls.filter(x=>x.action==='call.start').length,0);
+ assert.equal(h.api.state.getSnapshot().sessionId,'other');assert.equal(h.api.state.getSnapshot().mode,'idle');assert.equal(h.references[0].releases,1);
+});
+
+test('retained-session and media startup failures release ownership exactly once',async t=>{
+ for(const failure of ['session','capture']){
+  const h=setup(failure==='session'?{retainReady:()=>Promise.reject(Error('session unavailable'))}:{captureStart:()=>Promise.reject(Error('capture unavailable'))});t.after(()=>h.api.dispose());
+  await assert.rejects(h.api.startCall({sessionId:'s'}),/unavailable/);
+  assert.equal(h.references[0].releases,1);assert.equal(h.api.state.getSnapshot().mode,'idle');
+  if(failure==='session')assert.equal(h.players.length,0);
+ }
+});
+
+test('cancelling a new call waiting for prior cleanup does not start it later',async t=>{
+ const disposal=deferred(),h=setup({captureDispose:()=>disposal.promise});t.after(()=>h.api.dispose());
+ await h.api.startCall({sessionId:'s'});const ending=h.api.hangup();const next=h.api.startCall({sessionId:'other'});
+ assert.equal(h.api.hangup(),ending);h.api.selectSession('third');disposal.resolve();await ending;await next;
+ assert.equal(h.captures.length,1);assert.equal(h.references.length,1);assert.equal(h.api.state.getSnapshot().sessionId,'third');assert.equal(h.api.state.getSnapshot().mode,'idle');
+});
+
+test('view release stops page-owned dictation and read-aloud while other views cannot stop them',async t=>{
+ const h=setup();t.after(()=>h.api.dispose());h.api.selectSession('s');
+ await h.api.startDictation({sessionId:'s',inputActions:{captureInsertion:()=>({}),insertText:()=>true,persistDraft(){}}});
+ await h.api.releaseSessionView('other');assert.equal(h.api.state.getSnapshot().mode,'dictation');
+ await h.api.releaseSessionView('s');assert.equal(h.api.state.getSnapshot().mode,'idle');assert.equal(h.captures[0].disposed,true);
+ h.api.selectSession('s');await h.api.toggleRead('s');await h.api.releaseSessionView('s');assert.equal(h.api.state.getSnapshot().readEnabled,false);assert.equal(h.players[0].disposed,true);
+ assert.equal(h.references.length,0);
+});
+
+test('background visibility and blur keep a call alive but pagehide and offline release it',async t=>{
+ const previousDocument=globalThis.document,document=new EventTarget();document.baseURI='https://voice.example/';document.visibilityState='visible';globalThis.document=document;t.after(()=>{globalThis.document=previousDocument;});
+ for(const endingEvent of ['pagehide','offline']){
+  const window=new EventTarget(),h=setup({window});t.after(()=>h.api.dispose());await h.api.startCall({sessionId:'s'});
+  document.visibilityState='hidden';document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('blur'));await flush();
+  assert.equal(h.api.state.getSnapshot().mode,'call');assert.equal(h.references[0].released,undefined);assert.equal(h.captures[0].disposed,undefined);
+  window.dispatchEvent(new Event(endingEvent));await flush();assert.equal(h.api.state.getSnapshot().mode,'idle');assert.equal(h.references[0].releases,1);await h.api.dispose();
+ }
+});
+
+test('hangup restores read-aloud only while its original conversation is still viewed',async t=>{
+ for(const navigate of [false,true]){
+  const h=setup();t.after(()=>h.api.dispose());h.api.selectSession('s');await h.api.toggleRead('s');await h.api.startCall({sessionId:'s'});
+  if(navigate){h.api.selectSession('other');await h.api.releaseSessionView('s');}
+  await h.api.hangup();assert.equal(h.api.state.getSnapshot().readEnabled,!navigate);assert.equal(h.players.length,navigate?1:2);assert.equal(h.references[0].releases,1);
+ }
+});
+
+test('reading another conversation history never applies the active call mode',async t=>{
+ const requests=[],h=setup({conversationMode:'native',fetch:async(_url,options)=>{requests.push(JSON.parse(options.body));return Response.json({items:[]});}});t.after(()=>h.api.dispose());await h.api.startCall({sessionId:'s'});
+ await h.api.readConversationHistory('s');await h.api.readConversationHistory('other');
+ assert.deepEqual(requests,[{action:'history',sessionId:'s',mode:'native'},{action:'history',sessionId:'other'}]);assert.equal(h.api.state.getSnapshot().sessionId,'s');
+});
+
+test('failed read-aloud restoration settles hangup and releases its new player', {timeout:1000},async t=>{
+ let starts=0;const h=setup({playerStart:()=>{if(++starts===3)throw Error('playback unavailable');}});t.after(()=>h.api.dispose());
+ h.api.selectSession('s');await h.api.toggleRead('s');await h.api.startCall({sessionId:'s'});await h.api.hangup();
+ assert.equal(h.references[0].releases,1);assert.equal(h.players.length,2);assert.equal(h.players[1].disposed,true);assert.equal(h.api.state.getSnapshot().readEnabled,false);assert.equal(h.api.state.getSnapshot().error,'playback unavailable');
 });

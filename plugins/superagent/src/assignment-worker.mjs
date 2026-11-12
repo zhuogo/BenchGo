@@ -17,16 +17,17 @@ export function createAssistantAssignmentWorker({
   const controllers = new Set();
   const active = new Map();
 
-  async function perform(assignment) {
+  async function perform(assignment, { onReady } = {}) {
     const controller = new AbortController();
     controllers.add(controller);
     const ownership = { owner: workerId, fence: assignment.fence, leaseMs };
-    let heartbeat = null, renewal = null, stage = 'execution';
+    let heartbeat = null, renewal = null, stage = 'execution', resultReady = false;
     const renew = () => {
       if (renewal) return renewal;
       renewal = (async () => {
         controller.signal.throwIfAborted();
         const policy = await readPolicy();
+        if (resultReady) return database.getAssignment(assignment.id);
         controller.signal.throwIfAborted();
         const result = database.renewAssignment(assignment.id, {
           ...ownership, validateMandate: (mandate, context) => validateMandate(mandate, { ...context, policy }) === true,
@@ -43,15 +44,14 @@ export function createAssistantAssignmentWorker({
       }, Math.max(100, Math.floor(leaseMs / 3)));
       heartbeat.unref?.();
       const ticket = database.getTicket(assignment.ticketId);
-      const result = await execute(assignment, { ticket, signal: controller.signal, renew });
-      await renew();
+      const result = await execute(assignment, { ticket, signal: controller.signal, renew, onReady });
+      resultReady = true;
+      clearInterval(heartbeat); heartbeat = null;
       const beforeCommit = async () => {
-        clearInterval(heartbeat); heartbeat = null;
         if (renewal) await renewal;
-        await renew();
       };
-      // Keep leases alive during result persistence; quiesce heartbeat before its
-      // atomic terminal commit so a late renewal cannot revoke a completed run.
+      // Saving an existing draft never authorizes another execution against
+      // current settings; lifecycle association is handled by the result store.
       stage = 'result';
       await onResult(result, { assignment, ticket, signal: controller.signal, beforeCommit });
       clearInterval(heartbeat); heartbeat = null;
@@ -60,12 +60,20 @@ export function createAssistantAssignmentWorker({
       if (!['completed', 'waiting', 'paused', 'queued'].includes(state)) database.finishAssignment(assignment.id, { ...ownership, status: 'completed' });
       return { id: assignment.id, status: ['waiting', 'paused', 'queued'].includes(state) ? state : 'completed' };
     } catch (error) {
-      // Neither exceptions nor shutdown prove that an external action did not happen.
-      try { database.recordAssignmentFailure?.(assignment.id, { ...ownership, stage, code: error?.code, phase: error?.executionPhase }); } catch { /* Preserve the original failure. */ }
-      try { database.renewAssignment(assignment.id, { ...ownership, validateMandate: () => false }); }
-      catch { /* Lost leases are reconciled by the store's next claim. */ }
+      if (error?.resultDraft) { try { await onResult(error.resultDraft, { assignment, ticket: { id: assignment.ticketId }, signal: controller.signal, beforeCommit: async () => {} }); } catch { /* Run/session and runtime retain the draft for persistence retry. */ } }
+      let runs = [];
+      try { runs = database.runs?.(assignment.id) || []; } catch { /* The retained draft survives diagnostic read failure. */ }
+      const effects = error?.executionEffects || (stage === 'execution' && !runs.some(run => ['submitted', 'running', 'verifying', 'uncertain'].includes(run.state))
+        ? { effectsVerified: true, unknownCallIds: [] } : undefined);
+      const uncertain = effects?.effectsVerified !== true;
+      try { database.recordAssignmentFailure?.(assignment.id, { ...ownership, stage, code: error?.code, phase: error?.executionPhase,
+        message: String(error?.message || error), effects, cleanupFailure: error?.cleanupFailure }); } catch { /* Preserve the original failure. */ }
+      try {
+        if (uncertain) database.renewAssignment(assignment.id, { ...ownership, validateMandate: () => false });
+        else database.finishAssignment(assignment.id, { ...ownership, status: 'failed' });
+      } catch { /* Lost leases are reconciled by the store's next claim. */ }
       logger?.warn?.(`Assignment ${assignment.id}: ${error?.message || error}`);
-      return { id: assignment.id, status: 'uncertain', error: String(error?.message || error) };
+      return { id: assignment.id, status: uncertain ? 'uncertain' : 'failed', error: String(error?.message || error) };
     } finally {
       if (heartbeat) clearInterval(heartbeat);
       controller.abort();
@@ -76,6 +84,7 @@ export function createAssistantAssignmentWorker({
   async function runOnce() {
     if (stopped) return { claimed: 0, results: [], skipped: true };
     const batch = running ||= (async () => {
+      if (database.hasAssignmentWork?.() === false) return [];
       const policy = await readPolicy();
       const configured = getConcurrency ? await getConcurrency() : concurrency;
       if (!Number.isSafeInteger(configured) || configured < 1) throw new Error('Invalid assignment concurrency');
@@ -109,5 +118,27 @@ export function createAssistantAssignmentWorker({
     if (running) await running.catch(() => {});
     await Promise.allSettled([...active.values()]);
   }
-  return { workerId, runOnce, tick, start, stop, dispose: stop };
+  const resuming = new Map();
+  async function resumeExecutionSession({ sessionId }) {
+    if (stopped) throw new Error('Assignment worker stopped');
+    if (resuming.has(sessionId)) return resuming.get(sessionId);
+    const readiness = (async () => {
+      const policy = await readPolicy();
+      if (stopped) throw new Error('Assignment worker stopped');
+      const assignment = database.resumeWorkerConversation(sessionId, { owner: workerId, leaseMs,
+        validateMandate: (mandate, context) => validateMandate(mandate, { ...context, policy }) === true });
+      let ready, fail, isReady = false;
+      const admitted = new Promise((resolve, reject) => { ready = resolve; fail = reject; });
+      const work = perform(assignment, { onReady: agent => { isReady = true; ready(agent); } }).then(result => {
+        if (!isReady) fail(new Error(result.error || 'Worker continuation did not become ready'));
+        return result;
+      }).finally(() => active.delete(assignment.id));
+      active.set(assignment.id, work);
+      work.catch(fail);
+      return admitted;
+    })().finally(() => resuming.delete(sessionId));
+    resuming.set(sessionId, readiness);
+    return readiness;
+  }
+  return { workerId, runOnce, tick, start, stop, resumeExecutionSession, dispose: stop };
 }

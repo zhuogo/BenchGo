@@ -16,14 +16,16 @@ const routingString = maxLength => ({ type: 'string', maxLength, pattern: '^[^\\
 const apiTypes = ['', ...VOICE_API_TYPES.map(item => item.id).filter(id => id !== 'auto')];
 const protocolIds = kind => ['', ...VOICE_PROTOCOLS.filter(item => item.kind === kind && item.id !== 'auto').map(item => item.id)];
 const providerProperties = { providerId: routingString(200), baseURL: routingString(2048), apiKey: { ...routingString(4096), writeOnly: true }, model: routingString(200), apiType: { type: 'string', enum: apiTypes } };
+export const defaultListening = () => ({ enabled: false, endpoint: '', model: '', apiKey: '', wakeSource: 'custom', wakeWord: '' });
 export const VOICE_CONFIG_SCHEMA = { type: 'object', additionalProperties: false, properties: {
   dictation: { type: 'boolean', default: false }, readAloud: { type: 'boolean', default: false }, call: { type: 'boolean', default: false },
   conversation: { type: 'object', additionalProperties: false, properties: { providerId: routingString(200), model: routingString(200) } },
+  listening: { type: 'object', additionalProperties: false, properties: { enabled: { type: 'boolean', default: false }, endpoint: routingString(2048), model: routingString(200), apiKey: { ...routingString(4096), writeOnly: true }, wakeSource: { type: 'string', enum: ['custom', 'superagent'] }, wakeWord: routingString(100) } },
   asr: { type: 'object', additionalProperties: false, properties: { ...providerProperties, protocol: { type: 'string', enum: protocolIds('asr') }, realtime: { type: 'object', additionalProperties: false, properties: { url: routingString(2048), query: { type: 'object', maxProperties: 32, additionalProperties: routingString(512) } } } } },
   tts: { type: 'object', additionalProperties: false, properties: { ...providerProperties, protocol: { type: 'string', enum: protocolIds('tts') }, voice: routingString(200), speed: { type: 'number', minimum: TTS_SPEED_MIN, maximum: TTS_SPEED_MAX, multipleOf: 0.01, default: DEFAULT_TTS_SPEED }, stream: { type: 'boolean', default: true } } },
 } };
-export const VOICE_SENSITIVE_PATHS = [['asr', 'apiKey'], ['tts', 'apiKey']];
-const defaults = () => ({ dictation: false, readAloud: false, call: false, conversation: { providerId: '', model: '' }, asr: { baseURL: '', apiKey: '', model: '', apiType: '', protocol: '' }, tts: { baseURL: '', apiKey: '', model: '', apiType: '', protocol: '', voice: '', speed: DEFAULT_TTS_SPEED, stream: true } });
+export const VOICE_SENSITIVE_PATHS = [['asr', 'apiKey'], ['tts', 'apiKey'], ['listening', 'apiKey']];
+const defaults = () => ({ dictation: false, readAloud: false, call: false, conversation: { providerId: '', model: '' }, listening: defaultListening(), asr: { baseURL: '', apiKey: '', model: '', apiType: '', protocol: '' }, tts: { baseURL: '', apiKey: '', model: '', apiType: '', protocol: '', voice: '', speed: DEFAULT_TTS_SPEED, stream: true } });
 const string = (value, label, limit) => {
   if (typeof value !== 'string' || value.length > limit || /[\u0000-\u001f\u007f]/u.test(value)) throw new VoiceError(`Invalid ${label}`);
   return value.trim();
@@ -34,6 +36,13 @@ function endpoint(value) {
   let url; try { url = new URL(value); } catch { throw new VoiceError('Invalid baseURL'); }
   if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new VoiceError('baseURL must be an HTTP(S) API base without credentials, query or fragment');
   return url.href.replace(/\/+$/u, '');
+}
+export function validateListeningEndpoint(value) {
+  const clean = string(value, 'decision endpoint', 2048);
+  if (!clean) return '';
+  let parsed; try { parsed = new URL(clean); } catch { throw new VoiceError('决策接口地址无效'); }
+  if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) throw new VoiceError('决策接口地址必须是完整 HTTP(S) 地址，不能包含凭据、查询或片段');
+  return clean;
 }
 const sensitiveQuery = /api.?key|authorization|token|secret|password|credential|^key$|^bearer$/iu;
 /** Public routing metadata only: credentials belong exclusively in server headers. */
@@ -77,6 +86,19 @@ export function updateConfig(current, patch, { loading = false } = {}) {
   if (Object.keys(patch).some(key => !Object.hasOwn(VOICE_CONFIG_SCHEMA.properties, key))) throw new VoiceError('Unknown config field');
   const next = structuredClone(current);
   next.conversation ??= { providerId: '', model: '' };
+  next.listening ??= defaultListening();
+  if (Object.hasOwn(patch, 'listening')) {
+    if (!object(patch.listening)) throw new VoiceError('Invalid listening configuration');
+    for (const [key, value] of Object.entries(patch.listening)) {
+      if (['configured', 'apiKeyConfigured', 'apiKeyMasked', 'unavailableReason', 'wakeAvailable', 'wakeWordResolved', 'superagentName', 'superagentAvailable'].includes(key)) continue;
+      if (!Object.hasOwn(VOICE_CONFIG_SCHEMA.properties.listening.properties, key)) throw new VoiceError('Unknown listening field');
+      if (key === 'enabled') { if (typeof value !== 'boolean') throw new VoiceError('Invalid listening enabled'); next.listening.enabled = value; continue; }
+      if (key === 'wakeSource' && !['custom', 'superagent'].includes(value)) throw new VoiceError('Invalid wake word source');
+      const clean = key === 'endpoint' ? validateListeningEndpoint(value) : string(value, key, key === 'apiKey' ? 4096 : key === 'wakeWord' ? 100 : 200);
+      if (key === 'model' && clean !== value) throw new VoiceError('决策模型 ID 首尾不能含空格');
+      next.listening[key] = clean;
+    }
+  }
   if (Object.hasOwn(patch, 'conversation')) {
     if (!object(patch.conversation)) throw new VoiceError('Invalid conversation model');
     for (const [key, value] of Object.entries(patch.conversation)) {
@@ -126,8 +148,9 @@ export function migrateLegacyConfig(value) {
   return next;
 }
 export function publicConfig(config) {
-  return Object.fromEntries(Object.entries(config).map(([key, value]) => {
+  return Object.fromEntries(Object.entries({ ...config, listening: config.listening || defaultListening() }).map(([key, value]) => {
     if (key === 'conversation') return [key, { ...value, configured: !!(value.providerId && value.model) }];
+    if (key === 'listening') { const { apiKey, ...safe } = value; return [key, { ...safe, configured: !!(value.endpoint && apiKey), apiKeyConfigured: !!apiKey, apiKeyMasked: apiKey ? '••••••••' : '' }]; }
     if (!['asr', 'tts'].includes(key)) return [key, value];
     const { apiKey, ...safe } = value;
     return [key, { ...safe, configured: !!((value.providerId || value.baseURL) && value.model), apiKeyConfigured: !!apiKey, apiKeyMasked: apiKey ? '••••••••' : '' }];
@@ -137,7 +160,7 @@ function managedConfig(current, ops) {
   const submitted = applySettingsOps(current, ops, { sensitivePaths: VOICE_SENSITIVE_PATHS, base: defaults() });
   const next = updateConfig(current, submitted), fallback = defaults();
   for (const key of ['dictation', 'readAloud', 'call']) if (!Object.hasOwn(submitted, key)) next[key] = fallback[key];
-  for (const kind of ['asr', 'tts', 'conversation']) for (const key of Object.keys(next[kind])) if (!Object.hasOwn(submitted[kind] || {}, key)) {
+  for (const kind of ['asr', 'tts', 'conversation', 'listening']) for (const key of Object.keys(next[kind])) if (!Object.hasOwn(submitted[kind] || {}, key)) {
     if (Object.hasOwn(fallback[kind], key)) next[kind][key] = fallback[kind][key]; else delete next[kind][key];
   }
   if (VOICE_SENSITIVE_PATHS.some(([kind, key]) => next[kind][key] !== current[kind][key])) throw Object.assign(new VoiceError('该供应商变更会删除现有凭据，请先通过安全输入入口处理凭据', 409), { code: 'SETTINGS_PATH_BLOCKED' });

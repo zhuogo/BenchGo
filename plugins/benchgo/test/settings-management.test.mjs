@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { createSettingsManagement, applySettingsOps, settingsFingerprint } from '../src/settings-management.mjs';
 
 const owner = { kind: 'owner', id: 'human', profileId: 'isolated', sessionId: 'router' };
@@ -32,6 +33,18 @@ async function fixture(t, options = {}) {
 }
 const ref = { adapterId: 'fixture', namespace: 'sample' };
 const set = (field, value) => ({ op: 'set', path: [field], value });
+test('reading an unchanged configuration does not acquire a SQLite write lock', async t => {
+  const f = await fixture(t);
+  const reader = new DatabaseSync(join(f.directory, 'settings-management.db'));
+  reader.exec('BEGIN IMMEDIATE');
+  try {
+    const current = await f.manager.read(ref);
+    assert.equal(current.revision, 0);
+    assert.equal(current.value.count, 1);
+    assert.equal(f.manager.history().length, 0);
+  } finally { reader.exec('ROLLBACK'); reader.close(); }
+});
+
 test('startup and notification bursts observe each namespace without reprojecting the whole directory', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-settings-scale-'));
   const manager = createSettingsManagement({ directory });

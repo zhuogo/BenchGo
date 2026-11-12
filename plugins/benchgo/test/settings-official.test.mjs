@@ -132,6 +132,33 @@ test('temporary projection failure is retried instead of caching a blocked confi
   assert.equal(calls, 4, 'a later valid graph remains observable');
 });
 
+test('official observation batches use one fresh value directory rather than one per namespace', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-official-batch-'));
+  const manager = createSettingsManagement({ directory });
+  t.after(async () => { await manager.close(); await rm(directory, { recursive: true, force: true }); });
+  const schema = Schema.object({ count: Schema.number().volatile() });
+  const entries = Array.from({ length: 40 }, (_, index) => ({ options: { id: String(index), name: 'probe', config: { count: 1 } },
+    fiber: { uid: index + 1, runtime: { Config: schema }, effectiveConfig: { count: 1 }, ctx: {} } }));
+  const events = new Map();
+  let descriptions = 0;
+  const ctx = { settings: { describe() { descriptions++; return []; } },
+    configEditor: { configuration: () => entries.map(entry => ({ entry, inherited: {}, override: entry.options.config })) },
+    loader: { entries: () => entries }, on(event, callback) { events.set(event, callback); return () => events.delete(event); } };
+  const adapter = createOfficialSettingsAdapter(ctx, { projectSchema: () => ({ type: 'object', properties: { count: { type: 'number' } } }) });
+  await manager.register(adapter).ready;
+  assert.equal(descriptions, 2, 'one metadata directory and one batched value directory for forty namespaces');
+  for (const entry of entries) {
+    entry.options.config.count = 2; entry.fiber.effectiveConfig.count = 2;
+    events.get('settings/document-updated')(entry.options.id);
+  }
+  await manager.flush();
+  assert.equal(descriptions, 4, 'a whole notification burst costs two directory reads');
+  assert.equal(manager.history({ limit: 100 }).length, 40);
+  entries[0].options.config.count = 3; entries[0].fiber.effectiveConfig.count = 3;
+  assert.equal((await manager.read({ adapterId: 'official', namespace: '0' })).value.count, 3, 'explicit reads still see fresh authoritative values');
+  assert.equal(descriptions, 6);
+});
+
 test('official page mutations use the same version and journal while sensitive writes remain blocked', async t => {
   const f = await fixture(t), original = await f.manager.read(ref);
   await f.ctx.settings.mutate('probe', [set('count', 8)]);

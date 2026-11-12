@@ -52,22 +52,24 @@ test('Router corrects blank preset and independent permission, records actual va
   assert.equal(database.getSessionRole('ordinary'), null);
   assert.equal(ctx.permissionPresets.current(ordinary.agent.session), 'danger-full-access');
   const size = handle.agent.session.snapshotEvents().length;
+  const observation = database.getSessionRole('router').updatedAt;
   await role.reconcile();
+  assert.equal(database.getSessionRole('router').updatedAt, observation, 'unchanged configuration does not rewrite its observation');
   assert.equal(handle.agent.session.snapshotEvents().length, size, 'idempotent assembly does not replay or duplicate permission events');
 });
 
-test('a started legacy Agent preset is blocked with durable evidence and no transcript rewrite', async t => {
+test('a started legacy Agent preset resumes in place without transcript rewrite', async t => {
   const { ctx, database } = await host(t);
   const legacy = await ctx.agents.create({ sessionId: 'legacy', meta: { cwd: process.cwd(), agentPreset: 'other' }, setup: async scope => { await ctx.agentPresets.mount(scope, 'other'); } });
   legacy.agent.session.append('turn/start', { turn: 1 });
   legacy.agent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
   const events = legacy.agent.session.snapshotEvents();
   const role = await createSessionRoleAssembly({ ctx, database, identity: identity('legacy') });
-  await assert.rejects(role.mount(legacy.agent.ctx, legacy.agent), { code: 'ROLE_MIGRATION_UNAVAILABLE' });
+  await role.mount(legacy.agent.ctx, legacy.agent);
   assert.deepEqual(legacy.agent.session.snapshotEvents(), events);
   assert.equal(ctx.agentPresets.composedPreset(legacy.agent.ctx), 'other');
-  assert.equal(database.getSessionRole('legacy').status, 'blocked');
-  assert.equal(database.getSessionRole('legacy').reason.code, 'ROLE_MIGRATION_UNAVAILABLE');
+  assert.equal(database.getSessionRole('legacy').status, 'ready');
+  assert.equal(database.getSessionRole('legacy').actual.agentPreset, 'other');
 });
 
 test('mislabelled permission bundles are rejected rather than silently enabling full access or never', async t => {
@@ -136,7 +138,7 @@ test('persisted ownership and cold legacy ownership remain distinct from ordinar
   } finally { database.close(); }
 });
 
-test('official spawn inherits Worker sandbox, frozen model and narrowed never policy without exposing credentials or delegation', { timeout: 15000 }, async t => {
+test('official spawn keeps host sandbox, model inheritance and native tools without BenchGo child gates', { timeout: 15000 }, async t => {
   const { ctx, database } = await host(t, { persistence: true });
   ctx.provide('workingDirectory', { get: session => session.header.cwd, ensure: async agent => agent.session.header.cwd, set: async (_agent, cwd) => cwd });
   ctx.provide('sessionQuery', { listSessions: async () => ctx.sessions.list().map(session => ({ header: session.header })), readSession: async id => {
@@ -174,11 +176,20 @@ test('official spawn inherits Worker sandbox, frozen model and narrowed never po
   const request = await requested;
   const child = ctx.agents.get(activation.childId), actual = database.getSessionRole(activation.childId);
   assert.equal(actual.role, 'child-worker'); assert.equal(actual.parentSessionId, 'worker');
-  assert.equal(actual.actual.sandbox, 'workspace-write'); assert.equal(actual.actual.approval, 'never');
-  assert.equal(actual.actual.delegationApproval, 'parent-required');
+  const identities = database.listSessionRoles();
+  assert.ok(identities.some(row => row.sessionId === 'worker' && row.role === 'worker' && row.runId === run.id));
+  assert.ok(identities.some(row => row.sessionId === activation.childId && row.role === 'child-worker' && row.parentSessionId === 'worker'));
+  assert.ok(identities.every(row => !('actual' in row) && !('expected' in row)), 'sidebar enumeration returns only ownership metadata');
+  const nested = database.bindSessionRole({ role: 'child-worker', sessionId: 'nested-child', parentSessionId: child.id,
+    ticketId: ticket.id, assignmentId: assignment.id, runId: run.id, expected: {} });
+  assert.equal(nested.parentSessionId, child.id);
+  assert.throws(() => database.bindSessionRole({ ...nested, sessionId: 'foreign-child', ticketId: 'foreign' }), { code: 'SESSION_ROLE_OWNERSHIP' });
+  assert.equal(actual.status, 'ready');
+  assert.equal(actual.actual, null, 'ownership does not invent a second child assembly');
+  assert.equal(ctx.sandboxPolicy.resolve({ session: child.session }).mode, 'workspace-write');
   assert.equal(request.model, 'Opaque Worker/7');
-  assert.equal(actual.actual.requestModel.model, 'Opaque Worker/7');
-  assert.deepEqual(actual.actual.requestTools, ['read']);
+  assert.ok(request.tools.some(tool => tool.name === 'read'));
+  assert.ok(request.tools.some(tool => tool.name === 'spawn_agent'), 'official tools are not restricted by BenchGo');
   assert.equal(child.session.inheritedEventCount, 0);
   let approvals = 0;
   ctx.on('approval/request', () => { approvals++; return 'allowed-once'; });
@@ -186,8 +197,6 @@ test('official spawn inherits Worker sandbox, frozen model and narrowed never po
   assert.equal(approvals, 0);
   const approval = child.session.snapshotEvents().filter(event => event.type === 'approval/asked' || event.type === 'approval/decided');
   assert.equal(approval.at(-2).data.reason, 'outside workspace'); assert.equal(approval.at(-1).data.outcome, 'rejected');
-  const blocked = database.getSessionRole(child.id);
-  assert.equal(blocked.status, 'blocked'); assert.equal(blocked.reason.code, 'CHILD_APPROVAL_PARENT_REQUIRED');
-  assert.equal(blocked.reason.requestId, approval.at(-1).data.id);
+  assert.equal(database.getSessionRole(child.id).status, 'ready', 'official rejection does not create a permanent BenchGo child blocker');
   release(); await child.whenIdle();
 });

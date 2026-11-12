@@ -167,15 +167,12 @@ export function createSettingsManagement({ directory, requestConfirmation, now =
       ...(value.revision !== undefined ? { revision: value.revision } : {}),
       fingerprint: value.fingerprint, secrets: (value.secrets || []).map(row => ({ path: [...row.path], set: !!row.set })) };
   };
-  const observe = async (ref, { source = 'external', record = true, entries } = {}) => {
-    const { adapter, descriptor: metadata } = await descriptor(ref, entries);
-    if (metadata.applies === 'blocked' || metadata.risk === 'blocked') throw fail('SETTINGS_BLOCKED', metadata.unavailableReason || '此配置当前不可管理');
-    const snapshot = safeSnapshot(await adapter.read(ref.namespace), metadata);
+  const storeObservation = (ref, snapshot, metadata, { source = 'external', record = true, cache = snapshots } = {}) => {
     const prior = db.prepare('SELECT fingerprint,revision FROM settings_versions WHERE adapter=? AND namespace=?').get(ref.adapterId, ref.namespace);
-    const previous = snapshots.get(key(ref));
-    const { revision } = db.prepare('INSERT INTO settings_versions VALUES (?,?,?,0) ON CONFLICT(adapter,namespace) DO UPDATE SET revision=settings_versions.revision+CASE WHEN settings_versions.fingerprint=excluded.fingerprint THEN 0 ELSE 1 END,fingerprint=excluded.fingerprint RETURNING revision')
+    const previous = cache.get(key(ref));
+    const { revision } = prior?.fingerprint === snapshot.fingerprint ? prior : db.prepare('INSERT INTO settings_versions VALUES (?,?,?,0) ON CONFLICT(adapter,namespace) DO UPDATE SET revision=settings_versions.revision+1,fingerprint=excluded.fingerprint RETURNING revision')
       .get(ref.adapterId, ref.namespace, snapshot.fingerprint);
-    snapshots.set(key(ref), snapshot);
+    cache.set(key(ref), snapshot);
     if (record && prior && prior.fingerprint !== snapshot.fingerprint) {
       const changes = previous ? differences(previous.value, snapshot.value) : [];
       const rawChanges = previous ? differences(previous.user ?? previous.value, snapshot.user ?? snapshot.value) : [];
@@ -186,6 +183,11 @@ export function createSettingsManagement({ directory, requestConfirmation, now =
         reversible, ...(reversible ? {} : { rollbackBlockedReason: !previous ? '重启后没有可核验的变更前值' : !rawChanges.length ? '版本变化没有可安全恢复的公开差异' : '涉及秘密的历史不能通过普通配置恢复' }) });
     }
     return { adapterId: ref.adapterId, namespace: ref.namespace, ...snapshot, revision, backendRevision: snapshot.revision, metadata };
+  };
+  const observe = async (ref, { source = 'external', record = true, entries } = {}) => {
+    const { adapter, descriptor: metadata } = await descriptor(ref, entries);
+    if (metadata.applies === 'blocked' || metadata.risk === 'blocked') throw fail('SETTINGS_BLOCKED', metadata.unavailableReason || '此配置当前不可管理');
+    return storeObservation(ref, safeSnapshot(await adapter.read(ref.namespace), metadata), metadata, { source, record });
   };
   const publicPlan = plan => ({ operationId: plan.id, adapterId: plan.adapterId, namespace: plan.namespace,
     revision: plan.revision, digest: plan.digest, diff: clone(plan.diff), requiresConfirmation: plan.requiresConfirmation,
@@ -242,10 +244,29 @@ export function createSettingsManagement({ directory, requestConfirmation, now =
       const observeRows = async namespaces => {
         if (adapters.get(adapter.id) !== adapter) return;
         const entries = await adapter.schema();
-        for (const row of entries) {
+        const rows = entries.filter(row => (!namespaces || namespaces.has(row.namespace)) && row.applies !== 'blocked' && row.risk !== 'blocked');
+        // Native reads may themselves project the entire official directory.
+        // Share one fresh directory only within this observation sweep; CAS
+        // and explicit reads continue to ask the authoritative adapter anew.
+        const reads = adapter.readMany ? await adapter.readMany(rows.map(row => row.namespace)) : null;
+        const observations = [];
+        for (const row of rows) {
           if (adapters.get(adapter.id) !== adapter) return;
-          if (namespaces && !namespaces.has(row.namespace) || row.applies === 'blocked' || row.risk === 'blocked') continue;
-          await observe({ adapterId: adapter.id, namespace: row.namespace }, { entries });
+          const ref = { adapterId: adapter.id, namespace: row.namespace };
+          const { descriptor: metadata } = await descriptor(ref, entries);
+          observations.push({ ref, metadata, snapshot: safeSnapshot(reads?.get(row.namespace) ?? await adapter.read(row.namespace), metadata) });
+        }
+        if (adapters.get(adapter.id) !== adapter) return;
+        if (observations.length) {
+          // Keep synchronous durability, but fsync once per sweep. No adapter
+          // I/O or await holds the SQLite write lock; publish cache after commit.
+          const cache = new Map(snapshots);
+          db.exec('BEGIN');
+          try {
+            for (const { ref, snapshot, metadata } of observations) storeObservation(ref, snapshot, metadata, { cache });
+            db.exec('COMMIT');
+          } catch (error) { db.exec('ROLLBACK'); throw error; }
+          for (const { ref } of observations) snapshots.set(key(ref), cache.get(key(ref)));
         }
         observationErrors.delete(adapter.id);
       };

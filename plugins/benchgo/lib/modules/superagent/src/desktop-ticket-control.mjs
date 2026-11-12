@@ -33,7 +33,9 @@ export function createDesktopTicketControl({ ctx, database }) {
       if (operation === 'pause' && (ticket.status === 'completed' || ticketStopped(ticket))) throw new Error('工单已完成或停止，不能暂停');
       const { trigger } = recordDesktopTrigger(database, { sessionId: ownerAgent.id, threadId, message });
       if (operation === 'resume') return { operation, triggerId: trigger.id, ticket: database.resumeTicket(id) };
-      const inputKey = globalControl ? `trigger:${trigger.id}:ticket:${id}` : `trigger:${trigger.id}`;
+      // One owner instruction may control several explicitly selected Tickets,
+      // including when it only has the current conversation's owner scope.
+      const inputKey = `trigger:${trigger.id}:ticket:${id}`;
       if (operation === 'pause') {
         const ticket = database.pauseTicket(id, { triggerId: trigger.id, inputKey });
         const input = database.ticketInputs(id).find(row => row.triggerId === trigger.id);

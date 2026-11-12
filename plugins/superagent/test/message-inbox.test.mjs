@@ -234,28 +234,27 @@ test('revalidation suppresses a stale queued notice without dispatching or expos
   assert.deepEqual(await f.inbox.state('main'), []);
 });
 
-test('recovery notices refresh queued inspection facts, yield to humans and keep one durable execution identity', async () => {
+test('result notices refresh display facts, yield to humans and keep one durable result identity', async () => {
   const f = fixture(); f.agent.status = 'running';
-  const signal = { kind: 'recovery', eventKey: 'recovery:a:2:entered', ticketId: 't', assignmentId: 'a', fence: 2,
-    instructionRevision: 1, source: { channel: 'desktop', sessionId: 'owner' }, phase: 'entered', attempts: 0, nextCheckAt: null };
+  const signal = { ...ticketSignal, title: 'Old title', status: 'running' };
   const first = await f.inbox.enqueueTicketReply({ threadId: 'main', signal });
-  await f.inbox.enqueueTicketReply({ threadId: 'main', signal: { ...signal, attempts: 1, nextCheckAt: '2026-11-09T00:01:00Z' } });
-  await assert.rejects(f.inbox.enqueueTicketReply({ threadId: 'main', signal: { ...signal, fence: 3 } }), /冲突/);
+  await f.inbox.enqueueTicketReply({ threadId: 'main', signal: { ...signal, title: 'Current title', status: 'completed' } });
+  await assert.rejects(f.inbox.enqueueTicketReply({ threadId: 'main', signal: { ...signal, resultVersion: 3 } }), /冲突/);
   await f.inbox.enqueue({ text: '先聊别的', requestId: 'human-priority' });
   f.agent.status = 'idle'; await f.inbox.settle('main');
   assert.equal(f.sent[0].source.kind, 'user'); await f.finish();
-  assert.equal(f.sent[1].id, first.messageId); assert.equal(f.sent[1].source.replyKind, 'recovery');
-  assert.match(f.sent[1].content[0].text, /"attempts":1/);
+  assert.equal(f.sent[1].id, first.messageId); assert.equal(f.sent[1].source.replyKind, signal.kind);
+  assert.match(f.sent[1].content[0].text, /"title":"Current title"/);
   assert.deepEqual((await f.inbox.state('main')).map(row => row.requestId), ['human-priority']);
 });
 
-test('a delayed retry cannot replay a newer recovery expression that has already settled', async () => {
+test('a delayed retry cannot replay a newer result expression that has already settled', async () => {
   let unavailable = true, f;
   f = fixture({}, { getAgent: () => unavailable ? undefined : f.agent, ensureSession: async () => {
     if (unavailable) throw new Error('session startup unavailable');
     return f.agent;
   } });
-  const signal = { kind: 'recovery', eventKey: 'recovery:startup', ticketId: 't', phase: 'entered' };
+  const signal = { ...ticketSignal, eventKey: 'result:startup' };
   await f.inbox.enqueueTicketReply({ threadId: 'main', signal }); await f.inbox.settle('main');
   const original = structuredClone(f.state().requests[0]);
   assert.equal(original.status, 'failed'); unavailable = false;

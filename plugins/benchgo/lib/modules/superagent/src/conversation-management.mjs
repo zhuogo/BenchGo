@@ -1,31 +1,30 @@
+import { HarnessError } from '@deepseek-ai/dsh-llm';
 import { createHash } from 'node:crypto';
 import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 
-const fail = (code, message) => Object.assign(new Error(message), { code });
+const fail = (code, message) => new HarnessError(`${code}: ${message}`, code);
 const fingerprint = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const string = { type: 'string', minLength: 1 };
 const ids = { type: 'array', minItems: 1, maxItems: 1000, uniqueItems: true, items: string };
 const globalScope = Object.freeze({ owner: 'desktop-owner', mode: 'global' });
 function inputFor(input, fields) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)
-    || Object.keys(input).some(key => !['op', ...fields].includes(key))) throw fail('MANAGEMENT_INPUT', '管理工具参数无效；身份和确认只能由宿主提供');
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('MANAGEMENT_INPUT', 'Management parameters must be an object');
+  const unsupported = Object.keys(input).filter(key => !['op', ...fields].includes(key));
+  if (unsupported.length) throw fail('MANAGEMENT_INPUT', `Operation ${input.op} does not support parameters: ${unsupported.join(', ')}. Allowed: ${fields.join(', ') || 'none'}. Identity and confirmation fields are supplied only by the host.`);
   return Object.fromEntries(fields.filter(key => Object.hasOwn(input, key)).map(key => [key, structuredClone(input[key])]));
 }
 
 /** Only the mounted local Router can construct owner actors or approval capabilities. */
 export function registerConversationManagement({ ctx, scope, agent, register, settings, taskManagement, threadId = 'main', store }) {
   const prepared = new Map();
-  const liveInstruction = () => {
-    const instruction = currentHumanInstruction(ctx, agent);
-    const latest = agent.session.snapshotEvents().slice((instruction?.turn ?? -1) + 1).findLast(event => event.type === 'user/message')?.data;
-    return instruction && latest && fingerprint(latest) === fingerprint(instruction.message) ? instruction : null;
-  };
+  // Internal notifications in the same turn do not erase its real human input.
+  const liveInstruction = () => currentHumanInstruction(ctx, agent);
   async function authority(exec, expected) {
     exec?.signal?.throwIfAborted();
     if (!agent || exec?.agent !== agent) throw fail('MANAGEMENT_OWNER_REQUIRED', '仅当前本机主人 Router 可管理设置和工单');
     const instruction = liveInstruction();
     if (!instruction?.message?.id
-      || !(instruction.message.content || []).some(block => block.type === 'text' && block.text?.trim())) throw fail('MANAGEMENT_OWNER_REQUIRED', '管理操作需要当前原始主人文字指令，机器通知不能授权');
+      || !(instruction.message.content || []).some(block => block.type === 'text' && block.text?.trim())) throw fail('MANAGEMENT_OWNER_REQUIRED', '未找到本轮用户输入；本次未提交。请回到原对话发送明确要求，勿换参数重复调用');
     const state = await store.getState();
     const thread = threadId === 'main' ? { sessionId: state.mainSessionId } : state.threads.find(row => row.id === threadId);
     if (!thread || thread.archived || thread.sourceKey || thread.source && thread.source.channel !== 'desktop'
@@ -70,34 +69,40 @@ export function registerConversationManagement({ ctx, scope, agent, register, se
       prepared.set(result.operationId, stamp);
       if (prepared.size > 256) prepared.delete(prepared.keys().next().value);
     }
-    return result;
+    return input.op === 'history' ? { history: result } : result;
   });
 
   const cleanupFields = { preview: ['ids', 'includeUnsettled'], commit: ['previewId', 'ids', 'requestId'],
-    history: ['ticketId', 'limit'], restore: ['receiptId', 'previewId', 'ids', 'requestId'] };
-  register('assistant_task_cleanup', 'Organize ticket history by reversible archive tombstones only; never physically delete Tickets, evidence or files. Available in the local owner main chat or manual side chat, across all ticket sources. preview returns a concrete global or selected-ID manifest and excludes ongoing work. Present its actual items and exclusions. commit requires its previewId and an exact unchanged subset of IDs; the host displays that subset for fresh allowed-once human approval before archiving. That host manifest confirmation is the only approval step: do not first ask for verbal consent and then add a second approval card. A general cleanup request is not approval of a manifest. Stop active work through its existing separate control path, then preview again. history reads durable receipts. restore with receiptId and no requestId saves a concrete restore preview; restore with previewId, exact subset IDs and requestId requests fresh one-time human confirmation before restoring against saved versions. Never pass confirmed booleans or impersonate an owner.', {
+    history: ['ticketId', 'receiptId', 'limit'], restore: ['receiptId', 'previewId', 'ids', 'requestId'] };
+  register('assistant_task_cleanup', 'Organize ticket history by reversible archive tombstones only; never physically delete Tickets, evidence or files. Available in the local main chat or manual side chat, across all ticket sources. preview verifies current status and eligibility and returns a concrete global or selected-ID manifest, excluding ongoing work. When exact IDs are already known, call preview directly; do not first fetch every Ticket or its full results. Present its actual items and exclusions. commit requires its previewId and an exact unchanged subset of IDs; the host displays that subset for fresh allowed-once human approval before archiving. That host manifest confirmation is the only approval step: do not first ask for verbal consent and then add a second approval card. A general cleanup request is not approval of a manifest. Resolve the exact requested target IDs before preview; clarify an ambiguous count or scope. Waiting is not proof of active execution: use actual exclusions. Stop only work requiring it, then preview again; stopping is not cleanup. commit returns the persisted receipt with per-ticket before/after archive facts; report those actual facts directly. If the user explicitly requests independent readback, call history once with the returned receiptId; do not also fetch each full Ticket unless the receipt leaves a specific fact unresolved. Do not repeat a deterministic failure with changed parameters while its cause is unchanged. history reads durable receipts; pass receiptId to read one exact receipt, optionally intersecting ticketId. restore with receiptId and no previewId saves a concrete restore preview; restore with previewId, exact subset IDs requests fresh one-time human confirmation before restoring against saved versions. Never pass confirmed booleans or impersonate an owner.', {
     op: { type: 'string', enum: Object.keys(cleanupFields) }, ids, includeUnsettled: { type: 'boolean' },
-    previewId: string, receiptId: string, requestId: string, ticketId: string, limit: { type: 'integer', minimum: 1, maximum: 1000 },
+    previewId: string, receiptId: string, ticketId: string, limit: { type: 'integer', minimum: 1, maximum: 1000 },
   }, ['op'], async (input, exec) => {
     if (!Object.hasOwn(cleanupFields, input?.op)) throw fail('MANAGEMENT_INPUT', '无效工单清理操作');
     const args = inputFor(input, cleanupFields[input.op]);
     const { stamp, instruction } = await authority(exec);
     if (!taskManagement) throw fail('CLEANUP_UNAVAILABLE', '工单清理服务当前不可用');
     if (input.op === 'preview') return taskManagement.previewCleanup({ ...args, scope: globalScope });
-    if (input.op === 'history') return taskManagement.cleanupHistory(args);
-    const source = { sessionId: agent.id, messageId: instruction.message.id, callId: exec.callId };
-    if (input.op === 'commit' || input.op === 'restore' && args.requestId) {
-      if (!Array.isArray(args.ids) || !args.ids.length || !args.requestId) throw fail('MANAGEMENT_INPUT', '请提供清单的明确最终子集与稳定请求标识');
+    if (input.op === 'history') return { history: taskManagement.cleanupHistory(args) };
+    const source = { sessionId: agent.id, messageId: instruction.message.id };
+    if (input.op === 'commit' || input.op === 'restore' && args.previewId) {
+      if (!Array.isArray(args.ids) || !args.ids.length) throw fail('MANAGEMENT_INPUT', '请提供已预览清单的明确最终子集');
       const preview = await taskManagement.getCleanupPreview(args.previewId);
       if (input.op === 'restore' ? preview.type !== 'restore' : preview.type === 'restore') throw fail('CLEANUP_SCOPE_DENIED', '清单类型不属于本次操作');
       const selected = [...args.ids].sort();
       if (new Set(selected).size !== selected.length || selected.some(id => !preview.items.some(row => row.id === id))) throw fail('CLEANUP_SCOPE_DENIED', '最终清单必须是已预览工单的不重复子集');
+      const requestId = args.requestId || fingerprint([input.op, source, args.previewId, selected]);
+      if (preview.consumedBy) {
+        const previous = taskManagement.cleanupHistory({ ticketId: selected[0] }).find(row => row.receiptId === preview.consumedBy);
+        if (previous?.requestId === requestId && fingerprint(previous.confirmedBy?.ids) === fingerprint(selected)) return previous;
+        throw fail('CLEANUP_PREVIEW_CONSUMED', '清单已处理；请读取归档回执，不要重复确认或扩大范围');
+      }
       await approve(exec, stamp, 'assistant_task_cleanup', { operation: input.op === 'restore' ? 'restore' : 'archive', previewId: preview.previewId,
         manifestHash: preview.manifestHash, items: selected.map(id => preview.items.find(row => row.id === id)), excluded: preview.excluded });
       const confirmedBy = taskManagement.createCleanupConfirmation({ previewId: preview.previewId, manifestHash: preview.manifestHash,
         ids: selected, actorId: 'desktop-owner', source });
       const commit = input.op === 'restore' ? taskManagement.restoreCleanup : taskManagement.commitCleanup;
-      return commit({ previewId: args.previewId, requestId: args.requestId, ids: selected, confirmedBy });
+      return commit({ previewId: args.previewId, requestId, ids: selected, confirmedBy });
     }
     return taskManagement.previewRestore({ scope: globalScope, receiptId: args.receiptId, ids: args.ids });
   });

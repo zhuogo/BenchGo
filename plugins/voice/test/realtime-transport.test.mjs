@@ -16,36 +16,52 @@ class BrowserSocket extends EventTarget {
   close() { this.readyState = 3; }
 }
 async function browser() {
-  let now = 1000; const ws = new BrowserSocket(), warnings = [], errors = [];
-  const recognizer = new RealtimeRecognizer({ request: async (_url, options) => Response.json(JSON.parse(options.body).action === 'asr.start' ? { id: 's', ticket: 't' } : {}), endpoint: path => 'https://test/' + path, headers: () => ({}), openSocket: () => { queueMicrotask(() => { ws.dispatchEvent(new Event('open')); ws.event({ type: 'ready', epoch: 0 }); }); return ws; }, onError: error => errors.push(error), onWarning: value => warnings.push(value), now: () => now });
+  let now = 1000; const ws = new BrowserSocket(), errors = [];
+  const recognizer = new RealtimeRecognizer({ request: async (_url, options) => Response.json(JSON.parse(options.body).action === 'asr.start' ? { id: 's', ticket: 't' } : {}), endpoint: path => 'https://test/' + path, headers: () => ({}), openSocket: () => { queueMicrotask(() => { ws.dispatchEvent(new Event('open')); ws.event({ type: 'ready', epoch: 0 }); }); return ws; }, onError: error => errors.push(error), now: () => now });
   await recognizer.start();
-  return { recognizer, ws, warnings, errors, clock: value => { now = value; } };
+  return { recognizer, ws, errors, clock: value => { now = value; } };
 }
 const binary = ws => ws.sent.filter(value => value instanceof Uint8Array);
 const pcm = packet => new DataView(packet.buffer, packet.byteOffset).getInt16(12, true);
 
 test('continuous PCM sends before ACK and bounds the in-flight window under delayed network', async t => {
   const h = await browser(); t.after(() => h.recognizer.close());
-  for (let i = 0; i < 50; i++) h.recognizer.append([frame(i)], 1, () => {});
+  for (let i = 0; i < 42; i++) h.recognizer.append([frame(i)], 1, () => {});
   assert.equal(binary(h.ws).length, 12); assert.equal(h.recognizer.inflight.size, 12);
-  assert.equal(h.recognizer.queue.length, 30); assert.equal(h.warnings.length, 1);
+  assert.equal(h.recognizer.queue.length, 30); assert.equal(h.errors.length, 0);
   h.ws.event({ type: 'ack', epoch: 0, sequence: 1, accepted: true });
-  assert.equal(pcm(binary(h.ws).at(-1)), 20); // Old unsent frames, not recent speech, are discarded.
+  assert.equal(pcm(binary(h.ws).at(-1)), 12); // Keep the first unsent frame; no samples are skipped.
   assert.equal(h.recognizer.inflight.size, 12);
 });
 
-test('stale pending audio expires and commit stays ordered across overlapping utterances', async t => {
+test('commit stays ordered across overlapping utterances while the final barrier is within budget', async t => {
   const h = await browser(); t.after(() => h.recognizer.close());
   h.recognizer.append([frame(1)], 1, () => {}); const first = h.recognizer.commit(1);
   h.recognizer.append([frame(2)], 2, () => {}); const second = h.recognizer.commit(2);
   assert.equal(binary(h.ws).length, 1);
-  h.clock(1700); h.recognizer.pump();
-  assert.equal(h.recognizer.queue.filter(item => item.type === 'audio').length, 0);
+  h.clock(1600); h.recognizer.pump();
+  assert.equal(h.recognizer.queue.filter(item => item.type === 'audio').length, 1);
   h.ws.event({ type: 'final', epoch: 0, utteranceId: 1, text: '第一句' });
   assert.equal(await first, '第一句');
   assert.equal(h.ws.sent.at(-1).utteranceId, 2);
   h.ws.event({ type: 'final', epoch: 0, utteranceId: 2, text: '' });
   assert.equal(await second, ''); assert.equal(h.recognizer.utterances.size, 0);
+  assert.deepEqual(binary(h.ws).map(pcm), [1,2]); assert.deepEqual(h.errors, []);
+});
+
+test('queue capacity and stale audio fail the whole recognition instead of publishing truncated finals', async t => {
+  for (const reason of ['capacity','age']) {
+    const h=await browser();t.after(()=>h.recognizer.close());const partials=[];
+    h.recognizer.append([frame(1)],1,text=>partials.push(text));const first=h.recognizer.commit(1);
+    h.ws.event({type:'partial',epoch:0,utteranceId:1,text:'可恢复预览'});
+    h.recognizer.append([frame(2)],2,()=>{});const second=h.recognizer.commit(2);
+    if(reason==='capacity')h.recognizer.append(Array.from({length:30},()=>frame(3)),3,()=>{});
+    else {h.clock(1601);h.recognizer.pump();}
+    await assert.rejects(first,/积压超过 600ms/);await assert.rejects(second,/积压超过 600ms/);
+    assert.equal(h.recognizer.closed,true);assert.equal(h.errors.length,1);assert.equal(h.ws.readyState,3);
+    assert.deepEqual(partials,['可恢复预览']);assert.equal(h.recognizer.queue.length,0);assert.equal(h.recognizer.utterances.size,0);
+    h.ws.event({type:'final',epoch:0,utteranceId:1,text:'残缺结果不得成功'});assert.equal(h.errors.length,1);
+  }
 });
 
 test('clear bypasses congested audio, rejects old final and gates fresh audio until ready', async t => {
@@ -61,13 +77,19 @@ test('clear bypasses congested audio, rejects old final and gates fresh audio un
   h.ws.event({ type: 'final', epoch: 1, utteranceId: 2, text: '新' }); assert.equal(await next, '新');
 });
 
-test('upstream congestion warnings do not hang up and lost ACK eventually closes media', async t => {
+test('a rejected upstream audio packet ends recognition before any truncated final can succeed', async t => {
   const h = await browser(); t.after(() => h.recognizer.close());
   h.recognizer.append([frame(1)], 1, () => {});
+  const final=h.recognizer.commit(1);
   h.ws.event({ type: 'ack', epoch: 0, sequence: 1, accepted: false });
-  assert.equal(h.recognizer.closed, false); assert.equal(h.warnings.length, 1);
-  h.recognizer.append([frame(2)], 1, () => {}); h.clock(14000); h.recognizer.pump();
+  await assert.rejects(final,/音频未完整接收/);
   assert.equal(h.recognizer.closed, true); assert.equal(h.errors.length, 1); assert.equal(h.recognizer.queue.length, 0);
+});
+
+test('a lost ACK closes media after the bounded network response deadline',async t=>{
+  const h=await browser();t.after(()=>h.recognizer.close());
+  h.recognizer.append([frame(1)],1,()=>{});h.clock(14000);h.recognizer.pump();
+  assert.equal(h.recognizer.closed,true);assert.equal(h.errors.length,1);assert.match(h.errors[0].message,/网络响应超时/);
 });
 
 class Upstream extends EventEmitter {

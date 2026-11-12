@@ -18,7 +18,7 @@ export function installWorkerVault(scope, agent, { ctx, database, assignment, ru
     if (!result.allowed) throw fail('VAULT_MANDATE_REVOKED', '当前工单授权不允许使用保险库');
     exec.signal.throwIfAborted();
   };
-  scope.tools.register({ name: 'assistant_vault_list', description: 'List opaque credential handles and exact target bindings. Secrets never enter the conversation. Missing credentials require Resources > Vault secure input; entering a credential does not authorize an external action.',
+  scope.tools.register({ name: 'assistant_vault_list', description: 'List credential references, addresses or names, and custom credential names only. Values are never available to the model. Missing credentials require Resources > Vault secure input. Saving credentials does not connect browser login or other execution capabilities; report unavailable execution support honestly.',
     parameters: { type: 'object', properties: {}, additionalProperties: false }, output,
     async execute(_args, exec) { await renew(exec); const service = ctx.get('benchgoVault'); if (!service) throw fail('VAULT_UNAVAILABLE', '基础层保险库未启用'); return service.list(); },
   });

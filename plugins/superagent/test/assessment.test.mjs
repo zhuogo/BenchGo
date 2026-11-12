@@ -11,9 +11,9 @@ test('daily assessment supports bounded answers and clarification without weaken
     assert.match(prompt, /Perform read-only intake assessment/);
     assert.match(prompt, /current information.*use accept/);
     assert.match(prompt, /Daily requests need no project/);
-    assert.match(prompt, /write concrete acceptance criteria now/);
-    assert.match(prompt, /6-10 news items/);
-    assert.match(prompt, /Do not invent intermediate counts, phases or deliverables/);
+    assert.match(prompt, /target faithfully translates the user intent/);
+    assert.match(prompt, /acceptance restates the requested result or explicit user conditions/);
+    assert.match(prompt, /Worker chooses methods, steps and proportionate verification/);
     assert.match(prompt, /"modelId":"opaque\/main"/);
     yield { type: 'text-delta', text: JSON.stringify({ decisions: [decision] }) };
     yield { type: 'finish', reason: { kind: 'stop' } };

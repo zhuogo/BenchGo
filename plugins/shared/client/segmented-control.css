@@ -3,10 +3,11 @@
 .bg-segments-indicator{position:absolute;left:0;pointer-events:none;z-index:-1;transition:transform 180ms ease,width 180ms ease,height 180ms}
 .bg-segments.bg-segments button{display:flex;align-items:center;justify-content:center;gap:7px;flex:none;min-height:36px;padding:7px 14px;border:0;border-radius:6px;background:transparent;color:var(--ba-muted,var(--dsw-alias-label-secondary,#737373));white-space:nowrap;transition:background 160ms,color 160ms}
 .bg-segments.bg-segments button[aria-selected=true]{color:var(--dsw-alias-label-primary,inherit);font-weight:600}
+.bg-segments.bg-segments button[data-icon-only]{width:36px;padding:7px}
 .bg-segments.bg-segments button:hover{background:color-mix(in srgb,currentColor 4%,transparent)}
 .bg-segments.bg-segments button:disabled{opacity:.45;cursor:default}
 .bg-segments.bg-segments button:focus-visible{outline:2px solid currentColor;outline-offset:-2px}
 .bg-segments-fill{display:block;width:100%;height:100%;border-radius:6px;background:var(--bg-surface,var(--dsw-alias-background-base,var(--dsw-alias-bg-base,#fff)));box-shadow:0 1px 3px #00000012}
 
-@media(pointer:coarse){.bg-segments.bg-segments button{min-height:44px}}
+@media(pointer:coarse){.bg-segments.bg-segments button{min-height:44px}.bg-segments.bg-segments button[data-icon-only]{width:44px}}
 @media(prefers-reduced-motion:reduce){.bg-segments-fill{animation:none}.bg-segments-indicator,.bg-segments.bg-segments button{transition:none}.bg-segments.bg-segments button:active:not(:disabled){transform:none}}

@@ -2,12 +2,13 @@ import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from 
 import { IconMicrophoneOutlineMedium, IconStopFillRegular } from '@deepseek-ai/dsh-client-ui-primitives';
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import { createVoiceController } from './controller.mjs';
-import { CallStage, CallOrb, CallStageIcon } from './call-stage.jsx';
+import { CallOrb, CallStageIcon } from './call-stage.jsx';
+import { createCallPresentation } from './call-presentation.mjs';
+import { VoiceCallHost } from './call-host.jsx';
 import { CallEntry } from './call-entry.jsx';
-import { createCallFrameRegistry, registerCallFrame, useCallFrame, useCallFrameActive } from './call-frame.jsx';
 import { registerVoiceConversationRows } from './conversation-records.jsx';
 import { callStreamingReason } from '../src/call-streaming.mjs';
-import { generatedMediaDraft, generatedMediaPatch, voiceSettingsPatch } from './settings-state.mjs';
+import { generatedMediaDraft, generatedMediaPatch, voiceSettingsPatch, listeningDraft } from './settings-state.mjs';
 import { moduleSource } from '../../benchgo/client/modules.mjs';
 import css from './style.css';
 import mediaCss from './media-settings.css';
@@ -18,16 +19,16 @@ import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import { CustomSelect } from '../../shared/client/custom-select.jsx';
 import { VOICE_API_TYPES, protocolOptions, protocolDescriptor } from '../shared/protocol-catalog.mjs';
 
-export const inject = ['slots', 'sessions', 'conversation', 'uiSession', 'connection', 'uiConversation'];
+export const inject = ['slots', 'sessions', 'conversation', 'uiSession', 'connection', 'uiConversation', 'uiWorkspace'];
 let activeController;
 export function apply(ctx) {
   registerVoiceConversationRows(ctx);
   const controller = createVoiceController(ctx);
-  const callFrames = createCallFrameRegistry();
-  registerCallFrame(ctx, callFrames);
+  const callView = createCallPresentation(controller, { title: id => ctx.sessions.list.getSnapshot().byId[id]?.title, subscribeTitle: listener => ctx.sessions.list.subscribe(listener), openSession: id => ctx.uiWorkspace.openSession(id) });
   activeController = controller;
-  ctx.effect(() => async () => { if (activeController === controller) activeController = undefined; await controller.dispose(); });
-  ctx.slots.inject('conversation.input.activity', () => ctx.slots.register({ name: 'conversation.input.activity', priority: -10, inject: () => ({ controller, callFrames, sessionStatus: ctx.uiSession.sessionStatus, openSettings: () => { const shell = ctx.slots.entries('sidebar.settings').find(entry => entry.children?.['settings.section']); const actions = shell?.store?.create().actions; if (!actions?.openSection) throw Error('请从侧栏设置 → 媒体 → 语音打开配置。'); actions.openSection('media'); } }) }, VoiceActivity));
+  ctx.effect(() => async () => { if (activeController === controller) activeController = undefined; callView.dispose(); await controller.dispose(); });
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'benchgo-voice-call', inject: () => ({ controller, callView, sessionStatus: ctx.uiSession.sessionStatus }) }, VoiceCallHost));
+  ctx.slots.inject('conversation.input.activity', () => ctx.slots.register({ name: 'conversation.input.activity', priority: -10, inject: () => ({ controller, callView, sessionStatus: ctx.uiSession.sessionStatus, openSettings: () => { const shell = ctx.slots.entries('sidebar.settings').find(entry => entry.children?.['settings.section']); const actions = shell?.store?.create().actions; if (!actions?.openSection) throw Error('请从侧栏设置 → 媒体 → 语音打开配置。'); actions.openSection('media'); } }) }, VoiceActivity));
   void controller.load().catch(() => {});
 }
 /** Base owns the shared settings entry; optional modules own their working forms. */
@@ -49,21 +50,15 @@ export function normalizeTtsSpeed(value) {
   return Number.isFinite(speed) && speed >= TTS_SPEED_MIN && speed <= TTS_SPEED_MAX ? Math.round(speed * 100) / 100 : DEFAULT_TTS_SPEED;
 }
 const phaseLabels = { idle: '准备中', starting: '正在连接', listening: '正在聆听', transcribing: '正在识别', thinking: '正在思考', speaking: '正在回应', waiting: '等待授权或交互' };
-function Microphone({ muted = false }) { return <span className={'voice-microphone-icon' + (muted ? ' voice-microphone-muted' : '')} aria-hidden="true"><IconMicrophoneOutlineMedium size={18} /></span>; }
-function VoiceActivity({ controller, callFrames, sessionStatus, sessionId, inputActions, locked, onActiveChange, openSettings }) {
+function VoiceActivity({ controller, callView, sessionStatus, sessionId, inputActions, locked, onActiveChange, openSettings }) {
   const state = useVoice(controller), [pending, setPending] = useState(false), [error, setError] = useState('');
-  const [stageRequested, setStageRequested] = useState(false), [minimized, setMinimized] = useState(false), [historyOnly, setHistoryOnly] = useState(false), [hasHistory, setHasHistory] = useState(false);
-  const origin = useRef(null);
+  const [hasHistory, setHasHistory] = useState(false);
   const generation = useRef(0), activityRef = useRef(null);
   const own = state.sessionId === sessionId, active = own && state.mode !== 'idle';
   const recording = active && state.mode === 'dictation', calling = active && state.mode === 'call';
   const reading = own && state.readEnabled && state.phase === 'speaking';
-  const callFrame = useCallFrame(callFrames, sessionId, activityRef);
   const pendingInteraction = useSyncExternalStore(listener => sessionStatus?.subscribe(listener) || (() => {}), () => !!sessionStatus?.getSnapshot().get(sessionId)?.pendingInteraction);
   const waiting = own && (pendingInteraction || state.phase === 'waiting');
-  const enhanced = own && state.conversationMode === 'enhanced' && !historyOnly;
-  const inline = (calling || stageRequested) && enhanced && minimized && !waiting && callFrame;
-  useCallFrameActive(callFrame, !!inline);
   // Keep the draft mounted; restore editable controls after call/session teardown.
   useEffect(() => {
     if (!calling || waiting) return;
@@ -76,15 +71,21 @@ function VoiceActivity({ controller, callFrames, sessionStatus, sessionId, input
   }, [calling, sessionId, waiting]);
   useEffect(() => { onActiveChange?.(active); return () => onActiveChange?.(false); }, [active, onActiveChange]);
   useEffect(() => {
-    generation.current++; setError(''); setPending(false); setStageRequested(false); setMinimized(false); setHistoryOnly(false); setHasHistory(false);
+    generation.current++; setError(''); setPending(false); setHasHistory(false);
     controller.selectSession?.(sessionId);
-    return () => { generation.current++; if (controller.state.getSnapshot().sessionId === sessionId) void controller.hangup(); };
-  }, [controller, sessionId]);
+    if (callView.getSnapshot().sessionId !== sessionId) callView.minimize();
+    return () => { generation.current++; callView.leave(sessionId); controller.releaseSessionView(sessionId); };
+  }, [controller, callView, sessionId]);
   const run = async operation => {
     const version = generation.current; setPending(true); setError('');
     try { await operation(); } catch (failure) { if (version === generation.current) setError(failure.message || '语音操作失败'); }
     finally { if (version === generation.current) setPending(false); }
   };
+  useEffect(() => {
+    if (!own || state.mode !== 'idle' || !state.recoveryText || locked) return;
+    try { controller.recoverToDraft(inputActions); }
+    catch (failure) { setError(failure.message || '语音文字暂时无法写入草稿'); }
+  }, [controller, inputActions, own, locked, state.mode, state.recoveryText]);
   useEffect(() => {
     if (!controller.readConversationHistory) return;
     const abort = new AbortController();
@@ -93,40 +94,32 @@ function VoiceActivity({ controller, callFrames, sessionStatus, sessionId, input
   }, [controller, sessionId]);
   const startCall = event => {
     const rect = event?.currentTarget?.getBoundingClientRect();
-    if (rect) origin.current = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    setStageRequested(true); setMinimized(false); setHistoryOnly(false);
-    return run(() => controller.startCall({ sessionId, inputActions }));
+    return callView.start({ sessionId, inputActions, origin: rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null });
   };
-  const hangup = () => { setStageRequested(false); setHistoryOnly(false); setMinimized(false); return run(() => controller.hangup()); };
   const config = state.config;
   if (!config) return state.error ? <span className="voice-inline-error" role="status">语音配置加载失败，请在设置中重试</span> : null;
   const asrReady = !!(config.asr?.configured && config.asr?.model && protocolDescriptor('asr', config.asr?.protocol || '')), ttsReady = !!(config.tts?.configured && config.tts?.model && protocolDescriptor('tts', config.tts?.protocol || ''));
   const unavailable = [!asrReady && 'ASR', !ttsReady && 'TTS'].filter(Boolean).join('、');
   const callReason = callStreamingReason(config), callReady = asrReady && ttsReady && !callReason;
-  const recovery = state.recoverySessionId === sessionId && state.recoveryText;
-  const recoveryPanel = recovery && <div className="voice-recovery" role="region" aria-label="待恢复的语音文字"><p>{recovery}</p><div className="voice-recovery-actions">{calling && <button type="button" className="voice-text-button" disabled={pending || !state.canRetry} onClick={() => run(() => controller.retryPending())}>重试发送</button>}<button type="button" className="voice-text-button" disabled={pending} onClick={() => run(async () => { if (!navigator.clipboard?.writeText) throw Error('当前环境无法复制，请选择文字手动复制。'); await navigator.clipboard.writeText(recovery); })}>复制文字</button>{state.mode === 'idle' && <button type="button" className="voice-text-button" disabled={pending || locked} onClick={() => run(() => controller.recoverToDraft(inputActions))}>转入草稿</button>}<button type="button" className="voice-text-button" disabled={pending} onClick={() => run(() => controller.discardRecovery())}>丢弃</button></div></div>;
   const canStart = !locked && !pending && state.mode === 'idle';
-  const message = error || (own || state.mode === 'idle' ? state.error : '');
-  const stage = <CallStage state={state} controller={controller} sessionId={sessionId} open={(calling || stageRequested || historyOnly) && (!minimized || enhanced && !waiting)} inlineTarget={inline ? callFrame.element : null} onExpand={() => setMinimized(false)} interactionPending={waiting} historyOnly={historyOnly} origin={origin.current} pending={pending} error={message} recovery={recoveryPanel} returnFocusRef={activityRef} onMute={() => run(() => controller.setMuted(!state.muted))} onHangup={hangup} onRetry={startCall} onMinimize={() => { if (historyOnly) setHistoryOnly(false); else setMinimized(true); }} />;
-  if (calling || stageRequested) return <div ref={activityRef} className={'voice-activity voice-expanded voice-calling voice-call-phase-' + state.phase}>
-    <div className="voice-call-capsule"><button type="button" className="voice-call-restore" aria-label="返回语音通话" onClick={() => setMinimized(false)}><CallOrb state={state} /><span>{waiting ? '等待确认 · 请在对话中处理' : message ? '通话遇到问题' : pending && !calling ? '正在连接' : state.muted && state.phase === 'listening' ? '麦克风已关闭' : phaseLabels[state.phase] || '返回通话'}</span><CallStageIcon name="expand" /></button><Hint label={state.muted ? '开启麦克风' : '关闭麦克风'}><button type="button" className="voice-icon-button voice-call-mic" aria-label={state.muted ? '开启麦克风' : '关闭麦克风'} aria-pressed={!!state.muted} disabled={pending || !calling} onClick={() => run(() => controller.setMuted(!state.muted))}><Microphone muted={state.muted} /></button></Hint><Hint label="结束通话"><button type="button" className="voice-icon-button voice-call-stop" aria-label="结束语音通话" onClick={hangup}><IconStopFillRegular size={16} /></button></Hint></div>{stage}
+  const message = error || (own ? state.error : '');
+  if (calling) return <div ref={activityRef} className={'voice-activity voice-expanded voice-calling voice-call-phase-' + state.phase}>
+    <div className="voice-call-capsule"><button type="button" className="voice-call-restore" aria-label="返回语音通话" onClick={() => callView.expand()}><CallOrb state={state} /><span>{waiting ? '等待确认 · 请在对话中处理' : message ? '通话遇到问题' : state.muted ? '麦克风已关闭' : phaseLabels[state.phase] || '返回通话'}</span><CallStageIcon name="expand" /></button></div>
   </div>;
   return <div ref={activityRef} className={'voice-activity ' + (active ? 'voice-expanded ' : '') + (recording ? 'voice-dictating' : '')}>
     {recording ? <div className="voice-recording-strip"><span className="voice-recording-pulse" role="img" aria-label="麦克风实时音量" style={{ '--voice-level': state.level || 0 }}>{Array.from({ length: 31 }, (_, i) => <i key={i} style={{ '--voice-band': .22 + .78 * Math.abs(Math.sin(i * 1.7)) }} />)}</span><span className="voice-recording-caption" role="status">{state.transcript || '正在聆听'}</span><Hint label="停止转录"><button type="button" className="voice-icon-button voice-stop-recording" aria-label="停止语音转录" onClick={() => run(() => controller.stopDictation())}><IconStopFillRegular size={16} /></button></Hint></div> : config.dictation && !calling && <Hint label={asrReady ? '语音转文本' : '请先在设置 → 媒体 → 语音中配置 ASR 模型'}><button type="button" className="voice-icon-button" data-available={asrReady} aria-label="语音转文本" disabled={!canStart || !asrReady} onClick={() => run(() => controller.startDictation({ sessionId, inputActions }))}><IconMicrophoneOutlineMedium size={18} /></button></Hint>}
-    {config.readAloud && <Hint label={!ttsReady ? 'TTS 不可用，请打开设置 → 媒体 → 语音' : state.readEnabled ? '自动朗读开启' : '自动朗读关闭'}><button type="button" className="voice-icon-button voice-read-button" data-available={ttsReady} aria-label={!ttsReady ? 'TTS 不可用，请打开设置 → 媒体 → 语音' : state.readEnabled ? '自动朗读开启' : '自动朗读关闭'} aria-pressed={!!state.readEnabled} disabled={!ttsReady && !state.readEnabled} onClick={() => run(() => controller.toggleRead(sessionId))}><Speaker active={!!state.readEnabled} /></button></Hint>}
-    {!recording && (config.call || hasHistory || own && state.conversationMessages?.length > 0) && <CallEntry available={!!config.call && callReady} disabled={!config.call || !canStart || !callReady} hint={callReady && config.call ? '开始通话' : callReason || unavailable + ' 不可用，请打开设置 → 媒体 → 语音'} onStart={startCall} onHistory={() => { setHistoryOnly(true); setMinimized(false); }}><CallIcon /></CallEntry>}
-    {stage}
+    {config.readAloud && <Hint label={state.mode === 'call' ? '通话期间由原会话播放语音' : !ttsReady ? 'TTS 不可用，请打开设置 → 媒体 → 语音' : state.readEnabled ? '自动朗读开启' : '自动朗读关闭'}><button type="button" className="voice-icon-button voice-read-button" data-available={ttsReady} aria-label={!ttsReady ? 'TTS 不可用，请打开设置 → 媒体 → 语音' : state.readEnabled ? '自动朗读开启' : '自动朗读关闭'} aria-pressed={!!state.readEnabled} disabled={state.mode === 'call' || !ttsReady && !state.readEnabled} onClick={() => run(() => controller.toggleRead(sessionId))}><Speaker active={!!state.readEnabled} /></button></Hint>}
+    {!recording && (config.call || hasHistory || own && state.conversationMessages?.length > 0) && <CallEntry available={!!config.call && callReady} disabled={state.mode !== 'call' && (!config.call || !canStart || !callReady)} hint={state.mode === 'call' ? '查看正在进行的通话；结束后可在此开始新通话' : callReady && config.call ? '开始通话' : callReason || unavailable + ' 不可用，请打开设置 → 媒体 → 语音'} onStart={startCall} onHistory={() => callView.history(sessionId)}><CallIcon /></CallEntry>}
     {!recording && (active || reading) && <div className={'voice-status voice-phase-' + state.phase} role="status"><span className="voice-status-dot" /><span className="voice-status-text">{state.transcript || phaseLabels[state.phase] || '语音处理中'}</span></div>}
     {!active && pending && <span className="voice-inline-note" role="status">连接中…</span>}
     {unavailable && <button type="button" className="voice-text-button voice-settings-link" onClick={() => run(() => { if (!openSettings) throw Error('请打开设置 → 媒体 → 语音'); openSettings(); })}>{unavailable} 不可用 · 配置语音</button>}
     {!unavailable && config.call && callReason && <Hint label={callReason}><button type="button" className="voice-text-button voice-settings-link" onClick={() => run(() => { if (!openSettings) throw Error(callReason); openSettings(); })}>{config.tts?.stream === false ? '通话需开启流式播放 · 配置' : '通话需流式识别 · 配置'}</button></Hint>}
-    {recoveryPanel}
     {message && <span className="voice-inline-error" role="alert">{message}</span>}
   </div>;
 }
 export function draftFrom(config) {
   const endpoint = name => ({ providerId: config[name]?.providerId || '', baseURL: config[name]?.baseURL || '', model: config[name]?.model || '', apiKey: '', apiType: config[name]?.apiType === 'auto' ? '' : config[name]?.apiType || '', protocol: config[name]?.protocol === 'auto' ? '' : config[name]?.protocol || '', ...(name === 'tts' ? { voice: config.tts?.voice || '', speed: normalizeTtsSpeed(config.tts?.speed), stream: config.tts?.stream !== false } : { realtime: config.asr?.realtime || { url: '', query: {} } }) });
-  return { dictation: !!config.dictation, readAloud: !!config.readAloud, call: !!config.call, asr: endpoint('asr'), tts: endpoint('tts'), conversation: { providerId: config.conversation?.providerId || '', model: config.conversation?.model || '' } };
+  return { dictation: !!config.dictation, readAloud: !!config.readAloud, call: !!config.call, asr: endpoint('asr'), tts: endpoint('tts'), conversation: { providerId: config.conversation?.providerId || '', model: config.conversation?.model || '' }, listening: listeningDraft(config.listening) };
 }
 async function modelCatalog(action, args = {}, signal) {
   const response = await fetch(new URL('api/commander/tooling', document.baseURI), { method: 'POST', credentials: 'same-origin', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...args }) });
@@ -230,7 +223,44 @@ function ProviderSettings({ name, draft, config, providers, update, clearKey, to
   </fieldset>;
 }
 const voiceTabs = [{ id: 'dictation', label: '语音转文本', detail: '转为草稿，确认后发送', kinds: ['asr'] }, { id: 'readAloud', label: '朗读', detail: '自动朗读新的回复', kinds: ['tts'] }, { id: 'call', label: '实时通话', detail: '直接交谈，随时打断', kinds: ['asr', 'tts'] }];
-const callSettingsTabs = [{ value: 'conversation', label: '交互模型' }, { value: 'asr', label: '语音识别' }, { value: 'tts', label: '语音合成' }];
+const callSettingsTabs = [{ value: 'conversation', label: '交互模型' }, { value: 'asr', label: '语音识别' }, { value: 'tts', label: '语音合成' }, { value: 'listening', label: '决策' }];
+function ListeningSettings({ draft, config, update, clearKey, toggleClear, disabled }) {
+  const [checking, setChecking] = useState(false), [result, setResult] = useState(null), [error, setError] = useState('');
+  const operation = useRef(null), identity = JSON.stringify([draft, !!clearKey]);
+  useEffect(() => {
+    operation.current?.abort(); operation.current = null; setChecking(false); setResult(null); setError('');
+    return () => operation.current?.abort();
+  }, [identity]);
+  useEffect(() => { if (disabled) { operation.current?.abort(); operation.current = null; setChecking(false); } }, [disabled]);
+  const testConnection = async () => {
+    operation.current?.abort(); const abort = new AbortController(); operation.current = abort;
+    setChecking(true); setResult(null); setError('');
+    const config = { ...draft }; if (!config.apiKey?.trim()) delete config.apiKey;
+    try {
+      const response = await voiceProtocolRequest('listening.test', { config, clearApiKey: !!clearKey }, abort.signal);
+      if (!abort.signal.aborted) setResult(response.result);
+    } catch (failure) { if (!abort.signal.aborted) setError(failure.message || '连接测试失败，请检查地址和密钥。'); }
+    finally { if (operation.current === abort) { operation.current = null; setChecking(false); } }
+  };
+  const availableName = config?.superagentAvailable && config.superagentName || '';
+  const wakeWord = draft.wakeSource === 'superagent' ? availableName : draft.wakeWord.trim();
+  const routeChanged = draft.endpoint !== (config?.endpoint ?? listeningDraft().endpoint);
+  const canTest = !!draft.endpoint.trim() && !clearKey && !!(draft.apiKey.trim() || config?.apiKeyConfigured && !routeChanged);
+  return <fieldset disabled={disabled} aria-label="决策设置" className="voice-provider-settings voice-listening-settings">
+    <Toggle label="判断是否在对我说话" detail="暂未接入通话，当前通话直接交流。" checked={draft.enabled} onChange={enabled => update({ enabled })} />
+    <label>决策接口地址<input type="url" inputMode="url" autoComplete="off" spellCheck={false} value={draft.endpoint} placeholder="填写完整决策接口地址" onChange={event => update({ endpoint: event.target.value })} /></label>
+    <label>决策模型 ID<input autoComplete="off" spellCheck={false} value={draft.model} placeholder="填写模型 ID（接口支持时可留空）" onChange={event => update({ model: event.target.value })} /></label>
+    <label>决策 API Key<div className="voice-key-field"><input aria-label="决策 API Key" type="password" autoComplete="new-password" spellCheck={false} placeholder={clearKey ? '保存后清除密钥' : config?.apiKeyConfigured ? '已配置，留空保留' : '填写 API Key'} value={draft.apiKey} onChange={event => update({ apiKey: event.target.value })} />{(config?.apiKeyConfigured || clearKey) && <button type="button" onClick={toggleClear}>{clearKey ? '撤销清除' : '清除密钥'}</button>}</div></label>
+    <div className="voice-listening-check"><button type="button" className="voice-text-button" disabled={disabled || checking || !canTest} aria-busy={checking} onClick={testConnection}>{checking ? '正在测试…' : '测试连接'}</button>{checking && <button type="button" className="voice-text-button" onClick={() => { operation.current?.abort(); operation.current = null; setChecking(false); }}>取消</button>}<span role="status">{result?.supported ? '连接可用' + (Number.isFinite(result.latencyMs) ? ` · ${Math.round(result.latencyMs)}ms` : '') : checking ? '正在判断固定示例' : '仅发送固定示例，不使用会话内容'}</span></div>
+    {error && <p role="alert" className="voice-settings-error">{error}</p>}
+    <VoiceSelect label="唤醒词来源" value={draft.wakeSource} options={[{ value: 'custom', label: '自定义' }, { value: 'superagent', label: '跟随 SuperAgent 称呼', hint: availableName || '暂无可用的称呼', disabled: !availableName }]} disabled={disabled} onChange={wakeSource => update({ wakeSource })} />
+    {routeChanged && config?.apiKeyConfigured && !draft.apiKey.trim() && <p role="status" className="voice-provider-hint">地址已修改，请填写此地址的密钥，或保存地址后再测试。</p>}
+    {draft.wakeSource === 'custom' && <label>唤醒词<input autoComplete="off" maxLength={100} value={draft.wakeWord} placeholder="填写称呼；留空仅依据上下文判断" onChange={event => update({ wakeWord: event.target.value })} /></label>}
+    <p className="voice-listening-word" role="status">{draft.wakeSource === 'superagent' && !availableName ? 'SuperAgent 称呼暂不可用，请设置称呼或选择自定义。' : wakeWord ? `当前称呼：${wakeWord}` : '未设置称呼，仅依据上下文判断。'}</p>
+    {config?.unavailableReason && draft.enabled && <p role="status" className="voice-provider-hint">当前保存的配置：{config.unavailableReason}</p>}
+    <Disclosure title="使用说明" className="voice-connection-settings"><p className="voice-provider-hint">当前仅保留决策配置与固定示例测试，通话内容不发送到决策服务。说话对象判断待设计确认后再接入。</p></Disclosure>
+  </fieldset>;
+}
 function ConversationSettings({ draft, config, providers, update, disabled }) {
   const [models, setModels] = useState([]), [loading, setLoading] = useState(false), [error, setError] = useState(''), [manual, setManual] = useState(false), [revision, setRevision] = useState(0);
   const providerId = draft.providerId;
@@ -331,7 +361,7 @@ function VoiceSettings({ controller, providers = [], catalogError = '', selected
     {!navigationId && <SegmentedControl options={voiceTabs.map(item => ({ value: item.id, label: item.label }))} value={tab} onChange={setTab} label="语音交互方式" tabIdPrefix={tabsId} panelId={tabsId + '-panel'} />}
     <div className="voice-tab-panel" key={tab} id={tabsId + '-panel'} role="tabpanel" aria-labelledby={tabsId + '-' + tab}>
       <fieldset disabled={busy} className="voice-mode-settings"><Toggle label={current.label} detail={current.detail} checked={draft[tab]} onChange={value => update(tab, value)} /></fieldset>
-      {tab === 'call' ? <>{callStreamingReason(draft) && <p role="status" className="voice-settings-error">{callStreamingReason(draft)}，请调整高级设置。</p>}<SegmentedControl options={callSettingsTabs} value={callSection} onChange={setCallSection} label="通话设置" tabIdPrefix={callTabsId} panelId={callTabsId + '-panel'} /><div className="voice-call-settings-panel" id={callTabsId + '-panel'} role="tabpanel" aria-labelledby={callTabsId + '-' + callSection}>{callSection === 'conversation' ? <ConversationSettings draft={draft.conversation} config={state.config?.conversation} providers={providers} update={patch => endpoint('conversation', patch)} disabled={busy} /> : providerSettings(callSection)}</div></> : current.kinds.map(providerSettings)}
+      {tab === 'call' ? <>{callStreamingReason(draft) && <p role="status" className="voice-settings-error">{callStreamingReason(draft)}，请调整高级设置。</p>}<SegmentedControl options={callSettingsTabs} value={callSection} onChange={setCallSection} label="通话设置" tabIdPrefix={callTabsId} panelId={callTabsId + '-panel'} /><div className="voice-call-settings-panel" id={callTabsId + '-panel'} role="tabpanel" aria-labelledby={callTabsId + '-' + callSection}>{callSection === 'conversation' ? <ConversationSettings draft={draft.conversation} config={state.config?.conversation} providers={providers} update={patch => endpoint('conversation', patch)} disabled={busy} /> : callSection === 'listening' ? <ListeningSettings draft={draft.listening} config={state.config?.listening} update={patch => endpoint('listening', patch)} clearKey={clearKeys.listening} toggleClear={() => { setClearKeys(value => ({ ...value, listening: !value.listening })); endpoint('listening', { apiKey: '' }); }} disabled={busy} /> : providerSettings(callSection)}</div></> : current.kinds.map(providerSettings)}
     </div>
     {catalogError && <p role="status" className="voice-provider-hint">暂时无法读取已有供应商：{catalogError}。仍可独立配置。</p>}
     <footer><button className="voice-save" type="submit" disabled={busy || !dirty}>{busy ? '保存中…' : '保存设置'}</button><span role="status">{saved ? '已保存' : dirty ? '有未保存的修改' : ''}</span></footer>{(error || state.error) && <p role="alert" className="voice-settings-error">{error || state.error}</p>}

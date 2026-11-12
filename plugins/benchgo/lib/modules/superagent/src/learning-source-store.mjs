@@ -58,7 +58,7 @@ export function installLearningSourceStore({ db, tx }) {
     if (result.outcome !== row.status || result.instructionRevision !== row.instruction_revision) return null;
     return { seq: row.seq, ticketId: row.ticket_id, resultVersion: row.result_version, status: row.status, closedAt: row.closed_at,
       instructions, result: { finalSummary: result.finalSummary ?? result.summary ?? '', failure: result.failure ?? null,
-        toolEvidence: result.toolEvidence ?? null, transcript: result.transcript ?? null, checkpoint: result.checkpoint ?? null } };
+        toolEvidence: result.toolEvidence ?? null, transcript: result.transcript ?? null } };
   }
   return {
     recordClosedTicket(ticketId, { closedAt, inTransaction = false } = {}) {

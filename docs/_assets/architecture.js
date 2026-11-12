@@ -11,6 +11,10 @@
     const data = JSON.parse($('architecture-data').textContent);
     if (!data.nodes?.length) throw new Error('当前页面没有架构节点');
     const nodes = data.nodes, edges = data.edges || [], byId = new Map(nodes.map(n => [n.id, n]));
+    const canvasWidth = data.canvas?.width || 1580, canvasHeight = data.canvas?.height || 950;
+    const nodeWidth = n => n.compact ? 220 : 260, nodeHeight = n => n.compact ? 96 : 154;
+    world.style.width = canvasWidth + 'px'; world.style.height = canvasHeight + 'px';
+    world.querySelector('.edges').style.width = canvasWidth + 'px'; world.querySelector('.edges').style.height = canvasHeight + 'px';
     for (const e of edges) if (!byId.has(e.a) || !byId.has(e.b)) throw new Error('连线引用了不存在的节点');
     const original = nodes.map(({id,x,y}) => ({id,x,y}));
     const storageKey = 'benchgo-architecture-v1-' + data.id;
@@ -21,7 +25,7 @@
       const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
       if (saved?.version === data.version) for (const p of saved.positions || []) {
         const n = byId.get(p.id);
-        if (n && Number.isFinite(p.x) && Number.isFinite(p.y)) Object.assign(n, {x:clamp(p.x,20,1290),y:clamp(p.y,130,780)});
+        if (n && Number.isFinite(p.x) && Number.isFinite(p.y)) Object.assign(n, {x:clamp(p.x,20,canvasWidth-nodeWidth(n)-30),y:clamp(p.y,130,canvasHeight-nodeHeight(n)-16)});
       }
     } catch { /* A restricted file origin still supports the complete diagram. */ }
     const save = () => { try { localStorage.setItem(storageKey, JSON.stringify({version:data.version,positions:nodes.map(({id,x,y})=>({id,x,y}))})); } catch {} };
@@ -36,7 +40,7 @@
       const el=make('div','zone');Object.assign(el.style,{left:z.x+'px',top:z.y+'px',width:z.w+'px',height:z.h+'px'});el.append(make('span','',z.label));$('zones').append(el);
     }
     for (const [i,n] of nodes.entries()) {
-      const el=make('button','node');el.type='button';el.id='node-'+n.id;el.dataset.id=n.id;el.dataset.kind=n.kind;el.dataset.state=n.state;el.style.left=n.x+'px';el.style.top=n.y+'px';el.setAttribute('aria-label',`${String(i+1).padStart(2,'0')} ${n.title}，${statuses[n.state]}`);el.setAttribute('aria-pressed','false');
+      const el=make('button','node'+(n.compact?' compact':''));el.type='button';el.id='node-'+n.id;el.dataset.id=n.id;el.dataset.kind=n.kind;el.dataset.state=n.state;el.style.left=n.x+'px';el.style.top=n.y+'px';el.setAttribute('aria-label',`${String(i+1).padStart(2,'0')} ${n.title}，${statuses[n.state]}`);el.setAttribute('aria-pressed','false');
       const kicker=make('div','node-kicker'),label=make('span');label.append(make('i'),document.createTextNode(n.kicker));kicker.append(label,make('em','',String(i+1).padStart(2,'0')));
       el.append(kicker,make('h3','',n.title),make('p','',n.sub),make('code','',n.symbol));
       if(n.state!=='implemented')el.append(make('span','node-state',statuses[n.state]));
@@ -46,21 +50,21 @@
       });
       el.addEventListener('pointermove',e=>{
         if(!drag||e.pointerId!==drag.id)return;const dx=e.clientX-drag.sx,dy=e.clientY-drag.sy;if(Math.hypot(dx,dy)>5)drag.moved=true;if(!drag.moved)return;
-        n.x=clamp(drag.x+dx/state.camera.k,20,1290);n.y=clamp(drag.y+dy/state.camera.k,130,780);el.style.left=n.x+'px';el.style.top=n.y+'px';drawEdges();
+        n.x=clamp(drag.x+dx/state.camera.k,20,canvasWidth-nodeWidth(n)-30);n.y=clamp(drag.y+dy/state.camera.k,130,canvasHeight-nodeHeight(n)-16);el.style.left=n.x+'px';el.style.top=n.y+'px';drawEdges();
       });
       const end=e=>{if(!drag||drag.id!==e.pointerId)return;el._moved=drag.moved||e.type==='pointercancel';el.classList.remove('dragging');drag=null;save();};
       el.addEventListener('pointerup',end);el.addEventListener('pointercancel',end);el.addEventListener('lostpointercapture',end);$('nodes').append(el);
     }
     const ns='http://www.w3.org/2000/svg';
     edges.forEach((e,i)=>{const p=document.createElementNS(ns,'path');p.id='edge-'+i;p.setAttribute('class','edge '+(e.kind||''));$('edge-paths').append(p);const t=document.createElementNS(ns,'text');t.id='label-'+i;t.setAttribute('class','edge-label');t.textContent=e.label||'';$('edge-labels').append(t);});
-    function anchor(n,side){return side==='l'?{x:n.x,y:n.y+77}:side==='r'?{x:n.x+260,y:n.y+77}:side==='t'?{x:n.x+130,y:n.y}:{x:n.x+130,y:n.y+154};}
+    function anchor(n,side){const w=nodeWidth(n),h=nodeHeight(n);return side==='l'?{x:n.x,y:n.y+h/2}:side==='r'?{x:n.x+w,y:n.y+h/2}:side==='t'?{x:n.x+w/2,y:n.y}:{x:n.x+w/2,y:n.y+h};}
     const vectors={l:[-1,0],r:[1,0],t:[0,-1],b:[0,1]};
     function route(e){
       const a=anchor(byId.get(e.a),e.from),b=anchor(byId.get(e.b),e.to),av=vectors[e.from],bv=vectors[e.to];
       const start={x:a.x+av[0]*28,y:a.y+av[1]*28},end={x:b.x+bv[0]*28,y:b.y+bv[1]*28};
-      const rects=nodes.map(n=>({l:n.x-15,r:n.x+275,t:n.y-15,b:n.y+169}));
-      const xs=[...new Set([20,1560,start.x,end.x,...nodes.flatMap(n=>[n.x-30,n.x+290])])].sort((x,y)=>x-y);
-      const ys=[...new Set([120,930,start.y,end.y,...nodes.flatMap(n=>[n.y-30,n.y+184])])].sort((x,y)=>x-y);
+      const rects=nodes.map(n=>({l:n.x-15,r:n.x+nodeWidth(n)+15,t:n.y-15,b:n.y+nodeHeight(n)+15}));
+      const xs=[...new Set([20,canvasWidth-20,start.x,end.x,...nodes.flatMap(n=>[n.x-30,n.x+nodeWidth(n)+30])])].sort((x,y)=>x-y);
+      const ys=[...new Set([120,canvasHeight-20,start.y,end.y,...nodes.flatMap(n=>[n.y-30,n.y+nodeHeight(n)+30])])].sort((x,y)=>x-y);
       const blocked=(p,q)=>rects.some(r=>p.x===q.x?p.x>r.l&&p.x<r.r&&Math.max(p.y,q.y)>r.t&&Math.min(p.y,q.y)<r.b:p.y>r.t&&p.y<r.b&&Math.max(p.x,q.x)>r.l&&Math.min(p.x,q.x)<r.r);
       const sx=xs.indexOf(start.x),sy=ys.indexOf(start.y),ex=xs.indexOf(end.x),ey=ys.indexOf(end.y);
       const heap=[],costs=new Map(),parents=new Map(),key=(x,y,d)=>`${x},${y},${d}`;
@@ -80,7 +84,7 @@
     function drawEdges(){const occupied=[];edges.forEach((e,i)=>{
       const points=route(e);$('edge-'+i).setAttribute('d',rounded(points));
       const width=Math.max(45,(e.label||'').length*11),candidates=[];
-      for(let j=1;j<points.length;j++){const a=points[j-1],b=points[j],horizontal=a.y===b.y,length=Math.abs(a.x-b.x)+Math.abs(a.y-b.y);if(length<45)continue;const x=horizontal?(a.x+b.x)/2:a.x+12,y=horizontal?a.y-12:(a.y+b.y)/2;const box={x:horizontal?x-width/2:x,y:y-11,w:width,h:17};const overlap=occupied.filter(o=>box.x<o.x+o.w+8&&box.x+box.w+8>o.x&&box.y<o.y+o.h+5&&box.y+box.h+5>o.y).length;const nodeHit=nodes.some(n=>box.x<n.x+260&&box.x+box.w>n.x&&box.y<n.y+154&&box.y+box.h>n.y);candidates.push({x,y,box,horizontal,score:length+(horizontal?100:0)-overlap*10000-(nodeHit?10000:0)});}
+      for(let j=1;j<points.length;j++){const a=points[j-1],b=points[j],horizontal=a.y===b.y,length=Math.abs(a.x-b.x)+Math.abs(a.y-b.y);if(length<45)continue;const x=horizontal?(a.x+b.x)/2:a.x+12,y=horizontal?a.y-12:(a.y+b.y)/2;const box={x:horizontal?x-width/2:x,y:y-11,w:width,h:17};const overlap=occupied.filter(o=>box.x<o.x+o.w+8&&box.x+box.w+8>o.x&&box.y<o.y+o.h+5&&box.y+box.h+5>o.y).length;const nodeHit=nodes.some(n=>box.x<n.x+nodeWidth(n)&&box.x+box.w>n.x&&box.y<n.y+nodeHeight(n)&&box.y+box.h>n.y);candidates.push({x,y,box,horizontal,score:length+(horizontal?100:0)-overlap*10000-(nodeHit?10000:0)});}
       candidates.sort((a,b)=>b.score-a.score);const chosen=candidates[0]||{x:points[0].x,y:points[0].y-12,horizontal:true,box:{x:0,y:0,w:0,h:0}};occupied.push(chosen.box);const t=$('label-'+i);t.setAttribute('x',chosen.x);t.setAttribute('y',chosen.y);t.setAttribute('text-anchor',chosen.horizontal?'middle':'start');
     });}
     function select(id,open=false){const n=byId.get(id);if(!n)return;state.selected=id;
@@ -93,9 +97,9 @@
       if(open){$('directory').hidden=true;$('directory-toggle').setAttribute('aria-expanded','false');$('detail').hidden=false;$('detail').scrollTop=0;}
     }
     function camera(){const c=state.camera;world.style.transform=`translate(${c.x}px,${c.y}px) scale(${c.k})`;$('zoom-value').textContent=Math.round(c.k*100)+'%';$('zoom-out').disabled=c.k<=.1501;$('zoom-in').disabled=c.k>=2.499;viewport.style.backgroundSize=18*c.k+'px '+18*c.k+'px';viewport.style.backgroundPosition=c.x+'px '+c.y+'px';}
-    function fit(){const w=viewport.clientWidth,h=viewport.clientHeight;const k=clamp(Math.min((w-35)/1580,(h-87)/950,1),.15,2.5);state.camera={k,x:(w-1580*k)/2,y:(h-70-950*k)/2};camera();}
+    function fit(){const w=viewport.clientWidth,h=viewport.clientHeight;const k=clamp(Math.min((w-35)/canvasWidth,(h-87)/canvasHeight,1),.15,2.5);state.camera={k,x:(w-canvasWidth*k)/2,y:(h-70-canvasHeight*k)/2};camera();}
     function zoom(factor,x=viewport.clientWidth/2,y=viewport.clientHeight/2){const c=state.camera,k=clamp(c.k*factor,.15,2.5),r=k/c.k;c.x=x-(x-c.x)*r;c.y=y-(y-c.y)*r;c.k=k;camera();}
-    function focusNode(id,walking=false){const n=byId.get(id),w=viewport.clientWidth,h=viewport.clientHeight,k=w<760?Math.min(1,(w-50)/260):1;const cx=w<760?w/2:walking?(w+350)/2:(w-370)/2;state.camera={k,x:cx-(n.x+130)*k,y:(walking&&w<760?Math.max(130,(h-280)/2):h/2)-(n.y+77)*k};camera();}
+    function focusNode(id,walking=false){const n=byId.get(id),w=viewport.clientWidth,h=viewport.clientHeight,k=w<760?Math.min(1,(w-50)/nodeWidth(n)):1;const cx=w<760?w/2:walking?(w+350)/2:(w-370)/2;state.camera={k,x:cx-(n.x+nodeWidth(n)/2)*k,y:(walking&&w<760?Math.max(130,(h-280)/2):h/2)-(n.y+nodeHeight(n)/2)*k};camera();}
     const point=e=>{const r=viewport.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};};
     viewport.addEventListener('pointerdown',e=>{if(e.target.closest('.node')||e.button!==0||drag)return;e.preventDefault();viewport.focus({preventScroll:true});pointers.set(e.pointerId,point(e));viewport.setPointerCapture(e.pointerId);viewport.classList.add('panning');if(pointers.size===1)pan=point(e);else if(pointers.size===2){const[a,b]=[...pointers.values()];pinch={d:Math.hypot(a.x-b.x,a.y-b.y),x:(a.x+b.x)/2,y:(a.y+b.y)/2};}});
     viewport.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;const p=point(e);pointers.set(e.pointerId,p);if(pointers.size===2){const[a,b]=[...pointers.values()],next={d:Math.hypot(a.x-b.x,a.y-b.y),x:(a.x+b.x)/2,y:(a.y+b.y)/2};if(pinch?.d){zoom(next.d/pinch.d,pinch.x,pinch.y);state.camera.x+=next.x-pinch.x;state.camera.y+=next.y-pinch.y;camera();}pinch=next;}else if(pan){state.camera.x+=p.x-pan.x;state.camera.y+=p.y-pan.y;pan=p;camera();}});

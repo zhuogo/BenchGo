@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { groupHomeActivity, activityLabels } from '../client/activity-data.mjs';
+import { quietChatRows } from '../client/quiet-chat.mjs';
 import * as petState from '../client/pet-state.mjs';
 
 const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
@@ -23,6 +24,7 @@ function load(code, context = null, activity = { rows: [], error: '', loading: f
     if (id.endsWith('.css')) return '';
     if (id.endsWith('activity-data.mjs')) return { groupHomeActivity, activityLabels };
     if (id.endsWith('use-activity.jsx')) return { useAssistantActivity: () => activity };
+    if (id.endsWith('quiet-chat.mjs')) return { quietChatRows };
     if (id.endsWith('quiet-chat.jsx')) return { QuietChat: 'QuietChat' };
     if (id.endsWith('home.jsx')) return { AssistantHome: 'AssistantHome' };
     return {};
@@ -33,13 +35,22 @@ function walk(node) { return !node || typeof node !== 'object' ? [] : [node, ...
 const input = { phase: 'plain', draft: '', occurrences: [] };
 
 test('main and side conversations reuse native main width layout and width controls', () => {
-  const { OfficialConversation } = load(conversationCode);
+  const { OfficialConversation } = load(conversationCode, { api() {} });
   let content;
   OfficialConversation({ useSession: select => select({ blank: false, running: false }), useConversation: select => select({ activeTargets: new Set(['chat']) }), renderFactorySlot: (name, props, options) => { content = { name, props, options }; return null; } });
   assert.equal(content.name, 'conversation.content');
   assert.equal(content.props.variant, 'main');
   assert.equal(content.options.slots.widthControls, 'NativeWidthControls');
   assert.equal(typeof content.options.slots.views, 'function');
+});
+
+test('execution conversations retain the official transcript and input factory without QuietChat replacement', () => {
+  const { OfficialConversation } = load(conversationCode);
+  let content;
+  OfficialConversation({ useSession: select => select({ blank: false, running: true }), useConversation: select => select({ activeTargets: new Set(['chat']) }), renderFactorySlot: (name, props, options) => { content = { name, props, options }; return null; } });
+  assert.equal(content.name, 'conversation.content');
+  assert.equal(content.options.slots.views, undefined);
+  assert.equal(content.props.hero, false);
 });
 
 test('starter inserts and persists an editable draft without submitting, and preserves existing drafts', () => {

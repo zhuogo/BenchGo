@@ -46,65 +46,21 @@ function projection(suffix = 'a', patch = {}) {
     fact: { kind: 'tool/result', category: 'file', counts: { calls: 1, results: 1, errors: 0 }, evidenceRefs: [{ sessionId: `session-${suffix}`, seq: 7 }] },
     ...patch };
 }
-function observation(patch = {}) {
-  return { observationId: 'checkpoint-a', ticketId: 'ticket-a', assignmentId: 'assignment-a', runId: 'run-a', fence: 1, instructionRevision: 1,
-    directory: process.cwd(), callId: 'call-a', sequence: 0, startedAt: at, completedAt: at,
-    coverage: { kind: 'protected-workspace-files', complete: true, truncated: false, exclusionsVersion: 1,
-      externalEffects: 'not-observed', conversationOutputs: 'not-observed' },
-    comparison: { beforeFiles: 0, afterFiles: 0, added: 0, modified: 0, deleted: 0, unchanged: 0, netChanged: false }, ...patch };
-}
 
-test('artifact observations bind the persisted execution and publish only complete file comparison metadata', t => {
-  const f = fixture(t); f.seed();
-  const before = f.store.executionFactCursor(), input = observation({ paths: ['PRIVATE PATH'], hash: 'PRIVATE HASH', blob: 'PRIVATE BLOB' });
-  input.coverage.secret = 'PRIVATE COVERAGE'; input.comparison.path = 'PRIVATE PATH';
-  const saved = f.store.recordExecutionArtifactObservation(input);
-  assert.equal(saved.seq, before + 1); assert.equal(saved.kind, 'artifact-observation'); assert.equal(saved.sessionId, 'session-a');
-  assert.equal(saved.instructionRevision, 1); assert.equal(saved.fence, 1);
-  assert.equal(saved.data.observationId, input.observationId); assert.equal(saved.data.comparison.netChanged, false);
-  assert.equal(f.store.recordExecutionArtifactObservation(input).duplicate, true); assert.equal(f.store.executionFactCursor(), saved.seq);
-  assert.doesNotMatch(JSON.stringify(saved), /PRIVATE|directory|"paths"|"path"|"hash"|"blob"/);
-  const changed = observation({ observationId: 'checkpoint-b', sequence: 1,
-    comparison: { beforeFiles: 4, afterFiles: 5, added: 2, modified: 1, deleted: 1, unchanged: 2, netChanged: true } });
-  assert.deepEqual(f.store.recordExecutionArtifactObservation(changed).data.comparison, changed.comparison);
-  const evidence = f.store.executionEvidence({ ticketId: 'ticket-a', runId: 'run-a', instructionRevision: 1, after: before });
-  assert.equal(evidence.entries.length, 2); assert.deepEqual(evidence.entries.map(row => row.data.sequence), [0, 1]);
+test('public chat identities share the durable journal without text and deduplicate per request', async t => {
+  const f = fixture(t), observed = [];
+  f.store.onExecutionFacts(cursor => observed.push(cursor));
+  const input = { sessionId: 'router', sourceSeq: 3, threadId: 'main', requestId: 'request', text: 'PRIVATE REPLY', tool: 'PRIVATE TOOL' };
+  assert.deepEqual(f.store.recordChatPublication(input), { seq: 1, duplicate: false });
+  assert.deepEqual(f.store.recordChatPublication({ ...input, sourceSeq: 5 }), { seq: 1, duplicate: true });
+  assert.equal(f.store.executionFactCursor(), 1);
+  const page = f.store.executionFactPage({ after: 0 });
+  assert.equal(page.entries[0].kind, 'chat'); assert.equal(page.entries[0].data.operation, 'insert');
+  assert.equal(page.entries[0].data.requestId, 'request'); assert.doesNotMatch(JSON.stringify(page), /PRIVATE/);
+  f.store.recordChatPublication({ sessionId: 'router', sourceSeq: 7, threadId: 'main', mirrorKey: 'request' });
+  assert.equal(f.store.executionFactCursor(), 2, 'request and channel identities cannot collide');
+  await new Promise(setImmediate); assert.deepEqual(observed, [2]);
 });
-
-test('artifact observations reject identity conflicts, stale fences or applied revisions and untrusted directories', t => {
-  const f = fixture(t); f.seed(); f.seed('b');
-  f.store.recordExecutionArtifactObservation(observation());
-  assert.throws(() => f.store.recordExecutionArtifactObservation(observation({ sequence: 1 })), { code: 'EXECUTION_FACT_CONFLICT' });
-  assert.throws(() => f.store.recordExecutionArtifactObservation(observation({ ticketId: 'ticket-b', assignmentId: 'assignment-b', runId: 'run-b' })), { code: 'EXECUTION_FACT_CONFLICT' });
-  for (const patch of [{ ticketId: 'missing' }, { assignmentId: 'missing' }, { runId: 'missing' }, { fence: 2 }, { instructionRevision: 2 },
-    { directory: join(process.cwd(), 'other') }, { directory: 'relative/path' }]) {
-    assert.throws(() => f.store.recordExecutionArtifactObservation(observation({ observationId: 'another', ...patch })), { code: 'EXECUTION_FACT_BINDING' });
-  }
-  f.tx(() => f.db.exec("UPDATE sa_tickets SET instruction_revision=2 WHERE id='ticket-a'"));
-  assert.equal(f.store.recordExecutionArtifactObservation(observation({ observationId: 'old-applied' })).instructionRevision, 1,
-    'a queued Ticket revision does not rewrite the actual applied tool requirements');
-  f.tx(() => {
-    f.db.prepare('UPDATE sa_assignments SET payload=? WHERE id=?').run(JSON.stringify({ instructionRevision: 2 }), 'assignment-a');
-    f.db.prepare('UPDATE sa_runs SET payload=? WHERE id=?').run(JSON.stringify({ sessionId: 'session-a', instructionRevision: 2, directory: process.cwd() }), 'run-a');
-  });
-  assert.throws(() => f.store.recordExecutionArtifactObservation(observation({ observationId: 'frozen-old' })), { code: 'EXECUTION_FACT_BINDING' });
-  assert.equal(f.store.recordExecutionArtifactObservation(observation({ observationId: 'new-applied', instructionRevision: 2 })).instructionRevision, 2);
-  f.tx(() => f.db.exec("UPDATE sa_assignments SET fence=2 WHERE id='assignment-a'"));
-  assert.throws(() => f.store.recordExecutionArtifactObservation(observation({ observationId: 'old-fence', instructionRevision: 2 })), { code: 'EXECUTION_FACT_BINDING' });
-});
-
-test('incomplete or inconsistent artifact coverage cannot be negative file-change evidence', t => {
-  const f = fixture(t); f.seed();
-  const input = observation(), before = f.store.executionFactCursor();
-  for (const patch of [{ coverage: { ...input.coverage, complete: false } }, { coverage: { ...input.coverage, truncated: true } },
-    { coverage: { ...input.coverage, exclusionsVersion: 2 } }, { comparison: { ...input.comparison, netChanged: true } },
-    { comparison: { ...input.comparison, beforeFiles: 1 } }, { comparison: { ...input.comparison, added: -1 } },
-    { startedAt: 'invalid' }, { completedAt: '2026-11-08T00:00:00.000Z' }]) {
-    assert.throws(() => f.store.recordExecutionArtifactObservation({ ...input, ...patch }), { code: 'EXECUTION_FACT_INPUT' });
-  }
-  assert.equal(f.store.executionFactCursor(), before);
-});
-
 test('domain changes share an atomic dense journal and omit every private domain payload', t => {
   const f = fixture(t); f.seed();
   const baseline = f.store.executionFactCursor();
@@ -280,6 +236,39 @@ test('summary publication only emits a display change and requires a real ticket
   assert.equal(unassigned.runId, null); assert.equal(unassigned.instructionRevision, 2);
 });
 
+test('a late runtime notification wakes the existing stream without leaking its contents', async t => {
+  const f = fixture(t);
+  f.db.exec('CREATE TABLE task_events(id TEXT PRIMARY KEY,payload TEXT)');
+  f.store.installExecutionFactRuntimeSources();
+  f.store.installExecutionFactRuntimeSources();
+  const before = f.store.executionFactCursor(), observed = [];
+  f.store.onExecutionFacts(value => observed.push(value));
+  f.tx(() => f.db.prepare('INSERT INTO task_events VALUES (?,?)').run('notification-1', 'PRIVATE REPLY'));
+  await Promise.resolve();
+  const page = f.store.executionFactPage({ after: before });
+  assert.equal(page.entries.length, 1);
+  assert.equal(page.entries[0].kind, 'chat');
+  assert.deepEqual(page.entries[0].data, { operation: 'insert', eventId: 'notification-1' });
+  assert.deepEqual(observed, [page.cursor]);
+  assert.doesNotMatch(JSON.stringify(page), /PRIVATE REPLY/);
+});
+
+test('notification trigger upgrades in place with identities only and no historical replay', t => {
+  const f = fixture(t);
+  f.db.exec(`CREATE TABLE task_events(id TEXT PRIMARY KEY,payload TEXT);
+    CREATE TRIGGER sa_execution_fact_task_events_insert AFTER INSERT ON task_events
+    BEGIN INSERT INTO sa_execution_facts(ticket_id,kind,observed_at,data) VALUES(NULL,'chat','old','{}'); END;`);
+  f.db.prepare('INSERT INTO task_events VALUES (?,?)').run('old', '{}');
+  const before = f.store.executionFactCursor();
+  f.store.installExecutionFactRuntimeSources();
+  assert.equal(f.store.executionFactCursor(), before);
+  f.db.prepare('INSERT INTO task_events VALUES (?,?)').run('new', JSON.stringify({ threadId: 'side', requestId: 'request', ticketStateEventKey: 'delivery', sourceEventId: 'source', text: 'PRIVATE REPLY', other: 'PRIVATE OTHER' }));
+  const page = f.store.executionFactPage({ after: before });
+  assert.equal(page.entries.length, 1);
+  assert.deepEqual(page.entries[0].data, { operation: 'insert', eventId: 'new', threadId: 'side', requestId: 'request', ticketStateEventKey: 'delivery', sourceEventId: 'source' });
+  assert.doesNotMatch(JSON.stringify(page), /PRIVATE/);
+});
+
 test('counter scope is fixed to session and arbitrary scope or extra data is omitted', t => {
   const f = fixture(t); f.seed();
   const before = f.store.executionFactCursor();
@@ -299,13 +288,10 @@ test('persistent projection and journal reopen with the same cursor and bounded 
   const filename = join(directory, 'assistant.db');
   const first = fixture(t, filename); first.seed();
   first.store.recordExecutionProjection(projection('a', { sourceDurability: 'persisted', flushedCursor: 7 }));
-  const artifact = first.store.recordExecutionArtifactObservation(observation());
   const cursor = first.store.executionFactCursor(); first.close();
   const second = fixture(t, filename);
   assert.equal(second.store.executionFactCursor(), cursor);
-  assert.equal(second.store.recordExecutionArtifactObservation(observation()).duplicate, true);
   assert.equal(second.store.executionFactCursor(), cursor);
-  assert.equal(second.store.executionEvidence({ ticketId: 'ticket-a', after: artifact.seq - 1 }).entries[0].data.observationId, 'checkpoint-a');
   assert.equal(second.store.getExecutionProjection('session-a').flushedCursor, 7);
   assert.equal(second.store.getExecutionProjection('session-a').sourceDurability, 'persisted');
   assert.equal(second.store.executionEvidence({ ticketId: 'ticket-a', limit: 1 }).entries.length, 1);

@@ -75,7 +75,6 @@ async function fixture() {
             return {receiptId:'receipt-'+input.requestId,items:input.selectedTicketIds.map(id=>({id}))};
           }
           if(action==='goalList')return {goals:[]};
-          if(action==='checkpointList')return {checkpoints:[]};
           if(action==='state')return {config:{revision:1,workerConcurrency:2}};
           return {queued:true};
         };
@@ -92,7 +91,7 @@ async function fixture() {
         window.ticketFacts=()=>tasks.project('ticket',rows);
         window.updateTicket=(id,patch)=>{Object.assign(rows.find(row=>row.id===id),patch);sink.update({type:'changes',cursor:++cursor,entries:[{seq:cursor,ticketId:id,kind:'execution'}]});};
         root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main className='ba-studio-body' style={{padding:24,width:'100%',height:'100vh',overflow:'auto',boxSizing:'border-box'}}>
-          <Tickets api={api} requestedTicket={state==='archived-detail'?{ticketId:'archived'}:undefined} onCreateGoal={()=>window.calls.push(['createGoal'])} onSchedule={()=>window.calls.push(['openSchedule'])} onOpenExecution={async value=>{window.calls.push(['openExecution',value]);if(window.control.openError)throw Error('原会话尚未连接');}}/>
+          <Tickets api={api} requestedTicket={state==='archived-detail'?{ticketId:'archived'}:undefined} onSchedule={()=>window.calls.push(['openSchedule'])} onOpenExecution={async value=>{window.calls.push(['openExecution',value]);if(window.control.openError)throw Error('原会话尚未连接');}}/>
         </main></div>);
       };
     ` },
@@ -123,7 +122,12 @@ test('ticket board renders resource states with three business states, filters, 
     const shot = async name => { if (screenshots) await page.screenshot({ path: join(screenshots, name + '.png'), fullPage: true }); };
     for (const [state, title] of [['loading', '正在读取工单'], ['error', '工单暂时无法读取'], ['empty', '暂无工单']]) {
       await render(state); await page.getByText(title, { exact: true }).waitFor(); await shot(state);
-      assert(await page.getByText(state === 'empty' ? '0 项工单' : '数量待同步', { exact: true }).isVisible(), 'only a loaded empty response may show zero');
+      assert.equal(await page.locator('.ba-ticket-count').count(), 0, 'the toolbar uses an archive action instead of visible totals');
+      const archive = page.locator('.ba-ticket-view-controls').getByRole('button', { name: '归档已结束工单', exact: true });
+      assert(await archive.isDisabled(), 'unloaded or empty records cannot be archived');
+      await page.locator('.ba-ticket-archive-action').hover();
+      await page.getByRole('tooltip').getByText(state === 'empty' ? '暂无可归档工单' : '正在同步可归档工单', { exact: true }).waitFor();
+      await page.getByRole('searchbox', { name: '搜索工单' }).hover();
       assert(await page.getByRole('tab', { name: '已归档', exact: true }).isVisible(), 'archive navigation remains reachable in every resource state');
     }
     await page.getByRole('tab', { name: '已归档', exact: true }).click();
@@ -133,6 +137,10 @@ test('ticket board renders resource states with three business states, filters, 
     await render('data');
     const list = page.locator('.ba-task-list > .ba-task-list-row');
     await list.first().waitFor();
+    const archive = page.locator('.ba-ticket-view-controls').getByRole('button', { name: '归档已结束工单', exact: true });
+    await archive.hover();
+    await page.getByRole('tooltip').getByText('归档已结束工单 · 2 项可归档', { exact: true }).waitFor();
+    await page.getByRole('searchbox', { name: '搜索工单' }).hover();
     assert.deepEqual(await list.locator('.ba-task-open > strong').allTextContents(), ['运行兼容测试', '确认发布范围', '已停止验证', '准备周报', '交付设计稿']);
     assert(!(await page.evaluate(() => window.calls)).some(([name]) => name === 'tickets'), 'healthy opening uses the execution-facts snapshot directly');
     await page.getByRole('tab', { name: '已归档', exact: true }).click();
@@ -140,7 +148,7 @@ test('ticket board renders resource states with three business states, filters, 
     assert.equal(await list.count(), 1);
     await page.getByRole('button', { name: /已归档设计稿.*完成/ }).click();
     await page.getByRole('region', { name: '任务详情', exact: true }).waitFor();
-    await page.getByText('查看结果与证据 · 要求版本 1', { exact: true }).click();
+    await page.getByRole('tab', { name: '结果与证据', exact: true }).click();
     assert(await page.getByRole('region', { name: '任务详情', exact: true }).getByText('保留归档成果', { exact: true }).isVisible());
     assert.equal(await page.getByRole('region', { name: '任务详情', exact: true }).getByRole('button', { name: '继续工单', exact: true }).count(), 0);
     await shot('archive-desktop');
@@ -171,7 +179,14 @@ test('ticket board renders resource states with three business states, filters, 
     assert((await page.evaluate(() => window.calls)).some(([name, input]) => name === 'ticketResume' && input.ticketId === 'paused'));
     await board.getByRole('button', { name: /确认发布范围.*等待/ }).click();
     await page.getByRole('region', { name: '任务详情', exact: true }).waitFor();
+    const requirements=page.getByRole('region', { name: '任务详情', exact: true }).getByRole('tab', { name: '任务要求', exact: true });
+    assert.equal(await requirements.getAttribute('aria-selected'),'false');
+    await requirements.click();
     assert(await page.getByRole('region', { name: '任务详情', exact: true }).getByText('确认发布范围：按要求完成并提供证据', { exact: true }).isVisible());
+    assert.equal(await page.getByRole('region', { name: '任务详情', exact: true }).getByRole('button', { name: '任务要求', exact: true }).count(), 0, 'requirements are directly visible in their own tab');
+    await page.getByRole('region', { name: '任务详情', exact: true }).getByRole('tab', { name: '结果与证据', exact: true }).click();
+    await page.getByRole('tabpanel', { name: '结果与证据', exact: true }).getByText('尚无结果', { exact: true }).waitFor();
+    assert(await page.getByRole('tabpanel', { name: '结果与证据', exact: true }).getByText('执行结果保存后会显示在这里。', { exact: true }).isVisible(), 'the result tab is reachable before the first result');
     assert.equal(await page.getByRole('button', { name: '查看执行会话', exact: true }).count(), 0);
     await page.keyboard.press('Escape');
     await board.getByRole('button', { name: /运行兼容测试.*进行/ }).click();
@@ -210,17 +225,12 @@ test('ticket board renders resource states with three business states, filters, 
       await render(state);
       const row=page.locator('.ba-task-list > .ba-task-list-row').filter({has:page.getByText('运行兼容测试',{exact:true})});
       await row.waitFor();
-      assert(await row.getByRole('button',{name:'暂停工单',exact:true}).isEnabled(), 'uncertain and blocked work retains a real pause action');
+      assert.equal(await row.getByRole('button',{name:/暂停工单|停止工单/}).count(),0);
       await row.getByRole('button',{name:/运行兼容测试/}).click();
       const dialog=page.getByRole('region', { name: '任务详情', exact: true }); await dialog.waitFor();
-      assert(await dialog.getByRole('button',{name:'暂停工单',exact:true}).isEnabled());
-      await page.evaluate(()=>window.control.pauseError=true);
-      await dialog.getByRole('button',{name:'暂停工单',exact:true}).click();
-      await dialog.getByRole('alert').getByText('暂停未落账',{exact:true}).waitFor();
-      await page.evaluate(()=>window.control.pauseError=false);
-      await dialog.getByRole('button',{name:'暂停工单',exact:true}).click();
-      assert((await page.evaluate(()=>window.calls)).some(([action,input])=>action==='ticketPause'&&input.ticketId==='running'));
-      await shot('pause-'+state+'-mobile');
+      assert.equal(await dialog.getByRole('button',{name:/暂停工单|停止工单/}).count(),0);
+      assert.equal((await page.evaluate(()=>window.calls)).some(([action])=>['ticketPause','ticketStop'].includes(action)),false);
+      await shot('uncertain-mobile');
     }
     await render('blocked');
     const blocked = page.locator('.ba-task-list > .ba-task-list-row').filter({has:page.getByText('运行兼容测试',{exact:true})});
@@ -260,19 +270,38 @@ test('incremental ticket details keep list nodes, filters, scroll and focus with
       childCounts: { total: 1, completed: 1 },
     } }));
     await detail.getByText('正在整理验证证据', { exact: true }).waitFor();
-    const history = detail.getByRole('button', { name: '已结束步骤 · 1', exact: true });
-    await history.click();
+    await detail.locator('[data-worker-id="child"][data-worker-status="completed"]').waitFor();
+    const timeline = await detail.getByRole('list', { name: '执行时间线', exact: true }).elementHandle();
+    const requirements = detail.getByRole('tab', { name: '任务要求', exact: true });
+    assert.equal(await detail.getByRole('tab', { name: '执行记录', exact: true }).getAttribute('aria-selected'), 'true', 'ticket opens on the execution ledger');
+    await requirements.click();
     await page.evaluate(() => window.updateTicket('extra-20', { execution: {
       instructionRevision: 1, phase: 'executing', updatedAt: '2026-11-09T09:00:01Z',
       worker: { id: 'main', status: 'running', activity: '正在核对最终证据' },
       children: [{ id: 'child', status: 'completed', activity: '已返回检查结果' }],
       childCounts: { total: 1, completed: 1 },
     } }));
+    await detail.getByText('正在核对最终证据', { exact: true }).waitFor({ state: 'attached' });
+    assert.equal(await requirements.getAttribute('aria-selected'), 'true', 'incremental reads preserve the selected tab');
+    await detail.getByRole('tab', { name: '执行记录', exact: true }).click();
     await detail.getByText('正在核对最终证据', { exact: true }).waitFor();
-    assert.equal(await history.getAttribute('aria-expanded'), 'true', 'detail expansion survives incremental reads');
+    assert(await timeline.evaluate(node => node.isConnected), 'tab switches retain the live execution ledger DOM');
     assert(await handle.evaluate(node => node.isConnected), 'incremental facts do not replace the retained row DOM');
     await page.waitForTimeout(3200);
     assert.deepEqual(await page.evaluate(() => window.calls.filter(([name]) => name === 'tickets').map(([, input]) => input)), [{ ticketId: 'extra-20' }, { ticketId: 'extra-20' }], 'healthy updates only fetch the touched ticket, with no three-second full refresh');
+    await detail.getByRole('button', { name: '修订要求', exact: true }).click();
+    assert.equal(await requirements.getAttribute('aria-selected'), 'true', 'revision opens the requirements tab');
+    const target = detail.getByRole('textbox', { name: '任务要求', exact: true });
+    await target.fill('保留跨页签的要求草稿');
+    await detail.getByRole('textbox', { name: '变更原因', exact: true }).fill('补充验证范围');
+    const targetNode = await target.elementHandle();
+    await detail.getByRole('tab', { name: '执行记录', exact: true }).click();
+    await detail.getByText('正在核对最终证据', { exact: true }).waitFor();
+    assert(await targetNode.evaluate(node => node.isConnected), 'revision form remains mounted while another tab is visible');
+    await requirements.click();
+    assert.equal(await target.inputValue(), '保留跨页签的要求草稿');
+    assert.equal(await detail.getByRole('textbox', { name: '变更原因', exact: true }).inputValue(), '补充验证范围');
+    await detail.getByRole('button', { name: '取消', exact: true }).click();
     await detail.getByRole('button', { name: '返回列表', exact: true }).click();
     await detail.waitFor({ state: 'hidden' });
     assert.equal(await search.inputValue(), '历史工作');

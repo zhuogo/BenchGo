@@ -41,12 +41,15 @@ test('only terminal Tickets with matching confirmed worker delivery can enter le
   cases.forEach((value, index) => { const id = `invalid-${index}`; f.ticket(id, value); assert.equal(f.api.recordClosedTicket(id), null); });
   assert.deepEqual(f.api.learningSources().items, []);
   f.ticket('good1');
+  const legacy = JSON.parse(f.db.prepare('SELECT payload FROM sa_results WHERE ticket_id=?').get('good1').payload);
+  f.db.prepare('UPDATE sa_results SET payload=? WHERE ticket_id=?').run(JSON.stringify({ ...legacy, checkpoint: { manifestHash: 'obsolete' } }), 'good1');
   f.ticket('not-closed2', { status: 'waiting', outcome: 'failed' });
   f.api.recordClosedTicket('good1');
   assert.equal(f.api.recordClosedTicket('not-closed2'), null);
   const batch = f.api.learningSources();
   assert.deepEqual(batch.items.map(row => row.status), ['completed']);
   assert.equal(batch.items[0].instructions[0].source.role, 'user');
+  assert.equal(Object.hasOwn(batch.items[0].result, 'checkpoint'), false);
 });
 
 test('global range is stable across scopes, retries and reinstall; cursor commits are idempotent', t => {

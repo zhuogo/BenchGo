@@ -6,8 +6,6 @@ import { join, relative, resolve } from 'node:path';
 import { resolveWatchdogConfig } from '../src/watchdog-config.mjs';
 import { createWatchdogStore, watchdogDigest } from '../src/watchdog-store.mjs';
 import { createWatchdogRuntime } from '../src/watchdog-runtime.mjs';
-import { createExecutionSummaryInput } from '../src/execution-summary-input.mjs';
-import { createWorkerProgressJudge } from '../src/worker-progress-judgement.mjs';
 
 const epoch = Date.parse('2026-11-09T00:00:00.000Z');
 const iso = value => new Date(value).toISOString();
@@ -34,83 +32,7 @@ function facts(now = epoch, overdue = false) {
   return { cursor: 20, currentCursor: 20, observedAt: iso(now), bootId: 'boot-1', complete: true,
     truncated: false, schedulerHeartbeat: { at: iso(now) }, executions: [execution(now, overdue)] };
 }
-function observedFiles(now, cursor = 20) {
-  const current = facts(now), execution = current.executions[0]; current.cursor = current.currentCursor = cursor;
-  const entries = [0, 1].map(index => ({ ticketId: 'ticket', runId: 'run', instructionRevision: 1, fence: 1,
-    seq: cursor - 2 + index, kind: 'artifact-observation', data: { sequence: cursor - 2 + index,
-      startedAt: iso(now - (index ? 500 : 1500)), completedAt: iso(now - (index ? 0 : 1000)),
-      coverage: { kind: 'protected-workspace-files', complete: true, truncated: false, exclusionsVersion: 1 },
-      comparison: { beforeFiles: 1, afterFiles: 1, added: 0, modified: 0, deleted: 0, unchanged: 1, netChanged: false } } }));
-  entries.push({ ticketId: 'ticket', runId: 'run', instructionRevision: 1, fence: 1, seq: cursor, kind: 'tool/result', data: {} });
-  execution.modelEvidence = createExecutionSummaryInput({ ticketId: 'ticket', runId: 'run', instructionRevision: 1,
-    watermark: cursor, target: '生成本地报告', acceptance: '报告文件完成', facts: { entries, observedAt: iso(now),
-      runtime: { assignment: { fence: 1 }, artifactCoverage: { known: true, complete: true, lastSequence: cursor - 1 } },
-      projections: [{ ticketId: 'ticket', runId: 'run', instructionRevision: 1, complete: true,
-        state: { status: 'running', activity: 'working', tools: { calls: cursor, results: cursor } } }] } });
-  return current;
-}
-
-test('an alive Worker with observed unchanged files reaches the model before any mechanical fault and needs consecutive evidence', async t => {
-  let f, modelCalls = 0;
-  const worker = createWorkerProgressJudge({ now: () => f.time, config: { minObservationMs: 1000, minIntervalMs: 0 },
-    requestText: async request => { modelCalls++; return { text: JSON.stringify({ classification: 'no-progress', outputRelevance: 'relevant',
-      reason: '覆盖的报告文件无净变化', evidenceRefs: request.input.outputObservation.observations.map(row => row.evidenceRef), uncertainty: 'medium' }) }; } });
-  t.after(() => worker.dispose());
-  f = await fixture(t, { readFacts: api => observedFiles(api.time, 20 + Math.round((api.time - epoch) / 60000)),
-    judge: ({ evidence, signal }) => worker.evaluate({ ...evidence, signal }) });
-  const first = await f.runtime.check(f.receipt());
-  assert.equal(first.outcome, 'observed'); assert.equal(modelCalls, 1); assert.equal(f.calls.signals.length, 0);
-  f.time += 60000;
-  const next = await f.runtime.check(f.receipt());
-  assert.equal(modelCalls, 2); assert.deepEqual(next.findings, ['MODEL_NO_PROGRESS']);
-  assert.equal(f.calls.signals.length, 1); assert.equal(f.calls.signals[0].kind, 'model');
-  assert.match(f.calls.signals[0].summary, /受保护文件/);
-});
-
-test('file candidates exempt waits, stale identities, unknown or changed outputs and missing genuine tool activity', async t => {
-  for (const alter of [
-    value => { value.executions[0].wait.kind = 'user'; },
-    value => { value.executions[0].wait.kind = 'approval'; },
-    value => { value.executions[0].ticket.status = 'waiting'; value.executions[0].ticket.executionControl = { paused: true }; value.executions[0].wait.kind = 'paused'; },
-    value => { value.executions[0].wait = { kind: 'long-operation', expectedUntil: iso(epoch + 60000) }; },
-    value => { value.executions[0].modelEvidence.outputObservation = 'unknown'; },
-    value => { value.executions[0].modelEvidence.binding.fence = 2; },
-    value => { value.executions[0].modelEvidence.counts.results = 0; },
-    value => { value.executions[0].modelEvidence.events = []; },
-    value => { value.executions[0].modelEvidence.outputObservation.observations[1].sequence += 2; },
-  ]) {
-    const current = observedFiles(epoch); alter(current);
-    const f = await fixture(t, { readFacts: () => current, judge: () => assert.fail('insufficient output evidence must not trigger a candidate') });
-    await f.runtime.check(f.receipt()); assert.equal(f.calls.signals.length, 0);
-  }
-});
-
-test('an older positive file observation cannot resolve a newer model incident, while a new positive observation can', async t => {
-  let phase = 0, judged = 0;
-  const f = await fixture(t, { readFacts: api => {
-    const current = observedFiles(api.time, 20 + phase);
-    if (phase) {
-      const observation = current.executions[0].modelEvidence.outputObservation;
-      const changed = observation.observations[phase === 1 ? 0 : 1];
-      changed.comparison = { beforeFiles: 1, afterFiles: 1, added: 0, modified: 1, deleted: 0, unchanged: 0, netChanged: true };
-      observation.comparison = { added: 0, modified: 1, deleted: 0, netChanged: true };
-    }
-    return current;
-  }, judge: async () => { judged++; return { status: 'judged', classification: 'no-progress', signalEligible: true,
-    reason: '受保护文件检查点无净变化', evidenceWatermark: 20 }; } });
-  await f.runtime.check(f.receipt());
-  assert.equal(judged, 1); assert.equal(f.store.snapshot().incidents[0].active, true);
-  phase = 1; f.time += 60000;
-  await f.runtime.check(f.receipt());
-  assert.equal(f.store.snapshot().incidents[0].active, true);
-  assert.deepEqual(f.calls.signals.map(row => row.phase), ['opened']);
-  phase = 2; f.time += 60000;
-  await f.runtime.check(f.receipt());
-  assert.equal(judged, 1); assert.equal(f.store.snapshot().incidents[0].active, false);
-  assert.deepEqual(f.calls.signals.map(row => row.phase), ['opened', 'resolved']);
-});
-
-async function fixture(t, { config: overrides = {}, readFacts, sendSignal, judge } = {}) {
+async function fixture(t, { config: overrides = {}, readFacts, sendSignal } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-watchdog-runtime-'));
   let time = epoch, store, runtime;
   const config = resolveWatchdogConfig({ targetId: 'fixture-target', targetUrl: 'http://127.0.0.1:3080',
@@ -130,7 +52,7 @@ async function fixture(t, { config: overrides = {}, readFacts, sendSignal, judge
       await runtime?.stop();
       await store?.close();
       store = await createWatchdogStore({ directory, config, now: () => time });
-      runtime = createWatchdogRuntime({ store, config, client, judge, now: () => time });
+      runtime = createWatchdogRuntime({ store, config, client, now: () => time });
     },
   };
   const client = {
@@ -241,7 +163,7 @@ test('unknown evidence never reports healthy or resolves a fault before fresh au
 
 test('disabled, paused and maintenance modes journal a skipped check without external work', async t => {
   for (const config of [{ enabled: false }, { paused: true }, { maintenanceUntil: iso(epoch + 60000) }]) {
-    const f = await fixture(t, { config, judge: () => assert.fail('maintenance must not invoke the judge') });
+    const f = await fixture(t, { config });
     const check = await f.runtime.check(f.receipt());
     assert.equal(check.status, 'completed');
     assert.equal(check.outcome, 'maintenance');
@@ -273,32 +195,6 @@ test('concurrent Schedule deliveries retain the running occurrence and only the 
   assert.deepEqual(f.store.snapshot().checks.map(row => row.scheduledAt), [iso(epoch), iso(epoch + 120000)]);
   assert.equal((await f.runtime.check(f.receipt(epoch + 60000))).status, 'superseded');
   assert.equal(f.calls.probes, 2);
-});
-
-test('a hung auxiliary judge times out after mechanical incidents are persisted and cannot block delivery', async t => {
-  let f, judgeSignal, persisted;
-  f = await fixture(t, { readFacts: api => facts(api.time, true), judge: async ({ signal }) => {
-    judgeSignal = signal;
-    persisted = JSON.parse(await readFile(f.store.filename, 'utf8'));
-    return new Promise(() => {});
-  } });
-  // AbortSignal.timeout is unref'ed; keep the test alive and fail if the runtime has no hard bound.
-  let timer;
-  try {
-    const check = await Promise.race([f.runtime.check(f.receipt()), new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error('hung judge did not honor the runtime bound')), 2000);
-    })]);
-    assert.equal(judgeSignal.aborted, true);
-    assert.equal(persisted.checks[0].status, 'running');
-    assert.equal(persisted.incidents[0].reasonCode, 'REQUEST_DEADLINE_EXCEEDED');
-    assert.equal(persisted.signals[0].state, 'pending');
-    assert.equal(check.status, 'completed');
-    assert.equal(check.outcome, 'fault');
-    assert.equal(check.model, 'degraded');
-    assert(f.store.snapshot().degraded.includes('MODEL_JUDGE_UNAVAILABLE'));
-    assert.equal(f.store.snapshot().signals[0].state, 'accepted');
-    assert.equal(f.calls.signals.length, 1);
-  } finally { clearTimeout(timer); }
 });
 
 test('failed signals retry the same durable id and replayed snapshots cannot inflate escalation observations', async t => {
@@ -351,4 +247,12 @@ test('invalid receipts do not probe and shutdown interrupts an uncooperative in-
   assert.equal(f.store.snapshot().incidents.length, 0);
   assert.deepEqual(await f.runtime.check(f.receipt(epoch + 60000)), { status: 'stopped' });
   assert.equal(f.calls.probes, 1);
+});
+
+for (const legacy of [{ kind: 'model', reasonCode: 'MODEL_NO_PROGRESS' }, { kind: 'execution', reasonCode: 'RECOVERY_NOT_CONVERGING' }]) test('retired signals remain in history without delivery: ' + legacy.reasonCode, async t => {
+  const f = await fixture(t);
+  await f.store.update(state => state.signals.push({ id: 'legacy', ...legacy, state: 'pending', incidentKey: 'old' }));
+  await f.runtime.check(f.receipt());
+  assert.equal(f.calls.signals.length, 0);
+  assert.equal(f.store.snapshot().signals.find(row => row.id === 'legacy').state, 'pending');
 });

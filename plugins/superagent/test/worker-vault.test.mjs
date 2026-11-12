@@ -16,14 +16,9 @@ async function fixture(t, { approve } = {}) {
   const run = database.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence, sessionId: 'worker-session', directory: '/isolated' });
   database.updateRun(run.id, { owner: assignment.owner, fence: assignment.fence, state: 'submitted' });
   const session = Session.create(SessionId('worker-session')), agent = { id: 'worker-session', session };
-  const vault = createVault({ credentials: { readRecord: async key => structuredClone(records.get(key)), modifyRecord: async (key, fn) => { const next = await fn(structuredClone(records.get(key))); records.set(key, next); return structuredClone(next); } }, fetcher: async (url, options) => {
-    sends++; assert.equal(url, 'https://bound.test/submit'); assert.equal(options.headers.Authorization, 'Bearer VERY_PRIVATE_KEY');
-    if (f.failRequest) throw Error('VERY_PRIVATE_KEY');
-    f.sentBody = options.body;
-    return new Response('VERY_PRIVATE_KEY', { status: 202 });
-  } });
+  const vault = createVault({ credentials: { readRecord: async key => structuredClone(records.get(key)), modifyRecord: async (key, fn) => { const next = await fn(structuredClone(records.get(key))); records.set(key, next); return structuredClone(next); } } });
   t.after(() => { vault.dispose(); database.close(); });
-  const { entry } = await vault.save({ label: 'Private API', target: 'https://bound.test/submit', method: 'POST', placement: 'header', field: 'Authorization', prefix: 'bearer', secret: 'VERY_PRIVATE_KEY' });
+  const { entry } = await vault.save({ address: 'Private API', credentials: [{ name: '密钥', value: 'VERY_PRIVATE_KEY' }] });
   const tools = new Map(), approval = { request: async input => { approvals++; assert.equal(input.agent, agent); return approve ? approve(f, input) : 'allowed-once'; } };
   const ctx = { get: key => key === 'benchgoVault' ? vault : key === 'approval' ? approval : undefined };
   const scope = { get: ctx.get, tools: { register: tool => tools.set(tool.name, tool) } };

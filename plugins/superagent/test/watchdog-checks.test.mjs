@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { inspectWatchdogFacts } from '../src/watchdog-checks.mjs';
 
 const epoch = Date.parse('2026-11-09T00:00:00.000Z');
-const config = { observationWindowMs: 120_000, intervalSeconds: 60, escalationAttempts: 3 };
+const config = { observationWindowMs: 120_000, intervalSeconds: 60 };
 const iso = value => new Date(value).toISOString();
 function runtime(now = epoch) {
   return {
@@ -14,7 +14,6 @@ function runtime(now = epoch) {
     request: { state: 'settled', startedAt: iso(now - 1000), settledAt: iso(now), deadline: null },
     wait: { kind: 'none', since: null, expectedUntil: null },
     stop: { requestedAt: null, confirmedAt: null, confirmationOverdue: false },
-    recovery: null,
     watermarks: [{ sessionId: 'session', sourceSeq: 20, flushedSeq: 20, complete: true }],
   };
 }
@@ -129,13 +128,11 @@ test('a preceding stop acknowledgement cannot confirm a newer stop request', () 
 });
 
 test('user, approval, paused and bounded asynchronous waits are exempt', () => {
-  for (const kind of ['user', 'approval', 'paused', 'background-job', 'long-operation', 'continuation']) {
+  for (const kind of ['user', 'approval', 'paused', 'background-job', 'long-operation']) {
     const value = observeTwice((row, now) => {
       row.executionAlive.status = 'absent'; row.assignment.leaseUntil = epoch - 1;
       row.request = { state: 'inflight', deadline: iso(epoch - 1) };
       row.wait = { kind, expectedUntil: iso(now + 60000) };
-      row.recovery = { reasonCode: 'session-interrupted', attempts: 9, automatic: true,
-        escalated: true, nextCheckAt: iso(now + 60000) };
     });
     assert.deepEqual(value.last.findings, [], kind);
   }
@@ -153,21 +150,21 @@ test('unknown and unbounded waits do not infer a hang or clear a previous fault'
   }
 });
 
-test('repeated recovery needs the attempt threshold and a continuous window', () => {
-  const pending = observeTwice(row => {
-    row.assignment.state = 'uncertain';
-    row.recovery = { reasonCode: 'session-interrupted', attempts: 3, automatic: true, escalated: false };
-  });
-  assert.deepEqual(pending.first.findings, []);
-  assert.deepEqual(codes(pending.last), ['RECOVERY_NOT_CONVERGING']);
-  const underLimit = observeTwice(row => {
-    row.recovery = { reasonCode: 'session-interrupted', attempts: 2, automatic: true, escalated: false };
-  });
-  assert.deepEqual(underLimit.last.findings, []);
-  const noAutomaticWork = observeTwice(row => {
-    row.recovery = { reasonCode: 'session-interrupted', attempts: 9, automatic: false, escalated: false };
-  });
-  assert.deepEqual(noAutomaticWork.last.findings, []);
+test('retired recovery metadata cannot trigger an alarm or clear a real execution fault', () => {
+  const old = observeTwice(row => { row.executionAlive.status = 'absent'; }).last;
+  const facts = snapshot(epoch + 180000), row = facts.executions[0];
+  row.executionAlive.status = 'absent';
+  row.wait = { kind: 'continuation' };
+  row.recovery = { reasonCode: 'session-interrupted', attempts: 99, automatic: true,
+    escalated: true, nextCheckAt: iso(epoch + 240000) };
+  const value = inspect(facts, epoch + 180000, old.candidates);
+  assert.deepEqual(value.findings, []);
+  assert.deepEqual(value.resolvedKeys, []);
+  assert.equal(Object.values(value.candidates)[0].interrupted, true);
+  assert(!value.conditions.some(item => item.reasonCode === 'RECOVERY_NOT_CONVERGING'));
+  row.wait = { kind: 'none' };
+  row.assignment.state = 'uncertain';
+  assert.deepEqual(inspect(facts, epoch + 180000).findings, []);
 });
 
 test('paused and terminal executions retire prior faults without requesting recovery', () => {
@@ -197,18 +194,6 @@ test('unknown, missing and stale execution facts preserve incidents without repe
     assert.deepEqual(value.resolvedKeys, []);
     assert.equal(Object.keys(value.candidates).length, 1);
   }
-});
-
-test('a changed recovery reason begins a new observation window without resolving the prior incident', () => {
-  const old = observeTwice(row => {
-    row.recovery = { reasonCode: 'session-interrupted', attempts: 3, automatic: true, escalated: false };
-  }).last;
-  const facts = snapshot(epoch + 180000);
-  facts.executions[0].recovery = { reasonCode: 'external-effects-unknown', attempts: 3, automatic: true, escalated: false };
-  const value = inspect(facts, epoch + 180000, old.candidates);
-  assert.deepEqual(value.findings, []);
-  assert.deepEqual(value.resolvedKeys, []);
-  assert.equal(Object.values(value.candidates)[0].observations, 1);
 });
 
 test('replay, clock rollback, host restart and observation gaps do not complete a stale window', () => {
@@ -277,7 +262,7 @@ test('previous candidate payloads and ignored input cannot leak arbitrary string
 });
 
 test('invalid observation configuration fails explicitly', () => {
-  for (const patch of [{ observationWindowMs: 0 }, { escalationAttempts: 0 }, { intervalSeconds: -1 }]) {
+  for (const patch of [{ observationWindowMs: 0 }, { intervalSeconds: -1 }]) {
     assert.throws(() => inspectWatchdogFacts({ facts: snapshot(), now: epoch, config: { ...config, ...patch } }), /configuration/);
   }
 });

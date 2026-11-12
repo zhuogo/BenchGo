@@ -7,13 +7,14 @@ import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 const labels = { 'USER.md': '主人档案', 'IDENTITY.md': '我的身份', 'SOUL.md': '我的人设', 'AGENTS.md': '工作约定', 'TOOLS.md': '工具笔记', 'MEMORY.md': '共同记忆' };
 const descriptions = { 'USER.md': '你的偏好、背景与习惯，让每次协作更合拍。', 'IDENTITY.md': '助手的名字与身份，在每一次对话中保持一致。', 'SOUL.md': '定义助手的性格、表达方式与价值取向。', 'AGENTS.md': '把协作原则与工作流程，变成助手遵循的约定。', 'TOOLS.md': '记录工具的用法与环境细节，减少重复说明。', 'MEMORY.md': '值得长期记住的事情，留在你们的共同记忆里。' };
 
-export function AssistantDocuments({ api, refresh, memory = false, onDirtyChange }) {
+export function AssistantDocuments({ api, refresh, memory = false, onDirtyChange, requestedDocument }) {
   const [confirm, confirmation] = useConfirmation();
-  const initial = memory ? 'MEMORY.md' : 'USER.md', panelId = useId();
+  const initial = memory ? 'MEMORY.md' : requestedDocument !== 'MEMORY.md' && labels[requestedDocument] ? requestedDocument : 'USER.md', panelId = useId();
   const [selected, setSelected] = useState(initial);
   const [base, setBase] = useState(null), [draft, setDraft] = useState('');
   const [preview, setPreview] = useState(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false);
   const generation = useRef(0);
+  const lastRequested = useRef(requestedDocument);
   const dirty = !!base && draft !== base.content;
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
   async function load(name) {
@@ -29,6 +30,18 @@ export function AssistantDocuments({ api, refresh, memory = false, onDirtyChange
     finally { if (at === generation.current) setBusy(false); }
   }
   useEffect(() => { void load(initial); return () => { generation.current++; }; }, []);
+  useEffect(() => {
+    if (lastRequested.current === requestedDocument || busy) return;
+    lastRequested.current = requestedDocument;
+    if (memory || !labels[requestedDocument] || requestedDocument === 'MEMORY.md' || selected === requestedDocument) return;
+    let active = true;
+    const navigate = async () => {
+      if (dirty && !await confirm({ title: '切换档案？', description: '当前档案有未保存的修改，切换会放弃这些修改。', confirmLabel: '放弃并切换', cancelLabel: '继续编辑', destructive: true })) return;
+      if (active) await load(requestedDocument);
+    };
+    void navigate();
+    return () => { active = false; };
+  }, [requestedDocument, busy]);
   async function save() {
     setBusy(true); setError(''); setNotice('');
     try {

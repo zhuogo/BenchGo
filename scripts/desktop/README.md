@@ -39,7 +39,7 @@ npm run package:plus:win
 
 ## 数据和更新边界
 
-开发预览需已有上述打包应用。网页或业务模块变更执行 `npm run reload:plus` 重建，再刷新浏览器；它不重建服务器种子，也不重启 Web。`npm run build:plus` 的完整构建包含服务器种子，两条命令的交付范围不同。
+开发预览需已有上述打包应用。网页或业务模块变更执行 `npm run reload:plus` 重建，将运行源码、共享文件、模块与浏览器产物同步到已启用的受管 Desktop 安装；浏览器刷新更新前端。默认 HMR 忽略安装副本所在的隐藏目录与 `node_modules`，后端还需官方插件重载，不能用文件同步成功冒充运行生效。该命令不改登记、依赖、用户配置，不重建服务器种子，也不重启 Web；新增依赖或入口仍走开发登记同步。`npm run build:plus` 的完整构建包含服务器种子，两条命令的交付范围不同。
 
 appId 为 `cn.draftgo.benchgo`，Electron 用户界面数据与原版隔离。Harness 工作数据仍遵循官方 `DSH_HOME`，默认 `~/.dsh`，Desktop profile 为 `profiles/desktop`。不要同时运行原版 Desktop 和 Plus 使用同一个 profile。现有 profile 的其他插件和配置保留；第一次将旧直接 Plus bundle 转为组合 bundle，后续不强行恢复用户禁用。
 

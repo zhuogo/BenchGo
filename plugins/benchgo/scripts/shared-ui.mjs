@@ -1,5 +1,6 @@
 import { compile } from '@tailwindcss/node';
-import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, readdir, mkdir } from 'node:fs/promises';
+import { writeArtifact } from './write-artifact.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -71,5 +72,5 @@ export async function writeUiLicenses(output) {
   }
   for (const name of ['@radix-ui/react-slot', '@radix-ui/react-collapsible', '@radix-ui/react-dialog', 'class-variance-authority', 'clsx', 'tailwind-merge', 'tailwindcss']) await collect(name);
   await mkdir(dirname(output), { recursive: true });
-  await writeFile(output, sections.join('\n\n'));
+  await writeArtifact(output, sections.join('\n\n'));
 }

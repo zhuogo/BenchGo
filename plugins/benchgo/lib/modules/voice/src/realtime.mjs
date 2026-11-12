@@ -86,8 +86,9 @@ export class RealtimeASR {
     });
     s.signal.throwIfAborted();
   }
-  async open(config, signal, callId = '') {
+  async open(config, signal, callId = '', { maxDurationMs = 30 * 60 * 1000 } = {}) {
     signal.throwIfAborted();
+    if (!Number.isSafeInteger(maxDurationMs) || maxDurationMs <= 0 || maxDurationMs > 24 * 60 * 60 * 1000) throw new VoiceError('Invalid realtime ASR duration', 400);
     if (this.sessions.size >= 2) throw new VoiceError('Too many active realtime recognizers', 429);
     const id = randomUUID(), s = { id, config, signal, callId, socketEpoch: 0, queue: [], consumer: null, finished: false, attached: false };
     this.sessions.set(id, s);
@@ -97,7 +98,7 @@ export class RealtimeASR {
       else { s.queue.push(data); if (s.queue.length > 128) this.close(id); }
     };
     s.abort = () => this.close(id); signal.addEventListener('abort', s.abort, { once: true });
-    s.timer = setTimeout(() => this.close(id), 30 * 60 * 1000); s.timer.unref?.();
+    s.timer = setTimeout(() => this.close(id), maxDurationMs); s.timer.unref?.();
     try {
       await this.connect(s); s.attachTimer = setTimeout(() => this.close(id), 10000); s.attachTimer.unref?.(); return id;
     } catch (error) { this.close(id); throw error; }

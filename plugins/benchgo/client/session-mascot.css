@@ -1,0 +1,29 @@
+.bg-session-mascot{position:absolute;right:12px;bottom:calc(100% + 8px);width:60px;height:42px;pointer-events:none;user-select:none;z-index:0}
+.bg-session-mascot-arrival,.bg-session-mascot-body{width:100%;height:100%;transform-origin:50% 90%}
+.bg-session-mascot-art{display:block;position:relative;width:100%;height:100%}
+.bg-session-mascot-art>svg{position:absolute;width:81px;height:auto;left:-10.5px;top:-17.25px;overflow:visible}
+.bg-session-mascot-art [data-effect=soft-shadow]{filter:none}
+.bg-session-mascot-art [data-part=eyes]{transform-box:fill-box;transform-origin:center}
+.bg-session-mascot .benchgo-pet-avatar{position:absolute;bottom:0;left:0}
+.bg-session-mascot[data-motion=on] .bg-session-mascot-arrival{animation:bg-session-pet-arrive .7s cubic-bezier(.22,1,.36,1) both}
+.bg-session-mascot[data-motion=on] .bg-session-mascot-body{animation:bg-session-pet-play 32s ease-in-out .7s infinite}
+.bg-session-mascot[data-motion=on] [data-part=eyes]{animation:bg-session-pet-eyes 13s ease-in-out 1.4s infinite}
+/* Short gestures separated by long rests: peek, nod, hop, lean, shuffle, then settle. */
+@keyframes bg-session-pet-arrive{from{opacity:0;transform:translateY(14px) rotate(9deg)}to{opacity:1;transform:none}}
+@keyframes bg-session-pet-play{
+  0%,7%,17%,27%,38%,49%,62%,75%,88%,100%{transform:none}
+  10%{transform:translateY(-4px) rotate(-8deg)}13%{transform:rotate(5deg)}
+  30%,34%{transform:translateY(3px) rotate(4deg)}32%,36%{transform:translateY(-2px)}
+  42%{transform:translateY(2px) rotate(-3deg)}44%{transform:translateY(-13px) rotate(5deg)}47%{transform:translateY(-4px) rotate(-2deg)}
+  55%{transform:translateX(-5px) rotate(-10deg)}58%{transform:translateX(3px) rotate(6deg)}
+  67%{transform:translateX(-8px) rotate(-4deg)}70%{transform:translateX(6px) rotate(4deg)}73%{transform:translateX(-3px)}
+  81%{transform:translateY(-5px) rotate(3deg)}84%{transform:rotate(-3deg)}
+}
+@keyframes bg-session-pet-eyes{
+  0%,9%,12%,39%,42%,67%,70%,100%{transform:none}
+  10%,40%{transform:scaleY(.08)}
+  20%,27%{transform:translateX(-17px)}30%,35%{transform:translateX(15px)}
+  68%{transform:scaleY(.08)}80%,87%{transform:translateY(7px)}
+}
+@media(max-width:540px){.bg-session-mascot{right:8px;width:48px;height:34px}.bg-session-mascot-art>svg{width:64.8px;left:-8.4px;top:-13.8px}.bg-session-mascot .benchgo-pet-avatar{width:48px!important;height:48px!important}}
+@media(prefers-reduced-motion:reduce){.bg-session-mascot *{animation:none!important}}

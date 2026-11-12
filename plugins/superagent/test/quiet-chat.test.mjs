@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { quietChatRows } from '../client/quiet-chat.mjs';
-import { projectReplyStream } from '../client/reply-stream.mjs';
+import { projectReplyStream, projectReplyRows, conversationActivity } from '../client/reply-stream.mjs';
 import { continuationRecovery, ticketSnapshot } from '../client/ticket-state.mjs';
 import { PartialArguments } from '@deepseek-ai/dsh-util-values';
 import { readFileSync } from 'node:fs';
@@ -10,7 +10,7 @@ import { runInNewContext } from 'node:vm';
 
 test('official submission is visible immediately, reconciles by identity and withdraws on failure', () => {
   const pending = { requestId: 'rpc-1', placement: 'transcript', text: '你好', time: 1, attachments: [] };
-  const session = { pendingSubmissions: [pending, { ...pending, requestId: 'queued', placement: 'queued' }] };
+  const session = { pendingSubmissions: [pending] };
   assert.deepEqual(quietChatRows({}, 'main', session).map(row => row.key), ['pending:rpc-1']);
   assert.equal(quietChatRows({}, 'main', { pendingSubmissions: [] }).length, 0);
   const user = { kind: 'user', seq: 12, source: { kind: 'user', rpcId: 'rpc-1' }, content: [{ type: 'text', text: '你好' }], time: 1 };
@@ -22,6 +22,51 @@ test('official submission is visible immediately, reconciles by identity and wit
   assert.equal(quietChatRows(history, 'main', session, repeated).length, 2);
   assert.equal(quietChatRows({ messages: [{ id: 'saved', role: 'user', seq: 12, rpcId: 'rpc-1' }] }, 'main', session).length, 1, 'history may arrive before official live nodes');
   assert.equal(quietChatRows(history, 'main', {}, { legacy: { nodes: [{ ...user, seq: 1, source: { kind: 'user', rpcId: 'old' } }] } }).length, 1, 'live user nodes cannot expose older unloaded pages');
+});
+
+test('running human input remains visible from accepted echo through official inbox, admission and durable history', () => {
+  for (const [target, placement] of [['next-step', 'steering'], ['next-turn', 'queued']]) {
+    const pending = { requestId: 'rpc', placement, text: '补充要求', time: 10, attachments: [] };
+    const message = { id: 'human', source: { kind: 'user', rpcId: 'rpc' }, content: [{ type: 'text', text: '补充要求' }] };
+    const inbox = { [target]: [message, { ...message, id: 'internal', source: { kind: 'benchgo-ticket-reply' } }] };
+    const echo = quietChatRows({}, 'main', { pendingSubmissions: [pending] });
+    assert.equal(echo.length, 1); assert.equal(echo[0].submissionState, placement);
+    const accepted = quietChatRows({}, 'main', { pendingSubmissions: [pending] }, undefined, inbox);
+    assert.equal(accepted.length, 1); assert.equal(accepted[0].text, '补充要求');
+    assert.equal(accepted[0].key, echo[0].key);
+    const afterEchoRetired = quietChatRows({}, 'main', {}, undefined, inbox);
+    assert.equal(afterEchoRetired.length, 1); assert.equal(afterEchoRetired[0].submissionState, placement);
+    const chat = { legacy: { nodes: [{ ...message, kind: 'steering', messageId: message.id, seq: 5, time: 10 }] } };
+    const admitted = quietChatRows({}, 'main', { pendingSubmissions: [pending] }, chat, inbox);
+    assert.equal(admitted.length, 1); assert.equal(admitted[0].submissionState, undefined);
+    const history = { messages: [{ id: message.id, rpcId: 'rpc', seq: 5, role: 'user', text: '补充要求', time: 10 }] };
+    const saved = quietChatRows(history, 'main', { pendingSubmissions: [pending] }, chat, inbox);
+    assert.equal(saved.length, 1); assert.equal(saved[0].id, 'human');
+    assert.equal(quietChatRows({}, 'main', {}, undefined, { [target]: [] }).length, 0, 'cancelled input has no retained local queue');
+  }
+});
+
+test('private scheduling, recovery and execution requests cannot masquerade as human messages or send failures', () => {
+  const requests = ['ticketReply', 'ticketState', 'executionInput'].flatMap(key => ['queued', 'failed', 'uncertain'].map(status => ({
+    threadId: 'main', requestId: `${key}:${status}`, status, text: 'PRIVATE_NOTICE', error: 'PRIVATE_ERROR', [key]: {},
+  })));
+  requests.push({ threadId: 'main', requestId: 'schedule', status: 'failed', text: 'PRIVATE_SCHEDULE',
+    message: { source: { kind: 'schedule' } } });
+  assert.deepEqual(quietChatRows({ requests, messages: [{ id: 'private', role: 'user', text: 'PRIVATE_NOTICE', source: { kind: 'benchgo-ticket-reply' } }] }), []);
+});
+
+test('official inbox order survives retired echoes, edited queue order and skewed client clocks', () => {
+  const message = id => ({ id, source: { kind: 'user', rpcId: id }, content: [{ type: 'text', text: id }] });
+  const history = { messages: [{ id: 'reply', role: 'assistant', kind: 'final', text: '已有回复', time: 50 }] };
+  const pending = id => ({ requestId: id, placement: 'queued', text: id, time: id === 'a' ? 100 : 1 });
+  for (const echoes of [[], [pending('b')], [pending('a'), pending('b')]]) {
+    const rows = quietChatRows(history, 'main', { pendingSubmissions: echoes }, undefined, { 'next-turn': [message('a'), message('b')] });
+    assert.deepEqual(rows.map(row => row.text), ['已有回复', 'a', 'b']);
+  }
+  const reordered = quietChatRows(history, 'main', { pendingSubmissions: [pending('a'), pending('b')] }, undefined, { 'next-turn': [message('b'), message('a')] });
+  assert.deepEqual(reordered.map(row => row.text), ['已有回复', 'b', 'a']);
+  const newlyAccepted = quietChatRows(history, 'main', { pendingSubmissions: [pending('c')] }, undefined, { 'next-turn': [message('a'), message('b')] });
+  assert.deepEqual(newlyAccepted.map(row => row.text), ['已有回复', 'a', 'b', 'c']);
 });
 
 test('quiet chat admits user and explicit final only, never raw or streaming steps', () => {
@@ -37,8 +82,8 @@ test('quiet chat admits user and explicit final only, never raw or streaming ste
 
 test('delivery is source-bound, deduplicated, and ordered with final replies', () => {
   const history = { messages: [{ id: 'u', role: 'user', time: 1 }, { id: 'f', role: 'assistant', kind: 'final', time: 3 }], notifications: [
-    { id: 'n', threadId: 'side', text: 'Done', createdAt: 2 },
-    { id: 'n', threadId: 'side', text: 'Done', createdAt: 2 },
+    { id: 'n', type: 'ticket.result', origin: 'router', publication: { action: 'deliver' }, threadId: 'side', text: 'Done', createdAt: 2 },
+    { id: 'n', type: 'ticket.result', origin: 'router', publication: { action: 'deliver' }, threadId: 'side', text: 'Done', createdAt: 2 },
     { id: 'unknown', text: 'Unbound' },
     { id: 'empty', threadId: 'side', text: '' },
   ] };
@@ -83,7 +128,7 @@ test('chat hides legacy metadata and Worker drafts while preserving Router expre
     { eventId: 'ordinary-ask', threadId: 'main', text: '要继续吗？', options: ['继续'] },
     { ...question, eventId: 'missing-card', attention: undefined },
   ];
-  assert.deepEqual(quietChatRows({ notifications }).map(row => row.eventId).sort(), ['ordinary-ask', 'question', 'router']);
+  assert.deepEqual(quietChatRows({ notifications }).map(row => row.eventId).sort(), ['question', 'router']);
   assert.deepEqual(quietChatRows({ messages: [{ id: 'old', role: 'assistant', kind: 'final', origin: 'worker', text: '旧原稿' }] }), []);
 });
 
@@ -124,8 +169,8 @@ test('option accompanies its body and uses the validated endpoint, never approva
   const code = transformSync(readFileSync(new URL('../client/quiet-chat.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
   const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null && x !== false) }), useState: value => [value, () => {}], useRef: () => ({ current: null }), useEffect() {}, useSyncExternalStore: (_subscribe, snapshot) => snapshot() };
   const module = { exports: {} }, calls = [];
-  runInNewContext(code, { module, exports: module.exports, require: id => id.endsWith('approval-review.jsx') ? { useApprovalIndex: () => ({ entries: [], current: { current: [] } }), InlineApproval: 'InlineApproval' } : id.endsWith('approval-flow.mjs') ? { approvalReminderNavigation: { subscribe() {}, getSnapshot: () => null } } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('ticket-state.mjs') ? { continuationRecovery, ticketSnapshot } : id.endsWith('ticket-attention.jsx') ? { TicketAttention: 'TicketAttention' } : id.endsWith('message-actions.jsx') ? { MessageActions: 'MessageActions' } : id === 'react' ? react : id.endsWith('use-chat-scroll.jsx') ? { useChatScroll: () => ({ root: null, host: null }) } : id.endsWith('quiet-chat.mjs') ? { quietChatRows } : id.endsWith('reply-stream.mjs') ? { projectReplyStream } : {} });
-  const tree = module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side', api: async (...args) => calls.push(args), history: { notifications: [{ eventId: 'e', threadId: 'side', text: '方案已准备好', options: ['就这么办'] }] } } });
+  runInNewContext(code, { module, exports: module.exports, require: id => id.endsWith('approval-review.jsx') ? { useApprovalIndex: () => ({ entries: [], current: { current: [] } }), InlineApproval: 'InlineApproval' } : id.endsWith('approval-flow.mjs') ? { approvalReminderNavigation: { subscribe() {}, getSnapshot: () => null } } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('ticket-state.mjs') ? { continuationRecovery, ticketSnapshot } : id.endsWith('ticket-attention.jsx') ? { TicketAttention: 'TicketAttention' } : id.endsWith('message-actions.jsx') ? { MessageActions: 'MessageActions' } : id === 'react' ? react : id.endsWith('use-chat-scroll.jsx') ? { useChatScroll: () => ({ root: null, host: null }) } : id.endsWith('quiet-chat.mjs') ? { quietChatRows } : id.endsWith('reply-stream.mjs') ? { projectReplyStream, projectReplyRows, conversationActivity } : id.endsWith('conversation-activity.jsx') ? { ConversationActivity: 'ConversationActivity' } : {} });
+  const tree = module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side', api: async (...args) => calls.push(args), history: { notifications: [{ eventId: 'e', type: 'ticket.result', origin: 'router', publication: { action: 'ask' }, threadId: 'side', text: '方案已准备好', options: ['就这么办'] }] } } });
   const walk = node => node && typeof node === 'object' ? [node, ...(node.children || []).flatMap(walk)] : [];
   const nodes = walk(tree);
   assert(nodes.some(node => node.props?.text === '方案已准备好'));
@@ -139,7 +184,7 @@ test('option accompanies its body and uses the validated endpoint, never approva
   assert(!streaming.some(node => node.props?.text === '隐藏推理'));
   assert(!streaming.some(node => node.props?.['aria-label'] === '加载中'));
   const waiting = walk(module.exports.QuietChat({ session: { running: true }, home: {} }));
-  assert(waiting.some(node => node.props?.role === 'status' && node.props?.['aria-label'] === '加载中'));
+  assert(waiting.some(node => node.type === 'ConversationActivity' && node.props.activity.kind === 'waiting' && node.props.activity.subtle));
   assert(!waiting.some(node => node.children?.includes('加载中')));
   const questionApi = async () => {};
   const statusAndQuestion = walk(module.exports.QuietChat({ session: { running: true }, home: { api: questionApi, threadId: 'side', history: { notifications: [

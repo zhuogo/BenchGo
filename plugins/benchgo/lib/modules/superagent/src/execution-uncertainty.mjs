@@ -1,47 +1,40 @@
-import { interruptedContinuationPolicy } from './interrupted-continuation-policy.mjs';
 import { ticketStopped } from './ticket-lifecycle.mjs';
-// Read-only ledger facts. Execution gates independently enforce the persisted retry policy.
+// Read-only saved-result and interrupted-execution facts.
 export const stopConfirmationNoticeMs = 30_000;
-export const verificationEscalationAttempts = 6;
-const iso = value => Number.isFinite(Number(value)) && value > 0 ? new Date(value).toISOString() : null;
+
+export function hasSavedCompletion(run) {
+  const evidence = run?.evidence;
+  return !!(evidence?.summary || evidence?.finalSummary) && (!evidence.completion || evidence.completion.kind === 'completed')
+    && !evidence.interrupted && !evidence.waitingPause && !evidence.waitingAttention;
+}
 
 export function executionUncertainty(database, ticket, { now = Date.now() } = {}) {
   if (!ticket || ticket.status === 'completed' || ticketStopped(ticket)) return null;
   const assignments = database.assignments(ticket.id);
-  const assignment = [...assignments].reverse().find(row => row.state === 'uncertain'
-    || ticket.executionControl?.pauseRequested && ['claimed', 'uncertain'].includes(row.state) && row.leaseUntil <= now);
+  const assignment = [...assignments].reverse().find(row => (row.instructionRevision ?? 1) === ticket.instructionRevision
+    && (row.state === 'uncertain' || ticket.executionControl?.pauseRequested && ['claimed', 'uncertain'].includes(row.state) && row.leaseUntil <= now));
   if (!assignment) return null;
   const run = database.runs(assignment.id).find(row => row.fence === assignment.fence);
-  const inspected = assignment.lastInspection;
-  const lastInspection = inspected?.fence === assignment.fence && inspected.runId === run?.id
-    && inspected.sessionId === run?.sessionId && inspected.instructionRevision === ticket.instructionRevision ? inspected : undefined;
-  const code = assignment.lastFailure?.code, evidence = run?.evidence;
-  const pause = ticket.executionControl?.pauseRequested || code === 'EXECUTION_PAUSE_UNVERIFIED';
-  const external = code === 'EXECUTION_EFFECTS_UNKNOWN' || lastInspection?.code === 'EXECUTION_EFFECTS_UNKNOWN'
-    || assignment.verificationError === 'EXECUTION_EFFECTS_UNKNOWN' || evidence?.executionEffects?.effectsVerified === false;
-  const mismatch = ['RUN_CONFLICT', 'CHECKPOINT_CONFLICT', 'EVIDENCE_MISMATCH'].includes(lastInspection?.code || assignment.verificationError);
-  const reasonCode = external ? 'external-effects-unknown' : pause ? 'pause-unconfirmed'
-    : mismatch ? 'evidence-mismatch' : code === 'WORKER_TURN_INCOMPLETE' ? 'worker-incomplete' : 'session-interrupted';
-  const reason = { 'external-effects-unknown': '外部动作的实际效果尚未核清', 'pause-unconfirmed': '执行端尚未确认安全暂停',
-    'evidence-mismatch': '保存的执行证据与当前记录不一致', 'worker-incomplete': '执行尚未完整结束',
-    'session-interrupted': '执行会话中断或重启，正在核对已保存的记录' }[reasonCode];
-  const attempts = ((pause ? assignment.pauseRecoveryAttempts : assignment.verificationInspectionAttempts) || 0) + (lastInspection?.attempts || 0);
-  const scheduled = pause ? assignment.pauseRecoveryAfter : assignment.verificationAfter;
-  const recoverable = !!run && !!evidence && !evidence.interrupted && (pause ? evidence.waitingPause === true
-    : typeof evidence.summary === 'string' && typeof evidence.transcript?.hash === 'string'
-      && (!run.environment || typeof evidence.checkpoint?.manifestHash === 'string'));
-  const retry = interruptedContinuationPolicy(run, { now });
-  const limited = !recoverable && retry.exhausted;
-  return { reasonCode, reason, attempts, nextCheckAt: recoverable ? iso(scheduled) : null,
-    continuationRetry: { attempts: retry.attempts, limit: retry.limit, exhausted: retry.exhausted,
-      nextAttemptAt: !recoverable && !pause && !external ? iso(retry.nextAttemptAt) : null },
-    escalated: attempts >= verificationEscalationAttempts || limited, automatic: recoverable,
-    ...(!recoverable ? { recoveryBlocked: external ? '外部实际效果尚未核清，只能继续核查，不得续跑或重发'
-      : limited ? '自动续接已达上限，已停止自动尝试并保留待核实；等待用户决定或仅作只读核查'
-        : '尚无完整结束证据，由 Router 核查是否能安全续接原会话，不得直接重跑' } : {}),
-    ...(lastInspection ? { lastInspection } : {}),
-    assignmentId: assignment.id, runId: run?.id || null, sessionId: run?.sessionId || null, fence: assignment.fence,
-    instructionRevision: ticket.instructionRevision };
+  const hasCompletedResult = hasSavedCompletion(run);
+  const recovery = assignment.savedResultRecovery?.fence === assignment.fence && assignment.savedResultRecovery?.runId === run?.id ? assignment.savedResultRecovery : null;
+  const reasonCode = hasCompletedResult ? 'saved-result-pending' : 'session-interrupted';
+  const failure = assignment.lastFailure;
+  const interruptedReasons = {
+    NETWORK: '执行连接中断。', TIMEOUT: '执行请求超时。', RATE_LIMIT: '执行请求受到供应商限流。',
+    WORKER_TURN_INCOMPLETE: '原执行会话缺少完整结束记录。', EXECUTION_EFFECTS_UNKNOWN: '原执行缺少完整的工具回执。',
+    WORKER_MODEL_ROUTE: '原执行绑定的模型当前不可用。', MANDATE_REVOKED: '原执行授权已失效。',
+    FENCING_CONFLICT: '原执行的归属或租约已变化。', ROLE_PRESET_UNAVAILABLE: '执行所需的角色配置不可用。',
+    SESSION_ROLE_OWNERSHIP: '无法确认原执行会话的归属。',
+  };
+  const interruption = interruptedReasons[failure?.code] || '原执行会话已中断，缺少可核对的完整结束记录。';
+  const nextStep = failure?.effects?.effectsVerified === false
+    ? '尚不能确认工具或外部操作是否结束，请先核实原执行记录和实际结果，再继续原工单。'
+    : '请查看原执行记录并排除该阻塞，再继续原工单。';
+  return { reasonCode, reason: hasCompletedResult ? '执行原稿已保留，系统正在自动完成保存收尾，无需授权。' : interruption + nextStep,
+    ...(hasCompletedResult ? { automatic: true, attempts: recovery?.attempts || 0, nextCheckAt: recovery?.nextAttemptAt ?? now } : {}),
+    hasCompletedResult, assignmentId: assignment.id, runId: run?.id || null, sessionId: run?.sessionId || null,
+    fence: assignment.fence, instructionRevision: ticket.instructionRevision };
+
 }
 
 export function executionStopConfirmation(database, ticket, { now = Date.now() } = {}) {
@@ -52,44 +45,4 @@ export function executionStopConfirmation(database, ticket, { now = Date.now() }
   const requestedAt = pending.map(row => row.stopRequest.at).filter(value => Number.isFinite(Date.parse(value))).sort()[0] || null;
   return { stopRequestedAt: requestedAt,
     stopConfirmationOverdue: !!requestedAt && now - Date.parse(requestedAt) >= stopConfirmationNoticeMs };
-}
-
-export function executionRecoverySignal(database, ticket, { now = Date.now(), previous } = {}) {
-  const uncertainty = executionUncertainty(database, ticket, { now });
-  if (uncertainty) {
-    const phase = uncertainty.escalated ? 'escalated' : uncertainty.lastInspection ? 'inspection-completed' : 'entered';
-    return { kind: 'recovery', eventKey: `execution-recovery:${uncertainty.assignmentId}:${uncertainty.fence}:${ticket.instructionRevision}:${uncertainty.reasonCode}:${phase}:${uncertainty.lastInspection?.id || ''}`,
-      ticketId: ticket.id, title: ticket.title, target: ticket.target, source: ticket.mandate.source,
-      instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion, phase, ...uncertainty };
-  }
-  // Only a previously signalled execution can produce a recovery follow-up.
-  if (!previous || previous.kind !== 'recovery' || previous.phase === 'resolved' || previous.ticketId !== ticket?.id
-    || previous.instructionRevision !== ticket.instructionRevision || ticket.status === 'completed' || ticketStopped(ticket)) return null;
-  const assignment = database.assignments(ticket.id).find(row => row.id === previous.assignmentId);
-  if (!assignment || !['queued', 'claimed', 'paused', 'waiting', 'completed'].includes(assignment.state)) return null;
-  const run = database.runs(assignment.id).find(row => row.id === previous.runId);
-  const originalFence = previous.recoveredFromFence ?? previous.fence;
-  const receipt = run?.interruptedRecoveries?.find(row => row.queued !== false && row.fromFence === originalFence
-    && row.instructionRevision === ticket.instructionRevision && row.sessionId === previous.sessionId);
-  const continued = assignment.fence === originalFence + 1 && run?.fence === assignment.fence
-    && run.sessionId === previous.sessionId && !!receipt;
-  if (assignment.fence !== originalFence && !continued) return null;
-  return { kind: 'recovery', eventKey: `execution-recovery:${assignment.id}:${assignment.fence}:${ticket.instructionRevision}:resolved`,
-    ticketId: ticket.id, title: ticket.title, target: ticket.target, source: ticket.mandate.source,
-    instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion,
-    phase: 'resolved', assignmentId: assignment.id, runId: previous.runId, sessionId: previous.sessionId,
-    fence: assignment.fence, recoveredFromFence: originalFence,
-    disposition: continued || assignment.interruptedContinuation ? 'verified-interrupted-continuation' : assignment.verificationOnly ? 'verified-result-finalization'
-      : assignment.contextContinuation ? 'verified-context-continuation'
-        : ticket.executionControl?.paused ? 'verified-paused' : 'execution-reconciled' };
-}
-
-export const recoverySignalIdentity = value => JSON.stringify({ ...value, title: undefined, target: undefined,
-  reason: undefined, attempts: undefined, nextCheckAt: undefined, automatic: undefined,
-  recoveryBlocked: undefined, continuationRetry: undefined, resultVersion: undefined });
-
-export function currentExecutionRecoverySignal(database, signal, { now = Date.now() } = {}) {
-  const ticket = database.getTicket(signal?.ticketId);
-  const current = ticket && executionRecoverySignal(database, ticket, { now, previous: signal.phase === 'resolved' ? { ...signal, phase: 'entered' } : undefined });
-  return current && recoverySignalIdentity(current) === recoverySignalIdentity(signal) ? current : null;
 }

@@ -1,10 +1,21 @@
 import { createHash } from 'node:crypto';
-import { verifyArtifactCheckpoint } from './worker-artifact-checkpoint.mjs';
 import { executionEffects } from './execution-effects.mjs';
 
 const mismatch = message => Object.assign(new Error(message), { code: 'EVIDENCE_MISMATCH' });
+const recoveryUnavailable = (code, message) => Object.assign(new Error(message), { code });
 
 const LEGACY_EXECUTION_BUDGET_HOOK = 'benchgo-execution-budget-exhausted';
+
+/** Seed markers close storage handles; they do not start another execution. */
+export function executionCompletion(events = []) {
+  let terminal;
+  for (const event of events) {
+    if (['turn/start', 'step/start', 'assistant/message', 'tool/result', 'user/message'].includes(event.type)) terminal = undefined;
+    if (event.type === 'turn/end') terminal = { ...event.data?.reason,
+      ...(event.time !== undefined && Number.isFinite(new Date(event.time).getTime()) ? { at: new Date(event.time).toISOString() } : {}) };
+  }
+  return terminal;
+}
 
 /**
  * A pause is resumable only on the official pre-step rejection ending. Runs parked
@@ -15,16 +26,6 @@ export function isVerifiedPauseEnding(reason, saved) {
     && reason?.kind === 'aborted' && reason.reason?.kind === 'hook' && reason.reason.reason === LEGACY_EXECUTION_BUDGET_HOOK
     && JSON.stringify(reason) === JSON.stringify(saved.waitingExecutionBudget.terminal)) || (saved?.waitingBudget?.terminal?.kind === 'error'
     && reason?.kind === 'error' && JSON.stringify(reason) === JSON.stringify(saved.waitingBudget.terminal));
-}
-
-export async function verifyExecutionArtifacts(run, result, signal) {
-  if (!run?.environment) throw new Error('Project execution environment is unavailable');
-  if (!result?.checkpoint) throw new Error('Project execution recovery requires a verified artifact checkpoint');
-  if (JSON.stringify(run.environment) !== JSON.stringify(result.environment)
-    || JSON.stringify(run.evidence?.checkpoint) !== JSON.stringify(result.checkpoint)
-    || result.directory !== run.environment.path || result.runId !== run.id || result.sessionId !== run.sessionId) throw mismatch('Artifact evidence belongs to another execution');
-  try { return await verifyArtifactCheckpoint(run.environment, result.checkpoint, { signal }); }
-  catch (error) { if (signal?.aborted) throw error; throw mismatch(error.message); }
 }
 
 export function executionEvidence(log) {
@@ -134,10 +135,10 @@ function projectSourceEvidence(call, text, event, failed) {
   return [...found.values()];
 }
 export function recoveryStorage(ctx) {
-  return ctx.get?.('sessionPersistence') || ctx.sessionPersistence;
+  return ctx.get ? ctx.get('sessionPersistence') : ctx.sessionPersistence;
 }
 
-/** Hold the official writer lock without appending or running an Agent. */
+/** Reuse an idle host session or hold the official writer lock without running an Agent. */
 export function withRecoveredEvidence(input, action) {
   return inspectRecoveredExecution(input, action, false);
 }
@@ -149,33 +150,50 @@ export function withRecoveredPause(input, action) {
 async function inspectRecoveredExecution({ ctx, run, signal }, action, paused) {
   signal.throwIfAborted();
   const persistence = recoveryStorage(ctx);
-  if (!persistence?.open || !ctx.agents?.get) throw new Error('Official session ownership cannot be verified');
-  if (ctx.agents.get(run.sessionId)) throw new Error('Previous session is still live');
-  const handle = await persistence.open(run.sessionId, 'write', { signal });
+  if (!persistence?.open || !ctx.agents?.get) throw recoveryUnavailable('SESSION_UNAVAILABLE', 'Official session ownership cannot be verified');
+  const live = ctx.agents.get(run.sessionId);
+  if (live && (paused || live.status !== 'idle' || !live.session?.snapshotEvents || !ctx.sessions?.flush)) throw recoveryUnavailable('SESSION_STILL_LIVE', 'Previous session is still live');
+  let handle;
+  if (live) await ctx.sessions.flush(live.session);
+  else handle = await persistence.open(run.sessionId, 'write', { signal });
   try {
     signal.throwIfAborted();
-    if (handle.id !== run.sessionId || handle.access !== 'write') throw new Error('Unexpected session ownership');
-    const log = await handle.read(undefined, undefined, { signal });
-    const observed = executionEvidence(log), observedEffects = executionEffects(log), saved = run.evidence;
+    if (handle && (handle.id !== run.sessionId || handle.access !== 'write')) throw recoveryUnavailable('SESSION_UNAVAILABLE', 'Unexpected session ownership');
+    if (live && (ctx.agents.get(run.sessionId) !== live || live.status !== 'idle' || live.session.id !== run.sessionId)) throw recoveryUnavailable('SESSION_STILL_LIVE', 'Previous session is still live');
+    const log = live ? { events: live.session.snapshotEvents() } : await handle.read(undefined, undefined, { signal });
+    const observed = executionEvidence(log), observedEffects = executionEffects(log, new Map(Object.entries(run.evidence?.toolReceipts || {}))), saved = run.evidence;
+    if (!paused) {
+      // Preserve the host's saved draft exactly. Hash/seed/projection differences
+      // are diagnostics, never an admission gate for an already produced result.
+      const completion = executionCompletion(log.events);
+      const diagnostics = [];
+      if (saved?.transcript?.hash !== observed.transcript.hash) diagnostics.push('TRANSCRIPT_CHANGED');
+      const result = { ...observed, ...saved, runId: run.id, sessionId: run.sessionId, directory: run.directory,
+        finalSummary: saved?.finalSummary ?? observed.finalSummary, completion,
+        executionEffects: saved?.executionEffects ?? observedEffects,
+        recoveryObservation: { ...observed.transcript, diagnostics } };
+      return await action(result, { sessionId: run.sessionId, completed: completion?.kind === 'completed', ...observed.transcript });
+    }
     if (!saved || saved.runId !== run.id || saved.sessionId !== run.sessionId || !Number.isSafeInteger(saved.transcript?.lastSeq)
       || saved.transcript.lastSeq !== observed.transcript.lastSeq || saved.transcript.hash !== observed.transcript.hash || saved.summary !== observed.summary) throw mismatch('Persisted execution evidence does not match the official transcript');
     if (saved.finalSummary !== undefined && saved.finalSummary !== observed.finalSummary) throw mismatch('Persisted final result does not match the official transcript');
     if (saved.toolEvidence && JSON.stringify(saved.toolEvidence) !== JSON.stringify(observed.toolEvidence)) throw mismatch('Persisted tool evidence does not match the official transcript');
-    if (saved.executionEffects !== undefined && JSON.stringify(saved.executionEffects) !== JSON.stringify(observedEffects)) throw mismatch('Persisted execution effects do not match the official transcript');
+    if (paused && saved.executionEffects !== undefined && JSON.stringify(saved.executionEffects) !== JSON.stringify(observedEffects)) throw mismatch('Persisted execution effects do not match the official transcript');
     let terminal;
     for (const event of log.events) {
       if (['turn/start', 'step/start', 'assistant/message', 'tool/result', 'user/message'].includes(event.type)) terminal = undefined;
       if (event.type === 'turn/end') terminal = event;
     }
-    if (paused ? !isVerifiedPauseEnding(terminal?.data?.reason, saved) : terminal?.data?.reason?.kind !== 'completed') throw new Error(paused ? 'Previous execution has no verified pause ending' : 'Previous execution has no verified normal ending');
+    if (paused ? !isVerifiedPauseEnding(terminal?.data?.reason, saved) : terminal?.data?.reason?.kind !== 'completed') throw recoveryUnavailable('EXECUTION_END_UNVERIFIED', paused ? 'Previous execution has no verified pause ending' : 'Previous execution has no verified normal ending');
     if (paused && saved.waitingPause !== true) throw new Error('Execution has no saved explicit pause');
-    if (run.environment) await verifyExecutionArtifacts(run, saved, signal);
-    else if (paused) {
-      if (saved.directory !== run.directory) throw mismatch('Pause directory changed');
-      try { await verifyArtifactCheckpoint(run.directory, saved.checkpoint, { signal }); }
-      catch (error) { if (signal?.aborted) throw error; throw mismatch(error.message); }
-    }
+    // The original session and saved Run remain authoritative. File changes are
+    // ordinary working state, not a reason to scan or restore the whole directory.
+    if (saved.directory !== run.directory || JSON.stringify(saved.environment) !== JSON.stringify(run.environment))
+      throw mismatch('Saved execution directory belongs to another execution');
     signal.throwIfAborted();
+    // No asynchronous boundary between this check and the atomic acceptance callback.
+    if (live && (ctx.agents.get(run.sessionId) !== live || live.status !== 'idle'
+      || executionEvidence({ events: live.session.snapshotEvents() }).transcript.hash !== observed.transcript.hash)) throw mismatch('Official session changed before result acceptance');
     return await action({ ...saved, finalSummary: observed.finalSummary, toolEvidence: observed.toolEvidence, executionEffects: observedEffects }, { sessionId: run.sessionId, completed: !paused, paused, ...observed.transcript });
-  } finally { await handle.close(); }
+  } finally { if (handle) await handle.close(); }
 }

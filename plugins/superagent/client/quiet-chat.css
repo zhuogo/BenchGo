@@ -32,7 +32,13 @@
 .ba-chat-question-skipped{color:var(--dsw-alias-label-tertiary,#999)}
 .ba-chat-await{color:var(--dsw-alias-label-tertiary,#999)}
 .ba-chat-load{display:block;margin:0 auto 24px}
-.ba-chat-work{display:flex;gap:12px;align-items:center;color:var(--dsw-alias-label-secondary,#666);font-size:13px;margin:16px 0}
+.ba-chat-work{display:flex;gap:12px;align-items:center;color:var(--dsw-alias-label-secondary,#666);font-size:13px;margin:16px 0;overflow-wrap:anywhere}
+.ba-chat-work-label{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-label-primary,#222) 5%,transparent);font-size:12px;line-height:20px}
+.ba-chat-dots{display:inline-flex;gap:5px;align-items:center;height:20px;padding:0 4px}.ba-chat-dots i{width:4px;height:4px;border-radius:50%;background:currentColor;animation:ba-chat-dot 1.2s ease-in-out infinite;opacity:.4}.ba-chat-dots i:nth-child(2){animation-delay:.15s}.ba-chat-dots i:nth-child(3){animation-delay:.3s}
+.ba-chat-work-compact{display:inline-flex;margin:0;flex:none}.ba-chat-work-compact .ba-chat-work-label{padding:2px 8px}.ba-conversation-ready{font-size:12px;color:var(--dsw-alias-label-secondary,#666)}
+.ba-chat-identity{display:flex;align-items:center;gap:12px;min-width:0}.ba-chat-identity-link.ba-chat-identity-link{display:flex;align-items:center;gap:10px;min-width:0;padding:0;background:transparent;height:40px}.ba-chat-identity-link>span:last-child{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ba-chat-identity-link .ba-pet-avatar{flex:none}
+@keyframes ba-chat-dot{0%,70%,100%{opacity:.35;transform:translateY(0)}35%{opacity:1;transform:translateY(-2px)}}
+@media(prefers-reduced-motion:reduce){.ba-chat-dots i{animation:none;opacity:.6}}
 .ba-chat-attachment{display:block;font-size:13px;margin-top:8px;color:var(--dsw-alias-label-secondary,#666)}
 .ba-chat-options{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .ba-chat-message[data-role=system]{color:var(--dsw-alias-label-secondary,#666);font-size:13px}
@@ -72,15 +78,10 @@
 .ba-action-popover dd{margin:0;font-variant-numeric:tabular-nums}
 .ba-action-error{grid-column:var(--ba-body-column);grid-row:3;font-size:12px;color:var(--dsw-alias-label-primary,#222)}
 .ba-chat-message[data-role=user] .ba-action-error{text-align:right}
-.ba-loading-dots{display:flex;gap:4px}
-.ba-loading-dots i{width:4px;height:4px;border-radius:50%;background:currentColor;animation:ba-loading 1.25s ease-in-out infinite}
-.ba-loading-dots i:nth-child(2){animation-delay:.15s}
-.ba-loading-dots i:nth-child(3){animation-delay:.3s}
 .ba-chat-sr{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-@keyframes ba-loading{0%,70%,100%{opacity:.3;transform:translateY(0)}35%{opacity:1;transform:translateY(-3px)}}
 @keyframes ba-reaction-in{from{transform:scale(.8)}to{transform:scale(1)}}
 @keyframes ba-chat-reveal{from{opacity:.65}to{opacity:1}}
 @container ba-chat (max-width:700px){.ba-quiet-chat{padding-left:16px;padding-right:16px}.ba-chat-message,.ba-chat-message[data-role=user]{--ba-body-column:1;--ba-tools-column:1;grid-template-columns:minmax(0,1fr);column-gap:0}.ba-message-toolbar{grid-row:3;justify-self:start;margin-top:6px}.ba-chat-message[data-role=user] .ba-message-toolbar{justify-self:end}.ba-action-error{grid-row:4}.ba-message-time-label{display:none}.ba-message-toolbar .ba-message-time-icon{display:block}.ba-message-toolbar time{width:32px;padding:0;margin-left:2px}}
 @media(hover:none),(pointer:coarse){.ba-message-toolbar{opacity:1;pointer-events:auto}.ba-message-toolbar button,.ba-message-toolbar time,.ba-action-popover button,.ba-reaction-chip,.ba-chat-bottom-button{min-width:44px;min-height:44px}}
-@media(prefers-reduced-motion:reduce){.ba-loading-dots i,.ba-reaction-chip,.ba-chat-message[data-streaming=true] .ba-chat-content>[class*="_markdown"]>*{animation:none}.ba-message-toolbar,.ba-message-toolbar button,.ba-action-popover button,.ba-action-popover button span,.ba-chat-bottom,.ba-chat-bottom-button{transition:none;transform:none}.ba-action-popover button:hover span,.ba-chat-bottom-button:active{transform:none}}
+@media(prefers-reduced-motion:reduce){.ba-reaction-chip,.ba-chat-message[data-streaming=true] .ba-chat-content>[class*="_markdown"]>*{animation:none}.ba-message-toolbar,.ba-message-toolbar button,.ba-action-popover button,.ba-action-popover button span,.ba-chat-bottom,.ba-chat-bottom-button{transition:none;transform:none}.ba-action-popover button:hover span,.ba-chat-bottom-button:active{transform:none}}
 

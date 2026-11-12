@@ -62,9 +62,9 @@ test('requests use the system work role and reject every obsolete override field
   assert.deepEqual(f.database.assignments(ticket.id)[0].model, f.policy.workerModels[0]);
   const alias = await f.service.delegate({ ...input, requestId: 'same-trigger-other-request-id' }, f.exec, f.options);
   assert.equal(alias.id, ticket.id);
-  await assert.rejects(f.service.delegate({ ...input, requestId: 'same-trigger-new-task', text: 'different operation' }, f.exec, f.options), { code: 'TRIGGER_ALREADY_ASSIGNED' });
+  assert.notEqual((await f.service.delegate({ ...input, requestId: 'same-trigger-new-task', text: 'different operation' }, f.exec, f.options)).id, ticket.id);
   await assert.rejects(f.service.delegate({ ...input, requestId: 'same-trigger-new-model', provider: 'new-provider', model: 'new-model' }, f.exec, f.options), { code: 'MODEL_OVERRIDE_UNSUPPORTED' });
-  assert.equal(f.database.listTickets().length, 1);
+  assert.equal(f.database.listTickets().length, 2);
 });
 
 test('Router-selected duplicate merges only matching live source, requirements and authorization', async t => {
@@ -162,8 +162,9 @@ for (const original of ['做任务进度看板', '检查网站状态']) test(`ne
   assert.equal(ticket.mandate.source.messageId, 'original');
   assert.equal(ticket.mandate.controlledActions, 'require-current-policy-and-harness-approval');
   assert.equal(f.database.listTickets().length, 1);
-  await assert.rejects(f.service.delegate({ ...f.input, requestId: 'same-trigger-expanded', text: '额外发布网站', acceptance: '' }, f.exec, f.options), { code: 'TRIGGER_ALREADY_ASSIGNED' });
-  assert.equal(f.database.listTickets().length, 1);
+  const extra = await f.service.delegate({ ...f.input, requestId: 'same-trigger-expanded', text: '额外发布网站', acceptance: '' }, f.exec, f.options);
+  assert.notEqual(extra.id, ticket.id);
+  assert.equal(f.database.listTickets().length, 2);
 });
 test('project-free delegation still rejects policy changes during model resolution', async t => {
   const f = await fixture(t);
@@ -334,4 +335,15 @@ for (const when of ['before', 'final-policy']) test(`cancellation ${when} still 
   await assert.rejects(service.delegate(f.input, { ...f.exec, signal: controller.signal }, f.options), { name: 'AbortError' });
   assert.equal(f.database.listTickets().length, 0);
   assert.equal(f.modelRequests.length, 0);
+});
+
+test('host-generated delegation identity replays after service restart and keeps multiple tasks on the real message', async t => {
+  const f = await fixture(t), { requestId, ...input } = f.input;
+  const first = await f.service.delegate(input, f.exec, f.options);
+  const second = await f.service.delegate({ ...input, text: 'another explicit task' }, f.exec, f.options);
+  const restarted = createDesktopDelegationService({ ctx: f.ctx, database: f.database, readPolicy: async () => f.policy });
+  assert.equal((await restarted.delegate(input, f.exec, f.options)).id, first.id);
+  assert.notEqual(first.id, second.id);
+  assert.equal(first.mandate.source.messageId, second.mandate.source.messageId);
+  assert.equal(f.database.listTickets().length, 2);
 });

@@ -77,7 +77,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         const ticket = api.getTicket(assignment.ticket_id);
         if ((JSON.parse(assignment.payload).instructionRevision ?? 1) !== ticket.instructionRevision) throw new Error('Attention requirements changed');
         const run = api.runs(assignmentId).find(item => item.id === result.runId && item.fence === fence);
-        if (!run || run.state !== 'verifying' || !result.waitingAttention?.attentionIds?.length || !result.checkpoint || !result.transcript) throw new Error('Attention pause requires saved execution evidence');
+        if (!run || run.state !== 'verifying' || !result.waitingAttention?.attentionIds?.length || !result.transcript) throw new Error('Attention pause requires saved execution evidence');
         if (JSON.stringify(run.evidence) !== JSON.stringify(result)) throw new Error('Attention pause differs from saved evidence');
         const entries = api.attentions(ticket.id);
         if (!result.waitingAttention.attentionIds.every(id => entries.some(entry => entry.id === id && entry.sessionId === run.sessionId && entry.assignmentId === assignmentId))) throw new Error('Attention pause identity mismatch');
@@ -97,7 +97,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         const rows = db.prepare("SELECT * FROM sa_assignments WHERE state='waiting'").all();
         for (const row of rows) {
           const ticket = api.getTicket(row.ticket_id), payload = JSON.parse(row.payload);
-          if (ticketExecutionBlocked(ticket) || ticket.status !== 'waiting' || (payload.instructionRevision ?? 1) !== ticket.instructionRevision || !validateMandate(ticket.mandate)) continue;
+          if (ticketExecutionBlocked(ticket) || (payload.instructionRevision ?? 1) !== ticket.instructionRevision || !validateMandate(ticket.mandate)) continue;
           const run = api.runs(row.id).find(item => item.fence === row.fence && item.state === 'waiting');
           const ids = run?.evidence?.waitingAttention?.attentionIds;
           if (!ids?.length) continue;
@@ -109,7 +109,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
           delete payload.verificationOnly;
           const at = new Date(now).toISOString();
           db.prepare("UPDATE sa_assignments SET state='queued',payload=?,updated_at=? WHERE id=?").run(JSON.stringify(payload), at, row.id);
-          db.prepare("UPDATE sa_tickets SET status='waiting',updated_at=? WHERE id=?").run(at, ticket.id);
+          db.prepare("UPDATE sa_tickets SET status='running',updated_at=? WHERE id=?").run(at, ticket.id);
           queued++;
         }
         return queued;
@@ -188,11 +188,11 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         return { ...value({ ...row, answer_trigger_id: triggerId }), duplicate: false };
       });
     },
-    answerAttention(triggerId, { ownerAllowed = false } = {}) {
-      if (!ownerAllowed) return null;
+    answerAttention(triggerId, { sourceAllowed = false } = {}) {
+      if (!sourceAllowed) return null;
       return tx(() => {
         const trigger = api.readIntakeEvent(triggerId), source = trigger?.source;
-        if (!source || trigger.actor.kind !== 'human') return null;
+        if (!source || !trigger.actor?.id) return null;
         const explicitId = /^\/answer ([0-9a-f-]{36})\s+\S[\s\S]*$/iu.exec(trigger.content.trim())?.[1]?.toLowerCase();
         if (!source.parentMessageId && !explicitId) return null;
         // Old Telegram receipts used the provider-local integer; compare only
@@ -207,8 +207,8 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         const matches = rows.filter(row => {
           const ticket = api.getTicket(row.ticket_id), origin = ticket?.mandate.source;
           if (!currentRevision(row, ticket)) return false;
-          return source.channel === origin.channel && source.appId === origin.appId && source.accountId === origin.accountId && source.connectionRevision === origin.connectionRevision && source.chatId === origin.chatId && source.topicId === origin.topicId
-            && (trigger.actor.id === ticket.mandate.actorId || (ticket.mandate.admission === 'enabled-rules' && ticket.mandate.actorKind === 'machine')) && !(ticket.status === 'completed' || ticketStopped(ticket));
+          return source.channel === origin.channel && source.connectionId === origin.connectionId && source.conversationId === origin.conversationId && source.sourceType === origin.sourceType && source.appId === origin.appId && source.accountId === origin.accountId && source.connectionRevision === origin.connectionRevision && source.chatId === origin.chatId && source.topicId === origin.topicId
+            && trigger.actor.id === ticket.mandate.actorId && !(ticket.status === 'completed' || ticketStopped(ticket));
         });
         if (matches.length !== 1) return null;
         const row = matches[0];

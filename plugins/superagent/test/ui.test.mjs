@@ -1,4 +1,6 @@
-import { retainAssistantSession } from '../client/session-retain.mjs';
+import { createModelCatalogLoader } from '../../benchgo/client/model-catalog.mjs';
+import { retainAssistantSession, assistantBackgroundSessions } from '../client/session-retain.mjs';
+import { executionSessionNavigation } from '../client/execution-session-navigation.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -18,13 +20,14 @@ function harness(options = {}) {
   react.useLayoutEffect = () => {};
   react.useSyncExternalStore = (_subscribe, snapshot) => snapshot();
   const settingsModule = { exports: {} };
-  runInNewContext(settingsCode, { module: settingsModule, exports: settingsModule.exports, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('session-retain.mjs') ? { retainAssistantSession } : id === 'react' ? react : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('dsh-client-ui-primitives') ? { Switch: 'Switch' } : '' });
+  runInNewContext(settingsCode, { module: settingsModule, exports: settingsModule.exports, require: id => id.endsWith('model-catalog.mjs') ? { assistantModelCatalog } : id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('execution-session-navigation.mjs') ? { executionSessionNavigation } : id.endsWith('session-retain.mjs') ? { retainAssistantSession, assistantBackgroundSessions } : id === 'react' ? react : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('dsh-client-ui-primitives') ? { Switch: 'Switch' } : '' });
   const registryModule = { exports: {} };
-  runInNewContext(transformSync(readFileSync(new URL('../client/dirty-registry.mjs', import.meta.url), 'utf8'), { format: 'cjs' }).code, { module: registryModule, exports: registryModule.exports, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : react });
+  runInNewContext(transformSync(readFileSync(new URL('../client/dirty-registry.mjs', import.meta.url), 'utf8'), { format: 'cjs' }).code, { module: registryModule, exports: registryModule.exports, require: id => id.endsWith('model-catalog.mjs') ? { assistantModelCatalog } : id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : react });
   const listeners = new Map(), documentListeners = new Map(), intervals = [];
   const module = { exports: {} };
   const assistantConfigSync = createConfigSync();
-  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, localStorage: options.storage, queueMicrotask, setTimeout: fn => fn(), setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { calls.push(JSON.parse(options.body)); return {}; }, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('session-retain.mjs') ? { retainAssistantSession } : id === 'react' ? react : id.endsWith('sidebar-lists.mjs') ? sidebarLists : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async () => typeof options.response === 'function' ? options.response(calls.at(-1)) : options.response || ({ providers: [], models: [] }) } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
+  const assistantModelCatalog = createModelCatalogLoader(async () => { calls.push({ action: 'catalog' }); return typeof options.response === 'function' ? options.response(calls.at(-1)) : options.response || { providers: [], models: [] }; });
+  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, localStorage: options.storage, queueMicrotask, setTimeout: options.setTimeout || (fn => fn()), clearTimeout: () => {}, setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { const call = JSON.parse(options.body); calls.push(call); return { benchgoCall: call }; }, require: id => id.endsWith('model-catalog.mjs') ? { assistantModelCatalog } : id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('execution-session-navigation.mjs') ? { executionSessionNavigation } : id.endsWith('session-retain.mjs') ? { retainAssistantSession, assistantBackgroundSessions } : id === 'react' ? react : id.endsWith('sidebar-lists.mjs') ? sidebarLists : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async response => typeof options.response === 'function' ? options.response(response.benchgoCall) : options.response || ({ providers: [], models: [] }) } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
   return { listeners, documentListeners, intervals, exports: module.exports, render(name, props) { cursor = 0; refCursor = 0; effects.length = 0; return module.exports[name](props); }, calls, effects };
 }
 const walk = node => node && typeof node === 'object' ? [node, ...node.children.flatMap(walk)] : [];
@@ -358,29 +361,34 @@ test('resource navigation includes vault and system files last without settings 
   const h = harness(), props = { snapshot: { config: { models: [] } }, ctx: {} };
   const nodes = walk(h.render('Studio', props));
   const nav = nodes.find(node => node.type === 'nav');
-  assert.deepEqual(walk(nav).filter(node => node.type === 'b').map(node => node.children[0]), ['身份', '模型', '档案', '任务', '记忆', '产物', '多平台', '保险库', '授权管理', '系统文件']);
+  assert.deepEqual(walk(nav).filter(node => node.type === 'b').map(node => node.children[0]), ['身份', '模型', '档案', '任务', '目标', '记忆', '产物', '多平台', '保险库', '系统文件']);
   assert.equal(walk(nav).filter(node => node.props['aria-current'] === 'page')[0].children[1].children[0].children[0], '身份');
   assert.equal(nodes.some(node => node.props.className === 'ba-segment'), false);
 });
 
-test('ticket header opens the goal form and returns to the ticket list', () => {
-  const h = harness(), props = { initialSection: 'tasks', snapshot: { config: { models: [] } }, ctx: {} };
-  let nodes = walk(h.render('Studio', props));
-  nodes.find(node => node.props.onCreateGoal).props.onCreateGoal();
-  nodes = walk(h.render('Studio', props));
+test('goal management returns to tickets without a goal creation entry', () => {
+  const h = harness(), props = { initialSection: 'goals', snapshot: { config: { models: [] } }, ctx: {} };
+  const nodes = walk(h.render('Studio', props));
   const goals = nodes.find(node => node.props.onViewTickets);
-  assert.equal(goals.props.initialCreating, true);
+  assert.equal(goals.props.initialCreating, undefined);
+  assert.equal(nodes.find(node => node.props['data-section']).props['data-section'], 'goals');
   goals.props.onViewTickets();
-  assert(walk(h.render('Studio', props)).some(node => node.props.onCreateGoal));
+  const tickets = walk(h.render('Studio', props));
+  assert.equal(tickets.find(node => node.props['data-section']).props['data-section'], 'tasks');
+  assert.equal(tickets.some(node => node.props.onCreateGoal), false);
 });
 
-test('the goals tab opens existing Goals rather than creating one, and Tickets expose no quota entry', () => {
+test('the goals resource link opens its workspace page and tasks retain only tickets and approvals', () => {
   const h = harness(), props = { initialSection: 'tasks', snapshot: { config: { models: [] } }, ctx: {} };
-  assert.equal(walk(h.render('Studio', props)).some(node => node.props.onOpenGoals), false);
+  const taskNodes = walk(h.render('Studio', props));
+  assert.equal(taskNodes.some(node => node.props.onOpenGoals), false);
+  assert.deepEqual(Array.from(taskNodes.find(node => node.type === h.exports.ResourceTabs).props.tabs, row => row[0]), ['tickets', 'approvals']);
   const chat = harness(), requested = { ...props, requestedTab: 'goals' };
   chat.render('Studio', requested);
   chat.effects.find(item => item.deps?.[0] === 'goals').effect();
-  assert(walk(chat.render('Studio', requested)).some(node => node.props.onViewTickets));
+  const goalNodes = walk(chat.render('Studio', requested));
+  assert.equal(goalNodes.find(node => node.props['data-section']).props['data-section'], 'goals');
+  assert.equal(goalNodes.find(node => node.props.onViewTickets).props.initialCreating, undefined);
 });
 test('linked task navigation carries its ticket through the page and existing Studio detail entry', () => {
   const snapshot = { config: { models: [] }, state: { threads: [] } };
@@ -395,7 +403,7 @@ test('linked task navigation carries its ticket through the page and existing St
   const view = harness();
   view.render('Studio', studio.props);
   view.effects.find(item => item.deps?.[0] === studio.props.requestedTicket).effect();
-  const tickets = walk(view.render('Studio', studio.props)).find(node => node.props.requestedTicket && node.props.onCreateGoal);
+  const tickets = walk(view.render('Studio', studio.props)).find(node => node.props.requestedTicket && node.props.onDetailChange);
   assert.equal(tickets.props.requestedTicket.ticketId, 'linked');
 });
 
@@ -456,6 +464,37 @@ test('session scope waits for the assistant writer and remains alive until expli
   scope.release();
   assert.equal(released, true);
   assert.equal(called.options.signal.aborted, true);
+});
+
+test('assistant background retention excludes idle, archived and selected sessions but follows live status', () => {
+  const state = { mainSessionId: 'main', threads: [
+    ...Array.from({ length: 1000 }, (_, i) => ({ id: `idle-${i}`, sessionId: `idle-${i}` })),
+    { id: 'running', sessionId: 'running' }, { id: 'pending', sessionId: 'pending' },
+    { id: 'catalog', sessionId: 'catalog' }, { id: 'archived', sessionId: 'archived', archived: true },
+  ] };
+  const statuses = new Map([['main', { running: true }], ['running', { running: true }],
+    ['pending', { running: false, pendingInteraction: { kind: 'question' } }], ['archived', { running: true }]]);
+  const catalog = { byId: { catalog: { running: true }, running: { running: true } } };
+  assert.deepEqual([...assistantBackgroundSessions(state, 'main', statuses, catalog).keys()], ['running', 'pending', 'catalog']);
+  statuses.set('running', { running: false });
+  assert.deepEqual([...assistantBackgroundSessions(state, 'main', statuses, catalog).keys()], ['pending', 'catalog']);
+});
+
+test('opening a chat reads its history while unrelated state resources are still loading', async () => {
+  let finishState;
+  const snapshot = { config: { models: [] }, state: { threads: [] } };
+  const h = harness({ state: [snapshot, '', 'chat', 'main', { messages: [] }], setTimeout: () => 0,
+    response: ({ action }) => action === 'state' ? new Promise(resolve => { finishState = resolve; })
+      : action === 'ensure' ? { sessionId: 'main-session' } : { threadId: 'main', sessionId: 'main-session', messages: [] },
+  });
+  const ctx = {};
+  h.render('AssistantPage', { ctx });
+  const dispose = h.effects.find(item => item.deps?.length === 3 && item.deps[2] === ctx).effect();
+  await new Promise(setImmediate);
+  assert.deepEqual(h.calls.map(call => call.action), ['state', 'ensure', 'history']);
+  const nodes = walk(h.render('AssistantPage', { ctx }));
+  assert(nodes.some(node => node.props.sessionId === 'main-session'));
+  dispose(); finishState(snapshot); await new Promise(setImmediate);
 });
 test('released or replaced assistant sessions never open a stale official writer', async () => {
   for (const released of [false, true]) {

@@ -38,7 +38,6 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
     if (!ownerAgent || exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可委派桌面工单');
     if (goalLeaf !== undefined) required(goalLeaf, '目标子项路径', 512);
     const sessionId = required(ownerAgent.id, '会话标识');
-    const requestId = required(input.requestId, '请求标识', 200);
     const projectId = input.projectId == null ? undefined : required(input.projectId, '项目标识');
     const duplicateOfTicketId = input.duplicateOfTicketId === undefined ? undefined : required(input.duplicateOfTicketId, '重复工单标识', 512);
     const target = required(input.text, '任务内容');
@@ -46,13 +45,15 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
     assertSpecificTicketDescription({ title: input.title ?? title, target });
     const acceptance = input.acceptance ?? '';
     if (typeof acceptance !== 'string' || acceptance.length > 100000) throw new Error('无效验收条件');
-    const requestKey = JSON.stringify([sessionId, requestId]);
     const fingerprint = digest([projectId, target, acceptance, ...(input.title !== undefined ? [title] : []), ...(budgetGoalId ? [budgetGoalId] : []), ...(duplicateOfTicketId ? [duplicateOfTicketId] : [])]);
     const instruction = structuredClone(form || currentHumanInstruction(ctx, ownerAgent));
     const message = instruction?.message;
     const instructionFingerprint = digest(instruction);
     if (!message?.id) throw new Error('桌面委派缺少当前原始用户消息');
-    const source = { channel: 'desktop', sessionId, messageId: goalLeaf === undefined || goalLeaf === 'root' ? message.id : `${message.id}#goal:${goalLeaf}`, threadId };
+    const source = { channel: 'desktop', sessionId, messageId: message.id, threadId };
+    // Host-derived identity survives retries without requiring model-generated IDs.
+    const requestId = input.requestId === undefined ? digest([source, fingerprint, goalLeaf ?? null]) : required(input.requestId, '请求标识', 200);
+    const requestKey = JSON.stringify([sessionId, requestId]);
     const prior = () => {
       const existing = database.desktopRequest(requestKey);
       if (existing && existing.fingerprint !== fingerprint) throw new Error('请求标识已用于不同任务');

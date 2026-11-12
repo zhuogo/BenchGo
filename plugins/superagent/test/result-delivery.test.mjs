@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { resultDelivery, resultOutbox, validateDelivery, deliverySuppression } from '../src/result-delivery.mjs';
+import { resultDelivery, resultOutbox, validateDelivery, deliverySuppression, systemStateDelivery } from '../src/result-delivery.mjs';
 import { commitWorkerResult } from '../src/result-commit.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 
@@ -24,7 +24,7 @@ test('self-check is a record from the Worker and never another model verdict', (
   let committed;
   const database = { commitResult: (id, input) => (committed = { id, ...input }) };
   commitWorkerResult({ database, ticket, result, uniqueKey: 'result' });
-  assert.equal(committed.status, 'waiting');
+  assert.equal(committed.status, 'completed');
   assert.deepEqual(committed.result.selfCheck, result.selfCheck);
   assert.equal(committed.result.finalSummary, result.finalSummary);
   assert.equal(committed.result.delivery.text, result.finalSummary);
@@ -32,18 +32,19 @@ test('self-check is a record from the Worker and never another model verdict', (
   assert.equal(committed.outboxPayload.publication, undefined);
   assert(!JSON.stringify(committed.outboxPayload).includes(result.finalSummary));
   assert.equal(committed.result.review, undefined);
-  assert.throws(() => commitWorkerResult({ database, ticket, result: { ...result, selfCheck: undefined } }), { code: 'SELF_CHECK_MISSING' });
+  assert.equal(commitWorkerResult({ database, ticket, result: { ...result, selfCheck: undefined } }).result.selfCheck, undefined);
   assert.throws(() => commitWorkerResult({ database, ticket, result: { ...result, selfCheckRevision: 1 } }), { code: 'INSTRUCTION_REVISION_CONFLICT' });
 });
 
-test('structural failure needs attempts, cause and changed conditions; unknown effects cannot be delivered as terminal', () => {
+test('structural failure needs attempts, cause and changed conditions; legacy effect metadata adds no review gate', () => {
   const database = { commitResult: (_id, input) => input };
   assert.throws(() => commitWorkerResult({ database, ticket, result: { ...result, outcome: 'failed' } }), /Structural failure/);
   const failure = { attempted: '查询两项来源', cause: '数据已永久删除', resumeConditions: '恢复原始数据后可继续' };
   const saved = commitWorkerResult({ database, ticket, result: { ...result, outcome: 'failed', failure } });
   assert.equal(saved.outboxPayload.outcome, 'failed');
   assert.equal(saved.status, 'waiting');
-  assert.throws(() => commitWorkerResult({ database, ticket, result: { ...result, executionEffects: { effectsVerified: false } } }), { code: 'EXECUTION_EFFECTS_UNKNOWN' });
+  const legacy = commitWorkerResult({ database, ticket, result: { ...result, executionEffects: { effectsVerified: false } } });
+  assert.equal(legacy.status, 'completed');
 });
 
 test('superseded requirements and sources are suppressed rather than delivered', () => {
@@ -71,16 +72,16 @@ async function storedResult(t, { legacy = false } = {}) {
 }
 
 for (const receipt of [{ status: 'suppressed', reason: 'superseded' }, { status: 'accepted' }, { status: 'accepted', messageId: 'source-receipt' }]) {
-  test(`pending completion cannot close without a persisted Router reply (${receipt.status}/${Boolean(receipt.messageId)})`, async t => {
+  test(`execution completion is independent from a persisted Router reply (${receipt.status}/${Boolean(receipt.messageId)})`, async t => {
     const f = await storedResult(t);
     const [pending] = f.database.claimOutbox('sender');
     f.database.finishOutbox(pending.id, { owner: 'sender', sent: true, receipt });
-    assert.equal(f.database.getTicket(f.ticket.id).status, 'waiting');
+    assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
     assert.equal(f.database.results(f.ticket.id)[0].finalSummary, result.finalSummary);
   });
 }
 
-test('Router reply is immutable through retry and only its confirmed source receipt closes the Ticket', async t => {
+test('Router reply is immutable through retry and its confirmed source receipt only records delivery', async t => {
   const f = await storedResult(t);
   const [pending] = f.database.claimOutbox('sender', { now: Date.now() + 1 });
   const reply = { action: 'deliver', origin: 'router', text: '已整理完成，重点结论在这里。' };
@@ -91,7 +92,7 @@ test('Router reply is immutable through retry and only its confirmed source rece
   const [retry] = f.database.claimOutbox('retry');
   assert.equal(retry.id, pending.id);
   assert.equal(retry.payload.publication.text, reply.text);
-  assert.equal(f.database.getTicket(f.ticket.id).status, 'waiting');
+  assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
   f.database.finishOutbox(retry.id, { owner: 'retry', sent: true, receipt: { status: 'accepted', messageId: 'source-receipt' } });
   assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
   f.reopen();
@@ -99,14 +100,14 @@ test('Router reply is immutable through retry and only its confirmed source rece
   assert.equal(f.database.results(f.ticket.id).length, 1);
 });
 
-test('suppressed Router reply is retired without closing the Ticket', async t => {
+test('suppressed Router reply is retired without reverting execution completion', async t => {
   const f = await storedResult(t);
   const [pending] = f.database.claimOutbox('sender');
   f.database.saveOutboxReply(pending.id, { owner: 'sender',
     publication: { action: 'deliver', origin: 'router', text: '已完成。' } });
   f.database.finishOutbox(pending.id, { owner: 'sender', sent: true,
     receipt: { status: 'suppressed', reason: 'authorization-changed', messageId: 'not-a-source-receipt' } });
-  assert.equal(f.database.getTicket(f.ticket.id).status, 'waiting');
+  assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
   assert.deepEqual(f.database.claimOutbox('retry'), []);
 });
 
@@ -148,6 +149,45 @@ for (const ready of [false, true]) test(`historical review retirement preserves 
   assert.equal(delivery.id, f.committed.outbox.id);
   assert.equal(delivery.payload.replyState, ready ? 'ready' : 'pending');
   assert.equal(delivery.payload.text, ready ? '已经整理好结果。' : undefined);
-  assert.equal(f.database.getTicket(f.ticket.id).status, 'waiting');
+  assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
   assert.equal(f.database.results(f.ticket.id)[0].finalSummary, result.finalSummary);
+});
+
+
+test('duplicate receipts remain idempotent and a restart never resends an unknown transport outcome', async t => {
+  const f = await storedResult(t);
+  const [pending] = f.database.claimOutbox('sender');
+  f.database.saveOutboxReply(pending.id, { owner: 'sender', publication: { action: 'deliver', origin: 'router', text: '???' } });
+  f.reopen();
+  assert.deepEqual(f.database.claimOutbox('restart', { now: Date.now() + 61000 }), []);
+  const unknown = f.database.deliveries(f.ticket.id)[0];
+  assert.equal(unknown.state, 'uncertain');
+  assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
+  const receipt = { status: 'accepted', messageId: 'confirmed-source-message' };
+  f.database.reconcileOutbox(unknown.id, { attempts: unknown.attempts, outcome: 'sent', evidence: 'source message lookup', receipt });
+  assert.equal(f.database.finishOutbox(unknown.id, { owner: 'sender', sent: true, receipt }).state, 'sent');
+  f.reopen();
+  assert.deepEqual(f.database.claimOutbox('again'), []);
+  assert.equal(f.database.results(f.ticket.id).length, 1);
+});
+
+test('restart during expression retries only the same pending expression record', async t => {
+  const f = await storedResult(t);
+  const [pending] = f.database.claimOutbox('expression');
+  f.reopen();
+  const [retry] = f.database.claimOutbox('restart', { now: Date.now() + 61000 });
+  assert.equal(retry.id, pending.id);
+  assert.equal(retry.payload.replyState, 'pending');
+  assert.equal(f.database.results(f.ticket.id).length, 1);
+  assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
+});
+
+test('interrupted execution asks for user continuation without promising effect verification', () => {
+  for (const code of ['EXECUTION_UNAVAILABLE', 'EXECUTION_EFFECTS_UNKNOWN']) {
+    const delivery = systemStateDelivery({ state: 'continuation_wait', code });
+    assert.match(delivery.text, /执行已中断，尚未完成/);
+    assert.match(delivery.text, /等待用户续接/);
+    assert.doesNotMatch(delivery.text, /效果待核实|自动恢复|自动核查/);
+    assert.equal(validateDelivery(delivery).systemState.code, code);
+  }
 });

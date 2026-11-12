@@ -34,10 +34,11 @@ test('vault keyboard flow reaches long-list editing, restores focus, recovers er
   try {
     const page = await browser.newPage();page.setDefaultTimeout(6000);await page.emulateMedia({ reducedMotion: 'reduce' });
     const errors = [];page.on('pageerror', error => errors.push(error.message));
-    let mode = 'data', saveFails = false, pending;
-    const entries = Array.from({ length: 18 }, (_, index) => ({ handle: `entry-${index}`, label: `项目凭据 ${index + 1}`, kind: 'key', target: `https://example.com/api/${index}`, method: 'POST', placement: 'header', field: 'Authorization', prefix: 'bearer', revision: 1, available: true }));
+    let mode = 'data', saveFails = false, pending, lastSave;
+    const entries = Array.from({ length: 18 }, (_, index) => ({ handle: `entry-${index}`, address: `项目凭据 ${index + 1}`, credentials: [{ id: `credential-${index}`, name: '密钥', configured: true }], revision: 1 }));
     await page.route('**/api/benchgo/vault', async route => {
       const input = route.request().postDataJSON();
+      if (input.action === 'save') lastSave = input;
       if (mode === 'loading' || mode === 'saving' && input.action === 'save') { pending = route;return; }
       if (mode === 'error' || saveFails && input.action === 'save') return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '保存连接暂时中断' }) });
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ entries: mode === 'empty' ? [] : entries }) });
@@ -46,13 +47,13 @@ test('vault keyboard flow reaches long-list editing, restores focus, recovers er
     await page.goto('http://localhost/');await page.addStyleTag({content:bundle.outputFiles.filter(file=>file.path.endsWith('.css')).map(file=>file.text).join('\n')}); await page.addScriptTag({ content: bundle.outputFiles.find(file=>file.path.endsWith('.js')).text });
     const add = page.getByRole('button', { name: '添加凭据', exact: true });
     const cancel = page.getByRole('button', { name: '取消', exact: true });
-    const secret = page.locator('input[type=password]');
+    const secret = page.locator('textarea.bg-vault-secret');
     const focused = locator => locator.evaluate(element => element === document.activeElement);
     const onscreen = locator => locator.evaluate(element => { const box = element.getBoundingClientRect();return box.top >= 0 && box.bottom <= innerHeight; });
     for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: 850 });
       await add.focus();await page.keyboard.press('Enter');
-      const name = page.getByLabel('名称', { exact: true });await name.waitFor();
+      const name = page.getByLabel('地址或名称', { exact: false });await name.waitFor();
       assert(await focused(name));assert(await onscreen(name));
       await name.fill('未保存草稿');await cancel.click();
       assert(await focused(add));assert(await onscreen(add));
@@ -60,9 +61,9 @@ test('vault keyboard flow reaches long-list editing, restores focus, recovers er
       await update.focus();await page.keyboard.press('Enter');await secret.waitFor();
       assert(await focused(secret));assert(await onscreen(secret));assert.equal(await name.inputValue(), '项目凭据 1');
       await secret.fill('test-only-credential');saveFails = true;
-      await page.getByRole('button', { name: '保存目标绑定' }).click();
-      await page.getByRole('alert').waitFor();await page.waitForFunction(() => document.activeElement?.type === 'password');
-      assert.equal(await secret.inputValue(), '');assert(await onscreen(secret));assert.equal(await name.inputValue(), '项目凭据 1');
+      await page.getByRole('button', { name: '保存凭据' }).click();
+      await page.getByRole('alert').waitFor();await page.waitForFunction(() => document.activeElement?.tagName === 'TEXTAREA');
+      assert.equal(await secret.inputValue(), 'test-only-credential');assert(await onscreen(secret));assert.equal(await name.inputValue(), '项目凭据 1');
       assert(await onscreen(page.getByRole('alert')));
       assert(await secret.getAttribute('aria-describedby').then(value => value.includes('error')));
       assert.equal(await page.locator('body').innerText().then(value => value.includes('test-only-credential')), false);
@@ -85,12 +86,24 @@ test('vault keyboard flow reaches long-list editing, restores focus, recovers er
       }
     }
     mode = 'data';await page.evaluate(() => window.showVault());
+    await add.click();
+    await page.getByLabel('地址或名称', { exact: false }).fill('局域网设备');
+    await page.getByLabel('凭证名称 1', { exact: true }).fill('账号');
+    await page.getByLabel('凭证值 1', { exact: true }).fill('local-account');
+    await page.getByRole('button', { name: '添加一项凭证' }).click();
+    await page.getByLabel('凭证名称 2', { exact: true }).fill('密码');
+    await page.getByLabel('凭证值 2', { exact: true }).fill('local-password\nsecond-line');
+    await page.getByRole('button', { name: '添加一项凭证' }).click();
+    await page.getByRole('button', { name: '移除凭证 3', exact: true }).click();
+    await page.getByRole('button', { name: '保存凭据' }).click();
+    await page.getByText('凭据已加密保存', { exact: true }).waitFor();
+    assert.deepEqual(lastSave.credentials, [{ name: '账号', value: 'local-account' }, { name: '密码', value: 'local-password\nsecond-line' }]);
     const update = page.getByRole('button', { name: '更新', exact: true }).first();await update.click();await secret.fill('test-only-replacement');
-    await page.getByRole('button', { name: '保存目标绑定' }).click();await page.getByText('凭据已保存，助手仅可使用绑定目标', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '保存凭据' }).click();await page.getByText('凭据已加密保存', { exact: true }).waitFor();
     assert(await focused(update));assert(await onscreen(update));assert.equal(await secret.count(), 0);
     await add.click();
-    await page.getByLabel('名称', { exact: true }).fill('保存中卸载');await secret.fill('test-only-credential');await page.getByLabel('完整目标地址', { exact: false }).fill('https://example.com/exact');
-    mode = 'saving';await page.getByRole('button', { name: '保存目标绑定' }).click();await page.getByRole('button', { name: '保存中…' }).waitFor();
+    await page.getByLabel('地址或名称', { exact: false }).fill('保存中卸载');await secret.fill('test-only-credential');await page.getByLabel('凭证名称 1', { exact: true }).fill('账号');
+    mode = 'saving';await page.getByRole('button', { name: '保存凭据' }).click();await page.getByRole('button', { name: '保存中…' }).waitFor();
     await page.evaluate(() => window.hideVault());assert(await page.evaluate(() => window.signals.at(-1).aborted));await pending.abort().catch(() => {});
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }

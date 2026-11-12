@@ -1,14 +1,10 @@
 .ba-ticket-waiting{min-width:0;font-size:13px;line-height:1.6}
-.ba-ticket-waiting>strong{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-primary)}
-.ba-ticket-waiting>strong>svg{flex:none;color:var(--dsw-alias-warning-default,#a06f2c)}
+.ba-ticket-waiting>[role=img]{display:inline-flex;color:var(--dsw-alias-warning-default,#a06f2c)}
 .ba-ticket-waiting>p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ba-muted)}
 .ba-ticket-waiting>.ba-row-actions{margin-top:4px}
 .ba-ticket-waiting .ba-ticket-attention{margin:0}
 .ba-ticket-waiting>[role=alert]{color:var(--dsw-alias-danger-default,#c14b45)}
-
-.ba-ticket-verification-facts{display:flex;flex-wrap:wrap;gap:8px 24px;margin:4px 0 0;padding:12px;border-radius:10px;background:var(--ba-hover);font-size:12px}
-.ba-ticket-verification-facts>div{display:flex;flex-wrap:wrap;gap:4px 10px;min-width:0}
-.ba-ticket-verification-facts dt{color:var(--ba-muted)}
-.ba-ticket-verification-facts dd{margin:0;overflow-wrap:anywhere;color:var(--dsw-alias-label-primary)}
-.ba-ticket-verification-facts .ba-ticket-verification-escalated,.ba-ticket-verification-facts .ba-ticket-verification-blocked{flex-basis:100%}
-.ba-ticket-waiting[data-state=cancelling]>strong{align-items:flex-start}
+.ba-ticket-waiting.ba-ticket-waiting-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:4px 0}
+.ba-ticket-waiting-row>.ba-ticket-waiting-reason{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ba-ticket-waiting-row>.ba-row-actions{grid-column:3;grid-row:1;margin:0;flex-wrap:nowrap}
+.ba-ticket-waiting-row>p:not(.ba-ticket-waiting-reason),.ba-ticket-waiting-row>.ba-ticket-attention{grid-column:2/-1}

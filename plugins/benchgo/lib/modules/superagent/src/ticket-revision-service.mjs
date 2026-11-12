@@ -5,7 +5,8 @@ import { ownsDesktopTicket } from './desktop-ticket-owner.mjs';
 import { ticketMandateDifference, isTicketMandateNarrowing } from './ticket-revisions.mjs';
 import { configuredWorkModel, rejectModelOverride } from './work-role-policy.mjs';
 
-const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const digest = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
+  ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex');
 const text = (value, label, max = 100000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error(`无效${label}`);
   return value;
@@ -25,6 +26,7 @@ export function createTicketRevisionService({ ctx, store, database = store.orche
     const instructionHash = digest(instruction);
     const original = (instruction?.message?.content || []).filter(row => row.type === 'text').map(row => row.text || '').join('\n');
     text(original, '当前主人原始指令');
+    input.requestId ??= digest([options.ownerAgent.id, instruction.message.id, input]);
     text(input.requestId, '请求标识', 200);
     text(input.reason, '变更原因', 10000);
     const requestKey = JSON.stringify(['ticket-change', options.ownerAgent.id, input.requestId]);
@@ -54,15 +56,16 @@ export function createTicketRevisionService({ ctx, store, database = store.orche
     const source = { channel: 'desktop', sessionId, messageId: instruction.message.id, threadId: options.threadId || 'main' };
     // A local resource change is a new desktop authorization, including when the original
     // Ticket came from a channel. The original channel authority remains in revision history.
-    const mandate = { ...database.currentTicketMandate(ticket.id, ticket.mandate), actorId: 'desktop-owner', source, instruction: original, policyVersion: current.desktopVersion,
+    const currentMandate = database.currentTicketMandate(ticket.id, ticket.mandate);
+    const mandate = { ...currentMandate, actorId: 'desktop-owner', source, instruction: original, policyVersion: current.desktopVersion,
       admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval',
       ...(project ? { project: { id: project.id, path: project.path } } : {}) };
     const { trigger } = database.ingest({ dedupeKey: `ticket-change:${digest([sessionId, instruction.message.id])}`,
       thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source,
       actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' });
-    const difference = ticketMandateDifference(ticket.mandate, mandate);
+    const difference = ticketMandateDifference(currentMandate, mandate);
     let approval;
-    if (difference && !isTicketMandateNarrowing(ticket.mandate, mandate)) {
+    if (difference && !isTicketMandateNarrowing(currentMandate, mandate)) {
       if (!(ticket.status === 'completed' || ticket.executionControl?.stopped === true)
         && digest(mandate.project ?? null) !== digest(ticket.mandate.project ?? null)
         && database.assignments(ticket.id).some(row => database.runs(row.id).length)) throw Object.assign(new Error('已有真实执行会话不能原地切换工作区；请停止原工单后创建关联调整'), { code: 'PROJECT_REQUIRES_ADJUSTMENT' });
@@ -80,7 +83,7 @@ export function createTicketRevisionService({ ctx, store, database = store.orche
       || digest(finalTicket.executionControl) !== digest(ticket.executionControl)
       || digest(finalTicket.mandate) !== digest(ticket.mandate)) throw Object.assign(new Error('确认期间原指令、工单或授权规则已变化'), { code: 'TICKET_CHANGE_STALE' });
     const approvedBinding = digest([ticket.id, ticket.instructionRevision, mandate, difference]);
-    return database.changeTicket(ticket.id, { operation: input.operation, expectedInstructionRevision: input.expectedInstructionRevision,
+    return database.changeTicket(ticket.id, { operation: input.operation, expectedInstructionRevision: input.expectedInstructionRevision ?? ticket.instructionRevision,
       target, acceptance, reason: input.reason, requestKey, requestPayload, mandate, triggerId: trigger.id,
       model, validateMandate: value => validateTicketMandate(value, { policy: finalPolicy }),
       authorizeExpansion: request => approval && approvedBinding === digest([request.ticket.id, request.ticket.instructionRevision, request.mandate, request.difference]) ? approval : null });

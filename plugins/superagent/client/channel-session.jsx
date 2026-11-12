@@ -1,4 +1,3 @@
-import React from 'react';
 import { channelMessageRecordOf } from '../src/channel-session-record.mjs';
 
 /** Display-only plugin records use the host's context renderer, never its inbox. */
@@ -25,18 +24,7 @@ export const channelMessageDefinition = {
   },
 };
 
-/** Source is supplied by the official summary projection; navigation and input
- * remain the ordinary workspace session implementation. */
-export function registerChannelSessionRows(ctx) {
-  function ChannelSource({ sessionId, useSessions }) {
-    const source = useSessions(list => list.byId[sessionId]?.projectionValues?.benchgoChannelSource);
-    if (!source?.channel) return null;
-    const label = `${source.channel} · ${source.sourceType}`;
-    return <span title={`渠道来源：${label}`} aria-label={`渠道来源：${label}`}>{source.channel}</span>;
-  }
-  const dispose = ['sidebar.session.row.trailing', 'benchgo.sidebar.session.row.trailing'].map(name => ctx.slots.inject(name, () => ctx.slots.register({
-    name, id: 'benchgo-channel-source', order: 90,
-  }, ChannelSource)));
-  dispose.push(ctx.effect(() => ctx.uiConversation.events.register(channelMessageDefinition)));
-  return () => { for (const cleanup of dispose) cleanup(); };
+/** Channel records remain part of the same official Session transcript. */
+export function registerChannelMessages(ctx) {
+  return ctx.effect(() => ctx.uiConversation.events.register(channelMessageDefinition));
 }

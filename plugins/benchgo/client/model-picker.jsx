@@ -2,6 +2,7 @@ import { Loading } from '../../shared/client/ui/loading.jsx';
 import { readJsonResponse } from './http-response.mjs';
 import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { moduleSource } from './modules.mjs';
+import { pickerCatalog, invalidateModelCatalogs, mountModelCatalogs } from './model-catalog.mjs';
 import { createPortal } from 'react-dom';
 import { UIIcon } from './iconsax.jsx';
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
@@ -14,6 +15,8 @@ import { IconPinOutlineRegular, IconPinFillRegular } from '@deepseek-ai/dsh-clie
 
 /** Selection, permissions and persistence stay with the official directory. */
 export function mountModelPicker(ctx) {
+  mountModelCatalogs(ctx);
+  ctx.effect(() => moduleSource.subscribe(invalidateModelCatalogs));
   const style = document.createElement('style'); style.textContent = css; document.head.append(style);
   ctx.effect(() => () => style.remove());
   ctx.slots.inject('conversation.input.model', () => ctx.slots.register({
@@ -95,6 +98,7 @@ function NativeActivity({ sessionId }) {
 function ModelEmptyBanner({ available, useDirectory, load, binding, openSettingsSection }) {
   const modules = useSyncExternalStore(moduleSource.subscribe, moduleSource.getSnapshot);
   const state = useDirectory(value => value);
+  const catalogRevision = useSyncExternalStore(pickerCatalog.subscribe, pickerCatalog.getSnapshot);
   const [catalog, setCatalog] = useState(null), [catalogError, setCatalogError] = useState(''), [sessionBinding, setSessionBinding] = useState(null);
   const currentTool = currentToolId(state.current?.provider);
   const harnessUnavailable = !modules.harness && currentTool !== 'deepseek';
@@ -110,15 +114,11 @@ function ModelEmptyBanner({ available, useDirectory, load, binding, openSettings
     return () => { active = false; clearTimeout(timer); };
   }, [modules.harness]);
   useEffect(() => {
-    const controller = new AbortController();
-    (async () => {
-      const response = await fetch(new URL('api/commander/tooling', document.baseURI), { method: 'POST', credentials: 'same-origin', signal: controller.signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'pickerCatalog' }) });
-      const value = await readJsonResponse(response, new URL('api/commander/tooling', document.baseURI));
-      if (value.error) throw Error(typeof value.error === 'string' ? value.error : value.error?.message || '工具目录加载失败');
-      if (!controller.signal.aborted) setCatalog(value);
-    })().catch(reason => { if (!controller.signal.aborted) setCatalogError(reason.message); });
-    return () => controller.abort();
-  }, [modules.harness, state.groups?.map(group => group.id + ':' + (group.models?.length || 0)).join('|')]);
+    let active = true;
+    setCatalogError('');
+    pickerCatalog.load().then(value => { if (active) setCatalog(value); }).catch(reason => { if (active) setCatalogError(reason.message); });
+    return () => { active = false; };
+  }, [catalogRevision, modules.harness]);
   const configuredProviders = providersForTool(state.groups, catalog, currentTool).filter(entry => catalog?.providers?.some(row => row.id === entry.id) && (entry.models.length || entry.nativeRequired));
   const noProvider = available && catalog !== null && !catalogError && !configuredProviders.length && !sessionBinding?.bound;
   if (!noProvider && !harnessUnavailable) return null;
@@ -128,12 +128,14 @@ function ModelEmptyBanner({ available, useDirectory, load, binding, openSettings
 function ModelPicker({ locked, available, useDirectory, load, select, binding, openSettingsSection }) {
   const modules = useSyncExternalStore(moduleSource.subscribe, moduleSource.getSnapshot);
   const state = useDirectory(value => value);
+  const catalogRevision = useSyncExternalStore(pickerCatalog.subscribe, pickerCatalog.getSnapshot);
   const [open, setOpen] = useState(false), [tool, setTool] = useState('deepseek'), [provider, setProvider] = useState(null), [query, setQuery] = useState('');
   const [catalog, setCatalog] = useState(null), [catalogLoading, setCatalogLoading] = useState(false), [revision, setRevision] = useState(0);
   const [toolsOpen, setToolsOpen] = useState(false), [position, setPosition] = useState(null), [error, setError] = useState(''), [catalogError, setCatalogError] = useState('');
   const [sessionBinding, setSessionBinding] = useState(null), [bindingError, setBindingError] = useState('');
   const [effortDrag, setEffortDrag] = useState(null);
   const [effortOptimistic, setEffortOptimistic] = useState(null);
+  const [, renderPins] = useState(0);
   const pinnedModels = useRef((() => { try { return JSON.parse(localStorage.getItem('commander.pinned-models') || '{}') || {}; } catch { return {}; } })());
   const trigger = useRef(null), menu = useRef(null), search = useRef(null), selecting = useRef(false), toolTrigger = useRef(null);
   const id = useId(), currentTool = currentToolId(state.current?.provider);
@@ -165,17 +167,16 @@ function ModelPicker({ locked, available, useDirectory, load, select, binding, o
   const toolLocked = modelLocked || !!boundTool;
   const bindingHint = harnessUnavailable ? 'Harness 聚合未启用，请启用模块或切换模型' : bindingError || (sessionBinding?.bound && !sessionBinding?.route?.providerId ? '此对话使用本机默认模型，当前不能在会话中切换供应商模型' : sessionBinding?.bound ? '当前会话可在已选工具和供应商内切换模型' : sessionBinding === null ? '正在确认会话绑定状态…' : '');
   const close = () => { setOpen(false); setProvider(null); setToolsOpen(false); setQuery(''); setEffortDrag(null); };
-  const refresh = () => { setError(''); setRevision(value => value + 1); void load().catch(reason => setError(reason.message)); };
+  const refresh = (force = true) => { setError(''); if (force) pickerCatalog.invalidate(); setRevision(value => value + 1); void load().catch(reason => setError(reason.message)); };
   useEffect(() => {
-    const controller = new AbortController(); setCatalogLoading(true); setCatalogError('');
-    (async () => {
-      const response = await fetch(new URL('api/commander/tooling', document.baseURI), { method: 'POST', credentials: 'same-origin', signal: controller.signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'pickerCatalog' }) });
-      const value = await readJsonResponse(response, new URL('api/commander/tooling', document.baseURI)); if (value.error) throw Error(typeof value.error === 'string' ? value.error : value.error?.message || '工具目录加载失败');
-      if (controller.signal.aborted) return;
+    let active = true;
+    setCatalogLoading(pickerCatalog.peek() === null); setCatalogError('');
+    pickerCatalog.load().then(value => {
+      if (!active) return;
       setCatalog(value); setTool(current => availableTools(value).some(entry => entry.id === current && entry.routeSupported) ? current : 'deepseek');
-    })().catch(reason => { if (!controller.signal.aborted) setCatalogError(reason.message); }).finally(() => { if (!controller.signal.aborted) setCatalogLoading(false); });
-    return () => controller.abort();
-  }, [revision, modules.harness]);
+    }).catch(reason => { if (active) setCatalogError(reason.message); }).finally(() => { if (active) setCatalogLoading(false); });
+    return () => { active = false; };
+  }, [revision, modules.harness, catalogRevision]);
   useEffect(() => {
     if (!open) return;
     const place = () => {
@@ -212,7 +213,7 @@ function ModelPicker({ locked, available, useDirectory, load, select, binding, o
     event.stopPropagation();
     pinnedModels.current = { ...(pinnedModels.current || {}), [modelKey(group, model)]: !isPinned(group, model) };
     try { localStorage.setItem('commander.pinned-models', JSON.stringify(pinnedModels.current)); } catch { /* Storage may be unavailable. */ }
-    setRevision(value => value + 1);
+    renderPins(value => value + 1);
   };
   const providers = providersForTool(state.groups, catalog, tool).filter(item => !boundProvider || item.id === boundProvider), selectedProvider = providers.find(item => item.id === provider);
   const matches = text => text.toLowerCase().includes(query.trim().toLowerCase());
@@ -276,13 +277,14 @@ function ModelPicker({ locked, available, useDirectory, load, select, binding, o
     const buttons = [...scope.querySelectorAll('button:not(:disabled),input')], current = buttons.indexOf(document.activeElement), direction = event.key === 'ArrowDown' ? 1 : -1;
     event.preventDefault(); buttons[(current + direction + buttons.length) % buttons.length]?.focus();
   };
-  const sliderDisabled = busy || !catalog || !!catalogError || !modules.harness && currentTool !== 'deepseek';
+  const sliderDisabled = busy || catalogLoading || !catalog || !!catalogError || !modules.harness && currentTool !== 'deepseek';
   return <>
-    <Tooltip label={noProvider ? '无模型可用，请先配置模型供应商' : modelLabel + (effortName ? ' · ' + effortName : '') + (bindingHint ? '。' + bindingHint : '')} portal><button ref={trigger} type="button" className="cmd-model-trigger" data-empty={noProvider || undefined} disabled={modelLocked || !available || busy} aria-label={noProvider ? '无模型可用，请先配置模型供应商' : '选择工具与模型，当前 ' + (entries.find(item => item.id === currentTool)?.name ?? currentTool) + ' ' + (currentModel?.name ?? state.current?.model ?? '') + (sessionBinding?.bound ? '。可在当前工具和供应商内切换模型' : bindingHint ? '。' + bindingHint : '')} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => { if (open) close(); else { setTool(currentTool); setProvider(null); setQuery(''); setToolsOpen(false); setOpen(true); refresh(); } }}>
+    <Tooltip label={noProvider ? '无模型可用，请先配置模型供应商' : modelLabel + (effortName ? ' · ' + effortName : '') + (bindingHint ? '。' + bindingHint : '')} portal><button ref={trigger} type="button" className="cmd-model-trigger" data-empty={noProvider || undefined} disabled={modelLocked || !available || busy} aria-label={noProvider ? '无模型可用，请先配置模型供应商' : '选择工具与模型，当前 ' + (entries.find(item => item.id === currentTool)?.name ?? currentTool) + ' ' + (currentModel?.name ?? state.current?.model ?? '') + (sessionBinding?.bound ? '。可在当前工具和供应商内切换模型' : bindingHint ? '。' + bindingHint : '')} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => { if (open) close(); else { setTool(currentTool); setProvider(null); setQuery(''); setToolsOpen(false); setOpen(true); refresh(false); } }}>
       <span className="cmd-model-caption">{modelLabel}{!noProvider && effortName ? ' · ' + effortName : ''}</span><UIIcon name="chevronDown" size={14} />
     </button></Tooltip>
-    {open && position && createPortal(<div ref={menu} id={id} role="dialog" aria-label="工具与模型" className="cmd-model-popup" style={position} onKeyDown={onMenuKey}>
-      {catalogLoading && <Loading className="cmd-model-loading-overlay" label="正在加载模型目录" />}
+    {open && position && createPortal(<div ref={menu} id={id} role="dialog" aria-label="工具与模型" aria-busy={catalogLoading} className="cmd-model-popup" style={position} onKeyDown={onMenuKey}>
+      {catalogLoading && !catalog && <Loading className="cmd-model-loading-overlay" label="正在加载模型目录" />}
+      {catalogLoading && catalog && <p className="cmd-model-refresh-status" role="status">正在更新模型目录…</p>}
       <div className="cmd-model-provider-card"><header className="cmd-model-header">
         {provider ? <button type="button" className="cmd-model-back" aria-label="返回供应商列表" disabled={busy} onClick={() => { setProvider(null); setQuery(''); }}><UIIcon name="chevronLeft" size={16} /><span>{selectedProvider?.name || '供应商'}</span></button> : <span className="cmd-model-heading">选择供应商</span>}
         <Tooltip label={boundTool ? '当前工具为 ' + boundTool + '，只能切换该工具的模型' : '选择 Agent 工具'} portal><button ref={toolTrigger} type="button" className="cmd-model-tool-trigger" aria-label="选择 Agent 工具" aria-haspopup="menu" aria-expanded={toolsOpen} disabled={busy || toolLocked} onClick={() => setToolsOpen(value => !value)}><ToolBrandIcon tool={tool} size={18} muted={!activeTool?.installed || !activeTool?.routeSupported} /><span>{activeTool?.name || (catalogLoading ? '识别工具…' : tool)}</span><UIIcon name="chevronDown" size={13} /></button></Tooltip>

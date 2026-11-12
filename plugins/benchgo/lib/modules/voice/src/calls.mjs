@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { VoiceError } from './config.mjs';
 
-const TTL = 45000, MAX_DURATION = 30 * 60000;
+const TTL = 45000, MAX_DURATION = 30 * 60000, LISTENING_DURATION = 24 * 60 * 60000;
 const identity = (value, name) => { if (typeof value !== 'string' || !value || value.length > 200 || /[\u0000-\u001f]/u.test(value)) throw new VoiceError(`Invalid ${name}`); return value; };
 /** Process-local ownership only. Media cancellation never grants/revokes Agent permissions. */
 export class CallLeases {
@@ -14,13 +14,16 @@ export class CallLeases {
     lease.timer.unref?.();
   }
   purge() { for (const lease of this.sessions.values()) if (Math.min(lease.expiresAt, lease.maxEndsAt) <= this.now()) this.remove(lease); }
-  start(input) {
+  start(input, { listening = false } = {}) {
     this.purge(); const sessionId = identity(input.sessionId, 'sessionId'), deviceId = identity(input.deviceId, 'deviceId');
     const existing = this.sessions.get(sessionId);
     if (existing) { if (existing.deviceId !== deviceId) throw new VoiceError('This conversation already has an active call on another device', 409); return this.public(existing); }
     if (this.sessions.size >= 16) throw new VoiceError('Active call limit reached', 429);
     const startedAt = this.now();
-    const lease = { callId: randomUUID(), sessionId, deviceId, startedAt, expiresAt: startedAt + TTL, maxEndsAt: startedAt + MAX_DURATION, controller: new AbortController() };
+    // Only the host's validated option can opt into long listening. A request
+    // body cannot extend its own lease, and reconnecting never resets the cap.
+    const longListening = listening === true;
+    const lease = { callId: randomUUID(), sessionId, deviceId, startedAt, expiresAt: startedAt + TTL, maxEndsAt: startedAt + (longListening ? LISTENING_DURATION : MAX_DURATION), ...(longListening ? { listening: true } : {}), controller: new AbortController() };
     this.sessions.set(sessionId, lease); this.schedule(lease); return this.public(lease);
   }
   owned(input) {
@@ -33,5 +36,10 @@ export class CallLeases {
   heartbeat(input) { const lease = this.owned(input); lease.expiresAt = Math.min(this.now() + TTL, lease.maxEndsAt); this.schedule(lease); return this.public(lease); }
   end(input) { const lease = this.owned(input); this.remove(lease); return { ended: true }; }
   media(callId) { this.purge(); const lease = [...this.sessions.values()].find(value => value.callId === callId); if (!lease) throw new VoiceError('Voice call has expired', 409); return lease.controller.signal; }
+  mediaOptions(callId) {
+    this.purge(); const lease = [...this.sessions.values()].find(value => value.callId === callId);
+    if (!lease) throw new VoiceError('Voice call has expired', 409);
+    return lease.listening ? { maxDurationMs: Math.min(LISTENING_DURATION, Math.max(1, lease.maxEndsAt - this.now())) } : {};
+  }
   clear() { for (const lease of this.sessions.values()) this.remove(lease); }
 }

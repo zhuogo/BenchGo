@@ -45,9 +45,9 @@ export async function requestSpeech(_fetcher, config, text, signal, { socket = (
         if (created) throw new VoiceError('Duplicate TTS session', 502, 'tts_session_invalid');
         created = true;
         const characters = Array.from(text);
-        const chunkSize = Math.min(1000, Math.max(1, Math.ceil(characters.length / 2)));
+        const chunkSize = 1000;
         for (let offset = 0; offset < characters.length; offset += chunkSize) send('tts.text.delta', { text: characters.slice(offset, offset + chunkSize).join('') });
-        send('tts.text.flush'); send('tts.text.done'); resolveReady(); return;
+        send('tts.text.done'); resolveReady(); return;
       }
       if (!created) throw new VoiceError('TTS audio arrived before session creation', 502, 'tts_session_invalid');
       if (event.type === 'tts.response.audio.delta') enqueue(data.audio);
@@ -66,6 +66,7 @@ export async function requestSpeech(_fetcher, config, text, signal, { socket = (
   });
   ws.on('close', () => { if (!closed) fail(new VoiceError('TTS WebSocket ended before completion', 502, 'tts_stream_incomplete')); });
   if (operation.signal.aborted) abort();
+  // Forward the first samples immediately; all routes use the common player.
   try { await ready; return pcmResponse(source, operation); }
   catch (error) { void source.cancel().catch(() => {}); operation.cancel(); throw error; }
 }

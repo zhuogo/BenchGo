@@ -9,6 +9,18 @@ const channelMessage = row => row?.kind === 'channel-message' && row.source?.kin
   && typeof row.source.channelSource?.sourceType === 'string' && !!row.source.channelSource.sourceType
   && typeof row.text === 'string';
 const publicText = row => typeof row.text === 'string' && !!row.text.trim();
+const internalRequest = row => row.ticketReply || row.ticketState || row.executionInput
+  || row.message?.source && !isChatUserMessage(row.message);
+const messageTime = row => {
+  const time = row.time == null ? NaN : new Date(row.time).getTime();
+  return Number.isFinite(time) ? time : 0;
+};
+const compareRows = (a, b) => {
+  // Pending input follows settled conversation and retains the official inbox
+  // order. Its browser echo may disappear or use a different clock.
+  if (a.submissionState || b.submissionState) return Number(!!a.submissionState) - Number(!!b.submissionState);
+  return messageTime(a) - messageTime(b);
+};
 function conversationalNotification(row) {
   if (row.type === 'ticket.attention') return !!(row.attention || row.currentAttention)?.question?.question;
   if ([row.origin, row.publication?.origin].some(origin => ['system', 'worker'].includes(origin))) return false;
@@ -18,15 +30,13 @@ function conversationalNotification(row) {
   if (row.type === 'ticket.accepted') return row.origin === 'router'
     && typeof row.ticketId === 'string' && !!row.ticketId
     && typeof row.requestId === 'string' && !!row.requestId && row.text.length <= 6000;
-  // Older ordinary replies and interactive publications have no origin field.
-  // Their absence is not evidence that a real user question should disappear.
-  return true;
+  return false;
 }
 
 /** Defence in depth: only the server publication projection can supply assistant rows. */
-export function quietChatRows(history = {}, threadId = 'main', session = {}, chat) {
+export function quietChatRows(history = {}, threadId = 'main', session = {}, chat, inbox) {
   const rows = (history.messages || []).filter(row => !row.streaming &&
-    (channelMessage(row) || (row.kind !== 'channel-message' && (row.role === 'user' || (row.role === 'assistant' && row.kind === 'final'
+    (channelMessage(row) || (row.kind !== 'channel-message' && ((row.role === 'user' && (!row.source || isChatUserMessage(row))) || (row.role === 'assistant' && row.kind === 'final'
       && ![row.origin, row.publication?.origin].some(origin => ['system', 'worker'].includes(origin)))))))
     .map(row => ({ ...row, key: `message:${row.id}` }));
   const historyEnd = Math.max(-1, ...rows.map(row => row.seq).filter(Number.isFinite));
@@ -69,12 +79,27 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
     if (requestId) admittedRequests.add(requestId);
     if (alreadyKnown || seenSeq.has(node.seq) || node.seq <= historyEnd) continue;
     seenSeq.add(node.seq);
+    if (node.messageId) admittedMessages.add(node.messageId);
     const content = (node.content || []).filter(block => ['text', 'image', 'file'].includes(block.type));
     rows.push({ key: `live-user:${node.seq}`, role: 'user', seq: node.seq, rpcId: requestId, time: node.time,
       text: content.filter(block => block.type === 'text').map(block => block.text).join('\n'), content, provisional: true });
   }
+  for (const [target, placement] of [['next-step', 'steering'], ['next-turn', 'queued']]) {
+    for (const message of inbox?.[target] || []) {
+      if (message.source?.kind !== 'user' || admittedMessages.has(message.id)) continue;
+      const requestId = message.source.rpcId || message.source.requestId;
+      if (requestId && admittedRequests.has(requestId)) continue;
+      const content = (message.content || []).filter(block => ['text', 'image', 'file'].includes(block.type));
+      const echo = session.pendingSubmissions?.find(row => row.requestId === requestId);
+      rows.push({ key: requestId ? `pending:${requestId}` : `inbox:${message.id}`, id: message.id,
+        rpcId: requestId, role: 'user', text: content.filter(block => block.type === 'text').map(block => block.text).join('\n'),
+        content, time: echo?.time, submissionState: placement, provisional: true });
+      admittedMessages.add(message.id);
+      if (requestId) admittedRequests.add(requestId);
+    }
+  }
   for (const request of history.requests || []) {
-    if (request.threadId !== threadId || !request.requestId) continue;
+    if (request.threadId !== threadId || !request.requestId || internalRequest(request)) continue;
     if (admittedMessages.has(request.messageId)) admittedRequests.add(request.requestId);
     if (['queued', 'processing', 'prepared', 'failed', 'uncertain'].includes(request.status)
       && typeof request.text === 'string' && request.text.trim()
@@ -83,6 +108,7 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
         key: request.questionReply ? `message:${request.messageId}` : `request:${request.requestId}`,
         id: request.messageId, rpcId: request.requestId, role: 'user',
         ...(request.questionReply ? { kind: 'question-reply', ...request.questionReply } : { text: request.text }),
+        ...(request.status === 'queued' ? { submissionState: 'queued' } : {}),
         time: request.createdAt, provisional: true });
       if (request.questionReply) answeredCalls.add(request.questionReply.callId);
       admittedRequests.add(request.requestId);
@@ -95,8 +121,9 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
     }
   }
   for (const pending of session.pendingSubmissions || []) {
-    if (pending.placement !== 'transcript' || admittedRequests.has(pending.requestId)) continue;
+    if (!['transcript', 'steering', 'queued'].includes(pending.placement) || admittedRequests.has(pending.requestId)) continue;
     rows.push({ key: `pending:${pending.requestId}`, rpcId: pending.requestId, role: 'user', text: pending.text, time: pending.time,
+      ...(pending.placement !== 'transcript' ? { submissionState: pending.placement } : {}),
       content: (pending.attachments || []).map(block => ({ type: block.type, name: block.value?.name })), provisional: true });
   }
   for (const row of history.notifications || []) {
@@ -108,5 +135,5 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
       time: row.createdAt || row.time, notification: true });
   }
   return [...new Map(rows.map(row => [row.key, row])).values()]
-    .sort((a, b) => (new Date(a.time).getTime() || 0) - (new Date(b.time).getTime() || 0));
+    .sort(compareRows);
 }

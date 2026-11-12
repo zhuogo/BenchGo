@@ -88,6 +88,31 @@ export function memorySearchTerms(text) {
   return [...tokens];
 }
 
+/** Relevant excerpts only; full bodies remain available through memory/document tools. */
+export function selectContextMemories(entries, query, { maxEntries = 8, maxCharacters = 8000 } = {}) {
+  const terms = memorySearchTerms(String(query || ''));
+  if (!terms.length) return [];
+  const ranked = entries.map(entry => {
+    const content = normalized(entry.content);
+    return { entry, score: terms.reduce((sum, term) => sum + (content.includes(term) ? term.length : 0), 0) };
+  })
+    .filter(row => row.score > 0).sort((a, b) => b.score - a.score);
+  const result = [], seen = new Set();
+  for (const { entry } of ranked) {
+    const key = normalized(entry.content);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const content = cleanText(entry.content).slice(0, Math.min(2000, maxCharacters));
+    if (!content) continue;
+    result.push({ id: entry.id, content, scope: entry.scope,
+      source: object(entry.source) ? sourceReference(entry.source) : entry.source,
+      ...(content.length < cleanText(entry.content).length ? { truncated: true } : {}) });
+    maxCharacters -= content.length;
+    if (result.length >= maxEntries || maxCharacters <= 0) break;
+  }
+  return result;
+}
+
 export async function createAssistantMemory({ directory, documents }) {
   const db = new DatabaseSync(join(directory, 'assistant.db'));
   db.exec(`PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;

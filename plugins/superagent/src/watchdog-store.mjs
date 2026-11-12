@@ -4,37 +4,10 @@ import { join } from 'node:path';
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write';
 import { DataOwner } from '../../benchgo/shared/data-owner.mjs';
 import { watchdogPublicConfig } from './watchdog-config.mjs';
-import { redactExecutionText } from './execution-summary-input.mjs';
 
 const copy = value => structuredClone(value);
 export const watchdogDigest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const invalid = () => Object.assign(new Error('监督记录格式无效，已保留原文件'), { code: 'WATCHDOG_STORE_INVALID' });
-const classifications = new Set(['no-progress', 'off-target', 'waiting', 'insufficient-evidence']);
-const text = value => typeof value === 'string' && value.length > 0 && value.length <= 512;
-const count = (value, fallback = 0) => Number.isSafeInteger(value) && value >= 0 ? value : fallback;
-function auxiliaryRecord(value) {
-  if (value?.kind !== 'judgement' || !text(value.ticketId) || !text(value.runId)
-    || !Number.isSafeInteger(value.instructionRevision) || value.instructionRevision < 1
-    || !Number.isSafeInteger(value.watermark) || value.watermark < 0) throw invalid();
-  const result = value.result || {}, tracking = value.tracking || {};
-  return { kind: 'judgement', ticketId: value.ticketId, runId: value.runId,
-    instructionRevision: value.instructionRevision, watermark: value.watermark,
-    status: ['running', 'judged', 'skipped', 'degraded'].includes(value.status) ? value.status : 'degraded',
-    code: /^[A-Z][A-Z0-9_]{0,79}$/.test(value.code || '') ? value.code : 'UNKNOWN',
-    startedAt: Number.isFinite(value.startedAt) ? value.startedAt : null,
-    completedAt: Number.isFinite(value.completedAt) ? value.completedAt : null,
-    result: { classification: classifications.has(result.classification) ? result.classification : 'insufficient-evidence',
-      outputRelevance: ['relevant', 'irrelevant'].includes(result.outputRelevance) ? result.outputRelevance : 'unknown',
-      reason: redactExecutionText(String(result.reason || ''), 300), signalEligible: result.signalEligible === true,
-      evidenceWatermark: count(result.evidenceWatermark, null),
-      evidenceRefs: Array.isArray(result.evidenceRefs) ? result.evidenceRefs.filter(text).slice(0, 24) : [],
-      uncertainty: ['low', 'medium', 'high'].includes(result.uncertainty) ? result.uncertainty : 'high', hits: count(result.hits) },
-    tracking: { lastAttemptAt: Number.isFinite(tracking.lastAttemptAt) ? tracking.lastAttemptAt : null,
-      lastJudgedWatermark: count(tracking.lastJudgedWatermark, -1),
-      lastEvidenceFingerprint: /^[a-f0-9]{64}$/.test(tracking.lastEvidenceFingerprint || '') ? tracking.lastEvidenceFingerprint : null,
-      classification: classifications.has(tracking.classification) ? tracking.classification : null, hits: count(tracking.hits) } };
-}
-
 /** One independent supervisor owns only its observation journal, never the Ticket ledger. */
 export async function createWatchdogStore({ directory, config, now = Date.now }) {
   const root = join(directory, 'watchdog'), filename = join(root, 'state.json');
@@ -85,15 +58,5 @@ export async function createWatchdogStore({ directory, config, now = Date.now })
     },
     async close() { if (closed) return; closed = true; await chain; await owner.close(); },
   };
-  store.recordAuxiliaryActivity = record => {
-    const safe = auxiliaryRecord(record);
-    return store.update(next => {
-      next.auxiliaryActivity.push(safe);
-      next.auxiliaryActivity = next.auxiliaryActivity.slice(-config.retentionChecks * 4);
-      return safe;
-    });
-  };
-  store.latestAuxiliaryActivity = ({ kind, ticketId, runId, instructionRevision }) => copy(state.auxiliaryActivity.findLast(row =>
-    row.kind === kind && row.ticketId === ticketId && row.runId === runId && row.instructionRevision === instructionRevision) ?? null);
   return store;
 }

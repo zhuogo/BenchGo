@@ -12,10 +12,10 @@ const idsOf = values => {
     throw fail('CLEANUP_INPUT_INVALID', '工单清单须为 1 至 1000 个不重复的明确 ID');
   return [...values].sort();
 };
-const globalOwner = scope => {
-  if (scope?.owner !== 'desktop-owner' || scope?.mode !== 'global' || Object.keys(scope).some(key => !['owner', 'mode'].includes(key)))
-    throw fail('CLEANUP_SCOPE_DENIED', '工单整理需要主人主聊天的全局授权范围');
-  return { owner: 'desktop-owner', mode: 'global' };
+const globalScope = scope => {
+  if (scope?.mode !== 'global' || Object.keys(scope).some(key => !['owner', 'mode'].includes(key)))
+    throw fail('CLEANUP_SCOPE_DENIED', '工单整理需要明确的全局清单范围');
+  return { mode: 'global' };
 };
 const archiveFields = ['archived', 'archivedAt', 'cleanupReceiptId', 'archiveRevision'];
 const archiveSlice = value => Object.fromEntries(archiveFields.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
@@ -98,7 +98,7 @@ export function installTaskCleanupStore({ db, transaction }) {
     return { ...JSON.parse(row.payload), consumedBy: row.consumed_by };
   };
   function previewCleanup({ scope, ids, includeUnsettled = false } = {}) {
-    scope = globalOwner(scope);
+    scope = globalScope(scope);
     if (typeof includeUnsettled !== 'boolean') throw fail('CLEANUP_INPUT_INVALID', 'includeUnsettled 必须为布尔值');
     return transaction(() => {
       const selected = ids === undefined ? (hasTickets() ? db.prepare('SELECT id FROM sa_tickets ORDER BY created_at,id').all().map(row => row.id) : []) : idsOf(ids);
@@ -125,7 +125,7 @@ export function installTaskCleanupStore({ db, transaction }) {
   /** Host-only capability: never expose this factory or its confirmedBy argument as model tool inputs. */
   function createConfirmation({ previewId, manifestHash, ids, actorId, source } = {}) {
     ids = idsOf(ids);
-    if (actorId !== 'desktop-owner' || !source || !identity(source.sessionId) || !identity(source.messageId || source.callId)
+    if (!identity(actorId) || !source || !identity(source.sessionId) || !identity(source.messageId || source.callId)
       || !identity(manifestHash) || !identity(previewId))
       throw fail('CLEANUP_CONFIRMATION_REQUIRED', '需要绑定具体清单与来源的本次真人确认');
     const preview = readPreview(previewId);
@@ -213,7 +213,7 @@ export function installTaskCleanupStore({ db, transaction }) {
     });
   }
   function previewRestore({ scope, receiptId, ids } = {}) {
-    scope = globalOwner(scope);
+    scope = globalScope(scope);
     return transaction(() => {
       const original = receipt(receiptId);
       if (!original || !['archive', 'legacy-migration'].includes(original.operation)) throw fail('CLEANUP_RECEIPT_NOT_FOUND', '归档回执不存在');
@@ -233,11 +233,17 @@ export function installTaskCleanupStore({ db, transaction }) {
     });
   }
   return { previewCleanup, getCleanupPreview: readPreview, commitCleanup, previewRestore, restoreCleanup, createConfirmation,
-    cleanupHistory({ ticketId, limit = 100 } = {}) {
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000 || ticketId !== undefined && !identity(ticketId))
-        throw fail('CLEANUP_INPUT_INVALID', '无效清理历史查询');
-      const where = ticketId === undefined ? '' : " WHERE EXISTS (SELECT 1 FROM json_each(task_cleanup_receipts.payload,'$.items') item WHERE json_extract(item.value,'$.id')=?)";
+    cleanupHistory({ ticketId, receiptId, limit = 100 } = {}) {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000 || ticketId !== undefined && !identity(ticketId)
+        || receiptId !== undefined && !identity(receiptId)) throw fail('CLEANUP_INPUT_INVALID', 'Invalid cleanup history query');
+      const filters = [], args = [];
+      if (receiptId !== undefined) { filters.push('id=?'); args.push(receiptId); }
+      if (ticketId !== undefined) {
+        filters.push("EXISTS (SELECT 1 FROM json_each(task_cleanup_receipts.payload,'$.items') item WHERE json_extract(item.value,'$.id')=?)");
+        args.push(ticketId);
+      }
+      const where = filters.length ? ` WHERE ${filters.join(' AND ')}` : '';
       return db.prepare(`SELECT payload FROM task_cleanup_receipts${where} ORDER BY rowid DESC LIMIT ?`)
-        .all(...(ticketId === undefined ? [] : [ticketId]), limit).map(row => JSON.parse(row.payload));
+        .all(...args, limit).map(row => JSON.parse(row.payload));
     } };
 }

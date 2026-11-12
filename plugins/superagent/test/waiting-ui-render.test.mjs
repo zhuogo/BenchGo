@@ -25,7 +25,6 @@ async function fixture() {
       import { QuietChat } from './plugins/superagent/client/quiet-chat.jsx';
       import { AssistantConversation } from './plugins/superagent/client/conversation.jsx';
       import { AssistantHome } from './plugins/superagent/client/home.jsx';
-      import { Evaluations } from './plugins/superagent/client/evaluations.jsx';
       import css from './plugins/superagent/client/style.css';
       import hostCss from './plugins/benchgo/client/style.css';
       const root = createRoot(document.getElementById('root')); let serial = 0;
@@ -41,9 +40,7 @@ async function fixture() {
           if(control.state==='error'||control.fail) throw Error('测试连接暂不可用');
           if(name==='tickets') return {tickets:control.state==='empty'?[]:[ticket]};
           if(name==='goalList') return {goals:[]};
-          if(name==='checkpointList') return {checkpoints:[]};
           if(name==='state') return {config:{revision:1,workerConcurrency:2}};
-          if(name==='evaluations') return {candidates:control.state==='empty'?[]:[{id:'audit',threadId:'remote',retryCount:2,intakeEvent:{id:'raw',intakeStage:'pending',content:'原始评估正文\\n完整原始证据',source:{channel:'feishu'}}}]};
           if(name==='ticketResume') return control.blocked ? {queued:false,code:'MANDATE_REVOKED'} : {queued:true};
           return {};
         };
@@ -52,8 +49,7 @@ async function fixture() {
         const home={api,onRefresh:refresh,onOpenResources:resources,threadId:'main',history:{messages:[],notifications:[]},assistantName:'BenchGo'};
         let content;
         if(surface==='waiting') content=<TicketWaiting api={api} ticket={ticket} onRefresh={refresh} onOpenResources={resources}/>;
-        if(surface==='tickets') content=<Tickets api={api} requestedTicket={state==='linked'?{ticketId:'original'}:state==='missing'?{ticketId:'missing'}:undefined} onCreateGoal={()=>window.calls.push(['createGoal'])} onOpenGoals={()=>resources('goals')}/>;
-        if(surface==='evaluations') content=<Evaluations api={api}/>;
+        if(surface==='tickets') content=<Tickets api={api} requestedTicket={state==='linked'?{ticketId:'original'}:state==='missing'?{ticketId:'missing'}:undefined} onOpenGoals={()=>resources('goals')}/>;
         if(surface==='chat') {
           const notification={eventId:'wait',type:'ticket.attention',threadId:'main',ticketId:ticket.id,ticketStatus:ticket.status,currentInstructionRevision:2,currentResultVersion:3,
             currentExecutionControl:ticket.executionControl,currentResult:ticket.results[0],currentAttention:ticket.attentions?.[0],continuationWait:ticket.continuationWait,text:'请选择本次范围',createdAt:'2026-11-05T10:01:00Z'};
@@ -102,10 +98,8 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     assert.equal(await button('重试核验').count(), 0);
     await button('刷新记录').click();
     assert.deepEqual((await calls()).slice(0, 1), [['refresh']]);
-    await page.evaluate(() => window.control.fail = true);
-    await button('停止工单').click();
-    await page.getByRole('alert').waitFor();
-    assert.match(await page.getByRole('alert').innerText(), /可刷新记录/);
+    assert.equal(await button('停止工单').count(), 0);
+    assert.equal((await button('刷新记录').innerText()).trim(), '');
     // Tickets parked by the execution-time gate removed on 2026-11-06 resume without added time.
     await scenario('waiting', 'data', { continuationWait: { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 3 } });
     assert.equal(await page.getByRole('button', { name: /增加10分钟|额度/ }).count(), 0);
@@ -121,10 +115,12 @@ test('real waiting controls and chat/ticket connection states remain actionable 
       assert.equal(await page.getByRole('button', { name: /继续|恢复|重试核验/ }).count(), 0);
       await button('刷新记录').click();
       assert.deepEqual(await calls(), [['refresh']]);
-      await button('停止工单').click();
-      assert((await calls()).some(([name, input]) => name === 'ticketStop' && input.ticketId === 'original'));
+      assert.equal(await button('停止工单').count(), 0);
     }
     const screenshots = process.env.BENCHGO_WAITING_SCREENSHOTS;
+    await scenario('waiting', 'data', { execution: { uncertainty: { reasonCode: 'session-interrupted', instructionRevision: 2, reason: '执行中断，等待继续。' } } });
+    await button('继续原工单').click();
+    assert.deepEqual((await calls())[0], ['ticketResume', { ticketId: 'original' }]);
     if (screenshots) await mkdir(screenshots, { recursive: true });
     const uncertainty = { reasonCode: 'WORKER_TURN_INCOMPLETE', reason: '执行回合未提交完整结束记录。', attempts: 2, nextCheckAt: 1794218400000, escalated: false };
     for (const theme of ['light', 'dark']) for (const width of [1440, 390]) {
@@ -140,15 +136,10 @@ test('real waiting controls and chat/ticket connection states remain actionable 
         await scenario('waiting', 'data', overrides);
         const waiting = page.getByLabel('工单等待状态');
         await waiting.getByText(name.startsWith('stop') ? /后续动作已拦截/ : uncertainty.reason, { exact: !name.startsWith('stop') }).waitFor();
-        if (name === 'checking' || name === 'stop-overdue') await waiting.getByText('已查 2 次', { exact: true }).waitFor();
+        assert.equal(await waiting.getByText(/自动核查|下次核查|已查 \d+ 次/).count(), 0);
         if (name === 'missing-evidence') {
-          await waiting.getByText('等待完整恢复证据后安排', { exact: true }).waitFor();
           await waiting.getByText('缺少完整结束证据，不据此重跑。', { exact: true }).waitFor();
           assert.equal(await waiting.getByText(/正在自动核查|继续自动核查/).count(), 0);
-        }
-        if (name === 'escalated') {
-          await waiting.getByText('已查 4 次', { exact: true }).waitFor();
-          await waiting.getByText('已提请 Router 跟进，系统继续自动核查。', { exact: true }).waitFor();
         }
         if (name === 'stop-overdue') await waiting.getByText(/执行端仍未确认退出/).waitFor();
         if (name.startsWith('stop')) assert.equal(await button('停止工单').count(), 0, 'a stopping ticket cannot issue a second stop');
@@ -162,10 +153,10 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     await page.setViewportSize({ width: 1440, height: 960 });
     await scenario('tickets', 'data', { status: 'waiting', execution: { instructionRevision: 2, uncertainty } });
     const row = page.locator('.ba-task-list-row').first();
-    await row.locator('.ba-task-verification').getByText(/已查 2 次.*下次/).waitFor();
+    assert.equal(await row.getByText(/自动核查|下次核查|已查 2 次/).count(), 0);
     await row.locator('.ba-task-summary').getByText(uncertainty.reason, { exact: true }).waitFor();
     await page.getByRole('tab', { name: '看板', exact: true }).click();
-    await page.locator('.ba-ticket-board .ba-task-verification').getByText(/已查 2 次.*下次/).waitFor();
+    assert.equal(await page.locator('.ba-ticket-board').getByText(/自动核查|下次核查|已查 2 次/).count(), 0);
     assert.equal((await calls()).some(([name]) => ['ticketResume', 'ticketStop'].includes(name)), false);
     const question = { id: 'question', state: 'waiting', origin: 'worker', instructionRevision: 2, resultVersion: 3,
       question: { question: '请选择本次范围', options: [{ label: '全部' }] } };
@@ -176,6 +167,17 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     const answer = (await calls()).find(([name]) => name === 'ticketAnswer')[1];
     assert.equal(answer.ticketId, 'original'); assert.equal(answer.attentionId, 'question'); assert.equal(answer.instructionRevision, 2);
     assert.deepEqual(answer.answer, { selected: ['全部'] });
+    await scenario('tickets', 'data', { attentions: [question] });
+    await page.locator('.ba-task-list').getByText('核验工作结果', { exact: true }).click();
+    await detail.waitFor();
+    await detail.getByRole('radio', { name: '全部', exact: true }).check();
+    for (const name of ['任务要求', '结果与证据', '执行记录']) {
+      await detail.getByRole('tab', { name, exact: true }).click();
+      assert(await detail.getByLabel('工单等待状态', { exact: true }).isVisible(), 'waiting guidance remains outside detail tabs');
+      assert(await detail.getByRole('region', { name: '工单问题', exact: true }).isVisible(), 'the original question remains available in every tab');
+      assert(await detail.getByRole('radio', { name: '全部', exact: true }).isChecked(), 'tab switches retain the pending answer');
+    }
+    assert.equal((await calls()).some(([name]) => name === 'ticketAnswer'), false, 'switching tabs never submits an answer');
     await scenario('chat', 'schedule');
     await page.getByLabel('主助手对话', { exact: true }).waitFor();
     assert.equal(await page.getByText('系统定时记录', { exact: true }).count(), 0);
@@ -208,7 +210,8 @@ test('real waiting controls and chat/ticket connection states remain actionable 
       if (state === 'loading') await page.getByText('正在读取工单', { exact: true }).waitFor();
       if (state === 'empty') {
         await page.getByText('暂无工单', { exact: true }).waitFor();
-        assert(await button('新建持续目标').count() > 0);
+        assert.equal(await button('添加目标').count(), 0);
+        await page.getByText('在 SuperAgent 对话中交办任务。完成的工单会保留在当前列表。', { exact: true }).waitFor();
       }
       if (state === 'error') {
         await page.getByRole('alert').waitFor();
@@ -219,7 +222,7 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     }
     await page.locator('.ba-task-list').getByText('核验工作结果', { exact: true }).click();
     await detail.waitFor();
-    assert.equal(await detail.getByRole('button', { name: '停止工单', exact: true }).count(), 1);
+    assert.equal(await detail.getByRole('button', { name: '停止工单', exact: true }).count(), 0);
     assert.equal(await button('重试核验').count(), 0);
     assert(await button('刷新记录').isVisible());
     await scenario('tickets', 'linked');
@@ -231,29 +234,6 @@ test('real waiting controls and chat/ticket connection states remain actionable 
     await detail.getByRole('button', { name: '重试', exact: true }).click();
     await page.waitForFunction(before => window.calls.filter(([name, input]) => name === 'tickets' && input?.ticketId === 'missing').length > before, retriesBefore);
     await detail.getByText('关联工单暂不可用', { exact: true }).waitFor();
-    assert.deepEqual(errors, []);
-  } finally { await browser.close(); }
-});
-
-test('intake audit evaluations render loading, empty, error and original data at desktop and mobile widths', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
-  const html = await fixture(), browser = await chromium.launch({ headless: true, executablePath });
-  try {
-    const page = await browser.newPage(), errors = [];
-    page.on('pageerror', error => errors.push(error.message));
-    await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort());
-    await page.goto('http://localhost/');
-    for (const theme of ['light', 'dark']) for (const width of [1440, 390]) {
-      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
-      await page.setViewportSize({ width, height: 900 });
-      for (const [state, label] of [['loading', '正在读取评估'], ['empty', '暂无待处置评估'], ['error', '评估暂时无法读取'], ['data', '原始评估正文']]) {
-        await page.evaluate(state => window.renderScenario('evaluations', state), state);
-        await page.getByText(label, { exact: true }).waitFor();
-        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
-      }
-      await page.getByText('原始评估正文', { exact: true }).click();
-      await page.getByRole('dialog').getByText(/完整原始证据/).waitFor();
-      assert.match(await page.getByRole('dialog').innerText(), /feishu/);
-    }
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

@@ -4,7 +4,7 @@ export const WATCHDOG_OBSERVATION_PATH = '/benchgo/watchdog/observation';
 export const WATCHDOG_SIGNAL_PATH = '/benchgo/watchdog/signals';
 export const WATCHDOG_SIGNAL_REASONS = Object.freeze(['TARGET_UNREACHABLE', 'TARGET_IDENTITY_MISMATCH',
   'FACTS_STALE', 'SCHEDULER_STALLED', 'EXECUTION_INACTIVE', 'LEASE_EXPIRED', 'REQUEST_DEADLINE_EXCEEDED',
-  'STOP_UNCONFIRMED', 'RECOVERY_NOT_CONVERGING', 'MODEL_NO_PROGRESS', 'MODEL_OFF_TARGET']);
+  'STOP_UNCONFIRMED', 'MODEL_NO_PROGRESS', 'MODEL_OFF_TARGET']);
 const headerPrefix = 'x-benchgo-watchdog-';
 const executionFields = ['ticketId', 'assignmentId', 'runId', 'sessionId', 'fence', 'instructionRevision'];
 const signalFields = ['id', 'incidentKey', 'phase', 'kind', 'targetId', 'observedAt', 'checkId', 'evidenceCursor',
@@ -126,7 +126,7 @@ async function bounded(work, signal) {
  */
 export function installWatchdogObservationRoute({ ctx, readFacts, acceptSignal, config, now = Date.now }) {
   const { targetId, token } = credentials(config);
-  const webServer = ctx.get?.('webServer') ?? ctx.webServer;
+  const webServer = ctx.get ? ctx.get('webServer') : ctx.webServer;
   if (!webServer?.register || typeof readFacts !== 'function' || typeof acceptSignal !== 'function') {
     throw fail('WATCHDOG_OBSERVATION_UNAVAILABLE', 503);
   }

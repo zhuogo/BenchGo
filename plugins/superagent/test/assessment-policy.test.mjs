@@ -36,7 +36,7 @@ test('platform members receive task authority only within enabled Feishu scope',
 });
 import { readAssessmentPolicy, authorizeAssessment, validateTicketMandate } from '../src/assessment-policy.mjs';
 
-test('stop requires trusted direct owner and exact original ticket ownership', () => {
+test('stop requires verified source and exact requester ownership without owner privilege', () => {
   const source = { channel: 'telegram', connectionId: 'telegram', chatId: 'chat', conversationId: 'chat', sourceType: 'direct' };
   const config = { enabled: true, ownerIds: ['owner'], accessMode: 'platform', chatIds: ['chat'] };
   const evidence = { sourceVerified: true, ownerVerified: true, sourceType: 'direct', connectionId: 'telegram', conversationId: 'chat' };
@@ -45,17 +45,17 @@ test('stop requires trusted direct owner and exact original ticket ownership', (
     trigger: { actor: { id: 'owner', kind: 'human' }, source },
     decision: { outcome: 'stop', ticketId: 'ticket' }, ticket: { mandate: { actorId: 'owner', source } } };
   assert.equal(authorizeAssessment(input).allowed, true);
-  for (const key of ['ownerVerified', 'sourceVerified']) {
+  for (const key of ['sourceVerified']) {
     assert.equal(authorizeAssessment({ ...input, candidate: { gate: { ...input.candidate.gate, evidence: { ...evidence, [key]: false } } } }).allowed, false);
   }
-  assert.equal(authorizeAssessment({ ...input, policy: { connections: { telegram: { channel: 'telegram', config: { ...config, ownerIds: [] } } } } }).allowed, false);
+  assert.equal(authorizeAssessment({ ...input, policy: { connections: { telegram: { channel: 'telegram', config: { ...config, ownerIds: [] } } } } }).allowed, true);
   for (const key of ['channel', 'connectionId', 'conversationId']) {
     for (const value of [undefined, 'other']) {
       assert.equal(authorizeAssessment({ ...input, ticket: { mandate: { actorId: 'owner', source: { ...source, [key]: value } } } }).allowed, false);
     }
   }
   assert.equal(authorizeAssessment({ ...input, ticket: { mandate: { actorId: 'other', source } } }).allowed, false);
-  assert.equal(authorizeAssessment({ ...input, trigger: { ...input.trigger, actor: { id: 'member', kind: 'human' } }, ticket: { mandate: { actorId: 'member', source } } }).allowed, false);
+  assert.equal(authorizeAssessment({ ...input, trigger: { ...input.trigger, actor: { id: 'member', kind: 'human' } }, ticket: { mandate: { actorId: 'member', source } } }).allowed, true);
 });
 
 test('non-direct stop becomes Router attention; old source and unmentioned group cannot open work', () => {
@@ -162,7 +162,7 @@ test('machine admission requires auto mode and every enabled written rule; revoc
   assert.equal(validateTicketMandate(mandate, { policy: { ...policy, connection: { ...policy.connection, machineOpenIds: [] } } }), false);
   connection.enabledRuleIds = []; revision++;
   const revoked = await readAssessmentPolicy(store);
-  assert.notEqual(revoked.version, policy.version);
+  assert.equal(revoked.version, policy.version);
   assert.equal(validateTicketMandate(mandate, { policy: revoked }), false);
   assert.equal(authorizeAssessment({ ...input, policy: revoked }).allowed, false);
 });
@@ -180,7 +180,17 @@ test('all channel mandates bind trusted owners, source revision and current allo
   assert.equal(validateTicketMandate(mandate, { policy }), true);
   assert.equal(authorizeAssessment({ ...input, trigger: { ...input.trigger, actor: { id: 'stranger', kind: 'human', owner: true } } }).allowed, false);
   assert.equal(authorizeAssessment({ ...input, trigger: { ...input.trigger, source: { ...input.trigger.source, connectionRevision: 2 } } }).allowed, false);
+  const legacy = { ...mandate, policyVersion: 'legacy-all-channel-revisions' };
+  assert.equal(validateTicketMandate(legacy, { policy }), true);
+  connections[0].revision++;
+  const unrelated = await readAssessmentPolicy(store);
+  assert.equal(unrelated.version, policy.version);
+  assert.equal(unrelated.desktopVersion, policy.desktopVersion);
+  assert.equal(validateTicketMandate(mandate, { policy: unrelated }), true);
+  assert.equal(validateTicketMandate(legacy, { policy: unrelated }), true);
+  assert.equal(authorizeAssessment({ ...input, policy: unrelated }).allowed, true);
   connections[1].revision++;
   config.ownerIds = [];
   assert.equal(validateTicketMandate(mandate, { policy: await readAssessmentPolicy(store) }), false);
+  assert.equal(validateTicketMandate(legacy, { policy: await readAssessmentPolicy(store) }), false);
 });

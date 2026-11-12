@@ -205,6 +205,16 @@ export function createOfficialSettingsAdapter(ctx, { resolveMetadata = () => ({}
       }));
     },
     async read(namespace) { return snapshot(find(namespace)); },
+    async readMany(namespaces) {
+      if (!namespaces.length) return new Map();
+      const rows = records(), result = new Map();
+      for (const namespace of namespaces) {
+        const matching = rows.filter(row => row.namespace === namespace);
+        if (matching.length !== 1) throw fail('SETTINGS_BLOCKED', matching.length ? '配置命名空间不唯一' : '官方配置项已退出或未登记');
+        result.set(namespace, snapshot(matching[0]));
+      }
+      return result;
+    },
     async apply(namespace, { ops, expected, signal }) {
       signal?.throwIfAborted();
       const row = find(namespace), current = snapshot(row);

@@ -19,44 +19,42 @@ function mount(overrides = {}, hookValues = [], response = {}) {
   const state = { config: { dictation: true, readAloud: true, call: true, asr: { configured: true, model: 'asr', protocol: 'transcriptions-sse' }, tts: { configured: true, model: 'tts', protocol: 'speech' } }, sessionId: 'session', mode: 'call', phase: 'listening', muted: false, level: .3, readEnabled: true, ...overrides };
   const effects = [], actions = [], registrations = [], refs = [], requests = [], stateChanges = [];
   let hookIndex = 0;
-  const controller = { state: { subscribe: () => () => {}, getSnapshot: () => state }, load: async () => {}, dispose: async () => {}, hangup: async () => { actions.push('hangup'); }, setMuted: async value => { actions.push(['muted', value]); } };
+  const controller = { state: { subscribe: () => () => {}, getSnapshot: () => state }, load: async () => {}, dispose: async () => {}, releaseSessionView: id => actions.push(['release-view', id]), hangup: async () => { actions.push('hangup'); }, setMuted: async value => { actions.push(['muted', value]); } };
+  const callView = { getSnapshot: () => ({ sessionId: state.sessionId }), expand: () => actions.push('expand'), minimize() {}, leave: id => actions.push(['leave-view', id]), history: id => actions.push(['history', id]), start: args => actions.push(['call-entry', args.sessionId]), dispose() {} };
   const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x !== false && x != null) }), useEffect: effect => { effects.push(effect); }, useRef: value => { const ref = { current: value }; refs.push(ref); return ref; }, useState: value => [hookIndex < hookValues.length ? hookValues[hookIndex++] : (hookIndex++, value), next => stateChanges.push(next)], useSyncExternalStore: (_, get) => get(), useId: () => 'id' };
   const stageModule = { exports: {} };
   runInNewContext(stageCode, { module: stageModule, exports: stageModule.exports, require: path => path === 'react' ? react : path === 'react-dom' ? { createPortal: child => child } : new Proxy({}, { get: (_, name) => name }) });
   const primitives = new Proxy({}, { get: (_, name) => name });
   const document = { baseURI: 'https://benchgo.test/', createElement: () => ({ remove() {} }), head: { append() {} }, dispatchEvent() {} };
   const module = { exports: {} }, moduleSource = createModuleSource();
-  const frames = { createCallFrameRegistry: () => ({}), registerCallFrame() {}, useCallFrame: () => overrides.inlineFrame ?? null, useCallFrameActive() {} };
   moduleSource.update({base: true, superagent: overrides.superagent !== false, voice: overrides.voice !== false});
-  runInNewContext(code, { module, exports: module.exports, document, console, URL, AbortController, fetch: async (url, options) => { requests.push({ url: String(url), ...JSON.parse(options.body) }); return { ok: true, json: async () => response }; }, require: path => path.endsWith('protocol-catalog.mjs') ? protocolCatalog : path.endsWith('call-frame.jsx') ? frames : path.endsWith('custom-select.jsx') ? { CustomSelect: 'CustomSelect' } : path.endsWith('ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : path.endsWith('ui/tooltip.jsx') ? { Tooltip: 'Tooltip' } : path.endsWith('ui/loading.jsx') ? { Loading: 'Loading' } : path.endsWith('call-entry.jsx') ? { CallEntry: 'CallEntry' } : path.endsWith('call-stage.jsx') ? stageModule.exports : path.endsWith('conversation-records.jsx') ? { registerVoiceConversationRows() {} } : path.endsWith('call-streaming.mjs') ? { callStreamingReason } : path.endsWith('segmented-control.jsx') ? { SegmentedControl: 'SegmentedControl' } : path.endsWith('iconsax.jsx') ? { UIIcon: () => null } : path.endsWith('modules.mjs') ? { moduleSource } : path === 'react' ? react : path.includes('ui-primitives') ? primitives : path.endsWith('controller.mjs') ? { createVoiceController: () => controller } : path.endsWith('settings-state.mjs') ? settingsState : path.endsWith('.css') ? { default: css } : (() => { throw Error(path); })() });
+  runInNewContext(code, { module, exports: module.exports, document, console, URL, AbortController, fetch: async (url, options) => { requests.push({ url: String(url), ...JSON.parse(options.body) }); return { ok: true, json: async () => response }; }, require: path => path.endsWith('call-presentation.mjs') ? { createCallPresentation: () => callView } : path.endsWith('call-host.jsx') ? { VoiceCallHost: 'VoiceCallHost' } : path.endsWith('protocol-catalog.mjs') ? protocolCatalog : path.endsWith('custom-select.jsx') ? { CustomSelect: 'CustomSelect' } : path.endsWith('ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : path.endsWith('ui/tooltip.jsx') ? { Tooltip: 'Tooltip' } : path.endsWith('ui/loading.jsx') ? { Loading: 'Loading' } : path.endsWith('call-entry.jsx') ? { CallEntry: 'CallEntry' } : path.endsWith('call-stage.jsx') ? stageModule.exports : path.endsWith('conversation-records.jsx') ? { registerVoiceConversationRows() {} } : path.endsWith('call-streaming.mjs') ? { callStreamingReason } : path.endsWith('segmented-control.jsx') ? { SegmentedControl: 'SegmentedControl' } : path.endsWith('iconsax.jsx') ? { UIIcon: () => null } : path.endsWith('modules.mjs') ? { moduleSource } : path === 'react' ? react : path.includes('ui-primitives') ? primitives : path.endsWith('controller.mjs') ? { createVoiceController: () => controller } : path.endsWith('settings-state.mjs') ? settingsState : path.endsWith('.css') ? { default: css } : (() => { throw Error(path); })() });
   const ctx = { effect() {}, slots: { inject: (_, action) => action(), register: (options, component) => { registrations.push({ options, component }); } } };
   module.exports.mountMediaSettings(ctx);
   if (overrides.voice !== false) module.exports.apply(ctx);
   const component = registrations.find(item => item.options.name === 'conversation.input.activity')?.component;
-  const render = (sessionId = 'session') => component({ controller, sessionStatus: { subscribe: () => () => {}, getSnapshot: () => new Map([[sessionId, {pendingInteraction:overrides.pendingInteraction}]]) }, sessionId, locked: false, inputActions: {}, onActiveChange() {} });
+  const render = (sessionId = 'session') => component({ controller, callView, sessionStatus: { subscribe: () => () => {}, getSnapshot: () => new Map([[sessionId, {pendingInteraction:overrides.pendingInteraction}]]) }, sessionId, locked: false, inputActions: {}, onActiveChange() {} });
   return { render, effects, refs, actions, state, controller, registrations, requests, stateChanges, exports: module.exports };
 }
 const nodes = root => root && typeof root === 'object' ? [root, ...root.children.flatMap(nodes)] : [];
 
-test('minimizing uses the enhanced call seat while native calls return to the original conversation', () => {
-  const element = {}, inlineFrame = { element };
+test('all call modes register one global host and page cleanup releases only its view', () => {
   for (const conversationMode of ['enhanced', 'native', 'direct']) {
-    const h = mount({ conversationMode, inlineFrame }, [false, '', false, true, false, false]);
-    const stage = nodes(h.render()).find(node => node.type?.name === 'CallStage');
-    assert.equal(stage.props.open, conversationMode === 'enhanced');
-    assert.equal(stage.props.inlineTarget, conversationMode === 'enhanced' ? element : null);
-    stage.props.onExpand(); assert.equal(h.stateChanges.at(-1), false);
+    const h = mount({ conversationMode });
+    const tree = h.render();
+    assert(!nodes(tree).some(node => node.type?.name === 'CallStage'));
+    assert.equal(h.registrations.filter(row => row.options.name === 'shell.overlay' && row.component === 'VoiceCallHost').length, 1);
+    h.effects[2]()();
+    assert.deepEqual(h.actions, [['leave-view', 'session'], ['release-view', 'session']]);
+    assert.equal(h.state.mode, 'call');
   }
-  const missing = mount({ conversationMode: 'enhanced' }, [false, '', false, true, false, false]);
-  const stage = nodes(missing.render()).find(node => node.type?.name === 'CallStage');
-  assert.equal(stage.props.open, true); assert.equal(stage.props.inlineTarget, null);
 });
 
-test('pending official interaction releases enhanced inline and composer takeover even during speech', () => {
+test('pending official interaction releases composer takeover even during speech', () => {
   for (const pending of [{phase:'waiting'}, {phase:'speaking',pendingInteraction:{kind:'approval'}}]) {
-    const h=mount({conversationMode:'enhanced',inlineFrame:{element:{}},...pending},[false,'',false,true,false,false]);
-    const stage=nodes(h.render()).find(node=>node.type?.name==='CallStage');
-    assert.equal(stage.props.open,false); assert.equal(stage.props.inlineTarget,null); assert.equal(stage.props.interactionPending,true);
+    const h=mount({conversationMode:'enhanced',...pending},[false,'',false,true,false,false]);
+    const tree=h.render();
+    assert(nodes(tree).some(node=>node.children.includes('等待确认 · 请在对话中处理')));
     assert.equal(h.effects[0](),undefined);
   }
 });
@@ -73,23 +71,31 @@ test('non-streaming ASR and buffered playback keep independent features availabl
     assert(nodes(tree).some(node => node.type === 'button' && node.children.includes(blocked === 'tts' ? '通话需开启流式播放 · 配置' : '通话需流式识别 · 配置')));
   }
 });
-test('call composer contains only microphone and hangup controls, never read or send', async () => {
+test('ordinary conversation remains available when decision configuration is unavailable', () => {
+  for (const enabled of [false, true]) {
+    const config = { call: true, asr: { configured: true, model: 'ASR', protocol: 'transcriptions-sse' }, tts: { configured: true, model: 'TTS', protocol: 'speech', stream: true }, listening: { enabled, configured: false, unavailableReason: '请配置决策服务' } };
+    const h = mount({ mode: 'idle', config }), tree = h.render();
+    assert.equal(nodes(tree).find(node => node.type === 'CallEntry').props.disabled, false);
+    assert.equal(nodes(tree).some(node => node.type === 'button' && node.children.includes('决策需配置 · 设置')), false);
+  }
+});
+test('call composer restores the shared host without duplicating media controls', async () => {
   const h = mount();
   const tree = h.render(), buttons = nodes(tree).filter(node => node.type === 'button');
-  assert.deepEqual(buttons.map(node => node.props['aria-label']), ['返回语音通话', '关闭麦克风', '结束语音通话']);
-  await buttons[1].props.onClick(); await buttons[2].props.onClick();
-  assert.deepEqual(h.actions, [['muted', true], 'hangup']);
+  assert.deepEqual(buttons.map(node => node.props['aria-label']), ['返回语音通话']);
+  await buttons[0].props.onClick();
+  assert.deepEqual(h.actions, ['expand']);
   const orb = nodes(tree).find(node => node.type?.name === 'CallOrb');
   const rendered = orb.type(orb.props);
   assert.equal(rendered.props.className, 'voice-call-orb voice-orb-listening');
   assert.equal(rendered.props.style['--voice-level'], .3);
 });
-test('muted call keeps playback phase and microphone can be enabled', async () => {
+test('muted call keeps its playback phase when reopening the global controls', async () => {
   const h = mount({ muted: true, phase: 'speaking', playbackLevel: .65 });
   const tree = h.render(), buttons = nodes(tree).filter(node => node.type === 'button');
-  assert.equal(buttons[1].props['aria-label'], '开启麦克风');
-  await buttons[1].props.onClick();
-  assert.deepEqual(h.actions, [['muted', false]]);
+  assert.equal(buttons[0].props['aria-label'], '返回语音通话');
+  await buttons[0].props.onClick();
+  assert.deepEqual(h.actions, ['expand']);
   const orb = nodes(tree).find(node => node.type?.name === 'CallOrb');
   const rendered = orb.type(orb.props);
   assert.equal(rendered.props.className, 'voice-call-orb voice-orb-speaking');
@@ -303,35 +309,28 @@ test('streaming synthesis enables read and call controls only with configured mo
   }
 });
 
-test('recovery actions survive hangup and never appear in another session', async () => {
-  const h = mount({ mode: 'idle', recoveryText: '完整的未发送文字', recoverySessionId: 'session' });
-  h.controller.recoverToDraft = async () => { h.actions.push('recover'); };
-  h.controller.discardRecovery = async () => { h.actions.push('discard'); };
-  const tree = h.render();
-  const panel = nodes(tree).find(node => node.props['aria-label'] === '待恢复的语音文字');
-  assert(panel);
-  const buttons = nodes(panel).filter(node => node.type === 'button');
-  assert.deepEqual(buttons.map(node => node.children[0]), ['复制文字', '转入草稿', '丢弃']);
-  await buttons[1].props.onClick();
-  assert.deepEqual(h.actions, ['recover']);
-  assert(!nodes(h.render('other')).some(node => node.props['aria-label'] === '待恢复的语音文字'));
-  const call = mount({ recoveryText: '待重试', recoverySessionId: 'session', canRetry: true });
-  call.controller.retryPending = async () => { call.actions.push('retry'); };
-  const retry = nodes(nodes(call.render()).find(node => node.type?.name === 'CallStage').props.recovery).find(node => node.type === 'button' && node.children.includes('重试发送'));
-  await retry.props.onClick();
-  assert.deepEqual(call.actions, ['retry']);
+test('transcript recovery has no action panel and returns to the original draft after hangup', () => {
+  for (const mode of ['call', 'idle']) {
+    const h = mount({ mode, recoveryText: '完整的未发送文字', recoverySessionId: 'session' });
+    h.controller.recoverToDraft = () => { h.actions.push('recover'); };
+    const tree = h.render();
+    assert(!nodes(tree).some(node => node.props['aria-label'] === '待恢复的语音文字'));
+    assert(!nodes(tree).some(node => node.type?.name === 'CallStage'));
+    h.effects[3]();
+    assert.deepEqual(h.actions, mode === 'idle' ? ['recover'] : []);
+  }
+  const other = mount({ mode: 'idle', recoveryText: '其他会话文字', recoverySessionId: 'session' });
+  other.controller.recoverToDraft = () => { other.actions.push('recover'); };
+  other.render('other'); other.effects[3]();
+  assert.deepEqual(other.actions, []);
 });
 
-test('session selection restores recovery and failed recovery reports the error', async () => {
+test('failed automatic draft recovery keeps the text and reports a concise error', () => {
   const h = mount({ mode: 'idle', recoveryText: '保留文字', recoverySessionId: 'session' });
   h.controller.selectSession = id => h.actions.push(['select', id]);
-  h.controller.recoverToDraft = async () => { throw Error('草稿当前不可编辑'); };
-  const tree = h.render();
-  h.effects[2]();
+  h.controller.recoverToDraft = () => { throw Error('草稿当前不可编辑'); };
+  h.render(); h.effects[2](); h.effects[3]();
   assert.deepEqual(h.actions, [['select', 'session']]);
-  await nodes(tree).find(node => node.type === 'button' && node.children.includes('转入草稿')).props.onClick();
   assert(h.stateChanges.includes('草稿当前不可编辑'));
   assert.equal(h.state.recoveryText, '保留文字');
-  const call = mount({ recoveryText: '识别尚未结束', recoverySessionId: 'session', canRetry: false });
-  assert.equal(nodes(nodes(call.render()).find(node => node.type?.name === 'CallStage').props.recovery).find(node => node.type === 'button' && node.children.includes('重试发送')).props.disabled, true);
 });

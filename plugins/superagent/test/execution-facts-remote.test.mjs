@@ -5,6 +5,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runInNewContext } from 'node:vm';
+import { createNotificationFactGate } from '../client/notification-sound.mjs';
 
 // Worktrees may share a built official dependency tree through node_modules.
 const checkout = fileURLToPath(new URL('../../../deepseek-harness/', import.meta.url));
@@ -27,11 +28,13 @@ const { installExecutionFactsRemote } = await import('../src/execution-facts-rem
 const { executionFactsRemoteContribution } = await import('../src/execution-facts-contract.mjs');
 const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
 let activityEnvironment;
-function loadActivity(contribution = executionFactsRemoteContribution) {
+function loadActivity(contribution = executionFactsRemoteContribution, events = [], notificationSources = []) {
   const activityModule = { exports: {} };
   runInNewContext(transformSync(readFileSync(new URL('../client/activity-remote.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code, {
     module: activityModule, exports: activityModule.exports,
-    require: name => name.endsWith('use-activity.jsx') ? { configureAssistantActivity: (_api, environment) => { activityEnvironment = environment; } }
+    document: { dispatchEvent: event => { events.push(event.type); if (event.type === 'benchgo:assistant-notification-source') notificationSources.push(event.detail.publicChatNotifications); } }, Event, CustomEvent,
+    require: name => name.endsWith('use-activity.jsx') ? { configureAssistantActivity: (_api, environment) => { activityEnvironment = environment; }, assistantActivityStore: () => ({ subscribe: () => () => {} }) }
+      : name.endsWith('notification-sound.mjs') ? { createNotificationFactGate }
       : name.endsWith('execution-facts-contract.mjs') ? { executionFactsRemoteContribution: contribution } : clientGateway,
   });
   return activityModule.exports;
@@ -49,13 +52,13 @@ function factStore() {
     calls, entries, listeners,
     currentCursor: () => entries.length,
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    append(count = 1) {
-      for (let i = 0; i < count; i++) entries.push({ seq: entries.length + 1, ticketId: 'ticket-1', kind: 'progress' });
+    append(count = 1, kind = 'progress') {
+      for (let i = 0; i < count; i++) entries.push({ seq: entries.length + 1, ticketId: 'ticket-1', kind });
       for (const listener of listeners) listener();
     },
     async snapshot(request) {
       calls.push(['snapshot', request]);
-      const result = { cursor: entries.length, tickets: [{ id: 'ticket-1' }], bootId: 'boot-1', observedAt: 'now', completeness: { complete: true } };
+      const result = { cursor: entries.length, tickets: [{ id: 'ticket-1' }], bootId: 'boot-1', observedAt: 'now', completeness: { complete: true }, ...(facts.publicChatNotifications ? { publicChatNotifications: true } : {}) };
       await facts.duringSnapshot?.();
       return result;
     },
@@ -253,7 +256,8 @@ test('the real Client Remote mount calls the same strict unary and stream defini
 });
 
 async function scopedActivity(t, options = {}) {
-  const { mountAssistantActivity } = loadActivity(options.contribution);
+  const events = [], notificationSources = [];
+  const { mountAssistantActivity } = loadActivity(options.contribution, events, notificationSources);
   const b = await setup(t), client = new Context();
   t.after(() => client.fiber.dispose());
   await client.plugin(Registry);
@@ -272,8 +276,34 @@ async function scopedActivity(t, options = {}) {
   await owner;
   const received = [], failed = [];
   const connect = () => activityEnvironment.connect({ replace: value => received.push(value), update: value => received.push(value), carrierFailed: error => failed.push(error), failed: error => failed.push(error) });
-  return { ...b, client, owner, scope, received, failed, connect };
+  return { ...b, client, owner, scope, received, failed, connect, events, notificationSources };
 }
+
+test('official business stream wakes chat on publication and reconnect, not progress frames', async t => {
+  const b = await scopedActivity(t), control = b.connect(); control.start();
+  await settle(() => b.received.length === 1);
+  assert.deepEqual(b.events, ['benchgo:assistant-notification-source', 'benchgo:assistant-history-changed']);
+  assert.deepEqual(b.notificationSources, [false], 'old snapshots activate legacy sound retention');
+  b.facts.append(); await settle(() => b.received.length === 2);
+  assert.equal(b.events.length, 2);
+  for (const kind of ['chat', 'delivery', 'result', 'attention']) {
+    const before = b.events.length; b.facts.append(1, kind);
+    await settle(() => b.events.length === before + 1);
+  }
+  const before = b.events.length; control.restart();
+  await settle(() => b.events.length === before + 1);
+  await control.dispose();
+});
+
+test('new public notification capability survives restart without requesting legacy session fallback', async t => {
+  const b = await scopedActivity(t), control = b.connect();
+  b.facts.publicChatNotifications = true;
+  assert.deepEqual(b.notificationSources, []);
+  control.start(); await settle(() => b.received.length === 1);
+  assert.deepEqual(b.notificationSources, [true]);
+  control.restart(); await settle(() => b.received.length === 2);
+  assert.deepEqual(b.notificationSources, [true]); await control.dispose();
+});
 
 test('activity follows from a real remote-only Cordis scope; restart, dispose and resubscribe release the injected follower', async t => {
   const b = await scopedActivity(t);
@@ -310,6 +340,7 @@ test('activity terminal stream failure surfaces the error and releases its injec
   control.start(); await settle(() => b.failed.length === 1);
   await control.dispose();
   assert.match(b.failed[0].message, /真实流启动失败/);
+  assert.deepEqual(b.notificationSources, [false], 'failure before the first snapshot activates legacy reply notifications');
   assert.equal(b.facts.listeners.size, 0);
   assert.equal(b.client.get('remote.benchgoExecutionFacts'), undefined);
 });

@@ -32,6 +32,27 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
   };
   const taskDelivered = task => task.status === 'completed' && task.result?.outcome === 'completed'
     && (task.instructionRevision === undefined || task.result.instructionRevision === task.instructionRevision);
+  const checklistObjective = value => {
+    if (typeof value !== 'string' || !value.trim() || value.trim().length > 2000) throw new Error('目标须为 1 至 2000 字');
+    return value.trim();
+  };
+  function createChecklistGoal(input = {}) {
+    rejectModelOverride(input);
+    if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['objective', 'requestId', 'ownerSessionId', 'threadId'].includes(key))) throw new Error('清单目标只需要目标文字');
+    const objective = checklistObjective(input.objective);
+    if (typeof input.requestId !== 'string' || !input.requestId.trim() || input.requestId.length > 2048) throw new Error('目标请求标识无效');
+    return db.transaction(() => {
+      const previous = db.goalByRequest(input.requestId);
+      const inputFingerprint = createHash('sha256').update(JSON.stringify(['checklist', objective])).digest('hex');
+      if (previous) {
+        if (previous.executionKind !== 'checklist' || previous.inputFingerprint !== inputFingerprint) throw Object.assign(new Error('目标请求标识已用于不同内容'), { code: 'IDEMPOTENCY_CONFLICT' });
+        return previous;
+      }
+      return db.insertGoal({ id: randomUUID(), requestId: input.requestId, inputFingerprint, executionKind: 'checklist',
+        objective, title: objective, status: 'active', ownerSessionId: input.ownerSessionId || null,
+        threadId: input.threadId || 'main', ticketIds: [], childGoalIds: [], parentGoalId: null, nextStep: null });
+    });
+  }
   function validateGoal(input, seen = new Set()) {
     if (!input || typeof input !== 'object' || seen.has(input) || seen.size >= 100) throw new Error('目标树无效或超过100项');
     rejectModelOverride(input);
@@ -94,6 +115,7 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
   async function advanceGoal(id) {
     return serialize(`goal:${id}`, async () => {
       let goal = db.goal(id); if (!goal) throw new Error('目标不存在');
+      if (goal.executionKind === 'checklist') return goal;
       if (['cancelling', 'pausing', 'resuming'].includes(goal.status)) return goal;
       if (TERMINAL_GOAL.has(goal.status) || goal.status === 'paused') return goal;
       // A process may stop while a goal tree is being created. Never dispatch
@@ -128,6 +150,7 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
     return serialize(`goal:${id}`, async () => {
       let goal = db.goal(id);
       if (!goal) throw new Error('目标不存在');
+      if (goal.executionKind === 'checklist') throw new Error('清单目标没有执行控制，请编辑目标或标记完成');
       if (TERMINAL_GOAL.has(goal.status)) return goal;
       // Persist intent before external cancellation; a restart finishes it instead of dispatching.
       goal = db.updateGoal(id, { status: 'cancelling', nextStep: 'cancel' }, { rowVersion });
@@ -193,7 +216,7 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
         try { goals.push(await cancelGoal(goal.id)); }
         catch { goals.push(db.goal(goal.id)); }
       }
-      for (const goal of db.goals()) if (goal.status === 'active' || goal.status === 'waiting') {
+      for (const goal of db.goals()) if (goal.executionKind !== 'checklist' && (goal.status === 'active' || goal.status === 'waiting')) {
         try { goals.push(await advanceGoal(goal.id)); }
         catch (error) { goals.push(db.updateGoal(goal.id, { status: 'waiting', waitReason: 'error', error: String(error.message || error) })); }
       }
@@ -203,7 +226,7 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
     try { return await activeTick; } finally { activeTick = null; }
   }
   const api = {
-    createGoal, advanceGoal, cancelGoal,
+    createGoal, createChecklistGoal, advanceGoal, cancelGoal,
     getGoalBudget(id) {
       const goal = db.goal(id);
       if (!goal) throw new Error('目标不存在');
@@ -223,15 +246,26 @@ export function createAssistantScheduler({ store, database, owner = `scheduler-$
       if (prior && prior.fingerprint !== value) throw Object.assign(new Error('目标请求已冻结，不能改变部分派发中的目标'), { code: 'IDEMPOTENCY_CONFLICT' });
       if (!prior) db.setMeta(key, { fingerprint: value });
     },
-    goals: () => db.goals().map(goal => ({ ...goal, budgetState: goal.budgetGoalId ? api.getGoalBudget(goal.id) : null })),
-    getGoal: id => { const goal = db.goal(id); return goal && { ...goal, budgetState: goal.budgetGoalId ? api.getGoalBudget(id) : null }; },
+    goals: () => db.goals().filter(goal => !goal.deleted).map(goal => ({ ...goal, budgetState: goal.budgetGoalId ? api.getGoalBudget(goal.id) : null })),
+    getGoal: id => { const goal = db.goal(id); return goal && !goal.deleted ? { ...goal, budgetState: goal.budgetGoalId ? api.getGoalBudget(id) : null } : null; },
     updateGoal: (id, patch = {}, options) => {
+      const goal = db.goal(id);
+      if (!goal || goal.deleted) throw new Error('目标不存在');
+      if (goal.executionKind === 'checklist') {
+        if (!patch || typeof patch !== 'object' || Array.isArray(patch) || !Object.keys(patch).length || Object.keys(patch).some(key => !['objective', 'status', 'deleted'].includes(key))) throw new Error('目标只允许编辑文字、完成或删除');
+        if (!Number.isSafeInteger(options?.rowVersion) || options.rowVersion < 1) throw new Error('修改目标需要当前 rowVersion');
+        if (patch.status !== undefined && !['active', 'completed'].includes(patch.status)) throw new Error('目标状态仅支持未完成或已完成');
+        if (patch.deleted !== undefined && patch.deleted !== true) throw new Error('无效目标删除操作');
+        const next = { ...patch };
+        if (patch.objective !== undefined) next.title = next.objective = checklistObjective(patch.objective);
+        if (patch.status !== undefined) next.completedAt = patch.status === 'completed' ? goal.completedAt || iso(Date.now()) : null;
+        if (patch.deleted) next.deletedAt = iso(Date.now());
+        return db.updateGoal(id, next, options);
+      }
       if (patch.status === 'completed') throw new Error('目标必须在工单完成交付后完成，不能直接标记完成');
       if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key => !['title', 'status'].includes(key))) throw new Error('目标只允许修改标题或暂停、恢复状态；执行身份与任务关联不可修改');
       if (patch.title !== undefined && (typeof patch.title !== 'string' || !patch.title.trim() || patch.title.length > 120)) throw new Error('无效目标标题');
       if (patch.status !== undefined && !['paused', 'active'].includes(patch.status)) throw new Error('仅支持暂停或恢复目标调度');
-      const goal = db.goal(id);
-      if (!goal) throw new Error('目标不存在');
       if (goal.status === 'cancelling') throw new Error('目标正在停止，不能恢复调度');
       if (patch.status && TERMINAL_GOAL.has(goal.status)) throw new Error('终态目标不能重新调度，请创建新目标');
       if (patch.status === 'active') {

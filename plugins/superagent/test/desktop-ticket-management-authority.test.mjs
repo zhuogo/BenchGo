@@ -22,7 +22,6 @@ test('only a live current local owner human turn receives a host-only management
     f => { f.agent.session.header.origin = 'subagent'; },
     f => { f.events.push({ type: 'turn/end' }); },
     f => { f.events[1].data.source.kind = 'ticket-reply'; },
-    f => { f.events.push({ type: 'user/message', data: { id: 'internal', source: { kind: 'ticket-reply' } } }); },
     f => { f.state.mainSessionId = 'replacement'; },
     f => { f.ctx.agents.currentInitiator = () => ({ id: 'child' }); },
   ]) {
@@ -43,4 +42,10 @@ test('channel and archived side conversations cannot obtain global scope, includ
     assert.equal(await f.scope(), null);
   }
   assert.equal(isDesktopTicketManagementScope(await fixture('side').scope()), true);
+});
+
+test('same-turn internal notifications do not invalidate the real input', async () => {
+  const f = fixture();
+  f.events.push({ type: 'user/message', data: { id: 'internal', source: { kind: 'ticket-reply' } } });
+  assert.equal(isDesktopTicketManagementScope(await f.scope()), true);
 });

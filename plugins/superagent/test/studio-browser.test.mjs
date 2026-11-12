@@ -22,7 +22,7 @@ async function fixture() {
     import React,{useState} from 'react';import {createRoot} from 'react-dom/client';
     import {Studio} from './plugins/superagent/client/index.jsx';
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
-    import css from './plugins/superagent/client/style.css';import hostCss from './plugins/benchgo/client/style.css';
+    import css from './plugins/superagent/client/style.css';import documentCss from './plugins/superagent/client/documents.css';import hostCss from './plugins/benchgo/client/style.css';
     import tokens from './deepseek-harness/packages/client/ui-theme/src/styles/design-platform.css';import themeBase from './deepseek-harness/packages/client/ui-theme/src/styles/base.css';
     const initial={revision:1,name:'BenchGo',models:[{providerId:'Provider:Exact',modelId:'Model:First/1'}],workerModels:[],auxiliary:{models:[],capabilities:[]},image:{modelId:'Image:Keep/1'}};
     const memories=Array.from({length:30},(_,index)=>({id:'memory-'+index,content:'协作记录 '+(index+1)+'：保留简洁的操作路径与真实状态。',revision:1,document:'MEMORY.md',updatedAt:'2026-11-08T08:00:00Z'}));
@@ -30,8 +30,10 @@ async function fixture() {
     installIconSprite({effect:effect=>effect(),on(){}},undefined);
     function App(){
       const [snapshot,setSnapshot]=useState({config:initial,memories});
+      const [requestedTab,setRequestedTab]=useState(location.hash.slice(1)||undefined);
+      window.openResource=setRequestedTab;
       window.acceptConfig=config=>{window.config=config;setSnapshot({config,memories});};
-      return <div className='ba-root'><style>{tokens}{themeBase}{hostCss}{css}</style><main className='ba-main'><Studio snapshot={snapshot} ctx={{layout:{selectPanel(){}}}} execute={operation=>operation()} refresh={async()=>window.acceptConfig(window.config)} threadId='main'/></main></div>;
+      return <div className='ba-root'><style>{tokens}{themeBase}{hostCss}{css}{documentCss}</style><main className='ba-main'><Studio requestedTab={requestedTab} snapshot={snapshot} ctx={{layout:{selectPanel(){}}}} execute={operation=>operation()} refresh={async()=>window.acceptConfig(window.config)} threadId='main'/></main></div>;
     }
     createRoot(document.getElementById('root')).render(<App/>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-studio-ui-test'), format: 'iife', jsx: 'automatic',
@@ -90,7 +92,6 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
             return route.fulfill({ json: { artifacts, total: artifacts.length, nextCursor: null } });
           }
           if (input.action === 'systemFiles') return route.fulfill({ json: { path: '', entries: [file] } });
-          if (input.action === 'actionPermissions') return route.fulfill({ json: { grants: [], audit: [] } });
           return route.fulfill({ json: {} });
         }
         return route.abort();
@@ -189,10 +190,6 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
       await page.waitForFunction(scroll => Math.abs(document.querySelector('.ba-studio-body').scrollTop - scroll) < 3, scroll);
       assert.equal(await page.getByLabel('有什么值得记住？', { exact: true }).inputValue(), '保留跨页记忆草稿');
       await checkLayout('memory-restored');
-      await choose('授权管理');
-      await page.getByText('还没有站点许可', { exact: true }).waitFor();
-      assert.equal(await page.getByRole('heading', { name: '授权管理', exact: true }).count(), 1);
-      await checkLayout('permissions');
       for (const name of ['产物', '系统文件']) {
         await choose(name);
         await page.getByRole('button', { name: 'note.md', exact: true }).waitFor();
@@ -200,7 +197,7 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
         if (name === '产物') {
           await checkLayout('artifacts-default');
           const artifactScroll = await page.locator('.ba-studio-body').evaluate(element => { element.scrollTop = 520; return element.scrollTop; });
-          await choose('授权管理'); await choose('产物');
+          await choose('身份'); await choose('产物');
           await page.getByRole('button', { name: 'note.md', exact: true }).waitFor();
           await page.waitForFunction(scroll => Math.abs(document.querySelector('.ba-studio-body').scrollTop - scroll) < 3, artifactScroll);
         }
@@ -218,6 +215,131 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
         assert.equal(await page.locator(':focus').innerText(), 'note.md');
         if (name === '系统文件') assert.equal(await page.getByRole('searchbox', { name: '筛选当前目录文件', exact: true }).inputValue(), 'note');
       }
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('model settings keep controls aligned through loading, errors and data, with a clear empty state', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const browser = await chromium.launch({ headless: true, executablePath });
+  const screenshots = process.env.BENCHGO_STUDIO_SCREENSHOTS;
+  if (screenshots) await mkdir(screenshots, { recursive: true });
+  try {
+    const html = await fixture();
+    for (const width of [1440, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 960 } });
+      page.setDefaultTimeout(7000);
+      let releaseCatalog, attempts = 0;
+      const pending = new Promise(resolve => { releaseCatalog = resolve; });
+      await page.route('**/*', async route => {
+        if (route.request().url() === 'http://localhost/') return route.fulfill({ contentType: 'text/html', body: html });
+        if (route.request().url().endsWith('/api/commander/assistant')) {
+          if (route.request().postDataJSON().action === 'catalog') {
+            if (++attempts === 1) { await pending; return route.fulfill({ status: 503, json: { error: '供应商暂时无法连接' } }); }
+            return route.fulfill({ json: { providers: [{ id: 'Provider:Exact', name: '精确供应商', available: true }], models: [{ id: 'Model:First/1', name: '首个模型', provider: 'Provider:Exact' }] } });
+          }
+          return route.fulfill({ json: {} });
+        }
+        return route.abort();
+      });
+      await page.goto('http://localhost/');
+      if (width > 760) await page.getByRole('navigation', { name: '资源分区', exact: true }).getByRole('button', { name: '模型', exact: true }).click();
+      else { await page.getByRole('button', { name: '资源分区', exact: true }).click(); await page.getByRole('option', { name: / · 模型$/ }).click(); }
+      const check = async state => {
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${state}/${width} must fit the viewport`);
+        const row = page.locator('.ba-model-card').first();
+        if (await row.count()) {
+          const geometry = await row.evaluate(element => {
+            const rect = selector => { const bounds = element.querySelector(selector).getBoundingClientRect(); return { y: bounds.y, bottom: bounds.bottom, center: bounds.y + bounds.height / 2, height: bounds.height }; };
+            return { wide: element.closest('.ba-model-settings').clientWidth > 660, provider: rect('[aria-label="供应商"]'), model: rect('[aria-label="模型"]'), priority: rect('.ba-model-priority'), actions: rect('.ba-row-actions'), buttons: [...element.querySelectorAll('.ba-row-actions button')].map(button => button.getBoundingClientRect().height) };
+          });
+          assert(Math.abs(geometry.provider.y - geometry.model.y) < 1, `${state}/${width}: selector tops must align`);
+          assert.equal(geometry.provider.height, geometry.model.height);
+          assert(Math.abs(geometry.priority.center - geometry.actions.center) < 1, `${state}/${width}: priority and actions must align`);
+          if (geometry.wide) assert(Math.abs(geometry.model.center - geometry.actions.center) < 1, `${state}/${width}: actions must align with controls, excluding labels and feedback`);
+          else { assert(geometry.actions.bottom <= geometry.provider.y, 'compact rows put actions above the fields'); assert(geometry.buttons.every(height => height >= 44), 'all mobile actions retain their touch target, including disabled buttons'); }
+        }
+        if (screenshots) {
+          for (const theme of ['light', 'dark']) {
+            await page.evaluate(theme => { document.body.toggleAttribute('data-ds-dark-theme', theme === 'dark'); document.documentElement.style.colorScheme = theme; }, theme);
+            await page.screenshot({ path: join(screenshots, `model-layout-${state}-${theme}-${width}.png`), animations: 'disabled' });
+          }
+        }
+      };
+      await page.getByRole('status', { name: '正在读取模型目录', exact: true }).waitFor();
+      await check('loading');
+      releaseCatalog();
+      await page.getByRole('alert').filter({ hasText: '供应商暂时无法连接' }).waitFor();
+      await check('error');
+      await page.getByRole('button', { name: '重试', exact: true }).click();
+      await page.getByRole('button', { name: '供应商', exact: true }).filter({ hasText: '精确供应商' }).waitFor();
+      assert(!/编辑|配置/.test(await page.getByRole('button', { name: /工作模型 Worker/ }).innerText()), 'closed headings use the chevron without redundant action text');
+      assert(!/编辑|配置/.test(await page.getByRole('button', { name: /^辅助模型/ }).innerText()));
+      await check('data');
+      await page.getByRole('button', { name: '移除模型', exact: true }).click();
+      await page.getByText('为助手选择一个模型', { exact: true }).waitFor();
+      await check('empty');
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('board document shortcuts open exact files and protect retained drafts across navigation', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    const html = await fixture();
+    for (const width of [1440, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 960 } }), errors = [], calls = [];
+      page.setDefaultTimeout(5000); page.on('pageerror', error => errors.push(error.message));
+      const documents = ['USER.md', 'SOUL.md', 'IDENTITY.md'].map(name => ({ name, content: `${name} 原始正文`, hash: `${name}:1` }));
+      await page.route('**/*', async route => {
+        if (route.request().url() === 'http://localhost/') return route.fulfill({ contentType: 'text/html', body: html });
+        if (route.request().url().endsWith('/api/commander/assistant')) {
+          const input = route.request().postDataJSON(); calls.push(input);
+          if (input.action === 'profileDocuments') {
+            if (input.op === 'list') return route.fulfill({ json: { documents } });
+            const document = documents.find(row => row.name === input.name);
+            assert.equal(input.expectedHash, document.hash);
+            Object.assign(document, { content: input.content, hash: `${input.name}:2` });
+            return route.fulfill({ json: { document } });
+          }
+          return route.fulfill({ json: {} });
+        }
+        return route.abort();
+      });
+      await page.goto('http://localhost/#soul');
+      const soul = page.getByRole('textbox', { name: 'SOUL.md 正文', exact: true });
+      await soul.waitFor();
+      assert.equal(await page.locator('.ba-studio-body').getAttribute('data-section'), 'documents');
+      assert.equal(await soul.inputValue(), 'SOUL.md 原始正文');
+      await soul.fill('保留 SO 草稿');
+      await page.evaluate(() => window.openResource('memory'));
+      await page.getByLabel('有什么值得记住？', { exact: true }).waitFor();
+      await page.evaluate(() => window.openResource('soul'));
+      await soul.waitFor();
+      assert.equal(await soul.inputValue(), '保留 SO 草稿');
+      assert.equal(await page.getByRole('dialog').count(), 0, 'returning to the same file keeps its draft without prompting');
+      await page.evaluate(() => window.openResource('identity-document'));
+      const confirmation = page.getByRole('dialog', { name: '切换档案？', exact: true });
+      await confirmation.getByRole('button', { name: '继续编辑', exact: true }).click();
+      assert.equal(await soul.inputValue(), '保留 SO 草稿', 'cancelled navigation retains the draft');
+      assert.equal(calls.filter(call => call.op === 'update').length, 0, 'navigation never saves or discards by itself');
+      await page.evaluate(() => window.openResource('memory'));
+      await page.getByLabel('有什么值得记住？', { exact: true }).waitFor();
+      await page.evaluate(() => window.openResource('identity-document'));
+      await confirmation.getByRole('button', { name: '放弃并切换', exact: true }).click();
+      const identity = page.getByRole('textbox', { name: 'IDENTITY.md 正文', exact: true });
+      await identity.waitFor();
+      assert.equal(await identity.inputValue(), 'IDENTITY.md 原始正文');
+      await identity.fill('更新 Identity 正文');
+      await page.getByRole('button', { name: '保存', exact: true }).click();
+      await page.getByText('已保存，下次请求生效', { exact: true }).waitFor();
+      assert.deepEqual(calls.filter(call => call.op === 'update').map(({ name, content, expectedHash }) => ({ name, content, expectedHash })), [{ name: 'IDENTITY.md', content: '更新 Identity 正文', expectedHash: 'IDENTITY.md:1' }]);
+      await page.evaluate(() => window.openResource('soul')); await soul.waitFor();
+      await page.evaluate(() => window.openResource('identity-document')); await identity.waitFor();
+      assert.equal(await identity.inputValue(), '更新 Identity 正文', 'the exact saved file reloads through its shortcut');
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'document navigation fits the viewport');
       assert.deepEqual(errors, []);
       await page.close();
     }

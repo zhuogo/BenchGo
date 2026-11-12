@@ -32,6 +32,18 @@ test('provider directory projects settings once for all providers and observes t
   assert.equal(doc.value.providers.routergo.displayName, 'Updated RouterGo');
   assert.equal(first[0].name, 'RouterGo');
 });
+
+test('independent provider credentials are read concurrently while preserving directory ordering', async () => {
+  const { ctx, service } = fixture(), requested = new Set();
+  const original = ctx.credentials.resolve;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  ctx.credentials.resolve = async ref => { requested.add(ref); await gate; return original(ref); };
+  const pending = service.list();
+  try { assert.deepEqual([...requested].sort(), ['NATIVE_KEY', 'ROUTER_KEY']); }
+  finally { release(); }
+  assert.deepEqual((await pending).map(row => row.id), ['routergo', 'native', 'special']);
+});
 test('model metadata outranks names and audio models never enter the official chat list', async t => {
   const { service, doc } = fixture(); const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });

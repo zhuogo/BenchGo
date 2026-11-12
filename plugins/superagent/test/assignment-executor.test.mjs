@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAssignmentExecutor } from '../src/assignment-executor.mjs';
@@ -78,7 +78,7 @@ for (const selection of ['worker', 'explicit']) test(`Worker ignores ${selection
     } },
   };
   await installExecutionRoleHost(t, ctx);
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: router, models: [router], workerModels: workers }), authorizeAction: async () => ({ allowed: true }), captureCheckpoint: async () => ({ version: 1, manifestHash: 'checkpoint' }) });
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: router, models: [router], workerModels: workers }), authorizeAction: async () => ({ allowed: true }) });
   await executor(assignment, { ticket, signal, renew: async () => {} });
   assert.deepEqual(seen, expected.map(model => [model.providerId, model.modelId, model.options.maxTokens]));
   assert.equal(selected[0].provider, expected[0].providerId);
@@ -86,25 +86,18 @@ for (const selection of ['worker', 'explicit']) test(`Worker ignores ${selection
   assert.equal(selected[0].reasoningEffort, expected[0].options.reasoningEffort);
 });
 
-for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], [false, 'max-tokens'], [false, 'paused']]) test(`host execution is persisted, isolated and permission-gated (project=${projectMode}, ending=${ending})`, async t => {
+for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], ['directory', 'completed'], [false, 'max-tokens'], [false, 'paused']]) test(`host execution is persisted, isolated and permission-gated (project=${projectMode}, ending=${ending})`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-executor-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'main' } });
   const project = { id: 'opaque-project', path: join(directory, 'source') };
+  if (projectMode) await mkdir(projectMode === true ? join(project.path, '.git') : project.path, { recursive: true });
   const ticket = database.createTicket({ threadId: 'thread', target: 'inspect', mandate: { scope: ['read'], source: { channel: 'feishu', chatId: 'chat' }, ...(projectMode ? { project } : {}) } });
   database.createAssignment(ticket.id, { model: { providerId: 'provider', modelId: 'opaque/model' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const events = new Map(); let disposed = false, meta, submitted = false, sourceReference;
   const transcript = [], tools = new Map();
-  const environment = { path: join(directory, 'isolated'), branch: 'branch', baseCommit: 'commit', repositoryRoot: project.path };
-  const worktrees = { create: async (agent, request) => {
-    assert.equal(submitted, false);
-    assert.equal(meta.cwd, project.path);
-    assert.equal(database.runs(assignment.id)[0].state, 'prepared');
-    assert.equal(request.from, 'HEAD');
-    return environment;
-  } };
   const ctx = {
     workspaceRegistry: { resolveByPath: async () => ({ attachSession: async id => assert.equal(id, database.runs(assignment.id)[0].sessionId) }) },
     on() { return () => {}; },
@@ -116,6 +109,7 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
       const agent = { id: input.sessionId, session: { snapshotEvents: () => transcript }, async followup() {
         assert.equal(database.runs(assignment.id)[0].state, 'submitted');
         submitted = true;
+        await events.get('tools/execute')({ agent, name: 'write', arguments: {}, callId: 'project-write', signal: new AbortController().signal }, async () => 'written');
         await tools.get('assistant_task_result').execute({ selfCheck: { summary: 'Verified evidence' } }, { agent, signal: new AbortController().signal, callId: 'self-check' });
         if (ending === 'paused') {
           database.pauseTicket(ticket.id);
@@ -124,18 +118,18 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
         events.get('agent/status')({ status: 'running' });
         queueMicrotask(() => events.get('agent/status')({ status: 'idle' }));
       } };
-      await input.setup({ tools: { register: tool => tools.set(tool.name, tool) }, effect: fn => fn(), get: name => name === 'worktrees' ? worktrees : undefined, systemPrompt: { section() {}, context(entry) { if (entry.name === 'benchgo-worker-source-reference') sourceReference = JSON.parse(entry.text()); } }, on: (name, listener) => events.set(name, listener) }, agent);
+      await input.setup({ tools: { register: tool => tools.set(tool.name, tool) }, effect: fn => fn(), get: name => { if (name === 'worktrees') throw new Error('Worktree must not be required for dispatch'); }, systemPrompt: { section() {}, context(entry) { if (entry.name === 'benchgo-worker-source-reference') sourceReference = JSON.parse(entry.text()); } }, on: (name, listener) => events.set(name, listener) }, agent);
       return { agent, dispose: async () => { disposed = true; } };
     } },
   };
   await installExecutionRoleHost(t, ctx);
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readSourceContext: async () => ({ status: 'available', messages: [{ text: 'Earlier discussion' }] }), readPolicy: async () => ({ version: 'p1', projects: [project], workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }), captureCheckpoint: async input => { assert.deepEqual(input, projectMode ? environment : meta.cwd); return { version: 1, manifestHash: 'mock-checkpoint' }; } });
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readSourceContext: async () => ({ status: 'available', messages: [{ text: 'Earlier discussion' }] }), readPolicy: async () => ({ version: 'p1', projects: [project], workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }) });
   const signal = new AbortController().signal;
   if (ending === 'max-tokens') {
     await assert.rejects(executor(assignment, { ticket, signal, renew: async () => {} }), error => error.code === 'WORKER_TURN_INCOMPLETE' && error.executionPhase === 'evidence');
     const run = database.runs(assignment.id)[0];
     assert.equal(database.getWorkerExecutionState(run.id).selfCheck.selfCheck.summary, 'Verified evidence');
-    assert.equal(run.state, 'uncertain'); assert.equal(disposed, true);
+    assert.equal(run.state, 'submitted'); assert.equal(disposed, true);
     return;
   }
   const result = await executor(assignment, { ticket, signal, renew: async () => {} });
@@ -144,12 +138,12 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
   assert.equal(sourceReference.kind, 'untrusted-source-reference');
   assert.equal(sourceReference.messages[0].content, 'Earlier discussion');
   assert.equal(result.summary, 'Evidence found');
-  assert.equal(result.directory, projectMode ? environment.path : meta.cwd);
-  if (projectMode) {
-    assert.deepEqual(database.runs(assignment.id)[0].environment, environment);
-    assert.equal(result.checkpoint.manifestHash, 'mock-checkpoint');
-    assert.throws(() => database.setRunEnvironment(result.runId, { owner: assignment.owner, fence: assignment.fence, environment }), /cannot change/);
-  }
+  assert.equal(meta.cwd, projectMode ? project.path : database.runs(assignment.id)[0].directory);
+  assert.equal(database.runs(assignment.id)[0].workingDirectory, meta.cwd);
+  assert.equal(result.directory, database.runs(assignment.id)[0].directory);
+  assert.equal(Object.hasOwn(result, 'checkpoint'), false);
+  assert.equal(result.environment, undefined);
+  assert.equal(database.runs(assignment.id)[0].environment, undefined);
   assert.equal(database.runs(assignment.id)[0].state, 'verifying');
   assert.equal(typeof events.get('tools/execute'), 'function');
   const request = await events.get('agent/request')({ signal }, async () => ({ temperature: 0.2, provider: 'inherited', model: 'inherited' }));
@@ -159,7 +153,7 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
   await assert.rejects(executor(assignment, { ticket, signal, renew: async () => {} }), /reconciliation/);
 });
 
-test('elapsed time never interrupts execution; an explicit abort keeps its submitted run uncertain', async t => {
+test('elapsed time never interrupts execution; abort without dispatched effects preserves the submitted receipt', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-executor-timeout-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
@@ -190,7 +184,7 @@ test('elapsed time never interrupts execution; an explicit abort keeps its submi
   await assert.rejects(execution, /owner stopped/);
   assert.equal(interrupted, 1);
   assert.equal(disposed, 1);
-  assert.equal(database.runs(assignment.id)[0].state, 'uncertain');
+  assert.equal(database.runs(assignment.id)[0].state, 'submitted');
 });
 
 for (const cleanupFails of [false, true]) test(`cancel waits for confirmed host disposal (cleanupFails=${cleanupFails})`, async t => {
@@ -214,7 +208,7 @@ for (const cleanupFails of [false, true]) test(`cancel waits for confirmed host 
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }) });
   const controller = new AbortController();
   const work = executor(assignment, { ticket, signal: controller.signal, renew: async () => {} });
-  const rejected = assert.rejects(work, cleanupFails ? /cleanup failed/ : /requested stop/);
+  const rejected = assert.rejects(work, error => error.message === 'requested stop' && (!cleanupFails || error.cleanupFailure === 'cleanup failed'));
   await started;
   assert.equal(database.cancelTicket(ticket.id).status, 'waiting');
   assert.equal(database.getTicket(ticket.id).executionControl.stopRequested, true);

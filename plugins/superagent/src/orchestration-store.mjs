@@ -1,4 +1,4 @@
-import { assertTicketStatus, ticketExecutionBlocked, ticketStopped } from './ticket-lifecycle.mjs';
+import { assertTicketStatus, ticketExecutionBlocked, ticketStopped, ticketPaused, executionStatusText } from './ticket-lifecycle.mjs';
 import { migrateTicketStates } from './ticket-state-migration.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { ticketArchiveSql, ticketExecutionExitedSql, ticketIsArchived, ticketPresentationKey } from './ticket-archive.mjs';
@@ -23,6 +23,9 @@ import { installRouterQuestionStore } from './router-question-store.mjs';
 import { normalizeTicketTitle } from './ticket-title.mjs';
 import { installExecutionFactsStore } from './execution-facts-store.mjs';
 import { installExecutionSummaryStore } from './execution-summary-store.mjs';
+import { redactExecutionText } from './execution-summary-input.mjs';
+import { hasSavedCompletion } from './execution-uncertainty.mjs';
+import { migrateLegacyExecutionRelease } from './legacy-execution-release.mjs';
 
 const json = value => JSON.stringify(value);
 const parse = value => JSON.parse(value);
@@ -83,6 +86,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       priority INTEGER NOT NULL, owner TEXT, lease_until INTEGER, fence INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS sa_assignments_ready ON sa_assignments(state,priority DESC,created_at);
+    CREATE INDEX IF NOT EXISTS sa_assignments_ticket ON sa_assignments(ticket_id,created_at);
     CREATE TABLE IF NOT EXISTS sa_subscriptions(
       id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL REFERENCES sa_tickets(id), thread_id TEXT NOT NULL REFERENCES sa_threads(id),
       state TEXT NOT NULL, cursor_seq INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
@@ -102,6 +106,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       payload TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0,
       owner TEXT, lease_until INTEGER, sent_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS sa_outbox_ready ON sa_outbox(state,next_at,created_at);
+    CREATE INDEX IF NOT EXISTS sa_outbox_ticket ON sa_outbox(ticket_id,created_at,id);
     CREATE TABLE IF NOT EXISTS sa_runs(
       id TEXT PRIMARY KEY, assignment_id TEXT NOT NULL REFERENCES sa_assignments(id),
       fence INTEGER NOT NULL, owner TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL,
@@ -132,6 +137,12 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     try { const result = fn(); db.exec('COMMIT'); executionFacts?.flushExecutionFactChanges(); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
   };
   migrateTicketStates({ db, tx });
+  tx(() => migrateLegacyExecutionRelease(db));
+  // Old evidence-only queues must never become fresh executor work after removing
+  // their polling path. Keep their original uncertain Run for explicit acceptance.
+  tx(() => db.exec(`UPDATE sa_assignments SET state=CASE WHEN state='queued' THEN 'uncertain' ELSE state END,
+    payload=json_remove(payload,'$.verificationOnly','$.verificationAttempts','$.verificationAfter','$.verificationInspectionAttempts','$.verificationError','$.verificationCancelled')
+    WHERE json_type(payload,'$.verificationOnly') IS NOT NULL OR json_type(payload,'$.verificationAfter') IS NOT NULL;`));
   initializeTicketCleanup({ db, transaction: tx });
   const executionExited = db.prepare(`SELECT ${ticketExecutionExitedSql()} AS exited FROM sa_tickets WHERE id=?`);
   const ticketMetadata = db.prepare('SELECT value FROM task_meta WHERE key=?');
@@ -147,14 +158,16 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     const result = db.prepare('SELECT payload FROM sa_results WHERE ticket_id=? ORDER BY version DESC LIMIT 1').get(row.id);
     const saved = result ? parse(result.payload) : null;
     const latest = saved?.instructionRevision === row.instruction_revision ? saved : null;
-    const execution = db.prepare("SELECT state FROM sa_assignments WHERE ticket_id=? AND COALESCE(json_extract(payload,'$.instructionRevision'),1)=? AND state IN ('claimed','uncertain','queued','waiting') ORDER BY CASE state WHEN 'uncertain' THEN 0 WHEN 'claimed' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END LIMIT 1").get(row.id, row.instruction_revision);
+    const execution = db.prepare("SELECT id,state,fence,payload FROM sa_assignments WHERE ticket_id=? AND COALESCE(json_extract(payload,'$.instructionRevision'),1)=? AND state IN ('claimed','uncertain','queued','waiting') ORDER BY CASE state WHEN 'uncertain' THEN 0 WHEN 'claimed' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END LIMIT 1").get(row.id, row.instruction_revision);
     const pause = row.pause_reason ? parse(row.pause_reason) : null;
     const wait = row.continuation_wait ? parse(row.continuation_wait) : null;
     const control = parse(row.execution_control || '{}');
     const active = row.status !== 'completed' && !Object.values(control).some(Boolean);
-    const executionProgress = active ? ({ claimed: '正在执行', uncertain: '等待核实执行状态', queued: '等待执行', waiting: '等待继续条件' })[execution?.state] : null;
-    const blocker = wait?.reason || pause?.reason || (control.stopped ? '已停止，等待明确的继续要求' : control.stopRequested ? '正在确认执行已停止' : control.paused ? '已暂停' : control.pauseRequested ? '正在暂停' : execution?.state === 'uncertain' ? '上次执行效果尚待核实' : '');
-    return { goal: row.target.slice(0, 600), progress: String(blocker || executionProgress || latest?.summary || ({ running: '正在执行', waiting: '等待执行或交付', completed: '已完成' })[row.status]).replace(/\s+/g, ' ').slice(0, 600),
+    const saving = active && row.status === 'running' && execution?.state === 'uncertain'
+      && api.runs(execution.id).some(run => run.fence === execution.fence && hasSavedCompletion(run));
+    const executionProgress = active ? saving ? '正在保存执行结果' : ({ claimed: '正在执行', uncertain: '执行状态待核实', queued: '排队执行', waiting: '等待继续条件' })[execution?.state] : null;
+    const blocker = executionStatusText(wait?.reason) || executionStatusText(pause?.reason) || (control.stopped ? '已停止，等待明确的继续要求' : control.stopRequested ? '正在确认执行已停止' : control.paused ? '已暂停' : control.pauseRequested ? '正在暂停' : execution?.state === 'uncertain' && !saving ? '上次执行效果尚待核实' : '');
+    return { goal: row.target.slice(0, 600), progress: String(blocker || executionProgress || latest?.summary || ({ running: '正在执行', waiting: '等待执行条件', completed: '已完成' })[row.status]).replace(/\s+/g, ' ').slice(0, 600),
       blocker: String(blocker).slice(0, 600), status: row.status, updatedAt: row.updated_at };
   }
   const assignmentValue = row => row && ({ id: row.id, ticketId: row.ticket_id, ...parse(row.payload), state: row.state, priority: row.priority, owner: row.owner, leaseUntil: row.lease_until, fence: row.fence, attempts: row.attempts, createdAt: row.created_at, updatedAt: row.updated_at });
@@ -182,13 +195,13 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       const row = triggerRow(id(triggerId, 'source trigger id'));
       if (!row || row.thread_id !== threadId) throw fail('TRIGGER_THREAD_MISMATCH', 'Ticket source trigger must belong to its thread');
       const existing = db.prepare('SELECT ticket_id FROM sa_ticket_triggers WHERE trigger_id=? LIMIT 1').get(triggerId);
-      if (existing) throw Object.assign(fail('TRIGGER_ALREADY_ASSIGNED', 'A Trigger can open only one Ticket'), { ticketId: existing.ticket_id });
+      if (existing && input.allowSharedDesktopSource !== true) throw Object.assign(fail('TRIGGER_ALREADY_ASSIGNED', 'A Trigger can open only one Ticket'), { ticketId: existing.ticket_id });
     }
     const target = String(input.target || ''), acceptance = input.acceptance ?? input.mandate.acceptance ?? target;
     if (typeof acceptance !== 'string') throw new Error('Ticket acceptance must be text');
     const mandate = { ...input.mandate, target, acceptance };
     db.prepare('INSERT INTO sa_tickets(id,thread_id,title,target,acceptance,status,mandate,created_by_decision,created_at,updated_at,result_version) VALUES (?,?,?,?,?,?,?,?,?,?,0)')
-      .run(ticketId, threadId, normalizeTicketTitle(input.title, target), target, acceptance, assertTicketStatus(input.status || 'waiting'), json(mandate), decisionId, now, now);
+      .run(ticketId, threadId, normalizeTicketTitle(input.title, target), target, acceptance, assertTicketStatus(input.status || 'running'), json(mandate), decisionId, now, now);
     for (const triggerId of sourceTriggerIds) db.prepare('INSERT INTO sa_ticket_triggers VALUES (?,?)').run(ticketId, triggerId);
     if (input.adjustmentOfTicketId) db.prepare('UPDATE sa_tickets SET adjustment_of_ticket_id=? WHERE id=?').run(input.adjustmentOfTicketId, ticketId);
     return ticketValue(db.prepare('SELECT * FROM sa_tickets WHERE id=?').get(ticketId));
@@ -204,9 +217,30 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     }
   }
 
+  function savedResultPending(row) {
+    const ticket = api.getTicket(row.ticket_id), payload = parse(row.payload);
+    return !ticketExecutionBlocked(ticket) && !payload.stopRequest && !payload.retiredExecution
+      && (payload.instructionRevision ?? 1) === ticket.instructionRevision
+      && api.runs(row.id).some(run => run.fence === row.fence && ['verifying', 'uncertain'].includes(run.state) && hasSavedCompletion(run));
+  }
   const api = {
     path,
     hasActiveExecution: () => !!db.prepare("SELECT 1 FROM sa_assignments WHERE state IN ('claimed','uncertain') LIMIT 1").get(),
+    // These read-only probes avoid rebuilding policy/documents while idle. The
+    // transactional claim and renewal still perform the authoritative checks.
+    hasAssignmentWork: ({ now = Date.now() } = {}) => !!db.prepare("SELECT 1 FROM sa_assignments WHERE state='queued' OR (state='claimed' AND lease_until<=?) LIMIT 1").get(now),
+    hasAnsweredAttention: () => !!db.prepare("SELECT 1 FROM sa_assignments a JOIN sa_attentions q ON q.assignment_id=a.id WHERE a.state='waiting' AND q.answer_trigger_id IS NOT NULL LIMIT 1").get(),
+    hasPendingResultRecovery: ({ now = Date.now() } = {}) => !!db.prepare(`SELECT 1 FROM sa_assignments a JOIN sa_runs r ON r.assignment_id=a.id AND r.fence=a.fence
+      WHERE (a.state!='claimed' OR COALESCE(a.lease_until,0)<=?) AND r.state IN ('uncertain','cancelled','verifying','submitted','running','completed','failed')
+      AND (length(COALESCE(json_extract(r.payload,'$.evidence.summary'),''))>0 OR length(COALESCE(json_extract(r.payload,'$.evidence.finalSummary'),''))>0)
+      AND COALESCE(json_extract(a.payload,'$.savedResultRecovery.nextAttemptAt'),0)<=?
+      AND (json_extract(r.payload,'$.resultSaved') IS NULL OR json_extract(r.payload,'$.resultSaved.completionPending')=1 OR json_extract(r.payload,'$.resultSaved.notificationPending')=1) LIMIT 1`).get(now, now),
+    schedulingTickets: ({ limit = 1000 } = {}) => db.prepare(`SELECT t.* FROM sa_tickets t WHERE t.status!='completed' AND t.result_version=0
+      AND COALESCE(json_extract(t.execution_control,'$.pauseRequested'),0)!=1 AND COALESCE(json_extract(t.execution_control,'$.paused'),0)!=1
+      AND COALESCE(json_extract(t.execution_control,'$.stopRequested'),0)!=1 AND COALESCE(json_extract(t.execution_control,'$.stopped'),0)!=1
+      AND (t.continuation_wait IS NULL OR json_extract(t.continuation_wait,'$.stage')='scheduling')
+      AND NOT EXISTS (SELECT 1 FROM sa_assignments a WHERE a.ticket_id=t.id)
+      ORDER BY t.created_at,t.rowid LIMIT ?`).all(safeLimit(limit, 1000, 1000)).map(ticketValue),
     transaction: tx,
     createThread(input) { return tx(() => createThread(input)); },
     getThread(threadId) { return threadValue(threadRow(id(threadId, 'threadId'))); },
@@ -394,19 +428,6 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     },
     createTicket(input) { return tx(() => insertTicket(input)); },
     getTicket(ticketId) { return ticketValue(db.prepare('SELECT * FROM sa_tickets WHERE id=?').get(id(ticketId, 'ticketId'))); },
-    markTicketRestored(ticketId, { expectedInstructionRevision } = {}) {
-      return tx(() => {
-        const ticket = api.getTicket(ticketId);
-        if (!ticket || ticket.instructionRevision !== expectedInstructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Checkpoint requirements changed');
-        if (ticket.status !== 'completed' && !ticket.executionControl?.stopped) throw fail('CHECKPOINT_EXECUTION_ACTIVE', 'Execution must be stopped before restoration');
-        if (api.assignments(ticketId).some(assignment => !['completed', 'failed', 'cancelled'].includes(assignment.state)
-          || api.runs(assignment.id).some(run => !['completed', 'failed', 'cancelled'].includes(run.state)
-            || (run.fence === assignment.fence && (assignment.executionStopped?.fence !== run.fence || assignment.executionStopped?.owner !== run.owner))))) throw fail('CHECKPOINT_EXECUTION_ACTIVE', 'Execution release is unconfirmed');
-        db.prepare("UPDATE sa_tickets SET status='waiting',execution_control=?,continuation_wait=?,updated_at=? WHERE id=?")
-          .run(json({ stopped: true }), json({ code: 'CHECKPOINT_RESTORED', sourceResultVersion: ticket.resultVersion, reason: '已恢复检查点，等待明确的后续要求' }), new Date().toISOString(), ticketId);
-        return api.getTicket(ticketId);
-      });
-    },
     cancelTicket(ticketId) {
       return tx(() => cancelTicketInternal(ticketId));
     },
@@ -434,21 +455,20 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       return tx(() => {
         const ticket = api.getTicket(ticketId);
         if (!ticket) throw fail('TICKET_NOT_FOUND', 'Ticket does not exist');
-        if (ticket.executionControl?.pauseRequested) throw fail('PAUSE_PENDING', 'Execution has not reached its pause checkpoint');
+        if (ticket.executionControl?.pauseRequested) throw fail('PAUSE_PENDING', 'Execution has not confirmed its pause');
         if (ticketStopped(ticket) || ticket.status === 'completed') throw fail('TICKET_STOPPED', 'Stopped execution requires a new authorized continuation');
         if (!ticket.executionControl?.paused) return ticket;
         const at = new Date().toISOString();
         for (const row of db.prepare("SELECT * FROM sa_assignments WHERE ticket_id=? AND state='paused'").all(ticketId)) {
           const run = api.runs(row.id).find(item => item.fence === row.fence && item.state === 'waiting' && item.evidence?.waitingPause);
-          if (!run) throw fail('RUN_CONFLICT', 'Paused execution checkpoint is missing');
+          if (!run) throw fail('RUN_CONFLICT', 'Paused execution record is missing');
           const payload = { ...parse(row.payload), pauseContinuation: { runId: run.id } };
           delete payload.attentionContinuation;
           delete payload.contextContinuation;
           delete payload.interruptedContinuation;
-          delete payload.verificationOnly;
           db.prepare("UPDATE sa_assignments SET state='queued',payload=?,updated_at=? WHERE id=?").run(json(payload), at, row.id);
         }
-        db.prepare("UPDATE sa_tickets SET status='waiting',execution_control='{}',pause_reason=NULL,updated_at=? WHERE id=?").run(at, ticketId);
+        db.prepare("UPDATE sa_tickets SET status='running',execution_control='{}',pause_reason=NULL,updated_at=? WHERE id=?").run(at, ticketId);
         for (const delivery of db.prepare("SELECT * FROM sa_outbox WHERE ticket_id=? AND state='sent'").all(ticketId)) {
           const receipt = db.prepare('SELECT payload FROM sa_delivery_receipts WHERE outbox_id=?').get(delivery.id);
           if (receipt) closeDeliveredTicket(delivery, parse(receipt.payload), Date.now());
@@ -461,7 +481,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const assignment = ownedAssignment(assignmentId, owner, fence, now), ticket = api.getTicket(assignment.ticket_id);
         if (!ticket.executionControl?.pauseRequested) throw fail('PAUSE_CONFLICT', 'Ticket is not awaiting this pause');
         const run = api.runs(assignmentId).find(item => item.id === result.runId && item.fence === fence);
-        if (!run || run.state !== 'verifying' || !result.waitingPause || !result.checkpoint || !result.transcript || JSON.stringify(run.evidence) !== JSON.stringify(result)) throw fail('RUN_CONFLICT', 'Pause requires saved execution evidence');
+        if (!run || run.state !== 'verifying' || !result.waitingPause || !result.transcript || JSON.stringify(run.evidence) !== JSON.stringify(result)) throw fail('RUN_CONFLICT', 'Pause requires saved execution evidence');
         const stopped = parse(assignment.payload).executionStopped;
         if (stopped?.owner !== owner || stopped?.fence !== fence) throw fail('PAUSE_PENDING', 'Execution cleanup is not confirmed');
         if (result.waitingExecutionBudget || result.waitingBudget) throw fail('PAUSE_CONFLICT', 'Budget pauses were removed on 2026-11-06');
@@ -471,36 +491,6 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const pending = api.assignments(ticket.id).some(row => ['claimed', 'uncertain'].includes(row.state));
         db.prepare("UPDATE sa_tickets SET status='waiting',execution_control=?,updated_at=? WHERE id=?").run(json({ pauseRequested: pending, paused: !pending }), at, ticket.id);
         return api.getAssignment(assignmentId);
-      });
-    },
-    /** Resumes a Ticket parked by the execution-time gate removed on 2026-11-06; no added time is required. */
-    queueBudgetContinuation(ticketId, { expectedResultVersion, validateMandate, now = Date.now() } = {}) {
-      if (typeof validateMandate !== 'function') throw new Error('Execution budget continuation requires current authorization');
-      return tx(() => {
-        const ticket = api.getTicket(ticketId), continuation = ticket?.continuationWait;
-        if (!ticket || !Number.isSafeInteger(expectedResultVersion) || ticket.resultVersion !== expectedResultVersion
-          || continuation?.sourceResultVersion !== expectedResultVersion) throw fail('REVIEW_CONFLICT', 'Execution budget wait version changed');
-        const unavailable = code => ({ queued: false, code, ticket: api.getTicket(ticketId) });
-        if (ticketExecutionBlocked(ticket) || ticket.status !== 'waiting' || ticket.pauseReason?.kind !== 'execution-budget') return unavailable('TICKET_STOPPED');
-        if (validateMandate(ticket.mandate, { ticketId, assignmentId: continuation.assignmentId }) !== true) return unavailable('MANDATE_REVOKED');
-        const row = db.prepare('SELECT * FROM sa_assignments WHERE id=? AND ticket_id=?').get(continuation.assignmentId, ticketId);
-        const run = row && api.runs(row.id).find(item => item.id === continuation.runId && item.fence === row.fence);
-        const saved = run?.evidence, payload = row && parse(row.payload);
-        if (!row || row.state !== 'waiting' || run?.state !== 'waiting' || run.sessionId !== continuation.sessionId
-          || saved?.runId !== run.id || saved.sessionId !== run.sessionId || !saved.checkpoint || !saved.transcript
-          || !saved.waitingPause || saved.waitingAttention || (payload.instructionRevision ?? 1) !== ticket.instructionRevision
-          || saved.waitingExecutionBudget?.kind !== 'execution-time'
-          || saved.waitingExecutionBudget.terminal?.kind !== 'aborted' || saved.waitingExecutionBudget.terminal.reason?.kind !== 'hook'
-          || saved.waitingExecutionBudget.terminal.reason.reason !== 'benchgo-execution-budget-exhausted'
-          || payload.stopRequest) return unavailable('EXECUTION_NOT_VERIFIED');
-        if (payload.executionStopped?.owner !== run.owner || payload.executionStopped?.fence !== row.fence) return unavailable('EXECUTION_STOP_UNCONFIRMED');
-        if (saved.waitingExecutionBudget.effectsVerified !== true || saved.executionEffects?.effectsVerified === false) return unavailable('EXECUTION_EFFECTS_UNKNOWN');
-        payload.pauseContinuation = { runId: run.id, kind: 'execution-budget' };
-        for (const key of ['attentionContinuation', 'contextContinuation', 'interruptedContinuation', 'verificationOnly']) delete payload[key];
-        db.prepare("UPDATE sa_assignments SET state='queued',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?")
-          .run(json(payload), timestamp(now), row.id);
-        db.prepare("UPDATE sa_tickets SET status='waiting',pause_reason=NULL,continuation_wait=NULL,updated_at=? WHERE id=?").run(timestamp(now), ticketId);
-        return { queued: true, ticket: api.getTicket(ticketId), assignment: api.getAssignment(row.id) };
       });
     },
     /** Called only inside a trusted revision transaction after its new human input is saved. */
@@ -518,14 +508,14 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       const run = row && api.runs(row.id).find(item => item.id === result?.runId && item.fence === row.fence);
       const saved = run?.evidence, payload = row && parse(row.payload);
       if (result?.outcome !== 'failed' || result.version !== expectedResultVersion || result.instructionRevision >= expectedInstructionRevision
-        || row?.state !== 'completed' || run?.state !== 'completed' || !saved?.checkpoint || !saved.transcript
-        || saved.waitingAttention || saved.waitingPause || saved.executionEffects?.effectsVerified === false
+        || row?.state !== 'completed' || run?.state !== 'completed' || !saved?.transcript
+        || saved.waitingAttention || saved.waitingPause
         || payload.executionStopped?.fence !== row.fence || payload.executionStopped?.owner !== run.owner
-        || !api.deliveries(ticketId).some(item => item.state === 'sent' && item.receipt?.status === 'accepted' && item.receipt.messageId && item.payload.resultVersion === expectedResultVersion && item.payload.outcome === 'failed')) throw fail('EXECUTION_NOT_VERIFIED', 'Original failure execution must be safely released and effects verified before continuation');
+        || !api.deliveries(ticketId).some(item => item.state === 'sent' && item.receipt?.status === 'accepted' && item.receipt.messageId && item.payload.resultVersion === expectedResultVersion && item.payload.outcome === 'failed')) throw fail('EXECUTION_NOT_VERIFIED', 'Original failure execution must be released before continuation');
       payload.contextContinuation = { runId: run.id };
-      for (const key of ['attentionContinuation', 'pauseContinuation', 'verificationOnly', 'stopRequest', 'executionStopped']) delete payload[key];
+      for (const key of ['attentionContinuation', 'pauseContinuation', 'stopRequest', 'executionStopped']) delete payload[key];
       db.prepare("UPDATE sa_assignments SET state='queued',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?").run(json(payload), timestamp(now), row.id);
-      db.prepare("UPDATE sa_tickets SET status='waiting',continuation_wait=NULL,updated_at=? WHERE id=?").run(timestamp(now), ticketId);
+      db.prepare("UPDATE sa_tickets SET status='running',continuation_wait=NULL,updated_at=? WHERE id=?").run(timestamp(now), ticketId);
       return { queued: true, assignment: api.getAssignment(row.id), ticket: api.getTicket(ticketId) };
     },
     confirmExecutionStopped(assignmentId, { owner, fence }) {
@@ -597,6 +587,30 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         return assignmentValue(db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(assignmentId));
       });
     },
+    /** Explicit input in an original Worker conversation resumes that exact execution. */
+    resumeWorkerConversation(sessionId, { owner, leaseMs = 60000, now = Date.now(), validateMandate } = {}) {
+      id(sessionId, 'sessionId'); id(owner, 'assignment owner');
+      if (typeof validateMandate !== 'function' || !Number.isSafeInteger(now) || !Number.isSafeInteger(leaseMs) || leaseMs <= 0) throw new Error('Invalid Worker conversation claim');
+      return tx(() => {
+        const run = db.prepare("SELECT * FROM sa_runs WHERE json_extract(payload,'$.sessionId')=?").get(sessionId);
+        const row = run && db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(run.assignment_id);
+        if (!row || run.fence !== row.fence) throw fail('FENCING_CONFLICT', 'Original Worker execution is no longer current');
+        if (row.state === 'claimed' && row.lease_until > now) throw fail('FENCING_CONFLICT', 'Original Worker still has an active execution owner');
+        const ticket = api.getTicket(row.ticket_id), payload = parse(row.payload), evidence = parse(run.payload).evidence;
+        if (payload.retiredExecution) throw fail('FENCING_CONFLICT', 'Original Worker execution has been replaced');
+        if (validateMandate(copy(ticket.mandate), { ticketId: ticket.id, assignmentId: row.id }) !== true) throw fail('MANDATE_REVOKED', 'Worker authorization changed');
+        if (!evidence?.transcript?.hash || run.state !== 'completed' && evidence.executionEffects?.effectsVerified !== true) throw fail('EXECUTION_EFFECTS_UNKNOWN', 'Original execution requires verified effects before continuation');
+        for (const key of ['attentionContinuation', 'pauseContinuation', 'contextContinuation', 'interruptedContinuation', 'executionStopped', 'stopRequest']) delete payload[key];
+        payload.nativeContinuation = { runId: run.id };
+        payload.instructionRevision = ticket.instructionRevision;
+        const fence = row.fence + 1, at = timestamp(now);
+        db.prepare("UPDATE sa_assignments SET state='claimed',owner=?,lease_until=?,fence=?,attempts=attempts+1,payload=?,updated_at=? WHERE id=?").run(owner, now + leaseMs, fence, json(payload), at, row.id);
+        db.prepare("UPDATE sa_runs SET state='prepared',owner=?,fence=?,updated_at=? WHERE id=?").run(owner, fence, at, run.id);
+        db.prepare("UPDATE sa_tickets SET status='running',execution_control='{}',updated_at=? WHERE id=?").run(at, ticket.id);
+        db.prepare("UPDATE sa_subscriptions SET state='active',updated_at=? WHERE ticket_id=?").run(at, ticket.id);
+        return assignmentValue(db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(row.id));
+      });
+    },
     claimAssignments(owner, { limit = 1, leaseMs = 60000, now = Date.now(), validateMandate, assignmentId, includeReserved = false } = {}) {
       id(owner, 'assignment owner');
       if (typeof validateMandate !== 'function') throw new Error('Mechanical claim requires current Mandate validation');
@@ -606,7 +620,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         // A missing heartbeat does not prove that an external action did not happen.
         for (const row of expired) {
           db.prepare("UPDATE sa_assignments SET state='uncertain',owner=NULL,lease_until=NULL,updated_at=? WHERE id=?").run(timestamp(now), row.id);
-          db.prepare("UPDATE sa_tickets SET status='waiting',updated_at=? WHERE id=? AND status!='completed'").run(timestamp(now), row.ticket_id);
+          db.prepare("UPDATE sa_tickets SET status=?,updated_at=? WHERE id=? AND status!='completed'").run(savedResultPending(row) ? 'running' : 'waiting', timestamp(now), row.ticket_id);
           db.prepare("UPDATE sa_runs SET state='uncertain',updated_at=? WHERE assignment_id=? AND fence=? AND state IN ('prepared','submitted','running','verifying')").run(timestamp(now), row.id, row.fence);
         }
         const filters = ["a.state='queued'", "t.status!='completed'", "COALESCE(json_extract(t.execution_control,'$.pauseRequested'),0)=0", "COALESCE(json_extract(t.execution_control,'$.paused'),0)=0", "COALESCE(json_extract(t.execution_control,'$.stopRequested'),0)=0", "COALESCE(json_extract(t.execution_control,'$.stopped'),0)=0"];
@@ -633,14 +647,14 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
             const saved = run && parse(run.payload).evidence;
             const currentTicket = api.getTicket(row.ticket_id);
             const ready = payload.interruptedContinuation
-              ? run?.state === 'uncertain' && saved?.interrupted === true && saved.checkpoint?.manifestHash
+              ? run?.state === 'uncertain' && saved?.interrupted === true && saved.transcript?.hash
                 && saved.executionEffects?.effectsVerified === true && !payload.stopRequest
                 && continuation.instructionRevision === currentTicket.instructionRevision
                 && continuation.observation?.hash === saved.transcript?.hash
                 && continuation.observation?.lastSeq === saved.transcript?.lastSeq
                 && !!api.getWorkerExecutionState(run.id)?.models?.length
               : payload.contextContinuation
-              ? ['verifying', 'uncertain', 'completed'].includes(run?.state) && saved?.checkpoint && !saved.waitingPause && !saved.waitingAttention
+              ? ['verifying', 'uncertain', 'completed'].includes(run?.state) && saved?.transcript?.hash && !saved.waitingPause && !saved.waitingAttention
               : run?.state === 'waiting' && (payload.pauseContinuation ? saved?.waitingPause : saved?.waitingAttention)
                 && (!payload.pauseContinuation || !saved?.waitingExecutionBudget || saved.waitingExecutionBudget.effectsVerified === true);
             if (!ready) {
@@ -648,19 +662,6 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
               continue;
             }
             db.prepare("UPDATE sa_runs SET fence=?,owner=?,state='prepared',updated_at=? WHERE id=?").run(fence, owner, timestamp(now), run.id);
-          }
-          if (payload.verificationOnly) {
-            const run = db.prepare('SELECT * FROM sa_runs WHERE id=? AND assignment_id=? AND fence=?').get(payload.verificationOnly.runId, row.id, row.fence);
-            if (!run || !['verifying', 'uncertain'].includes(run.state) || !parse(run.payload).evidence) {
-              db.prepare("UPDATE sa_assignments SET state='blocked',updated_at=? WHERE id=?").run(timestamp(now), row.id);
-              db.prepare("UPDATE sa_tickets SET status='waiting',updated_at=? WHERE id=?").run(timestamp(now), row.ticket_id);
-              continue;
-            }
-            const runPayload = parse(run.payload);
-            // Transfer verification ownership, retaining the original execution identity.
-            runPayload.executionFence ??= run.fence;
-            runPayload.executionOwner ??= run.owner;
-            db.prepare("UPDATE sa_runs SET fence=?,owner=?,state='verifying',payload=?,updated_at=? WHERE id=?").run(fence, owner, json(runPayload), timestamp(now), run.id);
           }
           db.prepare("UPDATE sa_assignments SET state='claimed',owner=?,lease_until=?,fence=?,attempts=attempts+1,updated_at=? WHERE id=? AND state='queued'").run(owner, now + leaseMs, fence, timestamp(now), row.id);
           db.prepare("UPDATE sa_tickets SET status='running',updated_at=? WHERE id=?").run(timestamp(now), row.ticket_id);
@@ -678,6 +679,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         payload.reconciliations = [...(payload.reconciliations || []), { fence, outcome, evidence, at: timestamp(now) }];
         db.prepare('UPDATE sa_assignments SET state=?,payload=?,updated_at=? WHERE id=?').run(outcome === 'notExecuted' ? 'queued' : outcome, json(payload), timestamp(now), assignmentId);
         if (api.getTicket(row.ticket_id).executionControl?.stopRequested) cancelTicketInternal(row.ticket_id);
+        else if (outcome === 'notExecuted' && !ticketExecutionBlocked(api.getTicket(row.ticket_id)))
+          db.prepare("UPDATE sa_tickets SET status='running',updated_at=? WHERE id=?").run(timestamp(now), row.ticket_id);
         return assignmentValue(db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(assignmentId));
       });
     },
@@ -720,83 +723,41 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         return api.getAssignment(row.id);
       });
     },
-    verificationCandidates({ limit = 20, now = Date.now() } = {}) {
-      return db.prepare(`SELECT a.id FROM sa_assignments a JOIN sa_runs r ON r.assignment_id=a.id AND r.fence=a.fence
-        JOIN sa_tickets t ON t.id=a.ticket_id
-        WHERE a.state='uncertain' AND r.state IN ('verifying','uncertain') AND t.status!='completed' AND COALESCE(json_extract(t.execution_control,'$.stopRequested'),0)=0 AND COALESCE(json_extract(t.execution_control,'$.stopped'),0)=0 AND COALESCE(json_extract(t.execution_control,'$.pauseRequested'),0)=0 AND COALESCE(json_extract(t.execution_control,'$.paused'),0)=0
-        AND json_extract(r.payload,'$.evidence.summary') IS NOT NULL
-        AND json_type(r.payload,'$.evidence.transcript.hash')='text'
-        AND (json_type(r.payload,'$.environment') IS NULL OR json_type(r.payload,'$.evidence.checkpoint.manifestHash')='text')
-        AND json_type(a.payload,'$.retiredExecution') IS NULL
-        AND COALESCE(json_extract(a.payload,'$.verificationAfter'),0)<=?
-        ORDER BY a.updated_at,a.id LIMIT ?`).all(now, safeLimit(limit, 20, 100)).map(row => {
-          const assignment = api.getAssignment(row.id);
-          return { assignment, ticket: api.getTicket(assignment.ticketId), run: api.runs(row.id).find(run => run.fence === assignment.fence) };
-        });
-    },
-    deferVerification(assignmentId, { fence, reason = 'EVIDENCE_UNVERIFIED', now = Date.now() } = {}) {
-      return tx(() => {
-        const row = db.prepare("SELECT * FROM sa_assignments WHERE id=? AND fence=? AND state='uncertain'").get(id(assignmentId), fence);
-        if (!row) return false;
-        const payload = parse(row.payload);
-        payload.verificationInspectionAttempts = (payload.verificationInspectionAttempts || 0) + 1;
-        payload.verificationAfter = now + Math.min(900000, 30000 * 2 ** Math.min(payload.verificationInspectionAttempts - 1, 5));
-        payload.verificationError = String(reason).slice(0, 160);
-        db.prepare('UPDATE sa_assignments SET payload=?,updated_at=? WHERE id=?').run(json(payload), timestamp(now), assignmentId);
-        return true;
-      });
-    },
-    recordAssignmentFailure(assignmentId, { owner, fence, stage, code, phase, now = Date.now() } = {}) {
+    recordAssignmentFailure(assignmentId, { owner, fence, stage, code, phase, message, effects, cleanupFailure, now = Date.now() } = {}) {
       return tx(() => {
         const row = db.prepare("SELECT * FROM sa_assignments WHERE id=? AND fence=? AND state IN ('claimed','uncertain')").get(id(assignmentId), fence);
         if (!row) return false;
         const previous = parse(row.payload);
         const runOwner = db.prepare('SELECT owner FROM sa_runs WHERE assignment_id=? AND fence=?').get(assignmentId, fence)?.owner;
         if (row.owner !== owner && previous.revokedOwner !== owner && runOwner !== owner) return false;
-        const safeCodes = ['AUXILIARY_QUALITY', 'NO_ADAPTER', 'RATE_LIMIT', 'HTTP', 'NETWORK', 'TIMEOUT', 'ABORTED', 'FENCING_CONFLICT', 'MANDATE_REVOKED', 'EXECUTION_PAUSE_UNVERIFIED', 'EXECUTION_EFFECTS_UNKNOWN', 'WORKER_SELF_CHECK', 'WORKER_TURN_INCOMPLETE', 'EXECUTION_INPUT_ASSESSMENT_FAILED', 'EXECUTION_INPUT_ROUTER_UNAVAILABLE'];
+        const safeCodes = ['AUXILIARY_QUALITY', 'NO_ADAPTER', 'RATE_LIMIT', 'HTTP', 'NETWORK', 'TIMEOUT', 'ABORTED', 'FENCING_CONFLICT', 'MANDATE_REVOKED', 'EXECUTION_PAUSE_UNVERIFIED', 'EXECUTION_EFFECTS_UNKNOWN', 'WORKER_SELF_CHECK', 'WORKER_TURN_INCOMPLETE', 'EXECUTION_INPUT_ASSESSMENT_FAILED', 'EXECUTION_INPUT_ROUTER_UNAVAILABLE',
+          'WORKER_MODEL_ROUTE', 'SESSION_ROLE_STORE_UNAVAILABLE', 'SESSION_ROLE_OWNERSHIP', 'ROLE_ASSEMBLY_FAILED', 'ROLE_SERVICES_UNAVAILABLE', 'ROLE_PRESET_UNAVAILABLE', 'ROLE_CONFIGURATION_CHANGED', 'ROLE_MIGRATION_UNAVAILABLE', 'ROLE_PERMISSION_BUNDLE_INVALID', 'ROLE_LIVE_SESSION_UNMANAGED', 'CHILD_APPROVAL_PARENT_REQUIRED'];
         const safePhases = ['setup', 'resume', 'create', 'submit', 'attention-answer', 'completion', 'evidence'];
         const payload = { ...parse(row.payload), lastFailure: { stage: stage === 'result' ? 'result' : 'execution',
-          code: safeCodes.includes(code) ? code : 'UNAVAILABLE', ...(stage !== 'result' && safePhases.includes(phase) ? { phase } : {}), at: timestamp(now) } };
+          code: safeCodes.includes(code) ? code : 'UNAVAILABLE', ...(stage !== 'result' && safePhases.includes(phase) ? { phase } : {}),
+          ...(typeof message === 'string' && message.trim() ? { message: redactExecutionText(message, 2000) } : {}),
+          ...(record(effects) ? { effects: copy(effects) } : {}), at: timestamp(now) } };
+        payload.firstFailure ||= copy(payload.lastFailure);
+        if (typeof cleanupFailure === 'string') payload.lastFailure.cleanupFailure = redactExecutionText(cleanupFailure, 1000);
         db.prepare('UPDATE sa_assignments SET payload=?,updated_at=? WHERE id=?').run(json(payload), timestamp(now), assignmentId);
         const ticket = api.getTicket(row.ticket_id), uniqueKey = `assignment-system-state:${assignmentId}:${fence}:${payload.lastFailure.stage}`;
-        db.prepare("UPDATE sa_tickets SET status='waiting',updated_at=? WHERE id=? AND status!='completed'").run(timestamp(now), ticket.id);
+        const recoveringResult = savedResultPending(row);
+        db.prepare("UPDATE sa_tickets SET status=?,updated_at=? WHERE id=? AND status!='completed'").run(recoveringResult ? 'running' : 'waiting', timestamp(now), ticket.id);
+        // Saving an already completed execution is system work, not a user decision.
+        // Its bounded recovery path reports a blocker only if recovery really fails.
+        if (recoveringResult) return true;
         const publication = systemStateDelivery({ state: 'continuation_wait',
           code: payload.lastFailure.code, stage: payload.lastFailure.stage });
+        if (effects?.effectsVerified === true) {
+          publication.text = `执行失败：${payload.firstFailure.message || payload.firstFailure.code}。执行已停止，未重复执行。`;
+          db.prepare('UPDATE sa_tickets SET continuation_wait=? WHERE id=?').run(json({ code: 'EXECUTION_FAILED',
+            reason: payload.firstFailure.message || payload.firstFailure.code }), ticket.id);
+        }
         db.prepare("INSERT OR IGNORE INTO sa_outbox(id,unique_key,ticket_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
           .run(uuid(), uniqueKey, ticket.id, json({ type: 'ticket.result', ticketId: ticket.id, source: ticket.mandate.source,
             instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion, assignmentId, fence,
             publication, text: publication.text }), now, timestamp(now), timestamp(now));
         return true;
-      });
-    },
-    queueVerification(assignmentId, { fence, runId, observation, validateMandate, ownerRetry = false, now = Date.now() } = {}) {
-      if (typeof validateMandate !== 'function' || !record(observation) || observation.sessionId === undefined || observation.completed !== true) throw new Error('Verification requires observed completion and current authorization');
-      return tx(() => {
-        const row = db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(id(assignmentId));
-        const run = db.prepare('SELECT * FROM sa_runs WHERE id=? AND assignment_id=? AND fence=?').get(id(runId), assignmentId, fence);
-        if (!row || row.fence !== fence || row.state !== 'uncertain' || !run || !['verifying', 'uncertain'].includes(run.state)) throw fail('FENCING_CONFLICT', 'Execution is not awaiting verification recovery');
-        const ticket = api.getTicket(row.ticket_id), payload = parse(row.payload), saved = parse(run.payload);
-        if ((payload.instructionRevision ?? 1) !== ticket.instructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Verification requirements are stale');
-        if (ticketExecutionBlocked(ticket) || validateMandate(ticket.mandate) !== true) throw fail('MANDATE_REVOKED', 'Current Ticket authority does not permit verification');
-        if (!ownerRetry && (payload.verificationAfter || 0) > now) throw fail('RECOVERY_LIMIT', 'Automatic verification recovery is backing off');
-        if (!saved.evidence || saved.sessionId !== observation.sessionId || saved.evidence.runId !== runId || saved.evidence.sessionId !== saved.sessionId
-          || saved.evidence.transcript?.hash !== observation.hash || saved.evidence.transcript?.lastSeq !== observation.lastSeq) throw fail('RUN_CONFLICT', 'Observation does not match persisted execution evidence');
-        if (api.pendingSubscriptionMessages(ticket.id, { limit: 1 }).length) {
-          if (ownerRetry) throw fail('UNAPPLIED_CONTEXT', 'Evidence-only recovery cannot execute pending context');
-          if (!saved.evidence.checkpoint || saved.evidence.waitingPause || saved.evidence.waitingAttention) throw fail('UNAPPLIED_CONTEXT', 'Safe context continuation evidence is unavailable');
-          payload.contextContinuation = { runId, observation: copy(observation) };
-          delete payload.verificationOnly;
-        } else {
-          payload.verificationOnly = { runId, observation: copy(observation) };
-          delete payload.contextContinuation;
-        }
-        delete payload.attentionContinuation;
-        delete payload.pauseContinuation;
-        delete payload.interruptedContinuation;
-        payload.verificationAttempts = (payload.verificationAttempts || 0) + 1;
-        payload.verificationAfter = now + Math.min(900000, 30000 * 2 ** Math.min(payload.verificationAttempts - 1, 5));
-        db.prepare("UPDATE sa_assignments SET state='queued',payload=?,updated_at=? WHERE id=?").run(json(payload), timestamp(now), assignmentId);
-        return api.getAssignment(assignmentId);
       });
     },
     renewAssignment(assignmentId, { owner, fence, validateMandate, leaseMs = 60000, now = Date.now() } = {}) {
@@ -808,7 +769,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (!permitted) {
           const payload = { ...parse(row.payload), revokedOwner: owner };
           db.prepare("UPDATE sa_assignments SET state='uncertain',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?").run(json(payload), timestamp(now), assignmentId);
-          db.prepare("UPDATE sa_tickets SET status='waiting',updated_at=? WHERE id=? AND status!='completed'").run(timestamp(now), row.ticket_id);
+          db.prepare("UPDATE sa_tickets SET status=?,updated_at=? WHERE id=? AND status!='completed'").run(savedResultPending(row) ? 'running' : 'waiting', timestamp(now), row.ticket_id);
           return { allowed: false, assignment: assignmentValue(db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(assignmentId)) };
         }
         db.prepare('UPDATE sa_assignments SET lease_until=?,updated_at=? WHERE id=?').run(now + leaseMs, timestamp(now), assignmentId);
@@ -822,7 +783,15 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (!row) throw fail('ASSIGNMENT_NOT_FOUND', 'Assignment does not exist');
         if (row.state !== 'claimed' || row.owner !== owner || row.fence !== fence || row.lease_until <= now) throw fail('FENCING_CONFLICT', 'Assignment lease is no longer owned');
         db.prepare('UPDATE sa_assignments SET state=?,owner=NULL,lease_until=NULL,updated_at=? WHERE id=?').run(status === 'queued' ? 'queued' : status, new Date().toISOString(), assignmentId);
-        if (!api.assignments(row.ticket_id).some(item => item.state === 'claimed')) db.prepare("UPDATE sa_tickets SET status='waiting',updated_at=? WHERE id=? AND status!='completed'").run(timestamp(now), row.ticket_id);
+        if (status === 'failed') {
+          const failure = parse(row.payload).firstFailure;
+          for (const run of db.prepare("SELECT * FROM sa_runs WHERE assignment_id=? AND fence=? AND state NOT IN ('completed','failed','cancelled')").all(assignmentId, fence)) {
+            const payload = parse(run.payload);
+            payload.failure = failure;
+            db.prepare("UPDATE sa_runs SET state='failed',payload=?,updated_at=? WHERE id=?").run(json(payload), timestamp(now), run.id);
+          }
+        }
+        if (!api.assignments(row.ticket_id).some(item => item.state === 'claimed')) db.prepare("UPDATE sa_tickets SET status=?,updated_at=? WHERE id=? AND status!='completed'").run(status === 'queued' ? 'running' : 'waiting', timestamp(now), row.ticket_id);
         return assignmentValue(db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(assignmentId));
       });
     },
@@ -831,33 +800,19 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     runs(assignmentId) {
       return db.prepare('SELECT * FROM sa_runs WHERE assignment_id=? ORDER BY created_at,rowid').all(id(assignmentId)).map(runValue);
     },
-    prepareRun(assignmentId, { owner, fence, sessionId, directory, now = Date.now() } = {}) {
+    prepareRun(assignmentId, { owner, fence, sessionId, directory, workingDirectory, now = Date.now() } = {}) {
       id(sessionId, 'run session'); id(directory, 'run directory');
+      if (workingDirectory !== undefined) id(workingDirectory, 'run working directory');
       return tx(() => {
         ownedAssignment(assignmentId, owner, fence, now);
         const previous = db.prepare('SELECT * FROM sa_runs WHERE assignment_id=? AND fence=?').get(assignmentId, fence);
         if (previous) {
           const value = runValue(previous);
-          if (value.sessionId !== sessionId || value.directory !== directory) throw fail('RUN_CONFLICT', 'Run identity cannot change');
+          if (value.sessionId !== sessionId || value.directory !== directory || value.workingDirectory !== workingDirectory) throw fail('RUN_CONFLICT', 'Run identity cannot change');
           return value;
         }
         const runId = uuid(), at = timestamp(now);
-        db.prepare('INSERT INTO sa_runs VALUES (?,?,?,?,?,?,?,?)').run(runId, assignmentId, fence, owner, 'prepared', json({ sessionId, directory }), at, at);
-        return runValue(db.prepare('SELECT * FROM sa_runs WHERE id=?').get(runId));
-      });
-    },
-    setRunEnvironment(runId, { owner, fence, environment, now = Date.now() } = {}) {
-      if (!record(environment) || !environment.path || !environment.branch || !environment.baseCommit || !environment.repositoryRoot) throw new Error('Complete worktree environment is required');
-      return tx(() => {
-        const row = db.prepare('SELECT * FROM sa_runs WHERE id=?').get(id(runId));
-        if (!row) throw fail('RUN_NOT_FOUND', 'Run does not exist');
-        ownedAssignment(row.assignment_id, owner, fence, now);
-        if (row.owner !== owner || row.fence !== fence) throw fail('FENCING_CONFLICT', 'Run belongs to another execution');
-        const payload = parse(row.payload);
-        if (row.state !== 'prepared' || payload.environment) throw fail('RUN_CONFLICT', 'Execution environment cannot change');
-        payload.environment = copy(environment);
-        payload.directory = environment.path;
-        db.prepare('UPDATE sa_runs SET payload=?,updated_at=? WHERE id=?').run(json(payload), timestamp(now), runId);
+        db.prepare('INSERT INTO sa_runs VALUES (?,?,?,?,?,?,?,?)').run(runId, assignmentId, fence, owner, 'prepared', json({ sessionId, directory, ...(workingDirectory !== undefined ? { workingDirectory } : {}) }), at, at);
         return runValue(db.prepare('SELECT * FROM sa_runs WHERE id=?').get(runId));
       });
     },
@@ -966,52 +921,187 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         return candidateValue(db.prepare('SELECT * FROM sa_candidates WHERE id=?').get(candidateId));
       });
     },
-    commitResult(ticketId, { result, status = 'waiting', uniqueKey, outboxPayload, assignment, instructionRevision, now = Date.now() } = {}) {
-      id(uniqueKey, 'result uniqueKey');
-      if (!record(result) || !['completed', 'waiting'].includes(status)) throw new Error('Invalid result commit');
+    setSchedulingBlocker(ticketId, { code = null, now = Date.now() } = {}) {
+      const reasons = { WORKER_MODEL_ROUTE: '尚未配置可用的 Worker 模型，请在模型设置中选择模型后继续。',
+        MANDATE_REVOKED: '当前授权不再允许执行此工单，请恢复授权或更新工单要求。' };
+      if (code !== null && !Object.hasOwn(reasons, code)) throw new Error('Invalid scheduling blocker');
       return tx(() => {
         const ticket = api.getTicket(ticketId);
-        if (!ticket) throw fail('TICKET_NOT_FOUND', 'Ticket does not exist');
-        const fingerprint = createHash('sha256').update(json({ result, status, outboxPayload })).digest('hex');
-        const prior = db.prepare("SELECT payload FROM sa_results WHERE ticket_id=? AND json_extract(payload,'$.commitKey')=? ORDER BY version DESC LIMIT 1").get(ticketId, uniqueKey);
-        if (prior) {
-          const saved = parse(prior.payload);
-          if (saved.commitFingerprint !== fingerprint) throw fail('OUTBOX_CONFLICT', 'Result idempotency key has different content');
-          return { ticket, result: saved, outbox: parseOutbox(db.prepare('SELECT * FROM sa_outbox WHERE unique_key=?').get(uniqueKey)), duplicate: true };
-        }
-        const resultRevision = result.instructionRevision ?? instructionRevision ?? assignment?.instructionRevision ?? 1;
-        if (resultRevision !== ticket.instructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Result requirements are stale');
-        if (api.pendingSubscriptionMessages(ticketId, { limit: 1 }).length) throw fail('UNAPPLIED_CONTEXT', 'Ticket still has unapplied source messages');
-        if (ticket.status === 'completed' || ticketStopped(ticket)) throw fail('TICKET_CLOSED', 'Ticket no longer accepts results');
-        const at = timestamp(now), version = ticket.resultVersion + 1;
-        if (assignment) {
-          const claimed = ownedAssignment(assignment.id, assignment.owner, assignment.fence, now);
-          if (claimed.ticket_id !== ticketId || (parse(claimed.payload).instructionRevision ?? 1) !== ticket.instructionRevision) throw fail('ASSIGNMENT_CONFLICT', 'Result assignment changed');
-          if (result.runId) {
-            const run = api.runs(assignment.id).find(row => row.id === result.runId && row.fence === assignment.fence);
-            if (!run || run.sessionId !== result.sessionId || run.state !== 'verifying') throw fail('RUN_CONFLICT', 'Result execution identity changed');
-          }
-          db.prepare("UPDATE sa_assignments SET state='completed',owner=NULL,lease_until=NULL,updated_at=? WHERE id=?").run(at, assignment.id);
-          db.prepare("UPDATE sa_runs SET state='completed',updated_at=? WHERE assignment_id=? AND fence=? AND state='verifying'").run(at, assignment.id, assignment.fence);
-        }
-        const committed = { ...copy(result), outcome: result.outcome || 'completed', ticketId, instructionRevision: resultRevision, version, committedAt: at, commitKey: uniqueKey, commitFingerprint: fingerprint };
-        db.prepare('INSERT INTO sa_results VALUES (?,?,?,?)').run(ticketId, version, json(committed), at);
-        // Execution completion and source receipt are distinct facts.
-        db.prepare("UPDATE sa_tickets SET status=?,result_version=?,continuation_wait=NULL,updated_at=? WHERE id=?")
-          .run('waiting', version, at, ticketId);
-        const payload = outboxPayload ?? { type: 'ticket.result', ticketId, source: ticket.mandate.source, instructionRevision: resultRevision, resultVersion: version,
-          outcome: result.outcome || 'completed', replyState: 'pending' };
-        const outboxId = uuid();
-        db.prepare("INSERT INTO sa_outbox(id,unique_key,ticket_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
-          .run(outboxId, uniqueKey, ticketId, json(payload), now, at, at);
-        return { ticket: api.getTicket(ticketId), result: committed, outbox: parseOutbox(db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(outboxId)), duplicate: false };
+        if (!ticket || ticketExecutionBlocked(ticket) || ticket.resultVersion > 0 || api.assignments(ticketId).length
+          || ticket.continuationWait && ticket.continuationWait.stage !== 'scheduling') return false;
+        if (ticket.continuationWait?.code === code || !code && !ticket.continuationWait && ticket.status === 'running') return true;
+        db.prepare('UPDATE sa_tickets SET status=?,continuation_wait=?,updated_at=? WHERE id=?')
+          .run(code ? 'waiting' : 'running', code ? json({ stage: 'scheduling', code, reason: reasons[code], sourceResultVersion: ticket.resultVersion }) : null, timestamp(now), ticketId);
+        return true;
       });
+    },
+    recordSavedResultRecovery(assignmentId, { fence, runId, attempts, nextAttemptAt = Date.now() + 30000, code = null, reason = null, now = Date.now() } = {}) {
+      return tx(() => {
+        const row = db.prepare('SELECT * FROM sa_assignments WHERE id=? AND fence=?').get(assignmentId, fence);
+        if (!row) return false;
+        const payload = parse(row.payload), ticket = api.getTicket(row.ticket_id);
+        payload.savedResultRecovery = { runId, fence, instructionRevision: ticket.instructionRevision, state: 'retrying', attempts,
+          nextAttemptAt, code, reason, updatedAt: timestamp(now) };
+        db.prepare('UPDATE sa_assignments SET payload=?,updated_at=? WHERE id=?').run(json(payload), timestamp(now), assignmentId);
+        if (!ticketExecutionBlocked(ticket) && ticket.status !== 'completed' && !ticket.pauseReason)
+          db.prepare("UPDATE sa_tickets SET status='running',updated_at=? WHERE id=?").run(timestamp(now), ticket.id);
+        return true;
+      });
+    },
+    /** A host-owned draft survives lease changes and is never permission to execute. */
+    saveWorkerDraft(assignmentId, { runId, result, owner, fence }) {
+      return tx(() => {
+        const row = db.prepare('SELECT * FROM sa_runs WHERE id=? AND assignment_id=?').get(runId, assignmentId);
+        if (!row) return false;
+        if (owner !== row.owner || fence !== row.fence) return false;
+        const payload = parse(row.payload);
+        if (json(payload.evidence) !== json(result)) delete payload.resultSaved;
+        payload.evidence = copy(result);
+        db.prepare('UPDATE sa_runs SET payload=? WHERE id=?').run(json(payload), runId);
+        return true;
+      });
+    },
+    acceptRecoveredResult(ticketId, options = {}) {
+      return api.commitResult(ticketId, options);
+    },
+    commitResult(ticketId, { runId, result, status = 'waiting', uniqueKey, outboxPayload, assignment, instructionRevision, now = Date.now() } = {}) {
+      const retained = tx(() => {
+        const ticket = api.getTicket(ticketId);
+        if (!ticket) throw fail('TICKET_NOT_FOUND', 'No host Ticket is available to retain this draft');
+        const draft = record(result) ? copy(result) : { summary: result };
+        const fingerprint = createHash('sha256').update(json({ result: draft, status, outboxPayload })).digest('hex');
+        const key = typeof uniqueKey === 'string' && uniqueKey ? uniqueKey : `draft:${fingerprint}`;
+        const prior = db.prepare("SELECT payload FROM sa_results WHERE ticket_id=? AND json_extract(payload,'$.commitKey')=? ORDER BY version DESC").all(ticketId, key).map(row => parse(row.payload));
+        const duplicate = prior.find(saved => saved.commitFingerprint === fingerprint);
+
+        const resultRevision = draft.instructionRevision ?? instructionRevision ?? assignment?.instructionRevision ?? ticket.instructionRevision;
+        const at = timestamp(now), version = duplicate?.version ?? db.prepare('SELECT COALESCE(MAX(version),0)+1 AS version FROM sa_results WHERE ticket_id=?').get(ticketId).version;
+        const current = assignment && db.prepare('SELECT * FROM sa_assignments WHERE id=? AND ticket_id=?').get(assignment.id, ticketId);
+        const activeRun = current && (draft.runId || runId) && api.runs(current.id).find(row => row.id === (draft.runId || runId));
+        const diagnostics = [];
+        if (!assignment) diagnostics.push('UNBOUND_EXECUTION');
+        if (prior.length && !duplicate) diagnostics.push('IDEMPOTENCY_CONTENT_CHANGED');
+        if (resultRevision !== ticket.instructionRevision) diagnostics.push('SUPERSEDED_INSTRUCTION');
+        if (assignment && (!current || current.fence !== assignment.fence || (parse(current.payload).instructionRevision ?? 1) !== resultRevision)) diagnostics.push('ASSIGNMENT_CHANGED');
+        if ((draft.runId || runId) && (!activeRun || activeRun.fence !== current.fence || draft.sessionId && activeRun.sessionId !== draft.sessionId)) diagnostics.push('RUN_CHANGED');
+        if (api.pendingSubscriptionMessages(ticketId, { limit: 1 }).length || api.pendingTicketInputs?.(ticketId)?.some(row => ['revision', 'authorization'].includes(row.kind))) diagnostics.push('PENDING_INPUT');
+        const isCurrent = !diagnostics.some(code => code !== 'IDEMPOTENCY_CONTENT_CHANGED') && (ticket.status !== 'completed' || ticket.resultVersion === duplicate?.version);
+        // A completed official turn, not tool/effect/hash diagnostics, proves the
+        // execution boundary. Raw text alone never proves successful completion.
+        const completion = draft.completion;
+        const normal = completion?.kind === 'completed';
+        const pending = draft.completionPending === true;
+        const success = normal && (draft.outcome === undefined || draft.outcome === 'completed')
+          && !draft.waitingPause && !draft.waitingAttention && !draft.interrupted;
+        const stopAt = current && parse(current.payload).stopRequest?.at;
+        const completedBeforeStop = success && Number.isFinite(Date.parse(completion?.at)) && Number.isFinite(Date.parse(stopAt))
+          && Date.parse(completion.at) < Date.parse(stopAt) && !ticket.executionControl?.paused && !ticket.executionControl?.pauseRequested;
+        const blocked = (ticketStopped(ticket) || ticketPaused(ticket)) && !completedBeforeStop;
+        const associated = !!isCurrent;
+        const completed = associated && !blocked && success && !pending;
+        const committed = duplicate || { ...draft, ...(draft.outcome !== undefined || !draft.waitingAttention && !draft.waitingPause
+          ? { outcome: draft.outcome === 'failed' ? 'failed' : success ? 'completed' : 'failed' } : {}), ticketId,
+          instructionRevision: resultRevision, version, committedAt: at, commitKey: key, commitFingerprint: fingerprint,
+          association: { current: associated, diagnostics }, ...(prior.length ? { conflictsWithVersions: prior.map(row => row.version) } : {}) };
+        const deliveryKey = duplicate?.deliveryKey || (prior.length ? `${key}:draft:${fingerprint}` : key);
+        committed.deliveryKey = deliveryKey;
+        if (!duplicate) db.prepare('INSERT INTO sa_results VALUES (?,?,?,?)').run(ticketId, version, json(committed), at);
+        const continueContext = normal && !!current && !!activeRun && current.fence === assignment.fence && activeRun.fence === current.fence
+          && diagnostics.includes('PENDING_INPUT') && !blocked && !draft.waitingPause && !draft.waitingAttention;
+        return { ticket, committed, duplicate: !!duplicate, associated, completed, blocked, pending, normal, current, activeRun, draft, version, at, deliveryKey, resultRevision, continueContext };
+      });
+      const { ticket, committed, duplicate, associated, completed, blocked, pending, normal, current, activeRun, draft, version, at, deliveryKey, resultRevision, continueContext } = retained;
+      let lifecycleCurrent = associated, markerOwned = false;
+      try {
+        tx(() => {
+        const latest = api.getTicket(ticketId);
+        const latestAssignment = current && db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(current.id);
+        const latestRun = activeRun && api.runs(activeRun.assignmentId).find(row => row.id === activeRun.id);
+        const newInput = api.pendingSubscriptionMessages(ticketId, { limit: 1 }).length > 0
+          || api.pendingTicketInputs?.(ticketId)?.some(row => ['revision', 'authorization'].includes(row.kind));
+        const snapshotCurrent = latest && latest.instructionRevision === ticket.instructionRevision && latest.resultVersion === ticket.resultVersion
+          && latest.status === ticket.status && json(latest.executionControl) === json(ticket.executionControl)
+          && (!current || latestAssignment && latestAssignment.fence === current.fence && latestAssignment.state === current.state);
+        if (!latest || latest.instructionRevision !== ticket.instructionRevision || latest.resultVersion !== ticket.resultVersion
+          || latest.status !== ticket.status || json(latest.executionControl) !== json(ticket.executionControl)
+          || current && (!latestAssignment || latestAssignment.fence !== current.fence || latestAssignment.state !== current.state)) lifecycleCurrent = false;
+        if (newInput) lifecycleCurrent = false;
+        const continueCurrent = (continueContext || newInput && normal && !blocked && !draft.waitingPause && !draft.waitingAttention)
+          && snapshotCurrent && latestAssignment?.fence === assignment?.fence && latestRun?.fence === assignment?.fence;
+        if (lifecycleCurrent) {
+          let nextStatus = ticket.status, continuation = ticket.continuationWait;
+          if (!blocked && !draft.waitingPause && !draft.waitingAttention) {
+            nextStatus = pending ? 'running' : completed ? 'completed' : 'waiting';
+            continuation = completed || pending ? null : { code: 'EXECUTION_FAILED', sourceResultVersion: version,
+              reason: String(draft.failure?.cause || draft.completion?.kind || '执行未正常完成，已有内容已保存').slice(0, 2000),
+              resumeConditions: draft.failure?.resumeConditions || '请查看原执行记录及实际阻塞后继续' };
+          }
+          db.prepare('UPDATE sa_tickets SET status=?,result_version=?,continuation_wait=?,updated_at=? WHERE id=?')
+            .run(nextStatus, version, continuation ? json(continuation) : null, at, ticketId);
+          if (current && !pending && !draft.waitingPause && !draft.waitingAttention) {
+            const terminal = blocked ? 'cancelled' : normal ? 'completed' : 'uncertain';
+            db.prepare('UPDATE sa_assignments SET state=?,owner=NULL,lease_until=NULL,updated_at=? WHERE id=?').run(terminal, at, current.id);
+            if (activeRun) db.prepare('UPDATE sa_runs SET state=?,updated_at=? WHERE id=?').run(terminal, at, activeRun.id);
+          }
+          if (completed) {
+            if (ticket.executionControl?.stopped || ticket.executionControl?.stopRequested)
+              db.prepare("UPDATE sa_tickets SET execution_control='{}' WHERE id=?").run(ticketId);
+            db.prepare("UPDATE sa_subscriptions SET state='closed',updated_at=? WHERE ticket_id=?").run(at, ticketId);
+            api.recordClosedTicket?.(ticketId, { closedAt: at, inTransaction: true });
+          }
+        }
+        if (continueCurrent) {
+          const payload = parse(current.payload);
+          payload.contextContinuation = { runId: activeRun.id };
+          db.prepare("UPDATE sa_assignments SET state='queued',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?").run(json(payload), at, current.id);
+          db.prepare("UPDATE sa_runs SET state='verifying',updated_at=? WHERE id=?").run(at, activeRun.id);
+          db.prepare("UPDATE sa_tickets SET status='running',continuation_wait=NULL,updated_at=? WHERE id=?").run(at, ticketId);
+        }
+        markerOwned = snapshotCurrent && latestAssignment?.fence === assignment?.fence && latestRun?.fence === assignment?.fence
+          && latestRun?.evidence?.summary === draft.summary && latestRun?.evidence?.finalSummary === draft.finalSummary;
+        if (markerOwned) {
+          const payload = parse(db.prepare('SELECT payload FROM sa_runs WHERE id=?').get(activeRun.id).payload);
+          payload.resultSaved = { version, completionPending: pending, notificationPending: lifecycleCurrent && !blocked && !pending && !draft.waitingPause && !draft.waitingAttention };
+          db.prepare('UPDATE sa_runs SET payload=? WHERE id=?').run(json(payload), activeRun.id);
+        }
+        });
+      } catch { return { ticket: api.getTicket(ticketId), result: committed, outbox: null, duplicate, pending: true, persisted: true }; }
+      try { return tx(() => {
+        // Historical/partial drafts remain available in details. Only the current
+        // finished result emits expression work; saving never authorizes sending.
+        let outbox = null;
+        const latest = api.getTicket(ticketId);
+        if (lifecycleCurrent && latest.instructionRevision === resultRevision && latest.resultVersion === version
+          && !ticketStopped(latest) && !ticketPaused(latest) && !blocked && !pending && !draft.waitingPause && !draft.waitingAttention) {
+          const payload = { ...(outboxPayload || {}), type: 'ticket.result', ticketId, source: ticket.mandate.source,
+            instructionRevision: resultRevision, resultVersion: version, outcome: committed.outcome,
+            ...(outboxPayload?.publication ? {} : { replyState: 'pending' }) };
+          const existing = db.prepare('SELECT * FROM sa_outbox WHERE unique_key=?').get(deliveryKey);
+          if (existing) outbox = parseOutbox(existing);
+          else {
+          const outboxId = uuid();
+          db.prepare("INSERT INTO sa_outbox(id,unique_key,ticket_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
+            .run(outboxId, deliveryKey, ticketId, json(payload), now, at, at);
+          outbox = parseOutbox(db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(outboxId));
+          }
+        }
+        if (markerOwned) {
+          const row = db.prepare('SELECT fence,payload FROM sa_runs WHERE id=?').get(activeRun.id);
+          const payload = parse(row.payload);
+          if (row.fence === assignment.fence && payload.resultSaved?.version === version) {
+            payload.resultSaved.notificationPending = false;
+            db.prepare('UPDATE sa_runs SET payload=? WHERE id=?').run(json(payload), activeRun.id);
+          }
+        }
+        return { ticket: api.getTicket(ticketId), result: committed, outbox, duplicate, persisted: true };
+      }); } catch { return { ticket: api.getTicket(ticketId), result: committed, outbox: null, duplicate, pending: true, persisted: true }; }
     },
     results(ticketId) { return db.prepare('SELECT payload FROM sa_results WHERE ticket_id=? ORDER BY version').all(id(ticketId, 'ticketId')).map(row => parse(row.payload)); },
     claimOutbox(owner, { limit = 20, leaseMs = 30000, now = Date.now() } = {}) {
       id(owner, 'outbox owner');
       return tx(() => {
-        db.prepare("UPDATE sa_outbox SET state='uncertain',owner=NULL,lease_until=NULL,updated_at=? WHERE state='claimed' AND lease_until<=?").run(timestamp(now), now);
+        // Pending expression cannot have crossed the source send boundary.
+        db.prepare("UPDATE sa_outbox SET state=CASE WHEN json_extract(payload,'$.replyState')='pending' THEN 'queued' ELSE 'uncertain' END,owner=NULL,lease_until=NULL,updated_at=? WHERE state='claimed' AND lease_until<=?").run(timestamp(now), now);
         const rows = db.prepare("SELECT * FROM sa_outbox WHERE state='queued' AND next_at<=? AND (ticket_id NOT IN (SELECT id FROM sa_tickets WHERE json_extract(execution_control,'$.pauseRequested')=1 OR json_extract(execution_control,'$.paused')=1) OR (json_extract(payload,'$.publication.origin')='system' AND json_extract(payload,'$.publication.systemState.stage')='execution') OR json_extract(payload,'$.stateSignal.stage')='execution') ORDER BY created_at,id LIMIT ?").all(now, safeLimit(limit, 20, 200));
         for (const row of rows) {
           const payload = parse(row.payload);
@@ -1025,6 +1115,11 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         }
         return rows.map(row => parseOutbox(db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(row.id)));
       });
+    },
+    renewOutbox(outboxId, { owner, leaseMs = 60000, now = Date.now() } = {}) {
+      const updated = db.prepare("UPDATE sa_outbox SET lease_until=? WHERE id=? AND state='claimed' AND owner=? AND lease_until>?")
+        .run(now + leaseMs, outboxId, owner, now);
+      if (!updated.changes) throw fail('OUTBOX_LEASE_CONFLICT', 'Outbox lease is no longer owned');
     },
     saveOutboxReply(outboxId, { owner, publication, messageId, now = Date.now() } = {}) {
       if (!record(publication) || publication.origin !== 'router' || publication.action !== 'deliver'
@@ -1050,6 +1145,9 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       return tx(() => {
         const row = db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(id(outboxId, 'outboxId'));
         if (!row) throw fail('OUTBOX_NOT_FOUND', 'Outbox entry does not exist');
+        const priorReceipt = row.state === 'sent' ? parseOutbox(row).receipt : null;
+        if (row.state === 'sent' && sent && receipt?.status === 'accepted' && receipt.messageId
+          && priorReceipt?.status === receipt.status && priorReceipt.messageId === receipt.messageId) return parseOutbox(row);
         if (row.state !== 'claimed' || row.owner !== owner || row.lease_until <= now) throw fail('OUTBOX_LEASE_CONFLICT', 'Outbox lease is no longer owned');
         const sentAt = sent ? timestamp(now) : null;
         db.prepare('UPDATE sa_outbox SET state=?,owner=NULL,lease_until=NULL,sent_at=?,last_error=?,next_at=?,updated_at=? WHERE id=?')
@@ -1058,7 +1156,6 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           if (!record(receipt)) throw new Error('Delivery receipt must be an object');
           db.prepare('INSERT OR REPLACE INTO sa_delivery_receipts VALUES (?,?)').run(outboxId, json(receipt));
         }
-        if (sent) closeDeliveredTicket(row, receipt, now);
         return parseOutbox(db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(outboxId));
       });
     },
@@ -1083,36 +1180,19 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
             outcome === 'not_sent' ? now : row.next_at, at, outboxId);
         if (receipt) db.prepare('INSERT OR REPLACE INTO sa_delivery_receipts VALUES (?,?)')
           .run(outboxId, json({ ...receipt, ...(priorReceipt?.parts ? { parts: priorReceipt.parts } : {}), reconciliation }));
-        if (outcome === 'sent') closeDeliveredTicket(row, receipt, now);
         return parseOutbox(db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(outboxId));
       });
     },
     pendingOutbox(now = Date.now(), limit = 100) { return db.prepare("SELECT * FROM sa_outbox WHERE state='queued' AND next_at<=? ORDER BY created_at,id LIMIT ?").all(now, safeLimit(limit, 100, 1000)).map(parseOutbox); },
     deliveries(ticketId) { return db.prepare('SELECT * FROM sa_outbox WHERE ticket_id=? ORDER BY created_at,id').all(id(ticketId)).map(parseOutbox); },
+    sentDeliveries({ ticketLimit = 1000 } = {}) {
+      return db.prepare(`WITH tickets AS (SELECT id,created_at,rowid AS position FROM sa_tickets ORDER BY created_at,rowid LIMIT ?)
+        SELECT o.* FROM tickets t JOIN sa_outbox o ON o.ticket_id=t.id JOIN sa_delivery_receipts r ON r.outbox_id=o.id
+        WHERE o.state='sent' AND json_extract(r.payload,'$.status')='accepted' AND json_extract(r.payload,'$.messageId') IS NOT NULL
+        ORDER BY t.created_at,t.position,o.created_at,o.id`).all(safeLimit(ticketLimit, 1000, 1000)).map(parseOutbox);
+    },
     close() { if (!closed) { closed = true; executionFacts?.disposeExecutionFacts(); db.close(); } },
   };
-
-  function closeDeliveredTicket(row, receipt, now) {
-    const payload = parse(row.payload), ticket = api.getTicket(row.ticket_id);
-    if (receipt?.status !== 'accepted' || typeof receipt.messageId !== 'string' || !receipt.messageId.trim()
-      || payload.type !== 'ticket.result' || payload.publication?.origin !== 'router'
-      || !['completed', 'failed'].includes(payload.outcome) || !ticket || ticket.status !== 'waiting'
-      || payload.resultVersion !== ticket.resultVersion || payload.instructionRevision !== ticket.instructionRevision
-      || json(payload.source) !== json(ticket.mandate.source)) return;
-    const result = api.results(ticket.id).at(-1);
-    if (result?.outcome !== payload.outcome || result.version !== payload.resultVersion) return;
-    if (payload.outcome === 'failed') {
-      const continuation = { code: 'EXECUTION_FAILED', sourceResultVersion: result.version,
-        reason: String(result.failure?.cause || result.summary || '执行未完成').replace(/\s+/g, ' ').slice(0, 600),
-        resumeConditions: String(result.failure?.resumeConditions || '请补充明确的继续要求').replace(/\s+/g, ' ').slice(0, 600) };
-      db.prepare("UPDATE sa_tickets SET status='waiting',continuation_wait=?,updated_at=? WHERE id=?").run(json(continuation), timestamp(now), ticket.id);
-      return;
-    }
-    if (ticketExecutionBlocked(ticket)) return;
-    db.prepare("UPDATE sa_tickets SET status='completed',updated_at=? WHERE id=?").run(timestamp(now), ticket.id);
-    db.prepare("UPDATE sa_subscriptions SET state='closed',updated_at=? WHERE ticket_id=?").run(timestamp(now), ticket.id);
-    api.recordClosedTicket?.(ticket.id, { closedAt: timestamp(now), inTransaction: true });
-  }
 
   function thisFinishEval(row) {
     if (!row || row.status !== 'running') return;
@@ -1144,23 +1224,12 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       if (['completed', 'failed', 'cancelled'].includes(row.state)) continue;
       const payload = parse(row.payload);
       const unknown = ['claimed', 'uncertain'].includes(row.state);
-      const verification = payload.verificationOnly;
-      const verifyRun = verification && db.prepare('SELECT * FROM sa_runs WHERE id=? AND assignment_id=? AND fence=?').get(verification.runId, row.id, row.fence);
-      const saved = verifyRun && parse(verifyRun.payload), observation = verification?.observation;
-      // A verification lease cannot restart the original executor. Its saved
-      // observation and release must both identify that exact original run.
-      const verificationStopped = saved && Number.isSafeInteger(saved.executionFence) && typeof saved.executionOwner === 'string'
-        && typeof saved.evidence?.transcript?.hash === 'string' && Number.isSafeInteger(saved.evidence?.transcript?.lastSeq)
-        && observation?.completed === true && observation.sessionId === saved.sessionId
-        && observation.hash === saved.evidence?.transcript?.hash && observation.lastSeq === saved.evidence?.transcript?.lastSeq
-        && payload.executionStopped?.fence === saved.executionFence && payload.executionStopped?.owner === saved.executionOwner;
-      const stopped = payload.executionStopped?.fence === row.fence || verificationStopped;
+      const stopped = payload.executionStopped?.fence === row.fence;
       const waiting = unknown && !stopped;
       if (waiting) {
         pending = true;
         payload.stopRequest ||= { owner: row.owner || db.prepare('SELECT owner FROM sa_runs WHERE assignment_id=? AND fence=? ORDER BY rowid DESC LIMIT 1').get(row.id, row.fence)?.owner || null, fence: row.fence, at };
       }
-      if (verificationStopped) payload.verificationCancelled = { runId: verifyRun.id, fence: row.fence, at };
       db.prepare('UPDATE sa_assignments SET state=?,owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?')
         .run(waiting ? 'uncertain' : 'cancelled', json(payload), at, row.id);
     }
@@ -1170,10 +1239,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     // Cancellation becomes final only for the executor whose release was confirmed.
     db.prepare(`UPDATE sa_runs SET state='cancelled',updated_at=? WHERE state='uncertain'
       AND EXISTS (SELECT 1 FROM sa_assignments a WHERE a.id=sa_runs.assignment_id AND a.ticket_id=?
-        AND a.fence=sa_runs.fence AND ((json_extract(a.payload,'$.executionStopped.fence')=sa_runs.fence
-        AND json_extract(a.payload,'$.executionStopped.owner')=sa_runs.owner)
-        OR (json_extract(a.payload,'$.verificationCancelled.runId')=sa_runs.id
-        AND json_extract(a.payload,'$.verificationCancelled.fence')=sa_runs.fence)))`).run(at, ticketId);
+        AND a.fence=sa_runs.fence AND json_extract(a.payload,'$.executionStopped.fence')=sa_runs.fence
+        AND json_extract(a.payload,'$.executionStopped.owner')=sa_runs.owner)`).run(at, ticketId);
     db.prepare("UPDATE sa_subscriptions SET state='closed',updated_at=? WHERE ticket_id=?").run(at, ticketId);
     return ticketValue(db.prepare('SELECT * FROM sa_tickets WHERE id=?').get(ticketId));
   }
@@ -1242,6 +1309,26 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   Object.assign(api, installRouterQuestionStore({ db, tx, api }));
   retireContentReview({ db, tx });
   Object.assign(api, installLearningSourceStore({ db, tx, api }));
+  if (!db.prepare("SELECT 1 FROM sa_migrations WHERE id='execution-delivery-separation-v1'").get()) tx(() => {
+    const at = timestamp(Date.now());
+    for (const row of db.prepare("SELECT t.id FROM sa_tickets t JOIN sa_results r ON r.ticket_id=t.id AND r.version=t.result_version WHERE t.status='waiting' AND json_extract(r.payload,'$.outcome')='completed' AND COALESCE(json_extract(r.payload,'$.instructionRevision'),1)=t.instruction_revision AND t.execution_control='{}' AND NOT EXISTS(SELECT 1 FROM sa_assignments a WHERE a.ticket_id=t.id AND a.state IN ('claimed','uncertain','queued','waiting'))").all()) {
+      db.prepare("UPDATE sa_tickets SET status='completed',continuation_wait=NULL,updated_at=? WHERE id=?").run(at, row.id);
+      db.prepare("UPDATE sa_subscriptions SET state='closed',updated_at=? WHERE ticket_id=?").run(at, row.id);
+      api.recordClosedTicket?.(row.id, { closedAt: at, inTransaction: true });
+    }
+    db.prepare('INSERT INTO sa_migrations VALUES (?,?)').run('execution-delivery-separation-v1', at);
+  });
+  if (!db.prepare("SELECT 1 FROM sa_migrations WHERE id='queued-ticket-running-v1'").get()) tx(() => {
+    const at = timestamp(Date.now());
+    // Repair only mechanically queued work; explicit pauses, unresolved effects,
+    // failed assignments and human questions retain their existing blockers.
+    db.prepare(`UPDATE sa_tickets SET status='running',updated_at=? WHERE status='waiting'
+      AND execution_control='{}' AND continuation_wait IS NULL AND pause_reason IS NULL
+      AND EXISTS(SELECT 1 FROM sa_assignments a WHERE a.ticket_id=sa_tickets.id AND a.state='queued')
+      AND NOT EXISTS(SELECT 1 FROM sa_attentions a WHERE a.ticket_id=sa_tickets.id AND a.instruction_revision=sa_tickets.instruction_revision AND a.answer_trigger_id IS NULL)
+      AND NOT EXISTS(SELECT 1 FROM sa_assignments a WHERE a.ticket_id=sa_tickets.id AND a.state IN ('blocked','failed','uncertain','waiting','paused'))`).run(at);
+    db.prepare('INSERT INTO sa_migrations VALUES (?,?)').run('queued-ticket-running-v1', at);
+  });
   executionFacts = installExecutionFactsStore({ db, tx, api });
   Object.assign(api, executionFacts);
   Object.assign(api, installExecutionSummaryStore({ db, tx }));

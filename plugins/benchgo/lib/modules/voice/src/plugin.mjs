@@ -12,7 +12,7 @@ export async function apply(ctx, config = {}) {
   ctx.inject(['sessionProjections'], async child => { await registerVoiceSessionProjection(child); });
   const store = await new VoiceConfig({ ...ctx.get('benchgo').config.voice, ...config }).open();
   ctx.effect(() => () => store.writes);
-  mountWeb(ctx, store, { providers: createModelProviders(ctx), llm: ctx.get('llm'), conversationBridge: createConversationBridge(ctx) });
+  mountWeb(ctx, store, { providers: createModelProviders(ctx), llm: ctx.get('llm'), conversationBridge: createConversationBridge(ctx), getAssistant: () => ctx.get?.('assistant') });
   ctx.provide('voice', store);
   ctx.inject(['benchgoSettings'], child => { const manager = child.get?.('benchgoSettings'); if (manager) child.effect(() => manager.register(createVoiceSettingsAdapter(store))); });
 }

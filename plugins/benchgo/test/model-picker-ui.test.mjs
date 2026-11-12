@@ -5,6 +5,8 @@ import {createRequire} from 'node:module';
 import {runInNewContext} from 'node:vm';
 import * as helpers from '../client/model-picker-state.mjs';
 import { createModuleSource } from '../client/modules.mjs';
+import { createModelCatalogLoader } from '../client/model-catalog.mjs';
+const catalogModule = { pickerCatalog: createModelCatalogLoader(async () => catalog), mountModelCatalogs() {}, invalidateModelCatalogs() {} };
 import { nativeActivityLabel } from '../client/native-activity.mjs';
 import { SlotCore } from '../../../deepseek-harness/packages/client/ui-slots/lib/index.js';
 const require=createRequire(import.meta.url),{transformSync}=require('esbuild');
@@ -17,7 +19,7 @@ test('model picker activates against the official single and list slot contracts
  const core=new SlotCore(), cleanups=[];
  core.register({name:'root',children:{'conversation.input.model':{kind:'single',scope:'session'},'conversation.input.dock':{kind:'list',scope:'session'}}},()=>null);
  const module={exports:{}};
- runInNewContext(code,{module,exports:module.exports,document:{createElement:()=>({remove(){}}),head:{append(){}}},require:()=>({})});
+ runInNewContext(code,{module,exports:module.exports,document:{createElement:()=>({remove(){}}),head:{append(){}}},require:id=>id.endsWith('model-catalog.mjs')?catalogModule:id.endsWith('modules.mjs')?{moduleSource:createModuleSource()}:{}});
  try {
   module.exports.mountModelPicker({effect:fn=>cleanups.push(fn()),slots:{inject:(_name,callback)=>cleanups.push(callback()),register:(options,component)=>core.register(options,component)}});
   assert.equal(core.entries('conversation.input.model').length,1);
@@ -32,7 +34,7 @@ function render({provider=null,toolsOpen=false,directory=catalog,groups=state.gr
  const values=[true,'codex',provider,'',directory,catalogLoading,0,toolsOpen,{position:'fixed'},'',catalogError,sessionBinding,bindingError],actions=[],selections=[],opened=[];let cursor=0,Component,definition;
  const react={createElement:(type,props,...children)=>({type,props:props||{},children:children.flat(Infinity).filter(x=>x!==false&&x!=null)}),useState:()=>{const id=cursor++;return[values[id],value=>actions.push({id,value})]},useEffect(){},useSyncExternalStore:(_subscribe,snapshot)=>snapshot(),useId:()=> 'picker',useRef:initial=>({current:initial})};
  const module={exports:{}}, moduleSource=createModuleSource(); moduleSource.update({base:true,harness});
- runInNewContext(code,{module,exports:module.exports,URL,document:{createElement:()=>({remove(){}}),head:{append(){}}},require:id=>id.endsWith('modules.mjs')?{moduleSource}:id==='react'?react:id==='react-dom'?{createPortal:node=>node}:id.includes('model-picker-state')?helpers:id.includes('iconsax')?{UIIcon:'Icon'}:id.includes('tool-brand')?{ToolBrandIcon:'Brand'}:{default:''}});
+ runInNewContext(code,{module,exports:module.exports,URL,document:{createElement:()=>({remove(){}}),head:{append(){}}},require:id=>id.endsWith('model-catalog.mjs')?catalogModule:id.endsWith('modules.mjs')?{moduleSource}:id==='react'?react:id==='react-dom'?{createPortal:node=>node}:id.includes('model-picker-state')?helpers:id.includes('iconsax')?{UIIcon:'Icon'}:id.includes('tool-brand')?{ToolBrandIcon:'Brand'}:{default:''}});
  const shell={children:{'settings.section':{}},store:{create:()=>({actions:{openSection:id=>opened.push(id)}})}};
  module.exports.mountModelPicker({effect(){},sessions:{subagentAddress:()=>undefined},modelDirectories:{directoryFor:()=>({store:{},load:async()=>{},select:async()=>{}})},slots:{entries:()=>[shell],inject:(slot,cb)=>{if(slot==='conversation.input.model')cb();},register:(entry,component)=>{Component=component;definition=entry}}});
  const tree=Component({available:true,locked:false,useDirectory:()=>({...state,groups,current}),load:async()=>{},openSettingsSection:id=>opened.push(id),select:selection=>{selections.push(selection);return Promise.resolve({ok:true})}});
@@ -55,6 +57,14 @@ test('bound routed conversation keeps its tool and supplier fixed while allowing
 test('model click passes original opaque ID and reasoning to official selection',()=>{
  const view=render({provider:'routergo'}),button=view.nodes.find(node=>node.type==='button'&&node.props.role==='menuitemradio');
  button.props.onClick();assert.equal(view.selections[0].provider,'commander-codex');assert.equal(view.selections[0].model,route.modelId);assert.equal(view.selections[0].reasoningEffort,'high');
+});
+
+test('pinning a model only updates local ordering and does not refresh catalog metadata', () => {
+ const view=render({provider:'routergo'}), pin=view.nodes.find(node=>node.props['aria-label']==='置顶模型');
+ pin.props.onClick({stopPropagation(){}});
+ assert.equal(view.actions.length,1);
+ assert.equal(view.actions[0].id,15,'pin state is separate from the catalog reload revision');
+ assert.equal(view.selections.length,0);
 });
 test('installed unsupported tools remain visible and cannot be activated',()=>{
  const view=render({toolsOpen:true}),hermes=view.nodes.find(node=>node.type==='button'&&node.children.some(child=>child.type==='Brand'&&child.props.tool==='hermes'));

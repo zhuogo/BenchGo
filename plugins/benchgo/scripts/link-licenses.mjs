@@ -1,4 +1,6 @@
-import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, readdir, mkdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { writeArtifact } from './write-artifact.mjs';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 const resolve = createRequire(new URL('../../link/package.json', import.meta.url));
@@ -18,5 +20,5 @@ async function visit(name, from = resolve) {
 export async function writeLinkLicenses(output) {
   for (const name of ['selfsigned', 'react', 'react-dom', 'qrcode', 'ssh2', 'ws']) await visit(name);
   await mkdir(output, { recursive: true });
-  await writeFile(new URL('LINK-THIRD-PARTY-LICENSES.txt', output), [...collected.values()].join('\n\n====================\n\n') + '\n');
+  await writeArtifact(fileURLToPath(new URL('LINK-THIRD-PARTY-LICENSES.txt', output)), [...collected.values()].join('\n\n====================\n\n') + '\n');
 }

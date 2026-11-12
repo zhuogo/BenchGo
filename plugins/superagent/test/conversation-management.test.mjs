@@ -36,7 +36,7 @@ function fixture({ threadId = 'main', risk = false } = {}) {
   registerConversationManagement({ ctx, scope: { get: () => approval }, agent, threadId, store, settings, taskManagement,
     register: (name, description, properties, required, execute) => definitions.set(name, { description, properties, required, execute }) });
   const exec = { agent, callId: 'call', signal: new AbortController().signal };
-  return { events, agent, state, calls, approvals, ctx, store, definitions, exec, preview,
+  return { events, agent, state, calls, approvals, ctx, store, definitions, exec, preview, taskManagement,
     setOutcome: value => { outcome = value; }, onApproval: hook => { approvalHook = hook; },
     settings: (args, execution = exec) => definitions.get('assistant_settings').execute(args, execution),
     cleanup: (args, execution = exec) => definitions.get('assistant_task_cleanup').execute(args, execution) };
@@ -89,7 +89,6 @@ test('owner authority excludes workers, channels, machine turns, stale sessions 
     f => { f.agent.status = 'idle'; }, f => { f.ctx.agents.get = () => ({ ...f.agent }); },
     f => { f.ctx.agents.currentInitiator = () => ({ ...f.agent }); }, f => { f.state.mainSessionId = 'other'; },
     f => { f.events.push({ type: 'turn/end' }); }, f => { f.events[1].data.source.kind = 'notification'; },
-    f => { f.events.push({ type: 'user/message', data: { id: 'machine', source: { kind: 'ticket-reply' } } }); },
   ];
   for (const mutate of mutations) {
     const f = fixture(); mutate(f);
@@ -110,8 +109,7 @@ test('ordinary plan cannot be committed from another human instruction', async (
 });
 
 test('approval revalidates original human and authoritative local session before applying', async () => {
-  for (const change of [f => { f.events[1].data.content[0].text = '取消'; }, f => { f.state.mainSessionId = 'replaced'; },
-    f => { f.events.push({ type: 'user/message', data: { id: 'machine', source: { kind: 'ticket-reply' } } }); }]) {
+  for (const change of [f => { f.events[1].data.content[0].text = '取消'; }, f => { f.state.mainSessionId = 'replaced'; }]) {
     const f = fixture({ risk: true }); await prepare(f); f.onApproval(() => change(f));
     await assert.rejects(f.settings({ op: 'commit', operationId: 'operation' }), /主人|会话/);
   }
@@ -178,4 +176,58 @@ test('fallback replay query classification never treats settings changes or clea
   assert.equal(isRouterQuery('assistant_task_cleanup', { op: 'restore', previewId: 'preview', requestId: 'restore-1' }), false);
   assert.equal(isRouterQuery('assistant_task_cleanup', { op: 'commit' }), false);
   assert.equal(isRouterQuery('assistant_config', {}), false, 'removed legacy tool has no fallback read exemption');
+});
+
+test('cleanup keeps real input after an internal notice and generates its request identity', async () => {
+  const f = fixture();
+  f.events.push({ type: 'user/message', data: { id: 'notice', source: { kind: 'ticket-reply' } } });
+  await f.cleanup({ op: 'preview', ids: ['one'] });
+  await f.cleanup({ op: 'commit', previewId: 'preview', ids: ['one'] });
+  assert.equal(f.approvals.length, 1);
+  const committed = f.calls.find(row => row.op === 'commitCleanup').args;
+  assert.match(committed.requestId, /^[a-f0-9]{64}$/);
+  assert.equal(committed.confirmedBy.source.messageId, 'human-1');
+});
+
+test('replayed cleanup reads its durable receipt without a second confirmation', async () => {
+  const f = fixture();
+  let receipt;
+  f.taskManagement.commitCleanup = args => {
+    receipt = { receiptId: 'saved', requestId: args.requestId, confirmedBy: { ids: args.ids }, items: args.ids.map(id => ({ id, after: { archived: true } })) };
+    f.preview.consumedBy = receipt.receiptId;
+    return receipt;
+  };
+  f.taskManagement.cleanupHistory = () => [receipt];
+  const input = { op: 'commit', previewId: 'preview', ids: ['one'] };
+  assert.equal(await f.cleanup(input), await f.cleanup(input));
+  assert.equal(f.approvals.length, 1);
+  assert.deepEqual(receipt.items, [{ id: 'one', after: { archived: true } }]);
+});
+
+ test('cleanup history accepts exact receipt lookup and identifies unsupported parameters accurately', async () => {
+  const f = fixture();
+  await f.cleanup({ op: 'history', receiptId: 'receipt', limit: 10 });
+  assert.deepEqual(f.calls.at(-1).args, { receiptId: 'receipt', limit: 10 });
+  assert.equal(f.approvals.length, 0);
+  await assert.rejects(f.cleanup({ op: 'history', unknownField: true }), error => error.code === 'MANAGEMENT_INPUT'
+    && error.message.includes('history') && error.message.includes('unknownField'));
+  await assert.rejects(f.cleanup({ op: 'history', receiptId: 'receipt', confirmed: true }), { code: 'MANAGEMENT_INPUT' });
+});
+
+ test('cleanup history passes the official object output contract through real tool execution', async t => {
+  const { loadRolePackage } = await import('./role-host-fixture.mjs');
+  const load = name => loadRolePackage('core/agent-loop', name);
+  const { Context } = await load('@deepseek-ai/cordis');
+  const ctx = new Context(); t.after(() => ctx.fiber.dispose());
+  for (const name of ['session', 'session-projection', 'system-prompt', 'tools', 'agent']) await ctx.plugin((await load(`@deepseek-ai/dsh-${name}`)).default);
+  const f = fixture();
+  await ctx.plugin(await loadRolePackage('core/tool-executor-native', '@deepseek-ai/dsh-tool-executor-native'));
+  const definition = f.definitions.get('assistant_task_cleanup');
+  ctx.tools.register({ name: 'history_contract', description: 'History contract', parameters: { type: 'object', properties: definition.properties, required: definition.required },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+    execute: args => f.cleanup(args) });
+  const batch = await ctx.tools.execute({ signal: new AbortController().signal, calls: [{ type: 'tool-call', id: 'history-output', name: 'history_contract', arguments: JSON.stringify({ op: 'history', receiptId: 'receipt', limit: 10 }) }] });
+  const result = batch.results[0].result;
+  assert.equal(result.isError, false, JSON.stringify(result));
+  assert.deepEqual(JSON.parse(result.content[0].text), { history: [] });
 });

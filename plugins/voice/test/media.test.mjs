@@ -5,6 +5,41 @@ import vm from 'node:vm';
 import {Capture,PCMPlayer,pcmWav,HTTP_FIRST_CHUNK_SECONDS,HTTP_CHUNK_SECONDS} from '../client/media.mjs';
 const frame=(n=2000)=>new Int16Array(480).fill(n);
 const tick=()=>new Promise(r=>setTimeout(r,0));
+
+test('capture freezes the voiced endpoint before delayed recognition and refreshes it on resumed speech',async()=>{
+  let now=1000,resolve;const endpoints=[],finals=[];
+  const c=new Capture({now:()=>now,transcribe:()=>new Promise(done=>resolve=done),onSpeechEnd:(id,meta)=>endpoints.push({id,...meta}),onFinal:(text,meta)=>finals.push({text,...meta})});
+  const send=(sample,count)=>{for(let i=0;i<count;i++){now+=20;c.accept(frame(sample),sample?.9:0);}};
+  send(2000,5);send(0,8);send(2000,2);
+  const speechEndedAt=now;send(0,15);assert.deepEqual(endpoints,[]);
+  send(0,1);await tick();const endpointAt=now;
+  assert.equal(endpointAt-speechEndedAt,320);
+  assert.deepEqual(endpoints,[{id:1,cancelled:false,speechEndedAt,endpointAt}]);
+  now+=700;resolve('完整语音');await c.pending;
+  assert.deepEqual(finals,[{text:'完整语音',utteranceId:1,final:true,speechEndedAt,endpointAt,finalizedAt:now}]);
+  await c.dispose();
+});
+
+test('overlapping ASR finals preserve each utterance audio timing independently',async()=>{
+  let now=1000;const resolvers=new Map(),finals=[],ends=[];
+  const c=new Capture({now:()=>now,realtime:{append(){},commit:id=>new Promise(resolve=>resolvers.set(id,resolve)),close:async()=>{}},onSpeechEnd:(id,meta)=>ends.push({id,...meta}),onFinal:(text,meta)=>finals.push({text,...meta})});
+  const speak=()=>{for(let i=0;i<5;i++){now+=20;c.accept(frame(),.9);}const speechEndedAt=now;for(let i=0;i<16;i++){now+=20;c.accept(frame(0),0);}return {speechEndedAt,endpointAt:now};};
+  const first=speak(),second=speak();
+  resolvers.get(2)('第二段');await tick();assert.deepEqual(finals,[]);
+  now+=200;resolvers.get(1)('第一段');await c.pending;
+  assert.deepEqual(ends,[{id:1,cancelled:false,...first},{id:2,cancelled:false,...second}]);
+  assert.deepEqual(finals,[{text:'第一段',utteranceId:1,final:true,...first,finalizedAt:now},{text:'第二段',utteranceId:2,final:true,...second,finalizedAt:now}]);
+  await c.dispose();
+});
+
+test('muting discards old audio timing and late finals before a fresh utterance',async()=>{
+  let now=1000;const resolvers=new Map(),finals=[];
+  const c=new Capture({now:()=>now,realtime:{append(){},commit:id=>new Promise(resolve=>resolvers.set(id,resolve)),clear:async()=>{},close:async()=>{}},onFinal:(text,meta)=>finals.push({text,...meta})});
+  const speak=()=>{for(let i=0;i<5;i++){now+=20;c.accept(frame(),.9);}const speechEndedAt=now;for(let i=0;i<16;i++){now+=20;c.accept(frame(0),0);}return {speechEndedAt,endpointAt:now};};
+  speak();c.setMuted(true);resolvers.get(1)('旧内容');await c.pending;assert.deepEqual(finals,[]);
+  c.setMuted(false);now+=1000;const current=speak();resolvers.get(2)('新内容');await c.pending;
+  assert.deepEqual(finals,[{text:'新内容',utteranceId:2,final:true,...current,finalizedAt:now}]);await c.dispose();
+});
 test('HTTP ASR starts a short WAV upload while the user is still speaking',async()=>{
   let calls=0;const c=new Capture({transcribe:async()=>{calls++;return '';}});
   for(let i=0;i<Math.ceil(HTTP_CHUNK_SECONDS*50)+2;i++)c.accept(frame(),.9);
@@ -148,7 +183,7 @@ test('modeled speech keeps stricter playback interruption and resets activity on
   c.setPlaybackActive(true);
   for(let i=0;i<20;i++)c.accept(frame(100),.99);
   assert.equal(c.segment,null);
-  for(let i=0;i<9;i++)c.accept(frame(1000),.9);
+  for(let i=0;i<15;i++)c.accept(frame(1000),.9);
   assert.equal(c.segment,null);
   c.accept(frame(1000),.9);assert.ok(c.segment.voiceSamples>0);
   c.setMuted(true);assert.equal(c.segment,null);assert.equal(c.attack,0);assert.deepEqual(c.pre,[]);
@@ -234,11 +269,71 @@ test('muting realtime capture isolates old partials and commits across generatio
 });
 test('capture uses 320 ms endpoint and requires sustained speech during playback',async()=>{
   const commits=[],c=new Capture({realtime:{append:()=>{},commit:id=>{commits.push(id);return Promise.resolve('');},close:async()=>{}}});
-  c.setPlaybackActive(true);for(let i=0;i<9;i++)c.accept(frame(),.9);assert.equal(c.segment,null);c.accept(frame(),.9);assert.ok(c.segment);for(let i=0;i<15;i++)c.accept(frame(0),0);assert.deepEqual(commits,[]);c.accept(frame(0),0);assert.deepEqual(commits,[1]);await c.pending;await c.dispose();
+  c.setPlaybackActive(true);for(let i=0;i<15;i++)c.accept(frame(),.9);assert.equal(c.segment,null);c.accept(frame(),.9);assert.ok(c.segment);for(let i=0;i<15;i++)c.accept(frame(0),0);assert.deepEqual(commits,[]);c.accept(frame(0),0);assert.deepEqual(commits,[1]);await c.pending;await c.dispose();
+});
+
+test('playback rejects brief close-mic transients and sustained ambiguous noise before interruption',async()=>{
+  const starts=[],packets=[],c=new Capture({realtime:{append:frames=>packets.push(frames),close:async()=>{}},onSpeechStart:id=>starts.push(id)});
+  c.setPlaybackActive(true);
+  // Loud near-mic sound alone is insufficient even when RNNoise is moderately
+  // confident. Brief high-confidence mouth sounds cannot accumulate either.
+  for(let i=0;i<100;i++)c.accept(frame(16000),.8);
+  for(let burst=0;burst<3;burst++){for(let i=0;i<15;i++)c.accept(frame(16000),.99);c.accept(frame(0),0);}
+  assert.deepEqual(starts,[]);assert.deepEqual(packets,[]);assert.equal(c.segment,null);
+  // The energy floor is unchanged: sustained speech just above it still wins.
+  for(let i=0;i<15;i++)c.accept(frame(300),.9);assert.deepEqual(starts,[]);
+  c.accept(frame(300),.9);assert.deepEqual(starts,[1]);assert.equal(packets.length,1);
+  const speech=packets[0].flatMap(part=>[...part]).filter(sample=>sample===300);
+  assert.equal(speech.length,16*480,'the whole confirmed onset must survive in preroll');
+  await c.dispose();
+});
+
+test('playback boundary candidates reset without delaying ordinary listening',async t=>{
+  let now=1000;t.mock.method(Date,'now',()=>now);
+  const c=new Capture({transcribe:async()=>''});
+  for(let i=0;i<4;i++)c.accept(frame(),.9);
+  c.setPlaybackActive(true);for(let i=0;i<15;i++)c.accept(frame(),.9);
+  assert.equal(c.segment,null);assert.equal(c.attack,300);
+  c.accept(frame(),.9);assert.ok(c.segment);await c.dispose();
+  const tail=new Capture({transcribe:async()=>''});
+  tail.setPlaybackActive(true);tail.setPlaybackActive(false);
+  for(let i=0;i<10;i++){tail.accept(frame(),.9);now+=20;}
+  assert.equal(tail.segment,null);now+=21;
+  for(let i=0;i<4;i++)tail.accept(frame(100),.6);
+  assert.equal(tail.segment,null);assert.equal(tail.attack,80);
+  tail.accept(frame(100),.6);assert.ok(tail.segment,'idle speech still starts at 100 ms');
+  await tail.dispose();
 });
 test('player joins odd PCM bytes and isolates old epochs',async()=>{
   const messages=[];const p=new PCMPlayer();p.context={state:'running'};p.node={port:{postMessage:m=>messages.push(m)}};
   await p.enqueue(new Uint8Array([1]),1);await p.enqueue(new Uint8Array([2,3,4]),1);p.segmentEnd(1);assert.deepEqual([...new Int16Array(messages[0].data)],[513,1027]);assert.equal(messages.at(-1).type,'end');p.clear();assert.equal(p.queued,0);
+});
+
+test('player forwards PCM through one shared path without adapter-specific startup options',async()=>{
+  const messages=[],p=new PCMPlayer();p.context={state:'running'};p.node={port:{postMessage:m=>messages.push(m)}};
+  await p.enqueue(new Uint8Array([1,0,2,0]),1);
+  await p.enqueue(new Uint8Array([3,0]),2);
+  await p.enqueue(new Uint8Array([4,0]),3);
+  assert(messages.every(m=>Object.keys(m).sort().join(',')==='data,epoch,id,type'));
+  assert.deepEqual(messages.map(m=>[...new Int16Array(m.data)]),[[1,2],[3],[4]]);
+  p.clear();await p.enqueue(new Uint8Array([5,0]),4);
+  assert.equal(messages.at(-1).epoch,1);
+});
+
+test('player forwards render metrics with its local clock and rejects stale playback events',async t=>{
+  const metrics=[],starts=[],previousAudio=globalThis.AudioContext,previousNode=globalThis.AudioWorkletNode;
+  globalThis.AudioContext=class{constructor(options){assert.equal(options.latencyHint,'interactive');this.state='running';this.destination={};this.audioWorklet={addModule:async()=>{}};}async resume(){}async close(){this.state='closed';}};
+  globalThis.AudioWorkletNode=class{constructor(){this.port={postMessage(){}};}connect(){}disconnect(){}};
+  t.after(()=>{globalThis.AudioContext=previousAudio;globalThis.AudioWorkletNode=previousNode;});
+  const p=new PCMPlayer({now:()=>1234,onMetrics:value=>metrics.push(value),onPlaybackStart:value=>starts.push(value)});await p.start();
+  const node=p.node,event={type:'playing',epoch:0,id:7,buffer_ms:80,first_buffer_ms:80,underruns:0,gap_ms:0,queued_ms:100};
+  node.port.onmessage({data:event});assert.equal(starts.length,1);assert.equal(starts[0].id,7);assert.equal(starts[0].at,1234);
+  assert.equal(metrics[0].type,'playback');assert.equal(metrics[0].event,'playing');assert.equal(metrics[0].buffer_ms,80);assert.equal(metrics[0].bufferedSeconds,.1);
+  node.port.onmessage({data:{...event,type:'buffering',buffer_ms:120,underruns:1,queued_ms:.5}});
+  assert.equal(metrics.at(-1).event,'buffering');assert.equal(metrics.at(-1).underruns,1);
+  node.port.onmessage({data:{type:'segment_ended',epoch:0,id:7,render_time_ms:456.7,render_frame:21922}});
+  assert.equal(metrics.at(-1).event,'segment_ended');assert.equal(metrics.at(-1).render_time_ms,456.7);
+  p.clear();node.port.onmessage({data:event});assert.equal(starts.length,1);assert.equal(metrics.length,3);await p.dispose();
 });
 test('playback worklet resamples 48/44.1 kHz and ACKs only consumed PCM',async()=>{
   const code=await fs.readFile(new URL('../client/audio-worklet.js',import.meta.url),'utf8');
@@ -266,18 +361,22 @@ test('playback startup prebuffer holds short incomplete streams then flushes com
   vm.runInNewContext(code,{sampleRate:48000,AudioWorkletProcessor:class{constructor(){this.port={postMessage:m=>sent.push(m)};}},registerProcessor:(n,c)=>types[n]=c});
   const p=new types['voice-playback']();p.port.onmessage({data:{type:'pcm',epoch:0,id:1,data:new Int16Array(480).fill(1000).buffer}});const out=new Float32Array(128);p.process([],[[out]]);assert.equal(out.some(Boolean),false);assert.equal(sent.length,0);p.port.onmessage({data:{type:'end',epoch:0,id:1}});for(let i=0;i<8;i++)p.process([],[[out]]);assert.equal(sent.filter(e=>e.type==='played').length,1);assert.ok(sent.some(e=>e.type==='playing'));assert.ok(sent.some(e=>e.type==='idle'));
 });
-test('playback starts at 120 ms and preserves activity across underruns until explicit end',async()=>{
+test('playback uses bounded observation and preserves activity through a same-segment supply gap',async()=>{
   const code=await fs.readFile(new URL('../client/audio-worklet.js',import.meta.url),'utf8'),types={},sent=[];
   vm.runInNewContext(code,{sampleRate:48000,AudioWorkletProcessor:class{constructor(){this.port={postMessage:m=>sent.push(m)};}},registerProcessor:(n,c)=>types[n]=c});
   const p=new types['voice-playback'](),render=()=>p.process([],[[new Float32Array(128)]]),send=(type,samples=0)=>p.port.onmessage({data:{type,epoch:0,id:1,data:new Int16Array(samples).fill(1000).buffer}});
-  send('pcm',1440);render();assert.equal(sent.some(e=>e.type==='playing'),false);send('pcm',1440);render();assert.equal(sent.filter(e=>e.type==='playing').length,1);
-  for(let i=0;i<70;i++)render();assert.equal(sent.filter(e=>e.type==='buffering').length,1);assert.equal(sent.some(e=>e.type==='idle'),false);assert.equal(p.target,3840);
-  send('pcm',3840);for(let i=0;i<80;i++)render();assert.equal(sent.filter(e=>e.type==='playing').length,1);assert.equal(sent.filter(e=>e.type==='buffering').length,2);assert.equal(sent.some(e=>e.type==='idle'),false);
-  send('end');for(let i=0;i<5;i++)render();assert.equal(sent.filter(e=>e.type==='played').length,1);assert.equal(sent.filter(e=>e.type==='idle').length,1);
+  send('pcm',1920);render();assert.equal(sent.some(e=>e.type==='playing'),false);
+  for(let i=0;i<110;i++)render();assert.equal(sent.filter(e=>e.type==='playing').length,1);assert.equal(sent.filter(e=>e.type==='buffering').length,1);assert.equal(sent.some(e=>e.type==='idle'),false);
+  send('pcm',12000);send('end');for(let i=0;i<200;i++)render();assert.equal(sent.filter(e=>e.type==='played').length,1);assert.equal(sent.filter(e=>e.type==='idle').length,1);assert.equal(sent.filter(e=>e.type==='playing').length,1);
 });
-test('playback adaptive prebuffer stays within 120–240 ms and clear preserves learned jitter while isolating old audio',async()=>{
+
+test('playback retains learned same-route supply while clear isolates epochs and route reset clears only learning',async()=>{
   const code=await fs.readFile(new URL('../client/audio-worklet.js',import.meta.url),'utf8'),types={},sent=[];
   vm.runInNewContext(code,{sampleRate:48000,AudioWorkletProcessor:class{constructor(){this.port={postMessage:m=>sent.push(m)};}},registerProcessor:(n,c)=>types[n]=c});
-  const p=new types['voice-playback']();for(let i=0;i<12;i++){p.port.onmessage({data:{type:'pcm',epoch:0,id:1,data:new Int16Array(p.target).fill(1000).buffer}});for(let n=0;n<100;n++)p.process([],[[new Float32Array(128)]]);}assert.equal(p.target,5760);
-  p.port.onmessage({data:{type:'clear',epoch:1}});p.port.onmessage({data:{type:'pcm',epoch:0,id:1,data:new Int16Array(2000).buffer}});assert.equal(p.target,5760);assert.equal(p.written,0);assert.equal(p.active,false);
+  const p=new types['voice-playback'](),render=()=>p.process([],[[new Float32Array(128)]]);
+  p.port.onmessage({data:{type:'pcm',epoch:0,id:1,data:new Int16Array(2400).fill(1000).buffer}});for(let i=0;i<160;i++)render();
+  p.port.onmessage({data:{type:'pcm',epoch:0,id:1,data:new Int16Array(2400).fill(1000).buffer}});const learned=p.target;assert(learned>1920&&learned<=28800);
+  p.port.onmessage({data:{type:'clear',epoch:1}});p.port.onmessage({data:{type:'pcm',epoch:0,id:1,data:new Int16Array(2000).buffer}});assert.equal(p.target,learned);assert.equal(p.written,0);assert.equal(p.active,false);
+  p.port.onmessage({data:{type:'pcm',epoch:1,id:2,data:new Int16Array(2400).buffer}});p.port.onmessage({data:{type:'reset_supply',epoch:0}});assert.equal(p.target,learned);
+  p.port.onmessage({data:{type:'reset_supply',epoch:1}});assert.equal(p.target,1920);assert.equal(p.written,2400);
 });

@@ -54,13 +54,17 @@ test('cleanup freezes a persistent list, excludes unsettled work and archives on
   assert(!f.orchestration.listTickets({ archived: false }).some(row => row.id === 'one'));
   assert.equal(Object.hasOwn(f.tasks.project('ticket', [before], { archived: true })[0].taskMeta, 'deleted'), false);
   assert.equal(f.tasks.cleanupHistory({ ticketId: 'one' }).length, 1);
+  assert.deepEqual(f.tasks.cleanupHistory({ receiptId: receipt.receiptId, limit: 10 }), [receipt]);
+  assert.deepEqual(f.tasks.cleanupHistory({ receiptId: receipt.receiptId, ticketId: 'two' }), []);
+  assert.deepEqual(f.tasks.cleanupHistory({ receiptId: 'missing' }), []);
+  assert.throws(() => f.tasks.cleanupHistory({ receiptId: '' }), { code: 'CLEANUP_INPUT_INVALID' });
   const next = f.tasks.previewCleanup({ scope, ids: ['two'] });
   assert.throws(() => f.tasks.commitCleanup({ previewId: next.previewId, ids: ['two'], confirmedBy: f.confirm(next), requestId: 'archive-1' }), { code: 'IDEMPOTENCY_CONFLICT' });
 });
 
 test('cleanup confirmation is global-owner-only and all selected rows conflict atomically', async t => {
   const f = await fixture(t); f.ticket('one'); f.ticket('two');
-  for (const badScope of [undefined, { owner: 'channel', mode: 'global' }, { owner: 'desktop-owner', mode: 'thread' }, { ...scope, sessionId: 'side' }])
+  for (const badScope of [undefined, { owner: 'desktop-owner', mode: 'thread' }, { ...scope, sessionId: 'side' }])
     assert.throws(() => f.tasks.previewCleanup({ scope: badScope }), { code: 'CLEANUP_SCOPE_DENIED' });
   const preview = f.tasks.previewCleanup({ scope });
   const confirmedBy = f.confirm(preview);

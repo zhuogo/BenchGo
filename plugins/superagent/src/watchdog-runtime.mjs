@@ -1,39 +1,10 @@
 import { watchdogDigest } from './watchdog-store.mjs';
 import { inspectWatchdogFacts } from './watchdog-checks.mjs';
-import { createExecutionSummaryInput, zeroFileChangeWindow } from './execution-summary-input.mjs';
-import { ticketExecutionBlocked, ticketStopped } from './ticket-lifecycle.mjs';
-
 const iso = value => new Date(value).toISOString();
 const clone = value => structuredClone(value);
 const networkKey = 'host:reachability';
 const identityKey = 'host:identity';
-const judgeCodes = { EXECUTION_INACTIVE: 'worker-inactive', LEASE_EXPIRED: 'lease-expired',
-  REQUEST_DEADLINE_EXCEEDED: 'request-overdue', STOP_UNCONFIRMED: 'stop-overdue', RECOVERY_NOT_CONVERGING: 'recovery-not-converging' };
 const safeCode = error => /^[A-Z][A-Z0-9_]{0,79}$/.test(error?.code || '') ? error.code : error?.name === 'TimeoutError' ? 'WATCHDOG_TIMEOUT' : 'WATCHDOG_PROBE_FAILED';
-
-function unchangedFileCandidate(execution, facts, config, now) {
-  if (facts.complete !== true || facts.truncated !== false || !Number.isFinite(Date.parse(facts.observedAt))
-    || Date.parse(facts.observedAt) > now || now - Date.parse(facts.observedAt) > config.observationWindowMs
-    || execution.ticket?.status !== 'running' || ticketExecutionBlocked(execution.ticket)
-    || execution.assignment?.state !== 'claimed' || execution.run?.state !== 'running'
-    || execution.run.instructionRevision !== execution.ticket.instructionRevision || execution.wait?.kind !== 'none'
-    || execution.executionAlive?.status !== 'running' || execution.executionAlive.bootId !== facts.bootId
-    || !Number.isFinite(Date.parse(execution.executionAlive.observedAt)) || Date.parse(execution.executionAlive.observedAt) > now
-    || now - Date.parse(execution.executionAlive.observedAt) > config.observationWindowMs
-    || !execution.watermarks?.length || execution.watermarks.some(row => row.complete !== true)) return null;
-  let safe;
-  try { safe = createExecutionSummaryInput({ ticketId: execution.ticket.id, runId: execution.run.id,
-    instructionRevision: execution.ticket.instructionRevision, watermark: facts.currentCursor ?? facts.cursor,
-    observedAt: facts.observedAt, modelEvidence: execution.modelEvidence }); } catch { return null; }
-  if (safe.binding.fence !== execution.assignment.fence || !safe.evidenceComplete || !safe.counts.calls || !safe.counts.results
-    || !safe.events.some(row => ['tool/call', 'tool/result'].includes(row.kind) && row.count > 0)) return null;
-  const window = zeroFileChangeWindow(safe, config.observationWindowMs);
-  if (!window) return null;
-  const identity = { ticketId: execution.ticket.id, assignmentId: execution.assignment.id, runId: execution.run.id,
-    sessionId: execution.run.sessionId, fence: execution.assignment.fence, instructionRevision: execution.ticket.instructionRevision };
-  return { key: `observed-files:${watchdogDigest(Object.values(identity))}`, execution: identity,
-    evidenceCursor: facts.currentCursor ?? facts.cursor, firstObservedAt: window.startedAt, reasonCode: 'OBSERVED_FILES_UNCHANGED' };
-}
 
 async function bounded(operation, signal) {
   signal.throwIfAborted();
@@ -98,11 +69,11 @@ const signalPayload = row => Object.fromEntries(['id', 'incidentKey', 'phase', '
   'evidenceCursor', 'execution', 'reasonCode', 'summary'].filter(key => row[key] !== undefined).map(key => [key, row[key]]));
 
 /** Read-only probes and signal delivery are driven only by official Schedule receipts. */
-export function createWatchdogRuntime({ store, config, client, judge, now = Date.now }) {
+export function createWatchdogRuntime({ store, config, client, now = Date.now }) {
   const shutdown = new AbortController();
   let pending, queued;
   async function deliver() {
-    const rows = store.snapshot().signals.filter(row => row.state === 'pending' && (!row.nextAttemptAt || Date.parse(row.nextAttemptAt) <= now())).slice(0, 4);
+    const rows = store.snapshot().signals.filter(row => row.state === 'pending' && row.kind !== 'model' && row.reasonCode !== 'RECOVERY_NOT_CONVERGING' && (!row.nextAttemptAt || Date.parse(row.nextAttemptAt) <= now())).slice(0, 4);
     await Promise.all(rows.map(async row => {
       const startedAt = iso(now());
       await store.update(state => {
@@ -134,7 +105,7 @@ export function createWatchdogRuntime({ store, config, client, judge, now = Date
     if (before.checks.some(row => Date.parse(row.scheduledAt) > Date.parse(receipt.scheduledAt))) return { status: 'superseded', id };
     const check = { id, scheduleId: receipt.scheduleId, scheduledAt: receipt.scheduledAt, deliveredAt: receipt.deliveredAt,
       messageId: receipt.messageId, startedAt: iso(at), completedAt: null, status: 'running', attempt: (previous?.attempt || 0) + 1,
-      configRevision: before.configRevision, outcome: 'unknown', model: judge ? 'not-needed' : 'unconfigured' };
+      configRevision: before.configRevision, outcome: 'unknown' };
     await store.update(state => {
       state.checks = state.checks.filter(row => row.id !== id).concat(check).slice(-config.retentionChecks);
     });
@@ -164,62 +135,16 @@ export function createWatchdogRuntime({ store, config, client, judge, now = Date
           const facts = envelope.facts;
           if (!facts || typeof facts !== 'object' || !Array.isArray(facts.executions)) throw Object.assign(new Error('监督执行事实不可用'), { code: 'WATCHDOG_FACTS_INVALID' });
           const inspection = inspectWatchdogFacts({ facts, previous: before.candidates, config, now: now() });
-          const findings = [...inspection.findings], degraded = judge ? [] : ['MODEL_JUDGE_UNCONFIGURED'];
-          const judgments = [];
+          const findings = inspection.findings;
           // Commit deterministic observations before any auxiliary operation.
           await store.update(state => {
             state.probeFailures = 0; state.nextProbeAt = null; state.candidates = inspection.candidates;
             reconcileIncidents(state, { findings, resolvedKeys: [...(inspection.resolvedKeys || []), networkKey, identityKey] }, check, config, iso(now()));
           });
-          const modelResolved = [];
-          if (inspection.complete) for (const incident of before.incidents.filter(row => row.active && row.kind === 'model')) {
-            const row = facts.executions.find(item => item.ticket?.id === incident.execution.ticketId);
-            if (row && (row.run?.id !== incident.execution.runId || row.assignment?.fence !== incident.execution.fence
-              || row.ticket?.instructionRevision !== incident.execution.instructionRevision
-              || row.ticket?.status === 'completed' || ticketStopped(row.ticket)
-              || ['completed', 'failed', 'cancelled'].includes(row.run?.state)
-              || ['user', 'approval', 'paused'].includes(row.wait?.kind)
-              || ['background-job', 'long-operation'].includes(row.wait?.kind) && Date.parse(row.wait.expectedUntil) > now()
-              || row.modelEvidence?.outputObservation?.observations?.some(observation => observation.comparison?.netChanged === true
-                && /^execution:\d+$/.test(observation.evidenceRef) && Number(observation.evidenceRef.slice(10)) > incident.evidenceCursor))) modelResolved.push(incident.conditionKey);
-          }
-          const judgeSignal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(config.probeTimeoutMs)]);
-          let judged = 0;
-          if (judge) for (const execution of facts.executions.slice(0, 1000)) {
-            const relevant = findings.filter(row => row.execution?.runId === execution.run?.id && judgeCodes[row.reasonCode]);
-            const candidate = unchangedFileCandidate(execution, facts, config, now());
-            if (candidate) relevant.push(candidate); // A candidate alone never creates an incident or sends a signal.
-            if (!relevant.length) continue;
-            if (judgeSignal.aborted || judged >= 4) { degraded.push('MODEL_JUDGE_DEFERRED'); break; }
-            judged++;
-            const evidence = { ticketId: execution.ticket.id, runId: execution.run.id, instructionRevision: execution.ticket.instructionRevision,
-              watermark: facts.currentCursor ?? facts.cursor, observationStartedAt: relevant[0].firstObservedAt,
-              anomalies: relevant.map(row => row.reasonCode === 'OBSERVED_FILES_UNCHANGED' ? 'no-output-change' : judgeCodes[row.reasonCode]),
-              observedAt: facts.observedAt, modelEvidence: execution.modelEvidence,
-              waiting: { kind: execution.wait?.kind || 'unknown', active: !['none', 'unknown'].includes(execution.wait?.kind),
-                ...(execution.wait?.expectedUntil ? { until: execution.wait.expectedUntil } : {}) }, facts: execution };
-            try {
-              const result = await bounded(() => judge({ evidence, signal: judgeSignal }), judgeSignal);
-              judgments.push({ runId: execution.run.id, status: result.status, classification: result.classification,
-                signalEligible: result.signalEligible === true, evidenceWatermark: result.evidenceWatermark ?? null, code: result.code ?? null });
-              if (result.status === 'degraded') degraded.push('MODEL_JUDGE_UNAVAILABLE');
-              if (result.signalEligible && ['no-progress', 'off-target'].includes(result.classification)) {
-                const base = relevant[0];
-                findings.push({ ...base, key: `model:${base.key}:${result.classification}`, kind: 'model',
-                  reasonCode: result.classification === 'no-progress' ? 'MODEL_NO_PROGRESS' : 'MODEL_OFF_TARGET',
-                  summary: `辅助判断：${String(result.reason || '证据不足').slice(0, 300)}` });
-              }
-            } catch { degraded.push('MODEL_JUDGE_UNAVAILABLE'); judgments.push({ runId: execution.run.id, status: 'degraded' }); }
-          }
-          await store.update(state => {
-            state.probeFailures = 0; state.nextProbeAt = null; state.candidates = inspection.candidates;
-            state.degraded = [...new Set(degraded)];
-            reconcileIncidents(state, { findings, resolvedKeys: modelResolved }, check, config, iso(now()));
-          });
           Object.assign(check, { status: 'completed', outcome: findings.length ? 'fault'
             : inspection.complete && !inspection.coverage.unknown.length ? 'observed' : 'unknown',
             findings: findings.map(row => row.reasonCode), coverage: inspection.coverage, evidenceCursor: facts.currentCursor ?? facts.cursor ?? null,
-            bootId: typeof facts.bootId === 'string' ? facts.bootId : null, model: judge ? degraded.length ? 'degraded' : 'available' : 'unconfigured', judgments, completedAt: iso(now()) });
+            bootId: typeof facts.bootId === 'string' ? facts.bootId : null, completedAt: iso(now()) });
           await deliver();
         }
       }

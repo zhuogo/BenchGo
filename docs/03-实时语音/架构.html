@@ -13,8 +13,8 @@
   "id": "03",
   "title": "实时语音",
   "eyebrow": "VOICE / REALTIME",
-  "subtitle": "同一套媒体管线连接草稿、正式回复与实时通话；对话分流按真实会话身份决定，执行始终留在原会话。",
-  "boundary": "已存在采集、ASR/TTS、租约、通话分流与官方会话接线。native 指复用 SuperAgent 对话层，RealtimeASR 指识别传输，均不代表端到端语音模型。阶段成果即时表达与精确播放范围持久化仍待完善，真实设备及供应商可用性须单独验收。",
+  "subtitle": "同一套媒体管线连接草稿、正式回复与实时通话；通话固定绑定原会话，全局胶囊承载跨页面控制。",
+  "boundary": "已存在采集、ASR/TTS、租约、通话分流与官方会话接线。增强通话已接入语音层完整任务整理、最多最近5条必要证据、来源去重和修订增量；task 正式消息与聊天补充共用预算，原始口述仅保留在语音记录，真实模型整理质量仍待通话验收。native 复用 SuperAgent 对话层，不叠加这套任务整理。RealtimeASR 指识别传输，不代表端到端语音模型；真实设备及供应商须单独验收。",
   "nodes": [
     {
       "id": "entry",
@@ -24,14 +24,17 @@
       "sub": "输入草稿 · 朗读回复 · 实时通话",
       "symbol": "createVoiceController()",
       "plain": "说话可以成为可编辑草稿，也可以与现有会话持续通话。",
-      "role": "控制器在转录、朗读、通话三种入口间协调麦克风、播放、通话租约与会话事件；页面提供真实可用性和错误。",
+      "role": "控制器在转录、朗读、通话三种入口间协调麦克风、播放、通话租约与会话事件。实时通话通过官方 sessions.retain 保留原会话，CallHost 由 shell.overlay 统一呈现圆球、隐藏滚动条的幕布与可拖动胶囊；收起露出工作层记录，胶囊上方以14px文字投影最近3条实时发言，共用主题底色50%透明的磨砂蒙层，仅背景模糊、文字清晰，可独立隐藏，流式续接并柔和进出；切页或最小化不主动挂断，页面不持有媒体生命周期。",
       "input": "用户入口、当前 sessionId、语音配置",
       "output": "采集或朗读请求、通话生命周期",
       "sources": [
         "plugins/voice/client/controller.mjs",
-        "plugins/voice/client/index.jsx"
+        "plugins/voice/client/index.jsx",
+        "plugins/voice/client/call-host.jsx",
+        "plugins/voice/client/call-presentation.mjs",
+        "scripts/desktop/prepare-background.mjs"
       ],
-      "note": "独立转录不调用通话交互 LLM；朗读不改写正式回复。",
+      "note": "独立转录与朗读保留页面边界。桌面后台调度需重新打包并重启生效，插件热加载不更新旧包主进程；真实最小化音频与长通话仍待设备验收。",
       "state": "implemented",
       "x": 60,
       "y": 160
@@ -83,10 +86,10 @@
       "title": "最终转录与通话归属",
       "kicker": "FINAL / CALL LEASE",
       "kind": "orchestration",
-      "sub": "草稿停在编辑器，通话绑定原会话",
+      "sub": "语段续接后提交，通话绑定原会话",
       "symbol": "CallLeases / conversations.open()",
       "plain": "先确定这句话属于哪个真实会话，再决定交给哪一层接话。",
-      "role": "独立输入回到草稿；通话用 sessionId、deviceId 和 callId 维护进程内租约，核对会话归属和配置，防止另一设备或过期请求占用。",
+      "role": "独立输入回到草稿；通话续说预算从最后有效人声计算，与VAD和ASR重叠；最终结果齐备后只等剩余预算再提交，sessionId、deviceId 和 callId 维护租约与原会话归属，防止另一设备或过期请求占用。",
       "input": "最终文字、可信会话身份、设备标识",
       "output": "草稿或已绑定的通话模式",
       "sources": [
@@ -94,7 +97,7 @@
         "plugins/voice/src/conversations.mjs",
         "plugins/voice/client/controller.mjs"
       ],
-      "note": "取消媒体不会授予或撤销 Agent 权限，通话租约不等于工作授权。",
+      "note": "当前通话恢复直接交流，无对话／静默切换，不调用说话对象决策。设置中的决策连接、称呼配置和固定样例测试保留；判断临界点与上下文设计待研讨后再接入。普通通话30分钟，需有效心跳。",
       "state": "implemented",
       "x": 1200,
       "y": 160
@@ -124,18 +127,18 @@
       "title": "可选轻量接话模型",
       "kicker": "ORDINARY SESSION ONLY",
       "kind": "model",
-      "sub": "快速回答、交接、修订、停止与语速",
+      "sub": "快速接话；先整理完整任务再委派",
       "symbol": "createVoiceConversations()",
-      "plain": "普通会话可先快速接话，需要做事时再交给原 Agent。",
-      "role": "enhanced 模式使用所选 llm 路由与有界近期对话，提供 delegate、revise_execution、stop_execution 及真实语速工具；执行事实回传只允许表达，不再派工。",
-      "input": "最终用户原话、近期上下文、执行事件",
-      "output": "流式口头回复或受控桥调用",
+      "plain": "同一个 BenchGo 快速接话并承担工作，内部执行分工不变成两个对外助手。",
+      "role": "enhanced 模型先整理目标、对象、必要事实、约束与交付要求，通过 delegate 的 task 提交自包含任务；关键信息缺失先简短澄清。最近5条发言只是可选证据，早期有效约束写进任务；revise_execution 只提交变化。",
+      "input": "最终用户原话、标明来源的历史参考、准确 currentModel、工作状态与事件",
+      "output": "口头回复；完整任务或关联修订增量",
       "sources": [
         "plugins/voice/src/conversations.mjs",
         "plugins/voice/src/conversation-model.mjs",
         "plugins/voice/src/conversation-prompt.mjs"
       ],
-      "note": "SuperAgent 主聊/旁聊不叠加此模型；供应商和模型 ID 原样使用。",
+      "note": "精简系统提示仅维护交流、行动、事实与权限，每次回复读取权威 Markdown；候选数量、预算和参数规则由工具定义与宿主承载，正文不重复。恢复的旧助手发言作为历史资料，不重标为当前模型自述。currentModel 跟随实际路由，task 与 contextSourceSeqs 合同不变；真实口吻与任务整理质量待通话验收。SuperAgent 不叠加此模型；细则见实时通话.md。",
       "state": "implemented",
       "x": 820,
       "y": 450
@@ -145,16 +148,16 @@
       "title": "原会话执行桥",
       "kicker": "HANDOFF / EVENTS",
       "kind": "execution",
-      "sub": "绑定用户原话，修订仍回同一次执行",
+      "sub": "完整任务 + 最多5条必要补充",
       "symbol": "createConversationBridge()",
-      "plain": "交接只是把原话送回原会话，原 Agent 的模型、工具和审批都继续保留。",
-      "role": "从真实 session 与 agent 注册表确定执行归属，绑定 requestId，串行交接上下文；观察 turn、approval、tool 和终态事实，提供修订与停止回执。",
-      "input": "用户原话、requestId、有界引用上下文",
-      "output": "原 Session prompt、执行进度与终态",
+      "plain": "原会话执行语音层整理的任务，保留原模型、工具和审批，避免反复读整段聊天。",
+      "role": "校验可信会话归属、requestId幂等与执行回执。从当前句之前最近5条双方发言中按需选择补充，按原始事件标识排除执行层已有或已接收内容；补充最多4000字符，task 正式消息与聊天补充合计最多16000字符。送达未知先核对，修订关联原执行。",
+      "input": "完整任务、当前原话来源、requestId；最多5条补充",
+      "output": "正式 prompt / steer 正文为 task；可选聊天 inject；执行回执",
       "sources": [
         "plugins/voice/src/conversation-bridge.mjs"
       ],
-      "note": "桥自身不创建 Agent，不改模型或工具；停止请求须等确认后才能声称已停止。",
+      "note": "官方 prompt / steer 直接发送 task 纯文本，工作层记录显示任务；不重复提交用户口述，不注入任务 JSON 或固定说明。仅必要聊天证据经 model-only inject 补充。原话保留语音记录并绑定来源；接受回执后才标记来源已送达。",
       "state": "implemented",
       "x": 440,
       "y": 450
@@ -187,12 +190,13 @@
       "sub": "通话文字与执行记录可切换",
       "symbol": "VOICE_CONVERSATION_RECORD",
       "plain": "通话文字保存在原会话里，重开页面仍能回看。",
-      "role": "appendPluginRecord 保存通话启动、交互文字和执行状态；sessionProjections 派生活动摘要，记录接口提供按事件序号分页，避免维护第二份会话权威。",
+      "role": "appendPluginRecord 保存通话启动、交互文字和执行状态；sessionProjections 派生活动摘要，记录接口按事件序号分页。纯增强语音首个有效回复后，使用已选交互模型异步摘要真实用户语音并写入正式 session/title，统一顶部与侧栏；保护已有及手改标题，不伪造正式用户消息，不触发执行 Agent。",
       "input": "正式 Session 事件、语音插件记录",
-      "output": "可分页语音记录与活动摘要",
+      "output": "可分页语音记录、活动摘要与统一正式标题",
       "sources": [
         "plugins/voice/src/conversation-bridge.mjs",
         "plugins/voice/src/session-projection.mjs",
+        "plugins/voice/src/session-title.mjs",
         "plugins/voice/client/conversation-records.mjs"
       ],
       "note": "精确播放范围持久化仍待完善；不能把持久文字当作已播放证明。",
@@ -208,15 +212,17 @@
       "sub": "正式回复 / 增强回复 → 有序合成",
       "symbol": "createVoiceController() / speech",
       "plain": "读出已经生成的回复；用户插话时先清掉过时播放。",
-      "role": "客户端按正式回复或 enhanced 文字事件组织有序语音请求，处理消息边界、插话、取消与恢复；媒体取消与执行停止分开。",
+      "role": "客户端按正式回复或 enhanced 文字事件组织有序语音请求；用户说话与续说等待期间暂存新正式消息，输入交接后依次播报。Router 复用公开发布与渠道镜像，屏蔽内部草稿；媒体取消与执行停止分开。",
       "input": "已生成的正式文字、插话和静音事件",
       "output": "有序 TTS 请求与取消信号",
       "sources": [
         "plugins/voice/client/controller.mjs",
+        "plugins/voice/client/agent-feed.mjs",
+        "plugins/benchgo/shared/public-chat-record.mjs",
         "plugins/voice/client/speech.mjs",
         "plugins/voice/client/speech-content.mjs"
       ],
-      "note": "阶段成果即时表达尚待完善，不以阶段性推测冒充真实执行结果。",
+      "note": "阶段成果即时表达尚待完善，不以阶段性推测冒充真实执行结果。 公共分句按250ms首段预算与安全边界释放；三路预合成共用按PCM供给学习储备的播放器（80ms下限），取消协议专属900ms起播提示；分阶段记录最后人声到实际渲染起播。已实现公共供给学习、同批短句合并与逐段缺音归因；冷启动不能预知未来断供，设备听感待验收。细则只在媒体管线.md维护。",
       "state": "partial",
       "x": 440,
       "y": 740
@@ -251,11 +257,12 @@
       "sub": "PCM 队列 · 插话打断 · 资源释放",
       "symbol": "PCMPlayer / Capture.setPlaybackActive()",
       "plain": "按顺序播出音频，同时避免把扬声器的声音当成新指令。",
-      "role": "PCMPlayer 管理缓冲与播放；采集端同步播放状态，提高插话与回声保护门槛。挂断清理媒体与租约，真实执行是否停止单独处理。",
+      "role": "PCMPlayer 管理缓冲与播放；采集端同步播放状态，以较高人声概率和持续时间确认插话，前卷保留起始音节，减少近麦短噪声误打断。成功接通与主动挂断使用轻量本地提示音，失败和被动清理不误响；挂断清理媒体与租约，真实执行是否停止单独处理。",
       "input": "TTS 音频、用户插话、挂断",
       "output": "扬声器播放、媒体状态与资源释放",
       "sources": [
         "plugins/voice/client/media.mjs",
+        "plugins/voice/client/call-cues.mjs",
         "plugins/voice/client/controller.mjs"
       ],
       "note": "音频接收、播放和用户实际听到是不同事实；设备回声效果需实测。",
@@ -303,7 +310,7 @@
     {
       "a": "conversation",
       "b": "bridge",
-      "label": "原话交接",
+      "label": "完整任务 + ≤5条证据",
       "from": "l",
       "to": "r"
     },
@@ -396,8 +403,8 @@
     },
     {
       "node": "conversation",
-      "title": "及时接话并交回原话",
-      "text": "轻量模型可先简短回应，再调用 delegate。宿主绑定用户原话，不能让模型把自己的改写当成授权。",
+      "title": "先整理完整任务，再有界委派",
+      "text": "语音层消解指代，保留目标、对象和约束，整理 task 作为执行层正式消息。最近最多5条必要聊天单独补充；原始口述留在语音记录，不重复派发。修订只发增量，任务质量仍需真实通话验收。",
       "edge": 5
     },
     {

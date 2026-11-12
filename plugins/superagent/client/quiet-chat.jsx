@@ -2,10 +2,10 @@ import typographyCss from '../../shared/client/chat-typography.css';
 import { Button } from '../../shared/client/ui/button.jsx';
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { quietChatRows } from './quiet-chat.mjs';
-import { isChatUserMessage } from '../src/question-reply.mjs';
 import css from './quiet-chat.css';
 import { MessageActions } from './message-actions.jsx';
-import { projectReplyStream } from './reply-stream.mjs';
+import { projectReplyRows, conversationActivity } from './reply-stream.mjs';
+import { ConversationActivity } from './conversation-activity.jsx';
 import { createPortal } from 'react-dom';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { useChatScroll } from './use-chat-scroll.jsx';
@@ -31,23 +31,29 @@ export function QuestionReply({ row }) {
   })}</div>;
 }
 
-export function QuietChat({ home, session, chat }) {
+export function QuietChat({ home, session, chat, inbox }) {
   const { history = {}, threadId = 'main', api, onLoadEarlier } = home;
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [chosen, setChosen] = useState({});
   const refresh = useRef(home.onRefresh);
   refresh.current = home.onRefresh;
-  const latestUserSeq = chat?.legacy?.nodes?.findLast(node => ['user', 'steering'].includes(node.kind) && isChatUserMessage(node))?.seq;
+  const latestSeq = chat?.legacy?.nodes?.at(-1)?.seq;
   const statusSource = home.sessionStatus;
   const statuses = useSyncExternalStore(listener => statusSource?.subscribe(listener) || (() => {}), () => statusSource?.getSnapshot() || NO_STATUSES);
-  const awaitingChoice = statuses.get(home.sessionId)?.pendingInteraction?.kind === 'question';
-  // Foreground answers settle the tool; continued answers admit an official user message. Refresh both paths.
+  const pendingInteraction = statuses.get(home.sessionId)?.pendingInteraction;
+  const awaitingChoice = pendingInteraction?.kind === 'question';
+  const activity = conversationActivity(session, chat, pendingInteraction);
+  // Durable official events and reconnects reconcile business receipts. Token deltas
+  // render directly from the official projection and never issue history requests.
   useEffect(() => {
-    if (latestUserSeq === undefined) return;
-    void Promise.resolve(refresh.current?.()).catch(() => { /* Existing history retry owns connection notices. */ });
-  }, [latestUserSeq, session.running, awaitingChoice]);
-  const rows = quietChatRows(history, threadId, session, chat);
-  const reply = projectReplyStream({ history, chat, sessionId: home.sessionId, running: session.running });
-  if (reply && !rows.some(row => row.key === reply.key)) rows.push(reply);
+    if (session.openState === 'error' || session.openState === 'loading') return;
+    const timer = setTimeout(() => {
+      void Promise.resolve(refresh.current?.()).then(() => setError('')).catch(cause => setError(cause.message || '历史同步失败，请重试。'));
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [latestSeq, session.running, session.openState, awaitingChoice]);
+  const rows = quietChatRows(history, threadId, session, chat, inbox);
+  const replies = projectReplyRows({ history, chat, sessionId: home.sessionId, running: session.running });
+  for (const reply of replies) if (!rows.some(row => row.key === reply.key)) rows.push(reply);
   const approvalIndex = useApprovalIndex({ ctx: home.ctx, api, ownerThreadId: threadId,
     enabled: rows.some(row => !!row.approval) });
   const approvalTarget = useSyncExternalStore(approvalReminderNavigation.subscribe, approvalReminderNavigation.getSnapshot);
@@ -122,8 +128,8 @@ export function QuietChat({ home, session, chat }) {
       </div>
       {row.role !== 'system' && row.kind !== 'channel-message' && <MessageActions row={row} home={home} />}
     </article>; })}
-    {!reply && awaitingChoice && <div className="ba-chat-work ba-chat-await" role="status">在下方选项卡中作答后继续</div>}
-    {!reply && !awaitingChoice && (session.running || session.pendingSubmissions?.some(row => row.placement === 'transcript')) && <div className="ba-chat-work" role="status" aria-label="加载中"><span className="ba-loading-dots" aria-hidden="true"><i/><i/><i/></span></div>}
+    {!replies.length && awaitingChoice && <div className="ba-chat-work ba-chat-await" role="status">在下方选项卡中作答后继续</div>}
+    {activity && !awaitingChoice && <ConversationActivity activity={activity} />}
     {error && <p className="ba-error" role="alert">{error}</p>}
   </div>{scroll.host && createPortal(<div className="ba-chat-bottom" data-visible={scroll.visible ? 'true' : 'false'}>
     <Button variant="ghost" type="button" className="ba-chat-bottom-button" onClick={scroll.returnToBottom} aria-label={scroll.unread ? '有新回复，回到最新消息' : '回到底部'} title="回到底部" tabIndex={scroll.visible ? 0 : -1} aria-hidden={!scroll.visible}>

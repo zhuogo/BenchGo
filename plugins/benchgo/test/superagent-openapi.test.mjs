@@ -1,10 +1,9 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile, mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
-import { createWorkerCheckpointStore } from '../../superagent/src/worker-checkpoint-store.mjs';
 import { mountVault } from '../src/vault.mjs';
 import { createAssistantOrchestrationStore } from '../../superagent/src/orchestration-store.mjs';
 import { createEvaluationDisposition } from '../../superagent/src/eval-disposition.mjs';
@@ -127,45 +126,46 @@ test('new documented actions exist in production and require their actual CAS fi
     { action: 'evaluations', after: 0, limit: 50 }, { action: 'evaluationHistory', candidateId: 'candidate' },
     { action: 'evaluationDispose', candidateId: 'candidate', disposition: 'retry', expectedRevision: 0, expectedUpdatedAt: '2026-11-02T00:00:00.000Z' },
     { action: 'summarize', text: 'summarize this' }, { action: 'analyzeImage', file: 'image.png', question: 'read this image' },
-    { action: 'checkpointList', ticketId: 'ticket' }, { action: 'checkpointPreview', ticketId: 'ticket', runId: 'run' },
-    { action: 'checkpointRestore', ticketId: 'ticket', runId: 'run', token: hash },
   ];
   for (const input of inputs) { assert.ok(service.includes(`case '${input.action}':`), input.action); valid(request, input); }
   for (const input of [
     { action: 'ticketChange', id: 'ticket', operation: 'reopen', requestId: 'r', reason: '缂哄皯瑕佹眰鐗堟湰' },
     { action: 'evaluationDispose', candidateId: 'candidate', disposition: 'retry', expectedRevision: 0 },
-    { action: 'checkpointRestore', ticketId: 'ticket', runId: 'run' },
     { action: 'summarize', text: '' }, { action: 'analyzeImage', file: 'image.png' },
     { action: 'evaluationDispose', candidateId: 'candidate', disposition: 'approve', expectedRevision: 0, expectedUpdatedAt: 'date' },
   ]) assert.equal(request(input), false, JSON.stringify(input));
 });
 
+test('removed file-backup actions are unavailable', async () => {
+  const service = await readFile(new URL('../../superagent/src/service.mjs', import.meta.url), 'utf8');
+  for (const action of ['checkpointList', 'checkpointPreview', 'checkpointRestore']) {
+    assert.equal(request({ action, ticketId: 'ticket', runId: 'run', token: hash }), false);
+    assert.equal(document.paths[path].post.responses['200']['x-action-schemas'][action], undefined);
+    assert.equal(service.includes("case '" + action + "':"), false);
+  }
+});
+
 test('vault contract matches owner HTTP responses and excludes plaintext or execution', async () => {
-  let record;
   const records = new Map();
   const ctx = { credentials: { readRecord: async key => structuredClone(records.get(key)), modifyRecord: async (key, change) => { const next = await change(structuredClone(records.get(key))); records.set(key, structuredClone(next)); } }, provide() {}, effect() {} };
   const { service, fetch } = mountVault(ctx);
   const call = async input => { valid(vaultRequest, input); const result = await fetch(new Request('https://benchgo.test/api/benchgo/vault', { method: 'POST', body: JSON.stringify(input), headers: { 'content-type': 'application/json' } })); assert.equal(result.status, 200); assert.equal(result.headers.get('cache-control'), 'no-store'); const value = await result.json(); valid(response('/api/benchgo/vault', input.action), value); return value; };
   try {
     await call({ action: 'status' });
-    const value = await call({ action: 'save', label: '鍑嵁', secret: 'private-value', target: 'https://api.example.test/auth', method: 'POST', placement: 'header', field: 'Authorization' });
-    assert.equal(value.entry.secret, undefined); await call({ action: 'list' });
+    const value = await call({ action: 'save', address: '本机服务', credentials: [{ name: '账号', value: 'private-account' }, { name: '密码', value: 'private-value' }] });
+    assert.doesNotMatch(JSON.stringify(value), /private-account|private-value/);
+    const listed = await call({ action: 'list' });
+    assert.deepEqual(listed.entries, [value.entry]);
+    assert.doesNotMatch(JSON.stringify(listed), /private-account|private-value/);
+    const updated = await call({ action: 'save', handle: value.entry.handle, revision: value.entry.revision, address: 'http://device.local/login', credentials: value.entry.credentials.map((item, index) => ({ id: item.id, name: item.name, ...(index ? { value: 'replacement-value' } : {}) })) });
+    await service.withCredentials(updated.entry, data => {
+      assert.equal(data.credentials[0].value, 'private-account');
+      assert.equal(data.credentials[1].value, 'replacement-value');
+    });
     assert.equal(vaultRequest({ action: 'execute', handle: value.entry.handle, revision: 1 }), false);
-    assert.equal(vaultRequest({ action: 'save', handle: value.entry.handle, label: '鍑嵁', secret: 'private', target: 'https://api.example.test/auth', method: 'POST', placement: 'header', field: 'Authorization' }), false);
+    assert.equal(vaultRequest({ action: 'save', handle: value.entry.handle, address: '服务', credentials: [{ name: '密钥', value: 'private' }] }), false);
+    assert.equal(vaultRequest({ action: 'save', label: 'old', secret: 'private', target: 'https://api.example.test/auth', method: 'POST', placement: 'header', field: 'Authorization' }), false);
   } finally { service.dispose(); }
-});
-
-test('checkpoint response contract matches real file restoration', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'benchgo-contract-checkpoint-')), workspace = join(root, 'workspace');
-  try {
-    await mkdir(workspace); await writeFile(join(workspace, 'file.txt'), 'before');
-    const checkpoints = createWorkerCheckpointStore({ directory: join(root, 'backups') });
-    await checkpoints.protect({ runId: 'run', ticketId: 'ticket', assignmentId: 'assignment', directory: workspace, callId: 'call' }, () => writeFile(join(workspace, 'file.txt'), 'after'));
-    valid(response(path, 'checkpointList'), { checkpoints: await checkpoints.list({ ticketId: 'ticket' }) });
-    const preview = await checkpoints.preview('run'); valid(response(path, 'checkpointPreview'), preview);
-    valid(response(path, 'checkpointRestore'), await checkpoints.restore('run', { token: preview.token }));
-    assert.equal(await readFile(join(workspace, 'file.txt'), 'utf8'), 'before');
-  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('Eval response contracts accept real persistent records', async () => {
@@ -250,7 +250,7 @@ test('real memory responses retain bounded sources and correction version refere
 
 test('owner delivery reconciliation requests enforce attempts, evidence and sent-only receipts', async () => {
   const service = await readFile(new URL('../../superagent/src/service.mjs', import.meta.url), 'utf8');
-  const branch = service.slice(service.indexOf("case 'directReplyReconcile':"), service.indexOf("case 'checkpointList':"));
+  const branch = service.slice(service.indexOf("case 'directReplyReconcile':"), service.indexOf("case 'evaluations':"));
   assert.match(branch, /peer\?\.principal\?\.kind !== 'owner'/);
   assert.match(branch, /status: 403, code: 'OWNER_REQUIRED'/);
   for (const action of ['directReplyReconcile', 'outboxReconcile']) {
@@ -348,10 +348,10 @@ test('delegation rejects per-ticket model overrides and completed changes return
   db.ingest({ dedupeKey: 'original', thread, source, actor, content: '原任务', mode: 'direct' });
   const ticket = db.createTicket({ threadId: thread.id, target: '原任务', mandate: { source, actorId: actor.id } });
   db.commitResult(ticket.id, { result: { summary: '原成果' }, uniqueKey: 'original-result' });
-  assert.equal(db.getTicket(ticket.id).status, 'waiting');
+  assert.equal(db.getTicket(ticket.id).status, 'completed');
   for (const delivery of db.claimOutbox('test-delivery')) {
     db.saveOutboxReply(delivery.id, { owner: 'test-delivery', publication: { action: 'deliver', origin: 'router', text: '原任务已完成，成果已整理。' } });
-    assert.equal(db.getTicket(ticket.id).status, 'waiting');
+    assert.equal(db.getTicket(ticket.id).status, 'completed');
     db.finishOutbox(delivery.id, { owner: 'test-delivery', sent: true, receipt: { status: 'accepted', messageId: `sent:${delivery.id}` } });
   }
   assert.equal(db.getTicket(ticket.id).status, 'completed');
@@ -372,13 +372,15 @@ test('delegation rejects per-ticket model overrides and completed changes return
 });
 
 
-test('trusted execution-session and website-permission actions expose the current contract', () => {
-  for (const action of ['executionSessions', 'actionPermissions']) valid(request, { action });
-  valid(request, { action: 'actionPermissionCreate', origin: 'https://example.com', categories: ['login'], expiresAt: '2026-12-01T00:00:00Z', requestId: 'create-1' });
-  valid(request, { action: 'actionPermissionRevoke', id: 'grant-1', requestId: 'revoke-1' });
-  assert.equal(request({ action: 'actionPermissionCreate', origin: 'https://example.com' }), false);
-  assert.equal(request({ action: 'actionPermissionRevoke', id: 'grant-1' }), false);
+test('trusted execution-session actions expose the current contract', () => {
+  for (const action of ['executionSessions']) valid(request, { action });
   valid(response(path, 'executionSessions'), { sessions: [{ sessionId: 'session', ticketId: 'ticket', title: 'Ticket', available: true }] });
+  valid(response(path, 'executionSessions'), { sessions: [
+    { sessionId: 'root', ticketId: 'ticket', title: 'Ticket', available: true, role: 'worker', parentSessionId: null, status: 'running', runState: 'running', promptable: true },
+    { sessionId: 'child', ticketId: 'ticket', title: 'Ticket', available: true, role: 'child-worker', parentSessionId: 'root', status: 'completed', runState: 'verifying', promptable: false, reason: '子执行会话仅供查看，请向所属工单补充要求。' },
+  ] });
+  assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', ticketId: 'ticket', title: 'Ticket', available: true, promptable: 'yes' }] }), false);
+  assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', ticketId: 'ticket', title: 'Ticket', available: true, role: 'ordinary' }] }), false);
   assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', ticketId: 'ticket', title: 'Ticket', available: false }] }), false);
   const result = compile({ $ref: '#/components/schemas/AssistantCurrentResult' });
   assert.equal(result({ version: 1, instructionRevision: 1, review: { verdict: 'passed' } }), false);

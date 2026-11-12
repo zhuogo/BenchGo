@@ -41,7 +41,7 @@ test('Desktop Attention validates exact choices, revisions and idempotency and p
   assert.throws(() => db.answerDesktopAttention({ ...request, attentionId: second.id, requestId: 'other', answer: { selected: [], custom: 'other' } }), /terminal/);
 });
 
-for (const machine of [false, true]) test(`Attention replies require authenticated owner and exact source after reopening (machine=${machine})`, async t => {
+for (const machine of [false, true]) test(`Attention replies require admitted original requester and exact source after reopening (machine=${machine})`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-attention-'));
   let db = createAssistantOrchestrationStore({ directory });
   t.after(async () => { db.close(); await rm(directory, { recursive: true, force: true }); });
@@ -61,11 +61,13 @@ for (const machine of [false, true]) test(`Attention replies require authenticat
   assert.equal(outbox.payload.text, `原样的问题？\n原样详情\n原样选项\n\n问题编号：${attention.id}\n可引用这条消息回答，或发送 /answer ${attention.id} 你的回答`);
   db.finishOutbox(outbox.id, { owner: 'sender', sent: true, receipt: { messageId: 'sent-question' } });
   db.close(); db = createAssistantOrchestrationStore({ directory });
-  const policy = { version: 'v1', ownerIds: machine ? ['owner'] : ['owner', 'other-owner'], threadIds: ['chat', 'other-chat'] };
-  const event = { channel: 'feishu', sourceKey: 'answer', threadId: 'reply-thread', source: { ...source, messageId: 'answer', parentMessageId: 'sent-question' }, actor: { kind: 'human', id: 'owner' }, text: '完整原文回答', kind: 'group', mentioned: true };
+  const policy = { version: 'v1', ownerIds: ['owner', 'other-owner'], machineIds: ['ci'], threadIds: ['chat', 'other-chat'] };
+  const event = { channel: 'feishu', sourceKey: 'answer', threadId: 'reply-thread', source: { ...source, messageId: 'answer', parentMessageId: 'sent-question' }, actor: { kind: machine ? 'machine' : 'human', id: machine ? 'ci' : 'owner' }, text: '完整原文回答', kind: 'group', mentioned: true };
   for (const [key, patch] of [
     ['foreign-owner', { actor: { kind: 'human', id: 'other-owner' } }],
     ['machine', { actor: { kind: 'machine', id: 'owner' } }],
+    ['foreign-connection', { source: { ...event.source, connectionId: 'other-connection' } }],
+    ['foreign-conversation', { source: { ...event.source, conversationId: 'other-conversation' } }],
     ['foreign-chat', { source: { ...event.source, chatId: 'other-chat', conversationId: 'other-chat' } }],
     ['foreign-app', { source: { ...event.source, appId: 'other-app' } }],
     ['wrong-parent', { source: { ...event.source, parentMessageId: 'other-message' } }],

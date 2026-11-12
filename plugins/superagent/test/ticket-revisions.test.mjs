@@ -308,7 +308,7 @@ test('an old subscription receipt migrates into the one input ledger without rep
 
 test('live summary follows current goal, actual assignment progress and blocker without reusing old revision results', async t => {
   const f = await fixture(t);
-  assert.equal(f.db.getTicket(f.ticket.id).liveSummary.progress, '等待执行');
+  assert.equal(f.db.getTicket(f.ticket.id).liveSummary.progress, '排队执行');
   const [assignment] = f.db.claimAssignments('worker', { validateMandate: () => true });
   assert.equal(f.db.getTicket(f.ticket.id).liveSummary.progress, '正在执行');
   f.db.renewAssignment(assignment.id, { owner: assignment.owner, fence: assignment.fence, leaseMs: 60000, validateMandate: () => false });
@@ -391,7 +391,7 @@ test('Feishu owner adjusts a completed subscribed Ticket through fresh Eval and 
   await runner.tick();
   const current = db.listTickets().find(row => row.adjustmentOfTicketId === targetTicket.id);
   assert.equal(db.getTicket(targetTicket.id).status, 'completed');
-  assert.equal(current.status, 'waiting');
+  assert.equal(current.status, 'running');
   assert.equal(current.instructionRevision, 1);
   assert.equal(current.mandate.source.channel, 'feishu');
   assert.equal(current.mandate.source.messageId, 'reopen-message');
@@ -429,7 +429,7 @@ for (const verified of [true, false]) test(`an explicit failure revision resumes
     return;
   }
   const changed = f.db.changeTicket(f.ticket.id, f.input);
-  assert.equal(changed.status, 'waiting');
+  assert.equal(changed.status, 'running');
   assert.equal(changed.instructionRevision, 2);
   const [next] = f.db.claimAssignments('failure-next-worker', { validateMandate: () => true });
   assert.equal(next.id, assignment.id);
@@ -438,4 +438,31 @@ for (const verified of [true, false]) test(`an explicit failure revision resumes
   assert.equal(f.db.runs(next.id).length, 1);
   assert.equal(f.db.runs(next.id)[0].sessionId, 'failure-original-session');
   assert.equal(f.db.results(f.ticket.id).length, 1, 'prior failure evidence stays immutable');
+});
+
+test('host captures revision and request identity without model bookkeeping', async t => {
+  const f = await fixture(t), host = hostRevision(f);
+  delete host.input.requestId;
+  delete host.input.expectedInstructionRevision;
+  delete host.input.projectId;
+  host.input.target = 'updated target';
+  const first = await host.change();
+  assert.equal(first.instructionRevision, 2);
+  assert.equal((await host.change()).instructionRevision, 2);
+  assert.equal(f.db.ticketRevisions(f.ticket.id).length, 2);
+});
+
+test('one real message can revise two selected tickets without input collisions', async t => {
+  const f = await fixture(t), host = hostRevision(f);
+  const second = f.db.createTicket({ threadId: f.ticket.threadId, target: 'second target', mandate: f.ticket.mandate });
+  f.db.createAssignment(second.id, { model: { providerId: 'Opaque/P', modelId: 'Exact:M' }, text: second.target });
+  delete host.input.requestId;
+  delete host.input.expectedInstructionRevision;
+  delete host.input.projectId;
+  host.input.target = 'shared correction';
+  assert.equal((await host.change()).instructionRevision, 2);
+  host.input.id = second.id;
+  assert.equal((await host.change()).instructionRevision, 2);
+  host.input.id = f.ticket.id;
+  assert.equal((await host.change()).instructionRevision, 2);
 });

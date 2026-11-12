@@ -13,8 +13,7 @@ export async function desktopTicketManagementScope({ ctx, store, agent, threadId
   const thread = threadId === 'main' ? { sessionId: state.mainSessionId } : state.threads?.find(row => row.id === threadId);
   if (!thread || thread.archived || thread.sourceKey || thread.source && thread.source.channel !== 'desktop' || thread.sessionId !== agent.id) return null;
   const current = currentHumanInstruction(ctx, agent);
-  const latest = agent.session.snapshotEvents().slice(instruction.turn + 1).findLast(event => event.type === 'user/message')?.data;
-  if (JSON.stringify(current) !== stamp || JSON.stringify(latest) !== JSON.stringify(instruction.message)) return null;
+  if (JSON.stringify(current) !== stamp) return null;
   const scope = Object.freeze({ owner: 'desktop-owner', mode: 'global' });
   scopes.add(scope);
   return scope;

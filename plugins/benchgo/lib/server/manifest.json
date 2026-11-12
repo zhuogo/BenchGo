@@ -1,8 +1,0 @@
-{
-  "schemaVersion": 1,
-  "harnessVersion": "0.2.1-alpha.3",
-  "harnessCommit": "571902028a75c64c1d767f4ae5fd099485f0ddf0",
-  "pluginVersion": "0.1.0",
-  "bundle": "@benchgo/desktop-6ad9613a455798d6",
-  "sha256": "84b4e54adeed6a3b3a021d39ad71416a6f560fb8ada07b64f2ebaf4641abe048"
-}

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createDesktopTicketAccess, conciseTicketSummary, TICKET_SUMMARY_MAX_CHARS } from '../src/desktop-ticket-access.mjs';
 
@@ -60,4 +61,16 @@ test('trusted logical owner scope includes old model sessions and filters side c
   assert.equal(second.nextOffset, null); assert.equal(access.read(old.id, scope).id, old.id);
   assert.throws(() => access.read(foreign.id, scope), /当前会话/);
   assert.deepEqual(access.query({ threadId: 'main', sessionIds: [] }).tickets, []);
+});
+
+test('tickets without projects cross the official lossless JSON tool-output boundary', t => {
+  const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+  t.after(() => database.close());
+  database.createThread({ id: 'desktop:owner', source: { type: 'desktop', id: 'owner' } });
+  database.createTicket({ threadId: 'desktop:owner', target: '调查公开资料',
+    mandate: { source: { channel: 'desktop', sessionId: 'owner' } } });
+  const result = createDesktopTicketAccess(database).query('owner');
+  assert.deepEqual(validateJsonSchemaValue({ type: 'object', additionalProperties: true }, result), []);
+  assert.equal(result.tickets[0].project, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
 });

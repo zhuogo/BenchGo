@@ -6,42 +6,24 @@ import { createWatchdogStore } from './watchdog-store.mjs';
 import { createWatchdogRuntime } from './watchdog-runtime.mjs';
 import { createWatchdogScheduleBridge } from './watchdog-schedule.mjs';
 import { createWatchdogObservationClient } from './watchdog-observation-route.mjs';
-import { createExecutionAuxiliaryRequester } from './execution-summary-request.mjs';
-import { createWorkerProgressJudge } from './worker-progress-judgement.mjs';
-import { auxiliaryModels } from './routing.mjs';
 
 export const watchdogAgentPreset = 'benchgo-watchdog';
 export const watchdogPermissionPreset = 'benchgo-watchdog-read-only';
 const failed = (code, message) => Object.assign(new Error(message), { code });
 
-/** Only the independent profile's explicit auxiliary role can fund supervision. */
-export function createConfiguredWatchdogJudge({ llm, auxiliary, store, config } = {}) {
-  if (!llm || !auxiliary) return undefined;
-  const local = structuredClone({ revision: auxiliary.revision ?? 0,
-    auxiliary: { models: auxiliary.models || [], capabilities: auxiliary.capabilities || [] } });
-  if (!auxiliaryModels(undefined, local, 'summary', 'auxiliary-only').length) return undefined;
-  const worker = createWorkerProgressJudge({ auditStore: store,
-    requestText: createExecutionAuxiliaryRequester({ llm, getConfig: async () => local }),
-    config: { minObservationMs: config?.observationWindowMs, ...auxiliary.limits } });
-  const judge = ({ evidence, signal }) => worker.evaluate({ ...evidence, signal });
-  judge.dispose = worker.dispose;
-  return judge;
-}
-
 /** A standalone observation module. It never imports or mounts the assistant orchestrator. */
-export async function mountWatchdog(ctx, { directory, config: input, auxiliary, judge, client } = {}) {
+export async function mountWatchdog(ctx, { directory, config: input, client } = {}) {
   if (ctx.get?.('assistant')) throw failed('WATCHDOG_NOT_INDEPENDENT', '监督档案不得加载 SuperAgent 编排实例');
   const config = resolveWatchdogConfig(input);
   for (const key of ['agents', 'sessions', 'sessionPersistence', 'agentPresets', 'permissionPresets', 'agentDefaultModel', 'schedule']) {
     if (!ctx.get?.(key)) throw failed('WATCHDOG_HOST_UNAVAILABLE', `监督缺少官方服务：${key}`);
   }
   const store = await createWatchdogStore({ directory, config });
-  let runtime, bridge, handle, unregisterPreset, starting, configuredJudge, disposed = false;
+  let runtime, bridge, handle, unregisterPreset, starting, disposed = false;
   const disposers = [];
   const dispose = async () => {
     if (disposed) return;
     disposed = true;
-    configuredJudge?.dispose();
     await runtime?.stop();
     await bridge?.stop();
     for (const release of disposers.splice(0)) release();
@@ -55,8 +37,7 @@ export async function mountWatchdog(ctx, { directory, config: input, auxiliary, 
     unregisterPreset = await ctx.agentPresets.register({ id: watchdogAgentPreset, name: 'BenchGo Watchdog', plugins: [] });
     client ??= createWatchdogObservationClient({ origin: config.targetUrl, targetId: config.targetId,
       token: await readWatchdogToken(config.tokenFile), timeoutMs: config.probeTimeoutMs });
-    if (!judge && auxiliary) configuredJudge = createConfiguredWatchdogJudge({ llm: ctx.llm, auxiliary, store, config });
-    runtime = createWatchdogRuntime({ store, config, client, judge: judge || configuredJudge });
+    runtime = createWatchdogRuntime({ store, config, client });
     const workspace = join(directory, 'watchdog', 'workspace');
     await mkdir(workspace, { recursive: true, mode: 0o700 });
     const setup = async (scope, agent) => {
@@ -114,7 +95,6 @@ export async function mountWatchdog(ctx, { directory, config: input, auxiliary, 
     bridge = createWatchdogScheduleBridge({ ctx, watchdog: runtime, store, config, ensureSession });
     await bridge.start();
     const service = { readLog: runtime.readLog, dispose, sessionId: store.snapshot().sessionId, scheduleId: store.snapshot().scheduleId,
-      // Trusted composition may attach an auxiliary-only judge using this independent audit store.
       store };
     ctx.provide('benchgoWatchdog', service);
     ctx.effect(() => dispose);

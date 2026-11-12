@@ -65,7 +65,7 @@ export function AssistantCard({ name, pet, html, motion = true, onOpen, action =
   React.useEffect(() => {
     if (!host.current) return;
     let visible = true;
-    const read = () => { setColor(getComputedStyle(host.current).color); setActive(visible && !document.hidden); };
+    const read = () => { if (!host.current) return; setColor(getComputedStyle(host.current).color); setActive(visible && !document.hidden); };
     const intersection = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver(entries => { visible = entries[0]?.isIntersecting ?? false; read(); });
     intersection?.observe(host.current);
     document.addEventListener('visibilitychange', read);

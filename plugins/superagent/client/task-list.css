@@ -31,7 +31,7 @@
 .ba-board-glyph-text{font-size:16px;font-weight:600;line-height:1}
 .ba-board-dot{width:9px;height:9px;border:1.5px solid currentColor;border-radius:50%}
 .ba-board-pulse{width:9px;height:9px;border-radius:50%;background:currentColor}
-.ba-activity-detail-title{display:flex;align-items:flex-start;gap:10px;min-width:0}
+.ba-activity-detail-title{display:flex;align-items:center;gap:10px;min-width:0}
 .ba-activity-detail-title>span:last-child{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;min-width:0;overflow-wrap:anywhere}
 .ba-activity-detail-status{display:inline-flex;align-items:center;justify-content:center;flex:none;width:20px;height:24px;color:var(--dsw-alias-label-secondary,#737373);background:transparent}
 .ba-activity-detail-status:is([data-status=running],[data-status=active],[data-status=resuming]){color:var(--dsw-alias-state-business-primary,#438bea)}
@@ -39,15 +39,45 @@
 .ba-activity-detail-status:is([data-status=waiting],[data-status=uncertain],[data-status=paused],[data-status=pausing]){color:var(--dsw-alias-state-warning-primary,#b98824)}
 .ba-activity-detail-status:is([data-status=failed],[data-status=blocked]){color:var(--dsw-alias-state-error-primary,#d05c5c)}
 
-.ba-task-instructions h3{margin:0 0 8px;font-size:14px;font-weight:600}
-.ba-task-instructions p{margin:0 0 16px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65}
+.ba-task-instructions{display:flex;flex-direction:column;gap:16px;min-width:0}
+.ba-ticket-document{min-width:0;border:1px solid var(--ba-line);border-radius:12px;background:var(--dsw-alias-bg-base,#fff)}
+.ba-ticket-document-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid var(--ba-line);background:var(--ba-surface);border-radius:12px 12px 0 0}
+.ba-ticket-document-head h3,.ba-ticket-requirement-title{display:flex;align-items:center;gap:8px;margin:0;font-size:14px;font-weight:600;line-height:1.6}
+.ba-ticket-document .cmd-ui-icon{flex:none;color:var(--ba-muted)}
+.ba-ticket-version{display:inline-flex;align-items:center;flex:none;padding:2px 8px;border-radius:6px;background:var(--ba-hover);color:var(--ba-muted);font-size:11px;font-weight:500;line-height:1.7}
+.ba-ticket-document-content{display:flex;flex-direction:column;gap:18px;padding:18px;min-width:0}
+.ba-ticket-document-content>section>h4,.ba-ticket-document-section>h3{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--ba-muted)}
+.ba-ticket-document-section{padding-top:18px;margin-top:18px;border-top:1px solid var(--ba-line)}
+.ba-ticket-requirement>.bg-ui-disclosure-trigger{padding:14px 18px;border-radius:12px;min-height:52px}
+.ba-ticket-requirement[data-state=open]>.bg-ui-disclosure-trigger{border-radius:12px 12px 0 0;background:var(--ba-surface);border-bottom:1px solid var(--ba-line)}
+.ba-ticket-requirement .bg-ui-disclosure-inner{padding:18px}
+.ba-ticket-requirement time{display:block;margin-top:16px}
+.ba-task-markdown{min-width:0;max-width:100%}
+.ba-task-markdown>[class*="_markdown"]{font-family:inherit;font-size:14px;line-height:1.8}
+.ba-task-markdown :is(p,li){white-space:normal;overflow-wrap:anywhere}
+.ba-task-markdown p{margin:0 0 1em;line-height:1.8}
+.ba-task-markdown :is(h1,h2,h3,h4,h5,h6){margin:1.4em 0 .65em;font-weight:600;line-height:1.5}
+.ba-task-markdown h1{font-size:22px}.ba-task-markdown h2{font-size:19px}.ba-task-markdown h3{font-size:16px}.ba-task-markdown :is(h4,h5,h6){font-size:14px}
+.ba-task-markdown>[class*="_markdown"]>:first-child{margin-top:0}
+.ba-task-markdown>[class*="_markdown"]>:last-child{margin-bottom:0}
+.ba-task-markdown :is(pre,[class*="tableScroll"]){max-width:100%;overscroll-behavior-y:auto}
+.ba-task-markdown img{max-width:100%;height:auto}
 
-.ba-task-verification{font-size:12px;line-height:1.6;color:var(--cmd-muted,#85858a);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
 
 .ba-task-inline{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;max-height:100%;outline:none;overflow:hidden}
-.ba-task-inline-head{flex:none;min-width:0;padding:8px 16px 16px}.ba-task-inline-head>.bg-ui-button{gap:5px;margin:0 0 12px -8px}.ba-task-inline-head h2{margin:0;font-size:17px;font-weight:600;line-height:1.5;overflow-wrap:anywhere}
+.ba-task-inline-head{display:flex;align-items:center;gap:8px;flex:none;min-width:0;padding:12px 16px 20px}.ba-task-inline-head>.bg-ui-button{flex:none;margin:0 0 0 -8px}.ba-task-inline-head h2{min-width:0;margin:0;font-size:17px;font-weight:600;line-height:1.5;overflow-wrap:anywhere}
+.ba-task-inline-actions{display:flex;align-items:center;flex:none;margin-left:auto}
+.ba-task-inline-head:has(.ba-ticket-detail-tabs){flex-wrap:wrap}
+.ba-task-inline-head:has(.ba-ticket-detail-tabs) h2{flex:1 1 160px}
+.ba-task-inline-actions:has(.ba-ticket-detail-tabs){gap:8px;max-width:100%}
 .ba-task-inline>.ba-task-dialog-body{padding:0 16px 20px}.ba-task-inline>.ba-task-dialog-footer{padding:12px 16px;justify-content:flex-start}
+/* The workbench already owns the vertical scroll; nested containment traps wheel input. */
+.ba-studio-body .ba-task-inline{max-height:none;overflow:visible}
+.ba-studio-body .ba-task-inline-head{position:sticky;top:0;z-index:2;background:var(--dsw-alias-bg-base,#fff);box-shadow:0 -32px 0 var(--dsw-alias-bg-base,#fff)}
+.ba-studio-body .ba-task-inline>.ba-task-dialog-body{flex:none;overflow:visible;overscroll-behavior:auto}
 .ba-task-inline .ba-activity-detail-title>span:last-child{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.ba-task-milestones h3{margin:0 0 10px;font-size:13px}.ba-task-milestones ol{display:grid;gap:10px;list-style:none;margin:0;padding:0 0 0 12px;border-left:1px solid var(--ba-line,#ddd)}.ba-task-milestones li{display:flex;gap:12px;justify-content:space-between;font-size:12px}.ba-task-milestones time{flex:none;color:var(--ba-muted,#737373);font-variant-numeric:tabular-nums}
 .ba-task-inline .ba-task-dialog-footer button{white-space:normal;min-height:36px}.ba-task-inline:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#315be8);outline-offset:-2px}
+.ba-task-icon-spinning{animation:ba-task-icon-spin 600ms linear infinite}
+@keyframes ba-task-icon-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.ba-task-icon-spinning{animation:none}}
 @media(max-width:640px){.ba-task-inline-head{padding:8px 16px 12px}.ba-task-inline .ba-task-dialog-footer button{min-height:44px}}

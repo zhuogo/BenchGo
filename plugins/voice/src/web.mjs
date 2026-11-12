@@ -1,5 +1,5 @@
 import { HttpError, assertSameOrigin, readJson, readLimited } from '../../benchgo/shared/http.mjs';
-import { VoiceError } from './config.mjs';
+import { VoiceError, defaultListening, updateConfig } from './config.mjs';
 import { resolveVoiceProvider, voiceSnapshot } from './availability.mjs';
 import { LIMITS, validateWav, transcribe } from './media.mjs';
 import { streamTranscription } from './asr.mjs';
@@ -14,8 +14,8 @@ import { transcriptSourceId } from './transcript-source.mjs';
 import { transcriptMessage } from './transcript-message.mjs';
 import { ProtocolDetection, probeRealtimeAsr } from './protocol-detection.mjs';
 import { protocolDescriptor } from '../shared/protocol-catalog.mjs';
-import { updateConfig } from './config.mjs';
 import { requestSpeech } from './protocols/registry.mjs';
+import { decideAddressing } from './addressing.mjs';
 
 const headers = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
 function scope(request, signals) {
@@ -25,15 +25,15 @@ function scope(request, signals) {
   for (const signal of [request.signal, ...signals]) { signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort(); }
   return { signal: controller.signal, abort, close() { clearTimeout(timeout); for (const signal of [request.signal, ...signals]) signal.removeEventListener('abort', abort); } };
 }
-export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new AbortController().signal, providers, socket, llm, conversationBridge } = {}) {
-  const active = { asr: 0, tts: 0 }, realtime = new RealtimeASR({ socket });
+export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new AbortController().signal, providers, socket, llm, conversationBridge, getAssistant } = {}) {
+  const active = { asr: 0, tts: 0, listening: 0 }, realtime = new RealtimeASR({ socket });
   const probeRealtime = new RealtimeASR({ socket });
   const detection = new ProtocolDetection({ fetcher, shutdown, websocketProbe: (config, wav, signal, onOutput) => probeRealtimeAsr(probeRealtime, config, wav, signal, onOutput) });
   const sockets = createRealtimeSockets(realtime);
   const calls = new CallLeases(); let revision = 0, previous = structuredClone(store.value);
   const routeIdentity = ({ speed, ...route }) => JSON.stringify(route);
   const conversations = createVoiceConversations({ store, llm, bridge: conversationBridge, leases: calls, snapshot: () => snapshot() });
-  const generations = Object.fromEntries(['asr', 'tts', 'dictation', 'readAloud'].map(key => [key, new AbortController()]));
+  const generations = Object.fromEntries(['asr', 'tts', 'dictation', 'readAloud', 'listening'].map(key => [key, new AbortController()]));
   const invalidate = () => {
     const next = store.value;
     if (JSON.stringify(previous) === JSON.stringify(next)) return;
@@ -41,7 +41,8 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
     if (['asr', 'tts'].some(kind => routeIdentity(previous[kind]) !== routeIdentity(next[kind]))) detection.cancelPending();
     for (const key of Object.keys(generations)) {
       const withoutSpeed = ({ speed, ...rest } = {}) => rest;
-      const changed = ['asr', 'tts'].includes(key) ? JSON.stringify(key === 'tts' ? withoutSpeed(previous[key]) : previous[key]) !== JSON.stringify(key === 'tts' ? withoutSpeed(next[key]) : next[key]) : previous[key] && !next[key];
+      const comparable = value => key === 'tts' ? withoutSpeed(value) : key === 'listening' ? { ...defaultListening(), ...value } : value;
+      const changed = ['asr', 'tts', 'listening'].includes(key) ? JSON.stringify(comparable(previous[key])) !== JSON.stringify(comparable(next[key])) : previous[key] && !next[key];
       if (!changed) continue;
       generations[key].abort(); generations[key] = new AbortController();
       if (key === 'asr') { sockets.clear(); realtime.clear(); }
@@ -62,7 +63,7 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
     if (requirement === 'streaming' && !descriptor.streaming || requirement === 'http' && descriptor.transport === 'websocket') throw new VoiceError('所选协议不符合当前音频传输用途，请在语音设置中重新匹配或选择。', 409);
     return route;
   };
-  const snapshot = () => voiceSnapshot(store, providers, llm);
+  const snapshot = () => voiceSnapshot(store, providers, llm, getAssistant);
   const operationFor = (request, feature) => {
     const callId = request.headers.get('x-voice-call-id');
     if (!callId && !store.value[feature]) throw new VoiceError('Start a voice call before requesting call audio', 409);
@@ -80,6 +81,20 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
     noiseWasm: protect(async () => new Response(await readFile(new URL('../lib/rnnoise.wasm', import.meta.url)), { headers: { ...headers, 'content-type': 'application/wasm', 'cache-control': 'private, no-store' } })),
     config: protect(async request => {
       const input = await readJson(request);
+      if (input.action === 'listening.test') {
+        const submitted = { ...(input.config || {}) };
+        if (submitted.apiKey === '' && !input.clearApiKey) delete submitted.apiKey;
+        if (input.clearApiKey) submitted.apiKey = '';
+        const value = updateConfig(store.value, { listening: submitted }).listening;
+        // An existing secret belongs to its saved route; a changed destination
+        // must be saved or supplied a new key before an unsaved probe can use it.
+        if (value.endpoint !== store.value.listening?.endpoint && !submitted.apiKey) throw new VoiceError('更改接口地址后请填写密钥，或先保存新地址再测试', 409);
+        const release = acquire('listening');
+        try {
+          const result = await decideAddressing(value, { text: '你好，请告诉我现在是否可以开始交流。' }, { fetcher, getAssistant, signal: AbortSignal.any([request.signal, shutdown, generations.listening.signal]) });
+          return Response.json({ result: { supported: true, ...result } }, { headers });
+        } finally { release(); }
+      }
       if (input.action === 'providers') return Response.json({ providers: providers ? await providers.list() : [] }, { headers });
       if (input.action === 'models') { if (!providers) throw new VoiceError('模型供应商服务尚未就绪', 409); return Response.json({ models: await providers.models(input.providerId, request.signal) }, { headers }); }
       if (['protocol.detect', 'protocol.test'].includes(input.action)) {
@@ -101,7 +116,7 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
         const signals = [shutdown, generations.asr.signal]; if (!callId) signals.push(generations.dictation.signal); if (callId) signals.push(calls.media(callId));
         const release = acquire('asr'), opening = new AbortController(); signals.push(opening.signal);
         const abort = () => opening.abort(); request.signal.addEventListener('abort', abort, { once: true }); if (request.signal.aborted) abort();
-        try { const config = await provider('asr', AbortSignal.any(signals), callId ? 'streaming' : 'any', callId); AbortSignal.any(signals).throwIfAborted(); if (config.protocol !== 'openai-websocket') throw new VoiceError('Select an OpenAI WebSocket transcription protocol first', 409); const id = await realtime.open(config, AbortSignal.any(signals), callId); realtime.get(id, callId).onClose = release; return Response.json({ id, ticket: sockets.issue(id, callId) }, { headers }); }
+        try { const config = await provider('asr', AbortSignal.any(signals), callId ? 'streaming' : 'any', callId); AbortSignal.any(signals).throwIfAborted(); if (config.protocol !== 'openai-websocket') throw new VoiceError('Select an OpenAI WebSocket transcription protocol first', 409); const id = await realtime.open(config, AbortSignal.any(signals), callId, callId ? calls.mediaOptions(callId) : {}); realtime.get(id, callId).onClose = release; return Response.json({ id, ticket: sockets.issue(id, callId) }, { headers }); }
         catch (error) { release(); throw error; } finally { request.signal.removeEventListener('abort', abort); }
       }
       if (input.action === 'asr.end') { realtime.get(input.id, request.headers.get('x-voice-call-id') || ''); realtime.close(input.id); return Response.json({ ok: true }, { headers }); }
@@ -127,6 +142,7 @@ export function createVoiceHandlers(store, { fetcher = fetch, shutdown = new Abo
       if (input.action === 'history') {
         if (!conversationBridge?.readRecords) throw new VoiceError('语音记录服务尚未就绪', 409);
         const page = await conversationBridge.readRecords(input.sessionId, { before: input.before, limit: input.limit, mode: input.mode });
+        if (page.items) return Response.json({ ...page, before: page.nextBefore }, { headers });
         const items = [];
         for (const event of page.events) {
           const data = event.data || {};

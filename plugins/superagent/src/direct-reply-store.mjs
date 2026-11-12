@@ -111,6 +111,11 @@ export function installDirectReplyStore({ db, tx }) {
           return rows.map(row => value(get(row.id)));
         });
       },
+      renewDirectReply(id, { owner, leaseMs = 60000, now = Date.now() } = {}) {
+        const updated = db.prepare("UPDATE sa_direct_replies SET lease_until=? WHERE id=? AND state='claimed' AND owner=? AND lease_until>?")
+          .run(now + leaseMs, id, owner, now);
+        if (!updated.changes) throw fail('DIRECT_REPLY_LEASE_CONFLICT', 'Direct reply lease is no longer owned');
+      },
       finishDirectReply(id, { owner, sent = false, suppressed = false, uncertain = false, receipt, error, retryMs = 5000, now = Date.now() } = {}) {
         ownerId(owner); time(now); time(retryMs);
         if ([sent, suppressed, uncertain].some(flag => typeof flag !== 'boolean') || [sent, suppressed, uncertain].filter(Boolean).length > 1) throw new Error('Invalid direct reply outcome');
@@ -118,6 +123,9 @@ export function installDirectReplyStore({ db, tx }) {
         return tx(() => {
           const row = get(id);
           if (!row) throw fail('DIRECT_REPLY_NOT_FOUND', 'Direct reply does not exist');
+          const priorReceipt = row.receipt && JSON.parse(row.receipt);
+          if (row.state === 'sent' && sent && receipt?.status === 'accepted' && receipt.messageId
+            && priorReceipt?.status === receipt.status && priorReceipt.messageId === receipt.messageId) return value(row);
           if (row.state !== 'claimed' || row.owner !== owner || row.lease_until <= now) throw fail('DIRECT_REPLY_LEASE_CONFLICT', 'Direct reply lease is no longer owned');
           const state = sent ? 'sent' : suppressed ? 'suppressed' : uncertain ? 'uncertain' : 'queued';
           db.prepare('UPDATE sa_direct_replies SET state=?,owner=NULL,lease_until=NULL,last_error=?,receipt=COALESCE(?,receipt),next_at=?,updated_at=? WHERE id=?')

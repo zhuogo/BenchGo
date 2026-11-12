@@ -3,6 +3,7 @@ import { Button } from '../../shared/client/ui/button.jsx';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 import { ResourceState } from './resource-state.jsx';
+import { TaskIconButton } from './task-list.jsx';
 import { retainAssistantSession } from './session-retain.mjs';
 import { findReviewReminder, reviewReminderMatches, reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewDisplayText, reviewSessionOpenError, reviewRequestKey, sameReviewOrigin } from './approval-review.mjs';
 import css from './approval-review.css';
@@ -162,7 +163,7 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact 
     setSelectedKey(key);
   };
   useLayoutEffect(() => {
-    if (selectedKey) { back.current?.focus({ preventScroll: true }); return; }
+    if (selectedKey) { back.current?.querySelector('button')?.focus({ preventScroll: true }); return; }
     const saved = navigation.current;
     if (!saved) return;
     for (const [node, left, top] of saved.positions) if (node.isConnected) { node.scrollLeft = left; node.scrollTop = top; }
@@ -178,7 +179,7 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact 
   return <section className={`ba-approval-review${compact ? ' is-compact' : ''}`} aria-label="审核" data-sync-state={lastFailure ? 'reconnecting' : 'ready'} data-sync-error={lastFailure || undefined} hidden={!active} onKeyDown={event => {
     if (selectedKey && event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); setSelectedKey(null); }
   }}><style>{css}</style>
-    <header className="ba-review-heading"><div>{selectedKey ? <Button ref={back} type="button" variant="ghost" onClick={() => setSelectedKey(null)}><UIIcon name="chevronLeft" size={16} />返回审核列表</Button> : <><h2>审核 <span>{count ?? (entries.length ? `${entries.length}+` : '—')}</span></h2><p>查看待授权的操作，决定这一次是否执行。</p></>}</div><Button type="button" variant="ghost" aria-label="刷新审核" onClick={retry}><UIIcon name="refresh" size={16} />刷新</Button></header>
+    <header className="ba-review-heading"><div ref={back}>{selectedKey && <TaskIconButton icon="chevronLeft" label="返回审核列表" onClick={() => setSelectedKey(null)} />}</div><TaskIconButton icon="refresh" label="刷新审核" onClick={retry} /></header>
     <div hidden={!!selectedKey} className="ba-review-overview">
     {!selectedKey && !error && connectionErrors.length > 0 && <ConnectionErrors items={connectionErrors} />}
     {error ? !selectedKey && <ResourceState kind="error" title="审核列表暂时无法读取" description={error} />

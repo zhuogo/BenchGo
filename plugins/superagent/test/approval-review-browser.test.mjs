@@ -99,6 +99,8 @@ test('review Tab renders official Worker and Router approvals in four states; de
         assert.equal(await page.getByText('不得出现的无来源审批', { exact: true }).count(), 0);
         assert.equal(await page.getByText('普通提问', { exact: true }).count(), 0);
         assert.equal(await page.getByRole('button', { name: '刷新审核', exact: true }).count(), 1);
+        assert.equal(await page.getByRole('button', { name: '刷新审核', exact: true }).textContent(), '', 'refresh uses an icon with an accessible tooltip label');
+        assert.equal(await page.locator('.ba-review-heading h2, .ba-review-heading p').count(), 0, 'page title and description are supplied by the task page');
         assert.equal(await page.getByRole('button', { name: /^(刷新列表|重新读取|重新连接)$/ }).count(), 0);
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${mode}/${width} overflow`);
         if (screenshots) await page.screenshot({ path: join(screenshots, `${mode}-${width}.png`), fullPage: true });
@@ -254,7 +256,7 @@ test('review preserves its list through compact detail navigation and shares one
     await page.getByRole('button', { name: '返回审核列表', exact: true }).waitFor();
     assert.equal(await page.getByRole('dialog').count(), 0, 'detail stays inside the review container');
     assert(await node.evaluate(element => element.isConnected), 'the hidden list keeps its original rows');
-    assert.equal(await page.evaluate(() => document.activeElement.textContent.trim()), '返回审核列表');
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), '返回审核列表');
     await page.keyboard.press('Escape');
     assert.equal(await last.evaluate(element => document.activeElement === element), true, 'return restores the original trigger focus');
     assert.equal(await page.evaluate(() => document.documentElement.scrollTop), scroll, 'return restores the list scroll position');

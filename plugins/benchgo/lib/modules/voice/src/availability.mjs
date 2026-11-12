@@ -2,6 +2,7 @@ import { VoiceError, validateRealtime } from './config.mjs';
 import { callStreamingReason } from './call-streaming.mjs';
 import { prepareConversationCall } from './conversation-model.mjs';
 import { protocolDescriptor } from '../shared/protocol-catalog.mjs';
+import { listeningSnapshot } from './addressing.mjs';
 
 /** Resolve the request route without probing the provider or changing model IDs. */
 export async function resolveVoiceProvider(store, kind, providers, { allowUnmatched = false } = {}) {
@@ -26,8 +27,9 @@ export async function resolveVoiceProvider(store, kind, providers, { allowUnmatc
 }
 
 /** Public config and assistant capabilities use the same request route resolver. */
-export async function voiceSnapshot(store, providers, llm) {
+export async function voiceSnapshot(store, providers, llm, getAssistant) {
   const config = store.snapshot();
+  config.listening = await listeningSnapshot(store.value.listening, getAssistant);
   await Promise.all(['asr', 'tts'].map(async kind => {
     try {
       const resolved = await resolveVoiceProvider(store, kind, providers);

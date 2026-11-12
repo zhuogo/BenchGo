@@ -22,13 +22,13 @@ export function installDesktopTicketStore({ db, tx, api, insertTicket }) {
           return prior.ticket;
         }
         const trigger = api.getTrigger(triggerId);
-        if (!trigger || trigger.source.channel !== 'desktop' || trigger.actor.kind !== 'human' || trigger.actor.id !== 'desktop-owner'
+        if (!trigger || trigger.source.channel !== 'desktop' || trigger.actor.kind !== 'human' || !trigger.actor.id
           || mandate.actorId !== trigger.actor.id || JSON.stringify(mandate.source) !== JSON.stringify(trigger.source)
           || mandate.instruction !== trigger.content || mandate.admission !== 'desktop-approved-delegation') throw new Error('桌面工单缺少可信原始指令');
-        const owned = db.prepare('SELECT ticket_id FROM sa_ticket_triggers WHERE trigger_id=? LIMIT 1').get(triggerId);
-        if (duplicateOfTicketId && owned?.ticket_id !== duplicateOfTicketId) {
+        const linked = db.prepare('SELECT ticket_id FROM sa_ticket_triggers WHERE trigger_id=?').all(triggerId);
+        if (duplicateOfTicketId) {
           const existing = api.getTicket(duplicateOfTicketId), source = existing?.mandate.source;
-          if (owned || !existing || (existing.status === 'completed' || ticketStopped(existing))
+          if (!existing || (existing.status === 'completed' || ticketStopped(existing))
             || source?.channel !== 'desktop' || source.sessionId !== trigger.source.sessionId || (source.threadId || 'main') !== (trigger.source.threadId || 'main')
             || existing.mandate.actorId !== mandate.actorId || existing.mandate.policyVersion !== mandate.policyVersion
             || JSON.stringify(existing.mandate.project) !== JSON.stringify(mandate.project)
@@ -36,7 +36,7 @@ export function installDesktopTicketStore({ db, tx, api, insertTicket }) {
             || (api.ticketGoalBudget(existing.id)?.goalId ?? null) !== (budgetGoalId ?? null)) {
             throw Object.assign(new Error('重复工单合并未通过来源、范围或当前授权复核；已结束任务请新建关联调整单'), { code: 'TICKET_MERGE_REJECTED' });
           }
-          db.prepare('INSERT INTO sa_ticket_triggers VALUES (?,?)').run(existing.id, triggerId);
+          db.prepare('INSERT OR IGNORE INTO sa_ticket_triggers VALUES (?,?)').run(existing.id, triggerId);
           db.prepare('INSERT INTO sa_desktop_requests(request_key,fingerprint,ticket_id,trigger_id) VALUES (?,?,?,?)').run(requestKey, fingerprint, existing.id, triggerId);
           const at = new Date().toISOString(), candidateId = randomUUID();
           db.prepare("INSERT INTO sa_candidates(id,trigger_id,thread_id,policy_version,gate,status,created_at,updated_at) VALUES (?,?,?,?,?,'decided',?,?)")
@@ -44,14 +44,14 @@ export function installDesktopTicketStore({ db, tx, api, insertTicket }) {
           db.prepare('INSERT INTO sa_decisions VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), candidateId, trigger.threadId, 'attach', JSON.stringify({ reason: 'router-duplicate-verified', ticketId: existing.id, contextOnly: true }), mandate.policyVersion, existing.id, at);
           return existing;
         }
-        if (owned) {
-          const existing = api.getTicket(owned.ticket_id);
+        // Several explicit tasks may share one real input. Only identical task
+        // contracts are aliases; do not invent source message IDs for sub-tasks.
+        for (const row of linked) {
+          const existing = api.getTicket(row.ticket_id);
           const priorModel = api.assignments(existing.id).at(-1)?.model;
           if (existing.target !== target || existing.acceptance !== acceptance || JSON.stringify(existing.mandate.project) !== JSON.stringify(mandate.project)
             || JSON.stringify(priorModel) !== JSON.stringify(model)
-            || (api.ticketGoalBudget(existing.id)?.goalId ?? null) !== (budgetGoalId ?? null)) {
-            throw Object.assign(new Error('当前用户指令已创建工单，请先读取并挂靠已有工单'), { code: 'TRIGGER_ALREADY_ASSIGNED', ticketId: existing.id });
-          }
+            || (api.ticketGoalBudget(existing.id)?.goalId ?? null) !== (budgetGoalId ?? null)) continue;
           db.prepare('INSERT INTO sa_desktop_requests(request_key,fingerprint,ticket_id,trigger_id) VALUES (?,?,?,?)').run(requestKey, fingerprint, existing.id, triggerId);
           return existing;
         }
@@ -59,7 +59,7 @@ export function installDesktopTicketStore({ db, tx, api, insertTicket }) {
         db.prepare("INSERT INTO sa_candidates(id,trigger_id,thread_id,policy_version,gate,status,created_at,updated_at) VALUES (?,?,?,?,?,'decided',?,?)")
           .run(candidateId, triggerId, trigger.threadId, mandate.policyVersion, JSON.stringify({ strength: 'explicit', reason: 'approved-desktop-instruction' }), now, now);
         db.prepare('INSERT INTO sa_decisions VALUES (?,?,?,?,?,?,?,?)').run(decisionId, candidateId, trigger.threadId, 'accept', JSON.stringify({ reason: 'approved-desktop-instruction', target, acceptance }), mandate.policyVersion, ticketId, now);
-        const ticket = insertTicket({ id: ticketId, threadId: trigger.threadId, target, title, acceptance, mandate, sourceTriggerIds: [triggerId] }, decisionId);
+        const ticket = insertTicket({ id: ticketId, threadId: trigger.threadId, target, title, acceptance, mandate, sourceTriggerIds: [triggerId], allowSharedDesktopSource: true }, decisionId);
         if (budgetGoalId != null) api.bindTicketGoalInTransaction({ ticketId: ticket.id, goalId: budgetGoalId });
         const assignmentId = `desktop:${createHash('sha256').update(requestKey).digest('hex')}`;
         const payload = { executor: 'harness', ...(model ? { model } : {}), text: target, acceptance, instructionRevision: ticket.instructionRevision };

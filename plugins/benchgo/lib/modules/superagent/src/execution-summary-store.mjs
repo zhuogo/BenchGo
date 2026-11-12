@@ -33,6 +33,10 @@ export function installExecutionSummaryStore({ db, tx = callback => callback() }
       const row = get(ticketId);
       if (row && integer(watermark)) put({ ...row, pendingWatermark: Math.max(row.pendingWatermark ?? 0, watermark) });
     },
+    clearExecutionSummaryPending(ticketId, watermark) {
+      const row = get(ticketId);
+      if (row && row.pendingWatermark <= watermark) put({ ...row, pendingWatermark: undefined });
+    },
     executionSummaryCursor: () => db.prepare("SELECT value FROM sa_execution_summary_meta WHERE key='cursor'").get()?.value || 0,
     advanceExecutionSummaryCursor(cursor) {
       if (!integer(cursor)) throw new Error('Invalid summary cursor');
@@ -43,11 +47,15 @@ export function installExecutionSummaryStore({ db, tx = callback => callback() }
       return tx(() => {
         const previous = get(value.ticketId);
         if (previous && (previous.instructionRevision > value.instructionRevision || previous.watermark > value.watermark)) return previous;
-        const compatible = previous?.runId === value.runId && previous.instructionRevision === value.instructionRevision && previous.phase === value.phase;
+        const sameRun = previous?.runId === value.runId && previous.instructionRevision === value.instructionRevision;
+        const compatible = previous?.source === 'model' && sameRun && previous.phase === value.phase;
         const row = { ...nextBinding, phase: safeCode(value.phase), text: compatible ? previous.text : redactExecutionText(value.text, 80),
           source: compatible ? previous.source : 'deterministic', summaryWatermark: compatible ? previous.summaryWatermark : value.watermark,
           generatedAt: compatible ? previous.generatedAt : value.observedAt, degraded: compatible ? previous.degraded : false,
-          pendingWatermark: previous?.pendingWatermark,
+          pendingWatermark: sameRun ? previous?.pendingWatermark : undefined,
+          evidenceRefs: compatible ? previous.evidenceRefs || [] : [],
+          reportRefs: sameRun && previous.phase === value.phase ? previous.reportRefs || [] : [],
+          history: sameRun ? previous.history || [] : [], historyTruncated: sameRun && previous.historyTruncated === true,
           code: compatible ? previous.code : undefined };
         put(row); return row;
       });
@@ -57,8 +65,14 @@ export function installExecutionSummaryStore({ db, tx = callback => callback() }
       return tx(() => {
         const current = get(value.ticketId);
         if (!current || current.runId !== value.runId || current.instructionRevision !== value.instructionRevision || current.phase !== value.phase
-          || value.watermark > current.watermark || value.watermark < current.summaryWatermark) return { published: false, reason: 'STALE_BINDING' };
-        const row = { ...current, text: redactExecutionText(value.text, 80), source: value.source === 'model' ? 'model' : 'deterministic',
+          || value.watermark > current.watermark || current.source === 'model' && value.watermark < current.summaryWatermark) return { published: false, reason: 'STALE_BINDING' };
+        const text = redactExecutionText(value.text, 80), evidenceRefs = (value.evidenceRefs || []).filter(id).slice(-24);
+        const history = [...current.history || []];
+        if (value.source === 'model' && !value.degraded && text && history.at(-1)?.text !== text) history.push({ text,
+          generatedAt: value.generatedAt, watermark: value.watermark, evidenceRefs, source: 'model' });
+        const row = { ...current, text, source: value.source === 'model' ? 'model' : 'deterministic', evidenceRefs,
+          reportRefs: (value.reportRefs || []).filter(id).slice(-8),
+          history: history.slice(-64), historyTruncated: current.historyTruncated || history.length > 64,
           summaryWatermark: value.watermark, generatedAt: value.generatedAt, degraded: value.degraded === true, code: value.code ? safeCode(value.code) : undefined,
           pendingWatermark: current.pendingWatermark > value.watermark ? current.pendingWatermark : undefined };
         put(row); return { published: true, summary: row };

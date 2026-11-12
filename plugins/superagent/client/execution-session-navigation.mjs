@@ -8,13 +8,23 @@ async function refreshExecutionCatalog(sessions, sessionIds, signal) {
   if (sessionIds.some(id => !ids.includes(id))) await sessions.refresh();
 }
 
-/** Open the same persisted execution Session without mutating its visibility. */
+let selectedExecution = null;
+const listeners = new Set();
+export const executionSessionNavigation = {
+  subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+  getSnapshot: () => selectedExecution,
+  select(execution) { selectedExecution = execution; for (const listener of listeners) listener(); },
+  close() { if (selectedExecution) { selectedExecution = null; for (const listener of listeners) listener(); } },
+};
+
+/** Open the same persisted execution Session in the official workspace. */
 export async function openExecutionSession(ctx, execution) {
   if (!execution?.available || !execution.sessionId) throw new Error('无法定位执行会话');
-  if (!ctx.uiWorkspace?.openSession) throw new Error('官方会话入口不可用');
+  if (!ctx.uiWorkspace?.openSession) throw new Error('工作台会话入口不可用');
   try {
     await refreshExecutionCatalog(ctx.sessions, [execution.sessionId]);
-    ctx.uiWorkspace.openSession(execution.sessionId);
+    executionSessionNavigation.close();
+    await ctx.uiWorkspace.openSession(execution.sessionId);
   }
   catch (cause) { throw new Error(`无法打开执行会话：${cause.message || '请稍后重试'}`, { cause }); }
 }

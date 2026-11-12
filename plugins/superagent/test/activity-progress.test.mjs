@@ -34,14 +34,18 @@ test('activity from a different requirement or assignment cannot overwrite the c
   assert.equal(goal.execution, undefined, 'goals do not adopt a ticket worker tree');
 });
 
-test('result persistence is distinct from execution, while user waits and terminal outcomes override runtime activity', () => {
-  const row = ticket(); row.execution.phase = 'verifying';
+test('persistence adds no task stage and terminal outcomes override stale runtime summaries', () => {
+  const row = ticket(); row.execution.phase = 'finished';
+  row.execution.worker.status = 'completed';
   assert.equal(activityTask(row, 'ticket').status, 'running');
-  assert.equal(activityTask(row, 'ticket').progressSummary, 'Worker 已交回结果，正在保存');
+  assert.match(activityTask(row, 'ticket').progressSummary, /^执行已结束/);
+  row.execution.summary = { text: '正在保存执行结果' };
+  row.currentSummary = '执行状态待核实';
   for (const status of ['completed', 'waiting']) {
     const task = activityTask({ ...row, status }, 'ticket');
     assert.equal(task.status, status);
     assert.equal(task.progressSummary, '', 'stale activity must not claim execution is still advancing');
+    assert.equal(task.summaryText, '', 'stale session summaries cannot override terminal or waiting facts');
   }
   const question = activityTask({ ...row, status: 'waiting', attentions: [{ id: 'attention', state: 'waiting', instructionRevision: 2,
     question: { question: '需要哪份材料？' } }] }, 'ticket');
@@ -107,7 +111,7 @@ test('task summaries retain verification facts and the stop fence without claimi
   const task = activityTask(row, 'ticket');
   assert.equal(task.stateLabel, '等待');
   assert.equal(task.detail, '执行尚未完整结束');
-  assert.match(task.verificationSummary, /已查 3 次.*下次/);
+  assert.equal(task.verificationSummary, undefined);
   const stopping = activityTask({ ...row, status: 'waiting', executionControl: { stopRequested: true }, execution: { ...row.execution, stopRequestedAt: '2026-11-09T10:00:00Z', stopConfirmationOverdue: true } }, 'ticket');
   assert.equal(stopping.stateLabel, '等待');
   assert.equal(stopping.progressSummary, '');

@@ -1,4 +1,5 @@
 import { readJsonResponse } from './http-response.mjs';
+import { invalidateModelCatalogs } from './model-catalog.mjs';
 import { Loading } from '../../shared/client/ui/loading.jsx';
 import React, { useState } from 'react';
 import { Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives';
@@ -82,7 +83,7 @@ export function useProviderHarness(providerId) {
     async save() {
       if (selection === null) return;
       if (!providerId || !catalog) throw Error('供应商已保存，但 Harness 适用范围尚未就绪，请重试保存');
-      try { const result = await toolingRequest('setBindings', { providerId, tools: selection }); setCatalog(value => ({ ...value, bindings: result.bindings })); setSelection(null); }
+      try { const result = await toolingRequest('setBindings', { providerId, tools: selection }); setCatalog(value => ({ ...value, bindings: result.bindings })); setSelection(null); invalidateModelCatalogs(); }
       catch (error) { throw Error('供应商已保存；Harness 适用范围保存失败，请重试：' + error.message); }
     },
   };

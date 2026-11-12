@@ -1,4 +1,4 @@
-import { actionHash, HIGH_RISK_ACTION_CATEGORIES, SITE_ACTION_CATEGORIES, canonicalAction } from './action-permissions.mjs';
+import { actionHash, HIGH_RISK_ACTION_CATEGORIES, SITE_ACTION_CATEGORIES, canonicalAction } from './external-action-store.mjs';
 import { validateTicketMandate } from './assessment-policy.mjs';
 import { workerAppliedTicket } from './worker-permissions.mjs';
 import { requestExternalActionApproval } from './approval.mjs';
@@ -65,8 +65,7 @@ export function createExternalActionService({ store, registry, getContext, reque
         }
         if (['completed', 'denied'].includes(action.state)) return publicAction(action);
         if (['submitted', 'uncertain'].includes(action.state)) return { ...publicAction(action), requiresReconciliation: true };
-        const grant = action.state === 'pending' && action.origin && store.matchSite(action, identity(context));
-        if (!grant && action.state === 'pending') {
+        if (action.state === 'pending') {
           const outcome = await requestApproval({ exec, action: publicAction(frozen),
             reason: '批准本次具体外部动作（仅本次有效）：\n' + JSON.stringify({ actionId: action.id, category: action.category, origin: action.origin, target: action.target, content: action.content }) });
           context = await current(exec);
@@ -77,7 +76,7 @@ export function createExternalActionService({ store, registry, getContext, reque
         await adapter.validate?.(frozen, context);
         context = await current(exec);
         exec.signal?.throwIfAborted();
-        action = store.consume(action.id, context, grant ? { grantId: grant.id } : {});
+        action = store.consume(action.id, context);
         // No await from final host authority/consumption to the trusted submit call.
         let submission;
         try { submission = adapter.submit(frozen, { signal: exec.signal, idempotencyKey: `benchgo-action:${action.id}`, context }); }
@@ -116,7 +115,7 @@ export function registerChannelExternalActions(registry, { getAdapter, channelId
 export function installExternalActionTools(scope, agent, { service }) {
   const output = { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] };
   return scope.tools.register({ name: 'assistant_external_action',
-    description: 'Prepare or submit a registered structured external action. Call catalog first and follow the selected adapter inputSchema exactly for prepare.input; use the returned action id for submit.actionId. requestId is a stable idempotency key for the same exact target/content. Never guess field names or search application/source files to discover an adapter contract. If trusted target information is missing, ask rather than invent it. Payment/purchase, password changes, account deletion and additional external sending ALWAYS require an exact final-content one-time approval; absent adapters return human handoff. Open terminal/browser tools may only prepare these actions, never submit or bypass this channel. Normal authenticated source replies use the existing source delivery pipeline.',
+    description: 'Prepare or submit a registered structured external action. Call catalog first and follow the selected adapter inputSchema exactly for prepare.input; use the returned action id for submit.actionId. requestId is a stable idempotency key for the same exact target/content. Never guess field names or search application/source files to discover an adapter contract. If trusted target information is missing, ask rather than invent it. External actions reuse the existing task approval for the exact final content; an already approved action is never approved again. Absent adapters return human handoff. Open terminal/browser tools may only prepare these actions, never submit or bypass this channel. Normal authenticated source replies use the existing source delivery pipeline.',
     parameters: { type: 'object', additionalProperties: false, properties: {
       operation: { type: 'string', enum: ['catalog', 'prepare', 'submit'] }, adapterId: { type: 'string', description: 'catalog 返回的确切通道 ID；prepare 必填。' }, input: { type: 'object', additionalProperties: true, description: 'prepare 专用：严格遵守所选通道 catalog.inputSchema，不接受猜测的字段别名。' }, requestId: { type: 'string', description: 'prepare 必填：同一目标与正文的稳定幂等键。' }, actionId: { type: 'string', description: 'submit 必填：prepare 返回的动作 id；submit 将等待真实用户逐次审批。' },
     }, required: ['operation'] }, output,
@@ -128,17 +127,6 @@ export function installExternalActionTools(scope, agent, { service }) {
       throw fail('ACTION_OPERATION_INVALID', '无效动作操作');
     },
   });
-}
-
-export function createActionPermissionApi({ store, resolveActor }) {
-  return async (input, peer) => {
-    const actor = await resolveActor(peer);
-    if (!actor || actor.profileId !== store.profileId) throw fail('ACTION_OWNER_REQUIRED', '授权管理需要已认证的真实授权人');
-    if (input.action === 'actionPermissions') return store.list(actor);
-    if (input.action === 'actionPermissionCreate') return store.grantSite(input, actor);
-    if (input.action === 'actionPermissionRevoke') return store.revoke(input, actor);
-    throw fail('ACTION_OPERATION_INVALID', '无效授权管理操作');
-  };
 }
 
 /** The root service owns one registry/store, each owning Worker gets a scoped facade. */

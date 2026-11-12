@@ -28,10 +28,12 @@ async function fixture() {
       let state={config:['loading','error'].includes(scenario)?null:{dictation:true,readAloud:true,call:true,
         asr:{providerId:'Cloud/@01',model:'ASR/@01',configured:true,apiType:scenario==='legacy'?'auto':scenario==='unconfigured'?'':'openai',protocol:scenario==='legacy'?'auto':scenario==='unconfigured'?'':'transcriptions-sse'},
         tts:{providerId:'Cloud/@01',model:'TTS/@01',configured:true,apiType:'openai',protocol:'speech-stream',stream:true,voice:'original-voice',speed:1.2},
-        conversation:scenario==='empty'?{}:{providerId:'Cloud/@01',model:'Exact Model:01',configured:true}},error:scenario==='error'?'语音配置暂不可用':''};
+        conversation:scenario==='empty'?{}:{providerId:'Cloud/@01',model:'Exact Model:01',configured:true},
+        listening:{enabled:false,endpoint:scenario==='empty'?'':'https://example.test/v1/decision',model:'',wakeSource:'custom',wakeWord:scenario==='empty'?'':'小舟',apiKeyConfigured:scenario!=='empty',superagentAvailable:scenario!=='empty',superagentName:scenario==='empty'?'':'小蓝',configured:scenario!=='empty'}},error:scenario==='error'?'语音配置暂不可用':''};
       if(scenario==='saved')state.config=window.voiceSnapshot;
       const listeners=new Set(),controller={state:{getSnapshot:()=>state,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn)}},
-        load:async()=>{window.loads++},configure:async patch=>{window.saved.push(patch);state={...state,config:{...state.config,...patch,conversation:{...state.config.conversation,...patch.conversation},asr:{...state.config.asr,...patch.asr},tts:{...state.config.tts,...patch.tts}}};window.voiceSnapshot=structuredClone(state.config);listeners.forEach(fn=>fn());return state.config}};
+        load:async()=>{window.loads++},configure:async patch=>{window.saved.push(patch);state={...state,config:{...state.config,...patch,conversation:{...state.config.conversation,...patch.conversation},asr:{...state.config.asr,...patch.asr},tts:{...state.config.tts,...patch.tts},listening:{...state.config.listening,...patch.listening}}};if(Object.hasOwn(patch.listening||{},'apiKey'))state.config.listening.apiKeyConfigured=!!patch.listening.apiKey;delete state.config.listening.apiKey;window.voiceSnapshot=structuredClone(state.config);listeners.forEach(fn=>fn());return state.config}};
+      window.patchListeningSnapshot=patch=>{state={...state,config:{...state.config,listening:{...state.config.listening,...patch}}};listeners.forEach(fn=>fn())};
       root.render(<MediaSettings key={++serial} controller={controller}/>);
     };
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-voice-settings'), format: 'iife', jsx: 'automatic',
@@ -47,6 +49,75 @@ async function fixture() {
     ${theme}:root,body{color-scheme:light;--dsw-alias-bg-base:#fafafa;--dsw-alias-bg-layer-2:#fff;--dsw-alias-label-primary:#242424;--dsw-alias-label-secondary:#797b83;--dsw-alias-state-business-primary:#4d6bfe}html[data-dark=true],html[data-dark=true] body{color-scheme:dark;--dsw-alias-bg-base:#191a1e;--dsw-alias-bg-layer-2:#202126;--dsw-alias-label-primary:#ededee;--dsw-alias-label-secondary:#a3a5af}body{margin:0;padding:24px;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--dsw-alias-bg-base)}.voice-settings{margin:auto}${css}
     </style></head><body><div id="root"></div><script>${script.replaceAll('</script', '<\\/script')}</script></body></html>`;
 }
+
+test('decision settings are neutral, preserve selections and credentials, and render four states', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  const screenshots = process.env.BENCHGO_DECISION_SCREENSHOTS;
+  if (screenshots) await mkdir(screenshots, { recursive: true });
+  try {
+    const page = await browser.newPage(), errors = [], requests = []; let testMode = 'ok', release;
+    page.setDefaultTimeout(6000); page.on('pageerror', failure => errors.push(failure.message)); const html = await fixture();
+    await page.route('**/*', async route => {
+      if (route.request().url() === 'http://localhost/') return route.fulfill({ contentType: 'text/html', body: html });
+      if (route.request().url().endsWith('/api/commander/tooling')) return route.fulfill({ json: { providers: [], models: [] } });
+      if (route.request().url().endsWith('/api/commander/assistant')) return route.fulfill({ json: { config: {} } });
+      if (route.request().url().endsWith('/api/voice')) {
+        const input = route.request().postDataJSON(); requests.push(input);
+        if (testMode === 'hold') await new Promise(resolve => { release = resolve; });
+        if (testMode === 'error') return route.fulfill({ status: 502, json: { error: '决策服务暂不可用，请重试。' } });
+        return route.fulfill({ json: { result: { supported: true, decision: 'addressed', probability: .99, latencyMs: 122 } } }).catch(() => {});
+      }
+      return route.abort();
+    });
+    await page.goto('http://localhost/');
+    const navigate = async scenario => { await page.evaluate(scenario => window.renderSettings(scenario), scenario); await page.getByRole('tab', { name: '语音', exact: true }).click(); await page.getByRole('tab', { name: '实时通话', exact: true }).click(); await page.getByRole('tab', { name: '决策', exact: true }).click(); };
+    for (const width of [1440, 390]) for (const dark of [false, true]) {
+      await page.setViewportSize({ width, height: 1000 }); await page.evaluate(dark => document.documentElement.dataset.dark = dark, dark);
+      await navigate('empty');
+      assert.equal(await page.getByLabel('决策接口地址', { exact: true }).inputValue(), '');
+      assert.equal(await page.getByLabel('决策模型 ID', { exact: true }).inputValue(), '');
+      assert.equal(await page.getByLabel('唤醒词', { exact: true }).inputValue(), '');
+      assert.doesNotMatch(await page.locator('.voice-listening-settings').innerText(), /Jev|Bivia|TypeSafe|SystemOne|姓名/i);
+      assert.doesNotMatch((await page.locator('.voice-listening-settings input').evaluateAll(inputs => inputs.map(input => input.placeholder))).join(' '), /Jev|Bivia|TypeSafe|SystemOne|articul8|https?:/i);
+      assert(await page.getByRole('button', { name: '测试连接', exact: true }).isDisabled());
+      await page.getByRole('button', { name: '唤醒词来源 自定义', exact: true }).click();
+      assert(await page.getByRole('option', { name: /跟随 SuperAgent 称呼/ }).isDisabled()); await page.keyboard.press('Escape');
+      if (screenshots) await page.screenshot({ path: join(screenshots, `empty-${width}-${dark?'dark':'light'}.png`), fullPage: true });
+      await navigate('data'); testMode = 'hold'; await page.getByRole('button', { name: '测试连接', exact: true }).click();
+      await page.getByText('正在判断固定示例', { exact: true }).waitFor();
+      if (screenshots) await page.screenshot({ path: join(screenshots, `loading-${width}-${dark?'dark':'light'}.png`), fullPage: true });
+      await page.getByRole('button', { name: '取消', exact: true }).click(); testMode = 'error'; release();
+      await page.getByRole('button', { name: '测试连接', exact: true }).click(); await page.getByRole('alert').getByText('决策服务暂不可用，请重试。').waitFor();
+      if (screenshots) await page.screenshot({ path: join(screenshots, `error-${width}-${dark?'dark':'light'}.png`), fullPage: true });
+      testMode = 'ok'; await page.getByRole('button', { name: '测试连接', exact: true }).click(); await page.getByText('连接可用 · 122ms', { exact: true }).waitFor();
+      if (screenshots) await page.screenshot({ path: join(screenshots, `data-${width}-${dark?'dark':'light'}.png`), fullPage: true });
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    }
+    await page.setViewportSize({ width: 1280, height: 1000 }); await navigate('data');
+    await page.getByRole('switch', { name: /判断是否在对我说话/ }).click();
+    await page.getByLabel('唤醒词', { exact: true }).fill('小白');
+    await page.getByRole('button', { name: '唤醒词来源 自定义', exact: true }).click();
+    await page.getByRole('option', { name: /跟随 SuperAgent 称呼/ }).click(); await page.getByText('当前称呼：小蓝', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '保存设置', exact: true }).click(); await page.getByText('已保存', { exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.saved), [{ listening: { enabled: true, wakeSource: 'superagent', wakeWord: '小白' } }]);
+    await navigate('saved'); await page.getByText('当前称呼：小蓝', { exact: true }).waitFor();
+    await page.evaluate(() => window.patchListeningSnapshot({ superagentAvailable: false, superagentName: '' }));
+    await page.getByText('SuperAgent 称呼暂不可用，请设置称呼或选择自定义。', { exact: true }).waitFor();
+    await page.getByRole('button', { name: /^唤醒词来源 跟随/ }).click(); await page.getByRole('option', { name: '自定义', exact: true }).click();
+    assert.equal(await page.getByLabel('唤醒词', { exact: true }).inputValue(), '小白');
+    await page.getByLabel('决策接口地址', { exact: true }).fill('https://other.example.test/v1/decision');
+    assert(await page.getByRole('button', { name: '测试连接', exact: true }).isDisabled());
+    await page.getByLabel('决策 API Key', { exact: true }).fill('test-only-key'); await page.getByLabel('决策模型 ID', { exact: true }).fill('decision-1.14/@opaque');
+    await page.getByRole('button', { name: '测试连接', exact: true }).click(); await page.getByText('连接可用 · 122ms', { exact: true }).waitFor();
+    assert.equal(requests.at(-1).config.endpoint, 'https://other.example.test/v1/decision'); assert.equal(requests.at(-1).config.model, 'decision-1.14/@opaque'); assert.equal(requests.at(-1).config.apiKey, 'test-only-key');
+    assert(!requests.some(row => 'text' in row || 'context' in row || 'sessionId' in row));
+    await page.getByRole('button', { name: '保存设置', exact: true }).click(); await page.getByText('已保存', { exact: true }).waitFor();
+    await navigate('saved'); assert.equal(await page.getByLabel('决策模型 ID', { exact: true }).inputValue(), 'decision-1.14/@opaque'); assert.equal(await page.getByLabel('决策 API Key', { exact: true }).inputValue(), '');
+    await page.getByRole('button', { name: '清除密钥', exact: true }).click(); await page.getByRole('button', { name: '保存设置', exact: true }).click(); await page.getByText('已保存', { exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.saved), [{ listening: { apiKey: '' } }]);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
 
 test('voice settings render four states and save exact conversation model without replacing ASR or TTS', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
   const browser = await chromium.launch({ executablePath, headless: true });

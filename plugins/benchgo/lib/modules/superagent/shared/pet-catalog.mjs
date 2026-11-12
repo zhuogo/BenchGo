@@ -18,7 +18,7 @@ export function renderBuiltinPet({expression='standard',decorations=[],palette='
   });
   if (decorations.filter(id => id.startsWith('hat-')).length > 1 || decorations.filter(id => id.startsWith('glasses-')).length > 1) throw new Error('同类帽子或眼镜只能选择一个');
   // Every fragment is imported, reviewed static geometry; no input becomes SVG markup.
-  let svg = data.mark.replace(/<g data-part="eyes"[\s\S]*?<\/g>/, face.layer);
+  let svg = data.mark.replace(/<g data-part="eyes"[\s\S]*?<\/g>/, `<g data-part="eyes">${face.layer}</g>`);
   svg = svg.replace('</g></g><defs>', `${layers.join('')}</g></g><defs>`);
   return svg.replaceAll('#F3EBDF',colors.body).replaceAll('#D44A36',colors.corner).replaceAll('#222222',colors.ink);
 }

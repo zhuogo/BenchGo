@@ -18,13 +18,13 @@ test('completed tasks show the automatic report and only its current delivery st
   };
   assert.equal(task(row, 'ticket').status, 'completed');
   assert.equal(task(row, 'ticket').detail, '原文');
-  assert.equal(task(row, 'ticket').phase, '已完成并交付');
+  assert.equal(task(row, 'ticket').phase, '执行完成');
   row.deliveries.push({ state: 'queued', payload: { type: 'ticket.result', instructionRevision: 2, resultVersion: 3 } });
-  assert.equal(task(row, 'ticket').phase, '已完成并交付');
+  assert.equal(task(row, 'ticket').phase, '执行完成');
   row.deliveries.at(-1).state = 'sent';
-  assert.equal(task(row, 'ticket').phase, '已完成并交付');
+  assert.equal(task(row, 'ticket').phase, '执行完成 · 结果已交付');
   row.deliveries.push({ state: 'queued', payload: { type: 'ticket.attention', instructionRevision: 2, resultVersion: 3 } });
-  assert.equal(task(row, 'ticket').phase, '已完成并交付');
+  assert.equal(task(row, 'ticket').phase, '执行完成 · 结果已交付');
   row.deliveries = [];
   row.status = 'waiting';
   assert.equal(task(row, 'ticket').status, 'waiting');

@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { startupWindowPlugin, verifyStartupBundle } from './prepare-startup.mjs';
 import { workbenchLoadingPlugin, verifyWorkbenchLoadingBundle } from './prepare-workbench-loading.mjs';
+import { backgroundExecutionPlugin, verifyBackgroundBundle } from './prepare-background.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -114,12 +115,13 @@ export async function prepareDesktopTray(repositoryRoot, output) {
   await mkdir(output, { recursive: true });
   await build({
     ...config, config: false, cwd: desktop, entry: [join(desktop, 'lib/types/main.js')],
-    outDir: output, clean: true, plugins: [...config.plugins, trayLabelsPlugin(join(desktop, 'lib/types/tray.js')), applicationMenuPlugin(join(desktop, 'lib/types/main.js')), startupWindowPlugin(join(desktop, 'lib/types/main.js')), workbenchLoadingPlugin(join(desktop, 'lib/types/web-document.js'))],
+    outDir: output, clean: true, plugins: [...config.plugins, trayLabelsPlugin(join(desktop, 'lib/types/tray.js')), applicationMenuPlugin(join(desktop, 'lib/types/main.js')), startupWindowPlugin(join(desktop, 'lib/types/main.js')), backgroundExecutionPlugin(join(desktop, 'lib/types/main.js')), workbenchLoadingPlugin(join(desktop, 'lib/types/web-document.js'))],
   });
   const code = await readFile(join(output, 'main.js'), 'utf8');
   verifyTrayBundle(code);
   verifyStartupBundle(code);
   verifyWorkbenchLoadingBundle(code);
+  verifyBackgroundBundle(code);
   return join(output, 'main.js');
 }
 

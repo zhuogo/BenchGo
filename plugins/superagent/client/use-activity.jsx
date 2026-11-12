@@ -13,9 +13,13 @@ export function configureAssistantActivity(api, environment) {
   };
 }
 
-export function useAssistantActivity(api) {
+export function assistantActivityStore(api) {
   if (!stores.has(api)) stores.set(api, createActivityStore(api, environments.get(api)));
-  const store = stores.get(api);
+  return stores.get(api);
+}
+
+export function useAssistantActivity(api) {
+  const store = assistantActivityStore(api);
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
 
   return { ...snapshot, refresh: store.refresh, refreshTickets: store.refreshTickets };

@@ -10,3 +10,7 @@ node_modules/
 /artifacts/
 /plugins/workbench/lib/
 /plugins/voice/lib/
+
+# Generated server seed; rebuilt before packaging
+/plugins/benchgo/lib/server/server-seed.tar.gz
+/plugins/benchgo/lib/server/manifest.json

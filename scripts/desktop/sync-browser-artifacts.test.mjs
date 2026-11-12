@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
-import { syncDesktopBrowserArtifacts } from './sync-browser-artifacts.mjs';
+import { syncDesktopArtifacts, syncDesktopBrowserArtifacts } from './sync-browser-artifacts.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-browser-sync-'));
@@ -58,6 +58,34 @@ test('default writer creates missing browser directories atomically and retains 
   await syncDesktopBrowserArtifacts(f);
   assert.equal(await readFile(join(f.target, 'lib/preview/markdown.js'), 'utf8'), 'new:lib/preview/markdown.js');
   assert.equal(await readFile(join(f.target, 'lib/link-web/old-chunk.js'), 'utf8'), 'old-open-page');
+});
+
+test('reload sync publishes runtime modules and shared imports while preserving enrollment and the server seed', async t => {
+  const f = await fixture(t);
+  const patch = join(f.profile, 'cordis.patch.yml'), settings = '# user settings\n[]\n';
+  await f.put(patch, settings);
+  const runtime = ['lib/modules/superagent/src/service.mjs', 'lib/modules/superagent/src/legacy-execution-release.mjs', 'shared/public-chat-record.mjs', 'src/plugin.mjs'];
+  for (const file of runtime) await f.put(join(f.source, file), 'new:' + file);
+  const before = await readFile(join(f.profile, 'package.json'), 'utf8');
+  const result = await syncDesktopArtifacts(f);
+  assert.equal(result.runtime, true);
+  assert.equal(result.reloadRequested, true);
+  assert.equal(await readFile(patch, 'utf8'), settings + '\n');
+  for (const file of runtime) assert.equal(await readFile(join(f.target, file), 'utf8'), 'new:' + file);
+  for (const file of ['lib/server/seed.zip', 'lib/link.mjs', 'cordis.patch.yml']) assert.equal(await readFile(join(f.target, file), 'utf8'), 'preserve:' + file);
+  assert.equal(await readFile(join(f.profile, 'package.json'), 'utf8'), before);
+  assert.equal(JSON.parse(await readFile(join(f.target, 'package.json'), 'utf8')).version, '0.1.1');
+});
+
+test('runtime sync rejects linked runtime trees before publishing any files', async t => {
+  const f = await fixture(t);
+  for (const file of ['lib/modules/superagent/src/service.mjs', 'shared/value.mjs', 'src/plugin.mjs']) await f.put(join(f.source, file), 'new:' + file);
+  await mkdir(join(f.root, 'external'));
+  await rm(join(f.target, 'lib/modules'), { recursive: true });
+  await symlink(join(f.root, 'external'), join(f.target, 'lib/modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  let writes = 0;
+  await assert.rejects(syncDesktopArtifacts({ ...f, write: async () => { writes++; } }));
+  assert.equal(writes, 0);
 });
 
 for (const mode of ['unmanaged', 'disabled']) test(`browser sync skips ${mode} profile`, async t => {

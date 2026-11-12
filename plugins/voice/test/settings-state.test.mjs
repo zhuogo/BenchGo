@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generatedMediaDraft, generatedMediaPatch, voiceSettingsPatch } from '../client/settings-state.mjs';
+import { generatedMediaDraft, generatedMediaPatch, voiceSettingsPatch, listeningDraft } from '../client/settings-state.mjs';
 
 test('image and video edits send only their changed selection and preserve opaque IDs', () => {
   for (const kind of ['image', 'video']) {
@@ -70,4 +70,17 @@ test('explicit matched protocols preserve opaque selections and omit server dete
   assert.deepEqual(voiceSettingsPatch({ ...original, asr: { ...original.asr, apiType: 'stepfun', protocol: 'stepfun-sse' } }, original), { asr: { apiType: 'stepfun', protocol: 'stepfun-sse' } });
   assert.throws(() => voiceSettingsPatch({ ...original, asr: { ...original.asr, apiType: 'unknown' } }, original), /接口类型/);
   assert.throws(() => voiceSettingsPatch({ ...original, asr: { ...original.asr, protocol: 'auto' } }, original), /显式选择/);
+});
+
+test('listening saves only edits, keeps custom wake draft and never round-trips a saved secret', () => {
+  assert.deepEqual(listeningDraft(), { enabled: false, endpoint: '', model: '', apiKey: '', wakeSource: 'custom', wakeWord: '' });
+  const config = { enabled: true, endpoint: 'https://example.test/v1/systemone', model: 'Exact/@01', apiKey: 'PRIVATE', apiKeyConfigured: true, wakeSource: 'superagent', wakeWord: '小白', superagentName: '小蓝', configured: true };
+  const original = { asr: {}, tts: {}, listening: listeningDraft(config) };
+  assert.equal(original.listening.apiKey, ''); assert.equal(original.listening.wakeWord, '小白');
+  assert.deepEqual(voiceSettingsPatch(original, original), {});
+  assert.deepEqual(voiceSettingsPatch({ ...original, listening: { ...original.listening, wakeSource: 'custom' } }, original), { listening: { wakeSource: 'custom' } });
+  assert.deepEqual(voiceSettingsPatch({ ...original, listening: { ...original.listening, model: 'Exact/@02' } }, original), { listening: { model: 'Exact/@02' } });
+  assert.deepEqual(voiceSettingsPatch(original, original, { listening: true }), { listening: { apiKey: '' } });
+  assert.deepEqual(voiceSettingsPatch({ ...original, listening: { ...original.listening, apiKey: 'NEW_PRIVATE' } }, original), { listening: { apiKey: 'NEW_PRIVATE' } });
+  assert.throws(() => voiceSettingsPatch({ ...original, listening: { ...original.listening, model: ' Exact/@01' } }, original), /首尾/);
 });

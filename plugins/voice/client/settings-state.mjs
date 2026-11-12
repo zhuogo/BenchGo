@@ -1,5 +1,17 @@
 import { protocolDescriptor, VOICE_API_TYPES } from '../shared/protocol-catalog.mjs';
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+export const listeningDraft = (value = {}) => ({ enabled: !!value.enabled, endpoint: value.endpoint ?? '', model: value.model || '', apiKey: '', wakeSource: value.wakeSource || 'custom', wakeWord: value.wakeWord ?? '' });
+
+export function listeningSettingsPatch(draft, original = {}, clearKey = false) {
+  if (typeof draft.model !== 'string' || draft.model !== draft.model.trim()) throw Error('决策模型 ID 首尾不能含空格。');
+  const patch = {};
+  for (const key of ['enabled', 'endpoint', 'model', 'wakeSource', 'wakeWord']) {
+    if (draft[key] !== listeningDraft(original)[key]) patch[key] = draft[key];
+  }
+  if (clearKey) patch.apiKey = '';
+  else if (draft.apiKey?.trim()) patch.apiKey = draft.apiKey;
+  return patch;
+}
 
 export function voiceSettingsPatch(draft, original, clearKeys = {}) {
   const patch = {};
@@ -14,6 +26,10 @@ export function voiceSettingsPatch(draft, original, clearKeys = {}) {
     const value = conversation[key] || '';
     if (typeof value !== 'string' || value !== value.trim()) throw Error('通话交互模型的供应商和模型 ID 首尾不能含空格。');
     if (value !== (original.conversation?.[key] || '')) (patch.conversation ||= {})[key] = value;
+  }
+  if (draft.listening) {
+    const listening = listeningSettingsPatch(draft.listening, original.listening, !!clearKeys.listening);
+    if (Object.keys(listening).length) patch.listening = listening;
   }
   for (const kind of ['asr', 'tts']) {
     const endpoint = {};

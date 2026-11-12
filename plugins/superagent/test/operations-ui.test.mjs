@@ -41,33 +41,3 @@ test('running work accepts queued revisions while unsafe states wait and termina
   await h.render().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
   assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0])), { action: 'ticketChange', input: { id: 't', operation: 'adjustment', expectedInstructionRevision: 1, target: 'x', acceptance: '', reason: 'follow-up adjustment', requestId: 'request-id' } });
 });
-test('manual Eval retry is bound to both versions and keeps failed reason visible', async () => {
-  const row = { id: 'candidate', dispositionRevision: 8, updatedAt: 'then', trigger: { content: 'raw message' } };
-  const h = harness('evaluations.jsx', 'EvaluationRow', { row }, '状态已变化');
-  h.render().find(node => node.props.label === '重新评估').props.onClick();
-  h.render().find(node => node.type === 'textarea').props.onChange({ target: { value: 'model restored' } });
-  row.dispositionRevision = 9; row.updatedAt = 'now';
-  await h.render().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
-  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0])), { action: 'evaluationDispose', input: { candidateId: 'candidate', disposition: 'retry', reason: 'model restored', expectedRevision: 8, expectedUpdatedAt: 'then' } });
-  assert(h.render().some(node => node.props.role === 'alert' && walk(node).some(child => child.children.includes('状态已变化'))));
-  assert.equal(h.render().find(node => node.type === 'textarea').props.value, 'model restored');
-});
-test('checkpoint restore shows exclusions and refuses active, conflicting or incomplete previews', () => {
-  const ticket = { id: 'ticket', status: 'completed', assignments: [{ state: 'completed' }] };
-  const plan = { runId: 'run', token: 'token', excluded: ['.env*', '*.key'], externalEffectsReverted: false, changes: [{ path: 'src/app.js', action: 'replace' }], conflicts: [] };
-  const button = nodes => nodes.find(node => node.children.includes('确认整轮文件恢复'));
-  const h = harness('checkpoints.jsx', 'CheckpointRestore', { ticket, plan });
-  assert.equal(button(h.render()).props.disabled, false);
-  assert(h.render().some(node => node.children.includes('.env*、*.key')));
-  for (const patch of [{ conflicts: ['src/app.js'] }, { token: null }, { externalEffectsReverted: undefined }, { excluded: undefined }]) assert.equal(button(harness('checkpoints.jsx', 'CheckpointRestore', { ticket, plan: { ...plan, ...patch } }).render()).props.disabled, true);
-  assert.equal(button(harness('checkpoints.jsx', 'CheckpointRestore', { ticket: { ...ticket, assignments: [{ state: 'uncertain' }] }, plan }).render()).props.disabled, true);
-});
-test('checkpoint restore uses the reviewed token and never claims to revert external effects', async () => {
-  const calls = [], ticket = { id: 'ticket', status: 'waiting', executionControl: { stopped: true }, assignments: [{ state: 'cancelled' }] };
-  const plan = { runId: 'run', token: 'reviewed-token', excluded: ['.env*'], conflicts: [], changes: [], externalEffectsReverted: false };
-  const h = harness('checkpoints.jsx', 'CheckpointRestore', { ticket, plan, restore: async input => { calls.push(input); return { backupId: 'backup', externalEffectsReverted: false }; } });
-  await h.render().find(node => node.children.includes('确认整轮文件恢复')).props.onClick();
-  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{ ticketId: 'ticket', runId: 'run', token: 'reviewed-token' }]);
-  assert(h.render().some(node => node.children.includes('外部操作未撤销。原执行已禁止续行，继续工作请重新授权开单。')));
-  assert(!h.render().some(node => node.children.includes('确认整轮文件恢复')));
-});

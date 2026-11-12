@@ -4,8 +4,8 @@ import { isRouterTicketAck } from './ticket-ack.mjs';
 const systemStates = new Set(['delivery_wait', 'continuation_wait', 'action_verified']);
 export function systemStateDelivery({ state = 'continuation_wait', code = 'EXECUTION_UNAVAILABLE', stage = 'execution' } = {}) {
   if (!systemStates.has(state)) throw new Error('Invalid system state');
-  const text = code === 'EXECUTION_EFFECTS_UNKNOWN' ? '外部动作效果待核实，确认前不会重复执行。'
-    : state === 'action_verified' ? '操作回执已核实。' : state === 'delivery_wait' ? '结果已保存，等待原来源交付。' : '执行记录已保留，等待恢复条件。';
+  const text = state === 'action_verified' ? '操作回执已核实。'
+    : state === 'delivery_wait' ? '结果已保存，等待原来源交付。' : '执行已中断，尚未完成；记录已保留，等待用户续接。';
   return { action: 'deliver', origin: 'system', systemState: { state, code, stage }, text: `系统状态：${text}` };
 }
 
@@ -62,7 +62,7 @@ export function deliverySuppression(database, row) {
   if (payload.replyState === 'suppressed' && payload.suppressionReason === 'router-action-already-replied') return payload.suppressionReason;
   const state = payload.stateSignal || (payload.publication?.origin === 'system' ? payload.publication.systemState : null);
   if (state?.state === 'continuation_wait') {
-    const current = database.assignments?.(ticket.id)?.some(row => row.state === 'uncertain'
+    const current = database.assignments?.(ticket.id)?.some(row => ['uncertain', 'failed'].includes(row.state)
       && row.lastFailure?.code === state.code && row.lastFailure?.stage === state.stage
       && (!payload.assignmentId || row.id === payload.assignmentId && row.fence === payload.fence));
     if (!current) return 'state-superseded';

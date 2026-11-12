@@ -28,6 +28,7 @@ import { DeviceSwitch } from '../../link/client/device-switch.jsx';
 import { mountEfficiencySettings } from './efficiency-settings.jsx';
 import { mountInteractiveClient } from '../../interactive/client/official.jsx';
 import { mountWorkbenchClient } from '../../workbench/client/index.jsx';
+import { mountSessionMascot } from './session-mascot.jsx';
 
 const names = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi', opencode: 'OpenCode', gemini: 'Gemini CLI', hermes: 'Hermes', grok: 'Grok Build', mcode: 'MiniMax Code', deepseek: 'DeepSeek' };
 const liveStates = new Set(['running', 'connecting', 'waiting']);
@@ -48,10 +49,13 @@ async function api(action, args = {}, signal) {
   const res = await fetch(new URL('api/commander', document.baseURI), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...args }), signal });
   return readJsonResponse(res, new URL('api/commander', document.baseURI));
 }
-let stateSignature;
+let stateSignature, stateRequest = 0, readOwnershipIds;
 async function refresh(signal) {
+  const request = ++stateRequest, ownershipVerifiedIds = readOwnershipIds?.();
   const next = await api('state', {}, AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(STATE_TIMEOUT_MS)]));
   signal?.throwIfAborted();
+  if (request !== stateRequest) return;
+  if (ownershipVerifiedIds) next.ownershipVerifiedIds = ownershipVerifiedIds;
   const signature = JSON.stringify(next);
   if (signature === stateSignature && data.loaded && !data.error) return;
   stateSignature = signature; update({ ...next, loaded: true, error: '' });
@@ -89,6 +93,7 @@ export function apply(ctx) {
 
 function mountBaseUi(ctx) {
   mountBrand(ctx);
+  mountSessionMascot(ctx);
   mountShellUi(ctx);
   applyMobileWorkbench(ctx);
   mountUsageStyle(ctx);
@@ -114,12 +119,24 @@ function mountBaseUi(ctx) {
     return ensuringRecent;
   };
   void ensureRecent().catch(error=>{ if (!lifetime.signal.aborted) update({error:error.message}); });
+  readOwnershipIds = () => [...ctx.sessions.list.getSnapshot().ids];
   const stopPolling = startSidebarPolling({ refresh, onError: error => update({ error: connectionMessage(error) }), isActive: () => data.sessions.some(session => liveStates.has(session.status)) });
-  const refreshOwnership = () => { void refresh(lifetime.signal).catch(error => { if (!lifetime.signal.aborted) update({ error: connectionMessage(error) }); }); };
+  let ownershipPending, ownershipAgain = false;
+  const refreshOwnership = () => {
+    if (ownershipPending) { ownershipAgain = true; return; }
+    ownershipPending = refresh(lifetime.signal).catch(error => { if (!lifetime.signal.aborted) update({ error: connectionMessage(error) }); }).finally(() => {
+      ownershipPending = null; if (ownershipAgain && !lifetime.signal.aborted) { ownershipAgain = false; refreshOwnership(); }
+    });
+  };
+  let catalogIds = ctx.sessions.list.getSnapshot().ids.join('\0');
+  const stopOwnership = ctx.sessions.list.subscribe(() => {
+    const next = ctx.sessions.list.getSnapshot().ids.join('\0');
+    if (next !== catalogIds) { catalogIds = next; refreshOwnership(); }
+  });
   document.addEventListener('benchgo:assistant-changed', refreshOwnership);
   ctx.effect(() => () => {
     document.removeEventListener('benchgo:assistant-changed', refreshOwnership);
-    lifetime.abort(); stopPolling(); stateSignature = undefined; defaultWorkspaceId = undefined;
+    lifetime.abort(); stopPolling(); stopOwnership(); stateRequest++; readOwnershipIds = undefined; stateSignature = undefined; defaultWorkspaceId = undefined;
     data = { projects: [], sessions: [], selected: null, projectId: null, error: '', loaded: false };
     listeners.clear();
   });
@@ -177,7 +194,8 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
   const d = modules.harness ? snapshot : { ...snapshot, sessions: [] };
   const workspaceProjects = sidebarWorkspaces(workspaces, d.projects, defaultWorkspaceId);
   const privateIds = new Set(d.privateSessionIds ?? []);
-  const isPrivate = id => privateIds.has(id) && !harness.byId[id]?.projectionValues?.benchgoChannelSource;
+  const verifiedIds = new Set(d.ownershipVerifiedIds || []);
+  const isPrivate = id => privateIds.has(id) || (modules.superagent && id && harness.byId[id] && (!d.loaded || (d.ownershipVerifiedIds && !verifiedIds.has(id))));
   const projectsLoaded = workspaces.phase === 'ready' || workspaceProjects.length > 0 || d.loaded;
   const [actionSession, setActionSession] = useState(null), [confirmDelete, setConfirmDelete] = useState(null), [confirmProjectDelete, setConfirmProjectDelete] = useState(null), [confirmClearArchive, setConfirmClearArchive] = useState(false);
   const actionAnchor = useRef(null);
@@ -334,7 +352,7 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
     <div className="cmd-section-title cmd-recent-title">{wide && <button type="button" className="cmd-section-toggle" aria-expanded={sections.recent} aria-controls="cmd-recent-section" onClick={() => toggleSection('recent')}><span className="cmd-section-label">{showArchived ? '已归档最近' : '最近'}{!showArchived && recentActivity && <Activity status={recentActivity} />}</span><UIIcon name="chevronDown" size={12} /></button>}{!showArchived && <Hint label="新聊天"><button type="button" aria-label="最近新聊天" onClick={() => newSession()}><UIIcon name="plus" size={16} /></button></Hint>}</div>
     <div id="cmd-recent-section" className="cmd-section-body" data-open={!wide || sections.recent} inert={wide && !sections.recent ? '' : undefined}><div className="cmd-section-inner"><div className="cmd-recents" data-transition={archivePhase}>{wide && recents.map(row)}{wide && d.loaded && !recents.length && (filter || showArchived) && <p className="cmd-sidebar-empty">{filter ? '没有找到对话' : '暂无归档对话'}</p>}</div></div></div>
     </div>}
-    <Menu open={!showArchived && !!actionSession} onClose={() => { if(!busy)setActionSession(null); }} anchor={null} getAnchorRect={() => actionAnchor.current?.getBoundingClientRect() ?? null} side="right" align="end" portal autoFocus compact listClassName="cmd-actions-popover">
+    <Menu open={!showArchived && !!actionSession} onClose={() => { if(!busy)setActionSession(null); }} anchor={null} anchorRef={actionAnchor} side="right" align="end" portal autoFocus compact listClassName="cmd-actions-popover">
       {currentActionSession && <>
         <div className="cmd-session-details"><Icon provider={currentActionSession.provider} size={16} /><span>{names[currentActionSession.provider] || currentActionSession.provider}{currentActionSession.model ? ' · ' + currentActionSession.model : ''}</span></div>
         <div className="cmd-session-actions">

@@ -72,8 +72,8 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
   assert.equal(database.listTickets().length, 2);
   // Each Goal leaf is its own Trigger over the same original instruction; one Trigger still opens one Ticket.
   const sources = database.listTickets().map(ticket => ticket.mandate.source);
-  assert.equal(new Set(sources.map(source => source.messageId)).size, 2);
-  assert.ok(sources.every(source => /#goal:root:\d$/.test(source.messageId)));
+  assert.equal(new Set(sources.map(source => source.messageId)).size, 1);
+  assert.ok(sources.every(source => !source.messageId.includes('#goal:')));
   assert.equal(new Set(database.listTickets().map(ticket => ticket.mandate.instruction)).size, 1);
   if (!budgeted) {
     for (const ticket of database.listTickets()) assert.equal(ticket.acceptance, ticket.target, 'each legacy leaf uses its own full instruction, not the parent message');
@@ -107,7 +107,7 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
   for (const ticket of database.listTickets()) commitWorkerResult({ database, ticket, uniqueKey: `result:${ticket.id}`, result: {
     outcome: 'completed', summary: '原文结果', selfCheck: { summary: '已检查当前要求和执行结果' }, evidenceRefs: [],
   } });
-  assert.equal((await scheduler.advanceGoal(parent.id)).status, 'waiting', 'result persistence alone cannot complete a Goal');
+  assert.equal((await scheduler.advanceGoal(parent.id)).status, 'completed', 'completed execution does not wait for delivery');
   const deliveries = database.claimOutbox('goal-test');
   for (const delivery of deliveries) {
     assert.equal(delivery.payload.text, undefined);
@@ -115,7 +115,7 @@ for (const budgeted of [false, true]) test(`Ticket goal survives partial creatio
     database.saveOutboxReply(delivery.id, { owner: 'goal-test',
       publication: { action: 'deliver', origin: 'router', text: '这部分工作已经完成。' } });
   }
-  assert.equal((await scheduler.advanceGoal(parent.id)).status, 'waiting', 'a persisted Router draft still needs its source receipt');
+  assert.equal((await scheduler.advanceGoal(parent.id)).status, 'completed', 'draft delivery is independent of execution completion');
   for (const delivery of deliveries) database.finishOutbox(delivery.id, { owner: 'goal-test', sent: true,
     receipt: { status: 'accepted', messageId: `sent:${delivery.ticketId}` } });
   assert.equal((await scheduler.advanceGoal(parent.id)).status, 'completed');
@@ -204,3 +204,14 @@ test('cancellation persists before effects and resumes after restart without dis
 });
 
 
+
+test('goal request identity is generated from real input and normalized contract', async () => {
+  const ownerAgent = { id: 'owner', status: 'running', session: { header: {}, snapshotEvents: () => [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'input', source: { kind: 'user' }, content: [{ type: 'text', text: 'work' }] } }] } };
+  const ctx = { agents: { get: () => ownerAgent, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) }, workspaceRegistry: { list: () => [{ id: 'project' }] } };
+  const scheduler = { matchGoalRequest: () => null, reserveGoalRequest: () => {}, createGoal: value => value };
+  const create = goal => createGoalTickets({ goal, ownerAgent, exec: { agent: ownerAgent }, ctx, scheduler, delegation: { delegate: async () => ({ id: 'ticket' }) } });
+  const first = await create({ objective: 'goal', projectId: 'project', text: 'work' });
+  const repeated = await create({ objective: 'goal', projectId: 'project', text: 'work', acceptance: 'work' });
+  assert.match(first.requestId, /^[a-f0-9]{64}$/);
+  assert.equal(first.requestId, repeated.requestId);
+});
