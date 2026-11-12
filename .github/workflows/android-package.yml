@@ -62,7 +62,7 @@ jobs:
           umask 077
           printf '%s' "$BENCHGO_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$BENCHGO_ANDROID_KEYSTORE_PATH"
           npm run build:android -- --release --no-daemon
-          version=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
+          version=$(node --input-type=module -e "import { currentVersions } from './scripts/release/plan.mjs'; console.log((await currentVersions()).android)")
           apk="benchgo-$version-android.apk"
           cp plugins/link/mobile/android/app/build/outputs/apk/release/app-release.apk "$apk"
           sha256sum "$apk" > "$apk.sha256"

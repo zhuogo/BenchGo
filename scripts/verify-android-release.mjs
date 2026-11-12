@@ -19,11 +19,12 @@ function run(command, args, encoding = 'utf8') {
   return result.stdout;
 }
 if (!existsSync(apk)) throw new Error('Missing signed Android release APK');
-const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
+const gradle = readFileSync(join(root, 'plugins/link/mobile/android/app/build.gradle'), 'utf8');
+const version = /versionName\s+['"]([^'"]+)['"]/.exec(gradle)?.[1];
+if (!version) throw new Error('Missing Android component versionName');
 const metadata = run(join(buildTools, windows ? 'aapt.exe' : 'aapt'), ['dump', 'badging', apk]);
 if (!metadata.includes("package: name='cn.draftgo.benchgo.link'")) throw new Error('Unexpected Android applicationId');
-if (!metadata.includes("versionName='" + version + "'")) throw new Error('Android application version differs from root package');
-const gradle = readFileSync(join(root, 'plugins/link/mobile/android/app/build.gradle'), 'utf8');
+if (!metadata.includes("versionName='" + version + "'")) throw new Error('Android application version differs from its Gradle component version');
 const versionCode = /versionCode\s+(\d+)/.exec(gradle)?.[1];
 if (!versionCode || !metadata.includes("versionCode='" + versionCode + "'")) throw new Error('Unexpected Android versionCode');
 if (!metadata.includes("application-label:'BenchGo'")) throw new Error('Android application label must be BenchGo');
@@ -69,6 +70,7 @@ function readAsset(name) {
   throw new Error('Missing APK resource: ' + name);
 }
 for (const [asset, file] of [
+  ['assets/updates/update-public-key.pem', 'plugins/benchgo/shared/update-public-key.pem'],
   ['assets/app.js', 'plugins/link/dist/web/app.js'],
   ['assets/native-appearance.js', 'plugins/link/mobile/android/app/src/main/assets/native-appearance.js'],
   ['assets/server/server-seed.bundle', 'plugins/link/dist/server/server-seed.tar.gz'],

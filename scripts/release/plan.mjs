@@ -35,7 +35,6 @@ export function createReleasePlan({ releaseVersion, sourceSha, previous = null, 
   if (!stable(releaseVersion) || !/^[a-f0-9]{40}$/.test(sourceSha)) throw new Error('Release requires a stable X.Y.Z version and immutable source SHA');
   for (const key of ['plugin', 'windows', 'android']) if (!stable(versions[key])) throw new Error(`Invalid ${key} component version`);
   if (!stable(minAppVersion) || compareVersions(minAppVersion, versions.windows) > 0) throw new Error('minAppVersion must not exceed the available Windows version');
-  if (versions.android !== versions.windows) throw new Error('Android versionName must match root application version');
   if (!Number.isSafeInteger(versions.androidVersionCode) || versions.androidVersionCode < 1 || versions.androidVersionCode > 2147483647) throw new Error('Invalid Android versionCode');
   const reasons = classifyChanges(paths);
   if (packageChanged) for (const component of Object.keys(reasons)) reasons[component].push('package.json build contract');

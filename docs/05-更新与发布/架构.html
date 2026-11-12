@@ -21,15 +21,16 @@
       "title": "版本与引擎真源",
       "kicker": "VERSION SOURCES",
       "kind": "orchestration",
-      "sub": "应用、插件与引擎分别锁定",
+      "sub": "统一发行版与各组件版本分别锁定",
       "symbol": "package.json · upstream.json",
       "plain": "先知道更新的是哪一层，再决定构建什么。",
-      "role": "应用版本来自根 manifest，插件版本来自插件 manifest；官方引擎提交来自 upstream.json 与子模块 pin，Android 另有 versionCode。",
+      "role": "统一发行版来自签名清单；Windows 与插件版本分别来自根和插件 manifest，Android versionName/versionCode 来自 Gradle，各自独立；官方引擎提交来自 upstream.json 与子模块 pin。",
       "input": "源码提交与各交付单元 manifest",
       "output": "独立版本和兼容引擎范围",
       "sources": [
         "package.json",
         "plugins/benchgo/package.json",
+        "plugins/link/mobile/android/app/build.gradle",
         "upstream.json",
         ".gitmodules"
       ],

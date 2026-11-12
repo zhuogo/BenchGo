@@ -62,6 +62,20 @@ test('plugin-only release keeps application versions and reuses both native bina
   assert.equal(value.versions.windows, '1.0.0');
 });
 
+test('Windows-only version increase preserves the independent Android artifact and versionCode', () => {
+  const value = plan({ versions: versions({ windows: '1.1.0' }), paths: ['package.json'] });
+  assert.deepEqual(value.builds, { plugin: false, windows: true, android: false });
+  assert.equal(value.versions.android, '1.0.0');
+  assert.equal(value.versions.androidVersionCode, 10);
+});
+
+test('Android-only version increase preserves the independent Windows artifact', () => {
+  const value = plan({ versions: versions({ android: '1.1.0', androidVersionCode: 11 }), paths: ['plugins/link/mobile/android/app/build.gradle'] });
+  assert.deepEqual(value.builds, { plugin: false, windows: false, android: true });
+  assert.equal(value.versions.windows, '1.0.0');
+  assert.throws(() => plan({ versions: versions({ android: '1.1.0' }), paths: ['plugins/link/mobile/android/app/build.gradle'] }), /increased versionCode/);
+});
+
 test('native Android and embedded Link changes are explicit; documentation and tests do not rebuild', () => {
   assert.deepEqual(classifyChanges(['plugins/link/mobile/android/app/src/main/java/Main.kt']), { plugin: [], windows: [], android: ['plugins/link/mobile/android/app/src/main/java/Main.kt'] });
   const embedded = classifyChanges(['plugins/link/client/main.jsx']);
@@ -73,7 +87,7 @@ test('native Android and embedded Link changes are explicit; documentation and t
 test('changed components require increased versions and Android additionally requires increased versionCode', () => {
   assert.throws(() => plan({ paths: ['plugins/voice/src/calls.mjs'] }), /increment its component version/);
   assert.throws(() => plan({ versions: versions({ windows: '1.1.0', android: '1.1.0' }) }), /increased versionCode/);
-  assert.throws(() => plan({ versions: versions({ windows: '1.1.0' }) }), /must match/);
+  assert.throws(() => plan({ versions: versions({ android: '1.1' }) }), /Invalid android component version/);
   assert.throws(() => plan({ releaseVersion: '1.0.0' }), /must increase/);
   assert.throws(() => plan({ versions: versions({ plugin: '0.9.0' }) }), /roll back/);
 });
