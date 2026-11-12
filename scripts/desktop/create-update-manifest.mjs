@@ -6,16 +6,20 @@ import { releaseDownloadUrl, validateReleaseManifest } from '../../plugins/bench
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
-export async function createUpdateManifest({ pluginPath, outDir, version, engineVersion, tag = `plugin-v${version}`, privateKey, publicKey, notes, app } = {}) {
+export async function createUpdateManifest({ pluginPath, plugin, outDir, version = plugin?.version, engineVersion, engine = { min: engineVersion, max: engineVersion }, tag = `plugin-v${version}`, privateKey, publicKey, notes, app, releaseVersion, minAppVersion, android, sourceSha } = {}) {
   if (!privateKey) throw new Error('缺少 BENCHGO_UPDATE_PRIVATE_KEY 发布签名密钥');
   const key = createPrivateKey(privateKey);
   if (key.asymmetricKeyType !== 'ed25519') throw new Error('发布签名必须使用 Ed25519 密钥');
-  const bytes = await readFile(pluginPath);
+  if (pluginPath && plugin) throw new Error('插件文件与现成插件描述不能同时指定');
+  const bytes = plugin ? undefined : await readFile(pluginPath);
   const manifest = validateReleaseManifest({
     schemaVersion: 1,
     version,
-    engine: { min: engineVersion, max: engineVersion },
-    plugin: {
+    ...(releaseVersion !== undefined ? { releaseVersion } : {}),
+    ...(minAppVersion !== undefined ? { minAppVersion } : {}),
+    ...(sourceSha !== undefined ? { sourceSha } : {}),
+    engine,
+    plugin: plugin ?? {
       version,
       url: releaseDownloadUrl(path.basename(pluginPath), tag),
       sha256: createHash('sha256').update(bytes).digest('hex'),
@@ -23,6 +27,7 @@ export async function createUpdateManifest({ pluginPath, outDir, version, engine
     },
     ...(notes ? { notes } : {}),
     ...(app ? { app } : {}),
+    ...(android !== undefined ? { android } : {}),
   });
   const payload = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
   const signature = sign(null, payload, key);
@@ -36,7 +41,7 @@ export async function createUpdateManifest({ pluginPath, outDir, version, engine
 
 async function main() {
   const options = {};
-  const allowed = new Set(['--plugin', '--out', '--tag', '--notes-file', '--app-feed']);
+  const allowed = new Set(['--plugin', '--out', '--tag', '--notes-file', '--app-feed', '--release-version', '--min-app-version', '--android-feed']);
   const args = process.argv.slice(2);
   while (args.length) {
     const option = args.shift(), value = args.shift();
@@ -55,6 +60,9 @@ async function main() {
   }
   const result = await createUpdateManifest({
     app,
+    releaseVersion: options['--release-version'] ?? pkg.benchgo?.releaseVersion,
+    minAppVersion: options['--min-app-version'],
+    android: options['--android-feed'] ? JSON.parse(await readFile(options['--android-feed'], 'utf8')) : undefined,
     pluginPath: path.resolve(options['--plugin'] || path.join(outDir, `benchgo-${pkg.version}-plugin.tar.gz`)),
     outDir,
     version: pkg.version,

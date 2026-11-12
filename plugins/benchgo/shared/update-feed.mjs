@@ -1,9 +1,9 @@
 import { createHash, createPublicKey, verify } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, open, rm } from 'node:fs/promises';
 
 export const UPDATE_REPOSITORY = 'zhuogo/BenchGo';
 export const DEFAULT_UPDATE_CONFIG = Object.freeze({ source: 'mirror', mirrorUrl: 'https://ghfast.top/' });
-export const MAX_PLUGIN_BYTES = 256 * 1024 * 1024;
+export const MAX_PLUGIN_BYTES = 512 * 1024 * 1024;
 const releaseBase = `https://github.com/${UPDATE_REPOSITORY}/releases/`;
 const metadataUrl = `${releaseBase}download/plugin-updates/benchgo-update.json`;
 
@@ -96,12 +96,25 @@ export function validateReleaseManifest(manifest) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || manifest.schemaVersion !== 1)
     fail('UPDATE_MANIFEST', '不支持的更新清单格式');
   parseVersion(manifest.version);
+  if (manifest.releaseVersion !== undefined) parseVersion(manifest.releaseVersion);
+  if (manifest.minAppVersion !== undefined) parseVersion(manifest.minAppVersion);
+  if (manifest.sourceSha !== undefined && !/^[a-f0-9]{40}$/.test(manifest.sourceSha)) fail('UPDATE_MANIFEST', '发布源码提交标识无效');
   if (!manifest.engine || typeof manifest.engine !== 'object') fail('UPDATE_MANIFEST', '缺少引擎兼容信息');
   parseVersion(manifest.engine.min);
   if (manifest.engine.max !== undefined && compareVersions(manifest.engine.max, manifest.engine.min) < 0) fail('UPDATE_MANIFEST', '引擎兼容范围无效');
   validateArtifact(manifest.plugin, { plugin: true });
   if (manifest.version !== manifest.plugin.version) fail('UPDATE_MANIFEST', '插件版本与清单版本不一致');
   if (manifest.app !== undefined) validateArtifact(manifest.app);
+  if (manifest.android !== undefined) {
+    validateArtifact(manifest.android);
+    const tag = manifest.android.url.slice(releaseBase.length).split('/')[1];
+    if (!tag?.startsWith('v')) fail('UPDATE_MANIFEST', 'Android 更新包须使用不可变版本标签');
+    parseVersion(tag.slice(1));
+    if (filenameFromReleaseUrl(manifest.android.url) !== `benchgo-${manifest.android.version}-android.apk`
+      || !Number.isInteger(manifest.android.versionCode) || manifest.android.versionCode < 1 || manifest.android.versionCode > 2147483647
+      || !/^[a-f0-9]{64}$/.test(manifest.android.sha256)
+      || !Number.isSafeInteger(manifest.android.size) || manifest.android.size < 1 || manifest.android.size > 1024 * 1024 * 1024) fail('UPDATE_MANIFEST', 'Android 更新包信息无效');
+  }
   if (manifest.notes !== undefined && (typeof manifest.notes !== 'string' || manifest.notes.length > 16_384)) fail('UPDATE_MANIFEST', '更新说明过长或格式无效');
   return manifest;
 }
@@ -113,51 +126,82 @@ function allowedRedirect(url, initial) {
     fail('UPDATE_REDIRECT', '更新源返回了不受信任的跳转地址');
 }
 
-export async function fetchUpdateBytes(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, maxBytes = 256 * 1024, timeoutMs = 20_000 } = {}) {
+async function consumeUpdate(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, maxBytes, timeoutMs, consume }) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isFinite(timeoutMs) || timeoutMs < 1) fail('UPDATE_REQUEST', '更新请求限制无效');
   const initial = resolveUpdateUrl(url, config), controller = new AbortController();
-  let timer;
+  const timeout = new UpdateFeedError('UPDATE_TIMEOUT', '更新源响应超时，请重试或切换更新源');
+  const cancelled = new Promise((_, reject) => controller.signal.addEventListener('abort', () => reject(timeout), { once: true }));
+  const bounded = promise => Promise.race([promise, cancelled]);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await Promise.race([
-      (async () => {
-        let target = initial;
-        for (let redirects = 0; redirects <= 4; redirects++) {
-          const response = await fetcher(target, { signal: controller.signal, redirect: 'manual', credentials: 'omit', headers: { accept: 'application/octet-stream' } });
-          if ([301, 302, 303, 307, 308].includes(response.status)) {
-            const location = response.headers.get('location');
-            await response.body?.cancel();
-            if (!location || redirects === 4) fail('UPDATE_REDIRECT', '更新源跳转次数过多或地址缺失');
-            target = new URL(location, target).href;
-            allowedRedirect(target, initial);
-            continue;
-          }
-          if (!response.ok) {
-            await response.body?.cancel();
-            throw Object.assign(new UpdateFeedError('UPDATE_HTTP', `更新源请求失败（HTTP ${response.status}）`), { httpStatus: response.status });
-          }
-          const length = response.headers.get('content-length');
-          if (length && (!/^\d+$/.test(length) || Number(length) > maxBytes)) { await response.body?.cancel(); fail('UPDATE_SIZE', '更新文件超过允许大小'); }
-          if (!response.body) fail('UPDATE_BODY', '更新源返回空响应');
-          const reader = response.body.getReader(), chunks = [];
-          let size = 0;
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              size += value.byteLength;
-              if (size > maxBytes) { await reader.cancel(); fail('UPDATE_SIZE', '更新文件超过允许大小'); }
-              chunks.push(Buffer.from(value));
-            }
-          } finally { reader.releaseLock(); }
-          return Buffer.concat(chunks, size);
+    let target = initial;
+    for (let redirects = 0; redirects <= 4; redirects++) {
+      const response = await bounded(fetcher(target, { signal: controller.signal, redirect: 'manual', credentials: 'omit', headers: { accept: 'application/octet-stream' } }));
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get('location');
+        await bounded(response.body?.cancel());
+        if (!location || redirects === 4) fail('UPDATE_REDIRECT', '更新源跳转次数过多或地址缺失');
+        target = new URL(location, target).href;
+        allowedRedirect(target, initial);
+        continue;
+      }
+      if (!response.ok) {
+        await bounded(response.body?.cancel());
+        throw Object.assign(new UpdateFeedError('UPDATE_HTTP', `更新源请求失败（HTTP ${response.status}）`), { httpStatus: response.status });
+      }
+      const length = response.headers.get('content-length');
+      if (length && (!/^\d+$/.test(length) || Number(length) > maxBytes)) { await bounded(response.body?.cancel()); fail('UPDATE_SIZE', '更新文件超过允许大小'); }
+      if (!response.body) fail('UPDATE_BODY', '更新源返回空响应');
+      const reader = response.body.getReader();
+      let size = 0, completed = false;
+      try {
+        while (true) {
+          const { done, value } = await bounded(reader.read());
+          if (done) { completed = true; break; }
+          size += value.byteLength;
+          if (size > maxBytes) fail('UPDATE_SIZE', '更新文件超过允许大小');
+          await consume(value);
+          if (controller.signal.aborted) throw timeout;
         }
-      })(),
-      new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new UpdateFeedError('UPDATE_TIMEOUT', '更新源响应超时，请重试或切换更新源')); }, timeoutMs); }),
-    ]);
+      } finally {
+        // Cancel stalled readers as well as oversized responses. Never wait
+        // indefinitely for an uncooperative transport during cleanup.
+        if (!completed) void reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+      return size;
+    }
   } catch (error) {
     if (error instanceof UpdateFeedError) throw error;
     throw new UpdateFeedError('UPDATE_NETWORK', '无法连接更新源，请检查网络或切换更新源', { cause: error });
   } finally { clearTimeout(timer); }
+}
+
+export async function fetchUpdateBytes(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, maxBytes = 256 * 1024, timeoutMs = 20_000 } = {}) {
+  const chunks = [];
+  const size = await consumeUpdate(url, { config, fetcher, maxBytes, timeoutMs, consume: value => { chunks.push(Buffer.from(value)); } });
+  return Buffer.concat(chunks, size);
+}
+
+/** Large signed artifacts go straight to an exclusive temporary file, never a whole-package RAM buffer. */
+export async function fetchUpdateArtifact(artifact, { file, config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, timeoutMs = 10 * 60_000 } = {}) {
+  validateArtifact(artifact, { plugin: true });
+  const handle = await open(file, 'wx', 0o600), hash = createHash('sha256');
+  let success = false;
+  try {
+    const size = await consumeUpdate(artifact.url, { config, fetcher, maxBytes: artifact.size, timeoutMs, consume: async value => {
+      try { await handle.writeFile(value); }
+      catch (cause) { throw new UpdateFeedError('UPDATE_FILE', '无法写入更新文件，请检查磁盘空间与权限', { cause }); }
+      hash.update(value);
+    } });
+    if (size !== artifact.size) fail('UPDATE_SIZE', '更新包大小与清单不一致');
+    if (hash.digest('hex') !== artifact.sha256) fail('UPDATE_HASH', '更新包完整性校验失败');
+    success = true;
+    return { file, size };
+  } finally {
+    try { await handle.close(); }
+    finally { if (!success) await rm(file, { force: true }); }
+  }
 }
 
 export async function fetchVerifiedRelease({ config = DEFAULT_UPDATE_CONFIG, publicKey, fetcher = globalThis.fetch, timeoutMs = 20_000 } = {}) {
@@ -182,10 +226,4 @@ export async function fetchVerifiedRelease({ config = DEFAULT_UPDATE_CONFIG, pub
   let manifest;
   try { manifest = JSON.parse(bytes.toString('utf8')); } catch { fail('UPDATE_MANIFEST', '更新清单不是有效 JSON'); }
   return validateReleaseManifest(manifest);
-}
-
-export function verifyArtifact(bytes, artifact) {
-  if (bytes.byteLength !== artifact.size) fail('UPDATE_SIZE', '更新包大小与清单不一致');
-  if (createHash('sha256').update(bytes).digest('hex') !== artifact.sha256) fail('UPDATE_HASH', '更新包完整性校验失败');
-  return bytes;
 }

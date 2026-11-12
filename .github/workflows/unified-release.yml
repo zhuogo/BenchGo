@@ -1,0 +1,144 @@
+name: BenchGo unified release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Unified public BenchGo release version (X.Y.Z; component versions remain independent)
+        required: true
+        type: string
+      notes:
+        description: User-facing release notes
+        required: true
+        type: string
+      publish:
+        description: Build changed components and publish the verified release (false only creates a plan)
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: benchgo-unified-release
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      plugin: ${{ steps.plan.outputs.plugin }}
+      windows: ${{ steps.plan.outputs.windows }}
+      android: ${{ steps.plan.outputs.android }}
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Require explicit release from main
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: test "$RELEASE_REF" = refs/heads/main
+      - name: Verify release planner
+        run: node --test scripts/release/release.test.mjs
+      - name: Plan only changed components against the last signed unified release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/release/plan.mjs --version "$RELEASE_VERSION" --source-sha "$GITHUB_SHA" --out artifacts/release/release-plan.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchgo-release-plan
+          overwrite: true
+          path: artifacts/release/release-plan.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Require signing configuration only for an explicit publication
+        if: inputs.publish
+        env:
+          UPDATE_KEY: ${{ secrets.BENCHGO_UPDATE_PRIVATE_KEY }}
+          NEED_ANDROID: ${{ steps.plan.outputs.android }}
+          ANDROID_KEY: ${{ secrets.BENCHGO_ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.BENCHGO_ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_ALIAS: ${{ secrets.BENCHGO_ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.BENCHGO_ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$UPDATE_KEY"
+          if [ "$NEED_ANDROID" = true ]; then
+            test -n "$ANDROID_KEY"
+            test -n "$ANDROID_STORE_PASSWORD"
+            test -n "$ANDROID_ALIAS"
+            test -n "$ANDROID_KEY_PASSWORD"
+          fi
+  plugin:
+    needs: plan
+    if: inputs.publish && needs.plan.outputs.plugin == 'true'
+    uses: ./.github/workflows/plugin-update.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.sha }}
+      release_version: ${{ inputs.version }}
+    secrets: inherit
+  windows:
+    needs: plan
+    if: inputs.publish && needs.plan.outputs.windows == 'true'
+    uses: ./.github/workflows/windows-installer.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.sha }}
+      release_version: ${{ inputs.version }}
+    secrets: inherit
+  android:
+    needs: plan
+    if: inputs.publish && needs.plan.outputs.android == 'true'
+    uses: ./.github/workflows/android-package.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.sha }}
+      release_version: ${{ inputs.version }}
+    secrets: inherit
+  publish:
+    needs: [plan, plugin, windows, android]
+    if: >-
+      always() && inputs.publish && needs.plan.result == 'success' &&
+      (needs.plugin.result == 'success' || needs.plugin.result == 'skipped') &&
+      (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
+      (needs.android.result == 'success' || needs.android.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_NOTES: ${{ inputs.notes }}
+      BENCHGO_UPDATE_PRIVATE_KEY: ${{ secrets.BENCHGO_UPDATE_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: benchgo-release-plan
+          path: artifacts/release-plan
+      - name: Download only verified component artifacts from this run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: benchgo-*
+          path: artifacts/release-builds
+          merge-multiple: false
+      - name: Verify provenance and checksums, reuse unchanged immutable assets, then sign one manifest
+        run: node scripts/release/assemble.mjs --plan artifacts/release-plan/release-plan.json --builds artifacts/release-builds --out artifacts/release-ready
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchgo-release-ready
+          overwrite: true
+          path: artifacts/release-ready/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish complete immutable release, then advance signed channels
+        run: node scripts/release/publish.mjs --plan artifacts/release-plan/release-plan.json --directory artifacts/release-ready

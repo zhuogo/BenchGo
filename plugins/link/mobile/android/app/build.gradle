@@ -17,8 +17,8 @@ android {
         applicationId 'cn.draftgo.benchgo.link'
         minSdk 26
         targetSdk 35
-        versionCode 12
-        versionName '0.1.0'
+        versionCode 13
+        versionName '0.1.1'
     }
     signingConfigs {
         release {
@@ -67,6 +67,7 @@ tasks.configureEach { task ->
 tasks.register('prepareLinkAssets') {
     inputs.dir(linkWebDir).optional()
     inputs.dir(file('../../../dist/server')).optional()
+    inputs.file(file('../../../../benchgo/shared/update-public-key.pem'))
     outputs.dir(generatedAssets)
     doLast {
         if (!new File(linkWebDir, 'index.html').isFile()) {
@@ -76,6 +77,7 @@ tasks.register('prepareLinkAssets') {
         delete(out)
         out.mkdirs()
         copy { from linkWebDir; into out }
+        copy { from file('../../../../benchgo/shared/update-public-key.pem'); into new File(out, 'updates') }
         def seed = file('../../../dist/server')
         if (!new File(seed, 'manifest.json').isFile()) throw new GradleException('Missing server seed: run node scripts/server/package-seed.mjs first')
         copy { from seed; into new File(out, 'server'); rename 'server-seed.tar.gz', 'server-seed.bundle' }

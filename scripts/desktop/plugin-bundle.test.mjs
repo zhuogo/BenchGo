@@ -15,6 +15,73 @@ function fixture(t) {
   return { root, put };
 }
 
+function dependencyFixture(t, dependencies) {
+  const result = fixture(t), { put } = result;
+  put('plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0', files: ['src', 'lib', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies });
+  put('plugin/assets/icon.svg', '<svg/>');
+  for (const file of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${file}`, 'fixture');
+  return result;
+}
+
+test('production dependencies reuse the same source through Node ancestors and reserve direct packages first', t => {
+  const { root, put } = dependencyFixture(t, { parent: '1.0.0', common: '1.0.0', other: '1.0.0' });
+  put('plugin/node_modules/parent/package.json', { name: 'parent', version: '1.0.0', dependencies: { common: '1.0.0', leaf: '1.0.0' } });
+  put('plugin/node_modules/other/package.json', { name: 'other', version: '1.0.0', dependencies: { common: '1.0.0', leaf: '1.0.0' } });
+  put('plugin/node_modules/common/package.json', { name: 'common', version: '1.0.0', dependencies: { parent: '1.0.0' } });
+  put('plugin/node_modules/leaf/package.json', { name: 'leaf', version: '1.0.0' });
+  const staged = stagePluginBundle({ plugin: join(root, 'plugin'), output: join(root, 'seed') });
+  const modules = join(staged.destination, 'node_modules');
+  assert.ok(existsSync(join(modules, 'common/package.json')));
+  assert.ok(existsSync(join(modules, 'leaf/package.json')));
+  for (const parent of ['parent', 'other']) for (const child of ['common', 'leaf']) assert.equal(existsSync(join(modules, parent, 'node_modules', child)), false);
+  assert.deepEqual(staged.dependencies, ['common', 'leaf', 'other', 'parent']);
+});
+
+test('different sources and nested shadows retain consumer-local packages even with equal versions', t => {
+  const { root, put } = dependencyFixture(t, { parent: '1.0.0', common: '1.0.0', child: '9.0.0' });
+  put('plugin/node_modules/parent/package.json', { name: 'parent', version: '1.0.0', dependencies: { common: '1.0.0', child: '1.0.0' } });
+  put('plugin/node_modules/common/package.json', { name: 'common', version: '1.0.0', identity: 'original' });
+  put('plugin/node_modules/child/package.json', { name: 'child', version: '9.0.0' });
+  put('plugin/node_modules/parent/node_modules/common/package.json', { name: 'common', version: '1.0.0', identity: 'fork' });
+  put('plugin/node_modules/parent/node_modules/child/package.json', { name: 'child', version: '1.0.0', dependencies: { common: '1.0.0' } });
+  mkdirSync(join(root, 'plugin/node_modules/parent/node_modules/child/node_modules'), { recursive: true });
+  symlinkSync(join(root, 'plugin/node_modules/common'), join(root, 'plugin/node_modules/parent/node_modules/child/node_modules/common'), 'junction');
+  const staged = stagePluginBundle({ plugin: join(root, 'plugin'), output: join(root, 'seed') });
+  const modules = join(staged.destination, 'node_modules');
+  const read = path => JSON.parse(readFileSync(join(modules, path, 'package.json')));
+  assert.equal(read('child').version, '9.0.0');
+  assert.equal(read('parent/node_modules/child').version, '1.0.0');
+  assert.equal(read('parent/node_modules/common').identity, 'fork');
+  assert.equal(read('parent/node_modules/child/node_modules/common').identity, 'original');
+});
+
+test('ops keeps only executable target runtimes, retaining Linux for Windows WSL and all licenses', t => {
+  for (const [platform, arch, kept] of [['win32', 'x64', ['win32-x64', 'linux-x64']], ['linux', 'x64', ['linux-x64']]]) {
+    const { root, put } = dependencyFixture(t, { 'dsh-ops': '0.5.0' });
+    put('plugin/node_modules/dsh-ops/package.json', { name: 'dsh-ops', version: '0.5.0' });
+    put('plugin/node_modules/dsh-ops/LICENSE', 'preserve');
+    put('plugin/node_modules/dsh-ops/runtime/NOTICE', 'preserve');
+    for (const target of ['win32-x64', 'linux-x64', 'darwin-arm64', 'darwin-x64']) put(`plugin/node_modules/dsh-ops/runtime/${target}/provenance.json`, '{}');
+    const staged = stagePluginBundle({ plugin: join(root, 'plugin'), output: join(root, 'seed'), platform, arch });
+    const ops = join(staged.destination, 'node_modules/dsh-ops');
+    assert.equal(readFileSync(join(ops, 'LICENSE'), 'utf8'), 'preserve');
+    assert.equal(readFileSync(join(ops, 'runtime/NOTICE'), 'utf8'), 'preserve');
+    for (const target of ['win32-x64', 'linux-x64', 'darwin-arm64', 'darwin-x64']) assert.equal(existsSync(join(ops, 'runtime', target)), kept.includes(target));
+  }
+});
+
+test('an unrepresentable shadowed dependency cycle fails instead of copying forever', t => {
+  const { root, put } = dependencyFixture(t, { a: '1.0.0', b: '2.0.0' });
+  put('plugin/node_modules/a/package.json', { name: 'a', version: '1.0.0', dependencies: { b: '1.0.0' } });
+  put('plugin/node_modules/b/package.json', { name: 'b', version: '2.0.0', dependencies: { a: '1.0.0' } });
+  put('plugin/node_modules/a/node_modules/b/package.json', { name: 'b', version: '1.0.0', dependencies: { a: '2.0.0' } });
+  put('plugin/node_modules/a/node_modules/b/node_modules/a/package.json', { name: 'a', version: '2.0.0', dependencies: { b: '2.0.0' } });
+  const modules = join(root, 'plugin/node_modules/a/node_modules/b/node_modules/a/node_modules');
+  mkdirSync(modules, { recursive: true }); symlinkSync(join(root, 'plugin/node_modules/b'), join(modules, 'b'), 'junction');
+  assert.throws(() => stagePluginBundle({ plugin: join(root, 'plugin'), output: join(root, 'seed') }), /cyclic dependency.*different ancestor/u);
+  assert.equal(existsSync(join(root, 'seed/node_modules/benchgo-plugin')), false);
+});
+
 test('official source closure follows pinned CLI dependencies and includes CLI itself', t => {
   const { root, put } = fixture(t);
   put('cli/package.json', { name: '@deepseek-ai/dsh', version: '0.2.2-rc.1', dependencies: { '@deepseek-ai/dsh-base': 'workspace:*' } });
@@ -53,6 +120,18 @@ test('browser platform peers are supplied by the pinned shell, including injecte
   assert.equal(assertBrowserPlatformPeer(name, '*', {}, options), false);
   put('packages/client/web/src/seed.ts', 'export const modules = {};');
   assert.throws(() => assertBrowserPlatformPeer(name, '*', metadata, options), /browser platform omits/u);
+});
+
+test('source-only releases never register shell-static browser peers as Host shared packages', t => {
+  const { root, put } = fixture(t);
+  put('plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0', files: ['src', 'lib', 'cordis.patch.yml'],
+    dsh: { bundle: { patch: './cordis.patch.yml' }, client: { platform: 'web', inject: ['@deepseek-ai/dsh-client-ui-slots'] } },
+    peerDependencies: { '@deepseek-ai/dsh-client-ui-primitives': '^0.2.2-rc.1', '@deepseek-ai/dsh-client-ui-slots': '^0.2.2-rc.1' } });
+  put('plugin/assets/icon.svg', '<svg/>');
+  for (const file of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${file}`, 'fixture');
+  const staged = stagePluginBundle({ plugin: join(root, 'plugin'), output: join(root, 'seed') });
+  assert.deepEqual(staged.shared, []);
+  assert.deepEqual(JSON.parse(readFileSync(join(staged.directory, 'release.json'))).shared, []);
 });
 
 for (const [kind, name] of [['dependencies', '@deepseek-ai/dsh-client-ui-primitives'], ['peerDependencies', '@deepseek-ai/dsh-missing']]) {

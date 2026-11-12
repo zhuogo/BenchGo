@@ -102,19 +102,20 @@
     },
     {
       "id": "publish",
-      "title": "独立发行通道",
+      "title": "统一发行与按需构建",
       "kicker": "GITHUB RELEASES",
       "kind": "finish",
-      "sub": "不可变插件版本与签名元数据分开",
-      "symbol": "plugin-v\u003cversion> · plugin-updates",
-      "plain": "先发布完整包，再发布指向它的更新清单。",
-      "role": "CI 默认只产出 artifact；显式 publish 才创建唯一插件版本 Release，并上传独立更新元数据；应用与 Android 使用各自工作流。",
+      "sub": "一个公开版本，复用没有变化的组件",
+      "symbol": "v\u003creleaseVersion> · plugin-updates · app-updates",
+      "plain": "普通 push 保存源码，显式统一发版才通知客户端。",
+      "role": "统一工作流先比较签名发行基线，按需调用功能包、Windows、Android 构建；全部验证后发布不可变资产，再推进原生及签名更新通道。默认只生成计划。",
       "input": "已签名清单、完整包、显式发布选项",
       "output": "可匿名下载的发行包与更新通道",
       "sources": [
-        ".github/workflows/plugin-update.yml",
-        ".github/workflows/publish-windows-installer.yml",
-        ".github/workflows/android-package.yml"
+        ".github/workflows/unified-release.yml",
+        "scripts/release/plan.mjs",
+        "scripts/release/assemble.mjs",
+        "scripts/release/publish.mjs"
       ],
       "note": "已有工作流不代表当前版本已发布；需从 GitHub 与默认镜像实际取回核验。",
       "state": "partial",
@@ -127,11 +128,11 @@
       "kicker": "VERIFIED FEED",
       "kind": "execution",
       "sub": "所选 HTTPS 来源 → 验签 → 兼容检查",
-      "symbol": "fetchVerifiedRelease() · verifyArtifact()",
+      "symbol": "fetchVerifiedRelease() · fetchUpdateArtifact()",
       "plain": "镜像可以换，信任的签名和摘要不能变。",
-      "role": "按所选来源取清单并先验签，再检查 schema、版本、平台与引擎；下载包检查字节数和 SHA256。",
+      "role": "按所选来源取清单并先验签，再检查 schema、版本、平台与引擎；完整包流式落盘，检查字节数与 SHA256，失败删除部分文件。",
       "input": "镜像/GitHub/自定义 HTTPS 配置、内置公钥",
-      "output": "已验证 Release 与校验后的包字节",
+      "output": "已验证 Release 与校验后的临时包文件",
       "sources": [
         "plugins/benchgo/shared/update-feed.mjs"
       ],
@@ -148,7 +149,7 @@
       "sub": "检查、下载、安装、回退统一 admission",
       "symbol": "createUpdates() · mountUpdates()",
       "plain": "更新当前连接的主机，同时避开正在执行的任务。",
-      "role": "通过 /api/commander/updates 管理状态；插件和应用分别比较。安装前检查 managed/兼容/忙碌，下载后再次检查任务，阻止并发变更。",
+      "role": "通过 /api/commander/updates 比较组件与兼容条件，返回统一 decision；用户只操作检查更新或立即更新。安装前检查 managed/兼容/忙碌，下载后再次检查任务，阻止并发变更。",
       "input": "更新动作、当前版本、profile、运行任务状态",
       "output": "真实更新状态或冲突原因",
       "sources": [
@@ -248,7 +249,7 @@
       "sub": "壳与原生能力走各自安装/更新路径",
       "symbol": "package-windows.mjs · Gradle · bootstrap",
       "plain": "插件负责业务；系统壳与原生能力需要平台包。",
-      "role": "Windows 在自有打包层注入品牌、启动页与离线种子；Android 固定 applicationId 和发行签名；服务器/中继由各自 CLI 管理。",
+      "role": "Windows 在自有打包层注入品牌、启动页与离线种子；Android 固定 applicationId 和发行签名，本机设备页验签检查后交由浏览器及系统确认安装；服务器/中继由各自 CLI 管理。",
       "input": "官方锁定引擎、自有品牌与平台源码",
       "output": "Windows 安装包、正式 APK 或服务器部署",
       "sources": [

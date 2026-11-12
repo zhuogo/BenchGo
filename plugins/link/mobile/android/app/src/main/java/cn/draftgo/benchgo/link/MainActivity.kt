@@ -374,8 +374,9 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
     @Volatile private var devicesVisible = true
     private val connectionGeneration = java.util.concurrent.atomic.AtomicLong()
     private val servers = SshServerManager(context) { identity -> store.write(identity, false) }
+    private val appUpdates = AppUpdates(context)
     private data class NativePair(val identity: Identity, val pollToken: String, val expiresAt: Long)
-    private fun capabilities() = JSONObject().put("devices", true).put("ssh", true)
+    private fun capabilities() = JSONObject().put("devices", true).put("ssh", true).put("appUpdates", true)
     fun showDevices() { connectionGeneration.incrementAndGet(); pendingIdentity = null; devicesVisible = true }
     private fun currentIdentity() = pendingIdentity ?: store.read()
     private fun canOpenAnother(id: String) = context.canOpenDevice(id)
@@ -484,6 +485,10 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
     private fun deviceAction(input: JSONObject): JSONObject {
         val targetId = input.optString("deviceId").ifBlank { input.optString("targetId") }
         return when (input.optString("action")) {
+            "appUpdateStatus" -> appUpdates.status()
+            "appUpdateConfigure" -> appUpdates.configure(input)
+            "appUpdateCheck" -> appUpdates.check()
+            "appUpdateOpen" -> appUpdates.open()
             "list" -> JSONObject().put("devices", org.json.JSONArray(listOf(localDevice()) + store.all().map {
                 it.publicJson(if (it.kind == "ssh") servers.status(it.id) else "unknown")
             })).put("activeId", store.selectedId()).put("capabilities", capabilities())
@@ -546,6 +551,7 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
     }
 
     private fun localDevice() = JSONObject().put("id", "local").put("name", store.localName()).put("kind", "local").put("deviceType", "mobile").put("status", "online")
+        .put("appVersion", BuildConfig.VERSION_NAME).put("appVersionCode", BuildConfig.VERSION_CODE)
 
     // Candidate origins come only from the authenticated pairing response. Never retry writes.
     private fun trustedRoutes(raw: org.json.JSONArray?): org.json.JSONArray? {
@@ -674,6 +680,7 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
     fun close() {
         connectionGeneration.incrementAndGet()
         servers.close()
+        appUpdates.close()
         executor.shutdownNow()
         clients.values.forEach { it.dispatcher.executorService.shutdownNow(); it.connectionPool.evictAll() }
         clients.clear()

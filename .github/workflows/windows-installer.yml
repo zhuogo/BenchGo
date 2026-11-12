@@ -1,6 +1,14 @@
 name: BenchGo Windows installer
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      release_version:
+        required: true
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -14,17 +22,22 @@ jobs:
       CI: 'true'
       DSH_TELEMETRY_DISABLED: '1'
       NODE_OPTIONS: --max-old-space-size=6144
+      SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+      RELEASE_VERSION: ${{ inputs.release_version }}
     defaults:
       run:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           submodules: recursive
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Stage unified identity without changing component versions
+        run: node scripts/release/stage.mjs --source-sha "$env:SOURCE_SHA" --release-version "$env:RELEASE_VERSION"
       - name: Prepare package manager
         run: |
           # Hosted Windows images include Yarn shims; let Corepack replace them.
@@ -47,25 +60,12 @@ jobs:
         run: npm run package:plus:win
       - name: Verify plugin enrollment and legacy shadow migration
         run: node --test scripts/desktop/plugin-bundle.test.mjs plugins/benchgo/test/plugin-install.test.mjs
-      - name: Download previous installer for in-place upgrade verification
+      - name: Download previous signed installer for in-place upgrade verification
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = (Get-Content package.json | ConvertFrom-Json).version
-          $tags = @(gh release list --repo $env:GITHUB_REPOSITORY --limit 200 --json tagName --jq '.[].tagName' | Where-Object { $_ -ne "v$version" -and $_ -match '^v\d+\.\d+\.\d+$' })
-          if ($tags.Count -eq 0) {
-            'No previous application release; skipping in-place upgrade verification.'
-          } else {
-          $previousTag = @($tags | Sort-Object { [version]($_.Substring(1)) })[-1]
-            $previousVersion = $previousTag.Substring(1)
-            gh release download $previousTag --repo $env:GITHUB_REPOSITORY --pattern "benchgo-$previousVersion-win-x64-setup.exe" --dir previous
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            gh release download $previousTag --repo $env:GITHUB_REPOSITORY --pattern 'SHA256SUMS.txt' --dir previous
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            $previous = Join-Path $PWD "previous/benchgo-$previousVersion-win-x64-setup.exe"
-            $expected = Get-Content previous/SHA256SUMS.txt | Where-Object { $_ -match "  benchgo-$previousVersion-win-x64-setup.exe$" }
-            if (-not $expected -or ($expected -split '\s+')[0] -ne (Get-FileHash $previous -Algorithm SHA256).Hash.ToLowerInvariant()) { throw 'Previous installer checksum mismatch' }
-          }
+          node scripts/release/download-previous-installer.mjs
+          exit $LASTEXITCODE
       - name: Verify fresh install, legacy plugin repair and in-place upgrade
         run: |
           $previous = Get-ChildItem previous/*-win-x64-setup.exe -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -91,16 +91,20 @@ jobs:
           await writeFile(`${directory}/build-source.json`, JSON.stringify({ schemaVersion: 1, sourceSha: process.env.GITHUB_SHA, version: app.version, artifact, verified, files }, null, 2) + '\n');
           '@ | node --input-type=module
           exit $LASTEXITCODE
+      - name: Bind completed verification to immutable source
+        run: node scripts/release/record-artifact.mjs --component windows --directory artifacts/windows --source-sha "$env:SOURCE_SHA" --release-version "$env:RELEASE_VERSION" --verified packaged-runtime,fresh-install,legacy-plugin-shadow-repair,actual-plugin-resolution
       - name: Retain installer
         if: ${{ always() && hashFiles('artifacts/windows/*-win-x64-setup.exe') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: benchgo-windows-x64
+          overwrite: true
           path: |
             artifacts/windows/*.exe
             artifacts/windows/*.blockmap
             artifacts/windows/latest.yml
             artifacts/windows/build-source.json
+            artifacts/windows/component-source.json
           if-no-files-found: error
           retention-days: 14
       - name: Retain diagnostics
@@ -108,6 +112,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: benchgo-windows-diagnostics
+          overwrite: true
           include-hidden-files: true
           path: |
             deepseek-harness/apps/desktop/.desktop-build/packaging-runs/

@@ -1,9 +1,6 @@
 name: Publish BenchGo CLI packages
 
 on:
-  push:
-    tags:
-      - 'benchgo-v*'
   workflow_dispatch:
     inputs:
       package:
@@ -28,7 +25,7 @@ jobs:
       DSH_TELEMETRY_DISABLED: '1'
     strategy:
       matrix:
-        package: ${{ github.event_name == 'workflow_dispatch' && fromJSON(format('["{0}"]', inputs.package)) || fromJSON('["packages/benchgo-cli","packages/benchgo-relay","plugins/benchgo"]') }}
+        package: ${{ fromJSON(format('["{0}"]', inputs.package)) }}
     steps:
       - uses: actions/checkout@v4
         with:

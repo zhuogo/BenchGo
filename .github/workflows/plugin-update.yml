@@ -1,86 +1,66 @@
-name: BenchGo plugin update
+name: BenchGo plugin package
 on:
   workflow_dispatch:
+  workflow_call:
     inputs:
-      publish:
-        description: Publish a new signed plugin release (requires a unique plugin version)
-        type: boolean
+      source_sha:
         required: true
-        default: false
+        type: string
+      release_version:
+        required: true
+        type: string
 permissions:
   contents: read
-concurrency:
-  group: benchgo-plugin-release
-  cancel-in-progress: false
 jobs:
   package:
     runs-on: windows-2022
     timeout-minutes: 45
-    permissions:
-      contents: write
     env:
       CI: 'true'
       DSH_TELEMETRY_DISABLED: '1'
+      SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+      RELEASE_VERSION: ${{ inputs.release_version }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           submodules: recursive
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Stage unified identity without changing component versions
+        run: node scripts/release/stage.mjs --source-sha "$SOURCE_SHA" --release-version "$RELEASE_VERSION"
       - name: Prepare package manager
         run: |
-          # Hosted Windows images include Yarn shims; let Corepack replace them.
+          set -euo pipefail
           npm install --global --force corepack@0.34.0
           corepack enable
           git config --global core.longpaths true
       - name: Install locked dependencies
         run: |
+          set -euo pipefail
           npm run setup
           npm ci --prefix plugins/link
           npm ci --prefix plugins/benchgo
-      - name: Verify update feed and build plugins
+      - name: Verify update contract and build plugin
         run: |
+          set -euo pipefail
           node --test plugins/benchgo/test/update-feed.test.mjs
           npm run build:plus
-      - name: Create plugin archive
+          node --import ./scripts/source-loader.mjs --test plugins/benchgo/test/package-layout.test.mjs
+          node --test scripts/desktop/plugin-bundle.test.mjs
+      - name: Create complete plugin archive
         run: node scripts/desktop/package-plugin-update.mjs --out artifacts/plugins
-      - name: Sign update manifest
-        env:
-          BENCHGO_UPDATE_PRIVATE_KEY: ${{ secrets.BENCHGO_UPDATE_PRIVATE_KEY }}
-        run: |
-          app_feed_args=()
-          if curl -fL --max-time 30 --max-filesize 262144 'https://github.com/zhuogo/BenchGo/releases/download/app-updates/latest.yml' -o app-feed.json; then
-            app_feed_args=(--app-feed app-feed.json)
-          fi
-          node scripts/desktop/create-update-manifest.mjs --out artifacts/plugins "${app_feed_args[@]}"
-      - name: Retain signed update package
-        uses: actions/upload-artifact@v4
+      - name: Bind completed verification to immutable source
+        run: node scripts/release/record-artifact.mjs --component plugin --directory artifacts/plugins --source-sha "$SOURCE_SHA" --release-version "$RELEASE_VERSION" --verified update-feed,plugin-entry-closure,production-dependency-closure
+      - uses: actions/upload-artifact@v4
         with:
           name: benchgo-plugin-update
+          overwrite: true
           path: artifacts/plugins/*
           if-no-files-found: error
           retention-days: 14
-      - name: Publish unique plugin version
-        if: inputs.publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          version=$(node -p "JSON.parse(require('fs').readFileSync('plugins/benchgo/package.json','utf8')).version")
-          tag="plugin-v${version}"
-          tags=$(git ls-remote --tags origin "refs/tags/${tag}")
-          if [ -n "$tags" ]; then
-            echo "Version ${version} already exists; increment the plugin version before publishing."
-            exit 1
-          fi
-          gh release create "$tag" artifacts/plugins/* --target "$GITHUB_SHA" --title "BenchGo plugin ${version}" --notes "Signed plugin update for the compatible Harness engine. Existing tasks and settings are preserved." --latest=false
-          if ! gh release view plugin-updates --json tagName > /dev/null 2>&1; then
-            gh release create plugin-updates --target "$GITHUB_SHA" --title "BenchGo plugin update channel" --notes "Signed metadata for the current compatible plugin release." --latest=false
-          fi
-          gh release upload plugin-updates artifacts/plugins/benchgo-update.json artifacts/plugins/benchgo-update.json.sig --clobber

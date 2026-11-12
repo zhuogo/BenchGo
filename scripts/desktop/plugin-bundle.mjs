@@ -106,6 +106,10 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
   const shared = new Map();
   const copied = new Set();
   const omitted = new Set();
+  // Reserve every direct dependency before traversing children. Identity is the
+  // resolved source directory, never just name/version; nested forks stay apart.
+  const placements = new Map(), pendingDependencies = [];
+  const sourceLineages = new Map([[destination, new Set([realpathSync(plugin)])]]);
   let sourcePackages;
   const assertShared = (name, spec) => {
     if (!runtime) sourcePackages ??= officialSourcePackages();
@@ -117,7 +121,7 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
     if (!semver.satisfies(version, spec, { includePrerelease: true })) throw new Error(`Plus bundle: ${name}@${version} does not satisfy ${spec}`);
     shared.set(name, version);
   };
-  function dependencies(source, target, ancestors = new Set()) {
+  function dependencies(source, target) {
     const metadata = readJson(join(source, 'package.json'));
     const optional = metadata.optionalDependencies ?? {};
     for (const [name, spec] of Object.entries({ ...metadata.dependencies, ...optional })) {
@@ -133,22 +137,42 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
         if (!Object.hasOwn(optional, name)) throw new Error(`Plus bundle: ${name} is unavailable for ${platform}-${arch}`);
         omitted.add(name); continue;
       }
-      if (ancestors.has(dependency)) continue;
-      const output = join(target, 'node_modules', name);
+      let nearest;
+      for (let parent = target; ; parent = dirname(parent)) {
+        const candidate = join(parent, 'node_modules', name);
+        if (placements.has(candidate)) { nearest = placements.get(candidate); break; }
+        if (parent === destination) break;
+      }
+      if (nearest?.source === dependency) continue;
+      // A different nearest ancestor shadows any higher copy. Keep this edge
+      // consumer-local; otherwise a free root slot can safely be hoisted.
+      const container = nearest ? target : destination;
+      const output = join(container, 'node_modules', name);
+      if (placements.has(output)) throw new Error(`Plus bundle: conflicting dependency placement ${name}`);
+      const lineage = sourceLineages.get(container);
+      if (lineage.has(dependency)) throw new Error(`Plus bundle: cyclic dependency ${name} is blocked by a different ancestor source`);
+      placements.set(output, { source: dependency });
+      sourceLineages.set(output, new Set([...lineage, dependency]));
       mkdirSync(dirname(output), { recursive: true });
       cpSync(dependency, output, { recursive: true, dereference: true, filter: path => {
         if (path === dependency) return true;
         const relative = path.slice(dependency.length + 1);
         if (name === 'ssh2' && (relative === join('lib', 'protocol', 'crypto', 'build') || relative.startsWith(join('lib', 'protocol', 'crypto', 'build') + sep))) return false;
+        if (name === 'dsh-ops') {
+          const [directory, target] = relative.split(/[\\/]/u);
+          // Windows' optional WSL read backend also executes the Linux worker.
+          const targets = platform === 'win32' && arch === 'x64' ? ['win32-x64', 'linux-x64'] : [`${platform}-${arch}`];
+          if (directory === 'runtime' && /^(?:win32|linux|darwin)-(?:x64|arm64)$/.test(target ?? '') && !targets.includes(target)) return false;
+        }
         return !relative.split(/[\\/]/u).includes('node_modules') && !/\.(?:[cm]?[jt]s|css)\.map$|\.tsbuildinfo$/u.test(relative);
       } });
       copied.add(name);
-      dependencies(dependency, output, new Set([...ancestors, dependency]));
+      pendingDependencies.push({ source: dependency, target: output });
     }
     for (const [name, spec] of Object.entries(metadata.peerDependencies ?? {})) {
       if (sharedPackage(name) && !metadata.peerDependenciesMeta?.[name]?.optional) {
-        // Source-only seeds retain their existing closure. Desktop Host omits shell-static client modules.
-        if (runtime && assertBrowserPlatformPeer(name, spec, metadata)) continue;
+        // Source and runtime builds share Host services; shell-static client peers are never Host links.
+        if (assertBrowserPlatformPeer(name, spec, metadata)) continue;
         assertShared(name, spec);
       }
     }
@@ -160,7 +184,11 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
       mkdirSync(dirname(join(destination, file)), { recursive: true });
       copyFileSync(join(plugin, file), join(destination, file));
     }
-    dependencies(plugin, destination, new Set([plugin]));
+    dependencies(plugin, destination);
+    for (let index = 0; index < pendingDependencies.length; index++) {
+      const dependency = pendingDependencies[index];
+      dependencies(dependency.source, dependency.target);
+    }
     // The official resolver excludes the selected bundle itself. An immutable wrapper carries
     // BenchGo as a dependency, so Host inventory and client injection both resolve it.
     mkdirSync(composition, { recursive: true });

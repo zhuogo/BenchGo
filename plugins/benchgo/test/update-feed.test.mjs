@@ -7,7 +7,7 @@ import path from 'node:path';
 import {
   DEFAULT_UPDATE_CONFIG, normalizeUpdateConfig, releaseDownloadUrl, resolveUpdateUrl,
   fetchVerifiedRelease, fetchUpdateBytes, validateReleaseManifest, compareVersions,
-  isNewerVersion, isEngineCompatible, verifyArtifact,
+  isNewerVersion, isEngineCompatible, MAX_PLUGIN_BYTES, fetchUpdateArtifact,
 } from '../shared/update-feed.mjs';
 import { createUpdateManifest } from '../../../scripts/desktop/create-update-manifest.mjs';
 
@@ -105,11 +105,34 @@ test('network failures retain source and bound metadata length, timeout and redi
   assert.equal(bytes.toString(), 'ok');
 });
 
-test('plugin bytes must match signed size and SHA256', () => {
-  assert.equal(verifyArtifact(artifact, manifest().plugin), artifact);
-  assert.throws(() => verifyArtifact(Buffer.from('short'), manifest().plugin), { code: 'UPDATE_SIZE' });
-  const corrupt = Buffer.from(artifact); corrupt[0] ^= 1;
-  assert.throws(() => verifyArtifact(corrupt, manifest().plugin), { code: 'UPDATE_HASH' });
+test('plugin downloads stream into a new file and verify signed size and hash before returning', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'benchgo-stream-update-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'plugin.tar.gz');
+  const payload = manifest().plugin;
+  const chunks = [artifact.subarray(0, 4), artifact.subarray(4, 12), artifact.subarray(12)];
+  const fetcher = async () => new Response(new ReadableStream({ start(controller) { for (const chunk of chunks) controller.enqueue(chunk); controller.close(); } }));
+  const result = await fetchUpdateArtifact(payload, { file, fetcher });
+  assert.equal(result.size, artifact.length);
+  assert.deepEqual(await readFile(file), artifact);
+  await assert.rejects(fetchUpdateArtifact(payload, { file, fetcher }), { code: 'EEXIST' });
+  assert.deepEqual(await readFile(file), artifact, 'an existing download is never overwritten');
+});
+
+test('failed, oversized, corrupt or stalled streamed downloads remove partial files', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'benchgo-stream-failure-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const [index, code, fetcher] of [
+    [0, 'UPDATE_HASH', async () => new Response(Buffer.alloc(artifact.length))],
+    [1, 'UPDATE_SIZE', async () => new Response('short')],
+    [2, 'UPDATE_SIZE', async () => new Response(Buffer.alloc(artifact.length + 1))],
+    [3, 'UPDATE_TIMEOUT', async () => new Response(new ReadableStream({ start(controller) { controller.enqueue(artifact.subarray(0, 2)); } }))],
+    [4, 'UPDATE_TIMEOUT', () => new Promise(() => {})],
+  ]) {
+    const file = path.join(directory, `plugin-${index}.tar.gz`);
+    await assert.rejects(fetchUpdateArtifact(manifest().plugin, { file, fetcher, timeoutMs: 25 }), { code });
+    await assert.rejects(readFile(file), { code: 'ENOENT' });
+  }
 });
 
 test('release generator signs exact output and rejects a mismatched publishing key', async () => {
@@ -135,4 +158,51 @@ test('missing metadata is a channel readiness state; missing signatures and miss
   await assert.rejects(fetchVerifiedRelease({ publicKey, fetcher: url => url.endsWith('.sig') ? new Response(null, { status: 404 }) : valid(url) }), { code: 'UPDATE_HTTP', httpStatus: 404 });
   await assert.rejects(fetchVerifiedRelease({ publicKey, fetcher: async () => new Response(null, { status: 403 }) }), { code: 'UPDATE_HTTP', httpStatus: 403 });
   await assert.rejects(fetchUpdateBytes(manifest().plugin.url, { fetcher: async () => new Response(null, { status: 404 }) }), { code: 'UPDATE_HTTP', httpStatus: 404 });
+});
+
+test('schema one accepts signed release identity, optional desktop minimum and complete Android metadata', async () => {
+  const data = { ...manifest(), releaseVersion: '0.5.0', minAppVersion: '0.4.0', android: {
+    version: '0.5.0', versionCode: 15, url: releaseDownloadUrl('benchgo-0.5.0-android.apk', 'v0.5.0'), sha256: 'a'.repeat(64), size: 300000000,
+  } };
+  assert.deepEqual(await fetchVerifiedRelease({ publicKey, fetcher: feed(data) }), data);
+  const independent = structuredClone(data); independent.android.url = releaseDownloadUrl('benchgo-0.5.0-android.apk', 'v0.7.0');
+  assert.deepEqual(await fetchVerifiedRelease({ publicKey, fetcher: feed(independent) }), independent);
+  assert.equal(validateReleaseManifest(manifest()).minAppVersion, undefined);
+  for (const mutate of [
+    value => { value.releaseVersion = 'latest'; }, value => { value.minAppVersion = 'v0.4.0'; },
+    value => { delete value.android.sha256; }, value => { delete value.android.size; },
+    value => { value.android.versionCode = 0; }, value => { value.android.versionCode = 2147483648; },
+    value => { value.android.versionCode = 1.2; }, value => { value.android.url = releaseDownloadUrl('payload.exe', 'v0.5.0'); },
+    value => { value.android.url = releaseDownloadUrl('other.apk', 'v0.5.0'); }, value => { value.android.size = 1024 * 1024 * 1024 + 1; },
+    value => { value.android.url = releaseDownloadUrl('benchgo-0.5.0-android.apk', 'app-updates'); },
+    value => { value.android.url = 'https://evil.example/app.apk'; },
+  ]) {
+    const invalid = structuredClone(data); mutate(invalid);
+    await assert.rejects(fetchVerifiedRelease({ publicKey, fetcher: feed(invalid) }));
+  }
+  assert.equal(MAX_PLUGIN_BYTES, 512 * 1024 * 1024);
+  const fullSize = manifest(); fullSize.plugin.size = MAX_PLUGIN_BYTES;
+  assert.equal(validateReleaseManifest(fullSize).plugin.size, MAX_PLUGIN_BYTES);
+  const oversize = manifest(); oversize.plugin.size = MAX_PLUGIN_BYTES + 1;
+  assert.throws(() => validateReleaseManifest(oversize), { code: 'UPDATE_MANIFEST' });
+});
+
+test('release generator signs unified and native metadata without inventing an application minimum', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'benchgo-unified-feed-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const pluginPath = path.join(dir, 'benchgo-0.1.2-plugin.tar.gz'); await writeFile(pluginPath, artifact);
+  const options = { pluginPath, outDir: dir, version: '0.1.2', engineVersion: '0.2.1-alpha.3', privateKey: privatePem, publicKey,
+    releaseVersion: '0.5.0', android: { version: '0.5.0', versionCode: 15, url: releaseDownloadUrl('benchgo-0.5.0-android.apk', 'v0.5.0'), sha256: 'b'.repeat(64), size: 100 } };
+  const data = await createUpdateManifest(options);
+  assert.equal(data.minAppVersion, undefined); assert.equal(data.releaseVersion, '0.5.0');
+  const bytes = await readFile(path.join(dir, 'benchgo-update.json')), signature = await readFile(path.join(dir, 'benchgo-update.json.sig'));
+  assert.deepEqual(await fetchVerifiedRelease({ publicKey, fetcher: async url => new Response(url.endsWith('.sig') ? signature : bytes) }), data);
+  assert.equal((await createUpdateManifest({ ...options, minAppVersion: '0.4.0' })).minAppVersion, '0.4.0');
+  const reused = await createUpdateManifest({ outDir: dir, plugin: manifest().plugin, engine: manifest().engine,
+    releaseVersion: '0.6.0', sourceSha: 'c'.repeat(40), privateKey: privatePem, publicKey });
+  assert.deepEqual(reused.plugin, manifest().plugin); assert.deepEqual(reused.engine, manifest().engine);
+  assert.equal(reused.sourceSha, 'c'.repeat(40)); assert.equal(reused.version, '0.1.2');
+  await assert.rejects(createUpdateManifest({ ...options, plugin: manifest().plugin }), /不能同时指定/);
+  await assert.rejects(createUpdateManifest({ outDir: dir, plugin: manifest().plugin, engine: manifest().engine,
+    sourceSha: 'bad', privateKey: privatePem, publicKey }), /源码提交/);
 });

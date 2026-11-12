@@ -1,29 +1,28 @@
 name: BenchGo Android package
 on:
   workflow_dispatch:
+  workflow_call:
     inputs:
-      release_tag:
-        description: Existing release tag to receive the APK
+      source_sha:
         required: true
-        default: v0.0.1
-      publish:
-        description: Publish the verified signed release APK
-        type: boolean
+        type: string
+      release_version:
         required: true
-        default: false
+        type: string
 permissions:
   contents: read
 jobs:
   package:
-    permissions:
-      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       CI: 'true'
+      SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+      RELEASE_VERSION: ${{ inputs.release_version }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           submodules: recursive
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -37,6 +36,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Stage unified identity without changing component versions
+        run: node scripts/release/stage.mjs --source-sha "$SOURCE_SHA" --release-version "$RELEASE_VERSION"
       - name: Prepare official package manager
         run: |
           npm install --global --force corepack@0.34.0
@@ -66,29 +67,18 @@ jobs:
           cp plugins/link/mobile/android/app/build/outputs/apk/release/app-release.apk "$apk"
           sha256sum "$apk" > "$apk.sha256"
           echo "ANDROID_ARTIFACT=$apk" >> "$GITHUB_ENV"
+      - name: Verify native update signatures, versions and download integrity
+        working-directory: plugins/link/mobile/android
+        run: ./gradlew testDebugUnitTest --no-daemon
+      - name: Bind completed verification to immutable source
+        run: node scripts/release/record-artifact.mjs --component android --directory . --source-sha "$SOURCE_SHA" --release-version "$RELEASE_VERSION" --verified android-release-signature,android-current-resources,android-non-debuggable,android-update-signature-tests
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ANDROID_ARTIFACT }}
+          overwrite: true
           path: |
             benchgo-*-android.apk
             benchgo-*-android.apk.sha256
+            component-source.json
           if-no-files-found: error
           retention-days: 14
-      - name: Publish verified Android APK
-        if: inputs.publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
-          test "$RELEASE_TAG" = "v$version"
-          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "BenchGo $version" --notes "BenchGo 正式应用，包含 BenchGo 插件、多设备连接与工具环境自动准备。Android 使用持久发行密钥签名。旧 debug 验收包首次迁移需卸载，后续正式版本可直接升级。" --latest=false
-          fi
-          # Resolve annotated and lightweight tags to the actual build commit.
-          tag_sha=$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq .sha)
-          test "$tag_sha" = "$GITHUB_SHA"
-          gh release upload "$RELEASE_TAG" "benchgo-$version-android.apk" "benchgo-$version-android.apk.sha256" --clobber
