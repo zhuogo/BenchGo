@@ -93,8 +93,8 @@ test('Chinese search rereads Markdown, verifies phrases and correction excludes 
   assert.equal((await store.memory.search({ query: '多任务并行' })).length, 0);
   const oldEvidence = { role: 'user', sessionId: 's', messageId: 'old' };
   assert.equal((await store.memory.propose({ content: '项目可以并行任务', source: oldEvidence }, { verifiedSource: oldEvidence })).status, 'excluded');
-  const doc = await store.documents.read('MEMORY.md');
-  await store.documents.update('MEMORY.md', { expectedHash: doc.hash, content: doc.content + '\n用户手工补充了跨平台路径约定\n' });
+  const doc = await store.documents.read(first.document);
+  await store.documents.update(first.document, { expectedHash: doc.hash, content: doc.content + '\n用户手工补充了跨平台路径约定\n' });
   assert.match((await store.memory.search({ query: '跨平台' }))[0].content, /跨平台路径/);
 });
 
@@ -240,9 +240,10 @@ test('invalid UTF-8 and damaged memory metadata are reported without recreating 
   assert.deepEqual(await readFile(path), bytes);
   await writeFile(path, '恢复的风格');
   const body = '<!-- benchgo-memory {"id":"damaged"} -->\n不要丢失这段人工内容\n<!-- /benchgo-memory -->';
-  await writeFile(join(store.paths.directory, 'MEMORY.md'), body);
+  const daily = 'memory/2026-11-13.md';
+  await store.documents.write(daily, { content: body });
   await assert.rejects(store.listMemories(), error => error.code === 'MEMORY_PARSE_ERROR');
-  assert.equal(await readFile(join(store.paths.directory, 'MEMORY.md'), 'utf8'), body);
+  assert.equal(await readFile(join(store.paths.directory, daily), 'utf8'), body);
 });
 
 test('concurrent automatic learning across stores creates one durable memory', async t => {
@@ -270,7 +271,7 @@ test('manual source excerpts use current input and corrections retain ID and ver
   assert.deepEqual(third.supersedes, { id: first.id, revision: 2, updatedAt: second.updatedAt });
   assert.deepEqual(third.versionChain.map(row => row.revision), [1, 2]);
   assert.ok(third.versionChain.every(row => row.id === first.id && !('content' in row)));
-  assert.ok((await store.documents.versions('MEMORY.md')).some(row => row.content.includes('第二次手工输入')));
+  assert.ok((await store.documents.versions(first.document)).some(row => row.content.includes('第二次手工输入')));
 });
 
 test('model projections strip HTML comments without changing stored or frozen originals', async t => {
@@ -285,7 +286,7 @@ test('model projections strip HTML comments without changing stored or frozen or
   assert.equal(projected.userProfile, '用户');
   assert.equal(projected.assistantIdentity, '身份');
   assert.ok(projected.documents.every(row => !row.content.includes('<!--')));
-  assert.match((await store.documents.read('MEMORY.md')).content, /benchgo-memory/u);
+  assert.match((await store.documents.read(entry.document)).content, /benchgo-memory/u);
   assert.deepEqual(await store.getSessionContext('projection'), before);
 });
 

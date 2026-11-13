@@ -57,15 +57,16 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   await ctx.plugin(SessionQuery.default || SessionQuery, { path: ':memory:', openAt: 'first-search' });
   const tokenRequire = createRequire(new URL('../../../deepseek-harness/packages/llm/token-meter/package.json', import.meta.url));
   await ctx.plugin((await import(pathToFileURL(tokenRequire.resolve('@deepseek-ai/dsh-token-meter')).href)).default);
-  let duringStream;
+  let duringStream, maintenanceReply;
   const modelRequests = [];
   class Adapter extends LlmAdapter {
     async resolveModel(provider, id) { return { provider, id, name: id, context: { contextWindow: 131072 } }; }
     async *stream(request) {
       modelRequests.push(request);
       const callback = duringStream; duringStream = undefined; if (callback) await callback();
-      yield { type: 'block-start', index: 0, blockType: 'text' }; yield { type: 'text-delta', index: 0, text: 'Mounted reply' };
-      yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Mounted reply' } }; yield { type: 'finish', reason: { kind: 'stop' } };
+      const text = maintenanceReply?.(request) ?? 'Mounted reply';
+      yield { type: 'block-start', index: 0, blockType: 'text' }; yield { type: 'text-delta', index: 0, text };
+      yield { type: 'block-end', index: 0, block: { type: 'text', text } }; yield { type: 'finish', reason: { kind: 'stop' } };
     }
   }
   ctx.llm.registerAdapter(['mounted'], new Adapter());
@@ -116,6 +117,13 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.ok(assistantInject.includes('benchgoSettings'), 'the scoped plugin must receive the real settings manager');
   let appFiber;
   let mountTimer;
+  // Capture the existing review scheduler callback so this integration can
+  // drive its real tick deterministically without waiting thirty seconds.
+  const reviewTicks = [], nativeSetInterval = globalThis.setInterval;
+  const intervalHook = t.mock.method(globalThis, 'setInterval', (callback, delay, ...args) => {
+    if (delay === 30_000 && callback.name === 'tick') reviewTicks.push(callback);
+    return nativeSetInterval(callback, delay, ...args);
+  });
   const app = await new Promise((resolve, reject) => {
     mountTimer = setTimeout(() => reject(new Error('SuperAgent fixture mount timed out after 15s; missing dependencies: ' + assistantInject.filter(name => !['benchgo', 'commander', 'settings'].includes(name) && !ctx.get(name)).join(', '))), 15_000);
     // BenchGo/Commander/settings are supplied directly by this fixture; all
@@ -124,6 +132,8 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
       mountAssistant(child, commander, providers).then(resolve, reject);
     });
   }).finally(() => clearTimeout(mountTimer));
+  intervalHook.mock.restore();
+  assert.equal(reviewTicks.length, 1, 'the mounted service installs one shared review scheduler');
   const ownerPeer = { principal: { kind: 'owner' } };
   const call = async (input, ...peers) => {
     // Official exact Fetch routes expose the authenticated peer through the
@@ -714,6 +724,71 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   sharedVoice.value.readAloud = false;
   response = await speech.fetch(new Request('http://localhost/speech', { method: 'POST', body: JSON.stringify({ text: 'Hello' }), headers: { 'content-type': 'application/json' } }));
   assert.equal(response.status, 503); assert.equal((await response.json()).code, 'VOICE_UNAVAILABLE');
+  await t.test('real Router references feed background memory and alignment back into the next Router context', async () => {
+    const preference = '长期偏好使用中文先给结论，并附实际核验结果（SERVICE_MAINTENANCE_PREF）。';
+    const alignmentText = 'SERVICE_MAINTENANCE_ALIGNMENT：默认用中文先给结论，明确写出实际核验结果。';
+    const textOf = message => (message.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
+    const maintenanceRequests = [];
+    maintenanceReply = request => {
+      if (!['superagent-memory-upkeep', 'superagent-dreaming'].includes(request.purpose)) return undefined;
+      maintenanceRequests.push(request);
+      const material = JSON.parse(textOf(request.messages.at(-1)));
+      if (request.purpose === 'superagent-memory-upkeep') {
+        const source = material.find(row => row.messageId && row.text?.includes('SERVICE_MAINTENANCE_PREF'));
+        assert.ok(source, 'the real official-history source reader supplies the Router user text');
+        return JSON.stringify({ memories: [{ content: preference, category: 'opinions', sourceMessageId: source.messageId }], skills: [] });
+      }
+      const source = material.find(row => row.kind === 'user' && row.text.includes('SERVICE_MAINTENANCE_PREF'));
+      assert.ok(source, 'dreaming receives the same trusted conversation references');
+      return JSON.stringify({ reflections: [], alignment: [{ content: alignmentText, sourceIds: [source.id] }] });
+    };
+    try {
+      const sent = await call({ action: 'send', text: '/learn 我长期偏好使用中文先给结论，并附实际核验结果。记忆识别标记：SERVICE_MAINTENANCE_PREF。', requestId: 'service-maintenance-learning' });
+      assert.equal(sent.status, 200, await sent.clone().text());
+      await agent.whenIdle();
+      const original = agent.session.snapshotEvents().find(event => event.type === 'user/message' && event.data?.source?.requestId === 'service-maintenance-learning');
+      assert.ok(original?.data.id);
+      const queued = app.store.review.list({ status: 'pending' }).find(item => item.payload.requestEventId === original.data.id);
+      assert.equal(queued?.kind, 'learning');
+      assert.equal(queued.payload.trigger, 'explicit');
+      const chatIdentity = state => ({ mainSessionId: state.mainSessionId, threads: state.threads,
+        sessionLineage: state.sessionLineage, requestIds: state.requests.map(row => row.requestId).sort() });
+      const before = { sessions: (await ctx.sessionQuery.listSessions()).map(row => row.header.id).sort(),
+        chats: chatIdentity(await app.store.getState()), tickets: app.store.orchestration.listTickets().map(row => row.id).sort(),
+        transcript: agent.session.snapshotEvents().length };
+      const memoryRun = await reviewTicks[0]();
+      assert.equal(memoryRun.completed, 1, JSON.stringify(memoryRun));
+      assert.equal(app.store.review.get(queued.id).status, 'completed');
+      const [learned] = await app.store.memory.search({ query: 'SERVICE_MAINTENANCE_PREF' });
+      assert.equal(learned?.content, preference);
+      assert.equal(learned.source.role, 'user');
+      assert.equal(learned.source.sessionId, agent.id);
+      assert.equal(learned.source.messageId, original.data.id);
+      const dreaming = app.store.review.enqueue({ kind: 'maintenance', payload: { task: 'dreaming', trigger: 'explicit' }, idempotencyKey: 'service-maintenance-dreaming' });
+      const dreamingRun = await reviewTicks[0]();
+      assert.equal(dreamingRun.completed, 1, JSON.stringify(dreamingRun));
+      assert.equal(app.store.review.get(dreaming.id).status, 'completed');
+      const alignment = await app.store.memory.readDocument('dreams/alignment/ALIGNMENT_SYNTHESIS.md');
+      assert.match(alignment.content, /SERVICE_MAINTENANCE_ALIGNMENT/);
+      assert.match(alignment.content, new RegExp(original.data.id));
+      assert.deepEqual((await ctx.sessionQuery.listSessions()).map(row => row.header.id).sort(), before.sessions, 'maintenance creates no official session');
+      assert.deepEqual(chatIdentity(await app.store.getState()), before.chats, 'maintenance creates no chat, side chat or Router request');
+      assert.deepEqual(app.store.orchestration.listTickets().map(row => row.id).sort(), before.tickets, 'maintenance creates no Ticket');
+      assert.equal(agent.session.snapshotEvents().length, before.transcript, 'background execution never takes a Router turn');
+      assert.equal(maintenanceRequests.length, 2);
+      assert.ok(maintenanceRequests.every(request => request.tools.length === 0));
+      const next = await call({ action: 'send', text: '请按我的长期中文回复偏好，说明一次核验结论。', requestId: 'service-maintenance-next-context' });
+      assert.equal(next.status, 200, await next.clone().text());
+      await agent.whenIdle();
+      const request = modelRequests.at(-1);
+      // Official Harness emits dynamic context as a user-role runtime snapshot,
+      // separate from the static system prompt and original conversation text.
+      const currentContext = request.messages.map(textOf).findLast(text => text.startsWith('Current runtime context.'));
+      assert.ok(currentContext?.includes(preference), 'the next real Router runtime context selects the learned preference');
+      assert.match(currentContext, /dreams\/alignment\/ALIGNMENT_SYNTHESIS\.md/);
+      assert.match(currentContext, /SERVICE_MAINTENANCE_ALIGNMENT/, 'the next real Router request refreshes derived alignment');
+    } finally { maintenanceReply = undefined; }
+  });
   assert.equal(commander.listenerCount('event'), 0);
   const beforeSettingsRemount = await settingsRead();
   await appFiber.dispose();

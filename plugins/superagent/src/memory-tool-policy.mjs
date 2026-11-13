@@ -4,7 +4,7 @@ export function isLongTermMemoryWrite(name, args = {}) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) return ['assistant_memory', 'assistant_profile', 'assistant_review', 'assistant_learn'].includes(name);
   if (name === 'assistant_memory') return !!args.remove || Object.hasOwn(args, 'content');
   if (name === 'assistant_profile') return ['update', 'restore'].includes(args.op);
-  if (name === 'assistant_review') return args.op === 'enqueue';
+  if (name === 'assistant_review') return ['enqueue', 'skill-feedback', 'dismiss-idea'].includes(args.op);
   return name === 'assistant_learn';
 }
 

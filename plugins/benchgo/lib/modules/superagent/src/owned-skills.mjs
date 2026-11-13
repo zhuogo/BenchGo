@@ -2,8 +2,6 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { installOwnedSkillStore } from './owned-skill-store.mjs';
-import { applySettingsOps, assertSettingsExpected, settingsSnapshot } from '../../../../shared/settings-adapter-utils.mjs';
-import { SKILLS_POLICY_SCHEMA } from './settings-schema.mjs';
 
 const sections = ['When to Use', 'Procedure', 'Pitfalls', 'Verification'];
 export function validateOwnedSkill({ name, description, content }) {
@@ -15,7 +13,7 @@ export function validateOwnedSkill({ name, description, content }) {
     || !content.slice(match.index + match[0].length, headings[index + 1]?.index ?? content.length).trim())) throw new Error('技能必须包含四个非空标准章节');
 }
 
-/** Candidate approval and official-provider projection around durable Curator metadata. */
+/** Candidate approval and official-provider projection around durable feedback and snapshots. */
 export function createOwnedSkills({ directory }) {
   const db = new DatabaseSync(join(directory, 'assistant.db'));
   db.exec('PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;');
@@ -40,9 +38,12 @@ export function createOwnedSkills({ directory }) {
     propose(input) {
       validateOwnedSkill(input);
       if (!input.source || typeof input.source !== 'object' || !input.idempotencyKey || typeof input.idempotencyKey !== 'string' || input.idempotencyKey.length > 500) throw new Error('技能候选缺少来源或去重标识');
+      if ((input.source.skillId !== undefined || input.source.skillRevision !== undefined)
+        && (typeof input.source.skillId !== 'string' || !input.source.skillId || !Number.isSafeInteger(input.source.skillRevision) || input.source.skillRevision < 1)) throw new Error('技能改进候选缺少原版本');
       const payload = JSON.stringify({ name: input.name, description: input.description, content: input.content, source: input.source });
       if (payload.length > 24000) throw new Error('技能候选过大');
       return tx(() => {
+        if (!core.ownedSkillSourceAllowed(input.source) || input.source.skillId && core.getOwnedSkill(input.source.skillId)?.state === 'invalidated') return { status: 'invalidated', reason: '技能来源已纠正或遗忘' };
         const previous = db.prepare('SELECT * FROM sa_skill_candidates WHERE unique_key=?').get(input.idempotencyKey);
         if (previous) return candidate(previous);
         const id = randomUUID();
@@ -50,14 +51,17 @@ export function createOwnedSkills({ directory }) {
         return candidate(getCandidate(id));
       });
     },
-    list() { return [...db.prepare("SELECT * FROM sa_skill_candidates WHERE state='candidate' ORDER BY created_at DESC").all().map(candidate), ...core.listOwnedSkills().map(project)]; },
+    list() { return [...db.prepare("SELECT * FROM sa_skill_candidates WHERE state='candidate' ORDER BY created_at DESC").all().map(candidate), ...core.listOwnedSkills().filter(row => row.state !== 'invalidated').map(project)]; },
     get(id) { return project(core.getOwnedSkill(id)) || candidate(getCandidate(id)); },
     approve(id, { revision } = {}) {
       const saved = tx(() => {
         const row = getCandidate(id), value = candidate(row);
         if (!row || row.state !== 'candidate' || row.revision !== revision) throw new Error('技能候选版本已变化');
-        if (core.listOwnedSkills().some(skill => skill.source.skillName === value.name)) throw new Error('已有同名自建技能，请先检查已有版本');
-        const saved = core.saveOwnedSkill({ id, body: value.content, source: { ...value.source, skillName: value.name, description: value.description } });
+        const target = value.source.skillId && core.getOwnedSkill(value.source.skillId);
+        if (value.source.skillId && (!target || target.state === 'invalidated' || target.source.skillName !== value.name)) throw new Error('技能改进目标已变化');
+        if (core.listOwnedSkills().some(skill => skill.id !== target?.id && skill.source.skillName === value.name)) throw new Error('已有同名自建技能，请先检查已有版本');
+        const saved = core.saveOwnedSkill({ id: target?.id ?? id, expectedVersion: target ? value.source.skillRevision : 0,
+          body: value.content, source: { ...value.source, skillName: value.name, description: value.description } });
         db.prepare("UPDATE sa_skill_candidates SET state='approved',revision=revision+1 WHERE id=?").run(id);
         return saved;
       });
@@ -71,19 +75,25 @@ export function createOwnedSkills({ directory }) {
     pin(id, { revision, pinned }) { const result = core.setOwnedSkillFixed(id, { expectedVersion: revision, fixed: pinned }); changed(); return project(result); },
     restore(id, { revision, snapshotSeq } = {}) { const result = core.restoreOwnedSkill(id, { expectedVersion: revision, snapshotSeq }); changed(); return project(result); },
     recordUse({ id, eventId, at }) { const result = core.recordOwnedSkillUse(id, { eventId, ...(at === undefined ? {} : { now: at }) }); changed(); return project(result); },
-    curate(options) { const result = core.curateOwnedSkills(options); if (result.length) changed(); return result.map(project); },
-    audit(id) { return core.ownedSkillAudit(id); },
-    policy: () => core.curatorPolicy(),
-    configurePolicy(patch, { ops, expected, signal } = {}) {
+    recordFeedback({ id, at, ...input }) { return core.recordOwnedSkillFeedback(id, { ...input, ...(at === undefined ? {} : { now: at }) }); },
+    reviewInputs(options) { return core.ownedSkillReviewInputs(options).map(project); },
+    invalidateSources(change = {}) {
       const result = tx(() => {
-        const current = core.curatorPolicy();
-        if (expected || ops) assertSettingsExpected(settingsSnapshot(current), expected, signal);
-        const next = ops ? applySettingsOps(current, ops, { blockedPaths: [['llmMerge']] }) : { ...current, ...patch };
-        if (Object.keys(next).some(key => !Object.hasOwn(SKILLS_POLICY_SCHEMA.properties, key)) || next.llmMerge !== undefined && next.llmMerge !== false) throw new Error('技能整理策略无效');
-        return core.configureCurator({ staleDays: next.staleDays ?? 14, archiveDays: next.archiveDays ?? 30 });
+        const result = core.invalidateOwnedSkillSources(change), candidateIds = [];
+        for (const row of db.prepare('SELECT * FROM sa_skill_candidates').all()) {
+          if (row.state === 'invalidated') continue;
+          const value = candidate(row);
+          if (core.ownedSkillSourceAllowed(value.source) && !core.ownedSkillSourceMatches(value.source, change) && !result.skillIds.includes(value.source.skillId)) continue;
+          db.prepare("UPDATE sa_skill_candidates SET payload=?,state='invalidated',revision=revision+1 WHERE id=?").run(JSON.stringify({ name: '', description: '', content: '', source: {} }), row.id);
+          candidateIds.push(row.id);
+        }
+        return { ...result, candidateIds };
       });
-      changed(); return result;
+      if (result.skillIds.length || result.candidateIds.length) changed();
+      return result;
     },
+    audit(id) { return core.ownedSkillAudit(id); },
+    usage(id) { return core.ownedSkillUsage(id); },
     onChange(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     close() { if (!closed) { closed = true; listeners.clear(); db.close(); } },
   };

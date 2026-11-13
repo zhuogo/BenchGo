@@ -43,7 +43,7 @@ import { createAssessmentRunner } from './assessment-runner.mjs';
 import { createEvaluationDisposition } from './eval-disposition.mjs';
 import { readAssessmentPolicy, authorizeAssessment } from './assessment-policy.mjs';
 import { createOrchestrationRuntime } from './orchestration-runtime.mjs';
-import { createLearningProcessor } from './learning-processor.mjs';
+import { createMaintenanceProcessor } from './maintenance-processors.mjs';
 import { registerOwnedSkillProvider } from './owned-skill-provider.mjs';
 import { createDesktopDelegationService } from './desktop-delegation-service.mjs';
 import { createDesktopTicketAccess } from './desktop-ticket-access.mjs';
@@ -93,7 +93,7 @@ export async function mountAssistant(ctx, commander, providers) {
   const readLedger = async input => store.ledger.read(input.id, input);
   let channelCredentials;
   let database, goals, reviewWorker, deliveryWorker, engine, watchdogRetryTimer, disposal, feishu, feishuStream, channels, assessmentRunner, assessmentTimer, orchestrationRuntime, scheduleBridge, routerWatchdog;
-  let notificationQueue = Promise.resolve(), skillProvider, unsubscribeSkills, curatorTimer, scheduleLifecycle, externalActionStore, unregisterExternalActions, channelSessions;
+  let notificationQueue = Promise.resolve(), skillProvider, unsubscribeSkills, unsubscribeLearning, scheduleLifecycle, externalActionStore, unregisterExternalActions, channelSessions;
   let disposeFactsRemote, executionSummaries, disposeWatchdogRoute;
   let settings;
   const unregisterSettings = [];
@@ -103,7 +103,7 @@ export async function mountAssistant(ctx, commander, providers) {
   };
   const dispose = () => disposal ||= cleanupAssistant({
     halt: [
-      () => { clearInterval(watchdogRetryTimer); clearInterval(assessmentTimer); clearInterval(curatorTimer); },
+      () => { clearInterval(watchdogRetryTimer); clearInterval(assessmentTimer); },
       () => shutdown.abort(),
       () => routerWatchdog?.stop(),
       () => feishuStream?.stop(),
@@ -115,7 +115,7 @@ export async function mountAssistant(ctx, commander, providers) {
       () => engine?.dispose(), () => notificationQueue, () => feishu?.dispose()],
     detach: [
       ...unregisterSettings.splice(0).map(unregister => () => unregister()),
-      () => disposeWatchdogRoute?.(), () => disposeFactsRemote?.(), () => unsubscribeSkills?.(),
+      () => disposeWatchdogRoute?.(), () => disposeFactsRemote?.(), () => unsubscribeSkills?.(), () => unsubscribeLearning?.(),
       () => skillProvider?.dispose(), () => channelCredentials?.dispose(), () => unregisterExternalActions?.(),
       () => historySearch?.dispose(),
     ],
@@ -237,16 +237,29 @@ export async function mountAssistant(ctx, commander, providers) {
       return { verified: true, evidence: { kind: 'assistant-image', requestId: result.requestId, filename: result.filename, artifactHash } };
     },
   });
-  const processLearning = createLearningProcessor({ ctx, store });
+  let maintenanceEnabled = true;
+  const processMaintenance = createMaintenanceProcessor({ ctx, store,
+    readSources: input => historySearch.maintenanceSources(input) });
   reviewWorker = createAssistantReviewWorker({
     review: store.review,
     logger: ctx.logger,
-    process: async (item, { signal }) => {
-      signal.throwIfAborted();
-      if (item.kind === 'learning') return processLearning(item, { signal });
-      return { status: 'rejected', reason: `后台整理只处理闭单学习：${item.kind}` };
+    beforeRun: async () => {
+      const [policy, config] = await Promise.all([store.memory.learning(), store.getConfig()]);
+      maintenanceEnabled = policy.enabled;
+      store.learning.configure({ quietMs: config.maintenance.quietSeconds * 1000, periodMs: config.maintenance.intervalHours * 3600000 });
+      return store.learning.scheduleDue({ enabled: maintenanceEnabled });
     },
+    shouldRun: item => maintenanceEnabled && !engine?.isBusy() && store.learning.canRun(item),
+    process: processMaintenance,
   });
+  unsubscribeLearning = store.learning.onActivity(() => reviewWorker.interrupt());
+  const maintenanceFacts = () => {
+    const learning = store.learning.status(), status = reviewWorker.status();
+    return { ...status, enabled: maintenanceEnabled && status.enabled,
+      pending: store.review.list({ status: 'pending', limit: 100 }).length,
+      quietUntil: learning.lastActivityAt ? new Date(learning.lastActivityAt + learning.quietMs).toISOString() : null };
+  };
+  const readWatchdogFacts = options => ({ ...orchestrationRuntime.executionFacts.evidenceSnapshot(options), maintenance: maintenanceFacts() });
   // Delivery is deliberately injected by Link/host integrations. Polling and
   // acknowledgements remain available without a transport; accepted delivery
   // is never confused with a device receipt.
@@ -310,7 +323,7 @@ export async function mountAssistant(ctx, commander, providers) {
     get engine() { return engine; } });
   engine = await createAssistantEngine({ ctx, store, setupTools, scheduleBridge,
     resumeExecutionSession: input => orchestrationRuntime.resumeExecutionSession(input),
-    readWatchdogFacts: () => orchestrationRuntime.executionFacts.evidenceSnapshot(),
+    readWatchdogFacts,
     onSourceMessage: input => channelSessions.onSourceMessage(input),
     onClearMain: () => database.clearMainChatNotifications() });
   const watchdogTarget = ctx.get('benchgo')?.config?.watchdogTarget;
@@ -319,7 +332,7 @@ export async function mountAssistant(ctx, commander, providers) {
       const token = await readWatchdogToken(watchdogTarget.tokenFile);
       disposeWatchdogRoute = installWatchdogObservationRoute({ ctx,
         config: { targetId: watchdogTarget.targetId, token },
-        readFacts: () => orchestrationRuntime.executionFacts.evidenceSnapshot({ limit: 1000 }),
+        readFacts: () => readWatchdogFacts({ limit: 1000 }),
         acceptSignal: (signal, principal) => engine.notifyWatchdogSignal(signal, principal) });
     } catch (error) {
       ctx.logger?.warn?.(`SuperAgent watchdog unavailable: ${error.code || error.name}`);
@@ -346,12 +359,6 @@ export async function mountAssistant(ctx, commander, providers) {
   await routerWatchdog.tick().catch(error => ctx.logger?.warn?.(`Router recovery: ${error.message}`));
   routerWatchdog.start();
   await scheduleBridge.start();
-  const curate = () => {
-    if (shutdown.signal.aborted || !skillProvider || engine.isBusy() || store.orchestration.hasActiveExecution()) return;
-    try { store.ownedSkills.curate(); } catch (error) { ctx.logger?.warn?.(`技能整理失败：${error.message}`); }
-  };
-  curatorTimer = setInterval(curate, 60000); curatorTimer.unref?.();
-  curate();
   shutdown.signal.throwIfAborted();
   await reviewWorker.runOnce();
   reviewWorker.start();

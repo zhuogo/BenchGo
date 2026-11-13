@@ -1291,28 +1291,33 @@ test('Schedule messages enter the bridge without dispatching their raw instructi
   assert.doesNotMatch(JSON.stringify(f.requests[0].messages), /Scheduled action/);
 });
 
-test('profile understanding stays frozen until a new main session', async t => {
+test('Router profile understanding refreshes each turn without requiring a new main session', async t => {
   const f = await fixture(t, () => text('Snapshot reply'));
   await f.engine.send({ text: 'Read private profile' });
-  await (await f.engine.ensureSession()).whenIdle();
+  const original = await f.engine.ensureSession();
+  await original.whenIdle();
   f.setProfile({ identity: 'New snapshot identity', user: 'Changed user' });
   await f.engine.send({ text: 'Continue' });
   await (await f.engine.ensureSession()).whenIdle();
-  assert.doesNotMatch(JSON.stringify(f.requests.at(-1).messages), /New snapshot identity/);
+  assert.equal((await f.engine.ensureSession()).id, original.id);
+  const latest = f.requests.at(-1).messages.findLast(message => message.source?.kind === 'runtime-context');
+  const context = JSON.parse(latest.source.sections.find(section => section.name === 'benchgo-assistant-memory').text);
+  assert.equal(context.documents.find(document => document.name === 'IDENTITY.md').content, 'New snapshot identity');
+  assert.equal(context.documents.find(document => document.name === 'USER.md').content, 'Changed user');
   await f.engine.resetMain();
   await f.engine.send({ text: 'New session' });
   await (await f.engine.ensureSession()).whenIdle();
   assert.match(JSON.stringify(f.requests.at(-1).messages), /New snapshot identity/);
 });
 
-test('Router model context strips document and memory comments while retaining the raw frozen snapshot', async t => {
+test('Router model context strips comments and refreshes while the separate raw snapshot stays frozen', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-context-projection-'));
   const store = await createAssistantStore({ dataDirectory: directory });
   let f;
   t.after(async () => { await f?.engine.dispose(); await f?.ctx.fiber.dispose(); store.close(); await rm(directory, { recursive: true, force: true }); });
   await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }], workerModels: [{ providerId: 'test', modelId: 'exact' }] });
   await store.documents.mutate('IDENTITY.md', () => 'Visible identity <!-- hidden-identity-marker -->', { source: { type: 'user-edit' } }); await store.documents.mutate('USER.md', () => 'Visible user <!-- hidden-user-marker -->', { source: { type: 'user-edit' } });
-  await store.saveMemory({ content: 'Visible memory <!-- hidden-memory-marker -->', source: { messageId: 'source-1', excerpt: 'Visible source <!-- hidden-excerpt-marker -->' } });
+  const memory = await store.saveMemory({ content: 'Visible memory <!-- hidden-memory-marker -->', source: { messageId: 'source-1', excerpt: 'Visible source <!-- hidden-excerpt-marker -->' } });
   f = await fixture(t, () => text('Acknowledged'), { store });
   await f.engine.send({ text: 'Read visible context' });
   const agent = await f.engine.ensureSession();
@@ -1328,11 +1333,17 @@ test('Router model context strips document and memory comments while retaining t
     assert.ok(document.hash, 'stored document hashes remain available for concurrency checks');
     assert.ok(!request.includes(document.hash), 'storage hashes are not model instructions');
   }
-  for (const value of ['hidden-identity-marker', 'hidden-user-marker', 'hidden-memory-marker', 'hidden-excerpt-marker', 'benchgo-memory']) assert.ok(original.includes(value));
-  await store.documents.mutate('IDENTITY.md', () => 'Next-session identity', { source: { type: 'user-edit' } });
-  await f.engine.send({ text: 'Continue with the frozen context' });
+  for (const value of ['hidden-identity-marker', 'hidden-user-marker', 'hidden-memory-marker', 'hidden-excerpt-marker']) assert.ok(original.includes(value), `raw snapshot retains ${value}`);
+  assert.match((await store.documents.read(memory.document)).content, /<!-- benchgo-memory /, 'daily Markdown retains its storage annotation outside the bounded context');
+  await store.documents.mutate('IDENTITY.md', () => 'Next-turn identity', { source: { type: 'user-edit' } });
+  await f.engine.send({ text: 'Continue with the current context' });
   await agent.whenIdle();
-  assert.doesNotMatch(JSON.stringify(f.requests.at(-1).messages), /Next-session identity|hidden-(?:identity|user|memory|excerpt)-marker/);
+  const refreshed = f.requests.at(-1).messages;
+  assert.match(JSON.stringify(refreshed), /Next-turn identity/);
+  assert.doesNotMatch(JSON.stringify(refreshed), /hidden-(?:identity|user|memory|excerpt)-marker|<!--|benchgo-memory/);
+  const latest = refreshed.findLast(message => message.source?.kind === 'runtime-context');
+  const context = JSON.parse(latest.source.sections.find(section => section.name === 'benchgo-assistant-memory').text);
+  assert.equal(context.documents.find(document => document.name === 'IDENTITY.md').content, 'Next-turn identity');
   assert.deepEqual(await store.getSessionContext(agent.id), frozen);
 });
 
@@ -1379,7 +1390,7 @@ for (const document of ['MEMORY.md', 'USER.md']) test(`live session rereads a pr
   assert.doesNotMatch(JSON.stringify(f.requests.at(-1).messages), /private-marker-for-snapshot/);
 });
 
-test('official JSONL disk persistence resumes the same main identity after engine shutdown', async t => {
+test('official JSONL disk persistence resumes the same main session and refreshes its current profile', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-assistant-engine-'));
   const store = await createAssistantStore({ dataDirectory: directory });
   await store.documents.mutate('IDENTITY.md', () => 'frozen-persona-before-restart', { source: { type: 'user-edit' } });
@@ -1402,7 +1413,9 @@ test('official JSONL disk persistence resumes the same main identity after engin
   assert.equal(second.requests.length, 1);
   assert.match(JSON.stringify(second.requests[0].messages), /Before restart/);
   assert.match(JSON.stringify(second.requests[0].messages), /frozen-persona-before-restart/);
-  assert.doesNotMatch(JSON.stringify(second.requests[0].messages), /new-persona-after-restart/);
+  const latest = second.requests[0].messages.findLast(message => message.source?.kind === 'runtime-context');
+  const context = JSON.parse(latest.source.sections.find(section => section.name === 'benchgo-assistant-memory').text);
+  assert.equal(context.documents.find(document => document.name === 'IDENTITY.md').content, 'new-persona-after-restart');
 });
 
 test('resumed Router cleans legacy runtime memory comments from the model surface and preserves original events', async t => {
@@ -2062,10 +2075,12 @@ for (const pendingOriginal of [null, 'next-step', 'next-turn']) test(`Router res
   assert.deepEqual((await second.engine.history()).messages.map(row => row.text), ['Continue only this request', 'Recovered fallback answer']);
 });
 
-test('parallel tools in one Harness step count as one learning iteration', async t => {
+test('parallel tools record only the real user learning reference and never enqueue tool iterations', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'learning-step-'));
   const store = await createAssistantStore({ dataDirectory: directory });
   await store.updateConfig({ models: [{ providerId: 'test', modelId: 'first' }] });
+  const references = [], recordPrompt = store.learning.recordPrompt;
+  store.learning.recordPrompt = input => { references.push(structuredClone(input)); return recordPrompt(input); };
   const f = await fixture(t, (_request, count) => count === 1 ? [
     { type: 'block-start', index: 0, blockType: 'tool-call' },
     { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'parallel-a', name: 'learning_probe', arguments: '{}' } },
@@ -2076,11 +2091,16 @@ test('parallel tools in one Harness step count as one learning iteration', async
     scope.tools.register({ name: 'learning_probe', description: 'Probe', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => 'checked' });
   } });
   t.after(async () => { await f.engine.dispose(); store.close(); await rm(directory, { recursive: true, force: true }); });
-  await f.engine.send({ text: 'Inspect both' });
+  const sent = await f.engine.send({ text: 'Inspect both' });
   const agent = await f.engine.ensureSession(); await agent.whenIdle();
   const snapshot = store.learning.snapshot({ scope: agent.id });
-  assert.equal(snapshot.events.find(row => row.kind === 'tool')?.count, 1);
+  assert.equal(snapshot.events.some(row => row.kind === 'tool'), false);
   assert.equal(snapshot.events.find(row => row.kind === 'prompt')?.count, 1);
+  assert.equal(references.length, 1);
+  assert.equal(references[0].eventId, sent.messageId);
+  assert.deepEqual(references[0].source, { sessionId: agent.id, threadId: 'main', messageId: sent.messageId, role: 'user' });
+  assert.deepEqual(snapshot.triggers, []);
+  assert.deepEqual(store.review.list(), []);
 });
 
 test('stable client request IDs prevent duplicate sends', async t => {
@@ -2461,7 +2481,7 @@ async function stateReportFixture(t, script, options = {}) {
     delivery.payload.outcome = 'completed'; delete delivery.payload.publication; delivery.payload.replyState = 'pending'; }
   store.orchestration = { ...store.orchestration, getTicket: () => ticket, results: () => results, assignments: () => [assignment], deliveries: () => [delivery] };
   let learningWrites = 0;
-  store.learning = { ...store.learning, recordPrompt: () => { learningWrites++; }, recordToolIteration: () => { learningWrites++; } };
+  store.learning = { ...store.learning, recordPrompt: () => { learningWrites++; } };
   async function settle() {
     for (let i = 0; i < 100; i++) {
       const receipt = await f.engine.prepareTicketReply(delivery);

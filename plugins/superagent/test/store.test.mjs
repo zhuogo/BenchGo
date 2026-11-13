@@ -45,6 +45,17 @@ test('session context survives store restart and new sessions receive current do
   const [a, b] = await Promise.all([restarted.getSessionContext('session-c'), restarted.getSessionContext('session-c')]);
   assert.deepEqual(a, b);
 });
+test('maintenance timing saves partial changes and reloads without changing model selection', async t => {
+  const { store, openStore } = await fixture(t);
+  const models = [{ providerId: 'maintenance-provider', modelId: 'Exact:Opaque' }];
+  await store.updateConfig({ models, maintenance: { quietSeconds: 30, intervalHours: 12 } });
+  await store.updateConfig({ maintenance: { quietSeconds: 45 } });
+  const restarted = await openStore(), saved = await restarted.getConfig();
+  assert.deepEqual(saved.maintenance, { quietSeconds: 45, intervalHours: 12 });
+  assert.deepEqual(saved.models, models);
+  await assert.rejects(restarted.updateConfig({ maintenance: { intervalHours: 0 } }), /maintenance/);
+  assert.deepEqual((await store.getConfig()).maintenance, saved.maintenance);
+});
 test('concurrent stores serialize edits and reject stale revisions without partial files', async (t) => {
   const { store, openStore } = await fixture(t);
   const other = await openStore();
@@ -181,14 +192,14 @@ test('profiles, thread metadata and explicit memories persist and corrected/dele
   assert.ok(!(await readFile(join(store.paths.directory, 'MEMORY.md'), 'utf8')).includes('Old preference'));
 });
 
-test('runtime freezes five ordered documents while management preserves six', async t => {
+test('runtime reads five base documents while management preserves seven', async t => {
   const { store } = await fixture(t);
   const context = await store.getContext();
   assert.deepEqual(context.documents.map(row => row.name), [
     'SOUL.md', 'IDENTITY.md', 'USER.md', 'AGENTS.md', 'MEMORY.md',
   ]);
-  assert.equal((await store.documents.list()).length, 6);
-  assert.equal((await store.profileExport()).documents.length, 6);
+  assert.equal((await store.documents.list()).length, 7);
+  assert.equal((await store.profileExport()).documents.length, 7);
   assert.equal(context.memories.length, 0);
   assert.equal(context.learning.enabled, true);
   assert.ok(context.hashes['MEMORY.md']);
@@ -214,9 +225,31 @@ test('profile import rejects duplicate or missing authoritative documents', asyn
   const { store } = await fixture(t);
   const bundle = await store.profileExport();
   bundle.documents[5] = { ...bundle.documents[0], name: bundle.documents[0].name };
-  await assert.rejects(store.profileImport(bundle), /恰好包含六份不同/u);
+  await assert.rejects(store.profileImport(bundle), /完整且不重复/u);
   assert.deepEqual((await store.getContext()).documents.map(row => row.name), [
     'SOUL.md', 'IDENTITY.md', 'USER.md', 'AGENTS.md', 'MEMORY.md',
   ]);
+});
+
+test('profile v2 preserves dated memory once and excludes personal documents when requested', async t => {
+  const { store: source } = await fixture(t), { store: target } = await fixture(t);
+  const memory = await source.saveMemory({ content: 'Prefer concise Chinese replies', source: { role: 'user', messageId: 'profile-source' } });
+  await source.memory.curate({ ids: [memory.id] });
+  await source.memory.writeDerived({ document: 'dreams/alignment/ALIGNMENT_SYNTHESIS.md', content: 'Keep replies concise', memoryIds: [memory.id], source: { type: 'maintenance' } });
+  await source.documents.write('PROACTIVE_PREFERENCES.md', { content: 'Ask before suggesting evening activities' });
+  const bundle = await source.profileExport();
+  assert.equal(bundle.version, 2);
+  assert.ok(bundle.documents.some(row => /^memory\/\d{4}-\d{2}-\d{2}\.md$/u.test(row.name)));
+  assert.ok(bundle.documents.some(row => row.name === 'dreams/alignment/ALIGNMENT_SYNTHESIS.md'));
+  await assert.rejects(target.profileImport({ ...bundle, version: 1 }), /不支持/u);
+  const excluded = await target.profileImport(bundle, { includeMemories: false });
+  assert.deepEqual(excluded.documents.sort(), ['AGENTS.md', 'IDENTITY.md', 'SOUL.md']);
+  assert.equal(excluded.memories, 0);
+  await target.profileImport(bundle, { apply: true, overwrite: true });
+  const imported = await target.listMemories();
+  assert.equal(imported.length, 1, 'annotated daily file is authoritative; projection is not replayed');
+  assert.equal(imported[0].id, memory.id);
+  assert.equal((await target.documents.read('PROACTIVE_PREFERENCES.md')).content, 'Ask before suggesting evening activities');
+  assert.match((await target.getContext()).documents.find(row => row.name.endsWith('ALIGNMENT_SYNTHESIS.md')).content, /Keep replies concise/);
 });
 

@@ -1,10 +1,11 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { MAINTENANCE_WATCHDOG_REASONS } from './maintenance-health.mjs';
 
 export const WATCHDOG_OBSERVATION_PATH = '/benchgo/watchdog/observation';
 export const WATCHDOG_SIGNAL_PATH = '/benchgo/watchdog/signals';
 export const WATCHDOG_SIGNAL_REASONS = Object.freeze(['TARGET_UNREACHABLE', 'TARGET_IDENTITY_MISMATCH',
   'FACTS_STALE', 'SCHEDULER_STALLED', 'EXECUTION_INACTIVE', 'LEASE_EXPIRED', 'REQUEST_DEADLINE_EXCEEDED',
-  'STOP_UNCONFIRMED']);
+  'STOP_UNCONFIRMED', ...MAINTENANCE_WATCHDOG_REASONS]);
 const headerPrefix = 'x-benchgo-watchdog-';
 const executionFields = ['ticketId', 'assignmentId', 'runId', 'sessionId', 'fence', 'instructionRevision'];
 const signalFields = ['id', 'incidentKey', 'phase', 'kind', 'targetId', 'observedAt', 'checkId', 'evidenceCursor',
@@ -56,6 +57,9 @@ export function validateWatchdogSignal(value, targetId) {
     }
   }
   if (value.kind === 'execution' && !value.execution) throw fail('WATCHDOG_SIGNAL_INVALID');
+  if (MAINTENANCE_WATCHDOG_REASONS.includes(value.reasonCode) && (value.kind !== 'host' || value.execution !== undefined)) {
+    throw fail('WATCHDOG_SIGNAL_INVALID');
+  }
   return structuredClone(value);
 }
 

@@ -26,7 +26,7 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
     timings, thread, ticketOwnerScope, mayReplyToTicket, mayReplyToExecutionInput, isStopped, cooldowns, errors, failures, models, activeRoutes,
     agentCompaction } = runtime;
   const routerContext = createRouterContext({ store, sessionId: record.sessionId });
-  let contextText = '', selection, learningTurn, replyTurn, learningIteration, failedPlan, claimedMessages = [], currentTurn, resumeFallback;
+  let contextText = '', selection, replyTurn, failedPlan, claimedMessages = [], currentTurn, resumeFallback;
   let replayCalls = new Set();
   const advanceModel = () => {
     if (!selection) return false;
@@ -63,7 +63,7 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
       return next();
     });
     scope.on('agent/inbox/claimed', ({ message, turn }) => {
-      if (currentTurn !== turn) { currentTurn = turn; claimedMessages = []; replyTurn = undefined; learningTurn = undefined; }
+      if (currentTurn !== turn) { currentTurn = turn; claimedMessages = []; replyTurn = undefined; }
       claimedMessages.push(message);
       if (message.source?.kind === modelFallbackSource) {
         const plan = readModelFallbacks(agent.session.snapshotEvents()).get(message.source.fallbackId);
@@ -73,7 +73,6 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
           replyTurn = plan.requestId;
           const original = agent.session.snapshotEvents().find(event => event.type === 'user/message' && event.data?.id === plan.requestId)?.data
             || plan.uncommitted?.find(message => message.id === plan.requestId);
-          learningTurn = original?.source?.kind === ticketReplySource ? undefined : plan.requestId;
           expressionMode(original?.source);
           replayCalls = new Set(plan.dispatchedCalls || []);
           select(selection.models[selection.index]);
@@ -259,8 +258,6 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
       }
       await scheduleBridge?.ingestMessages({ sessionId: record.sessionId, threadId, messages: payload.messages });
       if (scheduleBridge && payload.messages?.length && payload.messages.every(message => message.source?.kind === 'schedule')) return { kind: 'enter', messages: [] };
-      if (internal || executionNotice) learningTurn = undefined;
-      learningIteration = Number.isSafeInteger(payload.turn) && Number.isSafeInteger(payload.step) ? `${payload.turn}:${payload.step}` : undefined;
       for (const message of payload.messages || []) {
         if (!isChatUserMessage(message) || !message.id) continue;
         if (message.source.kind === 'user-question-reply') {
@@ -270,7 +267,6 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
           await routerQuestions.accept(message);
         }
         if (store.orchestration) recordDesktopTrigger(store.orchestration, { sessionId: record.sessionId, threadId, message });
-        learningTurn = message.id;
         const source = { sessionId: record.sessionId, threadId, messageId: message.id, role: 'user' };
         store.learning?.recordPrompt({ scope: record.sessionId, eventId: message.id, turnId: message.id, source });
         const text = (message.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
@@ -303,7 +299,6 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
       const toolStarted = now();
       let result;
       try { result = await next(); } finally { timings.get(agent.id)?.tools.push({ name: execution.name, started: toolStarted, durationMs: now() - toolStarted }); }
-      if (learningTurn && learningIteration && execution.callId) store.learning?.recordToolIteration({ scope: record.sessionId, eventId: `${learningTurn}:${learningIteration}`, turnId: learningTurn, source: { sessionId: record.sessionId, threadId, callId: execution.callId, iteration: learningIteration } });
       return result;
     });
     scope.on('agent/request', async ({ turn, signal }, next) => {

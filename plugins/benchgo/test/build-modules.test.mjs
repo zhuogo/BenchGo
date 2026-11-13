@@ -34,6 +34,8 @@ export async function prepareWorkbenchVendors() {
   await put('benchgo/src/shared.mjs', 'export const value = 1;');
   await put('superagent/shared/catalog.mjs', 'export default [];');
   await put('superagent/prompts/builtin-layer.md', '# 内置层\n\nPublished runtime rules');
+  const maintenanceTasks = ['memory-upkeep', 'relationships', 'dreaming', 'skill-review', 'idea-curation'];
+  for (const task of maintenanceTasks) await put(`superagent/prompts/self-iteration/${task}.md`, `# ${task}\n\nPublished review instructions`);
   await put('superagent/src/prompt.mjs', "export const builtinLayer = new URL('../prompts/builtin-layer.md', import.meta.url);\n");
   await put('superagent/assets/pet/SOURCE.md', 'Preserved provenance');
   await put('voice/client/audio-worklet.js');
@@ -66,6 +68,8 @@ export async function buildNoise() {
   assert.equal(await readFile(join(output, 'superagent/assets/pet/SOURCE.md'), 'utf8'), 'Preserved provenance');
   const publishedPrompt = await import(pathToFileURL(join(output, 'superagent/src/prompt.mjs')).href);
   assert.equal(await readFile(publishedPrompt.builtinLayer, 'utf8'), await readFile(join(plugins, 'superagent/prompts/builtin-layer.md'), 'utf8'));
+  for (const task of maintenanceTasks) assert.equal(await readFile(join(output, `superagent/prompts/self-iteration/${task}.md`), 'utf8'),
+    await readFile(join(plugins, `superagent/prompts/self-iteration/${task}.md`), 'utf8'));
   for (const file of backups) assert.equal(await readFile(join(plugins, 'superagent/src', file), 'utf8'), 'fixture');
   assert.equal(await readFile(join(plugins, 'superagent/src/recovery.bak/nested.mjs'), 'utf8'), 'fixture');
   assert.equal(await readFile(join(output, 'voice/client/audio-worklet.js'), 'utf8'), 'fixture');

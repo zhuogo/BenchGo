@@ -2,11 +2,12 @@ import { validatePetProfile } from './pet-profile.mjs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write';
 import { resolve, join } from 'node:path';
-import { ASSISTANT_DOCUMENTS, createAssistantDocuments, documentHash } from './documents.mjs';
+import { ASSISTANT_DOCUMENTS, isAssistantDocument, createAssistantDocuments, documentHash } from './documents.mjs';
 import { createAssistantMemory } from './memory.mjs';
 import { createAssistantReview } from './review.mjs';
 import { createLearningCounters } from './learning-counters.mjs';
 import { createOwnedSkills } from './owned-skills.mjs';
+import { createIdeaStore } from './idea-store.mjs';
 import { createAssistantLedger } from './ledger.mjs';
 import { createAssistantConnections } from './connections.mjs';
 import { loadChannelModules } from './channel-catalog.mjs';
@@ -85,6 +86,12 @@ function validateConfig(value) {
   if (value.auxiliary === undefined) value.auxiliary = null;
   if (value.workerModels === undefined) value.workerModels = [];
   if (value.workerConcurrency === undefined) value.workerConcurrency = 2;
+  if (value.maintenance === undefined) value.maintenance = { quietSeconds: 120, intervalHours: 6 };
+  if (!object(value.maintenance) || Object.keys(value.maintenance).some(key => !['quietSeconds', 'intervalHours'].includes(key))) throw new Error('Invalid maintenance configuration');
+  value.maintenance = { quietSeconds: 120, intervalHours: 6, ...value.maintenance };
+  for (const [key, min, max] of [['quietSeconds', 10, 86400], ['intervalHours', 1, 168]]) {
+    if (!Number.isSafeInteger(value.maintenance[key]) || value.maintenance[key] < min || value.maintenance[key] > max) throw new Error(`Invalid maintenance ${key}`);
+  }
   if (!Number.isSafeInteger(value.workerConcurrency) || value.workerConcurrency < 1) throw new Error('Worker 并发数量必须是正整数');
   validateAssistantModels(value.models);
   validateAssistantModels(value.workerModels);
@@ -218,6 +225,13 @@ export async function createAssistantStore({ dataDirectory } = {}) {
   let ownedSkills;
   try { ownedSkills = createOwnedSkills({ directory }); }
   catch (error) { learning.close(); orchestration.close(); connections.close(); ledger.close(); review.close(); memory.close(); documents.close(); throw error; }
+  let ideas;
+  try { ideas = createIdeaStore({ directory }); }
+  catch (error) { ownedSkills.close(); learning.close(); orchestration.close(); connections.close(); ledger.close(); review.close(); memory.close(); documents.close(); throw error; }
+  const unsubscribeMemory = memory.onChange(change => {
+    ideas.invalidate(change);
+    ownedSkills.invalidateSources(change);
+  });
   async function getProfile() {
     const rows = await documents.list();
     return { identity: rows.find(row => row.name === 'IDENTITY.md').content, user: rows.find(row => row.name === 'USER.md').content };
@@ -235,10 +249,10 @@ export async function createAssistantStore({ dataDirectory } = {}) {
   }
   async function profileExport() {
     const [config, documentRows, memories] = await Promise.all([
-      getConfig(), documents.list(), memory.list(),
+      getConfig(), documents.list({ recursive: true }), memory.list(),
     ]);
     return {
-      format: 'benchgo-assistant-profile', version: 1,
+      format: 'benchgo-assistant-profile', version: 2,
       profile: await profileInfo(), exportedAt: new Date().toISOString(), config: exportConfig(config),
       documents: documentRows.map(({ name, content, hash, revision }) => ({ name, content, hash, revision })),
       memories: memories.map(({ id, content, scope, source, createdAt, updatedAt, revision }) => ({ id, content, scope, source, createdAt, updatedAt, revision })),
@@ -246,23 +260,23 @@ export async function createAssistantStore({ dataDirectory } = {}) {
   }
   async function profileImport(bundle, { apply = false, overwrite = false, includeMemories = true } = {}) {
     if (JSON.stringify(bundle || {}).length > 16 * 1024 * 1024) throw new Error('Profile 包超过大小限制');
-    if (!bundle || bundle.format !== 'benchgo-assistant-profile' || bundle.version !== 1) throw new Error('不支持的助手 Profile 包');
-    if (!Array.isArray(bundle.documents) || bundle.documents.length !== 6) throw new Error('Profile 包缺少六份助手文档');
-    const current = await documents.list(), currentByName = new Map(current.map(row => [row.name, row]));
+    if (!bundle || bundle.format !== 'benchgo-assistant-profile' || bundle.version !== 2) throw new Error('不支持的助手 Profile 包');
+    if (!Array.isArray(bundle.documents) || bundle.documents.length < ASSISTANT_DOCUMENTS.length || bundle.documents.length > 10000) throw new Error('Profile 包缺少助手文档');
+    const current = await documents.list({ recursive: true }), currentByName = new Map(current.map(row => [row.name, row]));
     const documentsToImport = bundle.documents.map(row => {
-      if (!ASSISTANT_DOCUMENTS.includes(row.name) || typeof row.content !== 'string') throw new Error('Profile 文档无效');
+      if (!isAssistantDocument(row.name) || typeof row.content !== 'string') throw new Error('Profile 文档无效');
       if (row.content.length > 256 * 1024 || (row.hash !== undefined && row.hash !== documentHash(row.content))) throw new Error('Profile 文档哈希无效');
       return { ...row };
     });
     const importedNames = new Set(documentsToImport.map(row => row.name));
-    if (importedNames.size !== ASSISTANT_DOCUMENTS.length || ASSISTANT_DOCUMENTS.some(name => !importedNames.has(name))) {
-      throw new Error('Profile 包必须恰好包含六份不同的助手文档');
+    if (importedNames.size !== documentsToImport.length || ASSISTANT_DOCUMENTS.some(name => !importedNames.has(name))) {
+      throw new Error('Profile 包必须包含完整且不重复的助手文档');
     }
     // These documents are the authoritative memory store, not just the export array.
-    // Opting out preserves the target's personal data in all three documents.
+    // Opting out preserves all of the target's personal and derived documents.
     if (!includeMemories) {
       for (let index = documentsToImport.length - 1; index >= 0; index--) {
-        if (['MEMORY.md', 'USER.md', 'TOOLS.md'].includes(documentsToImport[index].name)) documentsToImport.splice(index, 1);
+        if (!['AGENTS.md', 'SOUL.md', 'IDENTITY.md'].includes(documentsToImport[index].name)) documentsToImport.splice(index, 1);
       }
     }
     const importedIdentity = documentsToImport.find(row => row.name === 'IDENTITY.md');
@@ -287,16 +301,18 @@ export async function createAssistantStore({ dataDirectory } = {}) {
       delete patch.pet; delete patch.petPrevious; delete patch.petHasPrevious;
       await updateConfig(patch);
     }
-    for (const row of documentsToImport) await documents.update(row.name, { content: row.content, expectedHash: currentByName.get(row.name)?.hash, source: { type: 'profile-import', profileId: bundle.profile?.id || null } });
-    if (importedMemories.length) for (const row of importedMemories) {
-      await memory.save({ id: row.id, content: row.content, scope: row.scope, source: { ...(row.source || {}), type: 'profile-import', profileId: bundle.profile?.id || null } });
-    }
+    for (const row of documentsToImport) await documents.write(row.name, { content: row.content, expectedHash: currentByName.get(row.name)?.hash, source: { type: 'profile-import', profileId: bundle.profile?.id || null } });
+    // Memory annotations inside the managed documents are authoritative; the
+    // export's memories array is a read projection and must not be replayed.
+    await memory.context();
     return { ...result, applied: true, preview: false, profile: await profileInfo() };
   }
   let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
+    unsubscribeMemory();
+    ideas.close();
     ownedSkills.close();
     learning.close();
     ledger.close();
@@ -318,6 +334,7 @@ export async function createAssistantStore({ dataDirectory } = {}) {
     review,
     learning,
     ownedSkills,
+    ideas,
     getConfig,
     updateConfig,
     configurationSnapshot,

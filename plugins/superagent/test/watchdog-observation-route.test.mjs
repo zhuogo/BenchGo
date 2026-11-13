@@ -13,6 +13,9 @@ const targetId = 'fixture-target', token = 'fixture_only_' + 'a'.repeat(48);
 const observation = (patch = {}) => ({ id: 'signal-1', incidentKey: 'host:unreachable', phase: 'opened', kind: 'host',
   targetId, observedAt: '2026-11-09T01:00:00.000Z', checkId: 'check-1', evidenceCursor: null,
   reasonCode: 'TARGET_UNREACHABLE', summary: '目标宿主接口暂不可达', ...patch });
+const maintenance = { enabled: true, schedulerActive: true, state: 'idle', running: false, active: null,
+  pending: 0, quietUntil: null, deadlineAt: null, lastCheckAt: '2026-11-09T01:00:00.000Z',
+  nextCheckAt: '2026-11-09T01:00:30.000Z' };
 
 async function officialServerFixture() {
   const requireBenchgo = createRequire(new URL('../../benchgo/package.json', import.meta.url));
@@ -55,7 +58,7 @@ async function officialServerFixture() {
         if (mode === 'facts-hung') return new Promise(() => {});
         if (mode === 'facts-large') return { text: 'x'.repeat(600_000) };
         signal.throwIfAborted();
-        return { cursor: 7, tickets: [], host: { status: 'available', schedulerHeartbeatAt: null } };
+        return { cursor: 7, tickets: [], host: { status: 'available', schedulerHeartbeatAt: null }, maintenance };
       },
       async acceptSignal(value, { signal, principal }) {
         signal.throwIfAborted();
@@ -130,6 +133,7 @@ if (process.argv.includes('--watchdog-fixture')) {
     const read = await fixture.client.readFacts();
     assert.equal(read.protocolVersion, 1); assert.equal(read.targetId, targetId);
     assert.equal(read.facts.cursor, 7); assert.equal(read.facts.host.schedulerHeartbeatAt, null);
+    assert.deepEqual(read.facts.maintenance, maintenance, 'the signed route preserves the optional redacted maintenance facts');
     const first = await fixture.client.sendSignal(observation());
     assert.deepEqual(first, { accepted: true, id: 'signal-1', duplicate: false });
     assert.deepEqual(await fixture.client.sendSignal(observation()), { accepted: true, id: 'signal-1', duplicate: true });
@@ -233,6 +237,13 @@ if (process.argv.includes('--watchdog-fixture')) {
     const value = observation({ kind: 'execution', execution, reasonCode: 'EXECUTION_INACTIVE' });
     assert.deepEqual(validateWatchdogSignal(value, targetId), value);
     assert.throws(() => validateWatchdogSignal({ ...value, execution: { ...execution, owner: 'forged' } }, targetId), { code: 'WATCHDOG_SIGNAL_INVALID' });
+    for (const reasonCode of ['MAINTENANCE_EXECUTION_TIMEOUT', 'MAINTENANCE_SCHEDULER_STALLED']) {
+      const report = observation({ reasonCode });
+      assert.deepEqual(validateWatchdogSignal(report, targetId), report);
+      assert.throws(() => validateWatchdogSignal({ ...report, action: 'restart' }, targetId), { code: 'WATCHDOG_SIGNAL_INVALID' });
+      assert.throws(() => validateWatchdogSignal({ ...report, kind: 'execution', execution }, targetId), { code: 'WATCHDOG_SIGNAL_INVALID' });
+      assert.throws(() => validateWatchdogSignal({ ...report, execution }, targetId), { code: 'WATCHDOG_SIGNAL_INVALID' });
+    }
     const routes = new Map(), ctx = { webServer: { register: route => { routes.set(route.path, route); return () => routes.delete(route.path); } }, effect: () => {} };
     const mounted = installWatchdogObservationRoute({ ctx, config: { targetId, token }, readFacts: async () => ({}), acceptSignal: async () => ({}) });
     assert.deepEqual([...routes.keys()], [WATCHDOG_OBSERVATION_PATH, WATCHDOG_SIGNAL_PATH]);

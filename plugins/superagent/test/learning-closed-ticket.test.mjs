@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createAssistantStore } from '../src/store.mjs';
-import { createLearningProcessor } from '../src/learning-processor.mjs';
+import { createMaintenanceProcessor } from '../src/maintenance-processors.mjs';
 import { createAssistantReviewWorker } from '../src/review-worker.mjs';
 
 test('confirmed close feeds background queue once; crash after saving resumes the same global range', async t => {
@@ -33,7 +33,7 @@ test('confirmed close feeds background queue once; crash after saving resumes th
     yield { type: 'text-delta', text: JSON.stringify({ memories: [{ content, sourceMessageId: material[0].instructions[0].messageId }] }) };
     yield { type: 'finish', reason: { kind: 'stop' } };
   } } };
-  const worker = () => { const next = createAssistantReviewWorker({ review: store.review, process: createLearningProcessor({ ctx, store }) }); workers.push(next); return next; };
+  const worker = () => { const next = createAssistantReviewWorker({ review: store.review, process: createMaintenanceProcessor({ ctx, store, readSources: async () => [] }) }); workers.push(next); return next; };
   store.learning.request({ scope: 'router', eventId: 'before-delivery' });
   await worker().runOnce();
   assert.equal(requests.length, 0);

@@ -56,6 +56,85 @@ test('host recovery binds a machine source and reports only the restored interfa
     { interfaceReachable: true, observedAt: f.snapshot.observedAt });
 });
 
+function maintenanceFixture(reasonCode) {
+  const f = fixture(), now = Date.parse('2026-11-13T00:00:00.000Z');
+  const iso = value => new Date(value).toISOString();
+  const observation = { ...f.observation, kind: 'host', reasonCode, observedAt: iso(now) };
+  delete observation.execution;
+  const maintenance = { enabled: true, state: 'idle', running: false, schedulerActive: true,
+    active: null, deadlineAt: null, pending: 1, quietUntil: null,
+    lastCheckAt: iso(now - 180000), nextCheckAt: iso(now - 150000) };
+  if (reasonCode === 'MAINTENANCE_EXECUTION_TIMEOUT') {
+    const deadlineAt = iso(now - 1);
+    Object.assign(maintenance, { state: 'running', running: true, deadlineAt,
+      active: { startedAt: iso(now - 60000), deadlineAt } });
+  }
+  const snapshot = { ...f.snapshot, observedAt: iso(now), maintenance };
+  const signal = watchdogRouterSignal(f.database, observation, f.principal);
+  return { ...f, now, iso, snapshot, signal, maintenance,
+    inspect: () => inspectWatchdogRouterSignal(f.database, signal, snapshot, { now }) };
+}
+
+test('maintenance host reports revalidate real execution timeouts and stalled scheduler state', () => {
+  for (const reasonCode of ['MAINTENANCE_EXECUTION_TIMEOUT', 'MAINTENANCE_SCHEDULER_STALLED']) {
+    const f = maintenanceFixture(reasonCode), original = JSON.stringify([f.ticket, f.assignment, f.run, f.snapshot]);
+    const checked = f.inspect();
+    assert.equal(checked.valid, true, reasonCode);
+    assert.deepEqual(checked.facts, { interfaceReachable: true, maintenance: f.maintenance, observedAt: f.snapshot.observedAt });
+    assert.equal(f.signal.ticketId, undefined, 'a report is never attached to a business task');
+    assert.equal(f.signal.observation.execution, undefined);
+    assert.equal(JSON.stringify([f.ticket, f.assignment, f.run, f.snapshot]), original, 'admission never executes or changes state');
+    f.signal.observation.phase = 'escalated';
+    assert.equal(f.inspect().valid, true);
+    f.signal.observation.phase = 'resolved';
+    assert.deepEqual(f.inspect(), { valid: false, reason: 'maintenance-observation-not-current' }, 'an ongoing fault cannot publish a recovered notice');
+  }
+  const checking = maintenanceFixture('MAINTENANCE_SCHEDULER_STALLED');
+  checking.maintenance.state = 'checking';
+  assert.equal(checking.maintenance.running, false, 'runtime running denotes an active item, not preflight');
+  assert.equal(checking.inspect().valid, true, 'a stuck preflight remains observable');
+});
+
+test('recovered or newly exempt maintenance cannot publish a stale fault reason', () => {
+  for (const reasonCode of ['MAINTENANCE_EXECUTION_TIMEOUT', 'MAINTENANCE_SCHEDULER_STALLED']) {
+    for (const clear of [
+      f => { Object.assign(f.maintenance, { state: 'idle', running: false, active: null, deadlineAt: null, pending: 0 }); },
+      f => { f.maintenance.enabled = false; },
+      f => { f.maintenance.state = 'yielded'; },
+      f => { f.maintenance.quietUntil = f.iso(f.now + 60000); },
+    ]) {
+      const f = maintenanceFixture(reasonCode); clear(f);
+      assert.deepEqual(f.inspect(), { valid: false, reason: 'maintenance-observation-not-current' });
+      f.signal.observation.phase = 'resolved';
+      assert.equal(f.inspect().valid, true, 'only the freshly established recovery can publish');
+    }
+  }
+  const timeout = maintenanceFixture('MAINTENANCE_EXECUTION_TIMEOUT');
+  timeout.signal.observation.reasonCode = 'MAINTENANCE_SCHEDULER_STALLED';
+  assert.equal(timeout.inspect().valid, false, 'a current execution timeout does not prove a scheduler fault');
+  const scheduler = maintenanceFixture('MAINTENANCE_SCHEDULER_STALLED');
+  scheduler.signal.observation.reasonCode = 'MAINTENANCE_EXECUTION_TIMEOUT';
+  assert.equal(scheduler.inspect().valid, false, 'an overdue check does not prove an execution timeout');
+});
+
+test('unknown maintenance evidence cannot publish fault or recovery notices', () => {
+  for (const reasonCode of ['MAINTENANCE_EXECUTION_TIMEOUT', 'MAINTENANCE_SCHEDULER_STALLED']) {
+    for (const remove of [
+      f => { delete f.snapshot.maintenance; },
+      f => { f.snapshot.maintenance = null; },
+      f => { f.maintenance.state = 'unknown'; },
+      f => { if (reasonCode === 'MAINTENANCE_EXECUTION_TIMEOUT') f.maintenance.deadlineAt = null;
+        else f.maintenance.nextCheckAt = null; },
+    ]) {
+      const f = maintenanceFixture(reasonCode); remove(f);
+      for (const phase of ['opened', 'resolved']) {
+        f.signal.observation.phase = phase;
+        assert.deepEqual(f.inspect(), { valid: false, reason: 'maintenance-observation-not-current' });
+      }
+    }
+  }
+});
+
 test('same inbox persists phases once, retires queued old alarms and lets users go first', async () => {
   const f = fixture(); let state = { requests: [] }, queue = Promise.resolve();
   const sent = [], agent = { id: 'router', status: 'running', followup(message) { sent.push(message); agent.status = 'running'; } };

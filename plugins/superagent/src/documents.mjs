@@ -1,19 +1,28 @@
 ﻿import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, existsSync, openSync, fsyncSync, closeSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, existsSync, openSync, fsyncSync, closeSync, lstatSync, readdirSync } from 'node:fs';
+import { join, resolve, dirname, relative, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { notifySettings } from '../../benchgo/shared/settings-adapter-utils.mjs';
 
-export const ASSISTANT_DOCUMENTS = Object.freeze(['AGENTS.md', 'SOUL.md', 'USER.md', 'IDENTITY.md', 'TOOLS.md', 'MEMORY.md']);
+export const ASSISTANT_DOCUMENTS = Object.freeze(['AGENTS.md', 'SOUL.md', 'USER.md', 'IDENTITY.md', 'TOOLS.md', 'MEMORY.md', 'PROACTIVE_PREFERENCES.md']);
 // TOOLS remains managed for profile imports and on-demand reading, not injection.
 export const ASSISTANT_CONTEXT_DOCUMENTS = Object.freeze(['SOUL.md', 'IDENTITY.md', 'USER.md', 'AGENTS.md', 'MEMORY.md']);
+export const ASSISTANT_OPTIONAL_CONTEXT_DOCUMENTS = Object.freeze(['dreams/alignment/ALIGNMENT_SYNTHESIS.md', 'memory/people/INDEX.md', 'memory/groups/INDEX.md']);
+export function isAssistantDocument(name) {
+  if (typeof name !== 'string') return false;
+  if (ASSISTANT_DOCUMENTS.includes(name) || ASSISTANT_OPTIONAL_CONTEXT_DOCUMENTS.includes(name)) return true;
+  const daily = /^(?:memory|dreams)\/(\d{4}-\d{2}-\d{2})\.md$/u.exec(name);
+  if (daily) { const date = new Date(`${daily[1]}T00:00:00Z`); return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === daily[1]; }
+  return /^memory\/(?:people|groups)\/[A-Za-z0-9][A-Za-z0-9_-]{0,99}\.md$/u.test(name) && !/\/(?:con|prn|aux|nul|com[1-9]|lpt[1-9])\.md$/iu.test(name);
+}
 const templates = {
   "AGENTS.md": "# 工作约定\n\n执行用户已交代的工作；发现范围外新事项时先提出建议。\n前台保持可交流，持续工作交由后台任务；默认只报告结果、失败和需要用户决定的事项。\n根据真实执行结果说明完成情况，检查与任务相称；工具与执行权限以当前服务为准。\n",
   "SOUL.md": "# 沟通风格\n\n清晰、简洁、诚实。先给结论，按需要补充依据。\n普通细节自行判断，关键歧义及时澄清；不编造事实、进度或完成状态。\n",
   "USER.md": "# 用户资料与偏好\n\n尚未记录。仅保存用户明确资料和长期偏好；未知项保持空白。\n\n## 不要学习\n\n此处可写不应进入长期记忆的主题和范围。\n",
   "IDENTITY.md": "# 助手身份\n\n我是用户的长期个人助手，负责理解需求、工作协调与结果交付。\n初始姓名为空；用户命名后由本文件顶部的 name 字段管理，该名字就是正名，空字符串表示未命名。\n所有渠道沿用同一身份；渠道、产品品牌与所用模型不构成姓名或个人身份。\n默认使用品牌形象，也支持用户自己的形象。更换外观不改变我的身份、权限或记忆。\n自身人设沿用 SOUL.md，用户资料沿用 USER.md，共同经历与长期经验沿用同一套记忆。\n",
   "TOOLS.md": "# 本地工具笔记\n\n记录已核实的环境特点、使用经验及配置入口。\n实际工具可用性以当前运行时服务为准；此文件不保存密钥、令牌或工具注册表。\n",
-  "MEMORY.md": "# 长期记忆\n\n记录有来源的长期事实、决定和经验；不保存原始聊天或当前任务状态。\n"
+  "MEMORY.md": "# 精选长期记忆\n\n仅保留有来源的精选总纲；详细记录见 memory/YYYY-MM-DD.md。\n",
+  "PROACTIVE_PREFERENCES.md": "# 主动行为偏好\n\n仅记录用户明确的联系时机、频率、渠道和打扰边界；未知项不推断。\n"
 };
 const now = () => new Date().toISOString();
 export const documentHash = content => createHash('sha256').update(content, 'utf8').digest('hex');
@@ -21,7 +30,7 @@ const decode = value => value ? JSON.parse(value) : null;
 const queues = new Map();
 const conflict = hash => Object.assign(new Error('Assistant document changed; reload before saving'), { code: 'HASH_CONFLICT', hash });
 const validName = name => {
-  if (!ASSISTANT_DOCUMENTS.includes(name)) throw new Error('未知助手文档');
+  if (!isAssistantDocument(name)) throw new Error('未知助手文档或不安全路径');
   return name;
 };
 function validText(content) {
@@ -53,6 +62,22 @@ export async function createAssistantDocuments({ directory }) {
   const listeners = new Set();
   directory = resolve(directory);
   mkdirSync(directory, { recursive: true });
+  function safePath(name, createParents = false) {
+    validName(name);
+    const path = resolve(directory, ...name.split('/'));
+    if (relative(directory, path).startsWith(`..${sep}`) || relative(directory, path) === '..') throw new Error('不安全文档路径');
+    let currentPath = directory;
+    for (const part of ['', ...name.split('/')]) {
+      if (part) currentPath = join(currentPath, part);
+      try { if (lstatSync(currentPath).isSymbolicLink()) throw new Error('助手文档不允许符号链接'); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    if (createParents) { mkdirSync(dirname(path), { recursive: true }); return safePath(name); }
+    return path;
+  }
+  // Never follow an existing profile-root junction/symlink.
+  if (lstatSync(directory).isSymbolicLink()) throw new Error('助手目录不允许符号链接');
+  if (existsSync(join(directory, 'assistant.db')) && lstatSync(join(directory, 'assistant.db')).isSymbolicLink()) throw new Error('助手数据库不允许符号链接');
   const db = new DatabaseSync(join(directory, 'assistant.db'));
   db.exec(`PRAGMA busy_timeout=5000;
     PRAGMA secure_delete=ON;
@@ -66,7 +91,7 @@ export async function createAssistantDocuments({ directory }) {
   let closed = false;
   const tx = fn => { db.exec('BEGIN IMMEDIATE'); try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; } };
   const actual = name => {
-    try { const value = new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(join(directory, name))); validText(value); return value; }
+    try { const value = new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(safePath(name))); validText(value); return value; }
     catch (error) { error.document = name; throw error; }
   };
   function current(name) { return db.prepare('SELECT * FROM document_current WHERE name=?').get(name); }
@@ -87,7 +112,7 @@ export async function createAssistantDocuments({ directory }) {
   function recover() {
     for (const row of db.prepare("SELECT * FROM document_journal WHERE status='prepared'").all()) {
       let hash;
-      try { hash = documentHash(actual(row.name)); } catch { continue; }
+      try { hash = documentHash(actual(row.name)); } catch (error) { if (error.code === 'ENOENT' && row.old_hash === null) hash = null; else continue; }
       tx(() => {
         const record = db.prepare('SELECT * FROM document_versions WHERE id=?').get(row.version_id);
         const status = hash === row.new_hash ? 'committed' : hash === row.old_hash ? 'aborted' : 'conflict';
@@ -129,10 +154,13 @@ export async function createAssistantDocuments({ directory }) {
   }
   function change(name, content, { expectedHash, source, requireHash = true } = {}) {
     validName(name); validText(content); sourceValue(source);
-    const previous = sync(name);
+    if (name === 'MEMORY.md' && content.length > 6000) throw new Error('精选记忆总纲不超过 6000 字符');
+    const present = existsSync(safePath(name));
+    const previous = present ? sync(name) : { name, content: '', hash: null, revision: current(name)?.revision || 0 };
+    if (!present && requireHash) throw Object.assign(new Error('助手文档不存在'), { code: 'DOCUMENT_MISSING', document: name });
     if (requireHash && typeof expectedHash !== 'string') throw new Error('expectedHash is required');
     if (expectedHash !== undefined && expectedHash !== previous.hash) throw conflict(previous.hash);
-    if (content === previous.content) {
+    if (present && content === previous.content) {
       return previous;
     }
     const id = randomUUID();
@@ -141,8 +169,8 @@ export async function createAssistantDocuments({ directory }) {
       db.prepare('INSERT INTO document_journal VALUES (?,?,?,?,?,?,?)').run(id, name, previous.hash, entry.hash, entry.id, 'prepared', now());
       return entry;
     });
-    const path = join(directory, name);
-    const beforeHash = documentHash(actual(name));
+    const path = safePath(name, true);
+    const beforeHash = existsSync(path) ? documentHash(actual(name)) : null;
     if (beforeHash !== previous.hash) { recover(); sync(name); throw conflict(beforeHash); }
     atomic(path, content);
     const persistedHash = documentHash(actual(name));
@@ -157,26 +185,45 @@ export async function createAssistantDocuments({ directory }) {
   }
   function initialize() {
     for (const name of ASSISTANT_DOCUMENTS) {
-      if (!existsSync(join(directory, name))) {
+      if (!existsSync(safePath(name))) {
         if (current(name)) throw Object.assign(new Error(`助手文档 ${name} 缺失；请恢复文件，不会用模板覆盖已有资料`), { code: 'DOCUMENT_MISSING', document: name });
-        writeFileSync(join(directory, name), templates[name], { flag: 'wx', mode: 0o600 });
+        writeFileSync(safePath(name), templates[name], { flag: 'wx', mode: 0o600 });
       }
       sync(name);
     }
   }
   try { await locked(initialize); } catch (error) { db.close(); throw error; }
+  function allNames() {
+    const names = [...ASSISTANT_DOCUMENTS];
+    const walk = prefix => {
+      const path = join(directory, prefix);
+      if (!existsSync(path)) return;
+      if (lstatSync(path).isSymbolicLink()) throw new Error('助手文档不允许符号链接');
+      for (const entry of readdirSync(path, { withFileTypes: true })) {
+        const name = `${prefix}/${entry.name}`;
+        if (entry.isSymbolicLink()) throw new Error('助手文档不允许符号链接');
+        if (entry.isDirectory() && ['memory/people', 'memory/groups', 'dreams/alignment'].includes(name)) walk(name);
+        else if (entry.isFile() && isAssistantDocument(name)) names.push(name);
+        if (names.length > 4096) throw new Error('助手文档数量超过上限');
+      }
+    };
+    walk('memory'); walk('dreams');
+    return names.sort();
+  }
   return {
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     names: ASSISTANT_DOCUMENTS,
-    list: () => locked(() => ASSISTANT_DOCUMENTS.map(sync)),
+    list: ({ recursive = false } = {}) => locked(() => (recursive ? allNames() : ASSISTANT_DOCUMENTS).map(sync)),
     read: name => locked(() => sync(validName(name))),
     update: (name, options) => locked(() => change(name, options?.content, options)),
+    write: (name, options) => locked(() => change(name, options?.content, { ...options, requireHash: false })),
     // Read, transform and write under the same profile lock.
     mutate: (name, transform, options = {}) => locked(() => {
-      const previous = sync(validName(name));
+      validName(name);
+      const previous = existsSync(safePath(name)) ? sync(name) : { name, content: '', hash: null, revision: 0 };
       if (options.expectedHash !== undefined && options.expectedHash !== previous.hash) throw conflict(previous.hash);
       const content = transform(previous.content, previous);
-      return change(name, content, { ...options, expectedHash: previous.hash });
+      return change(name, content, { ...options, expectedHash: previous.hash, requireHash: previous.hash !== null });
     }),
     versions: name => locked(() => {
       sync(validName(name));
@@ -189,7 +236,7 @@ export async function createAssistantDocuments({ directory }) {
       return change(name, row.content, { expectedHash, source: { type: 'restore', versionId } });
     }),
     context: () => locked(() => {
-      const documents = ASSISTANT_CONTEXT_DOCUMENTS.map(sync);
+      const documents = [...ASSISTANT_CONTEXT_DOCUMENTS, ...ASSISTANT_OPTIONAL_CONTEXT_DOCUMENTS.filter(name => existsSync(safePath(name)))].map(sync);
       const hashes = Object.fromEntries(documents.map(row => [row.name, row.hash]));
       return { documents, hashes, snapshotId: documentHash(JSON.stringify(hashes)) };
     }),

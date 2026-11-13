@@ -1,7 +1,7 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>BenchGo · SuperAgent架构</title><link rel="stylesheet" href="../_assets/architecture.css"><link rel="stylesheet" href="../_assets/architecture-context.css"></head>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>BenchGo · SuperAgent架构</title><link rel="stylesheet" href="../_assets/architecture.css"><link rel="stylesheet" href="../_assets/architecture-context.css"><link rel="stylesheet" href="../_assets/architecture-iteration.css"></head>
 <body><main aria-label="BenchGo SuperAgent架构">
-<header class="header"><div class="brand"><a class="brand-mark" href="../总架构.html" aria-label="BenchGo 总架构" style="text-decoration:none">B</a><div><div class="eyebrow">BENCHGO / SUPERAGENT / ORCHESTRATION</div><h1>SuperAgent<span>架构图解</span></h1></div></div><div class="header-actions"><button type="button" class="btn outline context-open" id="context-open" aria-expanded="false" aria-controls="context-panel">上下文分层</button><button type="button" class="btn" id="directory-toggle" aria-expanded="false" aria-controls="directory">☷ <span class="directory-label">节点</span>目录</button><button type="button" class="btn outline" id="walk-start" aria-pressed="false">流程走读 ↗</button></div></header>
+<header class="header"><div class="brand"><a class="brand-mark" href="../总架构.html" aria-label="BenchGo 总架构" style="text-decoration:none">B</a><div><div class="eyebrow">BENCHGO / SUPERAGENT / ORCHESTRATION</div><h1>SuperAgent<span>架构图解</span></h1></div></div><div class="header-actions"><a class="btn outline iteration-shortcut" href="#iteration-files" style="text-decoration:none">自我迭代</a><button type="button" class="btn outline context-open" id="context-open" aria-expanded="false" aria-controls="context-panel">上下文分层</button><button type="button" class="btn" id="directory-toggle" aria-expanded="false" aria-controls="directory">☷ <span class="directory-label">节点</span>目录</button><button type="button" class="btn outline" id="walk-start" aria-pressed="false">流程走读 ↗</button></div></header>
 <nav class="tabs" aria-label="架构板块"><a href="../总架构.html"><span class="tab-index">◎</span>总架构</a><a href="../01-设备与远程连接/架构.html"><span class="tab-index">01</span>设备与远程连接</a><a href="../02-工作台与Agent/架构.html"><span class="tab-index">02</span>工作台与 Agent</a><a href="../03-实时语音/架构.html"><span class="tab-index">03</span>实时语音</a><a href="../04-模型与工具/架构.html"><span class="tab-index">04</span>模型与工具</a><a href="../05-更新与发布/架构.html"><span class="tab-index">05</span>更新与发布</a><a href="架构.html" aria-current="page"><span class="tab-index">06</span>SuperAgent</a></nav>
 <div class="viewport" id="viewport" tabindex="0" aria-label="架构画布：拖动空白平移，滚轮或双指缩放，拖动节点调整布局，点击节点查看源码。方向键平移，加减号缩放，零适应。"><div class="load-state" id="load-state" role="status"><strong id="load-title">正在展开架构图</strong><p id="load-message">如果画布未出现，请确认 _assets 目录与 HTML 一同保留。</p><button type="button" class="btn outline" id="retry" hidden onclick="location.reload()">重新加载</button></div><div class="world" id="world"><div class="canvas-title"><div><h2 id="canvas-title"></h2><p id="canvas-subtitle"></p></div><span class="sheet-no" id="sheet-no"></span></div><div id="zones"></div><svg class="edges" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--edge)"/></marker><marker id="arrow-feedback" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--accent)"/></marker></defs><g id="edge-paths"></g><g id="edge-labels"></g></svg><div id="nodes"></div></div></div>
 <div class="canvas-bottom"><div><div class="legend"><span><i></i>调用 / 依赖</span><span><i class="feedback"></i>反馈 / 记录</span><span><i class="support"></i>配置 / 装配</span><span>虚线边框 · 设计目标</span></div><p class="hint">拖动平移 · 滚轮缩放 · 拖动节点 · 点击查看说明与源码</p></div><div class="camera-controls" aria-label="画布控制"><button type="button" class="btn icon" id="zoom-out" aria-label="缩小">−</button><span class="zoom-value" id="zoom-value">100%</span><button type="button" class="btn icon" id="zoom-in" aria-label="放大">+</button><span class="separator"></span><button type="button" class="btn" id="fit">适应</button><button type="button" class="btn" id="actual">1:1</button><span class="separator"></span><button type="button" class="btn" id="reset">重置</button></div></div>
@@ -9,7 +9,8 @@
 <aside class="panel directory" id="directory" aria-label="节点与文档目录" hidden><div class="panel-top"><h2 style="font-size:17px">节点目录</h2><button type="button" class="btn icon" id="directory-close" aria-label="关闭节点目录">×</button></div><input class="search" id="search" type="search" placeholder="搜索名称、服务或函数" aria-label="搜索架构节点"><div class="directory-list" id="directory-list"></div><div class="empty" id="search-empty" hidden><div class="empty-mark">⌕</div><strong>没有匹配的节点</strong><p>试试模块名称或清空关键词。</p><button type="button" class="btn primary" id="clear-search">显示全部节点</button></div><div class="detail-block"><h3>阅读设计</h3><div id="design-links"></div></div><p class="notice" id="boundary"></p></aside>
 <section class="walkthrough" id="walkthrough" aria-label="架构流程走读" aria-live="polite" hidden><div class="step-top"><span id="step-label"></span><button type="button" class="btn icon" id="walk-exit" aria-label="退出流程走读">×</button></div><h3 id="step-title"></h3><p id="step-text"></p><div class="walk-controls"><button type="button" class="btn" id="walk-prev">← 上一步</button><button type="button" class="btn primary" id="walk-next">下一步 →</button></div><div class="progress"><span id="step-progress"></span></div></section>
 <noscript><div class="load-state"><strong>需要 JavaScript 展开交互图</strong><p>请启用 JavaScript，或直接阅读同目录中的设计 Markdown。</p></div></noscript>
-</main><script type="application/json" id="architecture-data">{
+</main><script type="application/json" id="architecture-data">
+{
   "id": "06",
   "title": "SuperAgent 总助手",
   "eyebrow": "SUPERAGENT / ORCHESTRATION",
@@ -69,7 +70,7 @@
       "sub": "理解、答疑、派工、接收信号与表达",
       "symbol": "createAssistantEngine()",
       "plain": "用户始终与同一个总助手对话，工作可以在后台继续。",
-      "role": "依持久主聊/旁聊归属复用官方 Agent 单写入生命周期，加载冻结文档和原会话历史，处理真实用户消息及持久内部信号。内存装配标记仅为缓存，缺失时在安全边界恢复装配，不要求用户手动结束原会话，不重放已执行动作；恢复契约及验证边界见模型与上下文.md。",
+      "role": "依持久主聊/旁聊归属复用官方 Agent 单写入生命周期，按安全边界装配当前有效档案版本和原会话历史，处理真实用户消息及持久内部信号。内存装配标记仅为缓存，缺失时在安全边界恢复装配，不要求用户手动结束原会话，不重放已执行动作；恢复契约及验证边界见模型与上下文.md。",
       "input": "用户原话、身份文档、历史与可信内部信号",
       "output": "普通回答、开单/修订调用、正式交付表达",
       "sources": [
@@ -244,7 +245,7 @@
       "sub": "身份档案 · 记忆 · 历史 · 任务包",
       "symbol": "getSessionContext() / selectMemories()",
       "plain": "下方上下文管理组逐项展示身份档案、自动匹配、主动检索和 Worker 注入，点击任一小节点查看输入输出与源码。",
-      "role": "Router 使用固定约定、本会话历史及四份固定档案快照，每轮匹配相关记忆；MEMORY.md 与 TOOLS.md 整文仅按需读取，其记忆条目可参与匹配。记忆、公开历史与工单证据各走自己的检索工具。Worker 接本单任务包；官方 subagents 的上下文与委派由官方能力管理。",
+      "role": "Router 使用稳定档案、短 MEMORY 总纲、小量对象目录和简短协作对齐；每轮有界匹配当前有效记忆，详细事实、对象页和复盘按需读。Worker 只接本单任务包，官方 subagents 自主管理子会话上下文。",
       "input": "身份档案、当前真人文本、官方历史、本单要求与可信来源指针",
       "output": "分角色上下文、相关记忆及有界原文",
       "sources": [
@@ -254,7 +255,7 @@
         "plugins/superagent/src/history-search.mjs",
         "plugins/superagent/src/assignment-executor.mjs"
       ],
-      "note": "管理六档案≠自动注入六档案；记忆包含匹配≠向量召回。MEMORY.md 正文与结构化记忆有重复，整包上下文总 token 预算尚未实现。下方小节点可直接展开；顶部保留完整对照。",
+      "note": "档案与记忆快照记录实际装配版本；后续回合在安全边界检查最新版本，纠正或摘要更新不一律等待新会话；在途请求保持原输入。明确遗忘立即限制旧召回并清理受影响快照。官方 Session 保留本会话历史，其他会话按需补读。本轮接线状态见记忆与技能。",
       "state": "implemented",
       "x": 820,
       "y": 740,
@@ -265,18 +266,22 @@
       "title": "自我迭代",
       "kicker": "SELF ITERATION",
       "kind": "orchestration",
-      "sub": "触发调度、闭单学习、记忆与技能策展",
-      "symbol": "createLearningProcessor()",
-      "plain": "完成任务后再整理可复用经验，避免把学习变成当前交付的阻塞步骤。",
-      "role": "统一涵盖后台学习、长期记忆沉淀、自建技能候选与闲时策展；下方独立分组展开当前流程。技能候选需用户批准后通过官方 provider 提供，保留状态和来源。",
-      "input": "已关工单、经验候选和技能内容",
-      "output": "受控记忆变更、可用技能或待处理状态",
+      "sub": "四组职责 · 11 模块 · 记忆与行为闭环",
+      "symbol": "Router 同步记录 + 一个专用后台执行器",
+      "plain": "一个自我迭代大组内包含四个小组、11 项职责。点击“文件树与全部流向”可查看真实运行根、现有与目标目录、逐模块触发/读写链以及上下文注入。",
+      "role": "一大组四小组、11 项职责。Router 同步主动记忆；仅一个自我迭代后台执行器处理记忆整合、关系档案、Dreams、技能评审和 Ideas，定时/静默/显式共用增量来源。Watchdog 只监督。后台不建工作台聊天、工单或过程 UI；服务校验来源、身份、版本、范围、去重与遗忘。",
+      "input": "权限范围内的真实对话、用户纠正、执行事实、已保存记忆和实际技能使用记录",
+      "output": "有来源的记忆与档案、对齐总结、数据库中的技能与想法候选；具体路径见“文件树与全部流向”。",
       "sources": [
-        "plugins/superagent/src/learning-processor.mjs",
+        "plugins/superagent/src/memory.mjs",
+        "plugins/superagent/src/documents.mjs",
+        "plugins/superagent/src/review.mjs",
+        "plugins/superagent/src/review-worker.mjs",
+        "plugins/superagent/src/maintenance-processors.mjs",
         "plugins/superagent/src/owned-skills.mjs",
         "plugins/superagent/src/owned-skill-provider.mjs"
       ],
-      "note": "后台学习只做经验整理，不审核本次任务能否交付。技能创建的判断标准待讨论。",
+      "note": "四组11职责的源码接线与定向测试已完成；真实付费模型效果、安装实例和用户使用效果仍待验。Ideas仅在proactive启用且相关的下一真实用户回合提议，未新增自主外发；提议上下文不等于已交付。目标研学和压缩不在本轮。",
       "state": "implemented",
       "x": 1200,
       "y": 740,
@@ -290,7 +295,7 @@
       "sub": "assistant.db · ledger.db · 官方 Session · Markdown",
       "symbol": "createAssistantStore()",
       "plain": "工单、业务原文、对话原文和档案各有自己的权威存放处。",
-      "role": "assistant.db 保存工单、运行与控制面，ledger.db 保存业务原文与引用关系，官方 Session 保存对话与执行原文，Markdown 保存身份、记忆等档案，state.json 保存逻辑会话映射。检索索引和执行投影是可重建的派生数据。",
+      "role": "三个自我迭代数据面：Markdown 保存权威事实与档案（按日详细事实、短总纲、对象视图、Dreams）；assistant.db 保存版本/journal、bank 分类与索引、统一维护队列/增量水位、技能及想法候选；官方 Session/ledger.db 保留各自原文证据。工单与投递仍由原控制面保存，不复制对话全文。",
       "input": "工单与运行变化、业务原文、档案修改",
       "output": "可恢复的工单、结果、投递与档案记录",
       "sources": [
@@ -373,7 +378,7 @@
     },
     {
       "id": "ctx-docs-auto",
-      "title": "四份自动注入档案",
+      "title": "稳定档案与简短对齐",
       "kicker": "CONTEXT / DOCUMENT",
       "kind": "orchestration",
       "symbol": "",
@@ -383,18 +388,18 @@
       "x": 110,
       "y": 1020,
       "doc": "docs/06-superagent/模型与上下文.md",
-      "sub": "SOUL · IDENTITY · USER · AGENTS",
+      "sub": "四档案 · 短总纲 · 对象目录 · 对齐",
       "plain": "沟通风格、助手身份、用户资料和工作约定，启动时注入 Router。",
-      "role": "SOUL.md：沟通风格与表达约定；IDENTITY.md：助手身份与姓名；USER.md：当前使用者资料和偏好，不是权限等级；AGENTS.md：工作约定与行为提示。启动时从档案快照注入 Router，去除 HTML 元数据注释，保留正文与 hash；IDENTITY 与 USER 正文只装配一次，USER 条目不重复进入自动匹配。",
-      "output": "Router 启动上下文；按 sessionId 冻结",
+      "role": "SOUL / IDENTITY / USER / AGENTS 正文自动装配；短 MEMORY 总纲、小量 people/groups INDEX 按预算注入。ALIGNMENT_SYNTHESIS 每次 Router 启动自动读取，简短说明如何与用户打交道；避免重复事实。",
+      "output": "Router 分层上下文与实际装配版本",
       "sources": [
         "plugins/superagent/src/documents.mjs"
       ],
-      "note": "首次取上下文时按 sessionId 冻结档案与记忆快照，后续回合复用；普通档案修改不改写旧快照，显式遗忘会擦除相关内容。本会话历史由官方 Session 提供，过长时复用官方压缩；其他会话不自动整段灌入。"
+      "note": "档案与记忆快照记录实际装配版本；后续回合在安全边界检查最新版本，纠正或摘要更新不一律等待新会话；在途请求保持原输入。明确遗忘立即限制旧召回并清理受影响快照。官方 Session 保留本会话历史，其他会话按需补读。本轮接线状态见记忆与技能。"
     },
     {
       "id": "ctx-docs-ondemand",
-      "title": "两份按需读取档案",
+      "title": "详细材料按需读取",
       "kicker": "CONTEXT / DOCUMENT",
       "kind": "orchestration",
       "symbol": "",
@@ -404,15 +409,15 @@
       "x": 460,
       "y": 1020,
       "doc": "docs/06-superagent/模型与上下文.md",
-      "sub": "MEMORY · TOOLS · 正文不自动注入",
-      "plain": "长期记忆与工具笔记可管理、可读取，整文不自动注入。",
-      "role": "MEMORY.md：长期事实与经验；TOOLS.md：本地工具笔记。均可管理、导入和读取，Router 自动上下文只保留文件名与 hash，正文按需读取。可解析的记忆条目进入逐轮有界匹配和主动检索；工具真实能力以运行时注册表为准。",
-      "output": "文件目录与 hash；按需正文；可解析条目参与记忆匹配",
+      "sub": "日记事实 · 对象页 · 复盘 · TOOLS",
+      "plain": "详细事实、对象视图与复盘按需读取，保留稳定来源。",
+      "role": "memory/日期.md 保存详细事实、稳定 ID、来源与版本；people/groups 对象页引用事实，dreams 日复盘写行为反思。TOOLS 按需；PROACTIVE_PREFERENCES 每次主动投递前读取。",
+      "output": "Router 分层上下文与实际装配版本",
       "sources": [
         "plugins/superagent/src/documents.mjs",
         "plugins/superagent/src/memory.mjs"
       ],
-      "note": "管理六份档案不等于自动注入六份。MEMORY.md 正文与结构化记忆存在重复。"
+      "note": "档案与记忆快照记录实际装配版本；后续回合在安全边界检查最新版本，纠正或摘要更新不一律等待新会话；在途请求保持原输入。明确遗忘立即限制旧召回并清理受影响快照。官方 Session 保留本会话历史，其他会话按需补读。本轮接线状态见记忆与技能。"
     },
     {
       "id": "ctx-match",
@@ -422,13 +427,13 @@
       "sub": "当前消息 → 字面匹配",
       "symbol": "",
       "plain": "自动选取与当前消息相关的记忆，不额外调用模型做全库搜索。",
-      "role": "从当前真人消息及可信问答回执取得文本，在已冻结、经过隐私策略过滤的结构化记忆中筛选；记忆存储汇合 MEMORY.md、USER.md、TOOLS.md 可解析条目；自动匹配排除已全文注入的 USER.md；不是每轮重新搜索全部磁盘或全部聊天。 转小写后提取至少两字符的英文/数字/下划线/连字符词片段，或连续中文片段；记忆正文包含片段就按片段长度加分。仅取有命中的条目，按归一化正文去重，最多 8 条、每条至多 2000 字符、正文合计最多 8000 字符；无查询词或无命中则不补记忆，不拼接末尾条目。",
+      "role": "从当前真人文本和可信回执筛选当前有效记忆，按正文去重并排除已全文注入 USER。沿现有有界字面匹配，不全库加载；详细事实按稳定 ID 定位。",
       "input": "当前消息、本单要求或按需检索参数",
-      "output": "最多 8 条、正文合计 8000 字符的命中记忆",
+      "output": "最多 6 条、正文合计 4000 字符的命中记忆",
       "sources": [
         "plugins/superagent/src/router-context.mjs"
       ],
-      "note": "这是字面包含排序，不是向量语义召回。MEMORY.md 不全文注入，USER.md 不重复进入匹配记忆；8 条与 8000 字符只约束匹配正文，不代表整个请求有总 token 预算。",
+      "note": "不是向量检索；分类视图和索引保存在 assistant.db，不生成四份 bank 正文。整包 token 预算待实施。",
       "state": "implemented",
       "compact": true,
       "x": 810,
@@ -527,7 +532,7 @@
       "sub": "技能正文按需 · 官方压缩",
       "symbol": "",
       "plain": "技能发现和长历史压缩复用官方能力。",
-      "role": "BenchGo 通过官方 SkillProvider 暴露 active/stale 技能的名称、描述和定位 hash；正文只在官方 get/调用时读取。技能目录不是把所有技能正文自动加入每个 Router/Worker 请求，也没有另一个全库技能匹配模型。 Router 复用 preset 中已有的 compaction，缺失时装配官方 basic compaction，并接入配置的辅助模型路由；压缩只改变会话上下文，不替代原始日志、长期记忆或当前要求。",
+      "role": "自建技能沿数据库候选采用和官方 SkillProvider 发现，正文按需；实际使用与效果分别记录，预览不算使用，idleDays仅作只读信号，不自动标记stale或按闲置归档。会话压缩复用官方 compaction，与本轮 11 项自我迭代分开。",
       "input": "当前消息、本单要求或按需检索参数",
       "output": "相关记忆、有界原文或官方上下文能力",
       "sources": [
@@ -541,92 +546,363 @@
       "doc": "docs/06-superagent/模型与上下文.md"
     },
     {
-      "id": "iteration-trigger",
-      "title": "迭代触发与调度",
-      "kicker": "SELF ITERATION / TRIGGER",
+      "id": "iteration-record",
+      "title": "即时记录",
+      "kicker": "A / 记录与触发",
       "kind": "orchestration",
-      "sub": "每 10 条用户输入 / 单回合第 10 次工具迭代",
-      "symbol": "createLearningCounters()",
-      "plain": "计数或用户主动要求只触发后台整理，不保证产生记忆或技能。",
-      "role": "同一 Router 会话累计第 10、20、30……条用户输入各触发一次；同一用户回合第 10 次 Router 工具迭代触发一次。/learn 与明确自然语言学习请求复用同一队列；重复事件去重，后台输出不递归计数。服务启动处理一次，随后每 30 秒领取一项，默认每日最多领取 20 项，重试也占额度。",
-      "input": "用户输入计数、工具迭代计数或显式学习请求",
-      "output": "持久 learning 后台整理队列项",
+      "sub": "对话中识别 · 保存后确认",
+      "symbol": "自我迭代 · 源码已接线",
+      "plain": "值得以后使用的事实、偏好与纠正，在当前对话中记下；不等待后台补记。",
+      "role": "Router 根据真实用户输入主动识别耐久信息，并处理明确的记住、纠正、遗忘请求，通过统一记忆服务写入；成功回执到达后才确认保存。用户明确偏好、执行事实和助手推断分别标注，推断不能冒充用户表态。单次任务要求不自动升级为长期偏好。进度流水、工具输出全文和凭据不进入长期记忆。",
+      "input": "当前原始消息、相关已有记忆、受影响条目与真实写入身份",
+      "output": "新增、纠正或遗忘的条目及来源、版本与写入回执",
       "sources": [
-        "plugins/superagent/src/learning-counters.mjs",
-        "plugins/superagent/src/review.mjs",
-        "plugins/superagent/src/review-worker.mjs"
+        "plugins/superagent/src/router-tools.mjs",
+        "plugins/superagent/src/memory-tool-policy.mjs",
+        "plugins/superagent/src/memory.mjs",
+        "plugins/superagent/src/profile-documents.mjs"
       ],
-      "note": "10、20、30 是用户输入的累计触发位置；每日 20 项是领取额度，均不是技能创建配额。",
+      "note": "源码服务已接线并有定向覆盖；真实付费模型的产出质量与实际使用效果未验证。",
       "state": "implemented",
       "x": 1580,
-      "y": 740,
-      "doc": "docs/06-superagent/记忆与技能.md"
+      "y": 775,
+      "compact": true,
+      "doc": "docs/06-superagent/记忆与技能.md",
+      "flow": {
+        "trigger": "对话中出现耐久事实、稳定偏好、决策、关系变化；或用户明确要求记住、纠正、遗忘。",
+        "actor": "当前 Router 同步识别；宿主绑定当前原始消息与身份，统一记忆服务负责写入。",
+        "via": "已存在：assistant_memory → store.saveMemory / memory.save → documents.mutate；档案修改走 assistant_profile（read/update/versions）。目标扩展到受控子目录，不给模型任意文件写权限。",
+        "reads": "当前用户原话；相关条目、档案及来源版本。",
+        "writes": "R/memory/YYYY-MM-DD.md 保存详细事实、稳定 ID、来源和版本；明确档案修改写相应受控文件；journal 与索引在 assistant.db。",
+        "use": "收到真实成功回执才确认，后续回合在安全边界刷新；遗忘立即限制旧召回。",
+        "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
+      }
     },
     {
-      "id": "iteration-material",
-      "title": "可信闭单取材",
-      "kicker": "SELF ITERATION / MATERIAL",
+      "id": "iteration-trigger",
+      "title": "静默整合",
+      "kicker": "A / 记录与触发",
       "kind": "orchestration",
-      "sub": "全局未消费闭单 · 每批最多 5 单",
-      "symbol": "learningSources()",
-      "plain": "只整理已完成且确认投递的工单，不直接提炼刚才的十条对话。",
-      "role": "按跨会话全局水位取新闭单，要求 completed、结果与指令版本一致、原来源匹配且存在 accepted 投递回执。每批最多五单，材料是可信用户原始指令加 Worker 最后一段话；运行、等待、待交付或投递不确定的工单不入选。",
-      "input": "已完成且已送达的工单、可信原始指令与结果",
-      "output": "带精确来源标识的有界学习材料",
+      "sub": "实质对话静默后 · 后台补记",
+      "symbol": "自我迭代 · 源码已接线",
+      "plain": "实质对话静默后，让统一后台执行器检查五类维护是否有增量欠账。",
+      "role": "五类维护共用静默窗口，定时、静默、显式入口共享来源引用和去重，同一职责沿自己的消费水位推进；有欠账下个统一tick续批。新输入让位或有界取消，无增量跳过模型调用，不创建独立定时Agent或quiet副本。",
+      "input": "静默信号、尚未整合的可信消息与现有记忆版本",
+      "output": "交给记忆整合管线的待处理范围或跳过原因",
       "sources": [
-        "plugins/superagent/src/learning-source-store.mjs",
-        "plugins/superagent/src/learning-processor.mjs"
+        "plugins/superagent/src/review.mjs",
+        "plugins/superagent/src/review-worker.mjs",
+        "plugins/superagent/src/learning-counters.mjs"
       ],
-      "note": "学习关闭、材料被排除或无新合格材料时不调用模型；本批保存完成才推进水位，失败复用未完成批次。",
+      "note": "源码服务已接线并有定向覆盖；真实付费模型的产出质量与实际使用效果未验证。",
       "state": "implemented",
-      "x": 1960,
-      "y": 740,
-      "doc": "docs/06-superagent/记忆与技能.md"
+      "x": 1880,
+      "y": 775,
+      "compact": true,
+      "doc": "docs/06-superagent/记忆与技能.md",
+      "flow": {
+        "trigger": "实质对话进入静默，或任务有尚未消费的增量欠账；共用窗口，新输入让位。",
+        "actor": "唯一自我迭代执行器；五职责共用静默窗口，同一职责的定时/静默/显式入口共享来源去重与消费水位。",
+        "via": "持久维护队列 → 五职责共用静默窗口/增量来源 → 按职责读任务说明；有未消费来源下个统一 tick 续批，不建工作台聊天、工单或 quiet 副本。",
+        "reads": "尚未处理的、有权限读取的原始消息和执行结果；即时记录已经保存的条目。",
+        "writes": "排队和处理进度写 R/assistant.db；实际记忆写入复用“记忆整合”的目标路径，没有单独 quiet 文件。",
+        "use": "补记结果按所属文件的规则供后续会话使用；没有新增信号就跳过。",
+        "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
+      }
     },
     {
       "id": "iteration-extract",
-      "title": "记忆与技能沉淀",
-      "kicker": "SELF ITERATION / LEARNING",
+      "title": "记忆整合",
+      "kicker": "B / 记忆组织",
       "kind": "model",
-      "sub": "记忆自动保存 · 技能候选批准后启用",
-      "symbol": "createLearningProcessor()",
-      "plain": "模型提炼可复用内容，记忆按规则保存，技能先进入待审核候选。",
-      "role": "每批最多输出五条记忆、两个技能，也可返回空列表。程序校验来源标识、字段、排除词与学习规则；合格记忆自动保存，技能保存为 candidate，由用户在“工具 → 技能”批准或拒绝。批准后通过官方 SkillProvider 提供，正文按需读取。",
-      "input": "可信闭单材料与当前学习规则",
-      "output": "受控长期记忆、待审核技能候选或空结果",
+      "sub": "增量取材 · 校正 · 精选总纲",
+      "symbol": "自我迭代 · 源码已接线",
+      "plain": "把新增记录整理成稳定理解，处理新旧冲突，并精选短小的常驻总纲。",
+      "role": "后台按可配置周期或静默触发读取有权限的新材料，区分事实、偏好、经验与推断；同一主张保留稳定身份、来源和适用条件，新结论通过替代关系更新旧结论。无增益时不产出。MEMORY.md 的目标定位是有长度上限的精选总纲，详细条目保留在可检索记忆中；生成总纲时避免与常驻 USER.md 重复。",
+      "input": "增量真实对话、纠正、执行结果、现有条目与学习排除规则",
+      "output": "带来源和替代关系的记忆变更、短 MEMORY 总纲与处理水位",
       "sources": [
-        "plugins/superagent/src/learning-processor.mjs",
+        "plugins/superagent/src/maintenance-processors.mjs",
+        "plugins/superagent/src/learning-source-store.mjs",
         "plugins/superagent/src/memory.mjs",
-        "plugins/superagent/src/owned-skills.mjs",
-        "plugins/superagent/src/owned-skill-provider.mjs"
+        "plugins/superagent/src/documents.mjs"
       ],
-      "note": "没有独立的第二轮 AI 质量审核，也没有跨批次技能语义去重。提示词要求：结果写明没做成的不提炼成功经验。技能创建的判断标准待讨论。",
+      "note": "源码服务已接线并有定向覆盖；真实付费模型的产出质量与实际使用效果未验证。",
       "state": "implemented",
-      "x": 1960,
-      "y": 1020,
-      "doc": "docs/06-superagent/记忆与技能.md"
+      "x": 2240,
+      "y": 775,
+      "compact": true,
+      "doc": "docs/06-superagent/记忆与技能.md",
+      "flow": {
+        "trigger": "运行时按策略定时唤醒，或静默整合、用户明确要求触发一次有界整理。",
+        "actor": "唯一自我迭代后台执行器组织材料；模型提出变更；记忆服务校验后提交。",
+        "via": "maintenance-processors / maintenance-memory-upkeep 读取 memory-upkeep.md；提示词定义提炼内容，服务核验来源、版本、预算、排除与遗忘。",
+        "reads": "同一增量来源中的真实公开对话、用户纠正、结果与业务原文，以及已有事实；失败与未知不写成成功，闭单已送达不是所有材料的准入门。",
+        "writes": "详细事实：R/memory/YYYY-MM-DD.md，稳定 ID / 来源 / 版本。\n短总纲：R/MEMORY.md。\n去重、版本、分类索引与水位：R/assistant.db。",
+        "use": "短 MEMORY 总纲按预算自动注入；详细条目仅在匹配或检索命中时进入上下文。新主张显式取代旧主张，摘要不成为新的事实证据。",
+        "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
+      }
+    },
+    {
+      "id": "iteration-material",
+      "title": "日志层",
+      "kicker": "B / 记忆组织",
+      "kind": "orchestration",
+      "sub": "有来源的事实轨迹 · 按需回查",
+      "symbol": "自我迭代 · 源码已接线",
+      "plain": "保留发生过什么、依据是什么和后来怎样变化，为纠错与复盘提供证据。",
+      "role": "官方 Session 是对话与执行原文权威，业务账本保存任务、结果和投递关系。按日事实日志只记录耐久事实及其变更引用，不复制整份聊天。以稳定消息、事件或条目 ID 加来源版本定位证据，文件行号只辅助展示。纠正记录新旧替代关系，明确遗忘按其范围清理，并留下防止再学习的保护。",
+      "input": "原始消息、执行与投递事实、即时记录或后台整合的变更回执",
+      "output": "按时间组织的事实轨迹、来源指针和纠正依据",
+      "sources": [
+        "plugins/superagent/src/ledger.mjs",
+        "plugins/superagent/src/memory.mjs",
+        "plugins/superagent/src/documents.mjs",
+        "plugins/superagent/src/history-search.mjs"
+      ],
+      "note": "源码服务已接线并有定向覆盖；真实付费模型的产出质量与实际使用效果未验证。",
+      "state": "implemented",
+      "x": 2540,
+      "y": 775,
+      "compact": true,
+      "doc": "docs/06-superagent/记忆与技能.md",
+      "flow": {
+        "trigger": "即时记录、整合、纠正或遗忘提交时产生事实变更；不是按天启动一次模型把聊天全文总结。",
+        "actor": "统一记忆服务记录事实变化；官方 Harness 继续负责会话原文。",
+        "via": "现有 documents 的版本/journal 与 ledger 服务；扩展按日事实轨迹写入。",
+        "reads": "已核实的源消息/业务记录 ID、变更条目 ID、版本与写入回执。",
+        "writes": "R/memory/YYYY-MM-DD.md：详细事实、变更、稳定 ID、来源与版本；不建每条 entries 文件。原聊天/执行过程仍由官方 Session 保存，业务原文在 ledger.db。",
+        "use": "不整份注入。通过检索和来源引用定点回查，作为审计与纠错依据；明确遗忘可清理相关正文和派生，不以追加留痕为由保留被要求遗忘的内容。",
+        "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
+      }
+    },
+    {
+      "id": "iteration-derived",
+      "title": "派生数据",
+      "kicker": "B / 记忆组织",
+      "kind": "orchestration",
+      "sub": "分类视图 + 检索索引",
+      "symbol": "自我迭代 · 源码已接线",
+      "plain": "bank 是整理后的知识条目视图，索引帮助找到条目；原始证据始终可回查。",
+      "role": "world / experience / opinions / reflections 是同一事实集合的数据库分类视图，索引定位事实 ID、来源与版本，不写四份正文，不新增向量库。修正或遗忘先限制旧召回，再清理可重建派生，不产生新事实或权限。",
+      "input": "已保存的记忆条目、来源版本、变更与遗忘事件",
+      "output": "分类视图、检索结果与可核验的原文定位",
+      "sources": [
+        "plugins/superagent/src/memory.mjs",
+        "plugins/superagent/src/history-search.mjs",
+        "plugins/superagent/src/documents.mjs"
+      ],
+      "note": "源码服务已接线并有定向覆盖；真实付费模型的产出质量与实际使用效果未验证。",
+      "state": "implemented",
+      "x": 2240,
+      "y": 935,
+      "compact": true,
+      "doc": "docs/06-superagent/记忆与技能.md",
+      "flow": {
+        "trigger": "权威 Markdown/条目发生新增、修改、删除或遗忘。",
+        "actor": "运行时记忆与索引服务；模型只读检索结果，不直接编辑索引。",
+        "via": "现有 memory.mjs 词索引与 history-search.mjs → 官方 sessionQuery。目标增量派生作业按水位处理；异步重试不阻塞对话，旧版本在检索时先失效。",
+        "reads": "R/memory/YYYY-MM-DD.md 的当前事实、稳定 ID、来源、分类、版本和访问范围。",
+        "writes": "R/assistant.db 的 bank 分类视图和词索引；无四份 bank Markdown、无 memory/index/、无向量库。",
+        "use": "assistant_memory_search 返回条目与来源；历史由 assistant_session_search 定位，再用 assistant_history 读取原文；业务原文通过 assistant_ledger_read 读取。只把相关摘录加入本轮。",
+        "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
+      }
+    },
+    {
+      "id": "iteration-relationships",
+      "title": "关系档案",
+      "kicker": "B / 记忆组织",
+      "kind": "orchestration",
+      "sub": "人物 / 群组 · 索引 / 详情",
+      "symbol": "自我迭代 · 源码已接线",
+      "plain": "把用户相关人物和群组各自整理成一份档案，谈到谁再读谁。",
+      "role": "会话即时记录与后台维护共享对象身份和写入服务；每个对象一份档案，people/groups 索引只保留名称、简述和引用。关系性质以用户明确陈述为据，公开资料与私人关系分开，不能凭兴趣推断亲疏。小量索引按上下文预算加载，详情在议题涉及对象时按需读取，修正与遗忘贯穿对象页和派生引用。",
+      "input": "明确的关系事实、对象来源和已有档案",
+      "output": "对象档案、受限索引和可追溯的变更",
+      "sources": [
+        "plugins/superagent/src/documents.mjs",
+        "plugins/superagent/src/memory.mjs",
+        "plugins/superagent/src/router-context.mjs"
+      ],
+      "note": "源码服务已接线并有定向覆盖；真实付费模型的产出质量与实际使用效果未验证。",
+      "state": "implemented",
+      "x": 2540,
+      "y": 935,
+      "compact": true,
+      "doc": "docs/06-superagent/记忆与技能.md",
+      "flow": {
+        "trigger": "用户提供明确关系事实时即时更新；后台按策略整合新增关系信息。",
+        "actor": "Router 提交明确关系事实；唯一后台执行器维护对象视图；同一受控服务提交。",
+        "via": "目标扩展档案服务；后台使用 prompts/self-iteration/relationships.md。对象 ID 和来源由服务管理。",
+        "reads": "有依据的关系条目、用户明确陈述与已有对象引用；公开资料与私人关系分开。",
+        "writes": "详细事实：R/memory/YYYY-MM-DD.md。对象视图：memory/people/<id>.md、memory/groups/<id>.md；两目录各有INDEX.md，每行名称、最多100字摘要与来源引用，合并保留已有有效对象，不将摘要当新证据。",
+        "use": "小量 INDEX 目录按预算注入；谈到具体对象时读取对象页及相关事实。关系性质不凭猜测，纠正/遗忘同步影响视图。",
+        "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
+      }
+    },
+    {
+      "id": "iteration-dreaming",
+      "title": "对齐复盘",
+      "kicker": "C / 后台改进",
+      "kind": "model",
+      "sub": "近期反馈 → 下次怎样做",
+      "symbol": "自我迭代 · 源码已接线",
+      "plain": "复盘有效做法、失误和用户纠正，把改进落实为下次可用的行为建议。",
+      "role": "后台读取近期有来源的交互与执行反馈，保存按日复盘、待修复线索和短对齐总结；明确事实、推断与不确定性。总结聚焦行事方式、边界和当前摩擦，后续相似场景引用，再用真实反馈校正。修复进展以可观察的变化判断，不从沉默推断认可，不通过反思增加授权。",
+      "input": "近期交互、用户纠正、失败教训与既有协作规则",
+      "output": "按日复盘、修复线索、短对齐总结与有依据的规则变更建议",
+      "sources": [
+        "plugins/superagent/src/review.mjs",
+        "plugins/superagent/src/review-worker.mjs",
+        "plugins/superagent/src/documents.mjs",
+        "plugins/superagent/src/router-context.mjs",
+        "plugins/superagent/src/maintenance-memory-upkeep.mjs"
+      ],
+      "note": "源码服务已接线并有定向覆盖；真实付费模型的产出质量与实际使用效果未验证。",
+      "state": "implemented",
+      "x": 1580,
+      "y": 1135,
+      "compact": true,
+      "doc": "docs/06-superagent/记忆与技能.md",
+      "flow": {
+        "trigger": "后台按日复盘近期真实反馈；执行时段可配置，无新材料跳过。",
+        "actor": "唯一自我迭代执行器按 dreaming.md 复盘；文档服务校验来源后保存。",
+        "via": "共用维护队列与 dreaming.md；日期页由 maintenance-memory-upkeep.mjs 的 prepareDailyDream 与记忆整合共用。",
+        "reads": "近期对话、用户纠正、事实轨迹、执行反馈、已有工作约定和未解决的修复线索。",
+        "writes": "R/dreams/YYYY-MM-DD.md：有来源的有界追加，同日最多6批/正文12000字符，同批去重并保留每批来源；任一依赖遗忘则整页失效。\nR/dreams/alignment/ALIGNMENT_SYNTHESIS.md：覆盖为最新简短综合。",
+        "use": "ALIGNMENT_SYNTHESIS 简短回答如何与用户打交道，每次 Router 启动自动注入，后续回合安全边界可刷新；日复盘按需，不增加权限。",
+        "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
+      }
     },
     {
       "id": "iteration-curator",
-      "title": "闲时技能策展",
-      "kicker": "SELF ITERATION / CURATOR",
-      "kind": "orchestration",
-      "sub": "闲置 14 天待整理 · 30 天归档",
-      "symbol": "curateOwnedSkills()",
-      "plain": "维护已有自建技能的可用状态，闲置天数不触发新技能创建。",
-      "role": "每分钟检查一次，官方技能服务可用且 Router、执行任务空闲时运行。只处理自建且未固定技能，距最近实际使用满十四天标记 stale，满三十天归档；永不自动删除。目录预览不计实际使用，归档技能可由管理入口恢复。",
-      "input": "已有自建技能、固定状态与实际使用时间",
-      "output": "待整理或归档状态、版本与审计记录",
+      "title": "技能评审",
+      "kicker": "C / 后台改进",
+      "kind": "model",
+      "sub": "使用证据 → 改进 → 验证",
+      "symbol": "自我迭代 · 源码已接线",
+      "plain": "从重复有效的方法形成技能，并根据真实使用结果维护已有技能。",
+      "role": "从可复用方法形成数据库技能候选，沿既有采用入口和官方 SkillProvider 提供。真实使用和效果分别留证，失败可形成避坑；idleDays仅为只读闲置信号，不自动标记stale或按闲置归档，固定与第三方技能保持保护。",
+      "input": "可复用工作方法、现有技能、实际使用与验证结果",
+      "output": "新建或修改候选、验证依据及采用、保留或恢复决定",
       "sources": [
-        "plugins/superagent/src/owned-skill-store.mjs",
         "plugins/superagent/src/owned-skills.mjs",
-        "plugins/superagent/src/owned-skill-provider.mjs"
+        "plugins/superagent/src/owned-skill-store.mjs",
+        "plugins/superagent/src/owned-skill-provider.mjs",
+        "plugins/superagent/src/maintenance-processors.mjs"
       ],
-      "note": "14、30 的单位是天。第三方技能和用户固定技能不被自动改写或归档；LLM 合并当前关闭。",
+      "note": "源码服务已接线并有定向覆盖；真实付费模型的产出质量与实际使用效果未验证。",
+      "state": "implemented",
+      "x": 1880,
+      "y": 1135,
+      "compact": true,
+      "doc": "docs/06-superagent/记忆与技能.md",
+      "flow": {
+        "trigger": "重复有效工作方法出现，或后台按策略评审已有技能的使用效果。",
+        "actor": "唯一自我迭代执行器按真实采用与效果评审；技能服务保留候选、版本、使用和效果。",
+        "via": "目标 prompts/self-iteration/skill-review.md；复用 ownedSkills.propose、候选批准流程及官方 SkillProvider。",
+        "reads": "来源明确的执行经验、现有技能正文、实际使用记录和必要验证结果。",
+        "writes": "R/assistant.db 保存候选、正文、版本、实际使用与效果记录；复用官方 SkillProvider，不新增自建技能文件副本。",
+        "use": "候选经既有批准/拒绝采用；官方 provider 按需提供正文。预览不算使用，仅按真实反馈评审；idleDays只读，不自动标记stale或按闲置归档，固定/第三方保护。",
+        "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
+      }
+    },
+    {
+      "id": "iteration-ideas",
+      "title": "想法策展",
+      "kicker": "C / 后台改进",
+      "kind": "model",
+      "sub": "真实上下文 → 有依据的建议",
+      "symbol": "自我迭代 · 源码已接线",
+      "plain": "发现值得提出的新想法，筛选后在合适时机交给用户判断。",
+      "role": "轻量想法保存在assistant.db，包含来源、期限、去重和失效。当前通过proactive开启且相关的下一真实用户回合提供最多1条提议，相关偏好先读；没有新增自主外发，提议元数据不等于已经采用或送达。",
+      "input": "可信记忆、近期需要、复盘发现与主动投递偏好",
+      "output": "带依据、适用条件及状态的想法候选",
+      "sources": [
+        "plugins/superagent/src/review.mjs",
+        "plugins/superagent/src/review-worker.mjs",
+        "plugins/superagent/src/source-delivery.mjs"
+      ],
+      "note": "源码服务已接线并有定向覆盖；真实付费模型的产出质量与实际使用效果未验证。",
       "state": "implemented",
       "x": 1580,
-      "y": 1020,
-      "doc": "docs/06-superagent/记忆与技能.md"
+      "y": 1295,
+      "compact": true,
+      "doc": "docs/06-superagent/记忆与技能.md",
+      "flow": {
+        "trigger": "后台按策略发现有价值的新需要或可行机会；重复和无依据的候选跳过。",
+        "actor": "唯一自我迭代执行器生成轻量候选；沿现有建议/投递服务管理。",
+        "via": "共用维护队列；目标 prompts/self-iteration/idea-curation.md。呈现前读取主动投递偏好。",
+        "reads": "真实用户上下文、相关记忆、近期反馈及 R/PROACTIVE_PREFERENCES.md。",
+        "writes": "R/assistant.db 的轻量 Ideas 候选：依据、适用条件、不确定性与状态；不建独立 Markdown 目录或新页面。",
+        "use": "Ideas仅在proactive显式启用、下一真实用户回合与候选相关时最多提议1条，读取相关PROACTIVE_PREFERENCES；内部调度不外发，不自动改候选生命周期、创建目标/工单或授权。",
+        "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
+      }
+    },
+    {
+      "id": "iteration-preferences",
+      "title": "主动投递偏好",
+      "kicker": "D / 行为约束",
+      "kind": "orchestration",
+      "sub": "何时说 · 说什么 · 怎样说",
+      "symbol": "自我迭代 · 源码已接线",
+      "plain": "把用户对主动消息的要求留下，在每次主动投递前使用。",
+      "role": "用户对主动消息表达反馈或规则时，由 Router 更新独立偏好记录，保留无关既有条目。约束选题、紧急度、时机和表达形式；一次拒绝不自动变成永久禁令，沉默不视为同意。仅在主动投递决策前读取，不占每轮常驻上下文；偏好不创建定时任务，也不授予新的对外操作权限。",
+      "input": "用户对主动消息的明确反馈、已有偏好与待投递内容",
+      "output": "更新的投递偏好，以及允许、抑制或延后的判断依据",
+      "sources": [
+        "plugins/superagent/src/documents.mjs",
+        "plugins/superagent/src/router-tools.mjs",
+        "plugins/superagent/src/source-delivery.mjs"
+      ],
+      "note": "源码服务已接线并有定向覆盖；真实付费模型的产出质量与实际使用效果未验证。",
+      "state": "implemented",
+      "x": 2240,
+      "y": 1135,
+      "compact": true,
+      "doc": "docs/06-superagent/记忆与技能.md",
+      "flow": {
+        "trigger": "用户对主动消息提出明确反馈或规则；一次性拒绝不自动变成永久禁令。",
+        "actor": "当前 Router 理解要求；受控档案服务保存。投递服务在决策前读取。",
+        "via": "目标扩展 assistant_profile 的受控文件范围与投递策略读取；不是新增后台生成偏好的任务。",
+        "reads": "当前用户原话和原有主动偏好；保留无关条目。",
+        "writes": "目标：R/PROACTIVE_PREFERENCES.md；来源、版本与写入记录仍在 R/assistant.db。",
+        "use": "每次主动投递决策前读取 R/PROACTIVE_PREFERENCES.md，不每轮常驻注入；约束选题、时机与表达，不产生执行授权。",
+        "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
+      }
+    },
+    {
+      "id": "iteration-standing",
+      "title": "常驻配置",
+      "kicker": "D / 行为约束",
+      "kind": "orchestration",
+      "sub": "身份 · 用户 · 工作约定",
+      "symbol": "自我迭代 · 源码已接线",
+      "plain": "把稳定身份、用户档案和工作约定保留下来，让协作方式跨会话延续。",
+      "role": "AGENTS.md 维护工作规范与经验，SOUL.md 维护人格与语气，IDENTITY.md 维护身份，USER.md 维护用户档案。当前真实用户要求优先于过时约定；修改经受控服务保存来源和版本，不能从记忆或复盘推导新授权。TOOLS.md 继续承担按需读取的本地工具笔记，与通用技能分工。",
+      "input": "用户明确修改、已形成的稳定共识与有依据的工作经验",
+      "output": "短小且一致的档案正文、版本与后续上下文",
+      "sources": [
+        "plugins/superagent/src/documents.mjs",
+        "plugins/superagent/src/profile-documents.mjs",
+        "plugins/superagent/src/router-context.mjs",
+        "plugins/superagent/src/router-tools.mjs"
+      ],
+      "note": "源码服务已接线并有定向覆盖；真实付费模型的产出质量与实际使用效果未验证。",
+      "state": "implemented",
+      "x": 2540,
+      "y": 1135,
+      "compact": true,
+      "doc": "docs/06-superagent/记忆与技能.md",
+      "flow": {
+        "trigger": "用户明确修改身份/人格/档案，或形成值得保留的稳定工作约定。",
+        "actor": "当前 Router 通过档案工具写入；后台复盘只提出需采用的规则变更。",
+        "via": "assistant_profile → 受控文档服务，expectedHash 与版本防冲突；builtin-layer 仍为源码内置职责真源，不复制 Muse system_prompt。",
+        "reads": "当前相关档案与原始用户要求；工作经验需有来源和适用范围。",
+        "writes": "R/AGENTS.md：工作约定。\nR/SOUL.md：人格语气。\nR/IDENTITY.md：身份。\nR/USER.md：用户档案。\nR/TOOLS.md：本地工具笔记（按需读取）。\n版本与快照：R/assistant.db。",
+        "use": "档案与记忆快照记录实际装配版本；后续回合在安全边界检查最新版本，纠正或摘要更新不一律等待新会话；在途请求保持原输入。明确遗忘立即限制旧召回并清理受影响快照。官方 Session 保留本会话历史，其他会话按需补读。本轮接线状态见记忆与技能。",
+        "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
+      }
     }
   ],
   "edges": [
@@ -713,7 +989,7 @@
     {
       "a": "delivery",
       "b": "learning",
-      "label": "已关工单",
+      "label": "执行结果与回执",
       "from": "b",
       "to": "b",
       "kind": "support"
@@ -721,7 +997,7 @@
     {
       "a": "learning",
       "b": "memory",
-      "label": "受控经验",
+      "label": "采纳的记忆与经验",
       "from": "l",
       "to": "r",
       "kind": "feedback"
@@ -752,33 +1028,34 @@
     },
     {
       "a": "learning",
-      "b": "iteration-trigger",
+      "b": "iteration-record",
       "from": "r",
       "to": "l",
       "kind": "support",
-      "label": "自我迭代流程"
+      "label": "记录与改进"
     },
     {
-      "a": "iteration-trigger",
+      "a": "iteration-record",
       "b": "iteration-material",
-      "from": "r",
-      "to": "l",
-      "label": "调度取材"
+      "from": "t",
+      "to": "t",
+      "kind": "feedback",
+      "label": "可信事实轨迹"
     },
     {
       "a": "iteration-material",
       "b": "iteration-extract",
-      "from": "b",
-      "to": "t",
-      "label": "可信材料"
+      "from": "l",
+      "to": "r",
+      "label": "增量证据"
     },
     {
       "a": "iteration-extract",
       "b": "iteration-curator",
-      "from": "l",
+      "from": "b",
       "to": "r",
       "kind": "support",
-      "label": "批准后的技能"
+      "label": "方法候选"
     },
     {
       "a": "ticket",
@@ -810,6 +1087,93 @@
       "from": "t",
       "to": "b",
       "kind": "feedback"
+    },
+    {
+      "a": "router",
+      "b": "iteration-record",
+      "from": "r",
+      "to": "t",
+      "kind": "feedback",
+      "label": "原话与纠正"
+    },
+    {
+      "a": "iteration-trigger",
+      "b": "iteration-extract",
+      "from": "r",
+      "to": "l",
+      "kind": "support",
+      "label": "静默补记"
+    },
+    {
+      "a": "iteration-extract",
+      "b": "iteration-derived",
+      "from": "b",
+      "to": "t",
+      "kind": "feedback",
+      "label": "条目与版本"
+    },
+    {
+      "a": "iteration-extract",
+      "b": "iteration-relationships",
+      "from": "r",
+      "to": "t",
+      "kind": "feedback",
+      "label": "关系事实"
+    },
+    {
+      "a": "iteration-derived",
+      "b": "memory",
+      "from": "l",
+      "to": "b",
+      "kind": "support",
+      "label": "按需检索"
+    },
+    {
+      "a": "iteration-extract",
+      "b": "iteration-dreaming",
+      "from": "b",
+      "to": "t",
+      "kind": "support",
+      "label": "经验与反馈"
+    },
+    {
+      "a": "iteration-dreaming",
+      "b": "iteration-standing",
+      "from": "b",
+      "to": "b",
+      "kind": "feedback",
+      "label": "做法变更建议"
+    },
+    {
+      "a": "iteration-dreaming",
+      "b": "iteration-ideas",
+      "from": "b",
+      "to": "t",
+      "label": "改进线索"
+    },
+    {
+      "a": "iteration-preferences",
+      "b": "iteration-ideas",
+      "from": "b",
+      "to": "r",
+      "kind": "support",
+      "label": "投递约束"
+    },
+    {
+      "a": "iteration-standing",
+      "b": "memory",
+      "from": "t",
+      "to": "b",
+      "kind": "support",
+      "label": "短档案与规则"
+    },
+    {
+      "a": "iteration-curator",
+      "b": "ctx-skills",
+      "from": "l",
+      "to": "r",
+      "kind": "support",
+      "label": "采纳后的技能"
     }
   ],
   "steps": [
@@ -821,7 +1185,7 @@
     {
       "node": "memory",
       "title": "上下文按角色分层装配",
-      "text": "Router 自动注入四份档案和当前匹配记忆，其他对话、业务原文与技能正文按需读取；Worker 接当前工单任务包，自主使用官方 subagents，子会话上下文复用官方机制。完整字段见顶部“上下文分层”。"
+      "text": "Router 分层装配稳定档案、短总纲、简短对齐和相关记忆，详细事实与技能按需；Worker 只接本单任务包，子会话复用官方机制。纠正可在后续回合安全边界刷新。"
     },
     {
       "node": "router",
@@ -872,19 +1236,44 @@
       "edge": 8
     },
     {
-      "node": "iteration-trigger",
-      "title": "自我迭代：按计数或主动请求调度",
-      "text": "第 10、20、30……条用户输入，或单回合第 10 次 Router 工具迭代，只触发后台整理；也可 /learn。取材使用全局新闭单，不保证创建技能。"
+      "node": "learning",
+      "title": "自我迭代：Router 同步记录 + 单后台执行器",
+      "text": "一大组四小组、11 职责；一个专用后台执行器共用队列、增量来源与校验，Watchdog 只监督。不建工作台聊天、工单或新过程 UI，压缩和目标研学不在本轮。"
     },
     {
-      "node": "iteration-extract",
-      "title": "自我迭代：沉淀记忆与技能候选",
-      "text": "每批最多五个闭单，模型最多提炼五条记忆、两个技能，也可为空；结果写明没做成的不提炼成功经验。记忆按规则自动保存，技能候选在“工具 → 技能”批准后启用。"
+      "node": "iteration-record",
+      "title": "A · 记录与触发：当场记，静默补",
+      "text": "重要事实、明确偏好和纠正当场保存并核实回执；实质对话静默后由后台有界补记，与定时整合共用消费水位，避免重复。Worker 贡献有来源的经验，不直接改长期记忆。"
     },
     {
-      "node": "iteration-curator",
-      "title": "自我迭代：闲时维护已有技能",
-      "text": "未固定的自建技能闲置十四天标记待整理、三十天归档，永不自动删除。这里按天维护已有技能，不是每十四或三十次对话创建技能。"
+      "node": "iteration-material",
+      "title": "B · 记忆组织：证据与理解分别保存",
+      "text": "原话和执行原文仍由官方 Session 与业务账本负责；日志记录有来源的事实轨迹，记忆整合维护主张与替代关系，短 MEMORY 总纲只精选后续必需内容。"
+    },
+    {
+      "node": "iteration-derived",
+      "title": "B · 派生数据：分类条目与检索索引",
+      "text": "bank 是 assistant.db 中的分类视图，索引返回摘录、稳定事实 ID、来源与版本，再按需核原文；无四份正文或向量库。纠正和遗忘先限制旧召回，再清理派生。"
+    },
+    {
+      "node": "iteration-relationships",
+      "title": "B · 关系档案：小索引，按需读对象",
+      "text": "人物和群组独立建档，关系性质来自用户明确陈述。索引按预算进入上下文，涉及对象才读取详情，来源权限、纠正与遗忘贯通各层。"
+    },
+    {
+      "node": "iteration-dreaming",
+      "title": "C · 后台改进：把反馈落实到下次",
+      "text": "复盘有效做法和失误，形成短对齐总结与修复线索；技能评审依据真实使用提出改进并验证效果，后续交互再检验是否有帮助。后台学习不阻塞当前交付。"
+    },
+    {
+      "node": "iteration-ideas",
+      "title": "C · 想法策展：建议保留依据和边界",
+      "text": "想法候选轻量保存在数据库，说明依据、可行性与不确定性；沿现有 Router 聊天/投递呈现，主动投递前读偏好，采纳后才走既有任务路径，不自行建目标或工单。"
+    },
+    {
+      "node": "iteration-standing",
+      "title": "D · 行为约束：常驻约定与主动偏好",
+      "text": "四份常驻档案延续身份与工作方式；主动投递偏好只在相关决策前读取。当前指令优先，临时要求不自动固化。所有写入经过服务层校验，已遗忘内容不能被后续整理恢复。"
     }
   ],
   "docs": [
@@ -929,9 +1318,9 @@
       "path": "docs/06-superagent/服务契约.md"
     }
   ],
-  "version": "2026-11-12-revision",
+  "version": "2026-11-13-self-iteration-paths",
   "context": {
-    "intro": "同一条请求分成固定约定、会话快照、当前任务和按需原文四层。下面按当前代码列出实际注入与检索方式；“管理了某份文件”不等于“每个角色都会加载它”。",
+    "intro": "上下文按固定层、会话层与按需层装配。四份稳定档案加短 MEMORY 总纲、小量对象 INDEX 和每次启动的简短协作对齐；详细事实、对象页、复盘与技能按需。当前回合后续可在安全边界刷新纠正，源码已接线，真实付费模型效果未验，边界见记忆与技能；全量 token 预算仍待实施。",
     "groups": [
       {
         "mode": "启动 / 固定",
@@ -943,15 +1332,15 @@
           ],
           [
             "四份自动注入",
-            "SOUL.md：沟通风格；IDENTITY.md：助手身份与姓名；USER.md：用户资料与偏好；AGENTS.md：工作约定。MEMORY.md 与 TOOLS.md 仅提供目录与按需读取，匹配记忆另行筛选。去除 HTML 元数据注释后，将正文和 hash 放入上下文。"
+            "官方角色 preset 与 BenchGo builtin-layer；SOUL / IDENTITY / USER / AGENTS 正文，预算内的短 MEMORY 总纲和 people/groups INDEX；每次 Router 启动注入简短 ALIGNMENT_SYNTHESIS。主聊另带未完成目标摘要，不产生授权。"
           ],
           [
-            "两份按需读取",
-            "MEMORY.md：长期事实与经验；TOOLS.md：本地工具笔记。均可管理、导入和读取，整份正文不自动注入。它的可解析记忆条目仍可进入结构化记忆匹配；工具真实能力以运行时注册表为准。"
+            "详细材料按需读取",
+            "TOOLS、本地按日详细事实、人物/群组对象页、Dreams 日复盘与技能正文按需读取。PROACTIVE_PREFERENCES 只在每次主动投递决策前读取。详细事实不再每条建 entries 文件。"
           ],
           [
             "快照和历史",
-            "首次取上下文时按 sessionId 冻结档案与记忆快照，后续回合复用；普通档案修改不会改写旧快照，显式遗忘会擦除相关内容。当前官方 Session 自带本会话历史，过长时复用官方压缩；其他会话不自动整段灌入。"
+            "档案与记忆快照记录实际装配版本；后续回合在安全边界检查最新版本，纠正或摘要更新不一律等待新会话；在途请求保持原输入。明确遗忘立即限制旧召回并清理受影响快照。官方 Session 保留本会话历史，其他会话按需补读。本轮接线状态见记忆与技能。"
           ]
         ]
       },
@@ -961,11 +1350,11 @@
         "rows": [
           [
             "匹配什么",
-            "从当前真人消息及可信问答回执取得文本，在已冻结、经过隐私策略过滤的结构化记忆中筛选；记忆存储汇合 MEMORY.md、USER.md、TOOLS.md 可解析条目；自动匹配排除已全文注入的 USER.md；不是每轮重新搜索全部磁盘或全部聊天。"
+            "当前真人文本和可信问答回执匹配当前有效的结构化记忆，详细事实来源于 memory/日期.md；排除已全文注入的 USER，按正文去重，不每轮搜索全部文件或全部聊天。"
           ],
           [
             "怎样匹配",
-            "转小写后提取至少两字符的英文/数字/下划线/连字符词片段，或连续中文片段；记忆正文包含片段就按片段长度加分。仅取有命中的条目，按归一化正文去重，最多 8 条、每条至多 2000 字符、正文合计最多 8000 字符；无查询词或无命中则不补记忆，不拼接末尾条目。"
+            "转小写后提取至少两字符的英文/数字/下划线/连字符词片段，或连续中文片段；记忆正文包含片段就按片段长度加分。仅取有命中的条目，按归一化正文去重，最多 6 条、每条至多 2000 字符、正文合计最多 4000 字符；无查询词或无命中则不补记忆，不拼接末尾条目。"
           ],
           [
             "未完成目标",
@@ -977,7 +1366,7 @@
           ],
           [
             "现有边界",
-            "这是字面包含排序，不是向量语义召回。MEMORY.md 不全文注入，USER.md 不重复进入匹配记忆；8 条与 8000 字符只约束匹配正文，不代表整个请求有总 token 预算。"
+            "词索引与字面匹配不是向量语义召回；bank 是数据库分类视图，不建四份正文或向量库。匹配条数与字符上限不是整包 token 预算。"
           ]
         ]
       },
@@ -999,7 +1388,7 @@
           ],
           [
             "档案与产品信息",
-            "assistant_profile 按文件名读六档案；项目、模型、配置等走各自只读工具。模型根据问题选择是否调用，宿主没有在每条消息前强制执行一轮“全库搜索”。"
+            "assistant_profile 仅读写白名单内的固定档案、按日事实/复盘与对象文件，不接受任意路径；模型按需调用，宿主不在每条消息前强制全库检索。"
           ]
         ]
       },
@@ -1031,7 +1420,7 @@
         "rows": [
           [
             "自建技能",
-            "BenchGo 通过官方 SkillProvider 暴露 active/stale 技能的名称、描述和定位 hash；正文只在官方 get/调用时读取。技能目录不是把所有技能正文自动加入每个 Router/Worker 请求，也没有另一个全库技能匹配模型。"
+            "自建技能沿 assistant.db 的候选、正文、版本、实际使用和效果记录，经官方 SkillProvider 发现并按需读全文；预览不计使用，闲置不自动判定无效。"
           ],
           [
             "执行检索",
@@ -1084,15 +1473,139 @@
       "label": "横向支撑 · 存储 / 目标清单 / 外部动作与审批 / 外部 Watchdog"
     },
     {
+      "x": 1510,
+      "y": 655,
+      "w": 1340,
+      "h": 790,
+      "label": "自我迭代 · 四组 / 11 项职责 · 文件路径与读写链见“文件与流向”"
+    },
+    {
       "x": 1540,
-      "y": 680,
-      "w": 720,
-      "h": 610,
-      "label": "自我迭代 · 触发调度 → 可信闭单 → 记忆与技能沉淀 → 闲时策展"
+      "y": 715,
+      "w": 620,
+      "h": 340,
+      "label": "自我迭代 A · 记录与触发（2）· 同步记录 / 后台补记"
+    },
+    {
+      "x": 2200,
+      "y": 715,
+      "w": 620,
+      "h": 340,
+      "label": "自我迭代 B · 记忆组织（4）· 证据 / 条目 / 检索 / 对象"
+    },
+    {
+      "x": 1540,
+      "y": 1075,
+      "w": 620,
+      "h": 340,
+      "label": "自我迭代 C · 后台改进（3）· 复盘 / 技能 / 想法"
+    },
+    {
+      "x": 2200,
+      "y": 1075,
+      "w": 620,
+      "h": 340,
+      "label": "自我迭代 D · 行为约束（2）· 主动投递 / 常驻约定"
     }
   ],
   "canvas": {
-    "width": 2300,
-    "height": 1320
+    "width": 2860,
+    "height": 1480
+  },
+  "iteration": {
+    "intro": "一大组、四小组、11 项职责，复用原图布局。源码已接入单后台执行器、增量来源和领域写入；下列说明各职责的触发与读写。三个数据面分别是Markdown事实/档案、数据库派生/维护、官方Session与业务原文；真实付费模型效果未验证。",
+    "roots": "R = <基础层 config.dataDir>/assistant/；默认 ~/.benchgo/assistant/。Windows 默认对应 %USERPROFILE%\\.benchgo\\assistant\\；配置覆盖时随 dataDir 改变。源码目录是 E:/BenchGo/plugins/superagent/，与 R 分开。以下只列自我迭代相关存储；其他工单、渠道业务仍由各自服务维护。",
+    "currentTree": "R/  （源码支持的存储，文件按需生成）\n├─ 稳定档案、短 MEMORY、按日事实、对象视图、Dreams、主动偏好\n│    Markdown 事实与档案面，详细路径见下节\n├─ assistant.db    版本/journal、bank分类/词索引、增量队列/水位、技能与Ideas\n├─ ledger.db       业务原文与关联\n├─ config.json / state.json   配置与逻辑会话映射\n└─ workspace/      普通工作产物\n\n官方Session保存对话与执行原文，物理文件由官方运行时管理。",
+    "currentNote": "源码接线和定向测试已完成，不意味着实际运行目录已被创建、清空或迁移。没有documents.db；不新增每条entries文件、bank四副本、向量库或自建技能文件副本。",
+    "targetNote": "直接采用新结构，按需生成文件；保留稳定ID、来源、版本恢复、重启续接与遗忘保护，不设计旧数据迁移或兼容层。真实付费模型与安装版效果尚未验证。",
+    "targetTree": "R/\n├─ AGENTS / SOUL / IDENTITY / USER.md     稳定档案，Router 自动装配\n├─ MEMORY.md                            精选短总纲，预算内常驻\n├─ TOOLS.md                             本地工具笔记，按需\n├─ PROACTIVE_PREFERENCES.md              每次主动投递前读取\n├─ memory/\n│  ├─ YYYY-MM-DD.md                      详细事实、稳定 ID、来源和版本\n│  ├─ people/INDEX.md                    人物目录，预算内装配\n│  ├─ people/<person-id>.md              人物对象视图，按需\n│  ├─ groups/INDEX.md                    群组目录，预算内装配\n│  └─ groups/<group-id>.md               群组对象视图，按需\n├─ dreams/\n│  ├─ YYYY-MM-DD.md                      当日行为复盘，按需\n│  └─ alignment/ALIGNMENT_SYNTHESIS.md    简短协作对齐，每次 Router 启动装配\n├─ assistant.db                         版本/journal、bank 分类/词索引、遗忘保护\n│                                       单执行器队列/水位、技能候选/采用/效果、Ideas\n├─ ledger.db                            业务原文\n├─ config.json / state.json              配置与会话映射\n└─ workspace/                           普通工作产物\n\nbank = world / experience / opinions / reflections 数据库分类视图；无四副本、无向量库。\n目标研学与压缩不在本轮。",
+    "pipeline": "同步：用户原话 → Router 主动识别 → 记忆/档案服务校验 → 按日详细事实与版本回执\n\n后台：定时 / 静默 / 显式请求 → 同一增量来源与持久队列\n→ 唯一自我迭代执行器串行领取 → 按任务读取五份提示词之一\n→ 模型提出有来源的变更 → 对应领域服务校验与提交 → 成功后推进水位\n→ 更新总纲 / 对象视图 / Dreams / 技能 / Ideas → 后续使用与真实反馈\n\n读取：短常驻材料 + 当前会话 → 有界匹配/按需检索 → 事实 ID 与来源\n→ 官方 Session / ledger 原文回查；不整库灌入 Router。",
+    "writerBoundary": "提示词约束任务行为，代码约束真实写入：来源、身份、范围、版本、去重、预算和遗忘。后台身份由宿主绑定；Worker/子代理提供证据，不直接改长期记忆。更正保留替代关系；遗忘即时限制旧召回，清理受影响派生，不能由后续整理恢复。 单执行器只负责自我迭代，Watchdog 只监督；后台过程不建工作台聊天、工单或新过程 UI。",
+    "prompts": "plugins/superagent/prompts/\n├─ builtin-layer.md                     Router 宿主必装配，唯一内置职责真源\n└─ self-iteration/                      单执行器按任务读取\n   ├─ memory-upkeep.md                  定时 / 静默 / 显式共用\n   ├─ relationships.md                   对象视图\n   ├─ dreaming.md                        日复盘与协作对齐\n   ├─ skill-review.md                    真实效果评审\n   └─ idea-curation.md                   想法候选",
+    "promptNote": "builtin-layer仍由宿主必装配，不复制Muse运行时system_prompt；五份说明已随模块发布，按任务读取，不是五个Agent，也不全量常驻Router。周期和额度由统一维护服务管理。",
+    "groups": [
+      {
+        "title": "A · 记录与触发（2）",
+        "nodes": [
+          "iteration-record",
+          "iteration-trigger"
+        ]
+      },
+      {
+        "title": "B · 记忆组织（4）",
+        "nodes": [
+          "iteration-extract",
+          "iteration-material",
+          "iteration-derived",
+          "iteration-relationships"
+        ]
+      },
+      {
+        "title": "C · 后台改进（3）",
+        "nodes": [
+          "iteration-dreaming",
+          "iteration-curator",
+          "iteration-ideas"
+        ]
+      },
+      {
+        "title": "D · 行为约束（2）",
+        "nodes": [
+          "iteration-preferences",
+          "iteration-standing"
+        ]
+      }
+    ],
+    "injection": [
+      [
+        "AGENTS / SOUL / IDENTITY / USER",
+        "四稳定档案自动装配。",
+        "保留；在安全边界按版本刷新。"
+      ],
+      [
+        "MEMORY.md",
+        "采用新结构，详细事实进入按日文件。",
+        "精选短总纲，预算内常驻，与 USER 去重。"
+      ],
+      [
+        "TOOLS.md",
+        "本地工具笔记按需。",
+        "保留按需，能力以真实注册表为准。"
+      ],
+      [
+        "memory/日期.md + bank",
+        "日记是详细事实；bank 是数据库分类。",
+        "命中后按事实 ID 读取，不全量注入，无 entries/向量库。"
+      ],
+      [
+        "people/groups INDEX 与对象页",
+        "有来源的对象视图。",
+        "小目录预算内装配，对象页按需。"
+      ],
+      [
+        "Dreams 日报与对齐",
+        "日复盘与事实层分开。",
+        "简短对齐每次 Router 启动注入，日报按需。"
+      ],
+      [
+        "PROACTIVE_PREFERENCES",
+        "用户明确投递偏好。",
+        "每次主动投递决策前读取，不常驻。"
+      ],
+      [
+        "技能与 Ideas（assistant.db）",
+        "候选与事实分开，保留采用/效果。",
+        "技能经官方provider按需；Ideas仅在开启proactive且相关的下一真人回合提议，不自主外发。"
+      ],
+      [
+        "原始聊天 / 业务原文 / 索引",
+        "原文归官方 Session / ledger。",
+        "按引用检索读取；索引不是正文。"
+      ]
+    ],
+    "injectionNote": "档案与记忆快照记录实际装配版本；后续回合在安全边界检查最新版本，纠正或摘要更新不一律等待新会话；在途请求保持原输入。明确遗忘立即限制旧召回并清理受影响快照。官方 Session 保留本会话历史，其他会话按需补读。本轮接线状态见记忆与技能。 后台结果只有真实保存后才宣称成功，来源和版本引用用于去重，避免同一事实重复占据上下文。",
+    "example": "用户说“以后回复请简短”：\n1. Router 同步识别明确的稳定偏好，以真实用户原话为来源保存。\n2. memory/当日.md 记录详细事实、稳定 ID 与来源版本；assistant.db 维护版本和分类索引。\n3. 整合时精选到短 MEMORY；USER 已承载同一事实时去重，不重复注入。\n4. 后续回合在安全边界取新版本；用户纠正即替代旧事实，遗忘限制旧召回。\n5. “为何此前回复太长”写 dreams/当日.md，简短改进写 ALIGNMENT_SYNTHESIS。\n\nmemory 日期文件记事实；dreams 日期文件记行为复盘。",
+    "boundary": "唯一机制正文是记忆与技能；本图只维护目录与流向。源码实现和定向覆盖不等于真实付费模型产出质量或安装版效果已验。Muse仅参考2026-10-29导出包及用户机制说明。目标研学与压缩不在这11项内。"
   }
-}</script><script src="../_assets/architecture.js"></script><script src="../_assets/architecture-context.js"></script></body></html>
+}
+</script><script src="../_assets/architecture.js"></script><script src="../_assets/architecture-context.js"></script><script src="../_assets/architecture-iteration.js"></script></body></html>

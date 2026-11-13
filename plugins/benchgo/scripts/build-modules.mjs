@@ -12,7 +12,7 @@ const inside = (root, path) => {
 };
 const modules = {
   harness: ['package.json', 'src'],
-  superagent: ['package.json', 'src', 'shared', 'prompts/builtin-layer.md', 'assets/pet'],
+  superagent: ['package.json', 'src', 'shared', 'prompts/builtin-layer.md', 'prompts/self-iteration', 'assets/pet'],
   voice: ['package.json', 'src', 'shared', 'prompts/conversation.md', 'client/audio-worklet.js', 'lib', 'locale'],
   interactive: ['package.json', 'src'],
   efficiency: ['package.json', 'src'],

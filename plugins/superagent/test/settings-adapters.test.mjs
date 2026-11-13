@@ -80,11 +80,8 @@ test('Assistant and all registered Connections share original stores, model iden
   assert.equal(saved.value.enabled, false);
   await assert.rejects(adapter.apply('superagent-learning', { ops: [set(['enabled'], true)], expected: expected(current) }), { code: 'REVISION_CONFLICT' });
   assert.equal((await store.memory.learning()).excludedTerms[0], '私人主题');
-  current = await adapter.read('superagent-skills-policy');
-  saved = await adapter.apply('superagent-skills-policy', { ops: [set(['staleDays'], 20), set(['archiveDays'], 45)], expected: expected(current) });
-  assert.equal(store.ownedSkills.policy().archiveDays, 45);
-  await assert.rejects(adapter.apply('superagent-skills-policy', { ops: [set(['staleDays'], 50)], expected: expected(saved) }));
-  assert.equal(store.ownedSkills.policy().staleDays, 20);
+  assert.deepEqual((await adapter.schema()).map(row => row.namespace), ['superagent', 'superagent-learning']);
+  await assert.rejects(adapter.read('superagent-skills-policy'), /未知总助手设置/);
   assert.ok(events.some(event => event.namespace === 'superagent-learning'));
   const connections = createConnectionSettingsAdapter(store.connections, { applyConfig: args => ({ ...store.connections.update({}, args), application: { state: 'pending', reason: '真实渠道仍在连接' } }) });
   assert.equal((await connections.schema()).length, store.connections.list().length);

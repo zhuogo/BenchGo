@@ -187,7 +187,7 @@ export function createAssistantDispatch(runtime) {
       case 'sessionHistory': return historySearch.history(input, queryOptions);
       case 'sessionList': return historySearch.sessions(input, queryOptions);
       case 'ledgerRead': return readLedger(input, queryOptions);
-      case 'ownedSkills': return { available: !!skillProvider, skills: store.ownedSkills.list(), policy: store.ownedSkills.policy() };
+      case 'ownedSkills': return { available: !!skillProvider, skills: store.ownedSkills.list() };
       case 'ownedSkillAudit': return { events: store.ownedSkills.audit(input.id) };
       case 'ownedSkillApprove':
         if (!skillProvider) throw new Error('当前未启用官方技能服务，无法启用技能');
@@ -201,8 +201,8 @@ export function createAssistantDispatch(runtime) {
       case 'memoryLearning': return input.patch ? management.patchLearning(input, peer) : store.memory.learning();
       case 'review': {
         if (input.op === 'enqueue') {
-          if (input.kind !== 'learning') throw new Error('后台整理只接受闭单材料调度');
-          return store.review.enqueue({ kind: 'learning', payload: {} });
+          if (input.kind !== 'learning') throw new Error('未知后台整理任务');
+          return store.review.enqueue({ kind: 'learning', payload: { task: 'memory-upkeep', trigger: 'explicit' } });
         }
         return input.op === 'budget' ? store.review.budget() : store.review.list(input);
       }

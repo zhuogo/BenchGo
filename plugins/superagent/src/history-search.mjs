@@ -113,6 +113,48 @@ export function createHistorySearch({ ctx, store }) {
   const isGone = error => error?.code === 'SESSION_QUERY_SESSION_NOT_FOUND';
 
   return {
+    /** Host-only maintenance input, resolved through the same private/public boundary. */
+    async maintenanceSources({ references = [], limit = 20, maxChars = 24000, signal } = {}) {
+      if (!Array.isArray(references) || references.length > 100) throw fail('SESSION_QUERY_INVALID_LIMIT', '维护引用数量无效');
+      limit = integer(limit, 20, 100, 1); maxChars = integer(maxChars, 24000, 100000, 1000);
+      const owned = await scope(signal), items = [], seen = new Set();
+      let consumedReferences = 0;
+      for (const reference of references) {
+        check(signal);
+        if (!owned.ids.includes(reference.sessionId)) { consumedReferences++; continue; }
+        let view;
+        try { view = await observed(reference.sessionId, signal); }
+        catch (error) { if (isGone(error)) { consumedReferences++; continue; } throw error; }
+        const index = view.rows.findIndex(row => row.role === 'user' && row.id === reference.messageId);
+        if (index < 0) { consumedReferences++; continue; }
+        const first = view.rows[index], feedback = [];
+        for (let i = index + 1; i < view.rows.length && feedback.length < 2; i++) {
+          const row = view.rows[i];
+          if (row.role === 'user') break;
+          if (row.role === 'assistant' && row.requestId === first.id) feedback.push(row);
+        }
+        const additions = [];
+        for (const row of [first, ...feedback]) {
+          const id = `${reference.sessionId}:${row.seq}`;
+          if (seen.has(id)) continue;
+          const item = { id, kind: row.role === 'user' ? 'user' : 'feedback', text: row.text.slice(0, 4000), truncated: row.text.length > 4000,
+            source: { role: row.role, sessionId: reference.sessionId, messageId: row.id, seq: row.seq,
+              ...(reference.threadId ? { threadId: reference.threadId } : {}) } };
+          additions.push(item);
+        }
+        if (items.length + additions.length > limit || JSON.stringify([...items, ...additions]).length > maxChars) {
+          if (items.length) return { items, consumedReferences, hasMore: true };
+          // A long first source still makes bounded progress. Original pointers
+          // remain available for verification; never relabel truncated text as full.
+          const characters = Math.max(100, Math.floor((maxChars - 2400) / Math.max(1, additions.length)));
+          for (const item of additions) { item.truncated ||= item.text.length > characters; item.text = item.text.slice(0, characters); }
+          if (additions.length > limit || JSON.stringify(additions).length > maxChars) throw fail('MAINTENANCE_SOURCE_LIMIT', '维护材料上限不足以读取一条来源');
+        }
+        for (const item of additions) { seen.add(item.id); items.push(item); }
+        consumedReferences++;
+      }
+      check(signal); return { items, consumedReferences };
+    },
     async search(input = {}, { signal } = {}) {
       const { query: value, sessionId, cursor } = input;
       if (typeof value !== 'string' || !value.trim() || value.length > 2000) throw fail('SESSION_QUERY_INVALID_QUERY', '搜索词无效');

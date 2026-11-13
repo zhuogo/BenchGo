@@ -12,7 +12,7 @@ const require = createRequire(new URL('../../../deepseek-harness/packages/skill/
 const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href);
 const body = '## When to Use\nVerify changes.\n## Procedure\nRun targeted checks.\n## Pitfalls\nDo not claim untested behavior.\n## Verification\nRead actual results.';
 
-test('approved skills use the official registry, preserve user precedence and invalidate archived entries', async t => {
+test('approved skills use the official registry, preserve user precedence and remain available when idle', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-owned-skills-'));
   const ctx = new Context();
   await ctx.plugin(SkillRegistry);
@@ -28,11 +28,124 @@ test('approved skills use the official registry, preserve user precedence and in
   const removeUser = ctx.skills.register({ name: 'check-changes', description: 'User version', content: 'user content', source: 'user-dsh' });
   assert.equal((await ctx.skills.get('check-changes')).content, 'user content');
   removeUser();
-  store.curate({ now: active.lastUsedAt + 31 * 86400000 });
-  assert.equal(await ctx.skills.get('check-changes'), undefined);
-  const archived = store.get(active.id);
-  const restored = store.restore(active.id, { revision: archived.revision });
+  store.reviewInputs({ now: active.lastUsedAt + 31 * 86400000 });
   assert.equal((await ctx.skills.get('check-changes')).content, body);
-  assert.throws(() => store.pin(active.id, { revision: archived.revision, pinned: true }), /version conflict/);
+  const current = store.get(active.id);
+  assert.equal(current.status, 'active');
+  assert.equal(current.revision, active.revision, 'idle review reads never change the adopted skill');
+  const restored = store.restore(active.id, { revision: current.revision });
+  assert.equal((await ctx.skills.get('check-changes')).content, body);
+  assert.throws(() => store.pin(active.id, { revision: current.revision, pinned: true }), /version conflict/);
   assert.equal(store.get(active.id).revision, restored.revision);
+});
+
+test('review improvements remain candidates until explicit adoption and retain identity and rollback', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-skill-review-'));
+  const store = createOwnedSkills({ directory });
+  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
+  const first = store.propose({ name: 'check-changes', description: 'Verify changes', content: body, source: { messageId: 'first' }, idempotencyKey: 'first' });
+  const original = store.approve(first.id, { revision: first.revision });
+  const snapshotSeq = store.audit(original.id)[0].seq;
+  store.recordFeedback({ id: original.id, eventId: 'feedback-1', text: 'It failed to detect a missing test.', source: { messageId: 'm1' }, outcome: 'failure' });
+  const [input] = store.reviewInputs({ limit: 8 });
+  assert.equal(input.id, original.id);
+  assert.equal(input.content, body);
+  assert.equal(input.feedback[0].outcome, 'failure');
+  const improved = body.replace('Run targeted checks.', 'Run targeted checks and inspect missing tests.');
+  const candidate = store.propose({ name: original.name, description: original.description, content: improved,
+    source: { skillId: original.id, skillRevision: input.revision, reviewId: 'r1', messageId: 'm1' }, idempotencyKey: 'review:r1' });
+  assert.equal(store.get(original.id).content, body, 'background proposal does not alter adopted content');
+  const updated = store.approve(candidate.id, { revision: candidate.revision });
+  assert.equal(updated.id, original.id);
+  assert.equal(updated.content, improved);
+  assert.deepEqual(store.reviewInputs(), [], 'old body feedback is not recycled');
+  const rolledBack = store.restore(updated.id, { revision: updated.revision, snapshotSeq });
+  assert.equal(rolledBack.content, body);
+  assert.equal(store.audit(original.id).at(-1).action, 'rollback');
+  assert.throws(() => store.approve(candidate.id, { revision: candidate.revision }), /版本/);
+  const conflict = store.propose({ name: original.name, description: original.description, content: improved,
+    source: { skillId: original.id, skillRevision: rolledBack.revision, reviewId: 'r2' }, idempotencyKey: 'review:r2' });
+  store.pin(original.id, { revision: rolledBack.revision, pinned: true });
+  assert.throws(() => store.approve(conflict.id, { revision: conflict.revision }), /version conflict/);
+  const fixed = store.get(original.id);
+  const fixedCandidate = store.propose({ name: original.name, description: original.description, content: improved,
+    source: { skillId: fixed.id, skillRevision: fixed.revision, reviewId: 'r3' }, idempotencyKey: 'review:r3' });
+  assert.throws(() => store.approve(fixedCandidate.id, { revision: fixedCandidate.revision }), /Fixed/);
+  store.reject(fixedCandidate.id, { revision: fixedCandidate.revision });
+  assert.equal(store.get(fixedCandidate.id).status, 'rejected');
+});
+
+test('source invalidation erases dependent feedback, candidate prose and skill snapshots without touching unrelated procedures', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-skill-forget-'));
+  const store = createOwnedSkills({ directory });
+  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
+  const forgotten = { sessionId: 'session', messageId: 'private-message' };
+  const propose = (name, source) => store.propose({ name, description: 'Reusable method', content: body, source, idempotencyKey: name });
+  const personalCandidate = propose('private-method', { references: [forgotten] });
+  const personal = store.approve(personalCandidate.id, { revision: 1 });
+  const snapshotSeq = store.audit(personal.id)[0].seq;
+  const edit = store.propose({ name: personal.name, description: personal.description, content: body + '\nAdditional detail.',
+    source: { messageId: 'new-feedback', skillId: personal.id, skillRevision: personal.revision }, idempotencyKey: 'private-update' });
+  const edited = store.approve(edit.id, { revision: edit.revision });
+  store.pin(personal.id, { revision: edited.revision, pinned: true });
+  const safeCandidate = propose('general-method', { sessionId: 'other-session', messageId: 'unrelated' });
+  const safe = store.approve(safeCandidate.id, { revision: 1 });
+  store.recordFeedback({ id: safe.id, eventId: 'sensitive-feedback', text: 'Private contextual feedback', source: forgotten, outcome: 'failure' });
+  store.recordFeedback({ id: safe.id, eventId: 'safe-feedback', text: 'Independent observation', source: { messageId: 'safe-observation' }, outcome: 'success' });
+  const pending = propose('pending-private-method', { references: [forgotten] });
+  const memoryDependent = propose('pending-memory-method', { memoryIds: ['memory-1'] });
+  const result = store.invalidateSources({ kind: 'forgotten', memoryIds: ['memory-1'], references: [forgotten] });
+  assert.deepEqual(result.skillIds, [personal.id]);
+  assert.ok(result.candidateIds.includes(pending.id));
+  assert.ok(result.candidateIds.includes(memoryDependent.id));
+  assert.equal(store.get(pending.id).content, '');
+  assert.equal(store.get(pending.id).status, 'invalidated');
+  const invalidated = store.get(personal.id);
+  assert.equal(invalidated.status, 'invalidated');
+  assert.equal(invalidated.content, '');
+  assert.equal(invalidated.pinned, true, 'privacy invalidation retains the fixed flag');
+  assert.ok(!store.list().some(row => row.id === personal.id));
+  assert.deepEqual(store.audit(personal.id).map(row => row.body), ['']);
+  assert.throws(() => store.restore(personal.id, { revision: invalidated.revision, snapshotSeq }), /Invalidated/);
+  assert.equal(store.get(safe.id).content, body);
+  assert.deepEqual(store.reviewInputs()[0].feedback.map(row => row.eventId), ['safe-feedback']);
+  assert.equal(store.propose({ name: 'revived-private-method', description: 'Old source', content: body, source: { references: [forgotten] }, idempotencyKey: 'new-key' }).status, 'invalidated');
+  assert.throws(() => store.recordFeedback({ id: safe.id, eventId: 'revived-feedback', text: 'Old private feedback', source: forgotten }), /forgotten/);
+  assert.deepEqual(store.invalidateSources({ references: [forgotten] }).skillIds, []);
+  store.close();
+  const reopened = createOwnedSkills({ directory });
+  try {
+    assert.equal(reopened.propose({ name: 'still-denied', description: 'Old source', content: body, source: forgotten, idempotencyKey: 'another-key' }).status, 'invalidated');
+    assert.equal(reopened.get(safe.id).status, 'active');
+  } finally { reopened.close(); }
+});
+
+test('a corrected memory invalidates old dependencies but permits new evidence for the same durable memory id', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-skill-correction-'));
+  const store = createOwnedSkills({ directory });
+  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
+  const oldSource = { sessionId: 'session', messageId: 'old-fact', memoryIds: ['same-memory'] };
+  const propose = (name, source) => store.propose({ name, description: 'Reusable method', content: body, source, idempotencyKey: name });
+  const oldCandidate = propose('old-memory-method', { memoryIds: ['same-memory'] });
+  const oldSkill = store.approve(oldCandidate.id, { revision: oldCandidate.revision });
+  const sourceCandidate = propose('old-source-method', { references: [oldSource] });
+  const sourceSkill = store.approve(sourceCandidate.id, { revision: sourceCandidate.revision });
+  const pending = propose('pending-memory-method', { memoryIds: ['same-memory'] });
+  const generalCandidate = propose('general-method', { messageId: 'unrelated' });
+  const general = store.approve(generalCandidate.id, { revision: generalCandidate.revision });
+  store.recordFeedback({ id: general.id, eventId: 'old-feedback', text: 'Old contextual feedback', source: { messageId: 'feedback', memoryIds: ['same-memory'] } });
+  const result = store.invalidateSources({ kind: 'corrected', memoryIds: ['same-memory'], references: [oldSource] });
+  assert.ok(result.skillIds.includes(oldSkill.id));
+  assert.ok(result.skillIds.includes(sourceSkill.id));
+  assert.ok(result.candidateIds.includes(pending.id));
+  assert.equal(store.get(oldSkill.id).content, '');
+  assert.equal(store.get(pending.id).content, '');
+  assert.deepEqual(store.reviewInputs(), []);
+  const fresh = propose('corrected-memory-method', { memoryIds: ['same-memory'], references: [{ sessionId: 'session', messageId: 'corrected-fact' }] });
+  assert.equal(fresh.status, 'candidate');
+  assert.equal(store.approve(fresh.id, { revision: fresh.revision }).status, 'active');
+  assert.equal(propose('revived-old-source', { references: [oldSource] }).status, 'invalidated');
+  assert.equal(store.recordFeedback({ id: general.id, eventId: 'new-feedback', text: 'Corrected observation', source: { messageId: 'corrected-fact', memoryIds: ['same-memory'] }, outcome: 'success' }).outcome, 'success');
+  store.invalidateSources({ kind: 'forgotten', memoryIds: ['same-memory'] });
+  assert.equal(propose('forgotten-memory-method', { memoryIds: ['same-memory'], messageId: 'another-fact' }).status, 'invalidated');
 });

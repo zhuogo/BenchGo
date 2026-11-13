@@ -23,6 +23,7 @@ export function createAssistantReview({ directory, budget = 20 } = {}) {
     );
     CREATE INDEX IF NOT EXISTS assistant_review_queue_pick ON assistant_review_queue(status, priority, created_at);
     CREATE TABLE IF NOT EXISTS assistant_review_keys (key TEXT PRIMARY KEY, review_id TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS assistant_review_charges (review_id TEXT PRIMARY KEY, day TEXT NOT NULL);
   `);
   let closed = false;
   const tx = fn => { db.exec('BEGIN IMMEDIATE'); try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; } };
@@ -37,6 +38,13 @@ export function createAssistantReview({ directory, budget = 20 } = {}) {
     return row ? JSON.parse(row.value) : { used: 0, limit: budget };
   };
   const saveBudget = value => db.prepare('INSERT INTO assistant_review_meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(`budget:${day()}`, JSON.stringify(value));
+  const settleCharge = (id, refund = false) => {
+    const charge = db.prepare('SELECT day FROM assistant_review_charges WHERE review_id=?').get(id);
+    if (!charge) return;
+    const key = `budget:${charge.day}`, saved = db.prepare('SELECT value FROM assistant_review_meta WHERE key=?').get(key);
+    if (saved && refund) { const quota = JSON.parse(saved.value); quota.used = Math.max(0, quota.used - 1); db.prepare('UPDATE assistant_review_meta SET value=? WHERE key=?').run(JSON.stringify(quota), key); }
+    db.prepare('DELETE FROM assistant_review_charges WHERE review_id=?').run(id);
+  };
   return {
     enqueue({ kind = 'memory', payload, source, priority = 0, idempotencyKey } = {}) {
       if (closed) throw new Error('Review store is closed');
@@ -80,15 +88,30 @@ export function createAssistantReview({ directory, budget = 20 } = {}) {
         recoverRows();
         const quota = budgetValue(), available = Math.max(0, quota.limit - quota.used), count = Math.min(limit, available);
         if (!count) return { workerId, items: [], budget: quota };
-        const rows = db.prepare("SELECT * FROM assistant_review_queue WHERE status='pending' ORDER BY priority DESC,created_at LIMIT ?").all(count);
+        // All review responsibilities share one execution lane, including
+        // independent workers after a reload. A live lease always wins.
+        if (db.prepare("SELECT id FROM assistant_review_queue WHERE status='running' LIMIT 1").get()) return { workerId, items: [], budget: quota };
+        const rows = db.prepare("SELECT * FROM assistant_review_queue WHERE status='pending' ORDER BY priority DESC,created_at LIMIT 1").all();
         const until = new Date(Date.now() + leaseMs).toISOString(), timestamp = now();
         for (const row of rows) db.prepare("UPDATE assistant_review_queue SET status='running',attempts=attempts+1,lease_owner=?,lease_until=?,updated_at=? WHERE id=? AND status='pending'").run(workerId, until, timestamp, row.id);
+        for (const row of rows) db.prepare('INSERT INTO assistant_review_charges VALUES (?,?) ON CONFLICT(review_id) DO UPDATE SET day=excluded.day').run(row.id, day());
         const result = rows.map(row => ({ id: row.id, kind: row.kind, status: 'running', priority: row.priority, payload: JSON.parse(row.payload), source: row.source ? JSON.parse(row.source) : null, attempts: row.attempts + 1, leaseOwner: workerId, leaseUntil: until }));
         const next = { used: quota.used + result.length, limit: quota.limit }; saveBudget(next);
         return { workerId, items: result, budget: next };
       });
     },
-    complete(id, { workerId, result, status = 'completed' } = {}) {
+    release(id, { workerId, reason = 'yielded', refundBudget = false } = {}) {
+      if (typeof workerId !== 'string' || !workerId || workerId.length > 200) throw new Error('review 租约无效');
+      return tx(() => {
+        const row = db.prepare('SELECT * FROM assistant_review_queue WHERE id=?').get(id);
+        if (!row || row.status !== 'running' || row.lease_owner !== workerId) throw new Error('review 租约无效');
+        settleCharge(id, refundBudget);
+        db.prepare("UPDATE assistant_review_queue SET status='pending',attempts=MAX(0,attempts-1),lease_owner=NULL,lease_until=NULL,result=?,updated_at=? WHERE id=?")
+          .run(JSON.stringify({ yielded: true, reason: String(reason).slice(0, 200) }), now(), id);
+        return { id, status: 'pending', yielded: true };
+      });
+    },
+    complete(id, { workerId, result, status = 'completed', refundBudget = false } = {}) {
       if (typeof workerId !== 'string' || !workerId || workerId.length > 200) throw new Error('review 租约无效');
       if (!['completed', 'pending', 'rejected'].includes(status)) throw new Error('review 完成状态无效');
       return tx(() => {
@@ -97,6 +120,7 @@ export function createAssistantReview({ directory, budget = 20 } = {}) {
         if (row.status === 'completed' || row.status === 'rejected') return { id, status: row.status, idempotent: true };
         if (row.status !== 'running' || row.lease_owner !== workerId) throw new Error('review 租约无效');
         const timestamp = now(); db.prepare('UPDATE assistant_review_queue SET status=?,lease_owner=NULL,lease_until=NULL,result=?,updated_at=? WHERE id=?').run(status, result === undefined ? null : JSON.stringify(safePayload(result)), timestamp, id);
+        settleCharge(id, refundBudget && status !== 'pending' && result?.modelUsed === false);
         return { id, status, result: result === undefined ? null : clone(result) };
       });
     },
@@ -108,6 +132,7 @@ export function createAssistantReview({ directory, budget = 20 } = {}) {
         if (row.status === 'failed') return { id, status: 'failed', idempotent: true };
         if (row.status !== 'running' || row.lease_owner !== workerId) throw new Error('review 租约无效');
         const timestamp = now(); db.prepare("UPDATE assistant_review_queue SET status='failed',lease_owner=NULL,lease_until=NULL,error=?,updated_at=? WHERE id=?").run(String(error || 'review failed').slice(0, 4000), timestamp, id);
+        settleCharge(id);
         return { id, status: 'failed', error: String(error || 'review failed') };
       });
     },

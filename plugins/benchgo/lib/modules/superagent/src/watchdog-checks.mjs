@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ticketPaused, ticketStates as businessTicketStates } from './ticket-lifecycle.mjs';
+import { inspectMaintenanceHealth, MAINTENANCE_WATCHDOG_REASONS } from './maintenance-health.mjs';
 
 const summaries = Object.freeze({
   FACTS_STALE: '主系统执行事实已超过观察窗口，当前状态待核实',
@@ -8,8 +9,10 @@ const summaries = Object.freeze({
   LEASE_EXPIRED: '执行租约持续过期，原分派仍未被既有机制处理',
   REQUEST_DEADLINE_EXCEEDED: '正在进行的模型请求已超过其真实截止时间',
   STOP_UNCONFIRMED: '停止请求已超过原系统确认期限，执行端尚未确认',
+  MAINTENANCE_EXECUTION_TIMEOUT: '后台维护执行已超过其真实截止时间，当前状态待核实',
+  MAINTENANCE_SCHEDULER_STALLED: '后台维护仍有待处理材料，但统一执行器已超过调度观察窗口',
 });
-const hostReasons = new Set(['FACTS_STALE', 'SCHEDULER_STALLED']);
+const hostReasons = new Set(['FACTS_STALE', 'SCHEDULER_STALLED', ...MAINTENANCE_WATCHDOG_REASONS]);
 const executionReasons = Object.keys(summaries).filter(code => !hostReasons.has(code));
 const terminal = new Set(['completed', 'failed', 'closed', 'cancelled']);
 const ticketStates = new Set(businessTicketStates);
@@ -150,6 +153,21 @@ export function inspectWatchdogFacts({ facts, previous = {}, config = {}, now = 
     coverage.schedulerHeartbeat = stale ? 'stale' : 'fresh';
     inspect('SCHEDULER_STALLED', null, stale);
   } else { unknown('schedulerHeartbeat', 'unavailable-or-stale-source'); inspect('SCHEDULER_STALLED', null, null); }
+
+  // This optional host projection never creates a Worker, task, session or
+  // recovery request. Older hosts omit it and retain their existing coverage.
+  const maintenance = inspectMaintenanceHealth(facts?.maintenance, { now, graceMs: continuityMs });
+  if (facts?.maintenance !== undefined) {
+    coverage.maintenance = { execution: 'unknown', scheduler: 'unknown' };
+    if (fresh && bootId) {
+      coverage.maintenance.execution = maintenance.executionTimeout === null ? 'unknown' : maintenance.executionTimeout ? 'overdue' : 'clear';
+      coverage.maintenance.scheduler = maintenance.schedulerStalled === null ? 'unknown' : maintenance.schedulerStalled ? 'overdue' : 'clear';
+      for (const field of maintenance.unknown) unknown(`maintenance.${field}`, 'unavailable-or-inconsistent');
+    } else unknown('maintenance', 'stale-source');
+    if (!fresh || !bootId || maintenance.unknown.length) complete = false;
+  }
+  inspect('MAINTENANCE_EXECUTION_TIMEOUT', null, fresh ? maintenance.executionTimeout : null);
+  inspect('MAINTENANCE_SCHEDULER_STALLED', null, fresh ? maintenance.schedulerStalled : null);
 
   for (const row of records.slice(0, MAX_EXECUTIONS)) {
     const execution = identity(row);

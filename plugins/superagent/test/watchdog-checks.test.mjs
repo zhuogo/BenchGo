@@ -266,3 +266,95 @@ test('invalid observation configuration fails explicitly', () => {
     assert.throws(() => inspectWatchdogFacts({ facts: snapshot(), now: epoch, config: { ...config, ...patch } }), /configuration/);
   }
 });
+
+function maintenance(patch = {}) {
+  return { enabled: true, schedulerActive: true, state: 'idle', running: false, active: null,
+    deadlineAt: null, pending: 1, quietUntil: null, lastCheckAt: iso(epoch - 30000),
+    nextCheckAt: iso(epoch + 30000), ...patch };
+}
+function maintenanceSnapshot(patch = {}, now = epoch) {
+  return { ...snapshot(now, null), maintenance: maintenance(patch) };
+}
+
+test('maintenance uses the real executor deadline and reports only a host finding', () => {
+  const deadlineAt = iso(epoch - 1);
+  const input = maintenanceSnapshot({ state: 'running', running: true, pending: 0, deadlineAt,
+    active: { id: 'private-id', task: 'private-task', startedAt: iso(epoch - 60000), deadlineAt },
+    transcript: 'secret user content', nextCheckAt: iso(epoch - 180000) });
+  const original = structuredClone(input), value = inspect(input);
+  assert.deepEqual(codes(value), ['MAINTENANCE_EXECUTION_TIMEOUT']);
+  assert.equal(value.findings[0].kind, 'host');
+  assert.equal(value.findings[0].execution, undefined);
+  assert.equal(value.coverage.maintenance.scheduler, 'clear', 'an active executor owns its deadline');
+  assert.deepEqual(input, original);
+  assert(!/private|secret|transcript/u.test(JSON.stringify(value)), 'only fixed mechanical evidence leaves the check');
+
+  input.maintenance.deadlineAt = input.maintenance.active.deadlineAt = iso(epoch + 1);
+  const recovered = inspect(input, epoch, value.candidates);
+  assert.deepEqual(recovered.findings, []);
+  assert.deepEqual(recovered.resolvedKeys, ['MAINTENANCE_EXECUTION_TIMEOUT']);
+});
+
+test('maintenance scheduler requires pending material and an overdue explicit next check', () => {
+  const nextCheckAt = iso(epoch - 120001), lastCheckAt = iso(epoch - 150001);
+  const input = maintenanceSnapshot({ nextCheckAt, lastCheckAt });
+  const value = inspect(input);
+  assert.deepEqual(codes(value), ['MAINTENANCE_SCHEDULER_STALLED']);
+  assert.equal(value.coverage.maintenance.scheduler, 'overdue');
+  for (const patch of [{ nextCheckAt: iso(epoch - 120000) }, { nextCheckAt: iso(epoch + 1) }, { pending: 0 }]) {
+    assert.deepEqual(inspect(maintenanceSnapshot({ nextCheckAt, lastCheckAt, ...patch })).findings, []);
+  }
+  const checking = maintenanceSnapshot({ state: 'checking', running: false, nextCheckAt, lastCheckAt });
+  assert.deepEqual(codes(inspect(checking)), ['MAINTENANCE_SCHEDULER_STALLED'], 'preflight running=false still exposes an overdue check');
+  const stoppedTimer = maintenanceSnapshot({ schedulerActive: false, nextCheckAt, lastCheckAt });
+  assert.deepEqual(codes(inspect(stoppedTimer)), ['MAINTENANCE_SCHEDULER_STALLED']);
+  const cleared = inspect(maintenanceSnapshot({ pending: 0 }), epoch, value.candidates);
+  assert.deepEqual(cleared.resolvedKeys, ['MAINTENANCE_SCHEDULER_STALLED']);
+});
+
+test('maintenance disabled, quiet, yielded and empty states are legitimate exemptions', () => {
+  for (const patch of [{ enabled: false }, { state: 'disabled' }, { state: 'yielded' },
+    { quietUntil: iso(epoch + 1) }, { pending: 0 }]) {
+    const input = maintenanceSnapshot({ nextCheckAt: iso(epoch - 180000), lastCheckAt: iso(epoch - 210000), ...patch });
+    assert.deepEqual(inspect(input).findings, [], JSON.stringify(patch));
+  }
+  const deadlineAt = iso(epoch - 1);
+  for (const patch of [{ enabled: false }, { state: 'yielded' }, { quietUntil: iso(epoch + 1) }]) {
+    assert.deepEqual(inspect(maintenanceSnapshot({ state: 'running', running: true, deadlineAt,
+      active: { startedAt: iso(epoch - 60000), deadlineAt }, ...patch })).findings, []);
+  }
+});
+
+test('missing or inconsistent maintenance evidence never invents or resolves a fault', () => {
+  const old = inspect(maintenanceSnapshot({ nextCheckAt: iso(epoch - 180000), lastCheckAt: iso(epoch - 210000) }));
+  for (const patch of [{ nextCheckAt: null }, { pending: undefined }, { state: 'invented' },
+    { schedulerActive: undefined }, { lastCheckAt: iso(epoch + 1) }, { quietUntil: 'invalid' },
+    { running: true }, { state: 'checking', running: true }]) {
+    const value = inspect(maintenanceSnapshot(patch), epoch, old.candidates);
+    assert.deepEqual(value.findings, []);
+    assert.deepEqual(value.resolvedKeys, []);
+    assert.equal(value.complete, false);
+    assert(value.coverage.unknown.some(row => row.field.startsWith('maintenance.')));
+  }
+  for (const input of [snapshot(epoch, null), { ...snapshot(epoch, null), maintenance: null },
+    maintenanceSnapshot({}, epoch - 120001)]) {
+    const value = inspect(input, epoch, old.candidates);
+    assert(!value.findings.some(row => row.reasonCode.startsWith('MAINTENANCE_')));
+    assert(!value.resolvedKeys.includes('MAINTENANCE_SCHEDULER_STALLED'));
+    assert.equal(value.candidates.MAINTENANCE_SCHEDULER_STALLED.interrupted, true);
+  }
+  const legacy = inspect(snapshot(epoch, null));
+  assert.equal(legacy.coverage.maintenance, undefined);
+  assert.equal(legacy.complete, true, 'optional status does not weaken older hosts');
+});
+
+test('maintenance deadlines need a consistent real start and cannot be inferred from activity', () => {
+  for (const patch of [{ deadlineAt: null }, { deadlineAt: iso(epoch - 70000) },
+    { active: { startedAt: iso(epoch + 1) } },
+    { active: { startedAt: iso(epoch - 60000), deadlineAt: iso(epoch - 2) } }]) {
+    const value = inspect(maintenanceSnapshot({ state: 'running', running: true, deadlineAt: iso(epoch - 1),
+      active: { startedAt: iso(epoch - 60000) }, toolCalls: 99999, ...patch }));
+    assert.deepEqual(value.findings, []);
+    assert.equal(value.coverage.maintenance.execution, 'unknown');
+  }
+});

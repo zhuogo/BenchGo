@@ -57,6 +57,33 @@ test('official search limits trusted scope, returns public positions and reads e
   await assert.rejects(f.service.history({ sessionId: 'worker' }), { code: 'SESSION_QUERY_FORBIDDEN' });
 });
 
+test('maintenance resolves host message references with public feedback and never reads foreign or internal messages', async t => {
+  const f = await fixture(t);
+  const main = f.turn('main', 'Keep my replies concise', 'I will keep the conclusion short');
+  const hidden = f.turn('main', 'secret-maintenance', 'secret-reply', { internal: true });
+  const foreign = f.turn('im', 'private-channel', 'private-channel-reply');
+  const references = [main, hidden, foreign].map(row => ({ sessionId: row.session.id, messageId: row.user.id, role: 'user' }));
+  const result = await f.service.maintenanceSources({ references });
+  assert.equal(result.consumedReferences, 3);
+  assert.deepEqual(result.items.map(row => row.source.role), ['user', 'assistant']);
+  assert.equal(result.items[0].source.messageId, main.user.id);
+  assert.ok(!JSON.stringify(result).includes('secret-maintenance'));
+  assert.ok(!JSON.stringify(result).includes('private-channel'));
+});
+
+test('maintenance character and item limits stop at a complete reference prefix', async t => {
+  const f = await fixture(t);
+  const a = f.turn('main', 'first '.repeat(1000), 'answer '.repeat(1000));
+  const b = f.turn('main', 'second question', 'second answer');
+  const references = [a, b].map(row => ({ sessionId: 'main', messageId: row.user.id, role: 'user' }));
+  const result = await f.service.maintenanceSources({ references, limit: 2, maxChars: 5000 });
+  assert.equal(result.consumedReferences, 1); assert.equal(result.hasMore, true);
+  assert.ok(JSON.stringify(result.items).length <= 5000);
+  assert.ok(result.items.some(row => row.truncated));
+  const rest = await f.service.maintenanceSources({ references: references.slice(result.consumedReferences) });
+  assert.equal(rest.consumedReferences, 1); assert.equal(rest.items[0].text, 'second question');
+});
+
 test('private internal/tool matches cannot disclose snippets; grouped best match does not hide public fallback', async t => {
   const f = await fixture(t);
   f.turn('main', 'needle-private needle-private needle-private', 'needle-private', { internal: true });

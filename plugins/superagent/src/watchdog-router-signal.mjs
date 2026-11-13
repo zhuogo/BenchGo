@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { validateWatchdogSignal } from './watchdog-observation-route.mjs';
 import { ticketPaused } from './ticket-lifecycle.mjs';
+import { inspectMaintenanceHealth, MAINTENANCE_WATCHDOG_REASONS } from './maintenance-health.mjs';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const phases = { opened: 0, escalated: 1, resolved: 2 };
@@ -56,6 +57,12 @@ export function inspectWatchdogRouterSignal(database, signal, snapshot, { now = 
       return invalid('target-interface-reachable');
     if (observation.reasonCode === 'FACTS_STALE' && observation.phase !== 'resolved') return invalid('current-facts-available');
     if (observation.reasonCode === 'SCHEDULER_STALLED') return invalid('scheduler-condition-not-verifiable');
+    if (MAINTENANCE_WATCHDOG_REASONS.includes(observation.reasonCode)) {
+      const health = inspectMaintenanceHealth(snapshot.maintenance, { now });
+      const active = observation.reasonCode === 'MAINTENANCE_EXECUTION_TIMEOUT' ? health.executionTimeout : health.schedulerStalled;
+      if (active === null || active !== (observation.phase !== 'resolved')) return invalid('maintenance-observation-not-current');
+      return { valid: true, facts: { interfaceReachable: true, maintenance: snapshot.maintenance, observedAt: snapshot.observedAt } };
+    }
     return { valid: true, facts: { interfaceReachable: true, observedAt: snapshot.observedAt } };
   }
   const ticket = database.getTicket(identity.ticketId), assignment = database.getAssignment(identity.assignmentId);

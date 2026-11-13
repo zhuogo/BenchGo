@@ -1127,6 +1127,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           if (!record(receipt)) throw new Error('Delivery receipt must be an object');
           db.prepare('INSERT OR REPLACE INTO sa_delivery_receipts VALUES (?,?)').run(outboxId, json(receipt));
         }
+        if (sent && receipt?.status === 'accepted' && receipt.messageId) api.recordClosedTicket(row.ticket_id, { closedAt: sentAt, inTransaction: true });
         return parseOutbox(db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(outboxId));
       });
     },
@@ -1151,6 +1152,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
             outcome === 'not_sent' ? now : row.next_at, at, outboxId);
         if (receipt) db.prepare('INSERT OR REPLACE INTO sa_delivery_receipts VALUES (?,?)')
           .run(outboxId, json({ ...receipt, ...(priorReceipt?.parts ? { parts: priorReceipt.parts } : {}), reconciliation }));
+        if (outcome === 'sent') api.recordClosedTicket(row.ticket_id, { closedAt: at, inTransaction: true });
         return parseOutbox(db.prepare('SELECT * FROM sa_outbox WHERE id=?').get(outboxId));
       });
     },

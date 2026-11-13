@@ -10,13 +10,14 @@ export const ASSISTANT_CONFIG_SCHEMA = { type: 'object', additionalProperties: f
   auxiliary: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false, required: ['models', 'capabilities'], properties: { models: { ...modelQueue, minItems: 1 }, capabilities: { type: 'array', uniqueItems: true, items: { type: 'string', enum: ['vision', 'compression', 'summary', 'review'] } } } }] },
   image: media, video: media, tts: media, asr: media,
   capabilities: { type: 'object', additionalProperties: true },
+  maintenance: { type: 'object', additionalProperties: false, properties: {
+    quietSeconds: { type: 'integer', minimum: 10, maximum: 86400, default: 120 },
+    intervalHours: { type: 'integer', minimum: 1, maximum: 168, default: 6 },
+  } },
   pet: { type: ['object', 'null'] }, petPrevious: { type: ['object', 'null'] }, petHasPrevious: { type: 'boolean' },
 } };
 export const ASSISTANT_BLOCKED_PATHS = [['pet'], ['petPrevious'], ['petHasPrevious']];
 export const LEARNING_CONFIG_SCHEMA = { type: 'object', additionalProperties: false, properties: {
   enabled: { type: 'boolean', default: true },
   ...Object.fromEntries(['excludedScopes', 'excludedTerms'].map(key => [key, { type: 'array', maxItems: 100, items: { type: 'string', minLength: 1, maxLength: 256 }, default: [] }])),
-} };
-export const SKILLS_POLICY_SCHEMA = { type: 'object', additionalProperties: false, properties: {
-  staleDays: { type: 'integer', minimum: 1, maximum: 36499, default: 14 }, archiveDays: { type: 'integer', minimum: 2, maximum: 36500, default: 30 }, llmMerge: { const: false, readOnly: true },
 } };

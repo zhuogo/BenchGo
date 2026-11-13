@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLearningProcessor } from '../src/learning-processor.mjs';
+import { createMaintenanceProcessor } from '../src/maintenance-processors.mjs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -20,7 +20,7 @@ function fixture(output, ownedSkills, original = '我偏好中文回复') {
   } };
   const ctx = { sessionQuery: { readSession: () => { throw new Error('Router session must never be read'); } },
     llm: { async *stream(request) { requests.push(request); yield { type: 'text-delta', text: JSON.stringify(output()) }; yield { type: 'finish', reason: { kind: 'stop' } }; } } };
-  return { process: createLearningProcessor({ ctx, store }), store, ticket, completed, candidates, requests, revoke() { settings = { ...settings, enabled: false, hash: 'p2' }; } };
+  return { process: createMaintenanceProcessor({ ctx, store, readSources: async () => [] }), store, ticket, completed, candidates, requests, revoke() { settings = { ...settings, enabled: false, hash: 'p2' }; } };
 }
 const item = { id: 'review-1', payload: { scope: 'session', trigger: 'prompt', eventIds: ['visible', 'hidden'] }, source: { sessionId: 'session' } };
 const options = { signal: new AbortController().signal };
@@ -141,6 +141,14 @@ test('waiting failure cannot publish reusable success procedures or advance curs
   await assert.rejects(f.process(item, options), /明确已关/);
   assert.equal(f.completed.length, 0);
   assert.equal(f.store.ownedSkills.list().length, 0);
+});
+test('a completed delivery containing an explicit failure cannot become a successful skill', async t => {
+  const f = fixture(() => ({ memories: [], skills: [skill] }), skillStore(t));
+  f.ticket.result.summary = '凭据失效，未能完成连接。';
+  await assert.rejects(f.process(item, options), /成功结果证据/);
+  assert.equal(f.candidates.length, 0);
+  assert.equal(f.store.ownedSkills.list().length, 0);
+  assert.equal(f.completed.length, 0);
 });
 
 test('running, waiting or undelivered material is rejected even if supplied by a faulty source adapter', async () => {
