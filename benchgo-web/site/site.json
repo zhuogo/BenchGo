@@ -1,0 +1,63 @@
+{
+  "server": "https://benchgo.cn",
+  "navigation": {
+    "id": 3,
+    "code": "benchgo-site-nav",
+    "source": "navigation.html"
+  },
+  "pages": [
+    {
+      "id": 30,
+      "route": "/",
+      "source": "home.html"
+    },
+    {
+      "id": 9,
+      "route": "/docs",
+      "reuse": true,
+      "source": "docs.html"
+    },
+    {
+      "id": 31,
+      "route": "/download",
+      "source": "download.html"
+    }
+  ],
+  "documents": [
+    {
+      "id": 1,
+      "slug": "install",
+      "title": "安装 BenchGo",
+      "summary": "按平台选择、下载与安装工作台。",
+      "source": "documents/install.html"
+    },
+    {
+      "id": 2,
+      "slug": "first-run",
+      "title": "首次使用与模型配置",
+      "summary": "完成初始化，连接模型并交付第一个任务。",
+      "source": "documents/first-run.html"
+    },
+    {
+      "id": 3,
+      "slug": "mobile-link",
+      "title": "手机与多设备连接",
+      "summary": "用 Link 配对 Android、iPhone 和其他设备。",
+      "source": "documents/mobile-link.html"
+    },
+    {
+      "id": 4,
+      "slug": "linux-server",
+      "title": "Linux 服务端安装",
+      "summary": "Ubuntu / Debian x64 + systemd 的部署与维护。",
+      "source": "documents/linux-server.html"
+    },
+    {
+      "id": 5,
+      "slug": "updates",
+      "title": "更新、校验与问题反馈",
+      "summary": "确认版本、校验安装包并更新。",
+      "source": "documents/updates.html"
+    }
+  ]
+}

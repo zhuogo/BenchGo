@@ -1,0 +1,10 @@
+<p>此包是浏览器工作台的服务端，不是 Linux 桌面安装器。当前仅支持 Ubuntu / Debian x64 与 systemd，不支持 ARM64。首次安装需联网准备固定版本的官方 Harness，必要时准备 Node.js 24.9+，插件依赖随包提供。</p>
+<h2>推荐：添加 SSH 服务器</h2><p>在已有 BenchGo 的「设备」中点击「添加」，选择 SSH 服务器，按引导完成连接。日常使用优先采用此入口；以下独立压缩包适用于维护者。</p>
+<h2>使用服务端压缩包</h2><p>从<a href="/download" target="_top">下载页</a>获取压缩包与同名 <code>.sha256</code>，核对校验值，解压并进入版本目录。将命令中的「版本」替换成实际版本号。</p>
+<pre><code>sha256sum -c benchgo-&lt;版本&gt;-linux-server.tar.gz.sha256
+tar -xzf benchgo-&lt;版本&gt;-linux-server.tar.gz
+cd benchgo-&lt;版本&gt;-linux-server
+(umask 077; bash install.sh github connect &gt; connection.json)</code></pre>
+<p><code>github</code> 可按脚本支持改为 <code>mirror</code>。以日常用户运行，需系统权限时按提示处理。<code>connection.json</code> 含私有连接凭据，不要公开、提交 Git 或随反馈发送。服务默认仅监听 loopback，请通过可信 SSH 隧道连接，不应把内部端口直接暴露到公网。</p>
+<h2>更新</h2><p>备份配置与工作数据，核对新包来源，解压进入新版本目录执行：</p><pre><code>(umask 077; bash install.sh github update &gt; update-result.json)</code></pre><p>检查命令结果与实际服务状态后继续使用。失败时检查网络、系统架构、systemd 与磁盘空间，不要公开敏感连接结果。</p>
+<h2>工作台与 Relay</h2><p>Linux 工作台提供完整工作环境；BenchGo Relay 只转发已授权设备的流量。两者是不同产品与安装流程，不要把 Relay 当作工作台安装包。</p>
