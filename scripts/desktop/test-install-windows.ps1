@@ -204,6 +204,12 @@ try {
         Copy-Item $uninstallers[0].FullName $uninstaller -Force
         $process = Start-Process -FilePath $uninstaller -ArgumentList @('/S', "_?=$($installed.DirectoryName)") -Wait -PassThru
         if ($process.ExitCode -ne 0) { throw "Uninstaller exited $($process.ExitCode)" }
+        # The legacy installer must initialize its own old-format profile,
+        # rather than attempt to downgrade the earlier reinstall fixture.
+        Write-Output "Keeping reinstall profile diagnostics: $($env:DSH_HOME)"
+        $env:DSH_HOME = Join-Path $env:RUNNER_TEMP ('benchgo-installer-upgrade-' + [Guid]::NewGuid().ToString('N'))
+        New-Item -Path $env:DSH_HOME -ItemType Directory | Out-Null
+        Write-Output "Legacy upgrade profile: $($env:DSH_HOME)"
         Install-Silently (Resolve-Path $PreviousInstaller).Path
         $legacy = Get-Installed 'BenchGo.exe'
         $legacyVersion = ([Version]$legacy.VersionInfo.ProductVersion).ToString(3)
