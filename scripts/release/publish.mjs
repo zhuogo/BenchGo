@@ -9,6 +9,7 @@ import { github, githubJson, assetBytes, findPreviousRelease, readSignedRelease,
 import { fileDigest } from './record-artifact.mjs';
 import { immutableArtifact } from './assemble.mjs';
 import { verifyDownloads } from './downloads.mjs';
+import { publishWebCatalog } from './publish-web-catalog.mjs';
 
 const sendJson = (path, method, body) => githubJson(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const getRelease = tag => githubJson(`/releases/tags/${encodeURIComponent(tag)}`, { missing: true });
@@ -140,6 +141,7 @@ export async function publishRelease({ plan, directory }) {
   if (release.draft) release = await sendJson(`/releases/${release.id}`, 'PATCH', { draft: false, make_latest: 'false' });
   if ((await githubJson(`/commits/${tag}`)).sha !== plan.sourceSha) throw new Error('Published release tag does not match verified source');
   await verifyReferencedArtifacts(manifest, downloads);
+  await publishWebCatalog({ directory: output, releaseVersion: plan.releaseVersion, sourceSha: plan.sourceSha });
   // Recheck after uploads: a newer channel written outside this serialized workflow must win.
   const refreshedChannel = await getRelease('plugin-updates');
   validateChannelAdvance(await readChannelForPublication(refreshedChannel, plan, raw, signatureBytes, publicKey), manifest);

@@ -51,12 +51,12 @@ const decode=value=>Uint8Array.from(atob(value.trim()),c=>c.charCodeAt(0));
 async function withCatalog(release,signal){
  if(!release||!crypto.subtle)return release;
  const inventory=release.assets||[],catalog=inventory.find(a=>a.name==='downloads.json'),signature=inventory.find(a=>a.name==='downloads.json.sig');
- if(!catalog||!signature||![catalog.id,signature.id].every(Number.isSafeInteger))return release;
+ if(!catalog||!signature||!/^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(release.tag_name))return release;
  try{
-  const read=async asset=>{const r=await fetch('https://api.github.com/repos/zhuogo/BenchGo/releases/assets/'+asset.id,{headers:{Accept:'application/octet-stream'},signal,cache:'no-cache'});if(!r.ok)throw new Error('catalog');const bytes=new Uint8Array(await r.arrayBuffer());if(bytes.byteLength>1024*1024)throw new Error('catalog-size');return bytes;};
+  const read=async asset=>{const r=await fetch('https://raw.githubusercontent.com/zhuogo/BenchGo/release-metadata/releases/'+encodeURIComponent(release.tag_name)+'/'+asset.name,{headers:{Accept:'application/octet-stream'},signal,cache:'no-cache'});if(!r.ok)throw new Error('catalog');const bytes=new Uint8Array(await r.arrayBuffer());if(bytes.byteLength>1024*1024)throw new Error('catalog-size');return bytes;};
   const[raw,sig]=await Promise.all([read(catalog),read(signature)]),key=await crypto.subtle.importKey('spki',decode(publicKey),{name:'Ed25519'},false,['verify']);
   if(!await crypto.subtle.verify('Ed25519',key,decode(new TextDecoder().decode(sig)),raw))return release;
-  const data=JSON.parse(new TextDecoder().decode(raw));if(data.schemaVersion!==1||'v'+data.releaseVersion!==release.tag_name||!Array.isArray(data.files))return release;
+  const data=JSON.parse(new TextDecoder().decode(raw));if(data.schemaVersion!==1||'v'+data.releaseVersion!==release.tag_name||!/^[a-f0-9]{40}$/.test(data.sourceSha)||data.sourceSha!==release.target_commitish||!Array.isArray(data.files))return release;
   const merged=[...inventory];for(const row of data.files){if(!allowed(row.url)||!Number.isSafeInteger(row.size)||row.size<1||!/^[a-f0-9]{64}$/.test(row.sha256))continue;const name=new URL(row.url).pathname.split('/').at(-1);if(!merged.some(a=>a.browser_download_url===row.url))merged.push({name,size:row.size,browser_download_url:row.url});}
   return{...release,assets:merged};
  }catch{return release;}

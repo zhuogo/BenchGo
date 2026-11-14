@@ -42,7 +42,7 @@ jobs:
           RELEASE_REF: ${{ github.ref }}
         run: test "$RELEASE_REF" = refs/heads/main
       - name: Verify release planner
-        run: node --test scripts/release/release.test.mjs scripts/release/downloads.test.mjs
+        run: node --test scripts/release/release.test.mjs scripts/release/downloads.test.mjs scripts/release/publish-web-catalog.test.mjs
       - name: Plan only changed components against the last signed unified release
         id: plan
         env:

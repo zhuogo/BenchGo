@@ -9,7 +9,7 @@
 - `/docs`：复用平台文档中心，提供安装、首次使用、手机连接、Linux 服务端及更新校验五篇指南。
 - 三个页面共用 `benchgo-site-nav` 导航。`docs.html` 是现有文档页的兼容修订，保留原布局与文档运行时，搜索框和文章链接使用原生元素。
 
-下载页仅接受 `github.com/zhuogo/BenchGo/releases/download/` 下的 HTTPS 文件，不推测文件 URL。若正式发布提供 `downloads.json` 与签名，页面通过 GitHub asset API 读取，使用 BenchGo 公钥验证 Ed25519 签名后，合并清单中的不可变文件引用；清单读取或验证失败时保留当次发布真实资产与 GitHub 手动入口。无清单的历史发布同样可用。公钥轮换须同步产品更新契约与页面公钥。
+下载页仅接受 `github.com/zhuogo/BenchGo/releases/download/` 下的 HTTPS 文件，不推测安装文件 URL。若正式发布提供 `downloads.json` 与签名，页面从同仓 `release-metadata` 分支的 `releases/vX.Y.Z/` 读取自动同步的原始文件，避免 GitHub Release 资产重定向的浏览器跨域限制。固定使用 `raw.githubusercontent.com/zhuogo/BenchGo/`，不接受可配置代理地址。使用 BenchGo 公钥验证 Ed25519 签名，并核对版本与发布的完整 `target_commitish` 后，合并清单中的不可变文件引用；清单读取或验证失败时保留当次发布真实资产与 GitHub 手动入口。无清单的历史发布同样可用。公钥轮换须同步产品更新契约与页面公钥。
 
 Linux 明确是 Ubuntu / Debian x64 + systemd 服务端，macOS 明确未通过 Apple 公证，iPhone / iPad 使用已有工作台的 HTTPS 网页。
 
@@ -24,5 +24,7 @@ Linux 明确是 Ubuntu / Debian x64 + systemd 服务端，macOS 明确未通过 
 在 `benchgo-web/` 运行 `node site/test-download.mjs`，需要已安装的 DraftGo CLI（使用其 `playwright-core`）与 Chrome；可用 `CHROME_PATH` 指定浏览器路径。测试使用本地临时 HTTP 服务和独立临时签名密钥，不改线上发布数据。
 
 覆盖加载、空、错误、有数据四态，重试、刷新失败保留内容、375px 窄屏、减少动效、下载来源过滤、有效签名复用与无效签名拒绝，并匿名检查官网路由及共享导航。截图保存在本地 `.draftgo/artifacts/render/`，不提交。
+
+仅验证签名目录传输与来源绑定可运行 `node site/test-download.mjs --catalog-only`，覆盖有效清单复用、签名有效但来源 SHA 不匹配、无效签名拒绝，不重复四态与线上路由检查。
 
 SEO 检查使用 `draftgo verify --seo --url https://benchgo.cn/download --output json`，文档文章同理。通过静态 SEO 检查不代表已被搜索引擎收录。
