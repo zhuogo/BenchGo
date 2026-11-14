@@ -18,13 +18,13 @@ test('late Feishu requests still get assessment but cannot answer current attent
       source: { channel: 'feishu', appId: 'app', chatId: 'chat' }, text: 'hello' };
     ingestAssistantEvent(db, { ...event, sourceKey: 'new', threadId: 'new', occurredAt: '2026-11-03T15:31:00Z' }, policy);
     db.close(); db = createAssistantOrchestrationStore({ directory });
-    const ticket = db.createTicket({ threadId: 'new', target: 'new work', mandate: {} });
-    db.subscribe(ticket.id, 'new');
+    const task = db.createTask({ threadId: 'new', target: 'new work', mandate: {} });
+    db.subscribe(task.id, 'new');
     db.answerAttention = () => assert.fail('historical message cannot answer current attention');
     const late = ingestAssistantEvent(db, { ...event, sourceKey: 'old', threadId: 'new', occurredAt: '2026-11-03T14:26:00Z' }, policy);
     assert.equal(late.gate.reason, 'allowed');
     assert.equal(late.requiresEval, true);
-    assert.equal(db.pendingSubscriptionMessages(ticket.id).length, 0);
+    assert.equal(db.pendingSubscriptionMessages(task.id).length, 0);
     assert.equal(db.getTrigger(late.trigger.id).content, 'hello');
     const candidate = { source: event.source, actor: event.actor, createdAt: '2026-11-03T14:26:00Z' };
     assert.equal(db.sourceMessageSuperseded(candidate), true);
@@ -57,12 +57,12 @@ test('explicit requests keep their own candidates with one or multiple running s
     const policy = { version: 'p', allowHumanRequests: true };
     const event = { channel: 'feishu', kind: 'group', mentioned: true, threadId: 'chat', source: { channel: 'feishu', chatId: 'chat' }, actor: { id: 'user', kind: 'human' }, text: 'Investigate another website' };
     ingestAssistantEvent(db, { ...event, sourceKey: 'first' }, policy);
-    const first = db.createTicket({ threadId: 'chat', target: 'first website', mandate: {} });
+    const first = db.createTask({ threadId: 'chat', target: 'first website', mandate: {} });
     db.subscribe(first.id, 'chat');
     const second = ingestAssistantEvent(db, { ...event, sourceKey: 'second' }, policy);
     assert.equal(second.requiresEval, true);
     assert.equal(second.delivery, null);
-    const another = db.createTicket({ threadId: 'chat', target: 'second website', mandate: {} });
+    const another = db.createTask({ threadId: 'chat', target: 'second website', mandate: {} });
     db.subscribe(another.id, 'chat');
     const third = ingestAssistantEvent(db, { ...event, kind: 'direct', sourceKey: 'third' }, policy);
     assert.equal(third.requiresEval, true);
@@ -112,13 +112,13 @@ test('trusted policy controls direct intake and group mention; replay cannot cre
     const forged = ingestAssistantEvent(db, { ...event, sourceKey: 'message-4', actor: { kind: 'human', id: 'other', owner: true }, kind: 'direct' }, policy);
     assert.equal(forged.direct, false); assert.equal(forged.gate.allowed, false);
     assert.throws(() => ingestAssistantEvent(db, { ...mentioned, text: 'changed' }, policy), { code: 'TRIGGER_CONFLICT' });
-    const ticket = db.createTicket({ threadId: 'thread', target: '修复问题', mandate: {} });
-    db.subscribe(ticket.id, 'thread');
+    const task = db.createTask({ threadId: 'thread', target: '修复问题', mandate: {} });
+    db.subscribe(task.id, 'thread');
     assert.equal(ingestAssistantEvent(db, mentioned, policy).duplicate, true, 'original trigger replay after subscription is still acknowledged');
     const followup = { ...event, sourceKey: 'message-5', text: '补充资料' };
-    assert.equal(ingestAssistantEvent(db, followup, policy).delivery.ticketId, ticket.id);
+    assert.equal(ingestAssistantEvent(db, followup, policy).delivery.taskId, task.id);
     assert.equal(ingestAssistantEvent(db, followup, policy).duplicate, true);
-    assert.equal(db.pendingSubscriptionMessages(ticket.id).length, 1);
+    assert.equal(db.pendingSubscriptionMessages(task.id).length, 1);
   } finally { db.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -145,13 +145,13 @@ test('subscription catches context arriving during assessment without taking ano
     const context = ingestAssistantEvent(db, contextEvent, policy);
     const separate = ingestAssistantEvent(db, { ...event, sourceKey: 'separate' }, policy);
     ingestAssistantEvent(db, { ...event, sourceKey: 'denied', mentioned: false }, { ...policy, threadIds: [] });
-    const { ticket } = db.decide(initial.candidate.id, { evalId: lease.id, owner: 'router', policyVersion: 'p', outcome: 'accept', assessment: {}, ticket: { target: '修复问题', mandate: {} } });
-    assert.deepEqual(db.pendingSubscriptionMessages(ticket.id).map(row => row.id), [context.trigger.id]);
+    const { task } = db.decide(initial.candidate.id, { evalId: lease.id, owner: 'router', policyVersion: 'p', outcome: 'accept', assessment: {}, task: { target: '修复问题', mandate: {} } });
+    assert.deepEqual(db.pendingSubscriptionMessages(task.id).map(row => row.id), [context.trigger.id]);
     assert.equal(db.candidates({ status: 'queued' })[0].id, separate.candidate.id);
-    assert.equal(db.getTicket(ticket.id).instructionRevision, 1);
+    assert.equal(db.getTask(task.id).instructionRevision, 1);
     assert.equal(ingestAssistantEvent(db, contextEvent, policy).duplicate, true);
-    assert.equal(db.pendingSubscriptionMessages(ticket.id).length, 1);
-    const subscription = db.subscriptions({ ticketId: ticket.id })[0];
+    assert.equal(db.pendingSubscriptionMessages(task.id).length, 1);
+    const subscription = db.subscriptions({ taskId: task.id })[0];
     assert.equal(subscription.cursorSeq, context.trigger.seq);
   } finally { db.close(); }
 });
@@ -162,10 +162,10 @@ test('late subscription preserves ambiguous messages without guessing ownership'
     const policy = { version: 'p', ownerIds: ['owner'], threadIds: ['chat'] };
     const event = { channel: 'feishu', sourceKey: 'initial', threadId: 'thread', source: { chatId: 'chat' }, actor: { kind: 'human', id: 'owner' }, text: '修复问题', kind: 'group', mentioned: false };
     const initial = ingestAssistantEvent(db, event, policy);
-    const first = db.createTicket({ threadId: 'thread', target: 'one', mandate: {} });
+    const first = db.createTask({ threadId: 'thread', target: 'one', mandate: {} });
     db.subscribe(first.id, 'thread');
     const late = ingestAssistantEvent(db, { ...event, sourceKey: 'late' }, policy);
-    const second = db.createTicket({ threadId: 'thread', target: 'two', mandate: {} });
+    const second = db.createTask({ threadId: 'thread', target: 'two', mandate: {} });
     db.subscribe(second.id, 'thread', { cursorTriggerId: initial.trigger.id });
     assert.equal(db.pendingSubscriptionMessages(second.id).length, 0);
     assert.equal(db.pendingSubscriptionMessages(first.id)[0].id, late.trigger.id);
@@ -176,7 +176,7 @@ test('late subscription preserves ambiguous messages without guessing ownership'
   } finally { db.close(); }
 });
 
-test('a batch opening two tickets does not assign late context to whichever decision finishes first', () => {
+test('a batch opening two tasks does not assign late context to whichever decision finishes first', () => {
   const db = createAssistantOrchestrationStore({ filename: ':memory:' });
   try {
     const policy = { version: 'p', ownerIds: ['owner'], threadIds: ['chat'] };
@@ -185,14 +185,14 @@ test('a batch opening two tickets does not assign late context to whichever deci
     const two = ingestAssistantEvent(db, { ...event, sourceKey: 'two' }, policy);
     const lease = db.claimEval('thread', { owner: 'router', policyVersion: 'p' });
     const context = ingestAssistantEvent(db, { ...event, sourceKey: 'context', mentioned: false }, policy);
-    const decide = candidate => db.decide(candidate.id, { evalId: lease.id, owner: 'router', policyVersion: 'p', outcome: 'accept', assessment: {}, ticket: { target: 'task', mandate: {} } });
-    const first = decide(one.candidate).ticket;
+    const decide = candidate => db.decide(candidate.id, { evalId: lease.id, owner: 'router', policyVersion: 'p', outcome: 'accept', assessment: {}, task: { target: 'task', mandate: {} } });
+    const first = decide(one.candidate).task;
     assert.equal(db.pendingSubscriptionMessages(first.id).length, 0);
-    const second = decide(two.candidate).ticket;
+    const second = decide(two.candidate).task;
     assert.equal(db.pendingSubscriptionMessages(first.id).length, 0);
     assert.equal(db.pendingSubscriptionMessages(second.id).length, 0);
     assert.ok(db.getTrigger(context.trigger.id));
-    assert.equal(db.deliverSubscribedMessage(context.trigger.id, { ticketId: second.id }).ticketId, second.id);
+    assert.equal(db.deliverSubscribedMessage(context.trigger.id, { taskId: second.id }).taskId, second.id);
   } finally { db.close(); }
 });
 
@@ -206,10 +206,10 @@ test('finishing a batch reconciles earlier context even after live delivery adva
     const lease = db.claimEval('thread', { owner: 'router', policyVersion: 'p' });
     const early = ingestAssistantEvent(db, { ...event, sourceKey: 'early', mentioned: false }, policy);
     const decision = { evalId: lease.id, owner: 'router', policyVersion: 'p', assessment: {} };
-    const { ticket } = db.decide(one.candidate.id, { ...decision, outcome: 'accept', ticket: { target: 'task', mandate: {} } });
+    const { task } = db.decide(one.candidate.id, { ...decision, outcome: 'accept', task: { target: 'task', mandate: {} } });
     const later = ingestAssistantEvent(db, { ...event, sourceKey: 'later', mentioned: false }, policy);
     db.decide(two.candidate.id, { ...decision, outcome: 'ignore' });
-    assert.deepEqual(db.pendingSubscriptionMessages(ticket.id).map(row => row.id), [early.trigger.id, later.trigger.id]);
-    assert.equal(db.subscriptions({ ticketId: ticket.id })[0].cursorSeq, later.trigger.seq);
+    assert.deepEqual(db.pendingSubscriptionMessages(task.id).map(row => row.id), [early.trigger.id, later.trigger.id]);
+    assert.equal(db.subscriptions({ taskId: task.id })[0].cursorSeq, later.trigger.seq);
   } finally { db.close(); }
 });

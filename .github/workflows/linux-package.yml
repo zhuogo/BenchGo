@@ -1,0 +1,51 @@
+name: BenchGo Linux server package
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      release_version:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI: 'true'
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      RELEASE_VERSION: ${{ inputs.release_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Stage release and prepare official package manager
+        run: |
+          node scripts/release/stage.mjs --source-sha "$SOURCE_SHA" --release-version "$RELEASE_VERSION"
+          npm install --global --force corepack@0.34.0
+          corepack enable
+      - name: Install locked dependencies
+        run: |
+          npm run setup
+          npm ci --prefix plugins/link
+          npm ci --prefix plugins/benchgo
+      - name: Build and verify Linux server archive
+        run: |
+          npm run build:plus
+          node --test scripts/server/package-linux.test.mjs
+          npm run package:plus:linux
+          npm run check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchgo-linux-server
+          path: artifacts/linux-server/*
+          if-no-files-found: error
+          retention-days: 14

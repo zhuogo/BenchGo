@@ -7,7 +7,7 @@ const config = { observationWindowMs: 120_000, intervalSeconds: 60 };
 const iso = value => new Date(value).toISOString();
 function runtime(now = epoch) {
   return {
-    ticket: { id: 'ticket', status: 'running', instructionRevision: 1 },
+    task: { id: 'task', status: 'running', instructionRevision: 1 },
     assignment: { id: 'assignment', state: 'claimed', owner: 'owner', fence: 1, leaseUntil: now + 60000 },
     run: { id: 'run', sessionId: 'session', state: 'running', instructionRevision: 1 },
     executionAlive: { status: 'running', observedAt: iso(now), bootId: 'boot-1' },
@@ -170,7 +170,7 @@ test('retired recovery metadata cannot trigger an alarm or clear a real executio
 test('paused and terminal executions retire prior faults without requesting recovery', () => {
   const old = observeTwice(row => { row.executionAlive.status = 'absent'; }).last;
   for (const patch of [{ status: 'waiting', executionControl: { paused: true } }, { status: 'completed' }, { status: 'waiting', executionControl: { stopped: true } }]) {
-    const facts = snapshot(epoch + 180000); Object.assign(facts.executions[0].ticket, patch);
+    const facts = snapshot(epoch + 180000); Object.assign(facts.executions[0].task, patch);
     facts.executions[0].stop = { requestedAt: iso(epoch), confirmationOverdue: true, confirmedAt: null };
     const value = inspect(facts, epoch + 180000, old.candidates);
     assert.deepEqual(value.findings, []);

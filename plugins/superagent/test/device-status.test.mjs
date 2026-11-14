@@ -51,7 +51,7 @@ test('requires current real owner turn and exact local conversation before consu
     f => { f.agent.status = 'idle'; },
     f => { f.agent.session.header.origin = 'subagent'; },
     f => { f.events.push({ type: 'turn/end' }); },
-    f => { f.events[1].data.source.kind = 'ticket-reply'; },
+    f => { f.events[1].data.source.kind = 'task-reply'; },
     f => { f.ctx.agents.currentInitiator = () => ({ id: f.agent.id }); },
     f => { f.ctx.agents.get = () => ({ id: f.agent.id }); },
     f => { f.state.mainSessionId = 'old-session'; },

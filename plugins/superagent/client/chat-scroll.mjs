@@ -1,4 +1,5 @@
 const NEAR_BOTTOM = 24;
+const FOLLOW_RATE = 18;
 const positions = new Map();
 
 /** Owns one transcript's scrolling. DOM access stays local to its scroll container. */
@@ -46,21 +47,39 @@ export function createChatScroll({ scroller, content, sessionKey, onChange, redu
     previousTop = scroller.scrollTop;
   }
   function bottom(smooth = false) {
-    stopAnimation(); following = true; unread = false;
+    following = true; unread = false;
     if (!smooth || reducedMotion() || Math.abs(floor() - scroller.scrollTop) < 1) {
+      stopAnimation();
       scroller.scrollTop = floor(); previousTop = scroller.scrollTop; capture(); emit(); save(); return;
     }
+    // One critically damped trajectory retains its velocity when the tail
+    // grows. Text chunks never restart an ease-out from a fresh zero speed.
+    if (animating) return;
     animating = true;
-    const start = scroller.scrollTop;
-    let began;
+    let position = scroller.scrollTop, velocity = 0, previousTime;
     const tick = time => {
       if (disposed) return;
-      began ??= time;
-      const progress = Math.min(1, (time - began) / 220);
-      scroller.scrollTop = start + (floor() - start) * (1 - (1 - progress) ** 3);
+      frame = null;
+      const destination = floor();
+      if (reducedMotion() || destination <= scroller.scrollTop) {
+        scroller.scrollTop = destination; previousTop = scroller.scrollTop;
+        animating = false; capture(); emit(); save(); return;
+      }
+      const dt = previousTime === undefined ? 0 : Math.max(0, (time - previousTime) / 1000);
+      const offset = position - destination, carry = velocity + FOLLOW_RATE * offset;
+      const decay = Math.exp(-FOLLOW_RATE * dt);
+      position = Math.min(destination, destination + (offset + carry * dt) * decay);
+      velocity = (velocity - FOLLOW_RATE * carry * dt) * decay;
+      // Retain fractional position: scrollTop may round to integer pixels,
+      // otherwise the last pixel can leave an animation running forever.
+      scroller.scrollTop = position;
       previousTop = scroller.scrollTop;
-      if (progress < 1) frame = requestFrame(tick);
-      else { frame = null; animating = false; capture(); emit(); save(); }
+      previousTime = time;
+      if (destination - position > .5 || Math.abs(velocity) > 3) frame = requestFrame(tick);
+      else {
+        scroller.scrollTop = destination; previousTop = scroller.scrollTop;
+        animating = false; capture(); emit(); save();
+      }
     };
     frame = requestFrame(tick); emit();
   }
@@ -77,8 +96,8 @@ export function createChatScroll({ scroller, content, sessionKey, onChange, redu
   }
   function resize() {
     if (!initialized || animating || disposed) return;
-    if (following) { scroller.scrollTop = floor(); previousTop = scroller.scrollTop; }
-    else restoreAnchor();
+    if (following) { bottom(true); return; }
+    restoreAnchor();
     capture(); emit(); save();
   }
   const wheel = event => { if (event.deltaY < 0 || animating) interrupt(); };
@@ -114,7 +133,7 @@ export function createChatScroll({ scroller, content, sessionKey, onChange, redu
         const saved = positions.get(sessionKey);
         if (saved && !saved.following) { following = false; anchor = saved.anchor; restoreAnchor(); capture(); emit(); }
         else bottom();
-      } else if (ownInput) bottom(true);
+      } else if (ownInput) bottom();
       else {
         if (!following && replySignature !== latestReply && reply && rows.indexOf(reply) >= previousTailIndex) unread = true;
         resize();

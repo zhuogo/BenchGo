@@ -2,11 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
 import { Commander } from '../src/runtime.mjs';
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(yes => { resolve = yes; });
+  return { promise, resolve };
+}
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'commander-store-'));
@@ -141,4 +147,127 @@ test('runtime hydration failures release ownership without rewriting stored sess
     assert.equal(await readFile(path, 'utf8'), bytes);
     await assert.rejects(access(join(f.directory, 'owner.lock')), { code: 'ENOENT' });
   }
+});
+
+test('pretty-printed v1 snapshots retain their schema and records when saved compactly', async t => {
+  const f = await fixture(t), store = f.store();
+  const state = { version: 1, sessions: [{ id: 'kept', nativeId: 'native', events: [{ seq: 1 }], receipts: { request: { text: '保留输入', receipt: { status: 'accepted' } } } }] };
+  await writeFile(join(f.directory, 'sessions.json'), JSON.stringify(state, null, 2));
+  assert.deepEqual(await store.open(), state);
+  await store.save(state.sessions);
+  const saved = await readFile(join(f.directory, 'sessions.json'), 'utf8');
+  assert.deepEqual(JSON.parse(saved), state);
+  assert.equal(saved, JSON.stringify(state));
+});
+
+test('slow writes coalesce pending states without serializing or acknowledging them early', async t => {
+  const f = await fixture(t), store = f.store(); await store.open();
+  const started = [deferred(), deferred()], release = [deferred(), deferred()];
+  const write = store.writeSnapshot.bind(store);
+  let writes = 0, serializations = 0, pendingSettled = false;
+  t.mock.method(store, 'writeSnapshot', async sessions => {
+    const index = writes++;
+    started[index].resolve(); await release[index].promise;
+    return write(sessions);
+  });
+  const state = revision => [{ toJSON() { serializations++; return { id: 'session', revision }; } }];
+  try {
+    const first = store.save(state(0)); await started[0].promise;
+    const callers = Array.from({ length: 100 }, (_, index) => store.save(state(index + 1)));
+    callers[0].then(() => { pendingSettled = true; });
+    assert.ok(callers.every(promise => promise === callers[0]));
+    assert.equal(serializations, 0);
+    assert.equal(writes, 1);
+    release[0].resolve(); await first; await started[1].promise;
+    assert.equal(serializations, 1);
+    assert.equal(pendingSettled, false);
+    assert.equal(JSON.parse(await readFile(join(f.directory, 'sessions.json'), 'utf8')).sessions[0].revision, 0);
+    release[1].resolve(); await Promise.all(callers);
+    assert.equal(serializations, 2);
+    assert.equal(writes, 2);
+    assert.equal(JSON.parse(await readFile(join(f.directory, 'sessions.json'), 'utf8')).sessions[0].revision, 100);
+  } finally { for (const gate of release) gate.resolve(); }
+});
+
+test('a failed in-flight write rejects its callers without losing the pending durable barrier', async t => {
+  const f = await fixture(t), store = f.store(); await store.open();
+  const started = [deferred(), deferred()], release = [deferred(), deferred()];
+  const write = store.writeSnapshot.bind(store);
+  let writes = 0, pendingSettled = false;
+  t.mock.method(store, 'writeSnapshot', async sessions => {
+    const index = writes++;
+    started[index].resolve(); await release[index].promise;
+    if (!index) throw new Error('disk write failed');
+    return write(sessions);
+  });
+  try {
+    const failed = assert.rejects(store.save([{ id: 'old' }]), /disk write failed/);
+    await started[0].promise;
+    const pending = store.save([{ id: 'latest' }]);
+    pending.then(() => { pendingSettled = true; });
+    release[0].resolve(); await failed; await started[1].promise;
+    assert.equal(pendingSettled, false);
+    await assert.rejects(access(join(f.directory, 'sessions.json')), { code: 'ENOENT' });
+    release[1].resolve(); await pending;
+    assert.deepEqual(JSON.parse(await readFile(join(f.directory, 'sessions.json'), 'utf8')).sessions, [{ id: 'latest' }]);
+  } finally { for (const gate of release) gate.resolve(); }
+});
+
+test('a failed coalesced write rejects all its callers and a later save can recover', async t => {
+  const f = await fixture(t), store = f.store(); await store.open();
+  const release = deferred(), started = deferred(), write = store.writeSnapshot.bind(store);
+  let writes = 0;
+  t.mock.method(store, 'writeSnapshot', async sessions => {
+    const index = writes++;
+    if (!index) { started.resolve(); await release.promise; }
+    if (index === 1) throw new Error('latest snapshot failed');
+    return write(sessions);
+  });
+  try {
+    const first = store.save([{ id: 'baseline' }]); await started.promise;
+    const second = assert.rejects(store.save([{ id: 'intermediate' }]), /latest snapshot failed/);
+    const third = assert.rejects(store.save([{ id: 'latest' }]), /latest snapshot failed/);
+    release.resolve(); await Promise.all([first, second, third]);
+    assert.deepEqual(JSON.parse(await readFile(join(f.directory, 'sessions.json'), 'utf8')).sessions, [{ id: 'baseline' }]);
+    await store.save([{ id: 'recovered' }]);
+    assert.deepEqual(JSON.parse(await readFile(join(f.directory, 'sessions.json'), 'utf8')).sessions, [{ id: 'recovered' }]);
+    assert.equal(writes, 3);
+  } finally { release.resolve(); }
+});
+
+test('failed atomic replacement cleans its temporary file and permits a subsequent save', async t => {
+  const f = await fixture(t), store = f.store(); await store.open();
+  const target = join(f.directory, 'sessions.json');
+  await mkdir(target);
+  await assert.rejects(store.save([{ id: 'blocked' }]));
+  assert.deepEqual((await readdir(f.directory)).filter(name => name.endsWith('.tmp')), []);
+  await rm(target, { recursive: true });
+  await store.save([{ id: 'recovered' }]);
+  assert.deepEqual(JSON.parse(await readFile(target, 'utf8')).sessions, [{ id: 'recovered' }]);
+});
+
+test('close flushes the latest pending state before releasing ownership and rejects later saves', async t => {
+  const f = await fixture(t), store = f.store(); await store.open();
+  const started = [deferred(), deferred()], release = [deferred(), deferred()];
+  const write = store.writeSnapshot.bind(store);
+  let writes = 0, closed = false;
+  t.mock.method(store, 'writeSnapshot', async sessions => {
+    const index = writes++;
+    started[index].resolve(); await release[index].promise;
+    return write(sessions);
+  });
+  try {
+    const first = store.save([{ id: 'old' }]); await started[0].promise;
+    const latest = store.save([{ id: 'latest' }]);
+    const closing = store.close().then(() => { closed = true; });
+    await assert.rejects(store.save([{ id: 'too-late' }]), /store is closing/);
+    release[0].resolve(); await first; await started[1].promise;
+    assert.equal(closed, false);
+    await access(join(f.directory, 'owner.lock'));
+    await assert.rejects(f.store().open(), error => error.code === 'BENCHGO_DATA_LOCKED');
+    release[1].resolve(); await Promise.all([latest, closing]);
+    const next = f.store();
+    assert.deepEqual(await next.open(), { version: 1, sessions: [{ id: 'latest' }] });
+    assert.equal(writes, 2);
+  } finally { for (const gate of release) gate.resolve(); }
 });

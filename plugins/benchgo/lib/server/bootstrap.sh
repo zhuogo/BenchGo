@@ -16,8 +16,8 @@ export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTI
 systemctl --user show-environment >/dev/null 2>&1 || { echo 'systemd 用户服务不可用；请启用用户会话服务后重试' >&2; exit 1; }
 node_root="$HOME/.local/share/benchgo/node"
 node_binary=$(command -v node || true)
-if [ -z "$node_binary" ] || ! "$node_binary" -e 'const [a,b,c]=process.versions.node.split(".").map(Number);process.exit(a>=24||(a===22&&(b>19||(b===19&&c>=0)))?0:1)' >/dev/null 2>&1; then
-  node_version=22.22.1
+if [ -z "$node_binary" ] || ! "$node_binary" -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>24||(a===24&&b>=9)?0:1)' >/dev/null 2>&1; then
+  node_version=24.22.3
   node_file="node-v$node_version-linux-$node_arch.tar.xz"
   command -v curl >/dev/null || { echo '安装 Node.js 需要 curl' >&2; exit 1; }
   command -v sha256sum >/dev/null || { echo '安装 Node.js 需要 sha256sum' >&2; exit 1; }

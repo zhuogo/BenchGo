@@ -9,16 +9,15 @@ import { ConversationActivity } from './conversation-activity.jsx';
 import { createPortal } from 'react-dom';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { useChatScroll } from './use-chat-scroll.jsx';
-import { TicketAttention } from './ticket-attention.jsx';
-import { ticketSnapshot } from './ticket-state.mjs';
-import { InteractiveReply } from '../../interactive/client/reply.jsx';
+import { TaskAttention } from './task-attention.jsx';
+import { taskSnapshot } from './task-state.mjs';
 import { InlineApproval, useApprovalIndex } from './approval-review.jsx';
 import { approvalReminderNavigation } from './approval-flow.mjs';
 import { sendInteractive } from '../../interactive/client/send.mjs';
+import { AssistantReply } from './reply-images.jsx';
 
 const labels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' };
 const NO_STATUSES = new Map();
-const ChatReply = memo(InteractiveReply);
 const sameFields = (a, b) => { const keys = Object.keys(a); return keys.length === Object.keys(b).length && keys.every(key => Object.is(a[key], b[key])); };
 // Live rows rebuild their small content block list on every projection.
 const sameBlocks = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((block, index) => sameFields(block, b[index]));
@@ -50,26 +49,26 @@ export function QuestionReply({ row }) {
 
 // Token updates and history polls re-render the transcript container. Each row
 // renders again only when its own data or controls change.
-const ChatRow = memo(function ChatRow({ row, attention, saved, chosen, approvalIndex, busy, running, assistantName, threadId, api, onRefresh, onRun, onChosen, onSubmit, SessionProvider, renderSlot }) {
+const ChatRow = memo(function ChatRow({ row, attention, saved, agentReaction, chosen, approvalIndex, busy, running, assistantName, threadId, api, onRefresh, onRun, onChosen, onSubmit, onOpenFile, SessionProvider, renderSlot }) {
   return <article className="ba-chat-message" data-approval-event={row.approval?.eventKey} data-approval-request={row.approval ? row.requestId : undefined} tabIndex={row.approval ? -1 : undefined} data-chat-key={row.key} data-role={row.role} data-streaming={row.streaming ? 'true' : undefined}>
     <div className="ba-chat-body">
-    <div className="ba-chat-content" aria-label={row.role === 'system' ? '消息状态' : row.kind === 'question-reply' ? '你的选择' : row.role === 'user' ? '你' : assistantName || 'BenchGo'}>
-    {row.kind === 'channel-message' ? <div className="ba-chat-user-text">{row.text}</div> : row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : row.role === 'assistant' ? <ChatReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={running || !!row.provisional} onSubmit={onSubmit} /> : <div className="ba-chat-status" role="alert">
+    {row.role === 'assistant' && row.kind !== 'channel-message' ? <AssistantReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={running || !!row.provisional} onSubmit={onSubmit} onOpenFile={onOpenFile} assistantName={assistantName || 'BenchGo'} /> : <div className="ba-chat-content" aria-label={row.role === 'system' ? '消息状态' : row.kind === 'question-reply' ? '你的选择' : row.role === 'user' ? '你' : assistantName || 'BenchGo'}>
+    {row.kind === 'channel-message' ? <div className="ba-chat-user-text">{row.text}</div> : row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : <div className="ba-chat-status" role="alert">
       {row.title && <strong>{row.title}</strong>}<span>{row.text}</span>
       {row.requestId && onRefresh && <Button variant="link" size="sm" className="ba-chat-status-link" type="button" disabled={busy} onClick={() => onRun(onRefresh)}>重新核实</Button>}
     </div>}
     {row.role === 'user' && (row.content || []).filter(block => ['image', 'file'].includes(block.type)).map((block, index) => <span className="ba-chat-attachment" key={index}>{block.type === 'image' ? '已附图片' : `已附文件${block.name ? `：${block.name}` : ''}`}</span>)}
-    </div>
+    </div>}
     </div><div className="ba-chat-followup">
     {row.approval && <InlineApproval row={row} index={approvalIndex} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} />}
-    {attention && <TicketAttention key={attention.id} api={api} attention={attention} showQuestion={!row.attention} ticket={{ id: row.ticketId, status: row.ticketStatus, executionControl: row.currentExecutionControl, instructionRevision: row.currentInstructionRevision ?? row.instructionRevision, resultVersion: row.currentResultVersion ?? row.resultVersion, mandate: { source: { channel: 'desktop' } } }} onAnswered={onRefresh} />}
+    {attention && <TaskAttention key={attention.id} api={api} attention={attention} showQuestion={!row.attention} task={{ id: row.taskId, status: row.taskStatus, executionControl: row.currentExecutionControl, instructionRevision: row.currentInstructionRevision ?? row.instructionRevision, resultVersion: row.currentResultVersion ?? row.resultVersion, mandate: { source: { channel: 'desktop' } } }} onAnswered={onRefresh} />}
     {row.notification && row.role !== 'system' && !row.attention && row.eventId && row.options?.length > 0 && <div className="ba-chat-options" aria-label="回复选项（不代表审批）">{row.options.map(option => <Button variant="ghost" type="button" className="ba-quiet" key={option} disabled={busy || running || !!chosen} onClick={() => onRun(async () => { await api('notificationOption', { eventId: row.eventId, threadId, text: option }); onChosen(value => ({ ...value, [row.eventId]: option })); await onRefresh?.(); })}>{option}{chosen === option ? ' · 已发送' : ''}</Button>)}</div>}
     </div>
-    {row.role !== 'system' && row.kind !== 'channel-message' && <MessageActions row={row} saved={saved} api={api} onRefresh={onRefresh} threadId={threadId} />}
+    {row.role !== 'system' && row.kind !== 'channel-message' && <MessageActions row={row} saved={saved} agentReaction={agentReaction} assistantName={assistantName} api={api} onRefresh={onRefresh} threadId={threadId} />}
   </article>;
 });
 
-export function QuietChat({ home, session, chat, inbox }) {
+export function QuietChat({ home, session, chat, inbox, onOpenFile }) {
   const { history = {}, threadId = 'main', api, onLoadEarlier } = home;
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [chosen, setChosen] = useState({});
   const refresh = useRef(home.onRefresh);
@@ -97,9 +96,8 @@ export function QuietChat({ home, session, chat, inbox }) {
   // Steps and tool results settle many times per turn and are already on screen
   // from the live projection; reconcile their receipts once the turn pauses.
   useEffect(() => connected && latestSeq !== reconcileSeq ? reconcile(1500) : undefined, [latestSeq]);
-  const projected = quietChatRows(history, threadId, session, chat, inbox);
   const replies = projectReplyRows({ history, chat, sessionId: home.sessionId, running: session.running });
-  for (const reply of replies) if (!projected.some(row => row.key === reply.key)) projected.push(reply);
+  const projected = quietChatRows(history, threadId, session, chat, inbox, replies);
   const rows = useStableRows(projected);
   const approvalIndex = useApprovalIndex({ ctx: home.ctx, api, ownerThreadId: threadId,
     enabled: rows.some(row => !!row.approval) });
@@ -155,18 +153,20 @@ export function QuietChat({ home, session, chat, inbox }) {
     {history.hasMore && <Button variant="ghost" type="button" className="ba-quiet ba-chat-load" disabled={busy} onClick={() => run(onLoadEarlier)}>查看更早消息</Button>}
     {rows.map((row, index) => {
       const attention = row.attention || row.currentAttention;
-      // A stopped ticket, or one awaiting verification, must not offer a live answer.
-      const answerable = attention && !(row.currentExecutionControl?.stopRequested || row.currentExecutionControl?.stopped || ticketSnapshot({ status: row.ticketStatus, executionControl: row.currentExecutionControl,
+      // A stopped task, or one awaiting verification, must not offer a live answer.
+      const answerable = attention && !(row.currentExecutionControl?.stopRequested || row.currentExecutionControl?.stopped || taskSnapshot({ status: row.taskStatus, executionControl: row.currentExecutionControl,
         resultVersion: row.currentResultVersion, continuationWait: row.currentContinuationWait ?? row.continuationWait,
         instructionRevision: row.currentInstructionRevision, results: row.currentResult ? [row.currentResult] : [] }).safetyWait)
         && !rows.slice(index + 1).some(later => (later.attention || later.currentAttention)?.id === attention.id);
-      return <ChatRow key={row.key} row={row} attention={answerable ? attention : null} saved={history.reactions?.[row.key] || null}
+      return <ChatRow key={row.key} row={row} attention={answerable ? attention : null} saved={history.reactions?.[row.key] || null} agentReaction={row.role === 'user' ? history.assistantReactions?.[row.key] || null : null}
         chosen={row.eventId ? chosen[row.eventId] : undefined} approvalIndex={row.approval ? approvalIndex : undefined}
         busy={(row.role === 'system' || !!row.notification) && busy} running={(row.role === 'assistant' || !!row.notification) && !!session.running} assistantName={home.assistantName} threadId={threadId} api={api} onRefresh={home.onRefresh}
-        onRun={run} onChosen={setChosen} onSubmit={submitInteractive} SessionProvider={row.approval ? home.SessionProvider : undefined} renderSlot={row.approval ? home.renderSlot : undefined} />;
+        onRun={run} onChosen={setChosen} onSubmit={submitInteractive} onOpenFile={onOpenFile} SessionProvider={row.approval ? home.SessionProvider : undefined} renderSlot={row.approval ? home.renderSlot : undefined} />;
     })}
-    {!replies.length && awaitingChoice && <div className="ba-chat-work ba-chat-await" role="status">在下方选项卡中作答后继续</div>}
-    {activity && !awaitingChoice && <ConversationActivity activity={activity} />}
+    {(rows.length > 0 || activity || awaitingChoice) && <div className="ba-chat-tail">
+      {!replies.length && awaitingChoice && <div className="ba-chat-work ba-chat-await" role="status">在下方选项卡中作答后继续</div>}
+      {activity && !awaitingChoice && <ConversationActivity activity={activity} />}
+    </div>}
     {error && <p className="ba-error" role="alert">{error}</p>}
   </div>{scroll.host && createPortal(<div className="ba-chat-bottom" data-visible={scroll.visible ? 'true' : 'false'}>
     <Button variant="ghost" type="button" className="ba-chat-bottom-button" onClick={scroll.returnToBottom} aria-label={scroll.unread ? '有新回复，回到最新消息' : '回到底部'} title="回到底部" tabIndex={scroll.visible ? 0 : -1} aria-hidden={!scroll.visible}>

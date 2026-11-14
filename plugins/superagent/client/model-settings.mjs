@@ -2,7 +2,7 @@ export const auxiliaryCapabilities = Object.freeze([
   ['vision', '看图', '读取任务图片'],
   ['compression', '上下文压缩', '压缩会话历史'],
   ['summary', '总结', '总结指定内容'],
-  ['review', '研判与复盘', '接单研判与学习复盘'],
+  ['review', '研判与复盘', '任务研判与学习复盘'],
 ]);
 
 export function validateModelSettings(config) {

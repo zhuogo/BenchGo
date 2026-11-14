@@ -32,12 +32,12 @@ test('legacy delivery keys expose the same stable signal identity for the Router
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-legacy-state-key-'));
   const db = createAssistantRuntimeStore({ directory });
   t.after(async () => { db.close(); await rm(directory, { recursive: true, force: true }); });
-  const event = db.notify({ id: 'ticket', threadId: 'main' }, 'ticket.result', {
-    publication: { action: 'deliver', origin: 'router', text: '执行记录还在，我会在恢复条件具备后继续。' }, ticketId: 'ticket',
-  }, 'ticket-delivery:assignment-system-state:work:1:execution');
-  assert.equal(event.ticketStateEventKey, undefined);
+  const event = db.notify({ id: 'task', threadId: 'main' }, 'task.result', {
+    publication: { action: 'deliver', origin: 'router', text: '执行记录还在，我会在恢复条件具备后继续。' }, taskId: 'task',
+  }, 'task-delivery:assignment-system-state:work:1:execution');
+  assert.equal(event.taskStateEventKey, undefined);
   const restored = db.chatNotifications('main').events[0];
-  assert.equal(restored.ticketStateEventKey, 'assignment-system-state:work:1:execution');
+  assert.equal(restored.taskStateEventKey, 'assignment-system-state:work:1:execution');
   assert.equal(restored.id, event.id);
 });
 
@@ -46,9 +46,9 @@ test('Router wording and provenance survive persistence, history and every deliv
   let db = createAssistantRuntimeStore({ directory });
   t.after(async () => { db.close(); await rm(directory, { recursive: true, force: true }); });
   const publication = { action: 'deliver', origin: 'router', text: '结果已经保存，正在等待原渠道恢复。' };
-  const event = db.notify({ id: 'system-ticket', threadId: 'main' }, 'ticket.result', {
+  const event = db.notify({ id: 'system-task', threadId: 'main' }, 'task.result', {
     publication, origin: 'worker', systemState: { state: 'untrusted' }, text: 'RAW WORKER OUTPUT',
-  }, 'system-ticket:1');
+  }, 'system-task:1');
   db.registerDeliveryTargets(event.eventId, ['phone']);
   db.close();
   db = createAssistantRuntimeStore({ directory });
@@ -69,10 +69,10 @@ test('old system templates and Worker bodies remain raw history but never reente
   const records = [
     { id: 'system', publication: systemStateDelivery({ state: 'delivery_wait', code: 'ROUTER_DELIVERY_MISSING', stage: 'publication' }) },
     { id: 'worker', publication: { action: 'deliver', origin: 'worker', text: 'PRIVATE WORKER BODY' } },
-  ].map(row => ({ ...row, eventId: row.id, type: 'ticket.result', threadId: 'main', text: row.publication.text }));
+  ].map(row => ({ ...row, eventId: row.id, type: 'task.result', threadId: 'main', text: row.publication.text }));
   for (const event of records) {
     raw.prepare('INSERT INTO task_events(id,unique_key,task_id,payload) VALUES (?,?,?,?)')
-      .run(event.id, `ticket-delivery:${event.id}`, 'legacy-ticket', JSON.stringify(event));
+      .run(event.id, `task-delivery:${event.id}`, 'legacy-task', JSON.stringify(event));
     raw.prepare('INSERT INTO task_outbox(event_id) VALUES (?)').run(event.id);
     db.registerDeliveryTargets(event.id, ['phone']);
   }
@@ -87,7 +87,7 @@ test('old system templates and Worker bodies remain raw history but never reente
     assert.equal(inspection.prepare('SELECT payload FROM task_events WHERE id=?').get(event.id).payload, JSON.stringify(event));
     assert.equal(db.outboxStatus(event.id).lastError, 'publication-suppressed');
     assert.ok(db.deliveryTargets(event.id)[0].deliveredAt);
-    assert.throws(() => db.notify({ id: 'legacy-ticket' }, 'ticket.result', event, `ticket-delivery:${event.id}`), /not publishable/);
+    assert.throws(() => db.notify({ id: 'legacy-task' }, 'task.result', event, `task-delivery:${event.id}`), /not publishable/);
   }
   inspection.close();
 });
@@ -96,7 +96,7 @@ test('notification store persists events, cursors and read state', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-runtime-store-'));
   const db = createAssistantRuntimeStore({ directory });
   t.after(async () => { db.close(); await rm(directory, { recursive: true, force: true }); });
-  const event = db.notify({ id: 'ticket-1', threadId: 'main' }, 'ticket.result', { publication: { action: 'deliver', origin: 'router', text: 'done' }, text: 'done', result: { acceptanceVerdict: 'passed' } }, 'ticket-1:1:completed');
+  const event = db.notify({ id: 'task-1', threadId: 'main' }, 'task.result', { publication: { action: 'deliver', origin: 'router', text: 'done' }, text: 'done', result: { acceptanceVerdict: 'passed' } }, 'task-1:1:completed');
   assert.equal(event.seq, 1);
   const page = db.notifications({ after: 0 });
   assert.equal(page.events.length, 1);
@@ -117,12 +117,12 @@ test('history and every delivery queue project formal messages and settle legacy
   const db = createAssistantRuntimeStore({ directory });
   t.after(async () => { db.close(); await rm(directory, { recursive: true, force: true }); });
   const raw = new DatabaseSync(db.path);
-  const legacy = { type: 'ticket.completed', text: 'PRIVATE WORKER OUTPUT', result: { secret: 'never publish' } };
-  raw.prepare('INSERT INTO task_events(id,unique_key,task_id,payload) VALUES (?,?,?,?)').run('old', 'old', 'ticket', JSON.stringify(legacy));
+  const legacy = { type: 'task.completed', text: 'PRIVATE WORKER OUTPUT', result: { secret: 'never publish' } };
+  raw.prepare('INSERT INTO task_events(id,unique_key,task_id,payload) VALUES (?,?,?,?)').run('old', 'old', 'task', JSON.stringify(legacy));
   raw.prepare('INSERT INTO task_outbox(event_id) VALUES (?)').run('old');
   raw.close();
   db.registerDeliveryTargets('old', ['phone']);
-  const valid = db.notify({ id: 'new', threadId: 'side' }, 'ticket.result', {
+  const valid = db.notify({ id: 'new', threadId: 'side' }, 'task.result', {
     publication: { action: 'deliver', origin: 'router', text: 'Public result' }, text: 'RAW', result: { secret: 'SECRET' }, reasoning: 'HIDDEN',
   }, 'new');
   db.registerDeliveryTargets(valid.eventId, ['phone']);
@@ -135,13 +135,13 @@ test('history and every delivery queue project formal messages and settle legacy
   assert.equal(db.pendingOutbox().length, 1);
   assert.equal(db.pendingOutbox()[0].event.text, 'Public result');
   assert.equal(db.notifications().events.length, 1);
-  assert.throws(() => db.notify({ id: 'ticket' }, 'ticket.completed', legacy, 'old'), /not publishable/);
+  assert.throws(() => db.notify({ id: 'task' }, 'task.completed', legacy, 'old'), /not publishable/);
 });
 
 test('side chat notifications remain at their source and never join main implicitly', () => {
   const db = createAssistantRuntimeStore({ filename: ':memory:' });
   try {
-    db.notify({ id: 'side-ticket', threadId: 'side-chat' }, 'ticket.result', { publication: { action: 'deliver', origin: 'router', text: 'side result' }, text: 'side result', threadRefs: ['main', 'side-chat'] }, 'side-result');
+    db.notify({ id: 'side-task', threadId: 'side-chat' }, 'task.result', { publication: { action: 'deliver', origin: 'router', text: 'side result' }, text: 'side result', threadRefs: ['main', 'side-chat'] }, 'side-result');
     assert.equal(db.notifications({ threadId: 'main' }).events.length, 0);
     const page = db.notifications({ threadId: 'side-chat' });
     assert.equal(page.events.length, 1);
@@ -154,13 +154,13 @@ test('clearing main chat hides earlier notifications only from its chat history'
   const db = createAssistantRuntimeStore({ filename: ':memory:' });
   try {
     const main = { id: 'main-task', threadId: 'main' }, side = { id: 'side-task', threadId: 'side' };
-    db.notify(main, 'ticket.attention', { text: 'old' }, 'main-old');
-    db.notify(side, 'ticket.attention', { text: 'side' }, 'side-old');
+    db.notify(main, 'task.attention', { text: 'old' }, 'main-old');
+    db.notify(side, 'task.attention', { text: 'side' }, 'side-old');
     db.clearMainChatNotifications();
     assert.deepEqual(db.chatNotifications('main').events, []);
     assert.equal(db.chatNotifications('side').events[0].text, 'side');
     assert.equal(db.notifications({ threadId: 'main' }).events[0].text, 'old');
-    db.notify(main, 'ticket.attention', { text: 'new' }, 'main-new');
+    db.notify(main, 'task.attention', { text: 'new' }, 'main-new');
     assert.deepEqual(db.chatNotifications('main').events.map(event => event.text), ['new']);
   } finally { db.close(); }
 });
@@ -168,8 +168,8 @@ test('clearing main chat hides earlier notifications only from its chat history'
 test('other-thread notifications cannot consume the requested thread page', () => {
   const db = createAssistantRuntimeStore({ filename: ':memory:' });
   try {
-    for (let i = 0; i < 4; i++) db.notify({ id: 'other', threadId: 'other' }, 'ticket.attention', { text: 'Other question' }, `other:${i}`);
-    db.notify({ id: 'mine', threadId: 'main' }, 'ticket.attention', { text: 'My question' }, 'mine');
+    for (let i = 0; i < 4; i++) db.notify({ id: 'other', threadId: 'other' }, 'task.attention', { text: 'Other question' }, `other:${i}`);
+    db.notify({ id: 'mine', threadId: 'main' }, 'task.attention', { text: 'My question' }, 'mine');
     const page = db.notifications({ threadId: 'main', limit: 2 });
     assert.equal(page.events.length, 1);
     assert.equal(page.events[0].text, 'My question');
@@ -184,7 +184,7 @@ test('durable outbox tracks per-device targets, retries independently and closes
   t.after(() => db.close());
   t.after(() => rm(directory, { recursive: true, force: true }));
   const task = { id: 'task-targets', threadId: 'main' };
-  const event = db.notify(task, 'ticket.result', { publication: { action: 'deliver', origin: 'router', text: 'done' }, text: 'done' }, 'task-targets:1:completed');
+  const event = db.notify(task, 'task.result', { publication: { action: 'deliver', origin: 'router', text: 'done' }, text: 'done' }, 'task-targets:1:completed');
   assert.deepEqual(db.registerDeliveryTargets(event.eventId, ['phone', 'tablet', 'phone']).map(row => row.deviceId), ['phone', 'tablet']);
   assert.equal(db.pendingDeliveries(Date.now()).length, 2);
   db.deliveryTargetAttempt(event.eventId, 'phone', { error: 'offline' });

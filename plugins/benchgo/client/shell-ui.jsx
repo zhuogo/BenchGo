@@ -13,11 +13,22 @@ function ResponsiveAppFrame(props) {
   return <AppFrame {...props} actions={actions} />;
 }
 
+function HiddenNativeUpdateBadge() { return null; }
+
 export function mountShellUi(ctx){
   mountToolsPage(ctx);
   for(const [name,owns,component] of [['root','sidebar',ResponsiveAppFrame],['sidebar','sidebar.workspaces',SidebarRoot],['sidebar.settings','settings.section',SettingsRoot]])ctx.effect(()=>{
     const entry=ctx.slots.entries(name).find(item=>item.children?.[owns]);if(!entry)throw Error('Official shell entry is unavailable: '+name);
     const original=entry.component;entry.component=component;return ()=>{if(entry.component===component)entry.component=original;};
+  });
+  // The settings owner also registers a rail badge for the same native update.
+  // Hide that specific registration, preserving unrelated badges and its service.
+  ctx.effect(()=>{
+    const entries=ctx.slots.entries('sidebar.toggle.badge').filter(entry=>entry.locale==='settings');
+    if(entries.length!==1)throw Error('Official desktop update badge entry is unavailable');
+    const entry=entries[0],original=entry.component;
+    entry.component=HiddenNativeUpdateBadge;
+    return ()=>{if(entry.component===HiddenNativeUpdateBadge)entry.component=original;};
   });
   // Preserve the official stable bound translators, including already-mounted views.
   ctx.effect(()=>{

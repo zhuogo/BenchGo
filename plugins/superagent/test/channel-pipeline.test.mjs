@@ -43,6 +43,21 @@ test('unmentioned group is preserved by adapter and ignored by unified admission
   } finally { f.database.close(); }
 });
 
+test('group mention discovered after trusted normalization enters the Router queue', async () => {
+  const f = fixture();
+  try {
+    const event = incoming(envelope());
+    const metadata = { ...event };
+    delete metadata.mentioned;
+    const result = await f.ingress.receive('feishu', metadata);
+    assert.equal(result.requiresEval, true);
+    assert.equal(result.intakeEvent.source.mentioned, true);
+    assert.equal(result.candidate.gate.strength, 'explicit');
+    assert.equal(result.candidate.gate.evidence.sourceVerified, true);
+    assert.equal(f.database.candidates().length, 1);
+  } finally { f.database.close(); }
+});
+
 test('durable intake binds connection evidence, queues direct assessment and projects one stable official key', async () => {
   const f = fixture();
   try {
@@ -79,15 +94,15 @@ test('a subscribed unmentioned follow-up is admitted into the original ledger wi
   try {
     const first = await f.ingress.receive('feishu', incoming(envelope()));
     const lease = f.database.claimEval(first.intakeEvent.threadId, { owner: 'router', policyVersion: 'feishu:1' });
-    const { ticket } = f.database.decide(first.candidate.id, { evalId: lease.id, owner: 'router', policyVersion: 'feishu:1', outcome: 'accept', assessment: {}, ticket: { target: 'work', mandate: { actorId: 'owner', source: first.intakeEvent.source } } });
+    const { task } = f.database.decide(first.candidate.id, { evalId: lease.id, owner: 'router', policyVersion: 'feishu:1', outcome: 'accept', assessment: {}, task: { target: 'work', mandate: { actorId: 'owner', source: first.intakeEvent.source } } });
     const followup = envelope({ mentioned: false });
     followup.event.message.message_id = 'followup'; followup.event.message.root_id = 'm';
     const received = await f.ingress.receive('feishu', incoming(followup));
     assert.equal(received.requiresEval, false);
-    assert.equal(received.delivery.ticketId, ticket.id);
+    assert.equal(received.delivery.taskId, task.id);
     assert.equal(received.trigger.intakeStage, 'admitted');
     assert.equal(f.database.candidates().length, 1);
-    assert.equal(f.database.pendingSubscriptionMessages(ticket.id).length, 1);
+    assert.equal(f.database.pendingSubscriptionMessages(task.id).length, 1);
   } finally { f.database.close(); }
 });
 
@@ -128,7 +143,7 @@ test('external-send preparation uses a real stored target, full content and curr
     const input = { targetTriggerId: accepted.intakeEvent.id, text: '完整外发正文' };
     assert.throws(() => f.ingress.prepareExternalSend('feishu', input, { principal: { kind: 'owner' } }), /可信渠道来源/);
     const lease = f.database.claimEval(accepted.intakeEvent.threadId, { owner: 'test-router', policyVersion: 'feishu:1' });
-    f.database.decide(accepted.candidate.id, { evalId: lease.id, owner: 'test-router', policyVersion: 'feishu:1', outcome: 'accept', assessment: {}, ticket: { target: 'existing source task', mandate: { source: accepted.intakeEvent.source } } });
+    f.database.decide(accepted.candidate.id, { evalId: lease.id, owner: 'test-router', policyVersion: 'feishu:1', outcome: 'accept', assessment: {}, task: { target: 'existing source task', mandate: { source: accepted.intakeEvent.source } } });
     const frozen = f.ingress.prepareExternalSend('feishu', input, { principal: { kind: 'owner' } });
     assert.deepEqual(frozen.submission.input, input);
     assert.equal(frozen.content.text, input.text);

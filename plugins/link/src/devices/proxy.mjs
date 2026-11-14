@@ -15,7 +15,8 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
     if (!cookie) throw new Error('主机未签发工作台授权');
     remoteCookie = cookie;
   };
-  await upstream();
+  try { await upstream(); }
+  catch (error) { agent.destroy(); throw error; }
   const server = createServer(async (req, res) => {
     try {
       if (closed || req.headers.host !== new URL(origin).host) throw Object.assign(new Error('设备连接地址无效'), { status: 403 });
@@ -36,7 +37,9 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
       if (!url.pathname.startsWith('/link/workbench/') || !['GET', 'HEAD', 'POST'].includes(req.method)) throw Object.assign(new Error('路径未授权'), { status: 403 });
       const headers = {};
       for (const [key, value] of Object.entries(req.headers)) if (value !== undefined && !['cookie','authorization','host','origin','referer','connection','upgrade','sec-websocket-key','sec-websocket-version'].includes(key)) headers[key] = value;
-      headers['accept-encoding'] = 'identity'; headers.cookie = remoteCookie; headers.origin = new URL(target.url).origin;
+      // Only static assets pass through unchanged. HTML must remain decodable for path/CSP rewriting.
+      const staticAsset = url.pathname.startsWith('/link/workbench/plugins/') || url.pathname.startsWith('/link/workbench/assets/');
+      headers['accept-encoding'] = staticAsset ? req.headers['accept-encoding'] || 'identity' : 'identity'; headers.cookie = remoteCookie; headers.origin = new URL(target.url).origin;
       const remote = request(new URL(url.pathname + url.search, target.url), { agent, method: req.method, headers }, response => {
         const outgoing = { ...response.headers, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
         delete outgoing['set-cookie']; delete outgoing['x-frame-options']; delete outgoing['strict-transport-security'];
@@ -56,7 +59,7 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
         response.on('error', error => res.destroy(error));
       });
       remote.on('error', error => { onFailure?.(error); if (res.headersSent) res.destroy(); else { res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' }); res.end('主机暂时不可达，请返回设备列表重试'); } });
-      remote.setTimeout(90000, () => remote.destroy(new Error('工作台响应超时')));
+      remote.setTimeout(90000, () => remote.destroy(Object.assign(new Error('工作台响应超时'), { code: 'ETIMEDOUT' })));
       res.on('close', () => { if (!res.writableEnded) remote.destroy(); });
       req.pipe(remote);
     } catch (error) { if (!res.headersSent) res.writeHead(error.status || 502, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end(error.message); }

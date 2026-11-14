@@ -65,13 +65,13 @@ export function validateAttentionDecisions(value, { questions, instruction }) {
 }
 
 /** Read-only routing: one Router call, no tools, no retries or fallback, bounded even for a stalled adapter. */
-export async function triageWorkerQuestions({ llm, ticket, questions, policy, signal, timeoutMs = 45_000 }) {
+export async function triageWorkerQuestions({ llm, task, questions, policy, signal, timeoutMs = 45_000 }) {
   signal?.throwIfAborted();
   const eligible = questions.filter(question => !requiresHumanDecision(question));
   const forced = questions.filter(requiresHumanDecision).map(question => userDecision(question, '权限与计划批准必须由用户决定'));
   if (!eligible.length) return forced;
   const model = policy.models?.[0] || policy.routingConfig?.models?.[0] || policy.model;
-  const instruction = ticket.mandate?.instruction;
+  const instruction = task.mandate?.instruction;
   if (!nonempty(instruction)) return questions.map(question => userDecision(question, '缺少可核对的原始指令', 'mandate-unavailable'));
   if (!model?.providerId || !model?.modelId || !llm?.stream) return questions.map(question => userDecision(question, 'Router 模型未配置，需用户补充', 'model-unavailable'));
   const timeout = new AbortController();

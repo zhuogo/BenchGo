@@ -14,6 +14,35 @@ const { build } = createRequire(new URL('../../benchgo/package.json', import.met
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 const captureDir = process.env.BENCHGO_CHAT_SCREENSHOTS;
 
+test('task completion uses the normal reply stream and history takes over the mounted bubble', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html = await fixture(), browser = await chromium.launch({ headless:true, executablePath });
+  try {
+    const page = await browser.newPage({ reducedMotion:'reduce' }), errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.setContent(html);
+    if(captureDir) await mkdir(captureDir,{recursive:true});
+    for(const dark of [false,true]) for(const width of [1440,390]) {
+      await page.setViewportSize({width,height:800});
+      await page.evaluate(dark=>document.body.toggleAttribute('data-ds-dark-theme',dark),dark);
+      await page.evaluate(()=>window.renderHandoff('stream','task-result'));
+      const message = page.locator('[data-chat-key="message:reply:task-completion:2:1"]');
+      await message.getByText('同一条完整回复',{exact:true}).waitFor();
+      await page.evaluate(()=>window.taskReplyNode=document.querySelector('[data-chat-key="message:reply:task-completion:2:1"]'));
+      for(const phase of ['stream','settled','completed','history']) {
+        if(phase!=='stream') await page.evaluate(phase=>window.renderHandoff(phase,'task-result'),phase);
+        await message.getByText('同一条完整回复',{exact:true}).waitFor();
+        assert.equal(await message.count(),1);
+        assert(await message.evaluate(node=>node===window.taskReplyNode),`${phase}: ordinary reply retains its mounted identity`);
+        assert.equal(await page.locator('[data-role="user"]').count(),0,'completion signal is never a user bubble');
+        assert.equal(await page.getByText(/PRIVATE|交付通知/).count(),0);
+        assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+        if(captureDir) await page.screenshot({path:join(captureDir,`task-result-${phase}-${dark?'dark':'light'}-${width}.png`),fullPage:true});
+      }
+    }
+    assert.deepEqual(errors,[]);
+  } finally { await browser.close(); }
+});
+
 test('Router public text stays mounted across tool and reasoning steps, completion and request boundaries', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
   const html = await fixture(), browser = await chromium.launch({ headless:true, executablePath });
   try {
@@ -67,6 +96,36 @@ test('Router public text stays mounted across tool and reasoning steps, completi
   } finally { await browser.close(); }
 });
 
+test('human follow-ups stay below prior replies without unmounting them through queue, steering and history', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html = await fixture(), browser = await chromium.launch({ headless:true, executablePath });
+  try {
+    const page = await browser.newPage({ reducedMotion:'reduce' }), errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.setContent(html);
+    if(captureDir) await mkdir(captureDir,{recursive:true});
+    for(const dark of [false,true]) for(const width of [1440,390]) {
+      await page.setViewportSize({width,height:800});
+      await page.evaluate(dark=>document.body.toggleAttribute('data-ds-dark-theme',dark),dark);
+      await page.evaluate(()=>window.renderFollowup('initial'));
+      const original = page.locator('[data-chat-key="message:reply:human:2:1"]');
+      await original.getByText('先检查连接。',{exact:true}).waitFor();
+      await page.evaluate(()=>window.originalReply=document.querySelector('[data-chat-key="message:reply:human:2:1"]'));
+      for(const phase of ['pending','inbox','steering','replied','repeated','history']) {
+        await page.evaluate(phase=>window.renderFollowup(phase),phase);
+        await page.getByText('这么慢吗？',{exact:true}).waitFor();
+        assert(await original.evaluate(node=>node===window.originalReply),`${phase}: prior reply remains mounted`);
+        const texts = await page.locator('.ba-chat-message').evaluateAll(nodes=>nodes.map(node=>node.querySelector('.ba-chat-content').innerText.trim()));
+        assert.deepEqual(texts, ['请连接笔记服务','先检查连接。','这么慢吗？',
+          ...(['replied','repeated','history'].includes(phase)?['正在核实认证。']:[]),
+          ...(['repeated','history'].includes(phase)?['现在进展呢？','收到补充，继续处理。']:[])],`${phase}: exact conversational event order`);
+        assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+      }
+      if(captureDir) await page.screenshot({path:join(captureDir,`followup-${dark?'dark':'light'}-${width}.png`),fullPage:true});
+    }
+    assert.deepEqual(errors,[]);
+  } finally { await browser.close(); }
+});
+
 test('Router streaming message keeps its mounted identity through official settlement and delayed history', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
   const html = await fixture(), browser = await chromium.launch({ headless:true, executablePath });
   try {
@@ -82,8 +141,8 @@ test('Router streaming message keeps its mounted identity through official settl
       await page.evaluate(() => window.handoffLayout = () => {
         const feed=document.querySelector('.ba-chat-feed');
         const row=feed.querySelector('[data-chat-key^="message:reply:human"]');
-        const box=node=>{const r=node.getBoundingClientRect();return {left:r.left,top:r.top+feed.scrollTop,width:r.width,height:r.height}};
-        return {distanceFromBottom:feed.scrollHeight-feed.scrollTop-feed.clientHeight,row:box(row),body:box(row.querySelector('.ba-chat-body')),content:box(row.querySelector('.ba-chat-content'))};
+        const box=node=>{const r=node.getBoundingClientRect();return {left:r.left,top:r.top+feed.scrollTop,screenTop:r.top,width:r.width,height:r.height}};
+        return {scrollTop:feed.scrollTop,distanceFromBottom:feed.scrollHeight-feed.scrollTop-feed.clientHeight,row:box(row),body:box(row.querySelector('.ba-chat-body')),content:box(row.querySelector('.ba-chat-content'))};
       });
       const baseline=await page.evaluate(()=>window.handoffLayout()), frames=[{phase:'stream',...baseline}];
       assert.equal(await message.locator('.ba-message-toolbar').getByRole('button').count(),0,'streaming controls stay inaccessible until the reply settles');
@@ -163,6 +222,7 @@ test('streaming reveals only new Markdown blocks without replaying existing text
         await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
       },phase);
       assert.deepEqual(await page.evaluate(()=>window.blockReveals),['P','P'],'final settlement never replays reveal animations');
+      await page.waitForFunction(()=>[...document.querySelectorAll('[data-chat-key^="message:reply:human"] p')].every(node=>getComputedStyle(node).opacity==='1'));
       assert.deepEqual(await message.locator('p').evaluateAll(nodes=>nodes.map(node=>getComputedStyle(node).opacity)),['1','1']);
     }
     await page.emulateMedia({reducedMotion:'reduce'});
@@ -175,6 +235,175 @@ test('streaming reveals only new Markdown blocks without replaying existing text
       await writeFile(join(captureDir,'streaming-animation-evidence.json'),JSON.stringify(await page.evaluate(()=>({animationStarts:window.blockReveals,firstParagraphRetained:window.firstRevealParagraph===document.querySelector('[data-chat-key^="message:reply:human"] p')})),null,2));
     }
   } finally { await browser.close(); }
+});
+
+test('completion keeps the real screen position while its final text and delayed history settle', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html=await fixture(),browser=await chromium.launch({headless:true,executablePath});
+  try {
+    for(const width of [1440,390]) for(const dark of [false,true]) for(const reducedMotion of ['no-preference','reduce']) {
+      const page=await browser.newPage({viewport:{width,height:500},reducedMotion}),errors=[];
+      page.on('pageerror',error=>errors.push(error.message));
+      await page.setContent(html);
+      const text='完成时保持正在阅读的正文位置，不因为状态改变而重新排列。'.repeat(40)+'\n\n尾部';
+      const finalText=text+'完成。';
+      await page.evaluate(({text,dark})=>{document.body.toggleAttribute('data-ds-dark-theme',dark);window.renderHandoff('stream','text',text);},{text,dark});
+      await page.getByText('尾部',{exact:true}).waitFor();
+      await page.evaluate(()=>document.fonts.ready);
+      await page.waitForFunction(()=>{const feed=document.querySelector('.ba-chat-feed');return feed.scrollHeight-feed.clientHeight-feed.scrollTop<=1;});
+      await page.waitForTimeout(200);
+      const frames=await page.evaluate(async finalText=>{
+        const feed=document.querySelector('.ba-chat-feed');
+        const row=feed.querySelector('[data-chat-key^="message:reply:human"]');
+        const paragraph=row.querySelector('p'),body=row.querySelector('.ba-chat-content'),tail=feed.querySelector('.ba-chat-tail');
+        const sample=phase=>({phase,top:feed.scrollTop,height:feed.scrollHeight,screenTop:body.getBoundingClientRect().top,
+          bodyHeight:body.getBoundingClientRect().height,tailHeight:tail.getBoundingClientRect().height,
+          sameRow:row===feed.querySelector('[data-chat-key^="message:reply:human"]'),sameParagraph:paragraph===row.querySelector('p'),
+          activities:tail.querySelectorAll('[role="status"]').length});
+        window.renderHandoff('stream','text',finalText);
+        await new Promise(requestAnimationFrame);
+        const frames=[sample('last-text')];
+        window.renderHandoff('completed','text',finalText);
+        for(let index=0;index<6;index++){await new Promise(requestAnimationFrame);frames.push(sample('completed-'+index));}
+        await new Promise(resolve=>setTimeout(resolve,280));frames.push(sample('revealed'));
+        window.renderHandoff('history','text',finalText);
+        for(let index=0;index<4;index++){await new Promise(requestAnimationFrame);frames.push(sample('history-'+index));}
+        return frames;
+      },finalText);
+      const baseline=frames[0];
+      assert(baseline.top>0,'the long message really overflows the viewport');
+      assert(baseline.activities>0,'the baseline includes the actual live activity');
+      for(const frame of frames) {
+        assert(frame.sameRow&&frame.sameParagraph,`${width}/${dark}/${reducedMotion}/${frame.phase}: official text stays mounted`);
+        assert(Math.abs(frame.top-baseline.top)<=1,`${frame.phase}: scrollTop never resets`);
+        assert(Math.abs(frame.screenTop-baseline.screenTop)<=1,`${frame.phase}: prose stays at the same screen coordinate`);
+        assert.equal(frame.height,baseline.height,`${frame.phase}: activity removal never shrinks the transcript`);
+        assert.equal(frame.bodyHeight,baseline.bodyHeight);
+        assert.equal(frame.tailHeight,baseline.tailHeight);
+        if(frame.phase!=='last-text')assert.equal(frame.activities,0,'completed history has no fake live status');
+      }
+      if(captureDir){
+        await mkdir(captureDir,{recursive:true});
+        await writeFile(join(captureDir,`completion-${width}-${dark?'dark':'light'}-${reducedMotion}.json`),JSON.stringify(frames,null,2));
+        await page.screenshot({path:join(captureDir,`completion-${width}-${dark?'dark':'light'}-${reducedMotion}.png`),fullPage:true});
+      }
+      await page.setContent(html);
+      await page.evaluate(({finalText,dark})=>{document.body.toggleAttribute('data-ds-dark-theme',dark);window.renderHandoff('history','text',finalText);},{finalText,dark});
+      await page.getByText('尾部完成。',{exact:true}).waitFor();
+      await page.evaluate(()=>document.fonts.ready);
+      const loaded=await page.locator('.ba-chat-feed').evaluate(feed=>({height:feed.scrollHeight,tail:feed.querySelector('.ba-chat-tail').getBoundingClientRect().height,status:feed.querySelector('.ba-chat-tail [role="status"]')}));
+      assert.equal(loaded.height,baseline.height,'initial history uses the same final geometry');
+      assert.equal(loaded.tail,baseline.tailHeight);
+      assert.equal(loaded.status,null);
+      assert.deepEqual(errors,[]);
+      await page.close();
+    }
+  } finally {await browser.close();}
+});
+
+test('a short reply and its last new block finish their entry after business streaming ends', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html=await fixture(),browser=await chromium.launch({headless:true,executablePath});
+  try {
+    const page=await browser.newPage({viewport:{width:390,height:500},reducedMotion:'no-preference'});
+    await page.setContent(html);
+    for(const text of ['短回复。','先出现的正文。\n\n最后新增的段落。']) {
+      // Start from a fresh mount so the short reply's actual entry is covered.
+      await page.setContent(html);
+      if(text.includes('\n\n')) {
+        await page.evaluate(()=>window.renderHandoff('stream','text','先出现的正文。'));
+        await page.getByText('先出现的正文。',{exact:true}).waitFor();
+        await page.waitForTimeout(180);
+      }
+      const state=await page.evaluate(async text=>{
+        window.renderHandoff('stream','text',text);
+        await new Promise(requestAnimationFrame);
+        const row=document.querySelector('[data-chat-key^="message:reply:human"]');
+        const block=[...row.querySelectorAll('p')].at(-1);
+        const animation=block.getAnimations().find(animation=>animation.animationName==='ba-chat-reveal');
+        if(!animation)return {hasEntry:false};
+        // Freeze at an observable in-between frame, then resume before the
+        // actual completion so browser scheduling cannot hide a hard cut.
+        animation.pause();animation.currentTime=40;
+        const before=getComputedStyle(block).opacity;
+        window.renderHandoff('completed','text',text);
+        await new Promise(requestAnimationFrame);
+        const same=block.getAnimations().includes(animation),after=getComputedStyle(block).opacity;
+        const businessStreaming=row.dataset.streaming;
+        animation.play();
+        await animation.finished.catch(()=>{});
+        await new Promise(requestAnimationFrame);
+        return {hasEntry:true,before,after,same,businessStreaming,opacity:getComputedStyle(block).opacity};
+      },text);
+      assert(state.hasEntry,'the test observes a real new-block entry');
+      assert(state.same,'completion retains the running entry instead of cancelling it');
+      assert.equal(state.after,state.before,'completion never jumps directly to full opacity');
+      assert.equal(state.businessStreaming,undefined,'business completion and controls are not delayed by presentation');
+      assert.equal(state.opacity,'1');
+      await page.waitForFunction(()=>!document.querySelector('.ba-chat-content[data-stream-revealing]'));
+    }
+  } finally {await browser.close();}
+});
+
+test('stream growth follows smoothly and yields immediately to reading or reduced motion', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html=await fixture(), browser=await chromium.launch({headless:true,executablePath});
+  try {
+    for(const width of [1440,390]) {
+      if(captureDir) await mkdir(captureDir,{recursive:true});
+      const context=await browser.newContext({viewport:{width,height:800},reducedMotion:'no-preference'});
+      const page=await context.newPage(),errors=[];
+      page.on('pageerror',error=>errors.push(error.message));
+      await page.setContent(html);
+      await page.evaluate(()=>{window.preparePerformance(40);window.renderPerformance(0)});
+      await page.locator('[data-chat-key="message:reply:human:2:1"]').waitFor();
+      await page.evaluate(()=>document.fonts.ready);
+      await page.waitForTimeout(220);
+      const frames=await page.evaluate(async()=>{
+        const feed=document.querySelector('.ba-chat-feed');
+        const sample=()=>({time:performance.now(),top:feed.scrollTop,bottom:feed.scrollHeight-feed.clientHeight});
+        const frames=[sample()];
+        window.renderPerformance(60);frames.push(sample());
+        for(let index=0;index<18;index++) {
+          await new Promise(requestAnimationFrame);
+          if(index===3)window.renderPerformance(90);
+          if(index===6)window.renderPerformance(120);
+          frames.push(sample());
+        }
+        const deadline=performance.now()+1000;
+        while(feed.scrollHeight-feed.clientHeight-feed.scrollTop>1 && performance.now()<deadline) await new Promise(requestAnimationFrame);
+        frames.push(sample());
+        return frames;
+      });
+      assert.equal(frames[1].top,frames[0].top,'a received text chunk does not snap the viewport');
+      assert(frames.some((frame,index)=>index>1&&frame.top>frames[index-1].top&&frame.bottom-frame.top>1),'the real container advances through intermediate positions');
+      for(let index=1;index<frames.length;index++) {
+        assert(frames[index].top>=frames[index-1].top-1,'growing output never oscillates upward');
+        assert(frames[index].top<=frames[index].bottom+1,'following never overshoots the live tail');
+      }
+      assert(Math.abs(frames.at(-1).top-frames.at(-1).bottom)<=1,'following settles at the final tail');
+      const held=await page.evaluate(async()=>{
+        const feed=document.querySelector('.ba-chat-feed');
+        feed.dispatchEvent(new WheelEvent('wheel',{deltaY:-80}));feed.scrollTop-=120;
+        await new Promise(requestAnimationFrame);const top=feed.scrollTop;
+        window.renderPerformance(160);await new Promise(resolve=>setTimeout(resolve,220));
+        return {top,after:feed.scrollTop};
+      });
+      assert(Math.abs(held.top-held.after)<=1,'new output preserves the reader position after upward intent');
+      const bottom=page.getByRole('button',{name:'有新回复，回到最新消息',exact:true});
+      await bottom.focus();await page.keyboard.press('Enter');
+      assert(await page.locator('.ba-chat-feed').evaluate(feed=>Math.abs(feed.scrollHeight-feed.clientHeight-feed.scrollTop)<=1),'keyboard return is immediate');
+      await page.emulateMedia({reducedMotion:'reduce'});
+      const reduced=await page.evaluate(()=>{
+        window.renderPerformance(200);const feed=document.querySelector('.ba-chat-feed');
+        return {top:feed.scrollTop,bottom:feed.scrollHeight-feed.clientHeight};
+      });
+      assert(Math.abs(reduced.top-reduced.bottom)<=1,'reduced motion follows without a scroll animation');
+      if(captureDir) {
+        await writeFile(join(captureDir,`scroll-frames-${width}.json`),JSON.stringify({frames,held,reduced},null,2));
+        await page.screenshot({path:join(captureDir,`scroll-settled-${width}.png`),fullPage:true});
+      }
+      assert.deepEqual(errors,[]);
+      await context.close();
+    }
+  } finally {await browser.close();}
 });
 
 test('token updates keep history controls cached and leave no global text paints or animation loop', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
@@ -199,8 +428,13 @@ test('token updates keep history controls cached and leave no global text paints
             const start=performance.now();window.renderPerformance(i);samples.push(performance.now()-start);
             await new Promise(resolve=>originalFrame.call(window,resolve));
           }
+          // A continuous trajectory keeps velocity between chunks. Wait for
+          // actual frame quiescence within a bound, then verify it stays idle.
+          const deadline=performance.now()+1000;
+          do { await new Promise(resolve=>originalFrame.call(window,resolve)); }
+          while(frames.size && performance.now()<deadline);
           const requestsAfterInput=requested;
-          await new Promise(resolve=>setTimeout(resolve,350));
+          await new Promise(resolve=>setTimeout(resolve,200));
           return {count,formats,requested,requestsAfterInput,pending:frames.size,
             sameParagraph:oldParagraph===document.querySelector('[data-chat-key="message:history-1"] p'),
             highlights:[...CSS.highlights.keys()].filter(name=>name.startsWith('ba-stream-')).length,
@@ -288,17 +522,17 @@ test('Router natural chat excludes execution metadata, deduplicates delivery and
         }
       }
     }
-    await page.evaluate(()=>window.renderScenario('ticket-question'));
+    await page.evaluate(()=>window.renderScenario('task-question'));
     await page.getByText('需要你的答复',{exact:true}).waitFor();
-    assert.equal(await page.getByLabel('工单问题',{exact:true}).count(),1);
-    assert.equal(await page.getByLabel('工单等待状态',{exact:true}).count(),0);
-    for (const name of ['查看执行会话','刷新状态','停止工单']) assert.equal(await page.getByRole('button',{name,exact:true}).count(),0);
+    assert.equal(await page.getByLabel('任务问题',{exact:true}).count(),1);
+    assert.equal(await page.getByLabel('任务等待状态',{exact:true}).count(),0);
+    for (const name of ['查看执行会话','刷新状态','停止任务']) assert.equal(await page.getByRole('button',{name,exact:true}).count(),0);
     await page.getByRole('radio',{name:'B',exact:true}).check();
     if(captureDir) await page.screenshot({path:join(captureDir,'question-B-before-submit.png'),fullPage:true});
     await page.getByRole('button',{name:'提交答复',exact:true}).click();
-    await page.getByText('答复已保存 · 原工单继续处理',{exact:true}).waitFor();
-    const answer = await page.evaluate(()=>window.apiCalls.find(([name])=>name==='ticketAnswer'));
-    assert.equal(answer[1].ticketId,'ticket');
+    await page.getByText('答复已保存 · 原任务继续处理',{exact:true}).waitFor();
+    const answer = await page.evaluate(()=>window.apiCalls.find(([name])=>name==='taskAnswer'));
+    assert.equal(answer[1].taskId,'task');
     assert.deepEqual(answer[1].answer,{selected:['B']});
     if(captureDir) await page.screenshot({path:join(captureDir,'question-without-status-panel.png'),fullPage:true});
     assert.deepEqual(errors,[]);
@@ -335,6 +569,27 @@ async function fixture() {
           api:async(name,args)=>window.actionCalls.push(['api',revision,name,args]),onRefresh:async()=>window.actionCalls.push(['refresh',revision]),
           history:{messages:[{id:'action',role:'assistant',kind:'final',text:'消息版本'+revision,time:1793808000000+revision*60000,usage:{outputTokens:revision}}],reactions:{'message:action':revision===1?'👍':'❤️'}}};
         flushSync(()=>root.render(<div className="ba-root ba-official-conversation" data-assistant-chat=""><div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll=""><QuietChat home={home} session={{running:false}}/></div></div></div>));
+      };
+      window.renderFollowup = phase => {
+        const user={id:'human',role:'user',seq:8,text:'请连接笔记服务',time:1793808000000};
+        const followup={id:'followup',role:'user',seq:12,text:'这么慢吗？',time:1793807990000};
+        const later={id:'later',role:'user',seq:16,text:'现在进展呢？',time:1793807980000};
+        const first={id:'reply:human:2:1',requestId:'human',segment:true,role:'assistant',kind:'final',seq:10,text:'先检查连接。',time:1793808001000};
+        const second={...first,id:'reply:followup:2:2',requestId:'followup',seq:14,text:'正在核实认证。'};
+        const third={...first,id:'reply:later:2:3',requestId:'later',seq:18,text:'收到补充，继续处理。'};
+        const steering=['steering','replied','repeated','history'].includes(phase),repeated=['repeated','history'].includes(phase);
+        const admitted=row=>({kind:row.id==='human'?'user':'steering',messageId:row.id,seq:row.seq,time:row.time,
+          source:{kind:'user',rpcId:row.id},content:[{type:'text',text:row.text}]});
+        const settled=(row,step)=>({kind:'assistant',messageId:'answer-'+step,turn:2,step,seq:row.seq,time:row.time,blocks:[{kind:'text',text:row.text}]});
+        const nodes=[admitted(user),settled(first,1),...(steering?[admitted(followup)]:[]),
+          ...(['replied','repeated','history'].includes(phase)?[settled(second,2)]:[]),...(repeated?[admitted(later),settled(third,3)]:[])];
+        const messages=phase==='history'?[user,first,followup,second,later,third]:[user,...(steering?[followup]:[]),...(repeated?[later]:[])];
+        const history={sessionId:'followup-session',activeReply:{turn:2,requestId:repeated?'later':steering?'followup':'human'},messages};
+        const pending=phase==='pending'?[{requestId:followup.id,placement:'steering',text:followup.text,time:followup.time}]:[];
+        const inbox=phase==='inbox'?{'next-step':[{id:followup.id,source:{kind:'user',rpcId:followup.id},content:[{type:'text',text:followup.text}]}]}:undefined;
+        const chat={legacy:{nodes,turnEnds:new Map()},timeline:{turnOrder:[2],turns:new Map([[2,{turn:2,start:{seq:7}}]])}};
+        const home={sessionId:'followup-session',threadId:'main',assistantName:'BenchGo',history};
+        flushSync(()=>root.render(<div className="ba-root ba-official-conversation" data-assistant-chat=""><div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll=""><QuietChat home={home} session={{running:true,pendingSubmissions:pending}} chat={chat} inbox={inbox}/></div></div></div>));
       };
       window.renderTurn = (phase, path) => {
         const first='先看资料。', second='找到结果。';
@@ -374,19 +629,21 @@ async function fixture() {
       window.renderHandoff = (phase, kind, textOverride) => {
         const text = textOverride || '同一条完整回复\\n\\n'+'这是一段完整的长回复，用于核对最终接管前后相同内容的折行与滚动位置。'.repeat(8)+'\\n\\n~~~js\\nconst message = "BenchGo keeps your messages readable";\\nconsole.log(message);\\n~~~\\n\\n| 项目 | 结果 |\\n| --- | --- |\\n| 暗主题 | 文字和气泡清晰可辨 |\\n| 操作 | 复制、表情、用量 |';
         const user = { id:'human', role:'user', seq:8, text:'请回复', time:1793808000000 };
-        const reply = { id:kind==='text'?'reply:human:2:1':'reply:human', requestId:'human', ...(kind==='text'?{segment:true}:{}), role:'assistant', kind:'final', text, time:1793808060000 };
+        const internal = kind === 'task-result';
+        const requestId = internal ? 'task-completion' : 'human';
+        const reply = { id:kind!=='assistant_reply'?'reply:'+requestId+':2:1':'reply:human', requestId, ...(kind!=='assistant_reply'?{segment:true}:{}), role:'assistant', kind:'final', text, time:1793808060000 };
         const running = ['stream','settled'].includes(phase);
         const end = running ? undefined : {seq:12,time:1793808001000,data:{reason:{kind:['aborted','error'].includes(phase)?phase:'completed'}}};
         const turn = {turn:2,start:{seq:7},...(end?{end}:{})};
         const args = PartialArguments.fromObject({text});
-        const legacy = {nodes:[{kind:'user',messageId:'human',seq:8,source:{kind:'user'}}],turnEnds:new Map(end?[[2,12]]:[])};
+        const legacy = {nodes:[{kind:'user',messageId:requestId,seq:8,time:1793808000000,source:internal?{kind:'benchgo-task-reply',replyKind:'result',replyMode:'conversation',eventKey:'result:1',taskId:'task'}:{kind:'user'},content:[{type:'text',text:internal?'PRIVATE_COMPLETION_SIGNAL':'请回复'}]}],turnEnds:new Map(end?[[2,12]]:[])};
         if(phase==='stream') {
           if(kind==='assistant_reply') legacy.runningCalls=[{name:kind,turn:2,args}];
           else legacy.partial={turn:2,step:1,blocks:[{kind:'reasoning',text:'PRIVATE'},{kind:'text',text}]};
         } else if(kind==='assistant_reply') legacy.nodes.push({kind:'tool-result',name:kind,turn:2,args,content:[{type:'text',text:JSON.stringify({published:true,requestId:'human'})}]});
         else legacy.nodes.push({kind:'assistant',messageId:'model-message',seq:10,turn:2,step:1,blocks:[{kind:'reasoning',text:'PRIVATE'},{kind:'text',text}]});
-        const home = {sessionId:'handoff',threadId:'main',assistantName:'BenchGo',history:{sessionId:'handoff',activeReply:running?{turn:2,requestId:'human'}:null,messages:phase==='history'?[user,reply]:[user]}};
-        root.render(<div className="ba-root ba-official-conversation" data-assistant-chat=""><div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll=""><QuietChat home={home} session={{running}} chat={{legacy,timeline:{turnOrder:[2],turns:new Map([[2,turn]])}}} /></div></div></div>);
+        const home = {sessionId:'handoff',threadId:'main',assistantName:'BenchGo',history:{sessionId:'handoff',activeReply:running?{turn:2,requestId}:null,messages:[...(internal?[]:[user]),...(phase==='history'?[reply]:[])]}};
+        flushSync(()=>root.render(<div className="ba-root ba-official-conversation" data-assistant-chat=""><div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll=""><QuietChat home={home} session={{running}} chat={{legacy,timeline:{turnOrder:[2],turns:new Map([[2,turn]])}}} /></div></div></div>));
       };
       const messages = [
         { id:'short', role:'user', text:'好的', time:1793808000000 },
@@ -404,24 +661,28 @@ async function fixture() {
           window.apiCalls.push([name,args]);
           if (state === 'loading') return new Promise(() => {});
           if (state === 'error') throw new Error('测试连接暂不可用');
-          return { tickets:[], goals:[] };
+          if (name === 'tasks' && ['home-active','home-completed'].includes(state)) return {tasks:[
+            {id:'home-done',title:'已完成的历史任务',status:'completed',results:[{version:1,summary:'不应在首页展示的历史交付详情',outcome:'completed'}]},
+            ...(state==='home-active'?[{id:'home-running',title:'继续推进当前目标',status:'running'}]:[]),
+          ]};
+          return { tasks:[], goals:[] };
         };
         const statuses = new Map(state==='question' ? [['test-question',{pendingInteraction:{kind:'question',key:'q',sessionId:'test-question'}}]] : []);
         const home = { api, threadId:'main', assistantName:'BenchGo', sessionId:'test-'+state, sessionStatus:{ subscribe:()=>()=>{}, getSnapshot:()=>statuses },
           assistantConfig:{cardMotion:false}, onOpenResources:(...args)=>window.resourceOpens.push(args),
           onOpenExecution:async execution=>{window.executionOpens.push(execution);if(window.failExecution)throw new Error('执行会话打开失败');if(window.holdExecution)await new Promise(resolve=>window.finishExecution=resolve);},
-          onRefresh:async()=>{window.refreshes++}, history:{ messages:state==='data'?messages:state==='state-reported'?[{id:'router-state',role:'assistant',kind:'final',ticketStateEventKey:'failure:1',text:'调研任务暂时受阻，已有记录已保留。',time:1793808005000}]:[],
+          onRefresh:async()=>{window.refreshes++}, history:{ messages:state==='data'?messages:state==='state-reported'?[{id:'router-state',role:'assistant',kind:'final',taskStateEventKey:'failure:1',text:'调研任务暂时受阻，已有记录已保留。',time:1793808005000}]:[],
             requests:state==='send-error'?[{threadId:'main',requestId:'failed-send',text:'请整理资料',status:'failed',error:'连接中断，消息发送失败',createdAt:1793808004000}]:[], reactions:{'message:reply':'👍'},
-            notifications:state==='ticket-question'?[{eventId:'ask',type:'ticket.attention',threadId:'main',ticketId:'ticket',ticketStatus:'waiting',instructionRevision:1,currentInstructionRevision:1,currentResultVersion:0,text:'结果选哪个标记？',attention:{id:'attention',state:'waiting',instructionRevision:1,resultVersion:0,question:{question:'结果选哪个标记？',options:[{label:'A'},{label:'B'}]}}}]:state==='data'?[{eventId:'delivery',type:'ticket.result',origin:'router',publication:{action:'deliver',origin:'router'},threadId:'main',ticketId:'ticket',ticketStatus:'completed',executionSession:{available:true,ticketId:'ticket',sessionId:'official-execution',placement:'ungrouped',closed:true},text:'布局已调整，窄容器也保持侧边操作。',createdAt:1793808004000,options:['继续检查']}]:['state-error','state-reported','router-delivered'].includes(state)?[
-              {eventId:'old-notification-uuid',ticketStateEventKey:'failure:1',type:'ticket.result',threadId:'main',ticketId:'ticket',title:'AI获客调研',ticketStatus:'waiting',publication:{action:'deliver',origin:'system',systemState:{state:'continuation_wait',code:'NETWORK',stage:'execution'},text:'系统状态：执行记录已保留，等待恢复条件。'},origin:'system',text:'系统状态：执行记录已保留，等待恢复条件。',createdAt:1793808004000},
-              {eventId:'worker-draft',type:'ticket.result',threadId:'main',ticketId:'ticket',publication:{action:'deliver',origin:'worker'},text:'旧执行报告：任务状态、验收记录和执行细节',createdAt:1793808004000},
-              {eventId:'old-unmarked-worker',type:'ticket.result',threadId:'main',ticketId:'ticket',publication:{action:'deliver'},text:'旧版Worker原始结果',createdAt:1793808004000},
+            notifications:state==='task-question'?[{eventId:'ask',type:'task.attention',threadId:'main',taskId:'task',taskStatus:'waiting',instructionRevision:1,currentInstructionRevision:1,currentResultVersion:0,text:'结果选哪个标记？',attention:{id:'attention',state:'waiting',instructionRevision:1,resultVersion:0,question:{question:'结果选哪个标记？',options:[{label:'A'},{label:'B'}]}}}]:state==='data'?[{eventId:'delivery',type:'task.result',origin:'router',publication:{action:'deliver',origin:'router'},threadId:'main',taskId:'task',taskStatus:'completed',executionSession:{available:true,taskId:'task',sessionId:'official-execution',placement:'ungrouped',closed:true},text:'布局已调整，窄容器也保持侧边操作。',createdAt:1793808004000,options:['继续检查']}]:['state-error','state-reported','router-delivered'].includes(state)?[
+              {eventId:'old-notification-uuid',taskStateEventKey:'failure:1',type:'task.result',threadId:'main',taskId:'task',title:'AI获客调研',taskStatus:'waiting',publication:{action:'deliver',origin:'system',systemState:{state:'continuation_wait',code:'NETWORK',stage:'execution'},text:'系统状态：执行记录已保留，等待恢复条件。'},origin:'system',text:'系统状态：执行记录已保留，等待恢复条件。',createdAt:1793808004000},
+              {eventId:'worker-draft',type:'task.result',threadId:'main',taskId:'task',publication:{action:'deliver',origin:'worker'},text:'旧执行报告：任务状态、验收记录和执行细节',createdAt:1793808004000},
+              {eventId:'old-unmarked-worker',type:'task.result',threadId:'main',taskId:'task',publication:{action:'deliver'},text:'旧版Worker原始结果',createdAt:1793808004000},
               {eventId:'schedule',type:'schedule.lifecycle',threadId:'main',origin:'system',text:'系统定时记录',schedule:{phase:'completed'},createdAt:1793808004000},
-              ...(state==='state-error'?[]:['router-delivery','router-replay'].map(eventId=>({eventId,ticketStateEventKey:'failure:1',type:'ticket.result',threadId:'main',ticketId:'ticket',origin:'router',publication:{action:'deliver',origin:'router'},text:'调研任务暂时受阻，已有记录已保留。',createdAt:1793808005000})))
+              ...(state==='state-error'?[]:['router-delivery','router-replay'].map(eventId=>({eventId,taskStateEventKey:'failure:1',type:'task.result',threadId:'main',taskId:'task',origin:'router',publication:{action:'deliver',origin:'router'},text:'调研任务暂时受阻，已有记录已保留。',createdAt:1793808005000})))
             ]:[] } };
         root.render(<div className="ba-root ba-official-conversation" data-assistant-chat="">
           <div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll="" tabIndex={0}>
-            {!['data','waiting','question','state-error','state-reported','router-delivered','send-error','ticket-question'].includes(state) && <AssistantHome key={'home-'+state} {...home} input={{phase:'plain',draft:''}} inputActions={{captureInsertion(){},insertText(){return true},persistDraft(){}}}/>}
+            {!['data','waiting','question','state-error','state-reported','router-delivered','send-error','task-question'].includes(state) && <AssistantHome key={'home-'+state} {...home} input={{phase:'plain',draft:''}} inputActions={{captureInsertion(){},insertText(){return true},persistDraft(){}}}/>}
             <QuietChat key={'chat-'+state} home={home} session={{running:state==='waiting'||state==='question'}} />
           </div></div>
         </div>);
@@ -563,7 +824,7 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
     await page.locator('[data-chat-key="notification:delivery"]').getByRole('button',{name:'继续检查',exact:true}).click();
     assert.deepEqual(await page.evaluate(()=>window.apiCalls.filter(([name])=>name.startsWith('notification'))),[['notificationOption',{eventId:'delivery',threadId:'main',text:'继续检查'}]],'delivery options retain the validated reply endpoint without a read action');
     assert.equal(await page.getByRole('button',{name:'查看执行会话',exact:true}).count(),0);
-    assert.equal(await page.getByLabel('工单等待状态',{exact:true}).count(),0);
+    assert.equal(await page.getByLabel('任务等待状态',{exact:true}).count(),0);
     await shot(page,'dark-delivery');
     const reply=page.locator('[data-chat-key="message:reply"]');
     await reply.getByRole('button',{name:'本条回复用量',exact:true}).focus();
@@ -575,12 +836,26 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
     assert.equal(await reply.getByRole('button',{name:'本条回复用量',exact:true}).evaluate(node=>node===document.activeElement),true,'usage Escape returns to usage trigger');
     await page.locator('.ba-chat-feed').focus(); await page.mouse.move(1,1);
     assert.equal(await reply.locator('.ba-reaction-chip').evaluate(node=>getComputedStyle(node).opacity),'1','saved reaction stays visible');
-    for(const dark of [false,true]) for(const width of [1440,390]) for(const state of ['empty','loading','error','waiting','question']) {
+    await page.locator('.ba-official-conversation').evaluate(node=>node.style.removeProperty('width'));
+    for(const dark of [false,true]) for(const width of [1440,390]) for(const state of ['empty','loading','error','home-completed','home-active','waiting','question']) {
       await page.setViewportSize({width,height:1000});
       await page.evaluate(({dark,state})=>{document.body.toggleAttribute('data-ds-dark-theme',dark);window.renderScenario(state)},{dark,state});
       await page.locator(state==='question'?'.ba-chat-await':state==='waiting'?'.ba-chat-work':state==='error'?'.ba-home-error':state==='loading'?'.ba-home-loading':'.ba-home-starters').waitFor();
+      if(state==='home-active') await page.getByText('继续推进当前目标',{exact:true}).waitFor();
+      if(state==='home-completed') await page.getByRole('button',{name:'查看任务记录',exact:true}).waitFor();
       await shot(page,`${dark?'dark':'light'}-${state}-${width}`);
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'four states fit the viewport');
+      if(state.startsWith('home-')) {
+        assert.equal(await page.getByRole('heading',{name:'最近完成',exact:true}).count(),0);
+        assert.equal(await page.getByText('已完成的历史任务',{exact:true}).count(),0);
+        assert.equal(await page.getByText('不应在首页展示的历史交付详情',{exact:true}).count(),0);
+        assert.equal(await page.locator('.ba-home').getAttribute('data-has-work'),String(state==='home-active'));
+        assert(await page.getByRole('navigation',{name:'开始一项工作'}).isVisible());
+        if(state==='home-completed') {
+          await page.getByRole('button',{name:'查看任务记录',exact:true}).click();
+          assert.deepEqual(await page.evaluate(()=>window.resourceOpens),[['tasks']]);
+        }
+      }
       if(state==='error') assert(await page.getByRole('button',{name:'重试',exact:true}).isVisible());
       if(state==='question') { assert.equal(await page.locator('.ba-loading-dots').count(),0,'an open question card replaces the busy dots'); assert(await page.getByText('在下方选项卡中作答后继续',{exact:true}).isVisible()); }
     }

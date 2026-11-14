@@ -45,8 +45,8 @@ test('production runtime dispatches Worker files without backup or rollback serv
   await store.updateConfig({ workerModels: [{ providerId: 'provider', modelId: 'opaque' }] });
   const db = store.orchestration, policy = await readAssessmentPolicy(store);
   db.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
-  const ticket = db.createTicket({ threadId: 'thread', target: 'create artifact', mandate: { source: { channel: 'desktop', sessionId: 'owner', messageId: 'source' }, actorId: 'desktop-owner', admission: 'desktop-approved-delegation', policyVersion: policy.desktopVersion, controlledActions: 'require-current-policy-and-harness-approval' } });
-  db.createAssignment(ticket.id, { model: { providerId: 'provider', modelId: 'opaque' } });
+  const task = db.createTask({ threadId: 'thread', target: 'create artifact', mandate: { source: { channel: 'desktop', sessionId: 'owner', messageId: 'source' }, actorId: 'desktop-owner', admission: 'desktop-approved-delegation', policyVersion: policy.desktopVersion, controlledActions: 'require-current-policy-and-harness-approval' } });
+  db.createAssignment(task.id, { model: { providerId: 'provider', modelId: 'opaque' } });
   const ctx = {
     on() { return () => {}; },
     llm: { prepareCall: async () => {} },
@@ -74,20 +74,21 @@ test('production runtime dispatches Worker files without backup or rollback serv
   };
   await installExecutionRoleHost(t, ctx);
   runtime = createOrchestrationRuntime({ ctx, store,
-    prepareTicketReply: async delivery => {
-      assert.equal(db.getTicket(ticket.id).status, 'waiting');
-      assert.equal(delivery.payload.text, undefined);
-      assert.equal(delivery.payload.publication, undefined);
-      assert.equal(db.results(ticket.id).at(-1).summary, 'Created artifact');
-      return { status: 'ready', text: '文件已经创建并检查完成。' };
+    notifyTaskResult: async notice => {
+      assert.equal(db.getTask(task.id).status, 'completed');
+      assert.equal(notice.taskId, task.id);
+      assert.equal(notice.payload.source.sessionId, 'owner');
+      assert.equal(notice.payload.text, undefined);
+      assert.equal(notice.payload.publication, undefined);
+      assert.equal(db.results(task.id).at(-1).summary, 'Created artifact');
+      return { status: 'accepted', messageId: `inbox:${notice.uniqueKey}` };
     },
-    deliverDesktop: async delivery => {
-      assert.equal(delivery.payload.publication.origin, 'router');
-      assert.equal(delivery.payload.text, '文件已经创建并检查完成。');
-      return { status: 'accepted', messageId: 'local' };
-    } });
-  for (let count = 0; count < 100 && db.getTicket(ticket.id).status !== 'completed'; count++) { await runtime.tick(); await new Promise(resolve => setTimeout(resolve, 10)); }
-  assert.equal(db.getTicket(ticket.id).status, 'completed');
+    deliverDesktop: async () => assert.fail('Worker results use Router inbox, not desktop delivery') });
+  for (let count = 0; count < 100 && db.getTask(task.id).status !== 'completed'; count++) { await runtime.tick(); await new Promise(resolve => setTimeout(resolve, 10)); }
+  assert.equal(db.getTask(task.id).status, 'completed');
+  await runtime.tick();
+  assert.deepEqual(db.deliveries(task.id), []);
+  assert.equal(db.results(task.id).at(-1).notification.state, 'notified');
   assert.equal(await readFile(file, 'utf8'), 'agent content');
   assert.equal(runtime.checkpoints, undefined);
   await assert.rejects(readFile(join(store.paths.workspace, 'checkpoints', 'HEAD')), { code: 'ENOENT' });

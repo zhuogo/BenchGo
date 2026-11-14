@@ -1,4 +1,4 @@
-const fields = ['sessionId', 'callId', 'approvalId', 'actionId', 'ticketId', 'assignmentId', 'runId', 'ownerThreadId', 'eventKey'];
+const fields = ['sessionId', 'callId', 'approvalId', 'actionId', 'taskId', 'assignmentId', 'runId', 'ownerThreadId', 'eventKey'];
 const identity = value => typeof value === 'string' && value.length > 0 && value.length <= 512;
 
 /** Presentation identity from a host signal, never authority to answer an approval. */

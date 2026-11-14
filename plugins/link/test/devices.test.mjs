@@ -110,6 +110,60 @@ test('local centre requires one-use entry and same-origin JSON, without third-pa
   assert.equal((await call('http://evil.test', { action: 'list' })).status, 403);
   const result = await (await call(center.origin, { action: 'list' })).json(); assert.equal(result.devices[0].id, 'local'); assert.equal(result.capabilities.ssh, false);
 });
+test('successful resource reads recover proxy failures and device lifecycle closes pooled TLS sockets', async t => {
+  const directory = await temp(t), identity = await loadIdentity(directory), rpcSockets = new Map();
+  let failPage = false, rpcStatus = 200;
+  const server = createServer({ key: identity.key, cert: identity.cert }, (req, res) => {
+    if (req.url === '/link/api/rpc') {
+      rpcSockets.set(req.headers.authorization, req.socket);
+      req.resume();
+      res.writeHead(rpcStatus, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(rpcStatus === 200 ? { available: true, items: [{ resourceId: 'project', title: 'Remote project' }] } : { code: rpcStatus === 401 ? 'UNAUTHORIZED' : 'UNSUPPORTED', error: 'Resource unavailable' }));
+      return;
+    }
+    if (req.url === '/link/api/workbench') {
+      req.resume();
+      res.writeHead(200, { 'set-cookie': 'dsh_link_workbench=private-cookie; HttpOnly; Secure; Path=/link/workbench/' });
+      res.end('{}'); return;
+    }
+    if (failPage) { req.socket.destroy(); return; }
+    res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html><head></head><body>Remote</body></html>');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  const registry = await openDeviceRegistry(join(directory, 'connections'));
+  const target = { url: 'https://127.0.0.1:' + server.address().port, pin: identity.pin };
+  const a = await registry.upsert({ ...target, id: 'a', name: 'A', token: 'private-a' });
+  const b = await registry.upsert({ ...target, id: 'b', name: 'B', token: 'private-b' });
+  let center = await createDeviceCenter({ directory: join(directory, 'connections'), webRoot: new URL('../dist/web/', import.meta.url), managerFactory: () => null });
+  t.after(() => center?.close());
+  const state = id => center.devices().devices.find(device => device.id === id);
+  const read = id => center.resources({ deviceId: id, kind: 'projects' });
+  const selected = await center.select(a.id, 'http://127.0.0.1:8080');
+  failPage = true;
+  assert.equal((await fetch(selected.url)).status, 502);
+  assert.equal(state(a.id).status, 'offline');
+  assert.equal((await read(a.id)).devices[0].available, true);
+  assert.equal(state(a.id).status, 'online'); assert.equal(state(a.id).lastError, null);
+  rpcStatus = 422;
+  assert.equal((await read(a.id)).devices[0].code, 'UNSUPPORTED');
+  assert.equal(state(a.id).status, 'online', 'unsupported resources do not mean the host is offline');
+  rpcStatus = 401;
+  assert.equal((await read(a.id)).devices[0].code, 'UNAUTHORIZED');
+  assert.equal(state(a.id).status, 'failed');
+  rpcStatus = 200;
+  assert.equal((await read(a.id)).devices[0].available, true);
+  assert.equal(state(a.id).status, 'online');
+  const aSocket = rpcSockets.get('Bearer private-a');
+  const aClosed = once(aSocket, 'close', { signal: AbortSignal.timeout(2000) });
+  await center.api({ action: 'remove', deviceId: a.id });
+  await aClosed;
+  assert.equal(state(a.id), undefined);
+  assert.equal((await read(b.id)).devices[0].available, true);
+  const bClosed = once(rpcSockets.get('Bearer private-b'), 'close', { signal: AbortSignal.timeout(2000) });
+  await center.close(); center = null;
+  await bClosed;
+});
 test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persistent streams', async t => {
   const directory = await temp(t), identity = await loadIdentity(directory); let authenticated = 0;
   const server = createServer({ key: identity.key, cert: identity.cert }, async (req, res) => {
@@ -133,6 +187,15 @@ test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persi
   const publicLocation = publicLogin.headers.get('location'); assert.match(publicLocation, /^\/p\/cloud-route\/s\//);
   const publicPage = await fetch(publicProxy.origin + publicLocation.slice('/p/cloud-route'.length));
   assert.match(await publicPage.text(), /href="\/p\/cloud-route\/s\//);
+  const centerDirectory = join(directory, 'sidebar-owner'), registry = await openDeviceRegistry(centerDirectory);
+  const saved = await registry.upsert({ ...target, name: '远端电脑' });
+  const center = await createDeviceCenter({ directory: centerDirectory, webRoot: new URL('../dist/web/', import.meta.url), managerFactory: () => null });
+  t.after(() => center.close());
+  const selected = await center.select(saved.id, 'http://127.0.0.1:8080');
+  assert.equal(selected.device.id, saved.id);
+  const selectedPage = await fetch(selected.url);
+  assert.match(selectedPage.headers.get('content-security-policy'), /frame-ancestors[^;]*http:\/\/127\.0\.0\.1:8080/);
+  assert.equal((await selectedPage.text()).includes('private-token'), false);
   assert.equal((await fetch(proxy.origin + '/link/workbench/')).status, 403);
   for (let i = 0; i < 18; i++) { const repeated = await fetch(await proxy.enter(), { redirect: 'manual' }); assert.equal(repeated.headers.get('location'), path); }
   assert.equal((await fetch(proxy.origin + path)).status, 200, 'retained workbench survives repeated host selection');

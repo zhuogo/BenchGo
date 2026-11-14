@@ -6,13 +6,13 @@ import { runInNewContext } from 'node:vm';
 
 const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
 const code = transformSync(readFileSync(new URL('../client/message-actions.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
-function render({ panel = '', saved = null, usage, clipboard = async () => true } = {}) {
+function render({ panel = '', saved = null, agentReaction = null, role = 'assistant', usage, clipboard = async () => true } = {}) {
   let index = 0;
   const changes = [], calls = [];
   const react = { createElement: (type, props, ...children) => typeof type === 'function' ? type(props || {}) : ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null && x !== false) }), memo: component => component, useMemo: read => read(), useState: value => { const slot = index++; return [slot === 0 ? panel : value, next => changes.push([slot, next])]; }, useRef: () => ({ current: null }), useEffect() {} };
   const module = { exports: {} };
   runInNewContext(code, { module, exports: module.exports, setTimeout: () => 1, clearTimeout() {}, require: id => id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id === 'react' ? react : { writeClipboard: clipboard, Menu: 'Menu' } });
-  const tree = module.exports.MessageActions({ row: { key: 'message:m', role: 'assistant', text: '结果', usage }, saved, threadId: 'side', api: async (...args) => calls.push(args) });
+  const tree = module.exports.MessageActions({ row: { key: 'message:m', role, text: '结果', usage }, saved, agentReaction, assistantName: '小助', threadId: 'side', api: async (...args) => calls.push(args) });
   const walk = node => node && typeof node === 'object' ? [node, ...(node.children || []).flatMap(walk)] : [];
   return { nodes: walk(tree), calls, changes };
 }
@@ -22,6 +22,15 @@ test('reaction toggle uses source-bound durable endpoint and never sends chat te
     await nodes.find(node => node.props['aria-label'] === '回应 👍').props.onClick();
     assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['messageReaction', { threadId: 'side', messageKey: 'message:m', emoji: saved ? null : '👍' }]]);
   }
+});
+test('assistant reaction shows as a read-only chip beside the user reaction', () => {
+  const { nodes } = render({ role: 'user', saved: '🤔', agentReaction: '👍' });
+  const row = nodes.find(node => node.props.className === 'ba-reaction-row');
+  assert.deepEqual(row.children.map(node => node.props['data-reactor'] || node.type), ['assistant', 'button']);
+  assert.equal(row.children[0].type, 'span');
+  assert.equal(row.children[0].props.onClick, undefined);
+  assert.equal(row.children[0].props['aria-label'], '小助 回应了 👍');
+  assert.equal(render({ role: 'user' }).nodes.some(node => node.props.className === 'ba-reaction-row'), false);
 });
 test('copy uses plain message text and reports clipboard failure', async () => {
   let copied;

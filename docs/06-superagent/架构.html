@@ -9,13 +9,12 @@
 <aside class="panel directory" id="directory" aria-label="节点与文档目录" hidden><div class="panel-top"><h2 style="font-size:17px">节点目录</h2><button type="button" class="btn icon" id="directory-close" aria-label="关闭节点目录">×</button></div><input class="search" id="search" type="search" placeholder="搜索名称、服务或函数" aria-label="搜索架构节点"><div class="directory-list" id="directory-list"></div><div class="empty" id="search-empty" hidden><div class="empty-mark">⌕</div><strong>没有匹配的节点</strong><p>试试模块名称或清空关键词。</p><button type="button" class="btn primary" id="clear-search">显示全部节点</button></div><div class="detail-block"><h3>阅读设计</h3><div id="design-links"></div></div><p class="notice" id="boundary"></p></aside>
 <section class="walkthrough" id="walkthrough" aria-label="架构流程走读" aria-live="polite" hidden><div class="step-top"><span id="step-label"></span><button type="button" class="btn icon" id="walk-exit" aria-label="退出流程走读">×</button></div><h3 id="step-title"></h3><p id="step-text"></p><div class="walk-controls"><button type="button" class="btn" id="walk-prev">← 上一步</button><button type="button" class="btn primary" id="walk-next">下一步 →</button></div><div class="progress"><span id="step-progress"></span></div></section>
 <noscript><div class="load-state"><strong>需要 JavaScript 展开交互图</strong><p>请启用 JavaScript，或直接阅读同目录中的设计 Markdown。</p></div></noscript>
-</main><script type="application/json" id="architecture-data">
-{
+</main><script type="application/json" id="architecture-data">{
   "id": "06",
   "title": "SuperAgent 总助手",
   "eyebrow": "SUPERAGENT / ORCHESTRATION",
-  "subtitle": "Router 维持持续对话，Worker 在真实官方会话执行；工单账、执行事实与原来源投递共同支撑可恢复的任务闭环。",
-  "boundary": "工单仅进行中、等待、完成三态。Worker 正常结束后保存它的最后一段话作为结果，工单记完成并通知 Router；没做成由 Router 读结果后直说，结果不满意由用户找 Router 派关联调整单。真实审批、输入、暂停、中断和错误保持等待并写明原因。节点标记表示存在对应源码，安装版主路径仍须实际验收。",
+  "subtitle": "Router 维持持续对话，Worker 在真实官方会话执行；任务账、执行事实与原来源投递共同支撑可恢复的任务闭环。",
+  "boundary": "任务仅进行中、等待、完成三态。Worker 正常结束后保存它的最后一段话作为结果，任务记完成并通知 Router；没做成由 Router 读结果后直说，结果不满意由用户找 Router 派关联调整任务。真实审批、输入、暂停、中断和错误保持等待并写明原因。节点标记表示存在对应源码，安装版主路径仍须实际验收。 跨设备查询、目标执行、结果回传与聚合导航已接线；AI管理限已有设备及中继优先级/启停申请，首次配对与秘密仍走设备中心。双向需双方授权；本地TLS和浏览器测试不等于襄阳服务器真机验收。",
   "nodes": [
     {
       "id": "ingress",
@@ -35,7 +34,7 @@
         "plugins/superagent/src/schedule-bridge.mjs",
         "plugins/superagent/src/watchdog-observation-route.mjs"
       ],
-      "note": "渠道不另存一套对话或工单账；机器观察和模型理由均不产生用户授权。",
+      "note": "渠道不另存一套对话或任务账；机器观察和模型理由均不产生用户授权。",
       "state": "implemented",
       "x": 60,
       "y": 160
@@ -57,7 +56,7 @@
         "plugins/superagent/src/assessment-runner.mjs",
         "plugins/superagent/src/assessment-policy.mjs"
       ],
-      "note": "普通问答不强制开单，后台事件也不直接启动任意工作。",
+      "note": "普通问答不强制创建任务，后台事件也不直接启动任意工作。",
       "state": "implemented",
       "x": 440,
       "y": 160
@@ -67,62 +66,70 @@
       "title": "Router 主聊与旁聊",
       "kicker": "CONTINUOUS CONVERSATION",
       "kind": "model",
-      "sub": "理解、答疑、派工、接收信号与表达",
+      "sub": "持续对话 · 专属工具 · 快速委派",
       "symbol": "createAssistantEngine()",
-      "plain": "用户始终与同一个总助手对话，工作可以在后台继续。",
-      "role": "依持久主聊/旁聊归属复用官方 Agent 单写入生命周期，按安全边界装配当前有效档案版本和原会话历史，处理真实用户消息及持久内部信号。内存装配标记仅为缓存，缺失时在安全边界恢复装配，不要求用户手动结束原会话，不重放已执行动作；恢复契约及验证边界见模型与上下文.md。",
+      "plain": "用户与同一个总助手对话；Router 处理专属产品管理与协调，环境操作交给 Worker。",
+      "role": "Router 仅保留专属产品管理、任务协调与已装配的上下文工具；文件、命令、网页、技能、插件、MCP 和官方 subagents 等环境执行能力交给 Worker，不提供一两步直做的例外，分工见任务与执行.md。依持久主聊/旁聊归属复用官方 Agent 单写入生命周期，按安全边界装配当前有效档案版本和原会话历史，处理真实用户消息及持久内部信号。内存装配标记仅为缓存，缺失时在安全边界恢复装配，不要求用户手动结束原会话，不重放已执行动作；恢复契约及验证边界见模型与上下文.md。",
       "input": "用户原话、身份文档、历史与可信内部信号",
-      "output": "普通回答、开单/修订调用、正式交付表达",
+      "output": "直接回答与产品管理、任务查询/重命名/整理、委派/修订、原来源交付",
       "sources": [
         "plugins/superagent/src/engine.mjs",
         "plugins/superagent/src/router-session-setup.mjs",
         "plugins/superagent/src/router-tools.mjs",
+        "plugins/superagent/src/conversation-management.mjs",
         "plugins/superagent/src/router-permissions.mjs",
         "plugins/superagent/src/router-language-policy.mjs"
       ],
-      "note": "Router 也是官方 Agent Session，没有另一套推理循环；它只协调和表达，不验收任务内容。",
+      "note": "Router 也是官方 Agent Session，没有另一套推理循环；角色工具门只保留专属产品管理、协调与上下文能力，不验收 Worker 内容。assistant_projects 省略设备选择时只查本机，设备参数查询已授权目标；assistant_devices 是出站目录，assistant_device_status 是本机入站授权，均不冒充实时在线。有限设备管理和远端任务协调已接线，首次配对、秘密及目标确认仍走原设备中心；真实双机待验。",
       "state": "implemented",
       "x": 820,
       "y": 160
     },
     {
-      "id": "ticket",
-      "title": "工单与原始要求",
-      "kicker": "TICKET / REQUIREMENTS",
+      "id": "task",
+      "title": "任务要求与展示整理",
+      "kicker": "TASK / REQUIREMENTS / ORGANIZATION",
       "kind": "orchestration",
-      "sub": "Ticket、要求版本、Mandate 与输入账",
-      "symbol": "createAssistantOrchestrationStore()",
-      "plain": "把要做的事、谁允许做和后来怎样修改，记在可追溯的同一张单上。",
-      "role": "持久保存工单、执行身份、输入账、要求版本、授权快照与交付关联；列表仅显示进行中、等待、完成。完成保留原会话和结果，用户要求改成果时由 Router 派关联调整单。",
-      "input": "用户任务、来源、授权与修订",
-      "output": "稳定工单身份、要求版本和执行记录",
+      "sub": "逻辑归属 · 有界查询 · 归档续办",
+      "symbol": "assistant_tasks / assistant_task_manage / assistant_task_cleanup",
+      "plain": "把要求与执行留在原任务上，改名、归档和恢复只整理展示。",
+      "role": "持久保存任务、执行身份、要求与授权版本及交付关联。Router 以同一逻辑会话 lineage 跟进旧任务；任务列表按关键词、时间、来源及状态等先筛选再分页，详情按节与稳定记录指针有界读取。改名、归档和恢复共用原领域服务；明确停止后归档保存精确持久待办，由原编排巡检确认退出后续办，不创建 Worker 或新增任务业务状态。",
+      "input": "用户任务、来源、授权与修订；当前真人明确的整理要求",
+      "output": "有界任务与证据、版本、持久续办和可恢复归档回执",
       "sources": [
         "plugins/superagent/src/orchestration-store.mjs",
-        "plugins/superagent/src/ticket-revision-service.mjs",
-        "plugins/superagent/src/ticket-input-store.mjs",
-        "plugins/superagent/src/task-management.mjs"
+        "plugins/superagent/src/task-revision-service.mjs",
+        "plugins/superagent/src/task-input-store.mjs",
+        "plugins/superagent/src/task-management.mjs",
+        "plugins/superagent/src/desktop-task-access.mjs",
+        "plugins/superagent/src/conversation-management.mjs",
+        "plugins/superagent/src/task-cleanup-store.mjs",
+        "docs/06-superagent/任务与执行.md",
+        "plugins/superagent/src/task-cleanup-continuation.mjs",
+        "plugins/superagent/src/task-cleanup-continuation-store.mjs"
       ],
-      "note": "原始用户要求与官方执行结束事实是权威；模型摘要不能自行关闭工单。",
+      "note": "本机主人主聊或手动旁聊可整理本机账内所有来源的任务；普通归档不暗含停止。停止后归档冻结原来源、版本及执行身份戳；新执行或绑定该任务的后续输入使旧待办失效，自然退出不冲突。取消待办不逆转停止；原旁聊删除后抑制通知，不重建旁聊。未消费预览24小时过期回收，正式回执及已消费预览保留。不物理删除成果或会话，真实安装版待验。",
       "state": "implemented",
       "x": 1200,
       "y": 160
     },
     {
       "id": "dispatch",
-      "title": "工单分派与任务审核",
+      "title": "任务分派与动作校验",
       "kicker": "ASSIGNMENT / APPROVAL",
       "kind": "execution",
-      "sub": "创建分派、领取续租与任务内审核",
+      "sub": "创建分派、领取续租与动作许可",
       "symbol": "createOrchestrationRuntime() / createAssistantAssignmentWorker()",
-      "plain": "后台服务把工单交给 Worker，需要审核的动作复用原任务官方审核。",
-      "role": "orchestration-runtime 每秒巡检并为新工单创建 Assignment，assignment-worker 按并发上限（默认 2）领取并续租，执行权限按任务与工具面裁剪，需要审核的动作复用原任务官方审批；叫停立即拦截后续动作。",
-      "input": "当前工单、要求/授权版本、待执行分派",
+      "plain": "后台服务把任务交给 Worker，任务范围和真实动作许可在执行边界核对。",
+      "role": "orchestration-runtime 每秒巡检并为新任务创建 Assignment，assignment-worker 按并发上限（默认 2）领取并续租，执行权限按任务与工具面裁剪，业务动作仍须满足真实许可条件；叫停立即拦截后续动作。 已明确授权的停止后归档在同一巡检派工前维护：核对原来源、精确任务、版本与执行身份，复用停止输入，真正退出后归档；重启可续办，不新增timer，通知只表达事实。",
+      "input": "当前任务、要求/授权版本、待执行分派",
       "output": "有效 Assignment/Run 或等待原因",
       "sources": [
         "plugins/superagent/src/orchestration-runtime.mjs",
         "plugins/superagent/src/assignment-worker.mjs",
         "plugins/superagent/src/worker-permissions.mjs",
-        "plugins/superagent/src/external-actions.mjs"
+        "plugins/superagent/src/external-actions.mjs",
+        "plugins/superagent/src/task-cleanup-continuation.mjs"
       ],
       "note": "单数据根只有一个编排所有者；领取与续租使用 owner、lease 和 fence，防止旧执行覆盖新结果。使用者权限由对应渠道适配器处理，核心不设主人/其他用户角色。",
       "state": "implemented",
@@ -134,10 +141,10 @@
       "title": "真实 Worker 执行会话",
       "kicker": "OFFICIAL AGENT / WORKER",
       "kind": "execution",
-      "sub": "一个工单执行会话 · 官方 subagents",
+      "sub": "一个任务执行会话 · 官方 subagents",
       "symbol": "createAssignmentExecutor()",
-      "plain": "实际工作由官方 Agent 在所属项目或未分组的真实会话里执行。",
-      "role": "一张工单由一个官方 Worker 会话接单。执行器使用 ctx.agents.create/resume；会话内委派复用官方 subagents，BenchGo 只通过任务提示词鼓励适当拆分，不另建子 Worker、子工单或运行时。提示词要求结束时用几句话写清做成了什么、产出在哪、还剩什么问题；验证由 Worker 按任务需要自行完成。",
+      "plain": "委派工作由官方 Agent 在所属项目或未分组的真实会话里执行。",
+      "role": "一项任务由一个官方 Worker 会话执行。执行器使用 ctx.agents.create/resume；Router 和 Worker 的新建、恢复与权限校正固定为官方 danger-full-access + never，进程内子代理沿官方机制继承。会话内委派复用官方 subagents，BenchGo 只通过任务提示词鼓励适当拆分，不另建子 Worker、子任务或运行时。提示词要求结束时用几句话写清做成了什么、产出在哪、还剩什么问题；验证由 Worker 按任务需要自行完成。",
       "input": "当前要求、冻结模型、任务权限与项目目录",
       "output": "工具执行、文件产物、进度和原会话记录",
       "sources": [
@@ -145,7 +152,7 @@
         "plugins/superagent/src/execution-session.mjs",
         "plugins/superagent/src/worker-subagents.mjs"
       ],
-      "note": "执行会话支持用户直接插话。Worker 和官方子代理在工作台侧栏可见并允许直接发消息；子代理的深度、继承、工具与模型遵循官方服务。",
+      "note": "执行会话支持用户直接插话。Worker 保留工作台侧栏入口，官方子代理从父会话入口访问并按生命周期接收消息；子代理的深度、继承、工具与模型遵循官方服务。 跨设备目标设计：使用项目所属设备的工作模型、Harness 与环境，入口模型不覆盖目标配置。",
       "state": "implemented",
       "x": 820,
       "y": 450
@@ -157,8 +164,8 @@
       "kind": "execution",
       "sub": "正常结束 → 保存最后一段话 → 通知 Router",
       "symbol": "commitWorkerResult()",
-      "plain": "Worker 正常结束后，系统保存它的最后一段话、完成工单，再通知 Router。",
-      "role": "Worker 正常结束后保存它的最后一段话作为结果，工单记完成并通知 Router；保存不设业务拒绝门，存储故障自动补存；没做成由 Router 读结果后直说。",
+      "plain": "Worker 正常结束后，系统保存它的最后一段话、完成任务，再通知 Router。",
+      "role": "Worker 正常结束后保存它的最后一段话作为结果，任务记完成并通知 Router；保存不设业务拒绝门，存储故障自动补存；没做成由 Router 读结果后直说。",
       "input": "Worker 最后一段话与官方结束事实",
       "output": "Result、completed 与完成信号",
       "sources": [
@@ -166,7 +173,7 @@
         "plugins/superagent/src/execution-evidence.mjs",
         "plugins/superagent/src/orchestration-runtime.mjs"
       ],
-      "note": "完成的含义是 Worker 跑完并交回了结果，不等于事情办成；Router 不改工单状态、不自动重派。报错、中断、截断、待审批、待输入、暂停和停止保持等待并写明原因。原始过程留在官方执行会话，不另存副本。",
+      "note": "完成的含义是 Worker 跑完并交回了结果，不等于事情办成；Router 不改任务状态、不自动重派。报错、中断、截断、待审批、待输入、暂停和停止保持等待并写明原因。原始过程留在官方执行会话，不另存副本。",
       "state": "implemented",
       "x": 440,
       "y": 450
@@ -176,41 +183,41 @@
       "title": "Router 自然表达",
       "kicker": "RESULT / ROUTER REPLY",
       "kind": "model",
-      "sub": "读结果 → 主动告知 → 保存正式稿",
-      "symbol": "prepareTicketReply / notificationPublication()",
+      "sub": "持久 inbox → 普通公开正文 → 官方历史",
+      "symbol": "Router inbox / official Session",
       "plain": "Worker 做完后，Router 主动用自然的话告知用户，按需要给摘要或完整结果；没做成就直说。",
-      "role": "持久完成信号回原 Router，由其读取已存结果并生成正式回复；正式稿与 Worker 结果分别保存，经官方 Session 持久检查点后准备投递。Router 只负责表达，不改工单状态、不重派。",
+      "role": "持久完成信号进入所属原 Router inbox，按同任务结果版本幂等；用户消息优先，不打断当前回合。普通 Router 读取结果，以公开正文流式告知并沿正常官方 Session 历史保存；不另存隐藏 task-reply 正式稿，不改任务状态、不重派。",
       "input": "完成信号、Worker 结果和原来源",
-      "output": "持久 Router 正式稿及唯一投递身份",
+      "output": "普通 Router 公开回复与官方历史",
       "sources": [
-        "plugins/superagent/src/router-ticket-expression.mjs",
-        "plugins/superagent/src/ticket-reply.mjs",
+        "plugins/superagent/src/router-task-expression.mjs",
+        "plugins/superagent/src/message-inbox.mjs",
         "plugins/superagent/src/orchestration-runtime.mjs",
         "plugins/superagent/src/notification-publication.mjs",
         "plugins/superagent/src/chat-publication.mjs"
       ],
-      "note": "生成失败仅重试表达，不重新执行 Worker；不使用固定报告、标题前缀或系统状态硬文案。",
+      "note": "源码接线和定向验证通过，安装版真实端到端仍待用户验收。删除专用正式稿、二次领取和桌面投递中转，结果提交事件直接唤醒 inbox，1 秒恢复检查兜底，成功路径不等 30 秒读稿；失败只恢复告知，已进入或状态不明的回合先核对官方记录，历史可读而不继续双轨执行。",
       "state": "implemented",
       "x": 60,
       "y": 450
     },
     {
       "id": "delivery",
-      "title": "原来源投递与回执",
-      "kicker": "OUTBOX / DELIVERY",
+      "title": "普通回复与渠道发送",
+      "kicker": "SESSION / CHANNEL REPLY",
       "kind": "finish",
       "sub": "执行完成与可信送达独立记录",
       "symbol": "createOrchestrationRuntime()",
-      "plain": "把保存好的正式回复送回原来的聊天，可信回执决定是否完成交付。",
-      "role": "outbox 独立记录 Router 表达与原来源投递，持久领取、退避补投并校验目标归属；送达与工单完成分别记录。发送效果未知保留真实原因，不盲重发，也不回退已完成工单。",
-      "input": "已保存正式稿、原来源与 outbox 身份",
-      "output": "投递回执、待交付原因和工单状态",
+      "plain": "原聊天直接显示普通 Router 回复；外部渠道沿既有普通回复链路发送。",
+      "role": "桌面沿正常官方 Session 流式显示与历史保存，无任务结果专用投递中转。外部渠道复用普通回复的来源校验、发送、回执和失败处理；送达与任务完成分别记录，发送效果未知不盲重发，不回退已完成任务。",
+      "input": "普通 Router 公开回复与原来源",
+      "output": "投递回执、待交付原因和任务状态",
       "sources": [
         "plugins/superagent/src/orchestration-runtime.mjs",
-        "plugins/superagent/src/result-delivery.mjs",
+        "plugins/superagent/src/direct-reply-delivery.mjs",
         "plugins/superagent/src/channels/delivery-outcome.mjs"
       ],
-      "note": "排入队列、HTTP 接收、可信送达、已读和已播放是不同事实；失败补投不重跑 Worker。真实渠道端到端仍须用对应账号验收。",
+      "note": "源码接线和定向验证通过；外部普通回复发送能力继续复用，安装版真实端到端仍待用户验收。排入队列、HTTP 接收、可信送达、已读和已播放是不同事实；失败不重跑 Worker。真实渠道端到端仍须用对应账号验收。",
       "state": "implemented",
       "x": 60,
       "y": 740
@@ -223,7 +230,7 @@
       "sub": "进行中 / 等待 / 完成",
       "symbol": "executionSessionProjection()",
       "plain": "状态来自官方执行与持久账；真正需要审批、输入或处理中断时才显示等待。",
-      "role": "汇合官方会话事件、执行身份和工单账，投影三态及简短等待原因，保留暂停、停止、中断与错误事实。用户明确要求续接时沿原会话继续，不重放已生效动作。",
+      "role": "汇合官方会话事件、执行身份和任务账，投影三态及简短等待原因，保留暂停、停止、中断与错误事实。用户明确要求续接时沿原会话继续，不重放已生效动作。",
       "input": "官方事件、Run/fence、当前要求与真实等待原因",
       "output": "三态、原会话入口与真实错误说明",
       "sources": [
@@ -232,7 +239,7 @@
         "plugins/superagent/src/execution-session.mjs",
         "plugins/superagent/src/interrupted-continuation.mjs"
       ],
-      "note": "后续动作已拦不等于执行端已退出，收件不等于恢复；未知外发不盲重发。官方动作审批尚未全部统一写入工单的等待状态。",
+      "note": "后续动作已拦不等于执行端已退出，收件不等于恢复；未知外发不盲重发。官方动作审批尚未全部统一写入任务的等待状态。",
       "state": "partial",
       "x": 440,
       "y": 740
@@ -245,8 +252,8 @@
       "sub": "身份档案 · 记忆 · 历史 · 任务包",
       "symbol": "getSessionContext() / selectMemories()",
       "plain": "下方上下文管理组逐项展示身份档案、自动匹配、主动检索和 Worker 注入，点击任一小节点查看输入输出与源码。",
-      "role": "Router 使用稳定档案、短 MEMORY 总纲、小量对象目录和简短协作对齐；每轮有界匹配当前有效记忆，详细事实、对象页和复盘按需读。Worker 只接本单任务包，官方 subagents 自主管理子会话上下文。",
-      "input": "身份档案、当前真人文本、官方历史、本单要求与可信来源指针",
+      "role": "Router 使用稳定档案、短 MEMORY 总纲、小量对象目录和简短协作对齐；每轮有界匹配当前有效记忆，详细事实、对象页和复盘按需读。Worker 只接当前任务包，官方 subagents 自主管理子会话上下文。",
+      "input": "身份档案、当前真人文本、官方历史、当前任务要求与可信来源指针",
       "output": "分角色上下文、相关记忆及有界原文",
       "sources": [
         "plugins/superagent/src/documents.mjs",
@@ -269,7 +276,7 @@
       "sub": "四组职责 · 11 模块 · 记忆与行为闭环",
       "symbol": "Router 同步记录 + 一个专用后台执行器",
       "plain": "一个自我迭代大组内包含四个小组、11 项职责。点击“文件树与全部流向”可查看真实运行根、现有与目标目录、逐模块触发/读写链以及上下文注入。",
-      "role": "一大组四小组、11 项职责。Router 同步主动记忆；仅一个自我迭代后台执行器处理记忆整合、关系档案、Dreams、技能评审和 Ideas，定时/静默/显式共用增量来源。Watchdog 只监督。后台不建工作台聊天、工单或过程 UI；服务校验来源、身份、版本、范围、去重与遗忘。",
+      "role": "一大组四小组、11 项职责。Router 同步主动记忆；仅一个自我迭代后台执行器处理记忆整合、关系档案、Dreams、技能评审和 Ideas，定时/静默/显式共用增量来源。Watchdog 只监督。后台不建工作台聊天、任务或过程 UI；服务校验来源、身份、版本、范围、去重与遗忘。",
       "input": "权限范围内的真实对话、用户纠正、执行事实、已保存记忆和实际技能使用记录",
       "output": "有来源的记忆与档案、对齐总结、数据库中的技能与想法候选；具体路径见“文件树与全部流向”。",
       "sources": [
@@ -294,15 +301,17 @@
       "kind": "orchestration",
       "sub": "assistant.db · ledger.db · 官方 Session · Markdown",
       "symbol": "createAssistantStore()",
-      "plain": "工单、业务原文、对话原文和档案各有自己的权威存放处。",
-      "role": "三个自我迭代数据面：Markdown 保存权威事实与档案（按日详细事实、短总纲、对象视图、Dreams）；assistant.db 保存版本/journal、bank 分类与索引、统一维护队列/增量水位、技能及想法候选；官方 Session/ledger.db 保留各自原文证据。工单与投递仍由原控制面保存，不复制对话全文。",
-      "input": "工单与运行变化、业务原文、档案修改",
-      "output": "可恢复的工单、结果、投递与档案记录",
+      "plain": "任务、业务原文、对话原文和档案各有自己的权威存放处。",
+      "role": "三个自我迭代数据面：Markdown 保存权威事实与档案（按日详细事实、短总纲、对象视图、Dreams）；assistant.db 保存版本/journal、bank 分类与索引、统一维护队列/增量水位、技能及想法候选；官方 Session/ledger.db 保留各自原文证据。任务与投递仍由原控制面保存，不复制对话全文。 任务展示版本、有效期冻结预览、持久待归档项及正式回执位于同一 assistant.db；提交核对权威任务与执行版本，回收仅作用于过期未消费预览。",
+      "input": "任务与运行变化、业务原文、档案修改",
+      "output": "可恢复的任务、结果、投递与档案记录",
       "sources": [
         "plugins/superagent/src/orchestration-store.mjs",
+        "plugins/superagent/src/task-cleanup-store.mjs",
         "plugins/superagent/src/runtime-store.mjs",
         "plugins/superagent/src/ledger.mjs",
-        "plugins/superagent/src/store.mjs"
+        "plugins/superagent/src/store.mjs",
+        "plugins/superagent/src/task-cleanup-continuation-store.mjs"
       ],
       "note": "assistant.db 目前由多个模块各自打开独立连接，尚未合并为单连接；默认数据根为 ~/.benchgo/assistant/。",
       "state": "implemented",
@@ -315,10 +324,10 @@
       "title": "目标清单",
       "kicker": "GOALS / CHECKLIST",
       "kind": "orchestration",
-      "sub": "一句目标 · 未完成 / 已完成 · 不派工",
+      "sub": "一句目标 · 未完成 / 已完成 · 不委派",
       "symbol": "assistant_goals",
       "plain": "用户记下这阶段想做成的事，Router 每次在主聊都看得到。",
-      "role": "一条目标只有一句目标文字和未完成/已完成状态，创建不派工、不绑项目。主聊每轮带最多 20 条未完成目标摘要，完整正文经 assistant_goals 按需读取；主聊重置后保留。目标是用户的关注清单，也是主动性的源点。",
+      "role": "一条目标只有一句目标文字和未完成/已完成状态，创建不委派、不绑项目。主聊每轮带最多 20 条未完成目标摘要，完整正文经 assistant_goals 按需读取；主聊重置后保留。目标是用户的关注清单，也是主动性的源点。",
       "input": "用户提出的目标、勾选与编辑",
       "output": "未完成目标摘要与完整清单",
       "sources": [
@@ -336,10 +345,10 @@
       "title": "外部动作与审批",
       "kicker": "EXTERNAL ACTION / APPROVAL",
       "kind": "execution",
-      "sub": "已注册通道 · 冻结内容 · 逐次审批",
+      "sub": "已注册通道 · 冻结内容 · 单次许可",
       "symbol": "assistant_external_action",
       "plain": "对外发消息这类动作先冻结内容，再由用户在原任务里逐次批准。",
-      "role": "支付或购买、修改密码、删除账号、另行对外发送四类高危动作只走已注册的结构化通道：先准备并冻结目标与内容，再在原任务内用官方审批卡逐次批准，一次只执行此件。没有通道时完成可做的准备，把最后一步交给用户接管。保险库只保存凭据并提供不透明句柄。",
+      "role": "支付或购买、修改密码、删除账号、另行对外发送四类高危动作只走已注册的结构化通道，准备时冻结目标与内容，提交时只认真实单次许可。当前 never 策略拒绝新的宿主审批请求；没有通道或有效许可时完成可做的准备，把最后一步交给用户接管。已有待批请求保持原官方生命周期，保险库只保存凭据并提供不透明句柄。",
       "input": "Worker 准备的动作、任务授权与用户答复",
       "output": "冻结动作、审批结果与执行回执，或接管点",
       "sources": [
@@ -428,7 +437,7 @@
       "symbol": "",
       "plain": "自动选取与当前消息相关的记忆，不额外调用模型做全库搜索。",
       "role": "从当前真人文本和可信回执筛选当前有效记忆，按正文去重并排除已全文注入 USER。沿现有有界字面匹配，不全库加载；详细事实按稳定 ID 定位。",
-      "input": "当前消息、本单要求或按需检索参数",
+      "input": "当前消息、当前任务要求或按需检索参数",
       "output": "最多 6 条、正文合计 4000 字符的命中记忆",
       "sources": [
         "plugins/superagent/src/router-context.mjs"
@@ -449,7 +458,7 @@
       "symbol": "",
       "plain": "Router 需要补充长期记忆时主动查找。",
       "role": "assistant_memory_search(query, scope?, limit?)：搜索当前受隐私策略过滤的长期记忆。中日韩文字拆相邻双字词，其他文本按词建索引；先累计词命中，再校验归一化原文含查询片段，按分数和更新时间排序。默认 8 条，最多 100 条。不是语义向量匹配。",
-      "input": "当前消息、本单要求或按需检索参数",
+      "input": "当前消息、当前任务要求或按需检索参数",
       "output": "相关记忆、有界原文或官方上下文能力",
       "sources": [
         "plugins/superagent/src/memory.mjs"
@@ -470,7 +479,7 @@
       "symbol": "",
       "plain": "按需查其他公开对话，不把所有会话历史自动注入。",
       "role": "assistant_session_search：复用官方索引搜索本助手主聊/手工旁聊的公开用户与助手正文；官方词/短语命中后再校验公开文本，返回会话 ID、事件序号与有界片段。assistant_history 按这些指针读原文或前后文。中文句内子串命中仍有官方索引限制。",
-      "input": "当前消息、本单要求或按需检索参数",
+      "input": "当前消息、当前任务要求或按需检索参数",
       "output": "相关记忆、有界原文或官方上下文能力",
       "sources": [
         "plugins/superagent/src/history-search.mjs"
@@ -484,17 +493,18 @@
     },
     {
       "id": "ctx-evidence",
-      "title": "工单证据读取",
+      "title": "任务证据读取",
       "kicker": "CONTEXT / RUNTIME",
       "kind": "orchestration",
-      "sub": "先定位工单 → 分段读原文",
+      "sub": "先定位任务 → 分段读原文",
       "symbol": "",
       "plain": "按需查看已有任务要求、结果与业务证据。",
-      "role": "assistant_tickets 按状态、项目及归属读取列表/详情，得到要求、结果与问题指针；assistant_ledger_read 按证据 ID 分段补读业务原文。涉及已有任务的指代或进度，先定位旧单，不因旧历史自动再派工。",
-      "input": "当前消息、本单要求或按需检索参数",
+      "role": "按实际问题定位任务和证据：查询条件与可信归属相交后分页，默认只读有界核心要求、最新结果及当前待答问题；历史结果、要求、修订、分派与运行等按节分页。长记录带稳定身份、内容哈希和字符续读指针，续读核对版本，变化时报冲突，不把全任务历史常驻注入 Router。ledger 原文继续按证据 ID 分段读，内容不授予新权限。",
+      "input": "当前消息、当前任务要求或按需检索参数",
       "output": "相关记忆、有界原文或官方上下文能力",
       "sources": [
-        "plugins/superagent/src/ledger.mjs"
+        "plugins/superagent/src/ledger.mjs",
+        "plugins/superagent/src/desktop-task-access.mjs"
       ],
       "note": "按需调用；不能把工具存在写成每轮必调用。",
       "state": "implemented",
@@ -508,16 +518,16 @@
       "title": "Worker 任务包",
       "kicker": "CONTEXT / RUNTIME",
       "kind": "orchestration",
-      "sub": "本单要求与输入账 · 执行时注入",
+      "sub": "当前任务要求与输入账 · 执行时注入",
       "symbol": "",
-      "plain": "一个官方执行会话接收当前工单上下文。",
-      "role": "自动注入当前 target、acceptance、原始 Mandate、要求版本、执行范围、工单/分派 ID、目录与请求时间；任务输入账提供本单已经应用的补充与答复，每步更新本单切片。执行器不注入 Router 的四份档案和全量记忆。当前接线仅飞书可补取原来源历史，最近最多 20 条、每条最多 4000 字符、总计默认 12000 字符；无服务或读取失败则标明不可用，它是参考资料，不是新增授权。Worker 自行使用官方 subagent 工具，BenchGo 只用提示词鼓励适当拆分；子会话上下文、模型、工具与结果回送均复用官方能力，不另开子工单。任务包要求结束时用几句话写清做成了什么、产出在哪、还剩什么问题。",
-      "input": "当前消息、本单要求或按需检索参数",
-      "output": "本单 Worker 上下文与官方委派指导",
+      "plain": "一个官方执行会话接收当前任务上下文。",
+      "role": "自动注入当前 target、acceptance、原始 Mandate、要求版本、执行范围、任务/分派 ID、目录与请求时间；任务输入账提供当前任务已经应用的补充与答复，每步更新当前任务切片。执行器不注入 Router 的四份档案和全量记忆。当前接线仅飞书可补取原来源历史，最近最多 20 条、每条最多 4000 字符、总计默认 12000 字符；无服务或读取失败则标明不可用，它是参考资料，不是新增授权。Worker 自行使用官方 subagent 工具，BenchGo 只用提示词鼓励适当拆分；子会话上下文、模型、工具与结果回送均复用官方能力，不另开子任务。任务包要求结束时用几句话写清做成了什么、产出在哪、还剩什么问题。",
+      "input": "当前消息、当前任务要求或按需检索参数",
+      "output": "当前任务 Worker 上下文与官方委派指导",
       "sources": [
         "plugins/superagent/src/assignment-executor.mjs"
       ],
-      "note": "Worker 与官方子代理在工作台侧栏可见并支持直接消息；输入复用原会话与同单记录，冷会话原 Run 续接仍需实际验收。",
+      "note": "Worker 保留工作台侧栏入口，官方子代理从父会话入口访问并按生命周期接收消息；输入复用原会话与同一任务记录，冷会话原 Run 续接仍需实际验收。",
       "state": "implemented",
       "compact": true,
       "x": 810,
@@ -533,7 +543,7 @@
       "symbol": "",
       "plain": "技能发现和长历史压缩复用官方能力。",
       "role": "自建技能沿数据库候选采用和官方 SkillProvider 发现，正文按需；实际使用与效果分别记录，预览不算使用，idleDays仅作只读信号，不自动标记stale或按闲置归档。会话压缩复用官方 compaction，与本轮 11 项自我迭代分开。",
-      "input": "当前消息、本单要求或按需检索参数",
+      "input": "当前消息、当前任务要求或按需检索参数",
       "output": "相关记忆、有界原文或官方上下文能力",
       "sources": [
         "plugins/superagent/src/owned-skill-provider.mjs"
@@ -603,7 +613,7 @@
       "flow": {
         "trigger": "实质对话进入静默，或任务有尚未消费的增量欠账；共用窗口，新输入让位。",
         "actor": "唯一自我迭代执行器；五职责共用静默窗口，同一职责的定时/静默/显式入口共享来源去重与消费水位。",
-        "via": "持久维护队列 → 五职责共用静默窗口/增量来源 → 按职责读任务说明；有未消费来源下个统一 tick 续批，不建工作台聊天、工单或 quiet 副本。",
+        "via": "持久维护队列 → 五职责共用静默窗口/增量来源 → 按职责读任务说明；有未消费来源下个统一 tick 续批，不建工作台聊天、任务或 quiet 副本。",
         "reads": "尚未处理的、有权限读取的原始消息和执行结果；即时记录已经保存的条目。",
         "writes": "排队和处理进度写 R/assistant.db；实际记忆写入复用“记忆整合”的目标路径，没有单独 quiet 文件。",
         "use": "补记结果按所属文件的规则供后续会话使用；没有新增信号就跳过。",
@@ -835,7 +845,7 @@
         "via": "共用维护队列；目标 prompts/self-iteration/idea-curation.md。呈现前读取主动投递偏好。",
         "reads": "真实用户上下文、相关记忆、近期反馈及 R/PROACTIVE_PREFERENCES.md。",
         "writes": "R/assistant.db 的轻量 Ideas 候选：依据、适用条件、不确定性与状态；不建独立 Markdown 目录或新页面。",
-        "use": "Ideas仅在proactive显式启用、下一真实用户回合与候选相关时最多提议1条，读取相关PROACTIVE_PREFERENCES；内部调度不外发，不自动改候选生命周期、创建目标/工单或授权。",
+        "use": "Ideas仅在proactive显式启用、下一真实用户回合与候选相关时最多提议1条，读取相关PROACTIVE_PREFERENCES；内部调度不外发，不自动改候选生命周期、创建目标/任务或授权。",
         "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
       }
     },
@@ -903,6 +913,96 @@
         "use": "档案与记忆快照记录实际装配版本；后续回合在安全边界检查最新版本，纠正或摘要更新不一律等待新会话；在途请求保持原输入。明确遗忘立即限制旧召回并清理受影响快照。官方 Session 保留本会话历史，其他会话按需补读。本轮接线状态见记忆与技能。",
         "current": "已实现：对应受控存储、任务分派与服务接线；定向覆盖来源、版本、去重、取消和遗忘边界。真实付费模型效果与安装版运行尚未验证。"
       }
+    },
+    {
+      "id": "cross-discovery",
+      "title": "发现设备与资源",
+      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "kind": "orchestration",
+      "sub": "出站目录 · 远端项目 · 真实查询结果",
+      "symbol": "共享 Link 查询能力",
+      "plain": "助手能回答另一台已授权设备上有什么。",
+      "role": "区分入站授权与出站保存目录；按指定设备查询项目。已保存不等于在线，连接诊断和实际调用核验目标能力。只给模型必要摘要。",
+      "input": "当前可信用户问题与目标",
+      "output": "有来源、时间和覆盖范围的事实",
+      "sources": [
+        "docs/01-设备与远程连接/跨设备协作.md",
+        "plugins/link/src/devices/resources.mjs",
+        "plugins/link/src/session/adapter.mjs"
+      ],
+      "note": "assistant_devices 返回出站保存目录；assistant_projects 可按设备查询项目。入站授权仍由 assistant_device_status 单独表达，目录不冒充实时能力。",
+      "state": "implemented",
+      "x": 60,
+      "y": 1580,
+      "doc": "docs/01-设备与远程连接/跨设备协作.md"
+    },
+    {
+      "id": "cross-execution",
+      "title": "按所属设备委派",
+      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "kind": "orchestration",
+      "sub": "任务引用 · 目标配置 · 本地文件",
+      "symbol": "deviceId / executionRef",
+      "plain": "入口助手协调，项目主机实际执行。",
+      "role": "用户要求由宿主绑定原来源与资源身份；目标创建唯一执行，使用目标工作模型/Harness。入口任务只关联目标执行，不创建第二个 Worker，不静默跨设备回退。",
+      "input": "可信原指令与目标项目引用",
+      "output": "目标设备接收和执行回执",
+      "sources": [
+        "docs/01-设备与远程连接/跨设备协作.md",
+        "plugins/superagent/src/device-collaboration.mjs",
+        "plugins/superagent/src/orchestration-runtime.mjs"
+      ],
+      "note": "已接目标既有任务与Worker链，使用目标模型和项目目录；入口只保留执行引用，既有tick跟进问题/结果。正常拒绝停止观察，未知接收有限核实，不重派。真实双机与供应商请求待验。",
+      "state": "implemented",
+      "x": 440,
+      "y": 1580,
+      "doc": "docs/01-设备与远程连接/跨设备协作.md"
+    },
+    {
+      "id": "cross-followup",
+      "title": "跨设备跟进与结果",
+      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "kind": "orchestration",
+      "sub": "补充 · 控制 · 提问 · 结果回传",
+      "symbol": "原 executionRef / requestId",
+      "plain": "在入口继续讨论同一件远端任务。",
+      "role": "沿原任务身份转发补充、修订和控制，目标复核来源、版本和授权；重连先查原回执。断线不推断任务停止，提交不等于生效，结果回原对话。",
+      "input": "目标状态、用户跟进与真实答复",
+      "output": "原来源可恢复的进度和交付",
+      "sources": [
+        "docs/01-设备与远程连接/跨设备协作.md",
+        "plugins/superagent/src/device-collaboration.mjs",
+        "plugins/superagent/src/orchestration-runtime.mjs"
+      ],
+      "note": "已接目标既有任务与Worker链，使用目标模型和项目目录；入口只保留执行引用，既有tick跟进问题/结果。正常拒绝停止观察，未知接收有限核实，不重派。真实双机与供应商请求待验。",
+      "state": "implemented",
+      "x": 820,
+      "y": 1580,
+      "doc": "docs/01-设备与远程连接/跨设备协作.md"
+    },
+    {
+      "id": "cross-configuration",
+      "title": "对话管理设备连接",
+      "kicker": "DEVICE MANAGEMENT / PARTIAL",
+      "kind": "orchestration",
+      "sub": "已有设备动作 · 中继有限修改申请",
+      "symbol": "设备中心 / 原配置事务",
+      "plain": "已有连接直接管理，首次配对和秘密通过设备中心。",
+      "role": "复用原设备中心与配置服务。远端管理单独授权，只能读取脱敏配置、申请已有节点优先级/启停变更和查询原操作；目标主人确认具体差异后执行。不开放owner接口或任意代理。",
+      "input": "明确设备、配置差量与版本",
+      "output": "真实连接事实 / 待确认操作 / 应用结果",
+      "sources": [
+        "docs/01-设备与远程连接/跨设备协作.md",
+        "plugins/link/src/settings-adapter.mjs",
+        "plugins/link/src/devices/center.mjs",
+        "plugins/link/src/pairing/store.mjs",
+        "plugins/link/client/app.jsx"
+      ],
+      "note": "已接已有设备连接/重连/改名/移除/诊断；远端脱敏读取及已有中继priority/enabled申请由目标主人确认。CAS、幂等、过期和unknown可核验。首次配对、秘密、新节点及部署仍走设备中心，模型不拿owner票据。",
+      "state": "partial",
+      "x": 1200,
+      "y": 1580,
+      "doc": "docs/01-设备与远程连接/跨设备协作.md"
     }
   ],
   "edges": [
@@ -922,15 +1022,15 @@
     },
     {
       "a": "router",
-      "b": "ticket",
-      "label": "明确执行请求",
+      "b": "task",
+      "label": "定位 / 修订 / 整理",
       "from": "r",
       "to": "l"
     },
     {
-      "a": "ticket",
+      "a": "task",
       "b": "dispatch",
-      "label": "当前要求与授权",
+      "label": "要求 / 授权 / 停止输入",
       "from": "b",
       "to": "t"
     },
@@ -951,14 +1051,14 @@
     {
       "a": "result",
       "b": "expression",
-      "label": "结果 + 完成信号",
+      "label": "持久完成信号入原 inbox",
       "from": "l",
       "to": "r"
     },
     {
       "a": "expression",
       "b": "delivery",
-      "label": "持久正式稿",
+      "label": "普通公开回复",
       "from": "b",
       "to": "t"
     },
@@ -972,8 +1072,8 @@
     },
     {
       "a": "facts",
-      "b": "ticket",
-      "label": "状态与输入账",
+      "b": "task",
+      "label": "状态 / 退出 / 待办核对",
       "from": "t",
       "to": "b",
       "kind": "feedback"
@@ -1024,7 +1124,7 @@
       "from": "t",
       "to": "b",
       "kind": "support",
-      "label": "本单任务包"
+      "label": "当前任务包"
     },
     {
       "a": "learning",
@@ -1058,9 +1158,9 @@
       "label": "方法候选"
     },
     {
-      "a": "ticket",
+      "a": "task",
       "b": "storage",
-      "label": "工单与运行记录",
+      "label": "展示版本 / 续办 / 回执",
       "from": "r",
       "to": "l",
       "kind": "feedback"
@@ -1174,6 +1274,53 @@
       "to": "r",
       "kind": "support",
       "label": "采纳后的技能"
+    },
+    {
+      "a": "router",
+      "b": "cross-discovery",
+      "label": "查询",
+      "from": "l",
+      "to": "t",
+      "kind": "support"
+    },
+    {
+      "a": "dispatch",
+      "b": "cross-execution",
+      "label": "远端分派",
+      "from": "b",
+      "to": "t",
+      "kind": "support"
+    },
+    {
+      "a": "cross-execution",
+      "b": "cross-followup",
+      "label": "原执行引用",
+      "from": "r",
+      "to": "l",
+      "kind": "support"
+    },
+    {
+      "a": "cross-followup",
+      "b": "delivery",
+      "label": "原来源交付",
+      "from": "b",
+      "to": "b",
+      "kind": "feedback"
+    },
+    {
+      "a": "router",
+      "b": "cross-configuration",
+      "label": "领域管理",
+      "from": "r",
+      "to": "t",
+      "kind": "support"
+    },
+    {
+      "a": "router",
+      "b": "delivery",
+      "label": "问答与产品管理回复",
+      "from": "t",
+      "to": "l"
     }
   ],
   "steps": [
@@ -1185,48 +1332,66 @@
     {
       "node": "memory",
       "title": "上下文按角色分层装配",
-      "text": "Router 分层装配稳定档案、短总纲、简短对齐和相关记忆，详细事实与技能按需；Worker 只接本单任务包，子会话复用官方机制。纠正可在后续回合安全边界刷新。"
+      "text": "Router 分层装配稳定档案、短总纲、简短对齐和相关记忆，详细事实按需读取；Worker 只接当前任务包，按需读技能正文，子会话复用官方机制。纠正可在后续回合安全边界刷新。"
     },
     {
       "node": "router",
-      "title": "Router 理解并保持对话",
-      "text": "普通问答可以直接回答；需要执行时根据明确请求组织工作，用户仍可在主聊或旁聊继续对话。",
+      "title": "Router 对话协调，环境操作尽快委派",
+      "text": "Router 直接处理问答、专属产品管理与任务协调；文件、命令、网页、技能、插件和 MCP 等环境操作从第一次探查起尽快交给 Worker，受理即返回对话，不轮询等待完成。能力与审批受阻时如实报告。",
       "edge": 1
+    },
+    {
+      "node": "delivery",
+      "title": "问答与产品管理沿原会话回复",
+      "text": "普通问答以及状态、设置、记忆、提醒和任务协调由 Router 使用专属工具办理，沿原来源正常回复；不因此开展文件、网页或命令调查。内部结果通知仍只表达既有事实，不获得新执行授权。",
+      "edge": 40
     },
     {
       "node": "goals",
       "title": "目标清单给 Router 长期方向",
-      "text": "用户记下的阶段目标是一份清单：一句话加未完成或已完成，不派工。主聊每轮带上最多 20 条未完成目标。它是主动性的源点，主动性机制待实施。",
+      "text": "用户记下的阶段目标是一份清单：一句话加未完成或已完成，不委派。主聊每轮带上最多 20 条未完成目标。它是主动性的源点，主动性机制待实施。",
       "edge": 21
     },
     {
-      "node": "ticket",
-      "title": "把要求和授权记入工单",
-      "text": "保存来源、原始要求、版本和 Mandate。后续修订进入同单输入账，普通修改在下一工具边界整体生效。",
+      "node": "task",
+      "title": "已有任务自然整理，不再委派",
+      "text": "用户提到旧工单，Router 沿逻辑会话归属接回原任务，用关键词、时间和来源定位，只在范围含糊时询问。查询与证据保持有界，重命名只改展示；普通归档或恢复先生成本次指令的冻结子集，再按持久回执简短说明。未退出执行不会被普通清理顺手停止，工具不提供物理删除。规则见任务与执行.md。",
+      "edge": 20
+    },
+    {
+      "node": "dispatch",
+      "title": "明确停止后归档，跨回合自动收尾",
+      "text": "只有用户明确要求停掉并归档时，宿主才冻结原真人来源、任务版本与执行身份。既有巡检先核对后续任务输入，再停止并等待真正退出、重新冻结归档；自然退出可继续，新执行或绑定该任务的新输入使待办失效。重启可续办，取消不逆转停止；原旁聊删除后抑制通知，不重建会话。模型不轮询，也不新增执行授权。",
+      "edge": 3
+    },
+    {
+      "node": "task",
+      "title": "委派时把要求和授权记入任务",
+      "text": "环境操作从第一次探查起交给 Worker，保存来源、原始要求、版本和 Mandate。后续修订进入同一任务输入账，普通修改在下一工具边界整体生效。",
       "edge": 2
     },
     {
       "node": "worker",
-      "title": "真实 Agent 执行并接受插话",
-      "text": "分派服务创建或恢复官方 Worker，会话属于原项目工作区或官方未分组；执行过程与工具记录可直接查看，仍受原授权约束。",
+      "title": "Worker 接单执行并接受插话",
+      "text": "分派服务创建或恢复官方 Worker，会话属于原项目工作区或官方未分组；效率重点是接单后及时执行、减少重复探查，无关任务在现有并发限额内独立推进。执行过程与工具记录可直接查看，仍受原授权约束。",
       "edge": 4
     },
     {
       "node": "result",
       "title": "正常结束即保存完成",
-      "text": "Worker 正常结束后，系统保存它的最后一段话作为结果、把工单记为完成并通知 Router。报错、中断、待审批或待输入保持等待并写明原因。",
+      "text": "Worker 正常结束后，系统保存它的最后一段话作为结果、把任务记为完成并通知 Router。报错、中断、待审批或待输入保持等待并写明原因。",
       "edge": 5
     },
     {
       "node": "expression",
       "title": "Router 主动自然告知结果",
-      "text": "完成信号回原 Router，由它读结果、判断给摘要还是完整内容，并保存正式回复；没做成就直说。表达生成失败只重试表达，不让 Worker 再做一次。",
+      "text": "完成信号持久进入原 Router inbox，同任务结果版本幂等，用户优先且不打断当前回合。Router 以普通公开正文流式告知，沿官方历史保存；没做成就直说。失败只恢复告知，不让 Worker 再做一次。源码接线和定向验证通过，安装版真实端到端仍待用户验收。",
       "edge": 6
     },
     {
       "node": "delivery",
-      "title": "可信送达决定交付状态",
-      "text": "outbox 将同一正式回复投回原来源，送达单独记账，不延迟或回退执行完成。用户不满意时找 Router 派关联调整单；发送失败只补投。",
+      "title": "沿普通回复回到原来源",
+      "text": "桌面直接显示原 Router 普通公开正文，不再经过结果专用正式稿、读稿领取和桌面投递。外部渠道沿普通回复发送与失败处理；送达单独记账，不延迟或回退执行完成。源码接线和定向验证通过，安装版真实端到端仍待用户验收。",
       "edge": 7
     },
     {
@@ -1238,7 +1403,7 @@
     {
       "node": "learning",
       "title": "自我迭代：Router 同步记录 + 单后台执行器",
-      "text": "一大组四小组、11 职责；一个专用后台执行器共用队列、增量来源与校验，Watchdog 只监督。不建工作台聊天、工单或新过程 UI，压缩和目标研学不在本轮。"
+      "text": "一大组四小组、11 职责；一个专用后台执行器共用队列、增量来源与校验，Watchdog 只监督。不建工作台聊天、任务或新过程 UI，压缩和目标研学不在本轮。"
     },
     {
       "node": "iteration-record",
@@ -1268,12 +1433,27 @@
     {
       "node": "iteration-ideas",
       "title": "C · 想法策展：建议保留依据和边界",
-      "text": "想法候选轻量保存在数据库，说明依据、可行性与不确定性；沿现有 Router 聊天/投递呈现，主动投递前读偏好，采纳后才走既有任务路径，不自行建目标或工单。"
+      "text": "想法候选轻量保存在数据库，说明依据、可行性与不确定性；沿现有 Router 聊天/投递呈现，主动投递前读偏好，采纳后才走既有任务路径，不自行建目标或任务。"
     },
     {
       "node": "iteration-standing",
       "title": "D · 行为约束：常驻约定与主动偏好",
       "text": "四份常驻档案延续身份与工作方式；主动投递偏好只在相关决策前读取。当前指令优先，临时要求不自动固化。所有写入经过服务层校验，已遗忘内容不能被后续整理恢复。"
+    },
+    {
+      "node": "cross-discovery",
+      "title": "已接线：知道各设备能做什么",
+      "text": "assistant_devices 读取出站保存目录；assistant_projects 按设备查询真实项目。入站授权单独表达，离线、未授权与不支持不说成没有项目。"
+    },
+    {
+      "node": "cross-execution",
+      "title": "已接线：远端本地执行，原对话跟进",
+      "text": "B 项目由 B 的模型、Harness 和工具执行，入口 A 仅关联执行引用；补充、提问、控制与结果沿同一来源链路传递，断线后查询原记录。"
+    },
+    {
+      "node": "cross-configuration",
+      "title": "已接线：助手管理连接和中继",
+      "text": "已有设备通过共享服务连接、重连和诊断。远端中继只申请已有节点优先级/启停修改，目标主人确认具体差异后执行。首次配对、秘密、新节点和部署仍走设备中心；待确认不冒充已应用。"
     }
   ],
   "docs": [
@@ -1316,11 +1496,15 @@
     {
       "label": "服务契约",
       "path": "docs/06-superagent/服务契约.md"
+    },
+    {
+      "label": "跨设备协作与连接管理",
+      "path": "docs/01-设备与远程连接/跨设备协作.md"
     }
   ],
-  "version": "2026-11-13-self-iteration-paths",
+  "version": "2026-11-13-cross-device-2",
   "context": {
-    "intro": "上下文按固定层、会话层与按需层装配。四份稳定档案加短 MEMORY 总纲、小量对象 INDEX 和每次启动的简短协作对齐；详细事实、对象页、复盘与技能按需。当前回合后续可在安全边界刷新纠正，源码已接线，真实付费模型效果未验，边界见记忆与技能；全量 token 预算仍待实施。",
+    "intro": "上下文按固定层、会话层与按需层装配。Router 使用四份稳定档案、短 MEMORY 总纲、小量对象 INDEX 和每次启动的简短协作对齐，详细事实、对象页与复盘按需；Worker 按需读取技能正文。当前回合后续可在安全边界刷新纠正，源码已接线，真实付费模型效果未验，边界见记忆与技能；全量 token 预算仍待实施。",
     "groups": [
       {
         "mode": "启动 / 固定",
@@ -1328,7 +1512,7 @@
         "rows": [
           [
             "固定系统层",
-            "官方 Agent preset 与角色工具；BenchGo《内置层》；Router 的协调、表达、来源与工具边界提示。"
+            "官方 Agent preset 经 Router 角色工具门收窄，保留专属产品管理、协调与已装配的上下文工具；文件、命令、网页、技能、插件、MCP 和官方 subagents 等环境执行能力交给 Worker。BenchGo《内置层》补充身份、分工、来源与授权边界。"
           ],
           [
             "四份自动注入",
@@ -1336,7 +1520,7 @@
           ],
           [
             "详细材料按需读取",
-            "TOOLS、本地按日详细事实、人物/群组对象页、Dreams 日复盘与技能正文按需读取。PROACTIVE_PREFERENCES 只在每次主动投递决策前读取。详细事实不再每条建 entries 文件。"
+            "TOOLS、本地按日详细事实、人物/群组对象页和 Dreams 日复盘按需读取；技能正文由 Worker 在执行中按需加载。PROACTIVE_PREFERENCES 只在每次主动投递决策前读取。详细事实不再每条建 entries 文件。"
           ],
           [
             "快照和历史",
@@ -1383,8 +1567,8 @@
             "assistant_session_search：复用官方索引搜索本助手主聊/手工旁聊的公开用户与助手正文；官方词/短语命中后再校验公开文本，返回会话 ID、事件序号与有界片段。assistant_history 按这些指针读原文或前后文。中文句内子串命中仍有官方索引限制。"
           ],
           [
-            "工单与业务证据",
-            "assistant_tickets 按状态、项目及归属读取列表/详情，得到要求、结果与问题指针；assistant_ledger_read 按证据 ID 分段补读业务原文。涉及已有任务的指代或进度，先定位旧单，不因旧历史自动再派工。"
+            "任务与业务证据",
+            "assistant_tasks 按状态、项目及归属读取列表/详情，得到要求、结果与问题指针；assistant_ledger_read 按证据 ID 分段补读业务原文。涉及已有任务的指代或进度，先定位原任务，不因旧历史自动再委派。"
           ],
           [
             "档案与产品信息",
@@ -1398,7 +1582,7 @@
         "rows": [
           [
             "Worker 任务包",
-            "自动注入当前 target、acceptance、原始 Mandate、要求版本、执行范围、工单/分派 ID、目录与请求时间；任务输入账提供本单已经应用的补充与答复，每步更新本单切片。执行器不注入 Router 的四份档案和全量记忆。任务包要求结束时用几句话写清做成了什么、产出在哪、还剩什么问题。"
+            "自动注入当前 target、acceptance、原始 Mandate、要求版本、执行范围、任务/分派 ID、目录与请求时间；任务输入账提供当前任务已经应用的补充与答复，每步更新当前任务切片。执行器不注入 Router 的四份档案和全量记忆。任务包要求结束时用几句话写清做成了什么、产出在哪、还剩什么问题。"
           ],
           [
             "来源参考",
@@ -1406,11 +1590,11 @@
           ],
           [
             "官方 subagents",
-            "Worker 自行使用官方 subagent 工具，BenchGo 只用提示词鼓励适当拆分；子会话上下文、模型、工具与结果回送均复用官方能力，不另开子工单。"
+            "Worker 自行使用官方 subagent 工具，BenchGo 只用提示词鼓励适当拆分；子会话上下文、模型、工具与结果回送均复用官方能力，不另开子任务。"
           ],
           [
             "渠道候选研判",
-            "按同一来源拼接开头与候选前后消息卡片、已有工单摘要、最近送达回复、准入规则及项目；原文不足时只读 read_assessment_source 分段补读，最多 8 次、每次 4000 字符。桌面 Router 派工不经过这轮候选模型复审。"
+            "按同一来源拼接开头与候选前后消息卡片、已有任务摘要、最近送达回复、准入规则及项目；原文不足时只读 read_assessment_source 分段补读，最多 8 次、每次 4000 字符。桌面 Router 委派不经过这轮候选模型复审。"
           ]
         ]
       },
@@ -1506,21 +1690,28 @@
       "w": 620,
       "h": 340,
       "label": "自我迭代 D · 行为约束（2）· 主动投递 / 常驻约定"
+    },
+    {
+      "x": 40,
+      "y": 1530,
+      "w": 1440,
+      "h": 245,
+      "label": "跨设备助手能力 · 已接线 · 入口对话与目标执行各守归属"
     }
   ],
   "canvas": {
     "width": 2860,
-    "height": 1480
+    "height": 1820
   },
   "iteration": {
     "intro": "一大组、四小组、11 项职责，复用原图布局。源码已接入单后台执行器、增量来源和领域写入；下列说明各职责的触发与读写。三个数据面分别是Markdown事实/档案、数据库派生/维护、官方Session与业务原文；真实付费模型效果未验证。",
-    "roots": "R = <基础层 config.dataDir>/assistant/；默认 ~/.benchgo/assistant/。Windows 默认对应 %USERPROFILE%\\.benchgo\\assistant\\；配置覆盖时随 dataDir 改变。源码目录是 E:/BenchGo/plugins/superagent/，与 R 分开。以下只列自我迭代相关存储；其他工单、渠道业务仍由各自服务维护。",
+    "roots": "R = <基础层 config.dataDir>/assistant/；默认 ~/.benchgo/assistant/。Windows 默认对应 %USERPROFILE%\\.benchgo\\assistant\\；配置覆盖时随 dataDir 改变。源码目录是 E:/BenchGo/plugins/superagent/，与 R 分开。以下只列自我迭代相关存储；其他任务、渠道业务仍由各自服务维护。",
     "currentTree": "R/  （源码支持的存储，文件按需生成）\n├─ 稳定档案、短 MEMORY、按日事实、对象视图、Dreams、主动偏好\n│    Markdown 事实与档案面，详细路径见下节\n├─ assistant.db    版本/journal、bank分类/词索引、增量队列/水位、技能与Ideas\n├─ ledger.db       业务原文与关联\n├─ config.json / state.json   配置与逻辑会话映射\n└─ workspace/      普通工作产物\n\n官方Session保存对话与执行原文，物理文件由官方运行时管理。",
     "currentNote": "源码接线和定向测试已完成，不意味着实际运行目录已被创建、清空或迁移。没有documents.db；不新增每条entries文件、bank四副本、向量库或自建技能文件副本。",
     "targetNote": "直接采用新结构，按需生成文件；保留稳定ID、来源、版本恢复、重启续接与遗忘保护，不设计旧数据迁移或兼容层。真实付费模型与安装版效果尚未验证。",
     "targetTree": "R/\n├─ AGENTS / SOUL / IDENTITY / USER.md     稳定档案，Router 自动装配\n├─ MEMORY.md                            精选短总纲，预算内常驻\n├─ TOOLS.md                             本地工具笔记，按需\n├─ PROACTIVE_PREFERENCES.md              每次主动投递前读取\n├─ memory/\n│  ├─ YYYY-MM-DD.md                      详细事实、稳定 ID、来源和版本\n│  ├─ people/INDEX.md                    人物目录，预算内装配\n│  ├─ people/<person-id>.md              人物对象视图，按需\n│  ├─ groups/INDEX.md                    群组目录，预算内装配\n│  └─ groups/<group-id>.md               群组对象视图，按需\n├─ dreams/\n│  ├─ YYYY-MM-DD.md                      当日行为复盘，按需\n│  └─ alignment/ALIGNMENT_SYNTHESIS.md    简短协作对齐，每次 Router 启动装配\n├─ assistant.db                         版本/journal、bank 分类/词索引、遗忘保护\n│                                       单执行器队列/水位、技能候选/采用/效果、Ideas\n├─ ledger.db                            业务原文\n├─ config.json / state.json              配置与会话映射\n└─ workspace/                           普通工作产物\n\nbank = world / experience / opinions / reflections 数据库分类视图；无四副本、无向量库。\n目标研学与压缩不在本轮。",
     "pipeline": "同步：用户原话 → Router 主动识别 → 记忆/档案服务校验 → 按日详细事实与版本回执\n\n后台：定时 / 静默 / 显式请求 → 同一增量来源与持久队列\n→ 唯一自我迭代执行器串行领取 → 按任务读取五份提示词之一\n→ 模型提出有来源的变更 → 对应领域服务校验与提交 → 成功后推进水位\n→ 更新总纲 / 对象视图 / Dreams / 技能 / Ideas → 后续使用与真实反馈\n\n读取：短常驻材料 + 当前会话 → 有界匹配/按需检索 → 事实 ID 与来源\n→ 官方 Session / ledger 原文回查；不整库灌入 Router。",
-    "writerBoundary": "提示词约束任务行为，代码约束真实写入：来源、身份、范围、版本、去重、预算和遗忘。后台身份由宿主绑定；Worker/子代理提供证据，不直接改长期记忆。更正保留替代关系；遗忘即时限制旧召回，清理受影响派生，不能由后续整理恢复。 单执行器只负责自我迭代，Watchdog 只监督；后台过程不建工作台聊天、工单或新过程 UI。",
+    "writerBoundary": "提示词约束任务行为，代码约束真实写入：来源、身份、范围、版本、去重、预算和遗忘。后台身份由宿主绑定；Worker/子代理提供证据，不直接改长期记忆。更正保留替代关系；遗忘即时限制旧召回，清理受影响派生，不能由后续整理恢复。 单执行器只负责自我迭代，Watchdog 只监督；后台过程不建工作台聊天、任务或新过程 UI。",
     "prompts": "plugins/superagent/prompts/\n├─ builtin-layer.md                     Router 宿主必装配，唯一内置职责真源\n└─ self-iteration/                      单执行器按任务读取\n   ├─ memory-upkeep.md                  定时 / 静默 / 显式共用\n   ├─ relationships.md                   对象视图\n   ├─ dreaming.md                        日复盘与协作对齐\n   ├─ skill-review.md                    真实效果评审\n   └─ idea-curation.md                   想法候选",
     "promptNote": "builtin-layer仍由宿主必装配，不复制Muse运行时system_prompt；五份说明已随模块发布，按任务读取，不是五个Agent，也不全量常驻Router。周期和额度由统一维护服务管理。",
     "groups": [
@@ -1607,5 +1798,4 @@
     "example": "用户说“以后回复请简短”：\n1. Router 同步识别明确的稳定偏好，以真实用户原话为来源保存。\n2. memory/当日.md 记录详细事实、稳定 ID 与来源版本；assistant.db 维护版本和分类索引。\n3. 整合时精选到短 MEMORY；USER 已承载同一事实时去重，不重复注入。\n4. 后续回合在安全边界取新版本；用户纠正即替代旧事实，遗忘限制旧召回。\n5. “为何此前回复太长”写 dreams/当日.md，简短改进写 ALIGNMENT_SYNTHESIS。\n\nmemory 日期文件记事实；dreams 日期文件记行为复盘。",
     "boundary": "唯一机制正文是记忆与技能；本图只维护目录与流向。源码实现和定向覆盖不等于真实付费模型产出质量或安装版效果已验。Muse仅参考2026-10-29导出包及用户机制说明。目标研学与压缩不在这11项内。"
   }
-}
-</script><script src="../_assets/architecture.js"></script><script src="../_assets/architecture-context.js"></script><script src="../_assets/architecture-iteration.js"></script></body></html>
+}</script><script src="../_assets/architecture.js"></script><script src="../_assets/architecture-context.js"></script><script src="../_assets/architecture-iteration.js"></script></body></html>

@@ -1,6 +1,6 @@
 import React, { useState, useSyncExternalStore } from 'react';
 import { Switch, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
-import { Button } from '../../shared/client/ui/index.jsx';
+import { Button, Disclosure } from '../../shared/client/ui/index.jsx';
 import { perfTrace } from '../../shared/client/perf-trace.mjs';
 import css from './diagnostics-settings.css';
 
@@ -43,7 +43,6 @@ export function DiagnosticsSettings({ trace = perfTrace, save = saveFile, copy =
     } catch (failure) { report('', `导出失败：下载与剪贴板均不可用（${failure?.message || '未知原因'}）。请重试。`); }
   };
   return <section className="cmd-diagnostics" aria-label="性能诊断">
-    <h2>性能诊断</h2>
     <p className="cmd-diagnostics-intro">遇到卡顿时开启记录，复现后导出给开发者。只记录耗时与来源，不记录对话内容。</p>
     <div className="cmd-diagnostics-row">
       <div className="cmd-diagnostics-copy"><h3>记录性能</h3><p>记录仅保存在内存，刷新窗口会清空；开关状态会保留。</p></div>
@@ -75,8 +74,15 @@ export function DiagnosticsSettings({ trace = perfTrace, save = saveFile, copy =
   </section>;
 }
 
+export function DiagnosticsItem({ trace = perfTrace, ...props }) {
+  const enabled = useSyncExternalStore(trace.subscribe, () => trace.getSnapshot().enabled);
+  return <Disclosure className="cmd-diagnostics-disclosure" title={<>性能诊断{enabled && <span className="cmd-diagnostics-recording">正在记录</span>}</>}>
+    <DiagnosticsSettings trace={trace} {...props} />
+  </Disclosure>;
+}
+
 export function mountDiagnosticsSettings(ctx) {
   const style = document.createElement('style'); style.textContent = css; document.head.append(style);
   ctx.effect(() => () => style.remove());
-  ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'benchgo-diagnostics', order: 36, label: () => '性能诊断' }, DiagnosticsSettings));
+  ctx.slots.inject('settings.general.item', () => ctx.slots.register({ name: 'settings.general.item', id: 'benchgo-diagnostics', order: 110 }, DiagnosticsItem));
 }

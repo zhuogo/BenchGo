@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { publicExecutionActivity } from './worker-progress.mjs';
 
-// Official Session projections own replay. This text-free view never authorizes,
-// executes, schedules, or changes the Ticket/Assignment/Run lifecycle.
+// Official Session projections own replay. This bounded view never authorizes,
+// executes, schedules, or changes the Task/Assignment/Run lifecycle.
 const executionProjectionKey = 'benchgoExecutionFacts';
 const terminal = new Set(['completed', 'failed', 'cancelled']);
 const iso = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : null;
@@ -10,7 +11,7 @@ const latest = (...values) => values.filter(Boolean).sort().at(-1) || null;
 const stopStatus = reason => reason === 'completed' ? 'completed' : reason === 'aborted' ? 'cancelled'
   : ['error', 'max-tokens', 'refusal'].includes(reason) ? 'failed' : 'unknown';
 const activities = { search: '正在搜索网页', web: '正在读取网页', read: '正在读取文件', write: '正在修改文件',
-  command: '正在执行命令', child: '正在协调子 Worker', question: '正在等待问题答复', tool: '正在使用工具' };
+  command: '正在执行命令', child: '正在协调并行任务', question: '正在等待问题答复', tool: '正在使用工具' };
 const category = name => name === 'web_search' ? 'search' : name === 'web_fetch' ? 'web'
   : ['read', 'read_file', 'glob', 'grep', 'list_directory'].includes(name) ? 'read'
   : ['write', 'write_file', 'edit', 'apply_patch'].includes(name) ? 'write'
@@ -18,10 +19,11 @@ const category = name => name === 'web_search' ? 'search' : name === 'web_fetch'
   : ['subagent', 'spawn_agent', 'send_message', 'followup_task', 'wait_agent', 'list_agents'].includes(name) ? 'child'
   : name === 'ask_user_question' ? 'question' : 'tool';
 const eventSchema = z.object({ seq: z.number().int(), kind: z.string(), time: z.string().nullable(), category: z.string().optional() });
-const activitySchema = z.object({ seq: z.number().int(), time: z.string().nullable(), status: z.string(), activity: z.string() });
+const activitySourceSchema = z.enum(['report', 'runtime']);
+const activitySchema = z.object({ seq: z.number().int(), time: z.string().nullable(), status: z.string(), activity: z.string(), activitySource: activitySourceSchema });
 const requestSchema = z.object({ state: z.enum(['unknown', 'inflight', 'settled']), startedAt: z.string().nullable(), settledAt: z.string().nullable(), deadline: z.null() });
 const stateSchema = z.object({ sessionId: z.string(), parentSessionId: z.string().nullable(), inheritedEventCount: z.number().int(),
-  cursor: z.number().int(), status: z.string(), activity: z.string(), updatedAt: z.string().nullable(), turn: z.number().int().nullable(), step: z.number().int().nullable(),
+  cursor: z.number().int(), status: z.string(), activity: z.string(), activitySource: activitySourceSchema, updatedAt: z.string().nullable(), turn: z.number().int().nullable(), step: z.number().int().nullable(),
   request: requestSchema, tools: z.object({ calls: z.number().int(), results: z.number().int(), errors: z.number().int(),
     incomplete: z.boolean(), active: z.array(z.object({ callId: z.string(), category: z.string(), sourceSeq: z.number().int() })).max(128) }),
   children: z.array(z.object({ sessionId: z.string(), catalogSeq: z.number().int(), createdAt: z.string().nullable(),
@@ -30,12 +32,12 @@ const stateSchema = z.object({ sessionId: z.string(), parentSessionId: z.string(
   activityHistory: z.array(activitySchema).max(64), activityHistoryTruncated: z.boolean() });
 const initialState = (header, inheritedEventCount) => ({ sessionId: header.id,
   parentSessionId: header.origin === 'subagent' ? header.parentSession || null : null, inheritedEventCount,
-  cursor: -1, status: 'unknown', activity: '', updatedAt: null, turn: null, step: null,
+  cursor: -1, status: 'unknown', activity: '', activitySource: 'runtime', updatedAt: null, turn: null, step: null,
   request: { state: 'unknown', startedAt: null, settledAt: null, deadline: null },
   tools: { calls: 0, results: 0, errors: 0, active: [], incomplete: false }, children: [], childrenTruncated: false, milestones: [], lastEvent: null,
   activityHistory: [], activityHistoryTruncated: false });
 
-/** Pure, bounded fold. Parameters, outputs, failure prose and reasoning never enter it. */
+/** Pure, bounded fold. Only marked public status text is retained; tool bodies and reasoning stay private. */
 function applyExecutionEvent(state, event) {
   if (event.seq < state.inheritedEventCount) return state;
   if (!['turn/start', 'turn/end', 'step/start', 'step/end', 'tool/call', 'tool/result', 'assistant/message',
@@ -62,15 +64,18 @@ function applyExecutionEvent(state, event) {
     if (children.length >= 512) next.childrenTruncated = true;
     else next.children = [...children, { sessionId: data.childId, catalogSeq: event.seq, createdAt: iso(data.childCreatedAt) || time }];
   } else if (event.type === 'turn/start') {
-    next.status = 'running'; next.activity = '正在处理任务'; next.turn = Number.isSafeInteger(data.turn) ? data.turn : null;
+    next.status = 'running'; next.activity = '正在处理任务'; next.activitySource = 'runtime'; next.turn = Number.isSafeInteger(data.turn) ? data.turn : null;
   } else if (event.type === 'step/start') {
-    next.status = 'running'; next.activity = '正在处理任务'; next.step = Number.isSafeInteger(data.step) ? data.step : null;
+    next.status = 'running'; if (state.activitySource !== 'report') next.activity = '正在处理任务'; next.step = Number.isSafeInteger(data.step) ? data.step : null;
     // Preparation is not proof of an in-flight model request.
     next.request = { state: 'unknown', startedAt: null, settledAt: null, deadline: null };
   } else if (['assistant/message', 'assistant/attempt'].includes(event.type)) {
     next.request = { ...state.request, state: 'settled', settledAt: time };
+    const report = publicExecutionActivity(event);
+    if (report) { next.activity = report; next.activitySource = 'report'; }
   } else if (event.type === 'tool/call') {
-    toolCategory = category(data.name); next.status = 'running'; next.activity = activities[toolCategory];
+    toolCategory = category(data.name); next.status = 'running';
+    if (state.activitySource !== 'report') next.activity = activities[toolCategory];
     const active = state.tools.active;
     next.tools = { ...state.tools, calls: state.tools.calls + 1, incomplete: state.tools.incomplete || active.length >= 128,
       active: active.length < 128 && typeof data.callId === 'string' ? [...active, { callId: data.callId, category: toolCategory, sourceSeq: event.seq }] : active };
@@ -79,10 +84,12 @@ function applyExecutionEvent(state, event) {
     toolCategory = state.tools.active.find(call => call.callId === callId)?.category || 'tool';
     next.tools = { ...state.tools, results: state.tools.results + 1, errors: state.tools.errors + (data.message?.isError ? 1 : 0),
       active: state.tools.active.filter(call => call.callId !== callId) };
-    next.activity = data.message?.isError ? '工具调用失败，正在处理' : '正在处理任务';
+    if (data.message?.isError) { next.activity = '工具调用失败，正在处理'; next.activitySource = 'runtime'; }
+    else if (state.activitySource !== 'report') next.activity = '正在处理任务';
   } else if (event.type === 'turn/end') {
     const reason = data.reason?.kind;
     next.status = reason === 'blocked' ? 'waiting' : stopStatus(reason);
+    next.activitySource = 'runtime';
     next.activity = reason === 'completed' ? '本轮执行已结束' : reason === 'blocked' ? '正在等待处理'
       : next.status === 'cancelled' ? '执行已停止' : next.status === 'failed' ? '执行遇到错误' : '执行状态待核实';
     next.request = { ...state.request, state: 'settled', settledAt: time };
@@ -96,12 +103,12 @@ function applyExecutionEvent(state, event) {
   if ((next.status !== state.status || next.activity !== state.activity)
     && (event.type !== 'step/start' && (event.type !== 'tool/result' || data.message?.isError))
     && (previous?.status !== next.status || previous?.activity !== next.activity)) {
-    next.activityHistory = [...history, { seq: event.seq, time, status: next.status, activity: next.activity }].slice(-64);
+    next.activityHistory = [...history, { seq: event.seq, time, status: next.status, activity: next.activity, activitySource: next.activitySource }].slice(-64);
     next.activityHistoryTruncated = state.activityHistoryTruncated || history.length >= 64;
   }
   return next;
 }
-const executionProjectionDefinition = { key: executionProjectionKey, stateVersion: 2, stateSchema,
+const executionProjectionDefinition = { key: executionProjectionKey, stateVersion: 3, stateSchema,
   init: initialState, apply: applyExecutionEvent, wire: { viewSchema: stateSchema, view: state => state, summary: false } };
 
 export function createTaskExecutionProgress({ ctx, database, now = Date.now, bootId = randomUUID() }) {
@@ -195,15 +202,15 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
   function batch() {
     const agents = new Map((ctx.agents?.list?.() || []).map(agent => [agent.id, agent]));
     const records = new Map(database.executionProjections().map(row => [row.sessionId, row]));
-    return (ticket, assignments = ticket.assignments || []) => {
-      const revision = ticket.instructionRevision ?? 1, assignment = assignments.filter(row => row.ticketId === ticket.id).at(-1);
+    return (task, assignments = task.assignments || []) => {
+      const revision = task.instructionRevision ?? 1, assignment = assignments.filter(row => row.taskId === task.id).at(-1);
       const run = assignment && database.runs(assignment.id).filter(row => row.fence === assignment.fence).at(-1);
       if (!run) return null;
       const worker = records.get(run.sessionId), live = agents.get(run.sessionId);
       const current = worker?.runId === run.id && worker?.fence === assignment.fence;
       const historyOf = record => record?.runId === run.id ? (record.state?.activityHistory || [])
         .filter(row => row.time && row.time >= run.createdAt) : [];
-      const completed = ticket.status === 'completed' || run.state === 'completed';
+      const completed = task.status === 'completed' || run.state === 'completed';
       const phase = completed ? 'finished' : run.state === 'prepared' ? 'preparing'
         : terminal.has(run.state) ? 'finished' : run.state === 'waiting' ? 'waiting' : run.state === 'uncertain' ? 'unknown' : 'executing';
       let status = completed ? 'completed' : terminal.has(run.state) ? run.state : live?.status === 'running' ? 'running'
@@ -220,8 +227,9 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
           const childStatus = ended ? stopStatus(ended) : childLive?.status === 'running' ? 'running'
             : notice ? stopStatus(notice.reason) : childLive?.status === 'idle' ? 'waiting' : 'unknown';
           return { id: child.sessionId, label: '子 Worker ' + (index + 1), status: childStatus,
-            activity: childStatus === 'completed' ? '已返回父 Worker' : childStatus === 'failed' ? '子 Worker 执行失败'
-              : childStatus === 'cancelled' ? '子 Worker 已停止' : childStatus === 'unknown' ? '子任务状态待核实' : child.state?.activity || '正在处理子任务',
+            activity: childStatus === 'completed' ? '并行任务已完成' : childStatus === 'failed' ? '并行任务执行失败'
+              : childStatus === 'cancelled' ? '并行任务已停止' : childStatus === 'unknown' ? '子任务状态待核实' : child.state?.activity || '正在处理子任务',
+            activitySource: ['running', 'waiting'].includes(childStatus) && child.state?.activitySource === 'report' ? 'report' : 'runtime',
             updatedAt: latest(child.state?.updatedAt, child.live?.observedAt), activationId: child.live?.activationId || null,
             history: historyOf(child), historyTruncated: child.state?.activityHistoryTruncated === true,
             historical: child.fence !== assignment.fence, sourceSeq: child.cursor };
@@ -232,10 +240,11 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
       const text = completed ? '执行已结束' : phase === 'preparing' ? '正在准备执行环境'
         : run.state === 'completed' ? '执行已结束' : run.state === 'failed' ? '执行失败' : run.state === 'cancelled' ? '执行已停止'
           : status === 'unknown' ? '执行状态待核实' : current && worker.state?.activity || '执行动态暂不可用';
-      return { ticketId: ticket.id, assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId, fence: assignment.fence,
+      return { taskId: task.id, assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId, fence: assignment.fence,
         instructionRevision: revision, appliedInstructionRevision: run.instructionRevision ?? assignment.instructionRevision ?? 1,
         phase, observed: !!worker, updatedAt: latest(iso(run.updatedAt), worker?.state?.updatedAt, ...children.map(row => row.updatedAt)),
         worker: { id: run.sessionId, label: '主 Worker', status, activity: text, updatedAt: latest(iso(run.updatedAt), worker?.state?.updatedAt),
+          activitySource: current && text === worker.state?.activity && worker.state?.activitySource === 'report' ? 'report' : 'runtime',
           history: current ? historyOf(worker) : [], historyTruncated: current && worker.state?.activityHistoryTruncated === true },
         children, childCounts, milestones: worker?.state?.milestones || [],
         watermark: { projectionSeq: database.executionFactCursor(), sessionSeq: current ? worker.cursor : null },

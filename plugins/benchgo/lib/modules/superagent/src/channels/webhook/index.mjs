@@ -7,7 +7,7 @@ export const channelDefinition = {
   id: 'webhook', label: 'Webhook', defaults: { accountId: 'benchgo-webhook', signingSecretRef: '' },
   fields: [{ key: 'accountId', label: '接入名称', type: 'text', required: true }, { key: 'signingSecretRef', label: '签名密钥', type: 'secretRef', required: true }],
   capabilities: { externalActions: [], text: true, signedEvents: true, pullResults: true, attachments: false },
-  help: 'POST /api/commander/assistant/channels/webhook。使用签名密钥及时间戳认证；密钥绑定当前机器连接身份。结果保存在工单中，通过已认证 API 查询。',
+  help: 'POST /api/commander/assistant/channels/webhook。使用签名密钥及时间戳认证；密钥绑定当前机器连接身份。结果保存在任务中，通过已认证 API 查询。',
 };
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 export function webhookConfig(input = {}) {

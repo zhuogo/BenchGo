@@ -1,3 +1,4 @@
+import { groupReplyImages } from '../../shared/client/image-gallery-model.mjs';
 import { createModelCatalogLoader } from '../../benchgo/client/model-catalog.mjs';
 import { retainAssistantSession, assistantBackgroundSessions } from '../client/session-retain.mjs';
 import { executionSessionNavigation } from '../client/execution-session-navigation.mjs';
@@ -28,7 +29,7 @@ function harness(options = {}) {
   const module = { exports: {} };
   const assistantConfigSync = createConfigSync();
   const assistantModelCatalog = createModelCatalogLoader(async () => { calls.push({ action: 'catalog' }); return typeof options.response === 'function' ? options.response(calls.at(-1)) : options.response || { providers: [], models: [] }; });
-  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, localStorage: options.storage, queueMicrotask, setTimeout: options.setTimeout || (fn => fn()), clearTimeout: () => {}, setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { const call = JSON.parse(options.body); calls.push(call); return { benchgoCall: call }; }, require: id => id.endsWith('model-catalog.mjs') ? { assistantModelCatalog } : id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('execution-session-navigation.mjs') ? { executionSessionNavigation } : id.endsWith('session-retain.mjs') ? { retainAssistantSession, assistantBackgroundSessions } : id === 'react' ? react : id.endsWith('sidebar-lists.mjs') ? sidebarLists : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('structural-share.mjs') ? { structuralShare } : id.endsWith('perf-trace.mjs') ? { perfTrace: { time: () => () => {} } } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async response => typeof options.response === 'function' ? options.response(response.benchgoCall) : options.response || ({ providers: [], models: [] }) } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
+  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, localStorage: options.storage, queueMicrotask, setTimeout: options.setTimeout || (fn => fn()), clearTimeout: () => {}, setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { const call = JSON.parse(options.body); calls.push(call); return { benchgoCall: call }; }, require: id => id.endsWith('model-catalog.mjs') ? { assistantModelCatalog } : id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('execution-session-navigation.mjs') ? { executionSessionNavigation } : id.endsWith('session-retain.mjs') ? { retainAssistantSession, assistantBackgroundSessions } : id === 'react' ? react : id.endsWith('sidebar-lists.mjs') ? sidebarLists : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('structural-share.mjs') ? { structuralShare } : id.endsWith('perf-trace.mjs') ? { perfTrace: { time: () => () => {} } } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async response => typeof options.response === 'function' ? options.response(response.benchgoCall) : options.response || ({ providers: [], models: [] }) } : id.endsWith('image-gallery-model.mjs') ? { groupReplyImages } : id.endsWith('image-gallery.jsx') ? { ImageGallery: 'ImageGallery' } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
   return { listeners, documentListeners, intervals, exports: module.exports, render(name, props) { cursor = 0; refCursor = 0; effects.length = 0; return module.exports[name](props); }, calls, effects };
 }
 const walk = node => node && typeof node === 'object' ? [node, ...node.children.flatMap(walk)] : [];
@@ -391,8 +392,10 @@ test('catalog fetch is shared across model fields', async () => {
 });
 test('image previews reject executable URL schemes and expose download', () => {
   const h = harness(); const nodes = walk(h.render('Images', { images: [{ url: 'javascript:alert(1)' }, { url: '/api/assistant/image/1', name: 'picture.png' }] }));
-  assert.equal(nodes.filter(node => node.type === 'img').length, 1);
-  assert.equal(nodes.find(node => node.props.download).props.download, 'picture.png');
+  const galleries = nodes.filter(node => node.type === 'ImageGallery');
+  assert.equal(galleries.length, 1);
+  assert.equal(galleries[0].props.images[0].name, 'picture.png');
+  assert.equal(galleries[0].props.images[0].url, '/api/assistant/image/1');
 });
 test('identity saves only changed card fields and never overwrites media or USER.md', async () => {
   const config = { revision: 1, name: 'A', cardHtml: '<b>A</b>', models: [{ providerId: 'cloud', modelId: 'Opaque:09' }], image: { modelId: 'Exact Image:01' }, video: { modelId: 'Exact Video:03' }, asr: { modelId: 'Exact ASR:07' }, tts: { modelId: 'Exact TTS:09' } };
@@ -419,45 +422,45 @@ test('resource navigation includes vault and system files last without settings 
 const visiblePage = nodes => nodes.find(node => node.type === 'div' && node.props.hidden === false && node.children.some(child => child?.props?.onDirtyChange))
   ?.children.find(child => child?.props?.onDirtyChange);
 
-test('the goals page is a checklist without a goal creation or ticket entry', () => {
+test('the goals page is a checklist without a goal creation or task entry', () => {
   const h = harness(), props = { initialSection: 'goals', snapshot: { config: { models: [] } }, ctx: {} };
   const nodes = walk(h.render('Studio', props));
   assert.equal(nodes.find(node => node.props['data-section']).props['data-section'], 'goals');
   const goals = visiblePage(nodes);
   assert.ok(goals, 'the goals section renders the checklist');
   assert.equal(goals.props.initialCreating, undefined);
-  assert.equal(goals.props.onViewTickets, undefined, 'a checklist goal has no bound tickets to open');
+  assert.equal(goals.props.onViewTasks, undefined, 'a checklist goal has no bound tasks to open');
   assert.equal(nodes.some(node => node.props.onCreateGoal), false);
 });
 
-test('the goals resource link opens its workspace page and tasks retain only tickets and approvals', () => {
+test('the goals resource link opens its workspace page and tasks retain only tasks and approvals', () => {
   const h = harness(), props = { initialSection: 'tasks', snapshot: { config: { models: [] } }, ctx: {} };
   const taskNodes = walk(h.render('Studio', props));
   assert.equal(taskNodes.some(node => node.props.onOpenGoals), false);
-  assert.deepEqual(Array.from(taskNodes.find(node => node.type === h.exports.ResourceTabs).props.tabs, row => row[0]), ['tickets', 'approvals']);
+  assert.deepEqual(Array.from(taskNodes.find(node => node.type === h.exports.ResourceTabs).props.tabs, row => row[0]), ['tasks', 'approvals']);
   const chat = harness(), requested = { ...props, requestedTab: 'goals' };
   chat.render('Studio', requested);
   chat.effects.find(item => item.deps?.[0] === 'goals').effect();
   const goalNodes = walk(chat.render('Studio', requested));
   assert.equal(goalNodes.find(node => node.props['data-section']).props['data-section'], 'goals');
   const goals = visiblePage(goalNodes);
-  assert.equal(goals.props.initialCreating, undefined); assert.equal(goals.props.onViewTickets, undefined);
+  assert.equal(goals.props.initialCreating, undefined); assert.equal(goals.props.onViewTasks, undefined);
 });
-test('linked task navigation carries its ticket through the page and existing Studio detail entry', () => {
+test('linked task navigation carries its task through the page and existing Studio detail entry', () => {
   const snapshot = { config: { models: [] }, state: { threads: [] } };
   const page = harness({ state: [snapshot, '', 'chat', 'main', { sessionId: 'chat', messages: [] }] });
   const ctx = { layout: { selectPanel() {} } };
   let nodes = walk(page.render('AssistantPage', { ctx }));
   for (const effect of page.effects.filter(item => item.deps?.length === 0)) effect.effect();
-  nodes.find(node => node.props.sessionId === 'chat' && node.props.onOpenResources).props.onOpenResources('tasks', { ticketId: 'linked' });
+  nodes.find(node => node.props.sessionId === 'chat' && node.props.onOpenResources).props.onOpenResources('tasks', { taskId: 'linked' });
   const studio = walk(page.render('AssistantPage', { ctx })).find(node => node.type === page.exports.Studio);
   assert.equal(studio.props.requestedTab, 'tasks');
-  assert.equal(studio.props.requestedTicket.ticketId, 'linked');
+  assert.equal(studio.props.requestedTask.taskId, 'linked');
   const view = harness();
   view.render('Studio', studio.props);
-  view.effects.find(item => item.deps?.[0] === studio.props.requestedTicket).effect();
-  const tickets = walk(view.render('Studio', studio.props)).find(node => node.props.requestedTicket && node.props.onDetailChange);
-  assert.equal(tickets.props.requestedTicket.ticketId, 'linked');
+  view.effects.find(item => item.deps?.[0] === studio.props.requestedTask).effect();
+  const tasks = walk(view.render('Studio', studio.props)).find(node => node.props.requestedTask && node.props.onDetailChange);
+  assert.equal(tasks.props.requestedTask.taskId, 'linked');
 });
 
 test('identity body is edited only through documents; model priority remains exact', async () => {

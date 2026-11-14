@@ -13,23 +13,23 @@ export function scheduleLifecyclePublication(event) {
     || typeof schedule.id !== 'string' || !schedule.id || typeof schedule.title !== 'string' || !schedule.title.trim()
     || schedule.title.length > 500 || typeof schedule.sourceSessionId !== 'string' || !schedule.sourceSessionId
     || !validTime(schedule.at) || (schedule.phase !== 'created' && !validTime(schedule.occurrenceAt))
-    || (['completed', 'failed'].includes(schedule.phase) && (typeof schedule.ticketId !== 'string' || !schedule.ticketId))) return null;
+    || (['completed', 'failed'].includes(schedule.phase) && (typeof schedule.taskId !== 'string' || !schedule.taskId))) return null;
   const identity = {};
   for (const key of ['id', 'eventId', 'taskId', 'createdAt', 'seq', 'readAt']) {
     if (typeof event[key] === 'string' || typeof event[key] === 'number' || event[key] === null) identity[key] = event[key];
   }
   const fact = { id: schedule.id, title: schedule.title, phase: schedule.phase, sourceSessionId: schedule.sourceSessionId, at: schedule.at,
-    ...(schedule.occurrenceAt ? { occurrenceAt: schedule.occurrenceAt } : {}), ...(schedule.ticketId ? { ticketId: schedule.ticketId } : {}) };
+    ...(schedule.occurrenceAt ? { occurrenceAt: schedule.occurrenceAt } : {}), ...(schedule.taskId ? { taskId: schedule.taskId } : {}) };
   return { ...identity, type: 'schedule.lifecycle', origin: 'system', threadId: 'main', threadRefs: ['main'],
     title: schedule.title, text: `${labels[schedule.phase]}：${schedule.title}`, schedule: fact,
-    ...(schedule.ticketId ? { ticketId: schedule.ticketId } : {}) };
+    ...(schedule.taskId ? { taskId: schedule.taskId } : {}) };
 }
 
 /** Reads official facts and projects them into the existing durable notification ledger. */
 export function createScheduleLifecycle({ ctx, store, database }) {
   let syncing;
   const publish = schedule => {
-    const key = `schedule-lifecycle:${digest([schedule.sourceSessionId, schedule.id, schedule.phase, schedule.occurrenceAt || '', schedule.ticketId || ''])}`;
+    const key = `schedule-lifecycle:${digest([schedule.sourceSessionId, schedule.id, schedule.phase, schedule.occurrenceAt || '', schedule.taskId || ''])}`;
     return database.notify({ id: schedule.id, threadId: 'main' }, 'schedule.lifecycle', { origin: 'system', schedule }, key);
   };
   const title = entry => String(entry.title?.trim() || entry.id).slice(0, 500);
@@ -43,20 +43,20 @@ export function createScheduleLifecycle({ ctx, store, database }) {
     return isScheduledTrigger(trigger) && trigger.source.sessionId === sessionId
       && trigger.source.scheduleId === scheduleId && trigger.source.occurrenceAt === occurrenceAt;
   };
-  const projectTicket = (ticket, owned) => {
-    const source = ticket?.mandate?.source;
-    if (ticket?.mandate?.admission !== 'desktop-schedule' || source?.channel !== 'desktop'
+  const projectTask = (task, owned) => {
+    const source = task?.mandate?.source;
+    if (task?.mandate?.admission !== 'desktop-schedule' || source?.channel !== 'desktop'
       || source.origin !== 'harness-schedule' || !owned.has(source.sessionId)
       || !recordedOccurrence(source.sessionId, source.scheduleId, source.occurrenceAt)) return;
-    const fact = { id: source.scheduleId, title: title({ id: source.scheduleId, title: ticket.title }),
+    const fact = { id: source.scheduleId, title: title({ id: source.scheduleId, title: task.title }),
       sourceSessionId: source.sessionId, occurrenceAt: source.occurrenceAt };
     publish({ ...fact, phase: 'triggered', at: source.occurrenceAt });
-    if (ticket.status === 'completed' && validTime(ticket.updatedAt)) {
-      return publish({ ...fact, phase: ticket.status, at: ticket.updatedAt, ticketId: ticket.id });
+    if (task.status === 'completed' && validTime(task.updatedAt)) {
+      return publish({ ...fact, phase: task.status, at: task.updatedAt, taskId: task.id });
     }
-    const result = store.orchestration.results(ticket.id).findLast(row => row.version === ticket.resultVersion && row.instructionRevision === ticket.instructionRevision);
-    if (ticket.status === 'waiting' && result?.outcome === 'failed' && validTime(result.committedAt)) {
-      return publish({ ...fact, phase: 'failed', at: result.committedAt, ticketId: ticket.id });
+    const result = store.orchestration.results(task.id).findLast(row => row.version === task.resultVersion && row.instructionRevision === task.instructionRevision);
+    if (task.status === 'waiting' && result?.outcome === 'failed' && validTime(result.committedAt)) {
+      return publish({ ...fact, phase: 'failed', at: result.committedAt, taskId: task.id });
     }
   };
   return {
@@ -68,8 +68,8 @@ export function createScheduleLifecycle({ ctx, store, database }) {
       return publish({ id: entry.id, title: title(entry), sourceSessionId: entry.sessionId, phase: 'triggered',
         at: occurrence.occurrence_at, occurrenceAt: occurrence.occurrence_at });
     },
-    async ticket(ticket) {
-      return projectTicket(store.orchestration.getTicket(ticket?.id), await ownedSessions());
+    async task(task) {
+      return projectTask(store.orchestration.getTask(task?.id), await ownedSessions());
     },
     sync() {
       return syncing ||= (async () => {
@@ -91,9 +91,9 @@ export function createScheduleLifecycle({ ctx, store, database }) {
         // Rebuild admitted occurrence and terminal cards even after the Host
         // schedule was removed or no new notification delivery is pending.
         for (let offset = 0;; offset += 1000) {
-          const tickets = store.orchestration.listTickets({ ownerSessionIds: [...owned], offset, limit: 1000 });
-          for (const ticket of tickets) projectTicket(ticket, owned);
-          if (tickets.length < 1000) break;
+          const tasks = store.orchestration.listTasks({ ownerSessionIds: [...owned], offset, limit: 1000 });
+          for (const task of tasks) projectTask(task, owned);
+          if (tasks.length < 1000) break;
         }
       })().finally(() => { syncing = undefined; });
     },

@@ -1,5 +1,5 @@
-import { ticketExecutionBlocked, ticketStopped } from './ticket-lifecycle.mjs';
-import { isRouterTicketAck } from './ticket-ack.mjs';
+import { taskExecutionBlocked, taskStopped } from './task-lifecycle.mjs';
+import { isRouterTaskAck } from './task-ack.mjs';
 
 const systemStates = new Set(['delivery_wait', 'continuation_wait', 'action_verified']);
 export function systemStateDelivery({ state = 'continuation_wait', code = 'EXECUTION_UNAVAILABLE', stage = 'execution' } = {}) {
@@ -27,48 +27,41 @@ export function validateDelivery(value) {
   }
   return { action: value.action, text: value.text, ...(value.options?.length ? { options: value.options } : {}), ...provenance };
 }
-export function resultDelivery({ result }) {
-  const body = result.summary;
-  if (typeof body !== 'string' || !body.trim()) throw new Error('Result requires its original body');
-  return { action: 'deliver', origin: 'worker', text: body };
-}
-export function resultOutbox({ ticket, result, delivery }) {
-  const envelope = { type: 'ticket.result', source: ticket.mandate.source, ticketId: ticket.id, title: ticket.title,
-    instructionRevision: ticket.instructionRevision, resultVersion: ticket.resultVersion + 1, evidenceRefs: result.evidenceRefs };
-  // Synchronous Router actions already answer in their original tool turn.
-  // Their audit row is not another Worker completion awaiting expression.
-  if (delivery?.origin === 'system' && delivery.systemState?.state === 'action_verified')
-    return { ...envelope, replyState: 'suppressed', suppressionReason: 'router-action-already-replied' };
-  return { ...envelope, outcome: result.outcome || 'completed', replyState: 'pending' };
+/** Synchronous Router actions already speak in their original tool turn. */
+export function resultOutbox({ task, result, delivery }) {
+  if (delivery?.origin !== 'system' || delivery.systemState?.state !== 'action_verified') throw new Error('Only Router action audit uses a result outbox');
+  return { type: 'task.result', source: task.mandate.source, taskId: task.id, title: task.title,
+    instructionRevision: task.instructionRevision, resultVersion: task.resultVersion + 1, evidenceRefs: result.evidenceRefs,
+    replyState: 'suppressed', suppressionReason: 'router-action-already-replied' };
 }
 
 export function deliverySuppression(database, row) {
   const payload = row.payload;
-  if (payload.type === 'ticket.accepted') {
-    if (!isRouterTicketAck(payload)) return 'invalid-ack';
-    const ticket = database.getTicket(row.ticketId);
-    if (!ticket || ticketExecutionBlocked(ticket) || ticket.resultVersion > 0) return 'ack-superseded';
-    if (payload.ticketId !== ticket.id || JSON.stringify(payload.source) !== JSON.stringify(ticket.mandate.source)) return 'source-mismatch';
+  if (payload.type === 'task.accepted') {
+    if (!isRouterTaskAck(payload)) return 'invalid-ack';
+    const task = database.getTask(row.taskId);
+    if (!task || taskExecutionBlocked(task) || task.resultVersion > 0) return 'ack-superseded';
+    if (payload.taskId !== task.id || JSON.stringify(payload.source) !== JSON.stringify(task.mandate.source)) return 'source-mismatch';
     return null;
   }
-  if (!['ticket.result', 'ticket.attention'].includes(payload.type)) return null;
-  const ticket = database.getTicket(row.ticketId);
-  if (!ticket || ticketStopped(ticket)) return 'ticket-inactive';
-  if (payload.ticketId !== undefined && payload.ticketId !== ticket.id) return 'ticket-mismatch';
-  if (payload.type === 'ticket.attention' && ticket.status === 'completed') return 'ticket-inactive';
-  if (payload.instructionRevision !== undefined && payload.instructionRevision !== ticket.instructionRevision) return 'superseded-instruction';
-  if (payload.resultVersion !== undefined && payload.resultVersion !== ticket.resultVersion) return 'superseded-result';
-  if (JSON.stringify(payload.source) !== JSON.stringify(ticket.mandate.source)) return 'source-mismatch';
+  if (!['task.result', 'task.attention'].includes(payload.type)) return null;
+  const task = database.getTask(row.taskId);
+  if (!task || taskStopped(task)) return 'task-inactive';
+  if (payload.taskId !== undefined && payload.taskId !== task.id) return 'task-mismatch';
+  if (payload.type === 'task.attention' && task.status === 'completed') return 'task-inactive';
+  if (payload.instructionRevision !== undefined && payload.instructionRevision !== task.instructionRevision) return 'superseded-instruction';
+  if (payload.resultVersion !== undefined && payload.resultVersion !== task.resultVersion) return 'superseded-result';
+  if (JSON.stringify(payload.source) !== JSON.stringify(task.mandate.source)) return 'source-mismatch';
   if (payload.replyState === 'suppressed' && payload.suppressionReason === 'router-action-already-replied') return payload.suppressionReason;
   const state = payload.stateSignal || (payload.publication?.origin === 'system' ? payload.publication.systemState : null);
   if (state?.state === 'continuation_wait') {
-    const current = database.assignments(ticket.id).some(row => ['uncertain', 'failed'].includes(row.state)
+    const current = database.assignments(task.id).some(row => ['uncertain', 'failed'].includes(row.state)
       && row.lastFailure?.code === state.code && row.lastFailure?.stage === state.stage
       && (!payload.assignmentId || row.id === payload.assignmentId && row.fence === payload.fence));
     if (!current) return 'state-superseded';
   }
-  if (payload.type === 'ticket.attention') {
-    const attention = database.attentions(ticket.id).find(entry => entry.id === payload.attentionId);
+  if (payload.type === 'task.attention') {
+    const attention = database.attentions(task.id).find(entry => entry.id === payload.attentionId);
     if (attention?.answerTriggerId) return 'attention-resolved';
   }
   return null;

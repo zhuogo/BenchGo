@@ -1,4 +1,5 @@
 ﻿import { DatabaseSync } from 'node:sqlite';
+import { migrateTaskStorage } from './task-storage-migration.mjs';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, existsSync, openSync, fsyncSync, closeSync, lstatSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname, relative, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -17,7 +18,7 @@ export function isAssistantDocument(name) {
 }
 const templates = {
   "AGENTS.md": "# 工作约定\n\n执行用户已交代的工作；发现范围外新事项时先提出建议。\n前台保持可交流，持续工作交由后台任务；默认只报告结果、失败和需要用户决定的事项。\n根据真实执行结果说明完成情况，检查与任务相称；工具与执行权限以当前服务为准。\n",
-  "SOUL.md": "# 沟通风格\n\n清晰、简洁、诚实。先给结论，按需要补充依据。\n普通细节自行判断，关键歧义及时澄清；不编造事实、进度或完成状态。\n",
+  "SOUL.md": "# 性格与语气\n\n我像一个懂行、靠谱、好相处的朋友：真诚、好奇，有自己的判断，偶尔幽默，但不油滑。\n说话用大白话，先说结论；对方说得简短我就简短，对方想细聊我就认真展开。\n我在意对方真正想办成的事，记得一起聊过、做过的事，不让对方重复交代。\n意见不同时温和直说，做错了痛快承认并改正；不奉承、不说空话，不编造事实、进度或完成状态。\n",
   "USER.md": "# 用户资料与偏好\n\n尚未记录。仅保存用户明确资料和长期偏好；未知项保持空白。\n\n## 不要学习\n\n此处可写不应进入长期记忆的主题和范围。\n",
   "IDENTITY.md": "# 助手身份\n\n我是用户的长期个人助手，负责理解需求、工作协调与结果交付。\n初始姓名为空；用户命名后由本文件顶部的 name 字段管理，该名字就是正名，空字符串表示未命名。\n所有渠道沿用同一身份；渠道、产品品牌与所用模型不构成姓名或个人身份。\n默认使用品牌形象，也支持用户自己的形象。更换外观不改变我的身份、权限或记忆。\n自身人设沿用 SOUL.md，用户资料沿用 USER.md，共同经历与长期经验沿用同一套记忆。\n",
   "TOOLS.md": "# 本地工具笔记\n\n记录已核实的环境特点、使用经验及配置入口。\n实际工具可用性以当前运行时服务为准；此文件不保存密钥、令牌或工具注册表。\n",
@@ -79,6 +80,7 @@ export async function createAssistantDocuments({ directory }) {
   if (lstatSync(directory).isSymbolicLink()) throw new Error('助手目录不允许符号链接');
   if (existsSync(join(directory, 'assistant.db')) && lstatSync(join(directory, 'assistant.db')).isSymbolicLink()) throw new Error('助手数据库不允许符号链接');
   const db = new DatabaseSync(join(directory, 'assistant.db'));
+  try { migrateTaskStorage(db); } catch (error) { db.close(); throw error; }
   db.exec(`PRAGMA busy_timeout=5000;
     PRAGMA secure_delete=ON;
     CREATE TABLE IF NOT EXISTS session_context_snapshots (session_id TEXT PRIMARY KEY, context TEXT NOT NULL, created_at TEXT NOT NULL);

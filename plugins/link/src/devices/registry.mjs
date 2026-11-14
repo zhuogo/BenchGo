@@ -56,6 +56,12 @@ export async function openDeviceRegistry(directory, { localName = () => '本机'
   const localDevice = () => ({ id: 'local', name: localName(), kind: 'local', status: 'online' });
   return {
     get, publicDevice,
+    scope() { return state.resourceScope || { mode: 'current', deviceIds: [] }; },
+    async setScope(value) {
+      if (!value || !['current','all','selected'].includes(value.mode) || !Array.isArray(value.deviceIds) || value.deviceIds.length > 33 || value.deviceIds.some(id => id !== 'local' && !state.devices.some(row => row.id === id))) throw new Error('资源显示范围无效');
+      const previous = state.resourceScope; state.resourceScope = { mode: value.mode, deviceIds: [...new Set(value.deviceIds)] };
+      try { await persist(); } catch (error) { state.resourceScope = previous; throw error; } return state.resourceScope;
+    },
     list() { return { activeId: state.activeId, devices: [localDevice(), ...state.devices.map(publicDevice)] }; },
     async upsert(input) {
       const target = normalizeTarget(input), routes = normalizeRoutes(input.routes), existing = input.id ? state.devices.find(value => value.id === input.id) : state.devices.find(value => value.kind !== 'ssh' && value.url === target.url && value.pin === target.pin);

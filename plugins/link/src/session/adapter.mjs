@@ -116,9 +116,20 @@ export function createSessionAdapter(ctx, _options = {}) {
     const result = await invoke(record, 'session', 'modelCatalog', {});
     return result.groups.flatMap(group => group.models.map(model => ({ provider: group.id, model: model.id, label: `${group.name} · ${model.name}` })));
   };
-  const rows = async record => {
+  const rows = async (record, availableProjects = projects()) => {
     const result = await invoke(record, 'session', 'list', { _request: {} });
-    return result.items.filter(row => !row.parentSessionId && row.origin !== 'subagent' && projectOf(row.sessionId)).map(row => ({ id: row.sessionId, projectId: projectOf(row.sessionId).id, title: row.projections?.values?.title?.title || row.projections?.values?.title || '新会话', running: row.running, updatedAt: row.updatedAt }));
+    const privateIds = new Set(await ctx.get?.('assistant')?.sidebarPrivateSessionIds?.() || []);
+    const projectBySession = new Map();
+    for (const project of availableProjects) {
+      for (const id of project.sessionIds) if (!projectBySession.has(id)) projectBySession.set(id, project);
+    }
+    const sessions = [];
+    for (const row of result.items) {
+      if (privateIds.has(row.sessionId) || row.parentSessionId || row.origin === 'subagent') continue;
+      const project = projectBySession.get(row.sessionId);
+      if (project) sessions.push({ id: row.sessionId, projectId: project.id, title: row.projections?.values?.title?.title || row.projections?.values?.title || '新会话', running: row.running, updatedAt: row.updatedAt });
+    }
+    return sessions;
   };
   const snapshot = async (record, id) => {
     const abort = new AbortController();
@@ -159,7 +170,7 @@ export function createSessionAdapter(ctx, _options = {}) {
     record.waits.get(interactionId)?.abort();
     return { accepted: true };
   };
-  const handle = async (input, device) => {
+  const handle = async (record, input, device) => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Expected an object');
     const action = string(input.action, 'action');
     if (!['state', 'models', 'create', 'history', 'send', 'cancel', 'respond', 'notifications', 'notificationAck', 'notificationRead'].includes(action)) throw new Error('Unsupported Link action');
@@ -177,11 +188,11 @@ export function createSessionAdapter(ctx, _options = {}) {
       if (action === 'notificationAck') return notify({ action: 'notificationAck', eventIds: input.eventIds || [] }, principal);
       return notify({ action: 'notificationRead', eventIds: input.eventIds || [] }, principal);
     }
-    const record = await getPeer(device);
     if (action === 'models') return { models: await catalog(record) };
     if (action === 'state') {
-      const [sessions, models] = await Promise.all([rows(record), catalog(record)]);
-      return { host: { name: hostname() }, projects: projects().map(project => ({ id: project.id, name: project.title || project.id, path: project.path })), sessions, models };
+      const availableProjects = projects();
+      const [sessions, models] = await Promise.all([rows(record, availableProjects), catalog(record)]);
+      return { host: { name: hostname() }, projects: availableProjects.map(project => ({ id: project.id, name: project.title || project.id, path: project.path })), sessions, models };
     }
     if (action === 'create') {
       const project = projects().find(project => project.id === string(input.projectId, 'project id'));
@@ -229,13 +240,15 @@ export function createSessionAdapter(ctx, _options = {}) {
     const session = (await rows(record)).find(row => row.id === input.id);
     return { messages, interactions, running: Boolean(attempt || session?.running), hasMore: page.hasMore, cursor: page.records[0]?.event.seq ?? 0 };
   };
-  const dispatch = async (input, device) => {
+  const withPeer = async (device, operation) => {
     const record = await getPeer(device);
     record.active++;
-    try { return await handle(input, device); }
+    try { return await operation(record); }
     finally { record.active--; if (peers.get(record.id) === record) touch(record); }
   };
-  return { dispatch, revoke: drop, close: async () => { await Promise.all([...peers.keys()].map(drop)); creates.clear(); } };
+  const dispatch = (input, device) => withPeer(device, record => handle(record, input, device));
+  const list = (device, availableProjects) => withPeer(device, record => rows(record, availableProjects));
+  return { dispatch, list, revoke: drop, close: async () => { await Promise.all([...peers.keys()].map(drop)); creates.clear(); } };
 }
 
 export function validateAnswer(answer, questions) {

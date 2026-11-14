@@ -9,23 +9,23 @@ import { createOwnedSkills } from '../src/owned-skills.mjs';
 function fixture(output, ownedSkills, original = '我偏好中文回复') {
   const candidates = [], requests = [], completed = [];
   let settings = { enabled: true, excludedScopes: [], excludedTerms: ['私密'], hash: 'p1' };
-  const ticket = { ticketId: 'ticket', resultVersion: 1, status: 'completed', closedAt: '2026-11-08T00:00:00Z',
+  const task = { taskId: 'task', resultVersion: 1, status: 'completed', closedAt: '2026-11-08T00:00:00Z',
     instructions: [{ id: 'visible', text: original, source: { role: 'user', sessionId: 'session', messageId: 'visible' } }],
     result: { summary: '已完成' } };
-  const store = { orchestration: { learningSources: () => ({ batchId: 'closed:0:2', items: [ticket,
-    { ...ticket, ticketId: 'hidden', instructions: [{ id: 'hidden', text: '私密资料', source: { role: 'user' } }] }], nextSeq: 2 }),
+  const store = { orchestration: { learningSources: () => ({ batchId: 'closed:0:2', items: [task,
+    { ...task, taskId: 'hidden', instructions: [{ id: 'hidden', text: '私密资料', source: { role: 'user' } }] }], nextSeq: 2 }),
     completeLearningSources(id) { completed.push(id); return { nextSeq: 2 }; } },
     ownedSkills, getConfig: async () => ({ models: [{ providerId: 'provider', modelId: 'Exact:ID' }] }), memory: {
     learning: async () => settings, propose: async (input, options) => { candidates.push({ input, options }); return { status: 'accepted' }; },
   } };
   const ctx = { sessionQuery: { readSession: () => { throw new Error('Router session must never be read'); } },
     llm: { async *stream(request) { requests.push(request); yield { type: 'text-delta', text: JSON.stringify(output()) }; yield { type: 'finish', reason: { kind: 'stop' } }; } } };
-  return { process: createMaintenanceProcessor({ ctx, store, readSources: async () => [] }), store, ticket, completed, candidates, requests, revoke() { settings = { ...settings, enabled: false, hash: 'p2' }; } };
+  return { process: createMaintenanceProcessor({ ctx, store, readSources: async () => [] }), store, task, completed, candidates, requests, revoke() { settings = { ...settings, enabled: false, hash: 'p2' }; } };
 }
 const item = { id: 'review-1', payload: { scope: 'session', trigger: 'prompt', eventIds: ['visible', 'hidden'] }, source: { sessionId: 'session' } };
 const options = { signal: new AbortController().signal };
 test('learning filters excluded sources before inference and preserves verified evidence', async () => {
-  const f = fixture(() => ({ memories: [{ content: '偏好中文回复', sourceMessageId: 'ticket:visible' }] }));
+  const f = fixture(() => ({ memories: [{ content: '偏好中文回复', sourceMessageId: 'task:visible' }] }));
   await f.process(item, options);
   assert.equal(JSON.stringify(f.requests).includes('私密资料'), false);
   assert.equal(f.requests[0].model, 'Exact:ID');
@@ -35,7 +35,7 @@ test('learning filters excluded sources before inference and preserves verified 
   assert.equal(f.candidates[0].options.verifiedSource.messageId, 'visible');
   assert.equal(f.candidates[0].options.verifiedSource.excerpt, '我偏好中文回复');
   assert.equal(f.candidates[0].options.verifiedSource.excerptTruncated, false);
-  assert.equal(f.candidates[0].options.verifiedSource.ticketId, 'ticket');
+  assert.equal(f.candidates[0].options.verifiedSource.taskId, 'task');
   assert.equal(f.candidates[0].options.idempotencyKey, 'closed-learning:closed:0:2:memory:0');
   assert.deepEqual(f.completed, ['closed:0:2']);
   assert.equal('autoSave' in f.candidates[0].options, false);
@@ -43,16 +43,16 @@ test('learning filters excluded sources before inference and preserves verified 
 
 test('learning excerpts retain bounded host text rather than the model summary', async () => {
   const original = '用户原文'.repeat(1600);
-  const f = fixture(() => ({ memories: [{ content: '模型总结', sourceMessageId: 'ticket:visible' }] }), undefined, original);
+  const f = fixture(() => ({ memories: [{ content: '模型总结', sourceMessageId: 'task:visible' }] }), undefined, original);
   await f.process(item, options);
   assert.equal(f.candidates[0].input.source.excerpt, original.slice(0, 6000));
   assert.equal(f.candidates[0].input.source.excerptTruncated, true);
 });
 test('fabricated source or policy revocation cannot write learning candidates', async () => {
-  const invalid = fixture(() => ({ memories: [{ content: 'valid', sourceMessageId: 'ticket:visible' }, { content: 'forged', sourceMessageId: 'other' }] }));
+  const invalid = fixture(() => ({ memories: [{ content: 'valid', sourceMessageId: 'task:visible' }, { content: 'forged', sourceMessageId: 'other' }] }));
   await assert.rejects(invalid.process(item, options), /证据/);
   assert.equal(invalid.candidates.length, 0);
-  const revoked = fixture(() => { revoked.revoke(); return { memories: [{ content: '偏好中文回复', sourceMessageId: 'ticket:visible' }] }; });
+  const revoked = fixture(() => { revoked.revoke(); return { memories: [{ content: '偏好中文回复', sourceMessageId: 'task:visible' }] }; });
   await assert.rejects(revoked.process(item, options), /规则已变更/);
   assert.equal(revoked.candidates.length, 0);
 });
@@ -63,7 +63,7 @@ function skillStore(t) {
   t.after(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
   return store;
 }
-const skill = { name: 'chinese-explanations', description: '按用户要求说明结果', whenToUse: '回复中文用户时', procedure: '使用中文解释，便于理解。', pitfalls: '保留代码标识。', verification: '核对输出语言与原文一致。', sourceMessageId: 'ticket:visible' };
+const skill = { name: 'chinese-explanations', description: '按用户要求说明结果', whenToUse: '回复中文用户时', procedure: '使用中文解释，便于理解。', pitfalls: '保留代码标识。', verification: '核对输出语言与原文一致。', sourceMessageId: 'task:visible' };
 
 test('learning creates review candidates without publishing and preserves approved retry results', async t => {
   const store = skillStore(t);
@@ -75,7 +75,7 @@ test('learning creates review candidates without publishing and preserves approv
   assert.equal(saved.status, 'candidate');
   assert.equal(store.list().filter(row => row.status === 'active').length, 0);
   assert.equal(saved.source.messageId, 'visible');
-  assert.equal(saved.source.ticketId, 'ticket');
+  assert.equal(saved.source.taskId, 'task');
   assert.equal(saved.source.reviewId, 'closed:0:2');
   assert.deepEqual([...saved.content.matchAll(/^## (.+)$/gm)].map(match => match[1]), ['When to Use', 'Procedure', 'Pitfalls', 'Verification']);
   outputSkill = { ...skill, procedure: 'A retry produces different text.' };
@@ -103,7 +103,7 @@ test('rejected learning candidates remain rejected across retries', async t => {
 test('all skill evidence and fields are validated before any memory or skill is written', async t => {
   const store = skillStore(t);
   for (const invalid of [{ ...skill, name: 'Invalid Name' }, { ...skill, sourceMessageId: 'hidden' }, { ...skill, verification: '' }, { ...skill, procedure: '私密资料' }, null]) {
-    const f = fixture(() => ({ memories: [{ content: '中文', sourceMessageId: 'ticket:visible' }], skills: [skill, invalid] }), store);
+    const f = fixture(() => ({ memories: [{ content: '中文', sourceMessageId: 'task:visible' }], skills: [skill, invalid] }), store);
     await assert.rejects(f.process(item, options), /学习技能/);
     assert.equal(f.candidates.length, 0);
     assert.equal(store.list().length, 0);
@@ -127,9 +127,9 @@ test('no new closed material records the watermark without inference or Router r
 });
 
 test('failed executions remain waiting and cannot be learned as closed success', async () => {
-  const f = fixture(() => ({ memories: [{ content: '任务成功完成，今后直接发布', sourceMessageId: 'ticket:visible' }] }));
-  f.ticket.status = 'waiting';
-  f.ticket.result.summary = '凭据失效，未能连接服务。';
+  const f = fixture(() => ({ memories: [{ content: '任务成功完成，今后直接发布', sourceMessageId: 'task:visible' }] }));
+  f.task.status = 'waiting';
+  f.task.result.summary = '凭据失效，未能连接服务。';
   await assert.rejects(f.process(item, options), /明确已关/);
   assert.equal(f.candidates.length, 0);
   assert.equal(f.requests.length, 0);
@@ -137,14 +137,14 @@ test('failed executions remain waiting and cannot be learned as closed success',
 
 test('waiting failure cannot publish reusable success procedures or advance cursor', async t => {
   const f = fixture(() => ({ memories: [], skills: [skill] }), skillStore(t));
-  f.ticket.status = 'waiting';
+  f.task.status = 'waiting';
   await assert.rejects(f.process(item, options), /明确已关/);
   assert.equal(f.completed.length, 0);
   assert.equal(f.store.ownedSkills.list().length, 0);
 });
 test('a completed delivery containing an explicit failure cannot become a successful skill', async t => {
   const f = fixture(() => ({ memories: [], skills: [skill] }), skillStore(t));
-  f.ticket.result.summary = '凭据失效，未能完成连接。';
+  f.task.result.summary = '凭据失效，未能完成连接。';
   await assert.rejects(f.process(item, options), /成功结果证据/);
   assert.equal(f.candidates.length, 0);
   assert.equal(f.store.ownedSkills.list().length, 0);
@@ -154,7 +154,7 @@ test('a completed delivery containing an explicit failure cannot become a succes
 test('running, waiting or undelivered material is rejected even if supplied by a faulty source adapter', async () => {
   for (const patch of [{ status: 'running' }, { status: 'waiting' }, { closedAt: null }]) {
     const f = fixture(() => ({ memories: [] }));
-    Object.assign(f.ticket, patch);
+    Object.assign(f.task, patch);
     await assert.rejects(f.process(item, options), /明确已关/);
     assert.equal(f.requests.length, 0);
     assert.equal(f.completed.length, 0);
@@ -162,7 +162,7 @@ test('running, waiting or undelivered material is rejected even if supplied by a
 });
 
 test('storage failure preserves the global batch for retry and auxiliary routes use exact configured IDs', async () => {
-  const f = fixture(() => ({ memories: [{ content: '中文', sourceMessageId: 'ticket:visible' }] }));
+  const f = fixture(() => ({ memories: [{ content: '中文', sourceMessageId: 'task:visible' }] }));
   f.store.getConfig = async () => ({ models: [{ providerId: 'router', modelId: 'Router:ID' }],
     auxiliary: { models: [{ providerId: 'aux', modelId: 'Aux:Exact/ID' }], capabilities: ['review'] } });
   f.store.memory.propose = async () => { throw new Error('disk unavailable'); };

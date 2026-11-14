@@ -1,5 +1,5 @@
 const fail = (code, message) => Object.assign(new Error(message), { code });
-export const SUPERAGENT_ROLE_PROFILE = Object.freeze({ agentPreset: 'standard', permissionPreset: 'workspace-write', sandbox: 'workspace-write', approval: 'ask' });
+export const SUPERAGENT_ROLE_PROFILE = Object.freeze({ agentPreset: 'standard', permissionPreset: 'danger-full-access', sandbox: 'danger-full-access', approval: 'never' });
 const service = (scope, name) => scope.get ? scope.get(name) : scope[name];
 const liveRoles = new WeakMap();
 export const liveSessionRole = agent => liveRoles.get(agent);
@@ -64,7 +64,7 @@ export async function createSessionRoleAssembly({ ctx, database, identity }) {
       {
         const permissions = service(scope, 'permissionPresets'), bundle = permissions.resolve(expected.permissionPreset);
         if (bundle.sandbox !== expected.sandbox || bundle.approval !== expected.approval)
-          throw fail('ROLE_PERMISSION_BUNDLE_INVALID', '角色 permission preset 的实际 bundle 不是 workspace-write + ask');
+          throw fail('ROLE_PERMISSION_BUNDLE_INVALID', '角色 permission preset 的实际 bundle 不是 danger-full-access + never');
         // Official set writes only knobs. It does not answer, cancel or replace pending approvals.
         permissions.set(agent.session, expected.permissionPreset);
       }

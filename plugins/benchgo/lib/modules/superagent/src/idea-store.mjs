@@ -6,7 +6,7 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const normalized = value => value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/gu, ' ').trim();
 const array = value => Array.isArray(value) && value.every(id => typeof id === 'string' && id.length > 0 && id.length <= 500);
 const aliases = source => [source?.messageId && `message:${source.sessionId || ''}:${source.messageId}`, source?.eventId && `event:${source.channel || ''}:${source.eventId}`,
-  source?.ticketId && `ticket:${source.ticketId}`, source?.taskId && `task:${source.taskId}`, source?.callId && `call:${source.callId}`].filter(Boolean);
+  source?.taskId && `task:${source.taskId}`, source?.callId && `call:${source.callId}`].filter(Boolean);
 const references = source => [...new Set((source?.references || [source]).flatMap(aliases))];
 const parse = row => row && ({ ...JSON.parse(row.payload), id: row.id, status: row.status, createdAt: row.created_at, expiresAt: row.expires_at });
 

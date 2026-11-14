@@ -1,6 +1,6 @@
 {
   "name": "benchgo",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "bin": {
@@ -42,6 +42,9 @@
     "build:plus": "npm --prefix plugins/benchgo run build:client",
     "build:android": "node scripts/build-link-android.mjs",
     "package:plus:win": "node scripts/desktop/package-windows.mjs",
+    "package:plus:mac:arm64": "node scripts/desktop/package-macos.mjs arm64",
+    "package:plus:mac:x64": "node scripts/desktop/package-macos.mjs x64",
+    "package:plus:linux": "node scripts/server/package-linux.mjs",
     "benchgo": "node plugins/benchgo/src/cli.mjs",
     "package:plus:plugin": "node scripts/desktop/package-plugin-update.mjs",
     "reload:plus": "node scripts/reload-plus-client.mjs",

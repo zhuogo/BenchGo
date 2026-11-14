@@ -7,7 +7,7 @@ export const WATCHDOG_SIGNAL_REASONS = Object.freeze(['TARGET_UNREACHABLE', 'TAR
   'FACTS_STALE', 'SCHEDULER_STALLED', 'EXECUTION_INACTIVE', 'LEASE_EXPIRED', 'REQUEST_DEADLINE_EXCEEDED',
   'STOP_UNCONFIRMED', ...MAINTENANCE_WATCHDOG_REASONS]);
 const headerPrefix = 'x-benchgo-watchdog-';
-const executionFields = ['ticketId', 'assignmentId', 'runId', 'sessionId', 'fence', 'instructionRevision'];
+const executionFields = ['taskId', 'assignmentId', 'runId', 'sessionId', 'fence', 'instructionRevision'];
 const signalFields = ['id', 'incidentKey', 'phase', 'kind', 'targetId', 'observedAt', 'checkId', 'evidenceCursor',
   'execution', 'reasonCode', 'summary'];
 const localError = Symbol('watchdog-transport-error');
@@ -51,7 +51,7 @@ export function validateWatchdogSignal(value, targetId) {
     const execution = value.execution;
     if (!object(execution) || Object.keys(execution).length !== executionFields.length
       || Object.keys(execution).some(key => !executionFields.includes(key))
-      || !['ticketId', 'assignmentId', 'runId', 'sessionId'].every(key => text(execution[key], 200))
+      || !['taskId', 'assignmentId', 'runId', 'sessionId'].every(key => text(execution[key], 200))
       || !integer(execution.fence) || !Number.isSafeInteger(execution.instructionRevision) || execution.instructionRevision < 1) {
       throw fail('WATCHDOG_SIGNAL_INVALID');
     }

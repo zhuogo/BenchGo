@@ -40,14 +40,14 @@ for (const selection of ['worker', 'explicit']) test(`Worker ignores ${selection
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'main' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'inspect', mandate: {} });
+  const task = database.createTask({ threadId: 'thread', target: 'inspect', mandate: {} });
   const router = { providerId: 'Router/@', modelId: 'Exact: Router/1', options: { maxTokens: 100 } };
   const worker = { providerId: 'Worker/@', modelId: 'Exact: Worker/2', options: { reasoningEffort: 'ultra', maxTokens: 700 } };
   const backup = { providerId: 'Backup/@', modelId: 'Exact: Worker/3', options: { maxTokens: 200 } };
   const explicit = { providerId: 'Explicit/@', modelId: 'Exact: Selected/4', options: { maxTokens: 900 } };
   const workers = selection === 'inherit' ? [] : [worker, backup];
   const expected = workers;
-  database.createAssignment(ticket.id, selection === 'explicit' ? { model: explicit } : {});
+  database.createAssignment(task.id, selection === 'explicit' ? { model: explicit } : {});
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const tools = new Map();
   const hooks = new Map(), seen = [], selected = [], transcript = [], injected = [];
@@ -78,7 +78,7 @@ for (const selection of ['worker', 'explicit']) test(`Worker ignores ${selection
   };
   await installExecutionRoleHost(t, ctx);
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: router, models: [router], workerModels: workers }), authorizeAction: async () => ({ allowed: true }) });
-  await executor(assignment, { ticket, signal, renew: async () => {} });
+  await executor(assignment, { task, signal, renew: async () => {} });
   assert.deepEqual(seen, expected.map(model => [model.providerId, model.modelId, model.options.maxTokens]));
   assert.equal(selected[0].provider, expected[0].providerId);
   assert.equal(selected[0].model, expected[0].modelId);
@@ -92,8 +92,8 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'main' } });
   const project = { id: 'opaque-project', path: join(directory, 'source') };
   if (projectMode) await mkdir(projectMode === true ? join(project.path, '.git') : project.path, { recursive: true });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'inspect', mandate: { scope: ['read'], source: { channel: 'feishu', chatId: 'chat' }, ...(projectMode ? { project } : {}) } });
-  database.createAssignment(ticket.id, { model: { providerId: 'provider', modelId: 'opaque/model' } });
+  const task = database.createTask({ threadId: 'thread', target: 'inspect', mandate: { scope: ['read'], source: { channel: 'feishu', chatId: 'chat' }, ...(projectMode ? { project } : {}) } });
+  database.createAssignment(task.id, { model: { providerId: 'provider', modelId: 'opaque/model' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const events = new Map(); let disposed = false, meta, submitted = false, sourceReference;
   const transcript = [], tools = new Map();
@@ -110,7 +110,7 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
         submitted = true;
         await events.get('tools/execute')({ agent, name: 'write', arguments: {}, callId: 'project-write', signal: new AbortController().signal }, async () => 'written');
         if (ending === 'paused') {
-          database.pauseTicket(ticket.id);
+          database.pauseTask(task.id);
           await events.get('agent/pre-step')({ messages: [] }, async () => ({ kind: 'enter', messages: [] }));
         }
         events.get('agent/status')({ status: 'running' });
@@ -124,13 +124,13 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readSourceContext: async () => ({ status: 'available', messages: [{ text: 'Earlier discussion' }] }), readPolicy: async () => ({ version: 'p1', projects: [project], workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }) });
   const signal = new AbortController().signal;
   if (ending === 'max-tokens') {
-    await assert.rejects(executor(assignment, { ticket, signal, renew: async () => {} }), error => error.code === 'WORKER_TURN_INCOMPLETE' && error.executionPhase === 'evidence');
+    await assert.rejects(executor(assignment, { task, signal, renew: async () => {} }), error => error.code === 'WORKER_TURN_INCOMPLETE' && error.executionPhase === 'evidence');
     const run = database.runs(assignment.id)[0];
     assert.equal(tools.has('assistant_task_result'), false);
     assert.equal(run.state, 'submitted'); assert.equal(disposed, true);
     return;
   }
-  const result = await executor(assignment, { ticket, signal, renew: async () => {} });
+  const result = await executor(assignment, { task, signal, renew: async () => {} });
   if (ending === 'paused') { assert.equal(result.waitingPause, true); assert.equal(database.runs(assignment.id)[0].state, 'verifying'); return; }
   assert.equal(submitted, true); assert.equal(disposed, true);
   assert.equal(sourceReference.kind, 'untrusted-source-reference');
@@ -149,24 +149,24 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
   assert.equal(request.temperature, undefined);
   assert.equal(request.provider, 'provider');
   assert.equal(request.model, 'opaque/model');
-  await assert.rejects(executor(assignment, { ticket, signal, renew: async () => {} }), /reconciliation/);
+  await assert.rejects(executor(assignment, { task, signal, renew: async () => {} }), /reconciliation/);
 });
 
-test('elapsed time never interrupts execution; abort without dispatched effects preserves the submitted receipt', async t => {
+for (const hostStop of [false, true]) test(`elapsed time never interrupts execution; host shutdown is classified separately (hostStop=${hostStop})`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-executor-timeout-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'main' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'inspect', mandate: { scope: ['read'] } });
-  database.createAssignment(ticket.id, { model: { providerId: 'provider', modelId: 'opaque/model' } });
+  const task = database.createTask({ threadId: 'thread', target: 'inspect', mandate: { scope: ['read'] } });
+  database.createAssignment(task.id, { model: { providerId: 'provider', modelId: 'opaque/model' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  let interrupted = 0, disposed = 0;
+  let interrupted = 0, disposed = 0, cancellation;
   const keepAlive = setInterval(() => {}, 1000);
   t.after(() => clearInterval(keepAlive));
   const ctx = {
     sessionQuery: { readSession: async () => { throw new Error('must not read a successful transcript'); } },
     agents: { create: async input => {
-      const agent = { followup() {}, cancel() { interrupted++; } };
+      const agent = { followup() {}, cancel(reason) { interrupted++; cancellation = reason; } };
       await input.setup({ tools: { register() {} }, systemPrompt: { section() {}, context() {} }, on() {} }, agent);
       return { agent, dispose: async () => { disposed++; } };
     } },
@@ -174,14 +174,15 @@ test('elapsed time never interrupts execution; abort without dispatched effects 
   await installExecutionRoleHost(t, ctx);
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 20, executionPauseGraceMs: 20 });
   const controller = new AbortController();
-  const execution = executor(assignment, { ticket, signal: controller.signal, renew: async () => {} });
+  const execution = executor(assignment, { task, signal: controller.signal, renew: async () => {} });
   execution.catch(() => {});
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(interrupted, 0, 'the removed execution-time gate no longer cancels long work');
-  assert.equal(database.getTicket(ticket.id).status, 'running');
-  controller.abort(new Error('owner stopped'));
+  assert.equal(database.getTask(task.id).status, 'running');
+  controller.abort(Object.assign(new Error('owner stopped'), hostStop ? { code: 'WORKER_HOST_STOPPED' } : {}));
   await assert.rejects(execution, /owner stopped/);
   assert.equal(interrupted, 1);
+  assert.deepEqual(cancellation, { kind: hostStop ? 'disposed' : 'user' });
   assert.equal(disposed, 1);
   assert.equal(database.runs(assignment.id)[0].state, 'submitted');
 });
@@ -191,8 +192,8 @@ for (const cleanupFails of [false, true]) test(`cancel waits for confirmed host 
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'main' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'inspect', mandate: {} });
-  database.createAssignment(ticket.id, { model: { providerId: 'provider', modelId: 'opaque/model' } });
+  const task = database.createTask({ threadId: 'thread', target: 'inspect', mandate: {} });
+  database.createAssignment(task.id, { model: { providerId: 'provider', modelId: 'opaque/model' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   let submitted, disposing, release;
   const started = new Promise(resolve => { submitted = resolve; });
@@ -206,17 +207,17 @@ for (const cleanupFails of [false, true]) test(`cancel waits for confirmed host 
   await installExecutionRoleHost(t, ctx);
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }) });
   const controller = new AbortController();
-  const work = executor(assignment, { ticket, signal: controller.signal, renew: async () => {} });
+  const work = executor(assignment, { task, signal: controller.signal, renew: async () => {} });
   const rejected = assert.rejects(work, error => error.message === 'requested stop' && (!cleanupFails || error.cleanupFailure === 'cleanup failed'));
   await started;
-  assert.equal(database.cancelTicket(ticket.id).status, 'waiting');
-  assert.equal(database.getTicket(ticket.id).executionControl.stopRequested, true);
+  assert.equal(database.cancelTask(task.id).status, 'waiting');
+  assert.equal(database.getTask(task.id).executionControl.stopRequested, true);
   controller.abort(new Error('requested stop'));
   await cleanupStarted;
-  assert.equal(database.getTicket(ticket.id).status, 'waiting');
-  assert.equal(database.getTicket(ticket.id).executionControl.stopRequested, true);
+  assert.equal(database.getTask(task.id).status, 'waiting');
+  assert.equal(database.getTask(task.id).executionControl.stopRequested, true);
   release(); await rejected;
-  assert.equal(database.getTicket(ticket.id).status, 'waiting');
-  assert.equal(database.getTicket(ticket.id).executionControl.stopRequested, cleanupFails);
-  assert.equal(database.getTicket(ticket.id).executionControl.stopped, !cleanupFails);
+  assert.equal(database.getTask(task.id).status, 'waiting');
+  assert.equal(database.getTask(task.id).executionControl.stopRequested, cleanupFails);
+  assert.equal(database.getTask(task.id).executionControl.stopped, !cleanupFails);
 });

@@ -1,0 +1,75 @@
+name: BenchGo macOS installers
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      release_version:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      CI: 'true'
+      DSH_TELEMETRY_DISABLED: '1'
+      NODE_OPTIONS: --max-old-space-size=6144
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      RELEASE_VERSION: ${{ inputs.release_version }}
+      TARGET_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: ${{ matrix.arch }}
+      - name: Stage release and prepare official package manager
+        run: |
+          node scripts/release/stage.mjs --source-sha "$SOURCE_SHA" --release-version "$RELEASE_VERSION"
+          npm install --global --force corepack@0.34.0
+          corepack enable
+      - name: Install locked dependencies
+        run: |
+          npm run setup
+          npm ci --prefix plugins/link
+          npm ci --prefix plugins/benchgo
+      - name: Build plugin and native BenchGo distribution
+        run: |
+          npm run build:plus
+          node --test scripts/desktop/package-macos.test.mjs
+          node scripts/desktop/package-macos.mjs "$TARGET_ARCH"
+      - name: Require clean official source after packaging
+        run: npm run check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchgo-macos-${{ matrix.arch }}
+          path: |
+            artifacts/macos-${{ matrix.arch }}/*.dmg
+            artifacts/macos-${{ matrix.arch }}/*.zip
+            artifacts/macos-${{ matrix.arch }}/*.blockmap
+            artifacts/macos-${{ matrix.arch }}/build-source.json
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: benchgo-macos-${{ matrix.arch }}-diagnostics
+          include-hidden-files: true
+          path: deepseek-harness/apps/desktop/.desktop-build/packaging-runs/
+          if-no-files-found: ignore

@@ -37,10 +37,10 @@ var require_constants = __commonJS({
       EMPTY_BUFFER: Buffer.alloc(0),
       GUID: "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
       hasBlob,
-      kForOnEventAttribute: /* @__PURE__ */ Symbol("kIsForOnEventAttribute"),
-      kListener: /* @__PURE__ */ Symbol("kListener"),
-      kStatusCode: /* @__PURE__ */ Symbol("status-code"),
-      kWebSocket: /* @__PURE__ */ Symbol("websocket"),
+      kForOnEventAttribute: Symbol("kIsForOnEventAttribute"),
+      kListener: Symbol("kListener"),
+      kStatusCode: Symbol("status-code"),
+      kWebSocket: Symbol("websocket"),
       NOOP: () => {
       }
     };
@@ -126,8 +126,8 @@ var require_buffer_util = __commonJS({
 var require_limiter = __commonJS({
   "plugins/link/node_modules/ws/lib/limiter.js"(exports2, module2) {
     "use strict";
-    var kDone = /* @__PURE__ */ Symbol("kDone");
-    var kRun = /* @__PURE__ */ Symbol("kRun");
+    var kDone = Symbol("kDone");
+    var kRun = Symbol("kRun");
     var Limiter = class {
       /**
        * Creates a new `Limiter`.
@@ -182,11 +182,11 @@ var require_permessage_deflate = __commonJS({
     var { kStatusCode } = require_constants();
     var FastBuffer = Buffer[Symbol.species];
     var TRAILER = Buffer.from([0, 0, 255, 255]);
-    var kPerMessageDeflate = /* @__PURE__ */ Symbol("permessage-deflate");
-    var kTotalLength = /* @__PURE__ */ Symbol("total-length");
-    var kCallback = /* @__PURE__ */ Symbol("callback");
-    var kBuffers = /* @__PURE__ */ Symbol("buffers");
-    var kError = /* @__PURE__ */ Symbol("error");
+    var kPerMessageDeflate = Symbol("permessage-deflate");
+    var kTotalLength = Symbol("total-length");
+    var kCallback = Symbol("callback");
+    var kBuffers = Symbol("buffers");
+    var kError = Symbol("error");
     var zlibLimiter;
     var PerMessageDeflate = class {
       /**
@@ -1358,7 +1358,7 @@ var require_sender = __commonJS({
     var { EMPTY_BUFFER, kWebSocket, NOOP } = require_constants();
     var { isBlob, isValidStatusCode } = require_validation();
     var { mask: applyMask, toBuffer } = require_buffer_util();
-    var kByteLength = /* @__PURE__ */ Symbol("kByteLength");
+    var kByteLength = Symbol("kByteLength");
     var maskBuffer = Buffer.alloc(4);
     var RANDOM_POOL_SIZE = 8 * 1024;
     var randomPool;
@@ -1841,14 +1841,14 @@ var require_event_target = __commonJS({
   "plugins/link/node_modules/ws/lib/event-target.js"(exports2, module2) {
     "use strict";
     var { kForOnEventAttribute, kListener } = require_constants();
-    var kCode = /* @__PURE__ */ Symbol("kCode");
-    var kData = /* @__PURE__ */ Symbol("kData");
-    var kError = /* @__PURE__ */ Symbol("kError");
-    var kMessage = /* @__PURE__ */ Symbol("kMessage");
-    var kReason = /* @__PURE__ */ Symbol("kReason");
-    var kTarget = /* @__PURE__ */ Symbol("kTarget");
-    var kType = /* @__PURE__ */ Symbol("kType");
-    var kWasClean = /* @__PURE__ */ Symbol("kWasClean");
+    var kCode = Symbol("kCode");
+    var kData = Symbol("kData");
+    var kError = Symbol("kError");
+    var kMessage = Symbol("kMessage");
+    var kReason = Symbol("kReason");
+    var kTarget = Symbol("kTarget");
+    var kType = Symbol("kType");
+    var kWasClean = Symbol("kWasClean");
     var Event = class {
       /**
        * Create a new `Event`.
@@ -2250,7 +2250,7 @@ var require_websocket = __commonJS({
     } = require_event_target();
     var { format, parse } = require_extension();
     var { toBuffer } = require_buffer_util();
-    var kAborted = /* @__PURE__ */ Symbol("kAborted");
+    var kAborted = Symbol("kAborted");
     var protocolVersions = [8, 13];
     var readyStates = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
     var subprotocolRegex = /^[!#$%&'*+\-.0-9A-Z^_`|a-z~]+$/;
@@ -3701,7 +3701,7 @@ var send = async (ws, data, options) => {
 };
 var requestHeaders = (headers, path) => {
   const result = {};
-  for (const key of ["accept", "accept-language", "content-type", "content-length", "range", "if-none-match", "if-modified-since", "cookie"]) {
+  for (const key of ["accept", "accept-encoding", "accept-language", "content-type", "content-length", "range", "if-none-match", "if-modified-since", "cookie"]) {
     if (typeof headers[key] === "string") result[key] = key === "cookie" ? workbenchCookie(headers[key]) : headers[key];
   }
   if (["/link/api/rpc", "/link/api/workbench"].includes(path) && typeof headers.authorization === "string") result.authorization = headers.authorization;
@@ -3872,7 +3872,7 @@ async function createRelayServer({ host = "0.0.0.0", port, identity, publicUrl, 
       }
     }
   };
-  const server = (0, import_node_http2.createSecureServer)({ key: identity.key, cert: identity.cert, minVersion: "TLSv1.2", allowHTTP1: true }, (req, res) => {
+  const server = (0, import_node_http2.createSecureServer)({ key: identity.key, cert: identity.cert, minVersion: "TLSv1.2", allowHTTP1: true, settings: { maxConcurrentStreams: 32 } }, (req, res) => {
     const headers = { "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" };
     try {
       const authority = req.headers[":authority"] || req.headers.host;
@@ -4086,7 +4086,6 @@ Content-Length: 0\r
     }
   };
 }
-var relayRoutes = Object.freeze({ control: RELAY_CONTROL_PATH, data: RELAY_DATA_PATH, probe: RELAY_PROBE_PATH, workbench: RELAY_WORKBENCH_PATH, voice: RELAY_VOICE_PATH });
 
 // plugins/link/scripts/run-relay-server.mjs
 var fail2 = (message) => {

@@ -23,7 +23,7 @@ const tool = (id, name) => [{ type: 'block-start', index: 0, blockType: 'tool-ca
 const primary = { providerId: 'test', modelId: 'Exact Worker/high', options: { reasoningEffort: 'high', maxTokens: 700 } };
 const backup = { providerId: 'test', modelId: 'Exact Worker/default' };
 
-async function fixture(t, script, { install, models = [primary, backup], persistent = false, task = {}, assignmentInput = {} } = {}) {
+async function fixture(t, script, { install, models = [primary, backup], persistent = false, task: taskInput = {}, assignmentInput = {} } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-worker-fallback-'));
   const database = createAssistantOrchestrationStore({ directory });
   const ctx = new Context();
@@ -56,17 +56,17 @@ async function fixture(t, script, { install, models = [primary, backup], persist
   }));
   await install?.(ctx);
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'Use existing evidence to finish the original task', acceptance: 'A supported result', mandate: { source: { channel: 'desktop', sessionId: 'owner' } }, ...task });
-  database.createAssignment(ticket.id, assignmentInput);
+  const task = database.createTask({ threadId: 'thread', target: 'Use existing evidence to finish the original task', acceptance: 'A supported result', mandate: { source: { channel: 'desktop', sessionId: 'owner' } }, ...taskInput });
+  database.createAssignment(task.id, assignmentInput);
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   let configured = models;
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'),
     readPolicy: async () => ({ workerModels: configured }), authorizeAction: async () => ({ allowed: true }) });
-  const context = { ticket, signal: AbortSignal.timeout(15000), renew: async () => {} };
-  return { ctx, database, ticket, assignment, executor, context, requests, selections, logs, setModels: value => { configured = value; } };
+  const context = { task, signal: AbortSignal.timeout(15000), renew: async () => {} };
+  return { ctx, database, task, assignment, executor, context, requests, selections, logs, setModels: value => { configured = value; } };
 }
 
-test('Worker receives the literal current owner instruction instead of a shortened Router task', async t => {
+test('Worker retains literal owner constraints in its Task package beside the assigned scope', async t => {
   const instruction = 'Read the report, formally verify both existing totals, then ask me for the final layout. The totals are already known; the verification procedure is required.';
   const target = 'Read the report and only ask for the layout; skip the known totals.';
   const f = await fixture(t, () => text('Supported result'), { task: { target, acceptance: 'Deliver the report',
@@ -74,11 +74,13 @@ test('Worker receives the literal current owner instruction instead of a shorten
   const result = await f.executor(f.assignment, f.context);
   const users = f.logs.get(result.sessionId).events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-instruction');
   assert.equal(users.length, 1);
-  assert.equal(users[0].data.content[0].text, instruction);
-  assert.ok(f.requests[0].messages.some(message => message.role === 'user' && message.content.some(block => block.type === 'text' && block.text === instruction)));
+  assert.equal(users[0].data.content[0].text, target);
+  assert.ok(f.requests[0].messages.some(message => message.role === 'user' && message.content.some(block => block.type === 'text' && block.text === target)));
   const system = f.requests[0].messages.map(message => message.content.map(block => block.text || '').join('\n')).join('\n');
-  assert.match(system, /explicit requirements take precedence over derived task summaries/);
-  assert.match(system, /must actually run and produce evidence/);
+  assert.ok(system.includes(JSON.stringify({ instruction }).slice(1, -1)));
+  assert.ok(system.includes(JSON.stringify({ executionScope: target }).slice(1, -1)));
+  assert.match(system, /mandate\.instruction supplies the original parent context and applicable explicit constraints, including required steps, tool interactions, quantities, verification and collaboration/);
+  assert.match(system, /Carry out those explicit requirements with evidence/);
 });
 
 test('Worker keeps an explicit assignment scope when the owner instruction includes sibling work', async t => {
@@ -88,10 +90,12 @@ test('Worker keeps an explicit assignment scope when the owner instruction inclu
     mandate: { instruction, source: { channel: 'desktop', sessionId: 'owner', messageId: 'owner#goal:report' } } }, assignmentInput: { text: scope } });
   const result = await f.executor(f.assignment, f.context);
   const user = f.logs.get(result.sessionId).events.find(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-instruction');
-  assert.equal(user.data.content[0].text, instruction);
+  assert.equal(user.data.content[0].text, scope);
   const system = f.requests[0].messages.map(message => message.content.map(block => block.text || '').join('\n')).join('\n');
+  assert.ok(system.includes(JSON.stringify({ instruction }).slice(1, -1)));
   assert.ok(system.includes(JSON.stringify({ executionScope: scope }).slice(1, -1)));
-  assert.match(system, /does not authorize sibling assignments or other Goal leaves/);
+  assert.match(system, /executionScope and target define your assigned portion/);
+  assert.match(system, /Sibling assignments and Router dispatch already performed are outside your scope/);
 });
 
 test('Worker fallback clears effort, rebuilds model tools and prompt, and never replays a completed action', async t => {
@@ -136,7 +140,7 @@ test('Worker preparation failure re-admits the original unlogged identity once a
   const events = f.logs.get(result.sessionId).events;
   const users = events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-instruction');
   assert.equal(users.length, 1);
-  assert.equal(users[0].data.content[0].text, f.ticket.target);
+  assert.equal(users[0].data.content[0].text, f.task.target);
   const plan = f.database.getWorkerExecutionState(result.runId).fallbackPlan;
   assert.equal(plan.unadmitted[0].id, users[0].data.id);
   assert.equal(plan.requestId, users[0].data.id);

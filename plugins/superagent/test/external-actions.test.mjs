@@ -9,7 +9,7 @@ import { prepareChannelExternalSend } from '../src/channel-policy.mjs';
 import { executionEffects } from '../src/execution-effects.mjs';
 
 const actor = { profileId: 'profile', id: 'desktop-owner', label: '主人' };
-const context = () => ({ profileId: 'profile', actorId: actor.id, ticketId: 'ticket', assignmentId: 'assignment', runId: 'run', authorizationVersion: 'a1', policyVersion: 'p1', principal: { kind: 'owner' } });
+const context = () => ({ profileId: 'profile', actorId: actor.id, taskId: 'task', assignmentId: 'assignment', runId: 'run', authorizationVersion: 'a1', policyVersion: 'p1', principal: { kind: 'owner' } });
 const exec = () => ({ signal: new AbortController().signal, callId: 'call', agent: {} });
 const open = t => { const store = createExternalActionStore({ filename: ':memory:', profileId: 'profile' }); t.after(() => store.close()); return store; };
 const prepared = { origin: 'https://example.test', target: { recipient: 'person-1' }, content: { text: '完整正文' }, submission: { to: 'person-1', text: '完整正文' } };
@@ -90,7 +90,7 @@ test('scoped host tool combines actual Worker, current mandate, official card an
   const reminders = [], warnings = [];
   const mandate = { policyVersion: 'p1', actorId: 'desktop-owner', admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval', source: { channel: 'desktop', sessionId: 'router', messageId: 'instruction' } };
   const database = {
-    getTicket: () => ({ id: 'ticket', status, executionControl, mandate }), appliedTicketSnapshot: () => ({}),
+    getTask: () => ({ id: 'task', status, executionControl, mandate }), appliedTaskSnapshot: () => ({}),
     getAssignment: () => ({ state: 'claimed', owner: 'worker', fence: 1 }),
     runs: () => [{ id: 'run', owner: 'worker', fence: 1, sessionId: 'session', state: 'running' }],
     renewAssignment: (_id, input) => ({ allowed: input.validateMandate(mandate) }),
@@ -106,7 +106,7 @@ test('scoped host tool combines actual Worker, current mandate, official card an
     assert.ok(asks > reminders.length, 'the official approval request starts before a reminder callback');
     reminders.push(input); throw Object.assign(new Error('PRIVATE REMINDER FAILURE'), { code: 'TEST_REMINDER_FAILED' });
   } }).installWorker(scope, agent, {
-    database, assignment: { id: 'assignment', ticketId: 'ticket', owner: 'worker', fence: 1 }, run: { id: 'run', sessionId: 'session' }, readPolicy: async () => ({ desktopVersion: 'p1' }), authorizeAction: async () => ({ allowed: true }),
+    database, assignment: { id: 'assignment', taskId: 'task', owner: 'worker', fence: 1 }, run: { id: 'run', sessionId: 'session' }, readPolicy: async () => ({ desktopVersion: 'p1' }), authorizeAction: async () => ({ allowed: true }),
   });
   const tool = tools.get('assistant_external_action'), execution = { agent, name: tool.name, signal: new AbortController().signal, callId: 'call', authorized: true };
   const first = await tool.execute({ operation: 'prepare', adapterId: 'channel:test:send', input: { targetTriggerId: 'real-trigger', text: '完整正文' }, requestId: 'first' }, execution);
@@ -120,7 +120,7 @@ test('scoped host tool combines actual Worker, current mandate, official card an
   revision++;
   await assert.rejects(tool.execute({ operation: 'submit', actionId: next.id }, execution), { code: 'ACTION_CONTENT_CHANGED' });
   status = 'waiting'; executionControl = { pauseRequested: true };
-  await assert.rejects(tool.execute({ operation: 'submit', actionId: next.id }, execution), { code: 'WORKER_TICKET_INACTIVE' });
+  await assert.rejects(tool.execute({ operation: 'submit', actionId: next.id }, execution), { code: 'WORKER_TASK_INACTIVE' });
   assert.equal(sends, 1);
   await assert.rejects(tool.execute({ operation: 'catalog' }, { ...execution, agent: { ...agent } }), { code: 'ACTION_AGENT_MISMATCH' });
 });

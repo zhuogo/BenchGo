@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-export const previewAssets = ['markdown.js', 'docx.js', 'sheet-worker.js', 'pdf.js', 'pdf-worker.js'];
+export const previewAssets = ['markdown.js', 'docx.js', 'sheet-worker.js', 'pptx.js', 'pdf.js', 'pdf-worker.js'];
 export async function mountPreviewAssets(ctx) {
   let resources = [];
   try { resources = JSON.parse(await readFile(new URL('../lib/preview/resources.json', import.meta.url), 'utf8')); }

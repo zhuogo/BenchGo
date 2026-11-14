@@ -82,7 +82,7 @@ test('Attention Router requests excerpt IDs and resolves them in one request wit
     ] }) };
     yield { type: 'finish', reason: { kind: 'stop' } };
   } };
-  const result = await triageWorkerQuestions({ llm, ticket: { id: 't', mandate: { instruction } }, questions, policy });
+  const result = await triageWorkerQuestions({ llm, task: { id: 't', mandate: { instruction } }, questions, policy });
   assert.equal(calls, 1);
   assert.equal(result[0].answer.custom, '使用简体中文。');
   assert.equal(result[1].route, 'user');
@@ -91,13 +91,13 @@ test('Attention Router requests excerpt IDs and resolves them in one request wit
 test('Attention uses a single Router request and times out a stalled adapter without retry', async () => {
   const calls = [];
   const llm = { async *stream(options) { calls.push(options); yield { type: 'text-delta', text: JSON.stringify({ decisions }) }; yield { type: 'finish', reason: { kind: 'stop' } }; } };
-  const result = await triageWorkerQuestions({ llm, ticket: { id: 't', mandate: { instruction } }, questions, policy });
+  const result = await triageWorkerQuestions({ llm, task: { id: 't', mandate: { instruction } }, questions, policy });
   assert.deepEqual(result.map(row => row.route), ['self', 'default']);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].model, 'Opaque Router/1'); assert.deepEqual(calls[0].tools, []); assert.equal(calls[0].sessionId, undefined);
   let attempts = 0;
   const stalled = { async *stream() { attempts++; await new Promise(() => {}); } };
-  const timed = await triageWorkerQuestions({ llm: stalled, ticket: { id: 't', mandate: { instruction } }, questions, policy, timeoutMs: 10 });
+  const timed = await triageWorkerQuestions({ llm: stalled, task: { id: 't', mandate: { instruction } }, questions, policy, timeoutMs: 10 });
   assert.equal(attempts, 1); assert.ok(timed.every(row => row.route === 'user' && row.systemState === 'timeout'));
 });
 
@@ -112,7 +112,7 @@ for (const kind of ['error', 'blocked', 'aborted', 'max-tokens', 'tool-calls']) 
       await new Promise(() => {});
     } finally { closed = true; }
   } };
-  const result = await triageWorkerQuestions({ llm, ticket: { id: 't', mandate: { instruction } }, questions, policy, timeoutMs: 30 });
+  const result = await triageWorkerQuestions({ llm, task: { id: 't', mandate: { instruction } }, questions, policy, timeoutMs: 30 });
   assert.ok(result.every(row => row.route === 'user' && row.systemState === 'triage-unavailable'));
   assert.equal(attempts, 1);
   assert.equal(pulledAfterFinish, false, 'a terminal failure must not request another stream chunk');
@@ -126,8 +126,8 @@ test('Attention stores host resolutions separately and assembles mixed batches w
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'Answer', mandate: { instruction, actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' } } });
-  database.createAssignment(ticket.id, { model: policy.models[0] });
+  const task = database.createTask({ threadId: 'thread', target: 'Answer', mandate: { instruction, actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' } } });
+  database.createAssignment(task.id, { model: policy.models[0] });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'worker-session', directory: '/fixture' });
@@ -137,15 +137,15 @@ test('Attention stores host resolutions separately and assembles mixed batches w
   assert.deepEqual(database.saveAttentionResolutions(assignment.id, input), saved);
   assert.throws(() => database.openAttention(assignment.id, { ...ownership, sessionId: run.sessionId, callId: 'call', questions: [questions[0]] }), /Automatically resolved/);
   const [entry] = database.openAttention(assignment.id, { ...ownership, sessionId: run.sessionId, callId: 'call', questions: [questions[1]] });
-  assert.equal(database.attentions(ticket.id).length, 1); assert.equal(entry.answerTriggerId, null);
-  assert.throws(() => attentionBatchAnswers(database, ticket.id, { sessionId: run.sessionId, callId: 'call' }), /answer is missing/);
-  database.answerDesktopAttention({ ticketId: ticket.id, attentionId: entry.id, instructionRevision: 1, requestId: 'human-answer', answer: { selected: [], custom: '列表' } });
-  const answers = attentionBatchAnswers(database, ticket.id, { sessionId: run.sessionId, callId: 'call' });
+  assert.equal(database.attentions(task.id).length, 1); assert.equal(entry.answerTriggerId, null);
+  assert.throws(() => attentionBatchAnswers(database, task.id, { sessionId: run.sessionId, callId: 'call' }), /answer is missing/);
+  database.answerDesktopAttention({ taskId: task.id, attentionId: entry.id, instructionRevision: 1, requestId: 'human-answer', answer: { selected: [], custom: '列表' } });
+  const answers = attentionBatchAnswers(database, task.id, { sessionId: run.sessionId, callId: 'call' });
   assert.deepEqual(answers, [{ id: 'known', selected: [], custom: '简体中文' }, { id: 'format', selected: [], custom: '列表' }]);
-  const receipt = database.ticketInputs(ticket.id).find(row => row.kind === 'answer');
+  const receipt = database.taskInputs(task.id).find(row => row.kind === 'answer');
   assert.equal(receipt.state, 'applied'); assert.equal(receipt.application.runId, run.id);
   assert.equal(receipt.application.attentionId, entry.id);
-  assert.ok(database.attentionResolutions(ticket.id).every(row => !row.answerTriggerId));
+  assert.ok(database.attentionResolutions(task.id).every(row => !row.answerTriggerId));
 });
 
 for (const channel of ['desktop', 'feishu']) test(`failed Attention triage keeps ${channel} questions unchanged and preserves diagnostics`, async t => {
@@ -153,8 +153,8 @@ for (const channel of ['desktop', 'feishu']) test(`failed Attention triage keeps
   t.after(() => database.close());
   database.createThread({ id: 'thread', source: { type: channel, id: 'owner' } });
   const source = { channel, sessionId: 'owner', chatId: 'origin-chat' };
-  const ticket = database.createTicket({ threadId: 'thread', target: 'Choose format', mandate: { instruction, actorId: 'desktop-owner', source } });
-  database.createAssignment(ticket.id, { model: policy.models[0] });
+  const task = database.createTask({ threadId: 'thread', target: 'Choose format', mandate: { instruction, actorId: 'desktop-owner', source } });
+  database.createAssignment(task.id, { model: policy.models[0] });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'worker-session', directory: '/fixture' });
@@ -162,7 +162,7 @@ for (const channel of ['desktop', 'feishu']) test(`failed Attention triage keeps
   const question = { id: 'format', question: '交付用列表还是短句？', detail: '请按阅读习惯选择。',
     options: [{ label: '列表', description: '逐项阅读' }, { label: '短句' }] };
   const llm = { async *stream() { yield { type: 'finish', reason: { kind: 'error' } }; } };
-  const decisions = await triageWorkerQuestions({ llm, ticket, questions: [question], policy });
+  const decisions = await triageWorkerQuestions({ llm, task, questions: [question], policy });
   assert.deepEqual(decisions, [{ questionId: question.id, route: 'user', basis: 'Router 自动核对未完成，需用户补充', systemState: 'triage-unavailable' }]);
   const batch = { ...ownership, sessionId: run.sessionId, callId: 'failed-triage', questions: [question] };
   database.saveAttentionResolutions(assignment.id, { ...batch, decisions });
@@ -174,20 +174,20 @@ for (const channel of ['desktop', 'feishu']) test(`failed Attention triage keeps
   assert.deepEqual(delivery.payload.options, ['列表', '短句']);
   assert.deepEqual(delivery.payload.source, source);
   assert.deepEqual(delivery.payload.triage, decisions[0]);
-  assert.deepEqual(database.attentionResolutions(ticket.id).map(({ questionId, route, basis, systemState }) => ({ questionId, route, basis, systemState })), decisions);
+  assert.deepEqual(database.attentionResolutions(task.id).map(({ questionId, route, basis, systemState }) => ({ questionId, route, basis, systemState })), decisions);
   assert.deepEqual(attention.question, question);
   assert.equal(attention.state, 'waiting');
   assert.equal(attention.answerTriggerId, null);
 });
 
-test('parking one Attention assignment does not block another assignment on the same Ticket', t => {
+test('parking one Attention assignment does not block another assignment on the same Task', t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'Parallel work', mandate: { instruction, actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' } } });
-  const waiting = database.createAssignment(ticket.id, { model: policy.models[0] });
+  const task = database.createTask({ threadId: 'thread', target: 'Parallel work', mandate: { instruction, actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' } } });
+  const waiting = database.createAssignment(task.id, { model: policy.models[0] });
   const [assignment] = database.claimAssignments('waiting-worker', { assignmentId: waiting.id, validateMandate: () => true });
-  const other = database.createAssignment(ticket.id, { model: policy.models[0] });
+  const other = database.createAssignment(task.id, { model: policy.models[0] });
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'waiting-session', directory: '/fixture' });
   database.updateRun(run.id, { ...ownership, state: 'submitted' });

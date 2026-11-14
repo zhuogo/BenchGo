@@ -22,15 +22,52 @@ for(const [pkg,file]of [['ui-settings-general','SettingsRoot.tsx'],['ui-sidebar'
 test('locale adapter preserves existing bound translators and forwards all other keys',async()=>{
   const {transformSync}=await import('esbuild'),{runInNewContext}=await import('node:vm');const source=await readFile(new URL('../client/shell-ui.jsx',import.meta.url),'utf8');const code=transformSync(source,{loader:'jsx',format:'cjs'}).code,module={exports:{}};runInNewContext(code,{module,exports:module.exports,require:()=>({}),Error});const locale={getLocale:()=>({active:'zh'}),translate:(ns,key)=>ns+':'+key},oldBound=key=>locale.translate('workspace',key);locale.translate=module.exports.recentTranslation(locale,locale.translate);assert.equal(oldBound('workspace.defaultName'),'最近');assert.equal(oldBound('other'),'workspace:other');
 });
-test('native desktop update and reconnect actions share a separate status seat above the Plus footer',async()=>{
+
+test('the Windows caption keeps the official accessible toggle outside the inert local shell', async () => {
+  const path=fileURLToPath(new URL('../../../deepseek-harness/packages/client/ui-sidebar/src/client/SidebarRoot.tsx',import.meta.url));
+  const result=await handlers.find(handler=>handler.filter.test(path)).callback({path});
+  assert.match(result.contents,/windowsTitlebar \? createPortal\(toggle, document\.body\) : toggle/);
+  assert.match(result.contents,/new Event\('benchgo:sidebar-toggle', \{ cancelable: true \}\)/);
+  assert.match(result.contents,/captionCollapsed \?\? collapsed/);
+  assert.match(result.contents,/aria-label=\{toggleLabel\}/);
+  assert.match(result.contents,/aria-keyshortcuts=\{shortcut\?\.aria\}/);
+});
+test('only connection recovery occupies the status seat above the unified BenchGo update entry',async()=>{
   const path=fileURLToPath(new URL('../../../deepseek-harness/packages/client/ui-settings-general/src/client/SettingsRoot.tsx',import.meta.url));
   const result=await handlers.find(handler=>handler.filter.test(path)).callback({path});
   assert.match(result.contents,/clsx\(css.triggerRow, !wide && css.railRow, 'cmd-sidebar-footer'\)/);
-  assert.match(result.contents,/<div className="cmd-sidebar-status">\s*<ConnectionIndicator[\s\S]*?<DesktopUpdateIndicator[\s\S]*?onOpen=\{openDesktopUpdate\} \/>\s*<\/div>/);
+  assert.match(result.contents,/<div className="cmd-sidebar-status">\s*<ConnectionIndicator[\s\S]*?onReconnect=\{reconnect\}\s*\/>\s*<\/div>/);
+  assert.match(result.contents,/state=\{wide \? connectionIndicator : undefined\}/);
+  assert.doesNotMatch(result.contents,/DesktopUpdateIndicator|useDesktopUpdate|openDesktopUpdate|desktopUpdate\.presentation/);
   const css=await readFile(new URL('../client/style.css',import.meta.url),'utf8');
   assert(result.contents.indexOf('className="cmd-sidebar-status"') < result.contents.indexOf("{renderSlot('settings.launcher'"), 'keyboard order follows visual order');
   assert.match(css,/\.cmd-sidebar-status:empty\s*\{ display: none/);
   assert.match(css,/\.cmd-shell-sidebar:has\(\.cmd-projects\) \[class\*="_regionArea"\]\s*\{ flex: 1; min-height: 0;/);
   assert.match(css,/.cmd-narrow \.cmd-sidebar-nav \{ flex-direction: column; padding: 36px 0 0;/);
   assert.match(css,/\.cmd-shell-sidebar \.cmd-sidebar-panels\s*\{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);[^}]*order: 0;/);
+});
+test('the native update rail badge is hidden reversibly without suppressing other badges or its service',async()=>{
+  const {transformSync}=await import('esbuild'),{runInNewContext}=await import('node:vm');
+  const source=await readFile(new URL('../client/shell-ui.jsx',import.meta.url),'utf8'),module={exports:{}};
+  runInNewContext(transformSync(source,{loader:'jsx',format:'cjs'}).code,{module,exports:module.exports,Error,require:id=>id==='./tools-page.jsx'?{mountToolsPage(){}}:{AppFrame(){},SidebarRoot(){},SettingsRoot(){}}});
+  const native=()=> '重试更新',other=()=> '其它提示',cleanups=[];
+  const coreModule={exports:{}};
+  const coreSource=await readFile(new URL('../../../deepseek-harness/packages/client/ui-slots/src/index.ts',import.meta.url),'utf8');
+  runInNewContext(transformSync(coreSource,{loader:'ts',format:'cjs'}).code,{module:coreModule,exports:coreModule.exports,queueMicrotask,require:()=>({})});
+  const core=new coreModule.exports.SlotCore();
+  core.register({name:'root',children:{'sidebar.toggle.badge':{kind:'single',scope:'root'}}},()=>null);
+  const ownerSource=await readFile(new URL('../../../deepseek-harness/packages/client/ui-settings-general/src/client/index.ts',import.meta.url),'utf8');
+  const registration=ownerSource.match(/ctx\.slots\.register\(\{\s*name: 'sidebar\.toggle\.badge'[\s\S]*?\}, DesktopUpdateBadge\)/u)?.[0];
+  assert(registration,'the official settings registration is present');
+  runInNewContext(registration,{ctx:{slots:core},NS:'settings',desktopUpdate:{store:{}},connection:{state:{}},DesktopUpdateBadge:native});
+  core.register({name:'sidebar.toggle.badge',locale:'another-plugin',priority:1},other);
+  const entries={root:[{component(){},children:{sidebar:{}}}],sidebar:[{component(){},children:{'sidebar.workspaces':{}}}],'sidebar.settings':[{component(){},children:{'settings.section':{}}}],'sidebar.toggle.badge':core.entries('sidebar.toggle.badge')};
+  assert.equal(entries['sidebar.toggle.badge'][0].locale,'settings','the actual official registry exposes its declared locale');
+  const originalInject=entries['sidebar.toggle.badge'][0].inject;
+  module.exports.mountShellUi({slots:{entries:key=>entries[key]||[]},effect:effect=>cleanups.push(effect()),locale:{getLocale:()=>({active:'zh'}),translate:(_ns,key)=>key}});
+  for(const phase of ['error','checking','available','downloading','ready','installing']) assert.equal(entries['sidebar.toggle.badge'][0].component({presentation:{phase},failed:phase==='error'}),null);
+  assert.equal(entries['sidebar.toggle.badge'][0].inject,originalInject,'native service injection remains owned by its official registration');
+  assert.equal(entries['sidebar.toggle.badge'][1].component,other,'other registrants keep their badge');
+  for(const cleanup of cleanups.reverse()) cleanup?.();
+  assert.equal(entries['sidebar.toggle.badge'][0].component,native,'unloading BenchGo restores the official badge');
 });

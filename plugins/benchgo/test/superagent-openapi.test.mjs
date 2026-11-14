@@ -57,16 +57,16 @@ test('official history search and point reads use distinct bounded pagination co
 test('P0 inbox reconciliation and quota-free continuation keep the public contract', () => {
   valid(request, { action: 'requestState', threadId: 'side' });
   valid(response(path, 'requestState'), [{ requestId: 'r', status: 'processing' }]);
-  valid(request, { action: 'ticketPause', ticketId: 't' });
-  valid(request, { action: 'ticketResume', ticketId: 't', expectedResultVersion: 0 });
-  assert.equal(request({ action: 'ticketResume', ticketId: 't', expectedResultVersion: -1 }), false);
+  valid(request, { action: 'taskPause', taskId: 't' });
+  valid(request, { action: 'taskResume', taskId: 't', expectedResultVersion: 0 });
+  assert.equal(request({ action: 'taskResume', taskId: 't', expectedResultVersion: -1 }), false);
   // Goals are a checklist: no quota, execution-control or self-check contract exists.
   assert.doesNotMatch(JSON.stringify(document), /additionalExecutionMs|goalBudget|goalCancel|goalPause|goalResume|goalAdvance|selfCheck|memoryCandidate/);
   valid(request, { action: 'goalCreate', goal: { objective: '把语音体验做稳', requestId: 'r' } });
   for (const goal of [{ objective: '缺少请求标识' }, { objective: 'x', requestId: 'r', projectId: 'p' }, { objective: 'x', requestId: 'r', children: [] }]) assert.equal(request({ action: 'goalCreate', goal }), false);
-  valid(response(path, 'ticketResume'), { queued: false, code: 'EXECUTION_EFFECTS_UNKNOWN' });
-  assert.equal(request({ action: 'ticketRetryReview', ticketId: 't' }), false);
-  assert.equal(document.paths[path].post.responses['200']['x-action-schemas'].ticketRetryReview, undefined);
+  valid(response(path, 'taskResume'), { queued: false, code: 'EXECUTION_EFFECTS_UNKNOWN' });
+  assert.equal(request({ action: 'taskRetryReview', taskId: 't' }), false);
+  assert.equal(document.paths[path].post.responses['200']['x-action-schemas'].taskRetryReview, undefined);
 });
 
 test('history exposes only optional structured active reply identity', () => {
@@ -120,14 +120,14 @@ test('new documented actions exist in production and require their actual CAS fi
     assert.equal(document.paths[path].post.responses['200']['x-action-schemas'][action], undefined);
   }
   const inputs = [
-    { action: 'ticketChange', id: 'ticket', operation: 'adjustment', expectedInstructionRevision: 2, requestId: 'r', reason: 'continue' },
+    { action: 'taskChange', id: 'task', operation: 'adjustment', expectedInstructionRevision: 2, requestId: 'r', reason: 'continue' },
     { action: 'evaluations', after: 0, limit: 50 }, { action: 'evaluationHistory', candidateId: 'candidate' },
     { action: 'evaluationDispose', candidateId: 'candidate', disposition: 'retry', expectedRevision: 0, expectedUpdatedAt: '2026-11-02T00:00:00.000Z' },
     { action: 'summarize', text: 'summarize this' }, { action: 'analyzeImage', file: 'image.png', question: 'read this image' },
   ];
   for (const input of inputs) { assert.ok(service.includes(`case '${input.action}':`), input.action); valid(request, input); }
   for (const input of [
-    { action: 'ticketChange', id: 'ticket', operation: 'reopen', requestId: 'r', reason: '缂哄皯瑕佹眰鐗堟湰' },
+    { action: 'taskChange', id: 'task', operation: 'reopen', requestId: 'r', reason: '缂哄皯瑕佹眰鐗堟湰' },
     { action: 'evaluationDispose', candidateId: 'candidate', disposition: 'retry', expectedRevision: 0 },
     { action: 'summarize', text: '' }, { action: 'analyzeImage', file: 'image.png' },
     { action: 'evaluationDispose', candidateId: 'candidate', disposition: 'approve', expectedRevision: 0, expectedUpdatedAt: 'date' },
@@ -137,7 +137,7 @@ test('new documented actions exist in production and require their actual CAS fi
 test('removed file-backup actions are unavailable', async () => {
   const service = await readFile(new URL('../../superagent/src/assistant-dispatch.mjs', import.meta.url), 'utf8');
   for (const action of ['checkpointList', 'checkpointPreview', 'checkpointRestore']) {
-    assert.equal(request({ action, ticketId: 'ticket', runId: 'run', token: hash }), false);
+    assert.equal(request({ action, taskId: 'task', runId: 'run', token: hash }), false);
     assert.equal(document.paths[path].post.responses['200']['x-action-schemas'][action], undefined);
     assert.equal(service.includes("case '" + action + "':"), false);
   }
@@ -276,14 +276,14 @@ test('delivery response contracts accept persisted reconciliation records withou
     reply: { text: '你好', source, actor, gate, policyVersion: 'p1' } });
   const [reply] = db.claimDirectReplies({ owner: 'sender', now: 2 });
   db.finishDirectReply(reply.id, { owner: 'sender', uncertain: true, now: 3 });
-  const ticket = db.createTicket({ threadId: 'thread', target: 'saved task', mandate: {} });
-  db.createAssignment(ticket.id, { id: 'work' });
+  const task = db.createTask({ threadId: 'thread', target: 'saved task', mandate: {} });
+  db.createAssignment(task.id, { id: 'work' });
   const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
   const run = db.prepareRun(assignment.id, { ...assignment, sessionId: 'session', directory: '/task' });
   db.updateRun(run.id, { ...assignment, state: 'submitted' });
   const commit = { assignment, uniqueKey: 'result', outboxPayload: { text: 'done' }, now: 10,
     result: { summary: 'done', runId: run.id, sessionId: run.sessionId, instructionRevision: 1, completion: { kind: 'completed' } } };
-  db.commitResult(ticket.id, commit);
+  db.commitResult(task.id, commit);
   const [delivery] = db.claimOutbox('sender', { now: 11 });
   db.finishOutbox(delivery.id, { owner: 'sender', uncertain: true, now: 12 });
   for (const [action, id, reconcile] of [['directReplyReconcile', reply.id, db.reconcileDirectReply], ['outboxReconcile', delivery.id, db.reconcileOutbox]]) {
@@ -294,21 +294,21 @@ test('delivery response contracts accept persisted reconciliation records withou
     assert.equal(sent.reconciliations.length, 2);
     if (action === 'outboxReconcile') {
       assert.deepEqual(sent.payload, delivery.payload); assert.equal(sent.payload.reconciliations, undefined);
-      assert.equal(db.commitResult(ticket.id, commit).duplicate, true);
+      assert.equal(db.commitResult(task.id, commit).duplicate, true);
       const { reconciliations, ...missing } = sent; assert.equal(response(path, action)(missing), false);
     }
   }
 });
 
-test('history accepts four real schedule lifecycle facts and current ticket projections', () => {
+test('history accepts four real schedule lifecycle facts and current task projections', () => {
   const at = '2026-11-05T10:00:00.000Z';
   const events = ['created', 'triggered', 'completed', 'failed'].map(phase => scheduleLifecyclePublication({ type: 'schedule.lifecycle', origin: 'system',
     schedule: { id: 'schedule', title: '定时检查', sourceSessionId: 'owner', phase, at,
-      ...(phase !== 'created' ? { occurrenceAt: at } : {}), ...(['completed', 'failed'].includes(phase) ? { ticketId: 'ticket' } : {}) } }));
+      ...(phase !== 'created' ? { occurrenceAt: at } : {}), ...(['completed', 'failed'].includes(phase) ? { taskId: 'task' } : {}) } }));
   assert.ok(events.every(Boolean)); valid(response(path, 'history'), { notifications: events });
   for (const action of ['notifications', 'notificationSync']) valid(response(path, action), { events, cursor: 4, hasMore: false, resyncRequired: false });
   const verified = systemStateDelivery({ state: 'action_verified', code: 'ACTION_VERIFIED', stage: 'action' });
-  const result = { type: 'ticket.result', ticketId: 'ticket', text: verified.text, publication: verified, origin: 'system', systemState: verified.systemState,
+  const result = { type: 'task.result', taskId: 'task', text: verified.text, publication: verified, origin: 'system', systemState: verified.systemState,
     currentInstructionRevision: 2, currentResultVersion: 1, currentResult: { version: 1, instructionRevision: 2, outcome: 'completed' },
     currentAttention: null, currentPauseReason: { code: 'EXECUTION_EFFECTS_UNKNOWN' } };
   valid(response(path, 'history'), { notifications: [result] });
@@ -319,11 +319,11 @@ test('history accepts four real schedule lifecycle facts and current ticket proj
   assert.equal(validate({ ...result, origin: 'router' }), false);
 });
 
-test('attention resolution evidence belongs to ticket rows and accepts real host decisions', t => {
+test('attention resolution evidence belongs to task rows and accepts real host decisions', t => {
   const db = createAssistantOrchestrationStore({ filename: ':memory:' }); t.after(() => db.close());
   db.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
-  const ticket = db.createTicket({ threadId: 'thread', target: '回答问题', mandate: { instruction: '使用简体中文', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' } } });
-  db.createAssignment(ticket.id, { model: { providerId: 'p', modelId: 'worker' } });
+  const task = db.createTask({ threadId: 'thread', target: '回答问题', mandate: { instruction: '使用简体中文', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' } } });
+  db.createAssignment(task.id, { model: { providerId: 'p', modelId: 'worker' } });
   const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   const run = db.prepareRun(assignment.id, { ...ownership, sessionId: 'worker-session', directory: '/fixture' });
@@ -331,65 +331,65 @@ test('attention resolution evidence belongs to ticket rows and accepts real host
   const questions = [{ id: 'language', question: '输出语言？' }, { id: 'approval', question: '是否批准执行？' }];
   const attentionResolutions = db.saveAttentionResolutions(assignment.id, { ...ownership, sessionId: run.sessionId, callId: 'call', questions,
     decisions: [{ questionId: 'language', route: 'self', basis: '原指令已说明', evidence: '简体中文' }, { questionId: 'approval', route: 'user', basis: '需要主人决定' }] });
-  valid(response(path, 'tickets'), { tickets: [{ ...db.getTicket(ticket.id), attentionResolutions }] });
+  valid(response(path, 'tasks'), { tasks: [{ ...db.getTask(task.id), attentionResolutions }] });
   assert.equal(document.paths[path].post.responses['200']['x-action-schemas'].state.properties.attentionResolutions, undefined);
   const resolution = compile({ $ref: '#/components/schemas/AssistantAttentionResolution' });
   assert.equal(resolution({ ...attentionResolutions[1], answer: { id: 'approval', selected: [], custom: '批准' } }), false);
   const [attention] = db.openAttention(assignment.id, { ...ownership, sessionId: run.sessionId, callId: 'call', questions: [questions[1]] });
-  valid(response(path, 'history'), { notifications: [{ type: 'ticket.attention', text: '请确认', currentAttention: { ...attention, instructionRevision: 1 }, currentResult: null, currentPauseReason: null }] });
+  valid(response(path, 'history'), { notifications: [{ type: 'task.attention', text: '请确认', currentAttention: { ...attention, instructionRevision: 1 }, currentResult: null, currentPauseReason: null }] });
 });
 
-test('delegation rejects per-ticket model overrides and completed changes return linked new tickets', t => {
+test('delegation rejects per-task model overrides and completed changes return linked new tasks', t => {
   const tool = name => compile(document.paths[path].post['x-tool-input-schemas'][name]);
-  const delegate = tool('assistant_delegate'), base = { text: '检查原任务', acceptance: '保留原要求', requestId: 'request', duplicateOfTicketId: 'active-ticket' };
+  const delegate = tool('assistant_delegate'), base = { text: '检查原任务', acceptance: '保留原要求', requestId: 'request', duplicateOfTaskId: 'active-task' };
   valid(delegate, base); assert.equal(delegate({ ...base, provider: 'Opaque/@Provider', model: 'Exact Model:07' }), false);
   valid(delegate, { ...base, acceptance: '' });
-  for (const patch of [{ provider: 'p' }, { model: 'm' }, { duplicateOfTicketId: '' }, { duplicateOfTicketId: 'x'.repeat(513) }]) assert.equal(delegate({ ...base, ...patch }), false);
+  for (const patch of [{ provider: 'p' }, { model: 'm' }, { duplicateOfTaskId: '' }, { duplicateOfTaskId: 'x'.repeat(513) }]) assert.equal(delegate({ ...base, ...patch }), false);
   const db = createAssistantOrchestrationStore({ filename: ':memory:' }); t.after(() => db.close());
   const source = { channel: 'desktop', sessionId: 'owner', messageId: 'original' }, actor = { kind: 'human', id: 'desktop-owner' };
   const thread = { id: 'thread', source: { type: 'desktop', id: 'owner' } };
   db.ingest({ dedupeKey: 'original', thread, source, actor, content: '原任务', mode: 'direct' });
-  const ticket = db.createTicket({ threadId: thread.id, target: '原任务', mandate: { source, actorId: actor.id } });
-  db.createAssignment(ticket.id, { id: 'original-work' });
+  const task = db.createTask({ threadId: thread.id, target: '原任务', mandate: { source, actorId: actor.id } });
+  db.createAssignment(task.id, { id: 'original-work' });
   const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
   const run = db.prepareRun(assignment.id, { ...assignment, sessionId: 'session', directory: '/task' });
   db.updateRun(run.id, { ...assignment, state: 'submitted' });
-  db.commitResult(ticket.id, { assignment, uniqueKey: 'original-result',
+  db.commitResult(task.id, { assignment, uniqueKey: 'original-result',
     result: { summary: '原成果', runId: run.id, sessionId: run.sessionId, instructionRevision: 1, completion: { kind: 'completed' } } });
-  assert.equal(db.getTicket(ticket.id).status, 'completed');
+  assert.equal(db.getTask(task.id).status, 'completed');
   for (const delivery of db.claimOutbox('test-delivery')) {
     db.saveOutboxReply(delivery.id, { owner: 'test-delivery', publication: { action: 'deliver', origin: 'router', text: '原任务已完成，成果已整理。' } });
-    assert.equal(db.getTicket(ticket.id).status, 'completed');
+    assert.equal(db.getTask(task.id).status, 'completed');
     db.finishOutbox(delivery.id, { owner: 'test-delivery', sent: true, receipt: { status: 'accepted', messageId: `sent:${delivery.id}` } });
   }
-  assert.equal(db.getTicket(ticket.id).status, 'completed');
-  const before = db.getTicket(ticket.id), results = db.results(ticket.id);
+  assert.equal(db.getTask(task.id).status, 'completed');
+  const before = db.getTask(task.id), results = db.results(task.id);
   const nextSource = { ...source, messageId: 'adjustment' };
   const { trigger } = db.ingest({ dedupeKey: 'adjustment', thread, source: nextSource, actor, content: '调整成果', mode: 'direct' });
-  const change = { id: ticket.id, operation: 'adjustment', expectedInstructionRevision: 1, requestId: 'change', reason: '补充要求' };
-  valid(request, { action: 'ticketChange', ...change }); valid(tool('assistant_ticket_change'), change);
-  assert.equal(request({ action: 'ticketChange', ...change, operation: 'reopen' }), false);
-  assert.equal(request({ action: 'ticketChange', ...change, provider: 'p', model: 'm' }), false);
-  assert.equal(request({ action: 'ticketChange', ...change, expectedInstructionRevision: 0 }), false);
-  assert.equal(request({ action: 'ticketChange', ...change, provider: 'unpaired' }), false);
-  const next = db.changeTicket(ticket.id, { ...change, target: '调整成果', acceptance: '新要求', requestKey: 'change', triggerId: trigger.id,
+  const change = { id: task.id, operation: 'adjustment', expectedInstructionRevision: 1, requestId: 'change', reason: '补充要求' };
+  valid(request, { action: 'taskChange', ...change }); valid(tool('assistant_task_change'), change);
+  assert.equal(request({ action: 'taskChange', ...change, operation: 'reopen' }), false);
+  assert.equal(request({ action: 'taskChange', ...change, provider: 'p', model: 'm' }), false);
+  assert.equal(request({ action: 'taskChange', ...change, expectedInstructionRevision: 0 }), false);
+  assert.equal(request({ action: 'taskChange', ...change, provider: 'unpaired' }), false);
+  const next = db.changeTask(task.id, { ...change, target: '调整成果', acceptance: '新要求', requestKey: 'change', triggerId: trigger.id,
     mandate: { source: nextSource, actorId: actor.id, instruction: '调整成果' }, model: { providerId: 'p', modelId: 'm' }, validateMandate: () => true });
-  valid(response(path, 'ticketChange'), next);
-  assert.equal(next.adjustmentOfTicketId, ticket.id); assert.equal(next.instructionRevision, 1); assert.equal(next.resultVersion, 0);
-  assert.deepEqual(db.getTicket(ticket.id), before); assert.deepEqual(db.results(ticket.id), results);
+  valid(response(path, 'taskChange'), next);
+  assert.equal(next.adjustmentOfTaskId, task.id); assert.equal(next.instructionRevision, 1); assert.equal(next.resultVersion, 0);
+  assert.deepEqual(db.getTask(task.id), before); assert.deepEqual(db.results(task.id), results);
 });
 
 
 test('trusted execution-session actions expose the current contract', () => {
   for (const action of ['executionSessions']) valid(request, { action });
-  valid(response(path, 'executionSessions'), { sessions: [{ sessionId: 'session', ticketId: 'ticket', title: 'Ticket', available: true }] });
+  valid(response(path, 'executionSessions'), { sessions: [{ sessionId: 'session', taskId: 'task', title: 'Task', available: true }] });
   valid(response(path, 'executionSessions'), { sessions: [
-    { sessionId: 'root', ticketId: 'ticket', title: 'Ticket', available: true, role: 'worker', parentSessionId: null, status: 'running', runState: 'running', promptable: true },
-    { sessionId: 'child', ticketId: 'ticket', title: 'Ticket', available: true, role: 'child-worker', parentSessionId: 'root', status: 'completed', runState: 'verifying', promptable: false, reason: '子执行会话仅供查看，请向所属工单补充要求。' },
+    { sessionId: 'root', taskId: 'task', title: 'Task', available: true, role: 'worker', parentSessionId: null, status: 'running', runState: 'running', promptable: true },
+    { sessionId: 'child', taskId: 'task', title: 'Task', available: true, role: 'child-worker', parentSessionId: 'root', status: 'completed', runState: 'verifying', promptable: false, reason: '子执行会话仅供查看，请向所属任务补充要求。' },
   ] });
-  assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', ticketId: 'ticket', title: 'Ticket', available: true, promptable: 'yes' }] }), false);
-  assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', ticketId: 'ticket', title: 'Ticket', available: true, role: 'ordinary' }] }), false);
-  assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', ticketId: 'ticket', title: 'Ticket', available: false }] }), false);
+  assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', taskId: 'task', title: 'Task', available: true, promptable: 'yes' }] }), false);
+  assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', taskId: 'task', title: 'Task', available: true, role: 'ordinary' }] }), false);
+  assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', taskId: 'task', title: 'Task', available: false }] }), false);
   const result = compile({ $ref: '#/components/schemas/AssistantCurrentResult' });
   assert.equal(result({ version: 1, instructionRevision: 1, review: { verdict: 'passed' } }), false);
   valid(request, { action: 'review' }); // Background memory review remains independent.
@@ -407,7 +407,7 @@ test('approval origins expose read-only Router and Worker links with scoped tool
   valid(validate, { origins: [] });
   const router = { kind: 'router', title: '主聊天', sourceTitle: '主聊天',
     sessionId: 'router', ownerSessionId: 'router', ownerThreadId: 'main' };
-  const origin = { kind: 'worker', sourceTitle: '主聊天', ticketId: 'ticket', title: '发送准备稿', assignmentId: 'assignment', runId: 'run',
+  const origin = { kind: 'worker', sourceTitle: '主聊天', taskId: 'task', title: '发送准备稿', assignmentId: 'assignment', runId: 'run',
     sessionId: 'worker', ownerSessionId: 'router', ownerThreadId: 'main' };
   valid(validate, { origins: [router, origin] });
   assert.equal(validate({ origins: [{ ...origin, approvalToken: 'invented' }] }), false);
@@ -415,16 +415,16 @@ test('approval origins expose read-only Router and Worker links with scoped tool
   assert.equal(validate({ origins: [missing] }), false);
 });
 
-test('ticket archive scope and direct history lookup share the original ledger contract', () => {
-  valid(request, { action: 'tickets', archived: false });
-  valid(request, { action: 'tickets', archived: true, limit: 2 });
-  valid(request, { action: 'tickets', ticketId: 'closed-original' });
-  assert.equal(request({ action: 'tickets', archived: 'yes' }), false);
-  assert.equal(request({ action: 'tickets', ticketId: '' }), false);
-  assert.equal(request({ action: 'tickets', limit: 1001 }), false);
-  const ticket = compile({ $ref: '#/components/schemas/AssistantTicket' });
+test('task archive scope and direct history lookup share the original ledger contract', () => {
+  valid(request, { action: 'tasks', archived: false });
+  valid(request, { action: 'tasks', archived: true, limit: 2 });
+  valid(request, { action: 'tasks', taskId: 'closed-original' });
+  assert.equal(request({ action: 'tasks', archived: 'yes' }), false);
+  assert.equal(request({ action: 'tasks', taskId: '' }), false);
+  assert.equal(request({ action: 'tasks', limit: 1001 }), false);
+  const task = compile({ $ref: '#/components/schemas/AssistantTask' });
   const original = { id: 'closed-original', status: 'completed', instructionRevision: 1, resultVersion: 1,
-    adjustmentOfTicketId: null, liveSummary: { goal: '检查文件', progress: '已交付', blocker: '', status: 'completed', updatedAt: '2026-11-09T00:00:00Z' } };
-  valid(ticket, { ...original, archived: true });
-  assert.equal(ticket({ ...original, archived: 'true' }), false);
+    adjustmentOfTaskId: null, liveSummary: { goal: '检查文件', progress: '已交付', blocker: '', status: 'completed', updatedAt: '2026-11-09T00:00:00Z' } };
+  valid(task, { ...original, archived: true });
+  assert.equal(task({ ...original, archived: 'true' }), false);
 });

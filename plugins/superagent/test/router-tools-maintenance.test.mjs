@@ -27,7 +27,7 @@ async function fixture(t, { threadId = 'main', channel } = {}) {
 
 test('Router immediate memory uses real original evidence, creates no task, and preserves correction and forgetting', async t => {
   const f = await fixture(t);
-  const before = f.store.orchestration.listTickets().length;
+  const before = f.store.orchestration.listTasks().length;
   const saved = await f.run('assistant_memory', { content: '用户偏好简洁回答。', source: { excerpt: 'model invented' } });
   assert.equal(saved.source.excerpt, '我喜欢简洁回答。');
   assert.equal(saved.source.messageId, 'message-1');
@@ -36,7 +36,7 @@ test('Router immediate memory uses real original evidence, creates no task, and 
   const corrected = await f.run('assistant_memory', { id: saved.id, revision: saved.revision, content: '偏好先结论再说明。' });
   assert.equal(corrected.revision, saved.revision + 1);
   assert.deepEqual(await f.run('assistant_memory', { id: saved.id, revision: corrected.revision, remove: true }), { removed: true });
-  assert.equal(f.store.orchestration.listTickets().length, before);
+  assert.equal(f.store.orchestration.listTasks().length, before);
   assert.deepEqual(f.actions, []);
   f.events().push({ type: 'turn/end' });
   await assert.rejects(f.run('assistant_memory', { content: 'no current turn' }), /当前原始用户消息/);
@@ -96,16 +96,16 @@ test('skill usage is separate from effectiveness and feedback persists the real 
   await assert.rejects(f.run('assistant_review', { ...args, id: 'third-party' }), /可用自建技能/);
 });
 
-test('ideas expose proactive preferences and explicit dismissal without creating a ticket', async t => {
+test('ideas expose proactive preferences and explicit dismissal without creating a task', async t => {
   const f = await fixture(t, { threadId: 'manual-side' });
   const idea = f.store.ideas.propose({ title: 'A useful suggestion', content: 'Consider organizing references.', source: { messageId: 'source', sessionId: f.agent.id }, idempotencyKey: 'idea:1', expiresAt: new Date(Date.now() + 86400000).toISOString() });
-  const before = f.store.orchestration.listTickets().length;
+  const before = f.store.orchestration.listTasks().length;
   const result = await f.run('assistant_review', { op: 'ideas' });
   assert.equal(result.ideas[0].id, idea.id);
   assert.equal(result.preferences.name, 'PROACTIVE_PREFERENCES.md');
   f.message('这个建议不需要，别再提了。');
   assert.equal((await f.run('assistant_review', { op: 'dismiss-idea', id: idea.id })).idea.status, 'dismissed');
-  assert.equal(f.store.orchestration.listTickets().length, before);
+  assert.equal(f.store.orchestration.listTasks().length, before);
   assert.deepEqual(f.actions, []);
 });
 

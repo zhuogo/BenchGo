@@ -1,0 +1,11 @@
+.ba-task-waiting{min-width:0;font-size:13px;line-height:1.6}
+.ba-task-waiting>[role=img]{display:inline-flex;color:var(--dsw-alias-warning-default,#a06f2c)}
+.ba-task-waiting>p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ba-muted)}
+.ba-task-waiting>.ba-row-actions{margin-top:4px}
+.ba-task-waiting-actions>.ba-row-actions{margin:0}
+.ba-task-waiting .ba-task-attention{margin:0}
+.ba-task-waiting>[role=alert]{color:var(--dsw-alias-danger-default,#c14b45)}
+.ba-task-waiting.ba-task-waiting-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:4px 0}
+.ba-task-waiting-row>.ba-task-waiting-reason{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ba-task-waiting-row>.ba-row-actions{grid-column:3;grid-row:1;margin:0;flex-wrap:nowrap}
+.ba-task-waiting-row>p:not(.ba-task-waiting-reason),.ba-task-waiting-row>.ba-task-attention{grid-column:2/-1}

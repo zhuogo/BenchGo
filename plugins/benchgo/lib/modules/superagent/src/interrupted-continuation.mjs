@@ -1,8 +1,8 @@
 import { interruptedTurnClosers } from '@deepseek-ai/dsh-session';
 import { executionEvidence, recoveryStorage } from './execution-evidence.mjs';
 import { executionEffects } from './execution-effects.mjs';
-import { validateTicketMandate } from './assessment-policy.mjs';
-import { ticketExecutionBlocked } from './ticket-lifecycle.mjs';
+import { validateTaskMandate } from './assessment-policy.mjs';
+import { taskExecutionBlocked } from './task-lifecycle.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
@@ -50,13 +50,13 @@ export function verifyInterruptedTranscript(events, saved) {
 /** Lock the original official session, inspect it, then queue the same run; no Agent executes here. */
 export async function requestInterruptedContinuation({ ctx, database, assignmentId, fence, instructionRevision, readPolicy, signal, now = Date.now() }) {
   signal.throwIfAborted();
-  const assignment = database.getAssignment(assignmentId), ticket = assignment && database.getTicket(assignment.ticketId);
+  const assignment = database.getAssignment(assignmentId), task = assignment && database.getTask(assignment.taskId);
   const run = database.runs(assignmentId).find(item => item.fence === fence);
   if (!assignment || assignment.state !== 'uncertain' || assignment.fence !== fence || !run || run.state !== 'uncertain'
-    || assignment.stopRequest || !ticket || ticketExecutionBlocked(ticket)) throw fail('FENCING_CONFLICT', 'Original execution is not available for continuation');
-  if (ticket.instructionRevision !== instructionRevision || assignment.instructionRevision !== instructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Original execution requirements changed');
+    || assignment.stopRequest || !task || taskExecutionBlocked(task)) throw fail('FENCING_CONFLICT', 'Original execution is not available for continuation');
+  if (task.instructionRevision !== instructionRevision || assignment.instructionRevision !== instructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Original execution requirements changed');
   if (!database.getWorkerExecutionState(run.id)?.models?.length) throw fail('WORKER_MODEL_ROUTE', 'Original frozen Worker model is unavailable');
-  if (database.attentions(ticket.id).some(row => row.state === 'waiting')) throw fail('EXECUTION_PAUSE_UNVERIFIED', 'Original execution is waiting for a user answer');
+  if (database.attentions(task.id).some(row => row.state === 'waiting')) throw fail('EXECUTION_PAUSE_UNVERIFIED', 'Original execution is waiting for a user answer');
   const persistence = recoveryStorage(ctx);
   if (!persistence?.open || !ctx.agents?.get || !ctx.agents?.resume) throw fail('SESSION_UNAVAILABLE', 'Official session recovery is unavailable');
   if (ctx.agents.get(run.sessionId)) throw fail('SESSION_STILL_LIVE', 'Original execution still owns its session');
@@ -69,14 +69,17 @@ export async function requestInterruptedContinuation({ ctx, database, assignment
     const executionEffects = assertInterruptedToolsSettled(events);
     const closers = interruptedTurnClosers(events);
     const terminal = closers.at(-1) || [...events].reverse().find(event => event.type === 'turn/end');
-    // User cancellation, a pause and completed results keep their existing dedicated paths.
-    if (!['interrupted', 'error'].includes(terminal?.data?.reason?.kind) || closers.some(event => event.type === 'tool/result')) throw fail('EXECUTION_PAUSE_UNVERIFIED', 'Execution has no safely resumable interrupted ending');
+    // Host disposal is an interruption, not a user cancellation. All writer,
+    // tool, effect and authorization checks still apply to its original run.
+    const ending = terminal?.data?.reason;
+    const resumable = ['interrupted', 'error'].includes(ending?.kind) || ending?.kind === 'aborted' && ending.reason?.kind === 'disposed';
+    if (!resumable || closers.some(event => event.type === 'tool/result')) throw fail('EXECUTION_PAUSE_UNVERIFIED', 'Execution has no safely resumable interrupted ending');
     const evidence = { ...executionEvidence(log), executionEffects, directory: run.directory,
       ...(run.environment ? { environment: run.environment } : {}), runId: run.id, sessionId: run.sessionId, interrupted: true };
     const policy = await readPolicy();
     signal.throwIfAborted();
     const result = database.queueInterruptedContinuation(assignmentId, { fence, runId: run.id, instructionRevision,
-      evidence, now, mandate: ticket.mandate, validateMandate: mandate => validateTicketMandate(mandate, { policy }) });
+      evidence, now, mandate: task.mandate, validateMandate: mandate => validateTaskMandate(mandate, { policy }) });
     return { state: 'queued', assignment: result };
   } finally { await handle.close(); }
 }

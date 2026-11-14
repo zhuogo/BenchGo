@@ -12,7 +12,7 @@ test('delivery worker is idempotent and persists failed attempts', async t => {
   t.after(() => database.close());
   t.after(() => rm(directory, { recursive: true, force: true }));
   const task = { id: 'delivery-task', requestId: 'delivery-request', fingerprint: 'delivery-fingerprint', status: 'running', rowVersion: 1, instructionRevision: 1, title: 'delivery' };
-  const event = database.notify(task, 'ticket.result', { publication: { action: 'deliver', origin: 'router', text: '工作完成，结果已整理好。' } }, 'delivery-task:1:completed');
+  const event = database.notify(task, 'task.result', { publication: { action: 'deliver', origin: 'router', text: '工作完成，结果已整理好。' } }, 'delivery-task:1:completed');
   const sent = [];
   const worker = createAssistantDeliveryWorker({ database, targets: async () => ['phone', 'tablet'], send: async (reply, meta) => {
     assert.equal(reply.origin, 'router');
@@ -35,7 +35,7 @@ test('offline target providers retain outbox rows until a device is available', 
   t.after(() => database.close());
   t.after(() => rm(directory, { recursive: true, force: true }));
   const task = { id: 'offline-task', requestId: 'offline-request', fingerprint: 'offline-fingerprint', status: 'running', rowVersion: 1, instructionRevision: 1, title: 'offline' };
-  const event = database.notify(task, 'ticket.result', { publication: { action: 'deliver', origin: 'router', text: '结果已经保存，可以查看了。' } }, 'offline-task:1:completed');
+  const event = database.notify(task, 'task.result', { publication: { action: 'deliver', origin: 'router', text: '结果已经保存，可以查看了。' } }, 'offline-task:1:completed');
   let sent = 0;
   const worker = createAssistantDeliveryWorker({ database, targets: async () => [], send: async () => { sent++; return true; } });
   const result = await worker.tick();

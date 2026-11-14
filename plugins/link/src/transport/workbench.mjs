@@ -4,7 +4,10 @@ import { createRequire } from 'node:module';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { createGzip } from 'node:zlib';
 import { WebSocketServer } from 'ws';
+import { gzipStatic } from './static-encoding.mjs';
 
 export const WORKBENCH_PATH = '/link/workbench/';
 const COOKIE = 'dsh_link_workbench';
@@ -125,8 +128,18 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot } = {}) {
     res.once('close', onClose);
     const onAbort = () => { if (!res.writableEnded) res.destroy(); };
     record.abort.signal.addEventListener('abort', onAbort, { once: true });
-    const sendResponse = async response => {
-      res.writeHead(response.status, { ...headers, ...Object.fromEntries(response.headers), 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
+    const sendResponse = async (response, staticAsset = false) => {
+      const compress = staticAsset && gzipStatic(req, response);
+      const outgoing = { ...headers, ...Object.fromEntries(response.headers), 'cache-control': 'no-store', 'x-accel-buffering': 'no' };
+      if (staticAsset) outgoing.vary = [...new Set((outgoing.vary || '').split(',').map(value => value.trim()).filter(Boolean).concat('Accept-Encoding'))].join(', ');
+      if (compress) {
+        outgoing['content-encoding'] = 'gzip'; delete outgoing['content-length'];
+        if (outgoing.etag && !outgoing.etag.startsWith('W/')) outgoing.etag = 'W/' + outgoing.etag;
+      }
+      res.writeHead(response.status, outgoing);
+      if (compress && req.method !== 'HEAD' && response.body) {
+        await pipeline(Readable.fromWeb(response.body), createGzip({ level: 4 }), res, { signal }); return;
+      }
       if (req.method !== 'HEAD' && response.body) for await (const chunk of response.body) await writeChunk(res, chunk, signal);
       res.end();
     };
@@ -204,7 +217,7 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot } = {}) {
       if (!['GET', 'HEAD'].includes(req.method)) throw fail('不支持的方法', 405);
       if (path.startsWith('plugins/')) {
         if (!ctx.clientModules?.fetchBundle) throw fail('网页模块尚未就绪', 503);
-        await sendResponse(await ctx.clientModules.fetchBundle(new Request(new URL('/' + path + url.search, url.origin), { method: req.method, signal }))); return;
+        await sendResponse(await ctx.clientModules.fetchBundle(new Request(new URL('/' + path + url.search, url.origin), { method: req.method, signal })), true); return;
       }
       if (path === 'workbench.js') {
         const bytes = await readFile(new URL('workbench.js', webRoot));
@@ -218,13 +231,12 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot } = {}) {
       let data = await readFile(asset);
       let policy = headers['content-security-policy'];
       if (path === '' || path === 'index.html') {
-        const html = ctx.webServer.renderIndex(data.toString()).replace(/<base\b[^>]*>/gi, '').replace(/(["'])\/(plugins|api)\//g, (_, quote, route) => quote + WORKBENCH_PATH + route + '/').replace(/<head(?:\s[^>]*)?>/i, open => open + '<base href="' + WORKBENCH_PATH + '"><script src="' + WORKBENCH_PATH + 'workbench.js"></script>').replace('width=device-width, initial-scale=1', 'width=device-width, initial-scale=1, viewport-fit=cover');
+        const html = ctx.webServer.renderIndex(data.toString(), record.peer).replace(/<base\b[^>]*>/gi, '').replace(/(["'])\/(plugins|api)\//g, (_, quote, route) => quote + WORKBENCH_PATH + route + '/').replace(/<head(?:\s[^>]*)?>/i, open => open + '<base href="' + WORKBENCH_PATH + '"><script src="' + WORKBENCH_PATH + 'workbench.js"></script>').replace('width=device-width, initial-scale=1', 'width=device-width, initial-scale=1, viewport-fit=cover');
         const hashes = [...html.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map(match => "'sha256-" + createHash('sha256').update(match[1]).digest('base64') + "'");
         policy = "default-src 'self'; script-src 'self' 'unsafe-eval' " + hashes.join(' ') + "; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; frame-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
         data = Buffer.from(html);
       }
-      res.writeHead(200, { ...headers, 'content-security-policy': policy, 'permissions-policy': 'microphone=(self), camera=(self)', 'content-type': mime[extname(asset)] ?? 'application/octet-stream' });
-      res.end(req.method === 'HEAD' ? undefined : data);
+      await sendResponse(new Response(req.method === 'HEAD' ? null : data, { headers: { 'content-security-policy': policy, 'permissions-policy': 'microphone=(self), camera=(self)', 'content-type': mime[extname(asset)] ?? 'application/octet-stream', 'content-length': String(data.length) } }), path !== '' && path !== 'index.html');
     } finally { record.abort.signal.removeEventListener('abort', onAbort); res.off('close', onClose); }
   };
   return { authenticate, begin, handle, upgrade, revoke, close: async () => { closed = true; await Promise.all([...peers.keys()].map(disposePeer)); realtime.close(); } };

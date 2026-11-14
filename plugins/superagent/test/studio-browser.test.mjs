@@ -39,6 +39,7 @@ async function fixture() {
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-studio-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')),
+      '@deepseek-ai/dsh-util-workspace-path': join(root, 'deepseek-harness/packages/util/workspace-path/src/index.ts'),
       '@deepseek-ai/dsh-api-gateway/client': requireOfficial.resolve('@deepseek-ai/dsh-api-gateway/client') },
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.woff2': 'dataurl', '.woff': 'dataurl', '.ttf': 'dataurl' }, plugins: [{ name: 'official-studio-primitives-source', setup(build) {
       // Use the pinned official components directly when workspace lib outputs are absent.

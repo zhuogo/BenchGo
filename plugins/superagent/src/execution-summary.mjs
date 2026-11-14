@@ -27,40 +27,40 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
   const pending = new Map(), active = new Map(), lastStarted = new Map(), tasks = new Set();
   let timer, retryTimer, retryDelay = 250, closed = false, lastGlobalStarted = -Infinity, cursor = store.executionSummaryCursor(), liveAfter = Infinity, draining, unsubscribe;
   const error = cause => { try { onError(cause); } catch {} };
-  const safeNotify = ticketId => { try { onChange(ticketId); } catch (cause) { error(cause); } };
+  const safeNotify = taskId => { try { onChange(taskId); } catch (cause) { error(cause); } };
   const audit = record => store.recordAuxiliaryActivity({ kind: 'summary', ...record });
   const observeLatest = current => {
-    const previous = store.executionSummary(current.ticketId);
+    const previous = store.executionSummary(current.taskId);
     const row = store.observeExecutionSummary({ ...current, text: current.fallback, observedAt: now() });
-    if (!previous || previous.text !== row.text || previous.runId !== row.runId || previous.instructionRevision !== row.instructionRevision) safeNotify(current.ticketId);
+    if (!previous || previous.text !== row.text || previous.runId !== row.runId || previous.instructionRevision !== row.instructionRevision) safeNotify(current.taskId);
     return row;
   };
 
-  async function load(ticketId, { model = false, signal } = {}) {
-    let facts = await executionFacts.evidence({ ticketId, limit: 80 });
+  async function load(taskId, { model = false, signal } = {}) {
+    let facts = await executionFacts.evidence({ taskId, limit: 80 });
     // The evidence API pages forward. A busy long-lived run must not keep
     // summarizing its first page forever; take a bounded current suffix.
-    if (facts.hasMore) facts = await executionFacts.evidence({ ticketId, after: Math.max(0, (facts.runtime?.evidenceCursor ?? facts.currentCursor) - 200), limit: 200 });
-    const ticket = await store.getTicket(ticketId);
-    if (!ticket) return null;
+    if (facts.hasMore) facts = await executionFacts.evidence({ taskId, after: Math.max(0, (facts.runtime?.evidenceCursor ?? facts.currentCursor) - 200), limit: 200 });
+    const task = await store.getTask(taskId);
+    if (!task) return null;
     const runtime = facts.runtime || {}, projection = facts.projections?.at(-1);
     const runId = runtime.run?.id || projection?.runId || 'pending';
-    const instructionRevision = ticket.instructionRevision ?? runtime.ticket?.instructionRevision ?? projection?.instructionRevision ?? 1;
+    const instructionRevision = task.instructionRevision ?? runtime.task?.instructionRevision ?? projection?.instructionRevision ?? 1;
     const watermark = runtime.evidenceCursor ?? facts.currentCursor ?? facts.cursor ?? 0;
     const waitKind = runtime.wait?.kind || runtime.wait?.reason;
-    const control = ticket.executionControl || {};
+    const control = task.executionControl || {};
     const controlPhase = ['pauseRequested', 'paused', 'stopRequested', 'stopped'].filter(key => control[key] === true).join(',') || 'active';
-    const phase = `${ticket.status || 'unknown'}:${controlPhase}:${['user', 'approval', 'background-job', 'long-operation'].includes(waitKind) ? waitKind : 'none'}`;
-    const previous = store.executionSummary(ticketId);
-    if (!lastStarted.has(ticketId)) {
-      const last = store.latestAuxiliaryActivity({ kind: 'summary', ticketId, runId, instructionRevision });
-      if (Number.isFinite(last?.startedAt)) lastStarted.set(ticketId, last.startedAt);
+    const phase = `${task.status || 'unknown'}:${controlPhase}:${['user', 'approval', 'background-job', 'long-operation'].includes(waitKind) ? waitKind : 'none'}`;
+    const previous = store.executionSummary(taskId);
+    if (!lastStarted.has(taskId)) {
+      const last = store.latestAuxiliaryActivity({ kind: 'summary', taskId, runId, instructionRevision });
+      if (Number.isFinite(last?.startedAt)) lastStarted.set(taskId, last.startedAt);
     }
-    const progressReports = model ? await readExecutionProgressReports({ sessionQuery, facts, ticketId, runId, instructionRevision, signal }) : [];
-    const input = model ? createExecutionSummaryInput({ ticketId, runId, instructionRevision, watermark, status: ticket.status, executionControl: control,
-      target: ticket.target, acceptance: ticket.acceptance, previousSummary: previous?.text, facts, progressReports }, options) : undefined;
-    return { ticketId, runId, instructionRevision, watermark, phase, input, facts,
-      fallback: deterministicExecutionSummary({ status: ticket.status, executionControl: control, continuationWait: ticket.continuationWait, progress: ticket.liveSummary?.progress }) };
+    const progressReports = model ? await readExecutionProgressReports({ sessionQuery, facts, taskId, runId, instructionRevision, signal }) : [];
+    const input = model ? createExecutionSummaryInput({ taskId, runId, instructionRevision, watermark, status: task.status, executionControl: control,
+      target: task.target, acceptance: task.acceptance, previousSummary: previous?.text, facts, progressReports }, options) : undefined;
+    return { taskId, runId, instructionRevision, watermark, phase, input, facts,
+      fallback: deterministicExecutionSummary({ status: task.status, executionControl: control, continuationWait: task.continuationWait, progress: task.liveSummary?.progress }) };
   }
 
   function arm() {
@@ -74,35 +74,35 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
     timer?.unref?.();
   }
 
-  async function observe(ticketId, { model = false, automatic = false } = {}) {
+  async function observe(taskId, { model = false, automatic = false } = {}) {
     if (closed) return;
-    const current = await load(ticketId);
+    const current = await load(taskId);
     if (!current || closed) return;
     observeLatest(current);
     if (!model) return current;
-    store.markExecutionSummaryPending(ticketId, current.watermark);
-    const old = pending.get(ticketId), at = now(), eventCount = (old?.eventCount || 0) + 1;
+    store.markExecutionSummaryPending(taskId, current.watermark);
+    const old = pending.get(taskId), at = now(), eventCount = (old?.eventCount || 0) + 1;
     const firstAt = old?.firstAt ?? at;
-    pending.set(ticketId, { ...current, automatic: old?.automatic === false ? false : automatic, firstAt, eventCount,
+    pending.set(taskId, { ...current, automatic: old?.automatic === false ? false : automatic, firstAt, eventCount,
       dueAt: eventCount >= options.eventThreshold ? at : Math.min(at + options.mergeMs, firstAt + options.maxWaitMs) });
     arm();
   }
 
   async function execute(row, controller) {
     const startedAt = now();
-    let b = { ticketId: row.ticketId, runId: row.runId, instructionRevision: row.instructionRevision, watermark: row.watermark }, inputCharacters = 0;
+    let b = { taskId: row.taskId, runId: row.runId, instructionRevision: row.instructionRevision, watermark: row.watermark }, inputCharacters = 0;
     try {
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(options.timeoutMs)]);
-      const current = await load(row.ticketId, { model: true, signal });
+      const current = await load(row.taskId, { model: true, signal });
       if (!current || closed) return;
       row = { ...row, ...current };
-      b = { ticketId: row.ticketId, runId: row.runId, instructionRevision: row.instructionRevision, watermark: row.watermark };
+      b = { taskId: row.taskId, runId: row.runId, instructionRevision: row.instructionRevision, watermark: row.watermark };
       observeLatest(row);
-      const previous = store.executionSummary(row.ticketId);
+      const previous = store.executionSummary(row.taskId);
       if (row.automatic && (!row.input.progressReports.length || previous?.phase === row.phase
         && previous.reportRefs?.length === row.input.progressReports.length
         && row.input.progressReports.every((report, index) => previous.reportRefs[index] === report.evidenceRef))) {
-        store.clearExecutionSummaryPending(row.ticketId, row.watermark); return;
+        store.clearExecutionSummaryPending(row.taskId, row.watermark); return;
       }
       inputCharacters = JSON.stringify(row.input).length;
       audit({ ...b, status: 'started', startedAt, inputCharacters });
@@ -113,19 +113,19 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
       signal.throwIfAborted();
       const output = summaryResult(result.text, row.input);
       // A phase/revision event can arrive while the model request is completing.
-      const latest = closed ? null : await load(row.ticketId);
+      const latest = closed ? null : await load(row.taskId);
       if (latest) observeLatest(latest);
       const published = closed ? { published: false } : store.publishExecutionSummary({ ...b, phase: row.phase, text: output.text,
         evidenceRefs: output.evidenceRefs, reportRefs: row.input.progressReports.map(report => report.evidenceRef), source: 'model', generatedAt: now() });
       if (!closed) audit({ ...b, status: published.published ? 'completed' : 'stale', startedAt, completedAt: now(), inputCharacters, routing: result.routing, published: published.published });
-      if (published.published) safeNotify(row.ticketId);
+      if (published.published) safeNotify(row.taskId);
     } catch (cause) {
       if (closed) { audit({ ...b, status: 'cancelled', code: 'ABORTED', startedAt, completedAt: now(), inputCharacters }); return; }
       if (!closed) {
-        const latest = await load(row.ticketId);
+        const latest = await load(row.taskId);
         if (closed) return;
         if (latest) observeLatest(latest);
-        const previous = store.executionSummary(row.ticketId);
+        const previous = store.executionSummary(row.taskId);
         // Keep an already valid sentence in the same phase; expose fallback separately.
         const text = previous?.runId === row.runId && previous?.instructionRevision === row.instructionRevision && previous?.phase === row.phase ? previous.text : row.fallback;
         const published = store.publishExecutionSummary({ ...b, phase: row.phase, text, source: previous?.source || 'deterministic',
@@ -133,7 +133,7 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
           generatedAt: now(), degraded: true, code: failureCode(cause) });
         audit({ ...b, status: 'degraded', startedAt, completedAt: now(), inputCharacters,
           code: failureCode(cause), routing: auxiliaryFailureRouting(cause), published: published.published });
-        if (published.published) safeNotify(row.ticketId);
+        if (published.published) safeNotify(row.taskId);
       }
     }
   }
@@ -141,12 +141,12 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
   async function pump() {
     if (closed) return;
     const at = now();
-    for (const [ticketId, row] of pending) {
+    for (const [taskId, row] of pending) {
       if (active.size >= options.globalConcurrency || at < lastGlobalStarted + options.globalMinIntervalMs) break;
-      if (active.has(ticketId) || row.dueAt > at || at < (lastStarted.get(ticketId) ?? -Infinity) + options.minIntervalMs) continue;
-      pending.delete(ticketId);
-      const controller = new AbortController(); active.set(ticketId, controller); lastStarted.set(ticketId, at); lastGlobalStarted = at;
-      const task = execute(row, controller).catch(error).finally(() => { active.delete(ticketId); tasks.delete(task); arm(); });
+      if (active.has(taskId) || row.dueAt > at || at < (lastStarted.get(taskId) ?? -Infinity) + options.minIntervalMs) continue;
+      pending.delete(taskId);
+      const controller = new AbortController(); active.set(taskId, controller); lastStarted.set(taskId, at); lastGlobalStarted = at;
+      const task = execute(row, controller).catch(error).finally(() => { active.delete(taskId); tasks.delete(task); arm(); });
       tasks.add(task);
     }
     arm();
@@ -161,9 +161,9 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
       do {
         const page = await executionFacts.page({ after: cursor, through, limit: 200 });
         const entries = page.entries || page.changes || [];
-        const ids = [...new Set(entries.filter(row => !['presentation', 'summary'].includes(row.kind)).map(row => row.ticketId).filter(Boolean))];
-        for (const ticketId of ids) await observe(ticketId, { automatic: true,
-          model: entries.some(row => row.ticketId === ticketId && row.seq > liveAfter && progressEvents.has(row.kind)) });
+        const ids = [...new Set(entries.filter(row => !['presentation', 'summary'].includes(row.kind)).map(row => row.taskId).filter(Boolean))];
+        for (const taskId of ids) await observe(taskId, { automatic: true,
+          model: entries.some(row => row.taskId === taskId && row.seq > liveAfter && progressEvents.has(row.kind)) });
         const next = page.cursor ?? page.nextCursor ?? entries.at(-1)?.seq ?? through;
         if (next <= cursor && cursor < through) throw Object.assign(new Error('Execution summary cursor did not advance'), { code: 'SUMMARY_CURSOR_STALLED' });
         cursor = next;
@@ -193,10 +193,10 @@ export function createExecutionSummaries({ executionFacts, store, requestText, l
     unsubscribe = executionFacts.subscribe(() => { void drain(); });
     // Pending requests from a previous process are not fresh user demand.
     // Refresh their visible state without replaying model calls.
-    for (const row of store.pendingExecutionSummaries()) await observe(row.ticketId);
+    for (const row of store.pendingExecutionSummaries()) await observe(row.taskId);
     await drain();
   }).catch(error);
-  return { ready, observe, request: ticketId => observe(ticketId, { model: true }), config: options, current: ticketId => store.executionSummary(ticketId),
+  return { ready, observe, request: taskId => observe(taskId, { model: true }), config: options, current: taskId => store.executionSummary(taskId),
     audit: query => store.auxiliaryActivities(query),
     async dispose() { closed = true; if (timer) cancel(timer); if (retryTimer !== undefined) cancel(retryTimer); unsubscribe?.(); pending.clear(); for (const controller of active.values()) controller.abort(); await ready; await draining; await Promise.allSettled([...tasks]); },
   };

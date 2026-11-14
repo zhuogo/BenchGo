@@ -152,8 +152,6 @@
 @keyframes voice-orb-think{0%,100%{transform:scale(.93) rotate(-4deg)}50%{transform:scale(1) rotate(5deg)}}
 @media(prefers-reduced-motion:reduce){.voice-call-orb,.voice-call-orb *{animation:none!important;transition:none!important}.voice-call-orb,.voice-orb-body,.voice-orb-aura{transform:none!important}.voice-recording-pulse i{transition:none;transform:scaleY(calc(.12 + var(--voice-level,0)*var(--voice-band,1)))}}
 
-.voice-settings-link{font-size:11px}
-
 /* The portal inherits public Harness tokens, including live theme changes. */
 .voice-call-stage{--voice-ground:var(--dsw-alias-bg-base,Canvas);position:fixed;inset:0;z-index:100;background:var(--voice-ground);display:flex;flex-direction:column;isolation:isolate;color:var(--voice-text);font-family:inherit;animation:voice-stage-enter 220ms ease both;overflow:hidden;-webkit-app-region:no-drag}
 html[data-windows-titlebar] .voice-call-stage{top:var(--dsh-windows-titlebar-height,36px)}

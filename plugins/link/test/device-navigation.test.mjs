@@ -18,7 +18,7 @@ function eventHost() {
 }
 function fixture(options = {}) {
   let cursor = 0, dirty = true, tree;
-  const slots = [], effects = [], requests = [];
+  const slots = [], effects = [], requests = [], selected = [];
   const host = Object.assign(eventHost(), { location: new URL(options.url || 'http://localhost:8000/'), ...options.globals });
   host.parent = host;
   const react = {
@@ -29,7 +29,7 @@ function fixture(options = {}) {
   };
   const module = { exports: {} };
   runInNewContext(code, { module, exports: module.exports, globalThis: host, window: host, location: host.location, URL,
-    document: { baseURI: host.location.href, body: {} },
+    document: { baseURI: host.location.href, body: {}, documentElement: { hasAttribute: name => options.desktop === true && name === 'data-windows-titlebar' }, dispatchEvent: event => selected.push(event) }, CustomEvent,
     fetch: async (url, input) => { requests.push({ url: String(url), input }); return options.response?.() || Response.json({ url: 'http://127.0.0.1:9000/enter?ticket=one' }); },
     require: id => id === 'react' ? react : id === 'react-dom' ? { createPortal: child => child } : id.includes('device-navigation') ? { connectDeviceNavigation: args => connectDeviceNavigation({ ...args, host }), deviceLauncherMode: () => deviceLauncherMode(host) } : id.includes('device-theme') ? { observeHostTheme: listener => observeHostTheme(listener, host), readHostTheme: () => readHostTheme(host) } : id.includes('http-response') ? { readJsonResponse } : {},
   });
@@ -38,7 +38,7 @@ function fixture(options = {}) {
     for (const node of nodes(tree)) if (node.props.ref && !node.props.ref.current) node.props.ref.current = node.type === 'dialog' ? { open: false, showModal() { this.open = true; }, close() { this.open = false; } } : { contentWindow: eventHost() };
     for (const effect of effects.splice(0)) effect();
   };
-  return { host, requests, get tree() { return tree; }, nodes: () => nodes(tree), async settle() { for (let i = 0; i < 8; i++) { if (dirty) render(); await new Promise(resolve => setImmediate(resolve)); } }, unmount() { for (const slot of slots) slot?.cleanup?.(); } };
+  return { host, requests, selected, get tree() { return tree; }, nodes: () => nodes(tree), async settle() { for (let i = 0; i < 8; i++) { if (dirty) render(); await new Promise(resolve => setImmediate(resolve)); } }, unmount() { for (const slot of slots) slot?.cleanup?.(); } };
 }
 
 test('owner capabilities distinguish Desktop, local browser, cloud and paired transports', () => {
@@ -78,6 +78,23 @@ test('closing and reopening preserves the centre iframe and avoids a second laun
   const frameNode = view.nodes().find(node => node.type === 'iframe');
   frameNode.props.onLoad(); await view.settle();
   assert.match(view.nodes().find(node => node.type === 'header').props.className, /dsh-device-dialog-ready/);
+  view.unmount();
+});
+
+test('desktop centre selection closes its dialog and forwards only its mounted exact-origin frame', async () => {
+  const view = fixture({ desktop: true }); await view.settle();
+  await view.nodes().find(node => node.props['aria-label'] === '设备中心').props.onClick(); await view.settle();
+  const frame = view.nodes().find(node => node.type === 'iframe');
+  assert.equal(new URL(frame.props.src).searchParams.get('reuseWorkbench'), '1');
+  const source = frame.props.ref.current.contentWindow, origin = new URL(frame.props.src).origin;
+  const data = { type: 'dsh-devices:select', deviceId: 'server/opaque-id' };
+  view.host.emit('message', { source: {}, origin, data });
+  view.host.emit('message', { source, origin: 'https://evil.test', data });
+  assert.equal(view.selected.length, 0);
+  view.host.emit('message', { source, origin, data }); await view.settle();
+  assert.equal(view.selected.length, 1); assert.equal(view.selected[0].type, 'benchgo:device-select');
+  assert.equal(view.selected[0].detail.deviceId, 'server/opaque-id');
+  assert.equal(view.nodes().find(node => node.type === 'dialog').props.ref.current.open, false);
   view.unmount();
 });
 

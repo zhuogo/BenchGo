@@ -5,6 +5,7 @@ import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { deviceRuntime } from './device-runtime.mjs';
 import { deviceIcon, deviceKind, deviceStatus, jobFailed, jobFinished, sshInput, workbenchUrl } from './device-state.mjs';
 import { workbenchNavigationMessage } from './device-navigation.mjs';
+import { deviceSwitchFrameMessage } from './device-switch.mjs';
 import { LinkSettings, PairingDialog, useLinkStyle } from './app.jsx';
 import css from './device-center.css';
 import { DeviceLoading } from './device-loading.jsx';
@@ -335,7 +336,7 @@ function ManageDevice({ device, runtime, onChanged, onRemoved, onCloseWorkbench,
       <Tooltip label="确认"><button type="submit" className="dc-name-save" aria-label="确认修改名称" disabled={working || !name.trim()}><UIIcon name="check" size={15} /></button></Tooltip>
     </form> : <strong>{savedName}</strong>}
   </div></div>;
-  return <><p className="dc-note">{deviceKind(device)} · {deviceStatus(device)}</p>{nameEditor}{device.kind === 'local' && runtime.isNative() && runtime.bootstrap?.()?.capabilities?.appUpdates === true && <LocalAppUpdates runtime={runtime} />}{device.kind === 'ssh' && <section className="dc-management"><h3>服务器</h3><div className="dc-service-actions">{[['status', '状态'], ['start', '启动'], ['restart', '重启'], ['stop', '停止'], ['logs', '日志'], ['update', '更新插件']].map(([operation, label]) => <Button key={operation} disabled={working} onClick={() => ['stop', 'restart', 'update'].includes(operation) ? setConfirm(operation) : void execute('serverAction', { operation })}>{label}</Button>)}</div><Button icon="refresh" disabled={working} onClick={() => setReconnecting(value => !value)}>重新连接隧道</Button>{reconnecting && <form onSubmit={event => { event.preventDefault(); void execute('reconnect', credentials.auth === 'key' ? { privateKey: credentials.privateKey, passphrase: credentials.passphrase } : { password: credentials.password }); setCredentials(emptyServer()); }}><div className="dc-form-grid"><Credentials form={credentials} setForm={setCredentials} disabled={working} /></div><div className="dc-actions"><Button primary type="submit" disabled={working}>连接</Button></div></form>}</section>}{confirm && confirm !== 'remove' && <div className="dc-confirm"><p>{confirm === 'stop' ? '停止服务器服务会中断远程工作台。' : confirm === 'restart' ? '重启时工作台会短暂断开。' : '更新服务器插件时工作台可能短暂断开。'}</p><Button disabled={working} onClick={() => setConfirm('')}>取消</Button><Button primary disabled={working} onClick={() => execute('serverAction', { operation: confirm })}>确认{confirm === 'stop' ? '停止' : confirm === 'restart' ? '重启' : '更新'}</Button></div>}{result && <pre className="dc-result" role="status">{String(result)}</pre>}<ErrorLine error={error} />{job && <><JobProgress job={job} />{jobFinished(job) && !jobFailed(job) && onOpenWorkbench && <div className="dc-actions"><Button primary onClick={() => onOpenWorkbench(job.device || device)}>重新打开工作台</Button></div>}{error && !jobFinished(job) && <Button onClick={() => { setError(''); setPollAttempt(value => value + 1); }}>重新检查进度</Button>}</>}{onCloseWorkbench && <section className="dc-management"><h3>工作台</h3><p className="dc-note">关闭页面会清除该页面尚未发送的内容，主机任务继续运行。</p><div className="dc-actions"><Button onClick={onCloseWorkbench}>关闭工作台页面</Button></div></section>}{device.kind !== 'local' && <section className="dc-remove"><h3>移除保存连接</h3><p className="dc-note">仅从此设备移除，不撤销授权，也不卸载或停止服务器。</p>{confirm === 'remove' ? <div className="dc-actions"><Button disabled={working} onClick={() => setConfirm('')}>取消</Button><Button danger disabled={working} onClick={() => execute('remove')}>确认移除</Button></div> : <Button danger icon="trash" disabled={working} onClick={() => setConfirm('remove')}>移除连接</Button>}</section>}</>;
+  return <><p className="dc-note">{[deviceKind(device), deviceStatus(device)].filter(Boolean).join(' · ')}</p>{nameEditor}{device.kind === 'local' && runtime.isNative() && runtime.bootstrap?.()?.capabilities?.appUpdates === true && <LocalAppUpdates runtime={runtime} />}{device.kind === 'ssh' && <section className="dc-management"><h3>服务器</h3><div className="dc-service-actions">{[['status', '状态'], ['start', '启动'], ['restart', '重启'], ['stop', '停止'], ['logs', '日志'], ['update', '更新插件']].map(([operation, label]) => <Button key={operation} disabled={working} onClick={() => ['stop', 'restart', 'update'].includes(operation) ? setConfirm(operation) : void execute('serverAction', { operation })}>{label}</Button>)}</div><Button icon="refresh" disabled={working} onClick={() => setReconnecting(value => !value)}>重新连接隧道</Button>{reconnecting && <form onSubmit={event => { event.preventDefault(); void execute('reconnect', credentials.auth === 'key' ? { privateKey: credentials.privateKey, passphrase: credentials.passphrase } : { password: credentials.password }); setCredentials(emptyServer()); }}><div className="dc-form-grid"><Credentials form={credentials} setForm={setCredentials} disabled={working} /></div><div className="dc-actions"><Button primary type="submit" disabled={working}>连接</Button></div></form>}</section>}{confirm && confirm !== 'remove' && <div className="dc-confirm"><p>{confirm === 'stop' ? '停止服务器服务会中断远程工作台。' : confirm === 'restart' ? '重启时工作台会短暂断开。' : '更新服务器插件时工作台可能短暂断开。'}</p><Button disabled={working} onClick={() => setConfirm('')}>取消</Button><Button primary disabled={working} onClick={() => execute('serverAction', { operation: confirm })}>确认{confirm === 'stop' ? '停止' : confirm === 'restart' ? '重启' : '更新'}</Button></div>}{result && <pre className="dc-result" role="status">{String(result)}</pre>}<ErrorLine error={error} />{job && <><JobProgress job={job} />{jobFinished(job) && !jobFailed(job) && onOpenWorkbench && <div className="dc-actions"><Button primary onClick={() => onOpenWorkbench(job.device || device)}>重新打开工作台</Button></div>}{error && !jobFinished(job) && <Button onClick={() => { setError(''); setPollAttempt(value => value + 1); }}>重新检查进度</Button>}</>}{(onCloseWorkbench || device.kind !== 'local') && <div className="dc-management dc-actions">{onCloseWorkbench && <Button onClick={onCloseWorkbench}>关闭工作台</Button>}{device.kind !== 'local' && (confirm === 'remove' ? <><Button disabled={working} onClick={() => setConfirm('')}>取消</Button><Button danger disabled={working} onClick={() => execute('remove')}>确认移除</Button></> : <Button danger icon="trash" disabled={working} onClick={() => setConfirm('remove')}>移除连接</Button>)}</div>}</>;
 }
 
 export function DeviceCenter({ runtime = deviceRuntime }) {
@@ -343,6 +344,7 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
   const [data, setData] = useState({ devices: [], capabilities: {} }), [loaded, setLoaded] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState(''), [modal, setModal] = useState(null), [showDevices, setShowDevices] = useState(true), [frames, setFrames] = useState([]), [activeId, setActiveId] = useState(null);
   const gate = useRef(false), frameElements = useRef(new Map());
   const [navigationReady, setNavigationReady] = useState([]);
+  const [switchReady, setSwitchReady] = useState([]);
   const [readyFrames, setReadyFrames] = useState([]);
   const [relayRevision, setRelayRevision] = useState(0);
   const [relayJob, setRelayJob] = useState(null);
@@ -357,12 +359,13 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
         event.source.postMessage({ type: 'dsh-devices:init', name }, new URL(frame.url).origin);
         setNavigationReady(items => items.includes(message.id) ? items : [...items, message.id]);
       } else if (message.type === 'dsh-devices:unready') setNavigationReady(items => items.filter(id => id !== message.id));
-      else if (message.id === activeId && navigationReady.includes(message.id)) { setShowDevices(true); setError(''); }
+      else if (message.id === activeId && (navigationReady.includes(message.id) || switchReady.includes(message.id))) { setShowDevices(true); setError(''); }
     };
     window.addEventListener('message', receive);
     return () => window.removeEventListener('message', receive);
-  }, [frames, data.devices, activeId, navigationReady]);
+  }, [frames, data.devices, activeId, navigationReady, switchReady]);
   const integratedNavigation = !showDevices && !modal && !error && navigationReady.includes(activeId);
+  const switchNavigation = !showDevices && !modal && !error && switchReady.includes(activeId);
   useEffect(() => {
     const parentOrigin = globalThis.__DSH_DEVICE_PARENT_ORIGIN__;
     if (parentOrigin && parent !== window) parent.postMessage({ type: 'dsh-devices:workbench-navigation', ready: integratedNavigation }, parentOrigin);
@@ -371,7 +374,9 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
   const frameLoaded = frame => {
     setReadyFrames(items => items.includes(frame.id) ? items : [...items, frame.id]);
     setNavigationReady(items => items.filter(id => id !== frame.id));
+    setSwitchReady(items => items.filter(id => id !== frame.id));
     frameElements.current.get(frame.id)?.contentWindow?.postMessage({ type: 'dsh-devices:probe' }, new URL(frame.url).origin);
+    frameElements.current.get(frame.id)?.contentWindow?.postMessage({ type: 'benchgo:device-switch:probe' }, new URL(frame.url).origin);
   };
   useEffect(() => { const node = document.createElement('style'); node.textContent = css; document.head.append(node); return () => node.remove(); }, []);
   const refresh = useCallback(async () => { const next = await runtime.call('list'); setData(next); if (next.relayJob) setRelayJob(next.relayJob); setLoaded(true); return next; }, [runtime]);
@@ -393,6 +398,11 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
   const select = useCallback(async device => {
     if (!device?.id || gate.current) return;
     if (runtime.isNative() && device.kind === 'local') { setModal({ type: 'manage', device }); return; }
+    const parentOrigin = globalThis.__DSH_DEVICE_PARENT_ORIGIN__ || new URLSearchParams(location.search).get('parentOrigin');
+    if (!runtime.isNative() && parentOrigin && parent !== window && new URLSearchParams(location.search).get('reuseWorkbench') === '1') {
+      parent.postMessage({ type: 'dsh-devices:select', deviceId: device.id }, parentOrigin);
+      setModal(null); setError(''); return;
+    }
     if (!runtime.isNative() && device.kind !== 'local' && !frames.some(frame => frame.id === device.id) && frames.length >= 4) { setError('已保留 4 个工作台。请在设备设置中关闭暂不用的工作台页面，再打开新设备。'); return; }
     gate.current = true; setBusy(device.id); setError('');
     const openHere = !runtime.isNative() && device.kind !== 'local' && !frames.some(item => item.id === device.id);
@@ -415,6 +425,30 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
       setModal(null); await refresh();
     } catch (reason) { setError(reason.message); setModal(null); if (openHere) setShowDevices(true); } finally { gate.current = false; setBusy(''); }
   }, [runtime, refresh, frames]);
+  useEffect(() => {
+    const publicDevices = data.devices.map(({ id, name, kind, status, deviceType }) => ({ id, name, kind, status, ...(deviceType ? { deviceType } : {}) }));
+    const publish = frame => {
+      const child = frameElements.current.get(frame.id)?.contentWindow;
+      const origin = new URL(frame.url).origin;
+      child?.postMessage({ type: 'benchgo:device-switch:init', devices: publicDevices, activeId: frame.id, busy, error }, origin);
+      // Keep the existing Link button available as the route back to this directory.
+      child?.postMessage({ type: 'dsh-devices:init', name: data.devices.find(item => item.id === frame.id)?.name || frame.name }, origin);
+    };
+    const receive = event => {
+      const message = deviceSwitchFrameMessage(event, frames.map(frame => ({ ...frame, window: frameElements.current.get(frame.id)?.contentWindow })));
+      if (!message) return;
+      if (message.type === 'benchgo:device-switch:ready') {
+        setSwitchReady(items => items.includes(message.id) ? items : [...items, message.id]);
+        publish(frames.find(frame => frame.id === message.id));
+      } else if (message.id === activeId && switchReady.includes(message.id)) {
+        const device = data.devices.find(item => item.id === message.deviceId);
+        if (device) void select(device);
+      }
+    };
+    for (const frame of frames) if (switchReady.includes(frame.id)) publish(frame);
+    window.addEventListener('message', receive);
+    return () => window.removeEventListener('message', receive);
+  }, [frames, data.devices, activeId, busy, error, select, switchReady]);
   const added = useCallback(async device => { const next = await refresh(); if (device?.id) await select(device); else { setModal(null); setShowDevices(true); setData(next); } }, [refresh, select]);
   const active = data.devices.find(item => item.id === activeId);
   // Keep the owner device in the same list so every device shares one scan path.
@@ -427,9 +461,9 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     if (next < 0) return;
     event.preventDefault(); tabs[next].focus(); setDirectoryTab(tabs[next].dataset.tab);
   };
-  const renderDevice = device => <article key={device.id} className={`dc-device ${activeId === device.id ? 'dc-selected' : ''}`}><button className="dc-device-open" disabled={!!busy} onClick={() => select(device)}><span className="dc-device-symbol"><UIIcon name={deviceIcon(device)} size={22} /></span><span className="dc-device-copy"><Tooltip label={device.name}><strong>{device.name}</strong></Tooltip><small>{deviceKind(device)}<span aria-hidden="true"> · </span><span data-status={device.status}>{busy === device.id ? '正在打开…' : currentLabel(device)}</span></small>{device.currentPath && <span className="dc-footnote">{device.currentPath === 'relay' ? '经我的中继' : '直连'}</span>}{device.warning && <span className="dc-device-error">{device.warning}</span>}{device.lastError && <span className="dc-device-error">{device.lastError}</span>}</span><UIIcon name={runtime.isNative() && device.kind === 'local' ? 'settings' : 'external'} size={16} /></button><Button icon="more" aria-label={`${device.name}设置`} onClick={() => setModal({ type: 'manage', device })} disabled={!!busy} /></article>;
+  const renderDevice = device => <article key={device.id} className={`dc-device ${activeId === device.id ? 'dc-selected' : ''}`}><button className="dc-device-open" disabled={!!busy} onClick={() => select(device)}><span className="dc-device-symbol"><UIIcon name={deviceIcon(device)} size={22} /></span><span className="dc-device-copy"><Tooltip label={device.name}><strong>{device.name}</strong></Tooltip><small>{deviceKind(device)}{(busy === device.id || currentLabel(device)) && <><span aria-hidden="true"> · </span><span data-status={device.status}>{busy === device.id ? '正在打开…' : currentLabel(device)}</span></>}</small>{device.warning && <span className="dc-device-error">{device.warning}</span>}{device.lastError && <span className="dc-device-error">{device.lastError}</span>}</span><UIIcon name={runtime.isNative() && device.kind === 'local' ? 'settings' : 'chevronRight'} size={16} /></button><Button icon="more" aria-label={`${device.name}设置`} onClick={() => setModal({ type: 'manage', device })} disabled={!!busy} /></article>;
   return <main className="dc-root">
-    <header className={'dc-topbar' + (integratedNavigation ? ' dc-topbar-integrated' : '')}>
+    <header className={'dc-topbar' + (integratedNavigation ? ' dc-topbar-integrated' : '') + (switchNavigation ? ' dc-topbar-switch' : '')}>
       <div className="dc-topbar-main">
         {canReturn && <Button className="dc-back" icon="chevronLeft" aria-label="返回工作台" onClick={returnToWorkbench} />}
         {!showDevices && <Button className="dc-back" icon="chevronLeft" aria-label="返回设备中心" title="返回设备中心" onClick={() => { setShowDevices(true); setError(''); }} />}

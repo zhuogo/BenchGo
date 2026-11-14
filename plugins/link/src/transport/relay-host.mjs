@@ -25,7 +25,7 @@ function validate(options) {
 }
 function headersFor(input, target) {
   const headers = {};
-  for (const name of ['accept', 'accept-language', 'content-type', 'content-length', 'range', 'if-none-match', 'if-modified-since', 'cookie']) {
+  for (const name of ['accept', 'accept-encoding', 'accept-language', 'content-type', 'content-length', 'range', 'if-none-match', 'if-modified-since', 'cookie']) {
     if (typeof input.headers?.[name] === 'string') headers[name] = input.headers[name];
   }
   if (['/link/api/rpc', '/link/api/workbench'].includes(input.path.split('?')[0]) && typeof input.headers?.authorization === 'string') headers.authorization = input.headers.authorization;

@@ -103,7 +103,7 @@ export function assessChannelAdmission({ policy, candidate, trigger, decision })
     && candidate.gate.allowed === true && candidate.gate.strength === 'inferred' && candidate.gate.evidence?.sourceVerified === true;
   if (!channelAllowed || candidate.gate.allowed === false || (!explicit && !inferred && !machineAttention)) return { allowed: false, reason: 'current-channel-actor-or-rule-denied' };
   if (['answer', 'ask'].includes(decision.outcome)) {
-    if (!explicit || decision.ticketId !== undefined) return { allowed: false, reason: 'direct-reply-requires-explicit-human-source' };
+    if (!explicit || decision.taskId !== undefined) return { allowed: false, reason: 'direct-reply-requires-explicit-human-source' };
     return { allowed: true, reason: 'authenticated-direct-reply' };
   }
 

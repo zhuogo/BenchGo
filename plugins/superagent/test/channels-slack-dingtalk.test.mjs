@@ -105,6 +105,8 @@ test('DingTalk Stream heartbeat/ACK and group/direct REST use official endpoints
   } });
   try {
     await adapter.start(); const socket = Socket.all.at(-1);
+    assert.equal(new URL(socket.url).searchParams.get('ticket'), 'secret-ticket');
+    assert.equal(new URL(socket.url).searchParams.has('task'), false);
     assert.equal((await adapter.status()).connection.state, 'connecting');
     socket.frame({ type: 'SYSTEM', headers: { topic: 'CONNECTED' } });
     socket.frame({ type: 'SYSTEM', headers: { topic: 'ping', messageId: 'ping1' }, data: 'pulse' });

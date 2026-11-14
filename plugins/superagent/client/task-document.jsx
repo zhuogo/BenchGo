@@ -9,5 +9,5 @@ export function TaskMarkdown({ text }) {
 }
 
 export function TaskDocument({ title, icon = 'document', meta, children }) {
-  return <section className="ba-ticket-document" aria-label={title}><header className="ba-ticket-document-head"><h3><UIIcon name={icon} size={18} />{title}</h3>{meta && <span className="ba-ticket-version">{meta}</span>}</header><div className="ba-ticket-document-content">{children}</div></section>;
+  return <section className="ba-task-document" aria-label={title}><header className="ba-task-document-head"><h3><UIIcon name={icon} size={18} />{title}</h3>{meta && <span className="ba-task-version">{meta}</span>}</header><div className="ba-task-document-content">{children}</div></section>;
 }

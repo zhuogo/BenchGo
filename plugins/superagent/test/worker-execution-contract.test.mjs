@@ -32,8 +32,8 @@ test('Worker route freezes once, preserves its selection after reopen and reject
   let database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'work', mandate: {} });
-  database.createAssignment(ticket.id, {});
+  const task = database.createTask({ threadId: 'thread', target: 'work', mandate: {} });
+  database.createAssignment(task.id, {});
   const [assignment] = database.claimAssignments('owner', { validateMandate: () => true });
   const run = database.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence, sessionId: 'worker-session', directory });
   const identity = { assignmentId: assignment.id, runId: run.id, owner: assignment.owner, fence: assignment.fence };
@@ -71,10 +71,10 @@ test('official loop stops repeated shared structural failures across tools witho
     }
   }
   ctx.llm.registerAdapter(['convergence-test'], new Adapter());
-  const assignment = { id: 'a', ticketId: 't', owner: 'o', fence: 1, state: 'claimed', leaseUntil: Date.now() + 60000 };
+  const assignment = { id: 'a', taskId: 't', owner: 'o', fence: 1, state: 'claimed', leaseUntil: Date.now() + 60000 };
   const run = { id: 'r', sessionId: 'convergence-same-session', owner: 'o', fence: 1, state: 'running' };
-  const ticket = { id: 't', status: 'running', instructionRevision: 1 };
-  const database = { getTicket: () => ticket };
+  const task = { id: 't', status: 'running', instructionRevision: 1 };
+  const database = { getTask: () => task };
   let created = 0, record;
   ctx.on('agent/created', () => { created++; });
   const handle = await ctx.agents.create({ sessionId: run.sessionId, setup: async (scope, agent) => {
@@ -99,21 +99,21 @@ test('official loop stops repeated shared structural failures across tools witho
 test('project membership attaches the same official session; no-project remains in the official ungrouped bucket', async () => {
   const calls = [], events = [], workspace = { id: 'workspace', attachSession: async id => calls.push(id) };
   const ctx = { workspaceRegistry: { resolveByPath: async path => { assert.equal(path, '/project'); return workspace; }, create: () => assert.fail('existing workspace must be reused') } };
-  const input = { ticket: { id: 't', mandate: { project: { path: '/project' } } }, assignment: { id: 'a' }, run: { id: 'r', sessionId: 'same-session' }, appendRecord: (_session, type, data) => events.push({ type, data }) };
+  const input = { task: { id: 't', mandate: { project: { path: '/project' } } }, assignment: { id: 'a' }, run: { id: 'r', sessionId: 'same-session' }, appendRecord: (_session, type, data) => events.push({ type, data }) };
   await attachExecutionSession(ctx, { session: {} }, input);
   await attachExecutionSession(ctx, { session: {} }, input);
   assert.deepEqual(calls, ['same-session', 'same-session']);
-  await attachExecutionSession({}, { session: {} }, { ...input, ticket: { id: 't', mandate: {} } });
+  await attachExecutionSession({}, { session: {} }, { ...input, task: { id: 't', mandate: {} } });
   assert.equal(events.length, 0, 'membership never extends the official Session log');
 });
 
 test('session lookup and projection keep completed execution accessible without archival', async () => {
-  const ticket = { id: 't', title: 'Task', status: 'running', mandate: {} }, assignment = { id: 'a', fence: 2 }, run = { id: 'r', sessionId: 'same', fence: 2 };
-  const database = { listTickets: () => [ticket], getTicket: () => ticket, assignments: () => [assignment], runs: () => [run] };
+  const task = { id: 't', title: 'Task', status: 'running', mandate: {} }, assignment = { id: 'a', fence: 2 }, run = { id: 'r', sessionId: 'same', fence: 2 };
+  const database = { listTasks: () => [task], getTask: () => task, assignments: () => [assignment], runs: () => [run] };
   assert.equal(findExecutionSessionOwner(database, 'same').run, run);
   assert.equal(findExecutionSessionOwner(database, 'missing'), null);
-  assert.deepEqual(executionSessionProjection(database, 't'), { available: true, ticketId: 't', title: 'Task', sessionId: 'same', assignmentId: 'a', runId: 'r', status: 'running', placement: 'ungrouped' });
-  ticket.status = 'completed';
+  assert.deepEqual(executionSessionProjection(database, 't'), { available: true, taskId: 't', title: 'Task', sessionId: 'same', assignmentId: 'a', runId: 'r', status: 'running', placement: 'ungrouped' });
+  task.status = 'completed';
   assert.equal(executionSessionProjection(database, 't').sessionId, 'same');
   assert.equal(executionSessionProjection(database, 't').status, 'completed');
 });

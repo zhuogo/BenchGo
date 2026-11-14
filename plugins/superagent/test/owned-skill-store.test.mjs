@@ -47,7 +47,7 @@ test('review inputs require durable real feedback, persist deduplication and bin
     assert.throws(() => api.recordOwnedSkillFeedback('example', { eventId: 'f1', text: 'Worked', source: {}, outcome: 'success' }), /source/);
     assert.throws(() => api.recordOwnedSkillFeedback('third-party', { eventId: 'f1', text: 'Worked', source: { messageId: 'm1' } }), /not found/);
     assert.throws(() => api.recordOwnedSkillFeedback('example', { eventId: 'f1', text: 'Worked', source: { messageId: 'm1' }, useEventId: 'preview' }), /evidence/);
-    const saved = api.recordOwnedSkillFeedback('example', { eventId: 'f1', text: 'Actual result was wrong.', source: { messageId: 'm1', ticketId: 't1' }, outcome: 'failure', useEventId: 'real-load', now: 2 * DAY });
+    const saved = api.recordOwnedSkillFeedback('example', { eventId: 'f1', text: 'Actual result was wrong.', source: { messageId: 'm1', taskId: 't1' }, outcome: 'failure', useEventId: 'real-load', now: 2 * DAY });
     assert.equal(saved.outcome, 'failure');
     api.db.close(); api = open(join(dir, 'skills.db'));
     assert.deepEqual(api.recordOwnedSkillFeedback('example', { eventId: 'f1', text: 'ignored duplicate', source: { messageId: 'm1' } }), saved);
@@ -58,7 +58,7 @@ test('review inputs require durable real feedback, persist deduplication and bin
     api.saveOwnedSkill({ id: 'example', body: 'Corrected procedure', source: { reviewId: 'r2' }, expectedVersion: oldVersion, now: 3 * DAY });
     assert.deepEqual(api.ownedSkillReviewInputs(), [], 'old feedback cannot validate a changed procedure');
     assert.throws(() => api.recordOwnedSkillFeedback('example', { eventId: 'old-use', text: 'Old procedure worked', source: { messageId: 'm2' }, useEventId: 'real-load' }), /current body/);
-    api.recordOwnedSkillFeedback('example', { eventId: 'f2', text: 'Observed success.', source: { ticketId: 't2' }, outcome: 'success' });
+    api.recordOwnedSkillFeedback('example', { eventId: 'f2', text: 'Observed success.', source: { taskId: 't2' }, outcome: 'success' });
     assert.equal(api.ownedSkillReviewInputs()[0].feedback[0].outcome, 'success');
     api.setOwnedSkillFixed('example', { fixed: true, expectedVersion: api.getOwnedSkill('example').version });
     assert.deepEqual(api.ownedSkillReviewInputs(), [], 'fixed skills are excluded from background review');

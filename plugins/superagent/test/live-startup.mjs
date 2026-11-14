@@ -46,7 +46,7 @@ try {
   const patch = [{ id: 'session-log-deepseek', config: { enabled: false } }, { id: 'session-telemetry-otel', disabled: true }, { id: 'commander-link', disabled: true }];
   if (liveModel) patch.push({ id: 'llm-pi-ai', config: { providers: { 'assistant-smoke': { api: 'openai-completions', baseURL: liveBase, apiKeyEnv: 'ASSISTANT_SMOKE_KEY', models: [{ id: liveModel, name: liveModel }] } } } });
   await writeFile(join(profile, 'cordis.patch.yml'), JSON.stringify(patch));
-  child = spawn(process.execPath, ['--import', pathToFileURL(join(root, 'deepseek-harness/node_modules/tsx/dist/esm/index.mjs')).href, join(root, 'deepseek-harness/apps/cli/src/bin.ts'), '--profile', 'web', '--host', '127.0.0.1', '--port', '0', '--no-open'], {
+  child = spawn(process.execPath, ['--import', pathToFileURL(join(root, 'scripts/source-host-loader.mjs')).href, '--import', pathToFileURL(join(root, 'deepseek-harness/node_modules/tsx/dist/esm/index.mjs')).href, join(root, 'deepseek-harness/apps/cli/src/bin.ts'), '--profile', 'web', '--host', '127.0.0.1', '--port', '0', '--no-open'], {
     cwd: directory, env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: directory, TMP: directory, HOME: home, USERPROFILE: home, DSH_HOME: dshHome, DSH_AGENTS_HOME: join(home, 'agents'), TSX_TSCONFIG_PATH: join(root, 'deepseek-harness/tsconfig.json'), DSH_TELEMETRY_DISABLED: '1', NO_COLOR: '1', ...(liveKey ? { ASSISTANT_SMOKE_KEY: liveKey } : {}) }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   ended = new Promise(resolve => { child.once('exit', resolve); child.once('error', error => { output += error.message; resolve(); }); });
@@ -74,7 +74,7 @@ try {
     const text = await response.text();
     assert.match(response.headers.get('content-type') || '', /application\/json/, `HTTP ${response.status}: ${text}; loader: ${safe()}`);
     const body = JSON.parse(text);
-    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(response.status, 200, `${JSON.stringify(body)}; loader: ${safe()}`);
     return body;
   };
   const state = await call({ action: 'state' });
@@ -106,9 +106,10 @@ try {
     assert.equal(projected.filter(row => row.role === 'user').length, 1, 'HTTP history plus live echo must show one user message');
     assert.equal(result.model.modelId, liveModel);
     if (fake) {
-      for (const name of ['assistant_delegate', 'assistant_tickets']) assert.ok(observedTools?.includes(name), `Expected ${name} in actual Router tools: ${observedTools?.join(', ')}; request keys: ${Object.keys(observedBody || {})}`);
+      for (const name of ['assistant_delegate', 'assistant_tasks', 'assistant_settings', 'ask_user_question']) assert.ok(observedTools?.includes(name), `Expected ${name} in actual Router tools: ${observedTools?.join(', ')}`);
+      for (const name of ['read', 'skill', 'web_fetch', 'plugin_manager', 'ops_discover_tools', process.platform === 'win32' ? 'pwsh' : 'bash']) assert.ok(!observedTools?.includes(name), `Unexpected execution tool ${name} in Router; request keys: ${Object.keys(observedBody || {})}`);
     }
-    console.log(fake ? 'PASS: real Harness Router preset exposes coordination tools and keeps execution tools out.' : 'PASS: real provider response through assistant Harness session.');
+    console.log(fake ? 'PASS: real Harness Router request keeps coordination and delegates environment execution.' : 'PASS: real provider response through assistant Harness session.');
   }
 } finally {
   if (child && child.exitCode === null && child.signalCode === null) {

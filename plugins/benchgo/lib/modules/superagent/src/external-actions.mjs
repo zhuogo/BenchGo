@@ -1,12 +1,12 @@
 import { actionHash, HIGH_RISK_ACTION_CATEGORIES, SITE_ACTION_CATEGORIES, canonicalAction } from './external-action-store.mjs';
-import { validateTicketMandate } from './assessment-policy.mjs';
-import { workerAppliedTicket } from './worker-permissions.mjs';
+import { validateTaskMandate } from './assessment-policy.mjs';
+import { workerAppliedTask } from './worker-permissions.mjs';
 import { requestExternalActionApproval } from './approval.mjs';
 import { channelExternalSendInputSchema } from './channel-policy.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
-const publicAction = ({ submission: _submission, binding, ...action }) => ({ ...action, ticketId: binding.ticketId });
+const publicAction = ({ submission: _submission, binding, ...action }) => ({ ...action, taskId: binding.taskId });
 const publicReceipt = receipt => {
   const fields = ['messageId', 'receiptId', 'transactionId'];
   if (receipt?.status !== 'accepted' || !fields.some(key => typeof receipt[key] === 'string' && receipt[key])) throw fail('ACTION_RECEIPT_UNKNOWN', '受控能力未返回确定回执，须先核实实际效果');
@@ -50,8 +50,8 @@ export function createExternalActionService({ store, registry, getContext, reque
     },
     async submit({ actionId }, exec) {
       const caller = await current(exec), owned = store.get(actionId);
-      for (const key of ['profileId', 'actorId', 'ticketId', 'assignmentId', 'runId', 'authorizationVersion', 'policyVersion']) {
-        if (String(caller[key]) !== owned.binding[key]) throw fail('ACTION_BINDING_CHANGED', '动作不属于当前工单、运行或授权版本');
+      for (const key of ['profileId', 'actorId', 'taskId', 'assignmentId', 'runId', 'authorizationVersion', 'policyVersion']) {
+        if (String(caller[key]) !== owned.binding[key]) throw fail('ACTION_BINDING_CHANGED', '动作不属于当前任务、运行或授权版本');
       }
       if (pending.has(actionId)) return pending.get(actionId);
       const work = (async () => {
@@ -59,9 +59,9 @@ export function createExternalActionService({ store, registry, getContext, reque
         const adapter = registered(action.adapterId);
         if (!adapter || adapter.category !== action.category) return { state: 'handoff', actionId, reason: '受控能力已不可用，请用户接管最后一步' };
         const frozen = freeze(structuredClone(action));
-        // Reject other Ticket/actor/run access even when the action was already decided.
-        for (const key of ['profileId', 'actorId', 'ticketId', 'assignmentId', 'runId', 'authorizationVersion', 'policyVersion']) {
-          if (String(context[key]) !== action.binding[key]) throw fail('ACTION_BINDING_CHANGED', '动作不属于当前工单、运行或授权版本');
+        // Reject other Task/actor/run access even when the action was already decided.
+        for (const key of ['profileId', 'actorId', 'taskId', 'assignmentId', 'runId', 'authorizationVersion', 'policyVersion']) {
+          if (String(context[key]) !== action.binding[key]) throw fail('ACTION_BINDING_CHANGED', '动作不属于当前任务、运行或授权版本');
         }
         if (['completed', 'denied'].includes(action.state)) return publicAction(action);
         if (['submitted', 'uncertain'].includes(action.state)) return { ...publicAction(action), requiresReconciliation: true };
@@ -115,12 +115,12 @@ export function registerChannelExternalActions(registry, { getAdapter, channelId
 export function installExternalActionTools(scope, agent, { service }) {
   const output = { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] };
   return scope.tools.register({ name: 'assistant_external_action',
-    description: 'Prepare or submit a registered structured external action. Call catalog first and follow the selected adapter inputSchema exactly for prepare.input; use the returned action id for submit.actionId. requestId is a stable idempotency key for the same exact target/content. Never guess field names or search application/source files to discover an adapter contract. If trusted target information is missing, ask rather than invent it. External actions reuse the existing task approval for the exact final content; an already approved action is never approved again. Absent adapters return human handoff. Open terminal/browser tools may only prepare these actions, never submit or bypass this channel. Normal authenticated source replies use the existing source delivery pipeline.',
+    description: 'Prepare or submit a registered structured external action. Call catalog first and follow the selected adapter inputSchema exactly for prepare.input; use the returned action id for submit.actionId. requestId is a stable idempotency key for the same exact target/content. Never guess field names or search application/source files to discover an adapter contract. If trusted target information is missing, ask rather than invent it. Submission requires a real one-time approval for the exact final content and never repeats an already approved action. The existing host approval path is available only when its policy permits it. Under never, a new approval request is rejected without a card: the action remains unsubmitted and requires human handoff, not inferred consent. Absent adapters also return human handoff. Open terminal/browser tools may only prepare these actions, never submit or bypass this channel. Normal authenticated source replies use the existing source delivery pipeline.',
     parameters: { type: 'object', additionalProperties: false, properties: {
-      operation: { type: 'string', enum: ['catalog', 'prepare', 'submit'] }, adapterId: { type: 'string', description: 'catalog 返回的确切通道 ID；prepare 必填。' }, input: { type: 'object', additionalProperties: true, description: 'prepare 专用：严格遵守所选通道 catalog.inputSchema，不接受猜测的字段别名。' }, requestId: { type: 'string', description: 'prepare 必填：同一目标与正文的稳定幂等键。' }, actionId: { type: 'string', description: 'submit 必填：prepare 返回的动作 id；submit 将等待真实用户逐次审批。' },
+      operation: { type: 'string', enum: ['catalog', 'prepare', 'submit'] }, adapterId: { type: 'string', description: 'catalog 返回的确切通道 ID；prepare 必填。' }, input: { type: 'object', additionalProperties: true, description: 'prepare 专用：严格遵守所选通道 catalog.inputSchema，不接受猜测的字段别名。' }, requestId: { type: 'string', description: 'prepare 必填：同一目标与正文的稳定幂等键。' }, actionId: { type: 'string', description: 'submit 必填：prepare 返回的动作 id；只有真实单次批准才提交，never 下的新审批被拒绝且不显示卡片，需用户接管。' },
     }, required: ['operation'] }, output,
     async execute(input, exec) {
-      if (exec.agent !== agent) throw fail('ACTION_AGENT_MISMATCH', '外部动作只供当前拥有工单的 Worker 使用');
+      if (exec.agent !== agent) throw fail('ACTION_AGENT_MISMATCH', '外部动作只供当前拥有任务的 Worker 使用');
       if (input.operation === 'catalog') return service.catalog();
       if (input.operation === 'prepare') return service.prepare(input, exec);
       if (input.operation === 'submit') return service.submit(input, exec);
@@ -136,22 +136,22 @@ export function createExternalActionHost({ ctx, store, registry, onApprovalPendi
     installWorker(scope, agent, { database, assignment, run, readPolicy, authorizeAction, leaseMs = 60000 }) {
       const getContext = async exec => {
         exec.signal.throwIfAborted();
-        if (exec.agent !== agent || String(agent.id) !== run.sessionId || String(agent.session?.id) !== run.sessionId) throw fail('ACTION_WORKER_MISMATCH', '动作只能由当前拥有工单的 Worker 发起');
-        const ticket = workerAppliedTicket(database, assignment, { name: 'assistant_external_action' });
+        if (exec.agent !== agent || String(agent.id) !== run.sessionId || String(agent.session?.id) !== run.sessionId) throw fail('ACTION_WORKER_MISMATCH', '动作只能由当前拥有任务的 Worker 发起');
+        const task = workerAppliedTask(database, assignment, { name: 'assistant_external_action' });
         const current = database.getAssignment(assignment.id), active = database.runs(assignment.id).find(item => item.id === run.id);
         if (!current || current.state !== 'claimed' || current.owner !== assignment.owner || current.fence !== assignment.fence || !active || active.owner !== assignment.owner || active.fence !== assignment.fence
-          || active.sessionId !== run.sessionId || !['submitted', 'running'].includes(active.state)) throw fail('ACTION_WORKER_STALE', '动作的工单、运行或租约已失效');
+          || active.sessionId !== run.sessionId || !['submitted', 'running'].includes(active.state)) throw fail('ACTION_WORKER_STALE', '动作的任务、运行或租约已失效');
         const policy = await readPolicy();
-        if (!validateTicketMandate(ticket.mandate, { policy }) || (await authorizeAction({ policy, mandate: ticket.mandate, ticket, execution: exec }))?.allowed !== true) throw fail('ACTION_MANDATE_REVOKED', '当前工单授权不允许此动作');
-        const finalPolicy = await readPolicy(), latest = workerAppliedTicket(database, assignment, { name: 'assistant_external_action' });
-        const versionKey = ticket.mandate.source?.channel === 'desktop' ? 'desktopVersion' : 'version';
+        if (!validateTaskMandate(task.mandate, { policy }) || (await authorizeAction({ policy, mandate: task.mandate, task, execution: exec }))?.allowed !== true) throw fail('ACTION_MANDATE_REVOKED', '当前任务授权不允许此动作');
+        const finalPolicy = await readPolicy(), latest = workerAppliedTask(database, assignment, { name: 'assistant_external_action' });
+        const versionKey = task.mandate.source?.channel === 'desktop' ? 'desktopVersion' : 'version';
         const renewed = database.renewAssignment(assignment.id, { owner: assignment.owner, fence: assignment.fence, leaseMs,
-          validateMandate: mandate => finalPolicy[versionKey] === policy[versionKey] && validateTicketMandate(mandate, { policy: finalPolicy }) });
-        if (!renewed.allowed || latest.authorizationVersion !== ticket.authorizationVersion) throw fail('ACTION_MANDATE_REVOKED', '动作提交前授权已变化');
+          validateMandate: mandate => finalPolicy[versionKey] === policy[versionKey] && validateTaskMandate(mandate, { policy: finalPolicy }) });
+        if (!renewed.allowed || latest.authorizationVersion !== task.authorizationVersion) throw fail('ACTION_MANDATE_REVOKED', '动作提交前授权已变化');
         exec.signal.throwIfAborted();
-        return { profileId: store.profileId, actorId: ticket.mandate.actorId, ticketId: ticket.id, assignmentId: assignment.id, runId: run.id,
-          authorizationVersion: String(ticket.authorizationVersion ?? ticket.mandate.authorizationVersion ?? 1), policyVersion: policy[versionKey],
-          principal: ticket.mandate.source?.channel === 'desktop' && ticket.mandate.actorId === 'desktop-owner' ? { kind: 'owner' } : { kind: 'channel-user', id: ticket.mandate.actorId } };
+        return { profileId: store.profileId, actorId: task.mandate.actorId, taskId: task.id, assignmentId: assignment.id, runId: run.id,
+          authorizationVersion: String(task.authorizationVersion ?? task.mandate.authorizationVersion ?? 1), policyVersion: policy[versionKey],
+          principal: task.mandate.source?.channel === 'desktop' && task.mandate.actorId === 'desktop-owner' ? { kind: 'owner' } : { kind: 'channel-user', id: task.mandate.actorId } };
       };
       const service = createExternalActionService({ store, registry, getContext, requestApproval: request => {
         // The official service appends approval/asked synchronously before its

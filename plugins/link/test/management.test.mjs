@@ -98,9 +98,17 @@ test('device launch only exposes the local owner entry', async t => {
   }
   const summary = await route.fetch(new Request('http://127.0.0.1:8080' + route.path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'devices' }) }));
   assert.equal(summary.status, 200);
-  assert.deepEqual((await summary.json()).devices, [{ id: 'local', name: link.status().hostName, kind: 'local', status: 'online' }]);
+  const localSummary = (await summary.json()).devices;
+  assert.deepEqual(localSummary.map(({ observedAt, direction, ...row }) => row), [{ id: 'local', name: link.status().hostName, kind: 'local', status: 'online' }]);
+  assert.equal(localSummary[0].direction, 'local');
   const cloudSummary = await route.fetch(new Request('https://cloud.example' + route.path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'devices' }) }));
   assert.equal(cloudSummary.status, 409);
+  const select = (origin, deviceId) => route.fetch(new Request(origin + route.path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'select', deviceId }) }));
+  const selected = await select('http://127.0.0.1:8080', 'local');
+  assert.equal(selected.status, 200); assert.equal((await selected.json()).device.kind, 'local');
+  assert.equal((await select('http://127.0.0.1:8080', 'missing')).status, 400);
+  assert.equal((await select('http://127.0.0.1:8080', '')).status, 400);
+  assert.equal((await select('https://cloud.example', 'local')).status, 400);
 });
 
 test('plugin admin persists settings, advertises real TLS and separates public pairing trust', async t => {

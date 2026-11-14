@@ -30,8 +30,8 @@ test('runner assesses pending intake and promotes the same source only after an 
   await runner.stop();
   assert.equal(database.getTrigger(triggerId).intakeStage, 'admitted');
   assert.equal(database.getTrigger(triggerId).content, database.readIntakeEvent(triggerId).content);
-  assert.equal(database.listTickets().length, 1);
-  assert.equal(database.listTickets()[0].mandate.triggerId, triggerId);
+  assert.equal(database.listTasks().length, 1);
+  assert.equal(database.listTasks()[0].mandate.triggerId, triggerId);
 });
 
 test('runner persists stop attention as attachment with the original requested outcome', async t => {
@@ -45,7 +45,7 @@ test('runner persists stop attention as attachment with the original requested o
   const runner = createAssessmentRunner({ database: intercepted,
     readPolicy: async () => ({ version: 'p', model: {} }),
     authorize: async () => ({ allowed: true, outcome: 'attach', routerAttention: true }),
-    assess: async ({ candidates }) => [{ candidateId: candidates[0].candidateId, outcome: 'stop', ticketId: 'ticket', reason: 'Stop-like group message' }],
+    assess: async ({ candidates }) => [{ candidateId: candidates[0].candidateId, outcome: 'stop', taskId: 'task', reason: 'Stop-like group message' }],
   });
   await runner.tick();
   await runner.stop();
@@ -62,8 +62,8 @@ for (const outcome of ['revise', 'adjustment']) for (const explicit of [false, t
   const worker = { providerId: 'Worker/@', modelId: 'Exact: Worker/2' };
   const selected = { providerId: 'Selected/@', modelId: 'Exact: Selected/3' };
   if (explicit) {
-    database.createTicket({ id: 'ticket', threadId: 'thread', target: 'Original', mandate: {} });
-    database.createAssignment('ticket', { model: selected });
+    database.createTask({ id: 'task', threadId: 'thread', target: 'Original', mandate: {} });
+    database.createAssignment('task', { model: selected });
   }
   let committed;
   const intercepted = new Proxy(database, { get(target, key) { return key === 'decide' ? (_id, decision) => { committed = decision; } : target[key]; } });
@@ -71,7 +71,7 @@ for (const outcome of ['revise', 'adjustment']) for (const explicit of [false, t
     authorize: async () => ({ allowed: true, mandate: {} }), assess: async ({ candidates, model, models }) => {
       assert.deepEqual(model, router);
       assert.deepEqual(models, [router]);
-      return [{ candidateId: candidates[0].candidateId, outcome, ticketId: 'ticket', expectedInstructionRevision: 1, reason: 'Changed requirements' }];
+      return [{ candidateId: candidates[0].candidateId, outcome, taskId: 'task', expectedInstructionRevision: 1, reason: 'Changed requirements' }];
     },
   });
   await runner.tick();
@@ -104,7 +104,7 @@ test('authorized channel admission delivers the same Router reply without anothe
     assert.equal(calls, 1);
     const pending = database.pendingOutbox();
     assert.equal(pending.length, allowed ? 1 : 0);
-    assert.equal(database.listTickets().length, allowed ? 1 : 0);
+    assert.equal(database.listTasks().length, allowed ? 1 : 0);
     if (allowed) {
       assert.equal(pending[0].payload.text, replyText);
       assert.equal(pending[0].payload.origin, 'router');
@@ -132,7 +132,7 @@ test('runner binds direct reply to the original source only after current author
     await runner.tick();
     await runner.stop();
     assert.equal(committed.outcome, allowed ? 'answer' : 'notExplicit');
-    assert.equal(committed.ticket, undefined);
+    assert.equal(committed.task, undefined);
     if (allowed) assert.deepEqual(committed.reply, { text: '你好！', source, actor, gate: store.candidates({ threadId: 'chat' })[0].gate, policyVersion: 'p' });
     else assert.equal(committed.reply, undefined);
   }
@@ -230,7 +230,7 @@ test('large candidate batches share an excerpt budget and leave excess candidate
   assert.equal(database.candidates({ status: 'queued' }).length, 12);
 });
 
-test('persisted intake becomes a ticket only with host authorization, duplicate ticks coalesce', async t => {
+test('persisted intake becomes a task only with host authorization, duplicate ticks coalesce', async t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   database.ingest({ dedupeKey: 'event', thread: { id: 'thread', source: { type: 'feishu', id: 'chat' } }, source: {}, actor: { id: 'owner' }, content: '检查项目', gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p1' });
@@ -242,13 +242,13 @@ test('persisted intake becomes a ticket only with host authorization, duplicate 
   });
   await Promise.all([runner.tick(), runner.tick()]);
   assert.equal(assessments, 1);
-  assert.deepEqual(database.listTickets()[0].mandate.scope, ['read']);
+  assert.deepEqual(database.listTasks()[0].mandate.scope, ['read']);
   assert.equal(database.subscriptions().length, 1);
   await runner.tick(); assert.equal(assessments, 1);
   await runner.stop();
 });
 
-test('policy changes during authorization prevent ticket creation', async t => {
+test('policy changes during authorization prevent task creation', async t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   database.ingest({ dedupeKey: 'event', thread: { id: 'thread', source: { type: 'feishu', id: 'chat' } }, source: {}, actor: { id: 'owner' }, content: '检查', gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p1' });
@@ -259,7 +259,7 @@ test('policy changes during authorization prevent ticket creation', async t => {
     assess: async ({ candidates }) => candidates.map(row => ({ candidateId: row.candidateId, outcome: 'accept', target: '检查', acceptance: '证据', reason: '指令' })),
   });
   await runner.tick();
-  assert.equal(database.listTickets().length, 0);
+  assert.equal(database.listTasks().length, 0);
   await runner.stop();
 });
 
@@ -285,5 +285,5 @@ test('a failed thread does not starve other threads and shutdown fences ignored 
   await ready;
   await stuck.stop();
   await assert.rejects(ticking, { name: 'AbortError' });
-  assert.equal(database.listTickets().length, 0);
+  assert.equal(database.listTasks().length, 0);
 });

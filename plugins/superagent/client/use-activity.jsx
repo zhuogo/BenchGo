@@ -22,5 +22,5 @@ export function useAssistantActivity(api) {
   const store = assistantActivityStore(api);
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
 
-  return { ...snapshot, refresh: store.refresh, refreshTickets: store.refreshTickets };
+  return { ...snapshot, refresh: store.refresh, refreshTasks: store.refreshTasks };
 }

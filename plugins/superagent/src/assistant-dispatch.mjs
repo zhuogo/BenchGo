@@ -4,20 +4,21 @@ import { executionSessionProjection, readOwnedSessionRole, superagentSessionInve
 import { resolveApprovalOrigins } from './execution-approval-origin.mjs';
 import { channelDefinition } from './channel-catalog.mjs';
 import { readAssessmentPolicy } from './assessment-policy.mjs';
-import { ticketStopped } from './ticket-lifecycle.mjs';
+import { taskStopped } from './task-lifecycle.mjs';
 import { profileDocuments } from './profile-documents.mjs';
 
 /** The owner-facing HTTP action table behind POST /api/commander/assistant. */
 export function createAssistantDispatch(runtime) {
   const { ctx, store, shutdown, historySearch, readLedger, channelCredentials, database, goals, engine, feishu, feishuStream, channels, orchestrationRuntime,
-    executionSummaries, projectSchedules, pet, restartFeishu, evaluations, ticketChanges, taskManagement, projectTickets, capabilities, management, state,
-    artifacts, auxiliary, systemFiles, skillProvider } = runtime;
+    executionSummaries, projectSchedules, pet, restartFeishu, evaluations, taskChanges, taskManagement, projectTasks, capabilities, management, state,
+    artifacts, auxiliary, systemFiles, skillProvider, collaboration } = runtime;
   return async function dispatch(input, peer, { signal } = {}) {
     if (shutdown.signal.aborted) throw Object.assign(new Error('SuperAgent 已停用'), { status: 503, code: 'ASSISTANT_UNAVAILABLE' });
     const queryOptions = { signal: AbortSignal.any([shutdown.signal, signal].filter(Boolean)) };
     queryOptions.signal.throwIfAborted();
     const threadId = input.threadId ?? 'main';
     switch (input.action) {
+      case 'collaboration': return collaboration.receive(input, peer, queryOptions);
       case 'state': return state();
       case 'sessionRole': return { role: await readOwnedSessionRole({ store, sessionId: input.sessionId,
         listSessions: () => ctx.sessionQuery.listSessions() }) };
@@ -81,9 +82,9 @@ export function createAssistantDispatch(runtime) {
         throw new Error('此链接不支持该操作');
       }
       case 'capabilities': return capabilities();
-      case 'tickets': return { tickets: projectTickets(orchestrationRuntime.state({ newestFirst: true, archived: input.archived, ticketId: input.ticketId, limit: input.limit })) };
+      case 'tasks': return { tasks: projectTasks(orchestrationRuntime.state({ newestFirst: true, archived: input.archived, taskId: input.taskId, limit: input.limit, offset: input.offset })) };
       case 'executionSummaryActivity': return { config: executionSummaries.config,
-        ...store.orchestration.auxiliaryActivities({ ticketId: input.ticketId, after: input.after, limit: input.limit }) };
+        ...store.orchestration.auxiliaryActivities({ taskId: input.taskId, after: input.after, limit: input.limit }) };
       case 'taskUpdate': return taskManagement.update(input);
       case 'taskCleanupPreview':
       case 'taskCleanupCommit':
@@ -111,22 +112,22 @@ export function createAssistantDispatch(runtime) {
       }
       case 'evaluationHistory': return evaluations.history(input.candidateId);
       case 'evaluationDispose': return evaluations.dispose({ ...input, action: input.disposition }, { kind: 'human', actorId: peer?.principal?.deviceId ? `device:${peer.principal.deviceId}` : 'desktop-owner' });
-      case 'ticketStop': return store.orchestration.cancelTicket(input.ticketId);
-      case 'ticketPause': return store.orchestration.pauseTicket(input.ticketId);
-      case 'ticketResume': {
-        const ticket = store.orchestration.getTicket(input.ticketId);
-        if (!ticket) throw new Error('工单不存在');
-        if (!ticket.executionControl?.paused && !ticket.executionControl?.pauseRequested) {
-          const pending = orchestrationRuntime.state({ ticketId: ticket.id })[0]?.execution?.uncertainty;
-          if (pending) return orchestrationRuntime.manageExecution({ ticketId: ticket.id, assignmentId: pending.assignmentId,
+      case 'taskStop': return store.orchestration.cancelTask(input.taskId);
+      case 'taskPause': return store.orchestration.pauseTask(input.taskId);
+      case 'taskResume': {
+        const task = store.orchestration.getTask(input.taskId);
+        if (!task) throw new Error('任务不存在');
+        if (!task.executionControl?.paused && !task.executionControl?.pauseRequested) {
+          const pending = orchestrationRuntime.state({ taskId: task.id })[0]?.execution?.uncertainty;
+          if (pending) return orchestrationRuntime.manageExecution({ taskId: task.id, assignmentId: pending.assignmentId,
             fence: pending.fence, instructionRevision: pending.instructionRevision, operation: 'resume', automatic: false });
         }
-        return store.orchestration.resumeTicket(ticket.id);
+        return store.orchestration.resumeTask(task.id);
       }
-      case 'ticketAnswer': return store.orchestration.answerDesktopAttention(input);
-      case 'ticketChange': {
+      case 'taskAnswer': return store.orchestration.answerDesktopAttention(input);
+      case 'taskChange': {
         const original = JSON.stringify(input), ownerAgent = await engine.ensureSession({ threadId });
-        return ticketChanges.submitForm(JSON.parse(original), { ownerAgent, threadId, original });
+        return taskChanges.submitForm(JSON.parse(original), { ownerAgent, threadId, original });
       }
       case 'summarize': return auxiliary.summarize({ threadId, text: input.text });
       case 'analyzeImage': return auxiliary.analyzeImage({ threadId, file: input.file, question: input.question });
@@ -136,27 +137,28 @@ export function createAssistantDispatch(runtime) {
         await projectSchedules();
         const history = await engine.history(threadId, { before: input.before, limit: input.limit });
         const notifications = database.chatNotifications(threadId, { after: input.afterSeq || 0, limit: input.notificationLimit || 100 }).events.map(event => {
-          if (!['ticket.attention', 'ticket.result'].includes(event.type) || !event.ticketId) return event;
-          const ticket = store.orchestration.getTicket(event.ticketId);
-          if (!ticket || ticket.mandate.source?.channel !== 'desktop' || (ticket.mandate.source.threadId || 'main') !== threadId) return event;
-          const result = store.orchestration.results(ticket.id).findLast(item => item.version === ticket.resultVersion
-            && (item.instructionRevision ?? 1) === ticket.instructionRevision);
+          if (!['task.attention', 'task.result'].includes(event.type) || !event.taskId) return event;
+          const task = store.orchestration.getTask(event.taskId);
+          if (!task || task.mandate.source?.channel !== 'desktop' || (task.mandate.source.threadId || 'main') !== threadId) return event;
+          const result = store.orchestration.results(task.id).findLast(item => item.version === task.resultVersion
+            && (item.instructionRevision ?? 1) === task.instructionRevision);
           const currentResult = result ? { version: result.version, instructionRevision: result.instructionRevision ?? 1,
             outcome: result.outcome } : null;
-          const attentions = store.orchestration.attentions(ticket.id).map(item => ({ ...item,
+          const attentions = store.orchestration.attentions(task.id).map(item => ({ ...item,
             instructionRevision: item.instructionRevision ?? store.orchestration.getAssignment(item.assignmentId)?.instructionRevision ?? 1 }));
-          const currentAttention = ticket.status !== 'completed' && !ticketStopped(ticket) ? attentions.find(item => item.state === 'waiting'
-            && !item.answerTriggerId && item.instructionRevision === ticket.instructionRevision) || null : null;
-          const current = { ...event, ticketStatus: ticket.status, executionSession: executionSessionProjection(store.orchestration, ticket.id), currentInstructionRevision: ticket.instructionRevision,
-            currentResultVersion: ticket.resultVersion,
-            currentResult, currentAttention, currentPauseReason: ticket.pauseReason || null, currentExecutionControl: ticket.executionControl,
-            currentContinuationWait: ticket.continuationWait || null };
-          if (event.type !== 'ticket.attention' || !event.attentionId) return current;
+          const currentAttention = task.status !== 'completed' && !taskStopped(task) ? attentions.find(item => item.state === 'waiting'
+            && !item.answerTriggerId && item.instructionRevision === task.instructionRevision) || null : null;
+          const current = { ...event, taskStatus: task.status, executionSession: executionSessionProjection(store.orchestration, task.id), currentInstructionRevision: task.instructionRevision,
+            currentResultVersion: task.resultVersion,
+            currentResult, currentAttention, currentPauseReason: task.pauseReason || null, currentExecutionControl: task.executionControl,
+            currentContinuationWait: task.continuationWait || null };
+          if (event.type !== 'task.attention' || !event.attentionId) return current;
           const attention = attentions.find(item => item.id === event.attentionId);
           if (!attention) return current;
           return { ...current, attention };
         });
-        return { ...history, reactions: database.messageReactions(reactionScope(threadId, history.sessionId)), notifications };
+        const scope = reactionScope(threadId, history.sessionId);
+        return { ...history, reactions: database.messageReactions(scope), assistantReactions: database.assistantReactions(scope), notifications };
       }
       case 'messageReaction': return setMessageReaction({ engine, database }, { threadId, messageKey: input.messageKey, emoji: input.emoji });
       case 'send': return engine.send({ threadId, text: input.text, requestId: input.requestId, replyContext: input.replyContext });

@@ -43,8 +43,8 @@ export function createAssistantAssignmentWorker({
         renew().catch(error => controller.abort(error));
       }, Math.max(100, Math.floor(leaseMs / 3)));
       heartbeat.unref?.();
-      const ticket = database.getTicket(assignment.ticketId);
-      const result = await execute(assignment, { ticket, signal: controller.signal, renew, onReady });
+      const task = database.getTask(assignment.taskId);
+      const result = await execute(assignment, { task, signal: controller.signal, renew, onReady });
       resultReady = true;
       clearInterval(heartbeat); heartbeat = null;
       const beforeCommit = async () => {
@@ -53,14 +53,14 @@ export function createAssistantAssignmentWorker({
       // Saving an existing draft never authorizes another execution against
       // current settings; lifecycle association is handled by the result store.
       stage = 'result';
-      await onResult(result, { assignment, ticket, signal: controller.signal, beforeCommit });
+      await onResult(result, { assignment, task, signal: controller.signal, beforeCommit });
       clearInterval(heartbeat); heartbeat = null;
       controller.signal.throwIfAborted();
       const state = database.getAssignment(assignment.id)?.state;
       if (!['completed', 'waiting', 'paused', 'queued'].includes(state)) database.finishAssignment(assignment.id, { ...ownership, status: 'completed' });
       return { id: assignment.id, status: ['waiting', 'paused', 'queued'].includes(state) ? state : 'completed' };
     } catch (error) {
-      if (error?.resultDraft) { try { await onResult(error.resultDraft, { assignment, ticket: { id: assignment.ticketId }, signal: controller.signal, beforeCommit: async () => {} }); } catch { /* Run/session and runtime retain the draft for persistence retry. */ } }
+      if (error?.resultDraft) { try { await onResult(error.resultDraft, { assignment, task: { id: assignment.taskId }, signal: controller.signal, beforeCommit: async () => {} }); } catch { /* Run/session and runtime retain the draft for persistence retry. */ } }
       let runs = [];
       try { runs = database.runs(assignment.id); } catch { /* The retained draft survives diagnostic read failure. */ }
       const effects = error?.executionEffects || (stage === 'execution' && !runs.some(run => ['submitted', 'running', 'verifying', 'uncertain'].includes(run.state))
@@ -114,7 +114,7 @@ export function createAssistantAssignmentWorker({
     stopped = true;
     if (timer) clearInterval(timer);
     timer = null;
-    for (const controller of controllers) controller.abort(new Error('Assignment worker stopped'));
+    for (const controller of controllers) controller.abort(Object.assign(new Error('Assignment worker stopped'), { code: 'WORKER_HOST_STOPPED' }));
     if (running) await running.catch(() => {});
     await Promise.allSettled([...active.values()]);
   }

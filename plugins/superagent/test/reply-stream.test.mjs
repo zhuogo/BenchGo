@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { PartialArguments } from '@deepseek-ai/dsh-util-values';
 import { activeChatReply, projectChatMessages } from '../src/chat-publication.mjs';
 import { projectReplyStream, projectReplyRows, conversationActivity } from '../client/reply-stream.mjs';
+import { quietChatRows } from '../client/quiet-chat.mjs';
 
 const history = { sessionId: 'session', activeReply: { requestId: 'human', turn: 2 }, messages: [{ id: 'human', role: 'user', time: 1 }] };
 const rows = (chat, extra = {}) => projectReplyRows({ history, sessionId: 'session', running: true, chat, ...extra });
@@ -67,6 +68,49 @@ test('explicit assistant_reply stream supersedes ordinary public progress in the
   const args = PartialArguments.fromObject({ text: '正式正文' });
   const chat = { legacy: { runningCalls: [call(args)], partial: { turn: 2, blocks: [{ kind: 'text', text: '可见进度' }] } } };
   assert.equal(run([], { chat }).text, '正式正文');
+});
+
+test('admitted conversational task result streams without a human echo and hands off to ordinary history', () => {
+  const source = { kind: 'benchgo-task-reply', replyKind: 'result', replyMode: 'conversation', eventKey: 'task:1', taskId: 'task' };
+  const signal = { kind: 'user', messageId: 'completion', seq: 8, time: 2, source };
+  const chat = { timeline: { turnOrder: [2], turns: new Map([[2, { turn: 2, start: { seq: 7 } }]]) },
+    legacy: { nodes: [signal], turnEnds: new Map(), partial: { turn: 2, step: 1, blocks: [{ kind: 'text', text: '整理完成' }] } } };
+  const taskHistory = { sessionId: 'session', messages: [], activeReply: { turn: 2, requestId: 'completion' } };
+  const stream = rows(chat, { history: taskHistory });
+  assert.equal(stream[0].text, '整理完成');
+  assert.equal(stream[0].id, 'reply:completion:2:1');
+  assert.equal(stream[0].time, 2);
+  assert.equal(stream[0].streaming, true);
+  assert.deepEqual(quietChatRows(taskHistory, 'main', {}, chat), [], 'host completion has no public user echo');
+  assert.deepEqual(rows(chat, { history: { ...taskHistory, activeReply: history.activeReply } }), []);
+  for (const change of [{ replyMode: undefined }, { replyKind: 'state' }, { eventKey: '' }, { taskId: '' }]) {
+    signal.source = { ...source, ...change };
+    assert.deepEqual(rows(chat, { history: taskHistory }), [], 'only the new bound completion signal can publish');
+  }
+  signal.source = source;
+  const publication = { ...call(PartialArguments.fromObject({ text: '显式完成正文' })), step: 1 };
+  chat.legacy.runningCalls = [publication];
+  assert.equal(rows(chat, { history: taskHistory })[0].text, '显式完成正文');
+  chat.legacy.runningCalls = [];
+  chat.legacy.nodes.push({ ...publication, kind: 'tool-result', content: [{ type: 'text', text: '{"published":true,"requestId":"completion"}' }] });
+  assert.equal(rows(chat, { history: taskHistory, running: false })[0].text, '显式完成正文');
+  chat.legacy.nodes.pop();
+  chat.legacy.nodes.push({ kind: 'assistant', messageId: 'answer', turn: 2, step: 1, seq: 10, time: 3, blocks: chat.legacy.partial.blocks });
+  const end = { seq: 12, data: { reason: { kind: 'completed' } } };
+  chat.timeline.turns.get(2).end = end;
+  chat.legacy.turnEnds.set(2, 12);
+  const endedHistory = { ...taskHistory, activeReply: null };
+  const settled = rows(chat, { history: endedHistory, running: false });
+  assert.equal(settled[0].key, stream[0].key);
+  assert.equal(settled[0].streaming, false);
+  const messages = projectChatMessages([
+    { type: 'turn/start', seq: 7, data: { turn: 2 } },
+    { type: 'user/message', seq: 8, data: { id: signal.messageId, source, content: [{ type: 'text', text: 'PRIVATE_COMPLETION' }] } },
+    { type: 'assistant/message', seq: 10, data: { turn: 2, step: 1, message: { id: 'answer', source: { kind: 'model' }, content: [{ type: 'text', text: '整理完成' }] } } },
+    { type: 'turn/end', seq: 12, data: { turn: 2, reason: { kind: 'completed' } } },
+  ]);
+  assert.deepEqual(messages.map(row => row.id), [settled[0].id]);
+  assert.deepEqual(rows(chat, { history: { ...endedHistory, messages }, running: false }), []);
 });
 
 test('malformed, extra-field, empty and oversized reply arguments are withheld', () => {
@@ -194,14 +238,14 @@ test('same-turn steering and late events cannot borrow the earlier request text'
   chat.timeline.turns.get(2).steps = [{ step: 1, start: { seq: 8 }, end: { seq: 10 } }, { step: 2, start: { seq: 10.5 } }];
   const updated = { ...history, activeReply: { turn: 2, requestId: next.id }, messages: [...history.messages, next] };
   chat.legacy.partial = { turn: 2, step: 1, blocks: [{ kind: 'text', text: 'LATE_FIRST_REQUEST' }] };
-  assert.equal(run([], { chat, history: updated }), null);
+  assert.equal(run([], { chat, history: updated }).text, '完整正文', 'steering retains earlier settled text while a delayed partial stays hidden');
   chat.legacy.partial = { turn: 2, step: 2, blocks: [{ kind: 'text', text: '只答新请求' }] };
   const answer = run([], { chat, history: updated });
   assert.equal(answer.text, '只答新请求');
   assert.equal(answer.requestId, 'next');
   chat.legacy.runningCalls = [{ ...call(PartialArguments.fromObject({ text: 'LATE_OLD_PUBLICATION' })), step: 1 }];
   assert.equal(run([], { chat, history: updated }).text, answer.text, 'a delayed publication draft also keeps its original request boundary');
-  assert.equal(run([], { chat }), null, 'old history identity cannot adopt newly admitted user text');
+  assert.equal(run([], { chat }).text, '完整正文', 'old history keeps its own reply without adopting newly admitted user text');
   assert.equal(run([], { chat, history: updated, sessionId: 'other-session' }), null);
   chat.timeline.turnOrder.push(3);
   chat.timeline.turns.set(3, { turn: 3, start: { seq: 20 } });
@@ -216,6 +260,44 @@ test('cancel and failure discard all uncommitted steps but preserve an accepted 
       content: [{ type: 'text', text: '{"published":true,"requestId":"human"}' }] });
     assert.equal(run([], { chat, running: false }).text, '已正式提交');
   }
+});
+
+test('repeated human steering preserves each reply, event order and identities through delayed history and reload', () => {
+  const chat = settledChat(null);
+  chat.legacy.nodes[0].time = 10;
+  const originalHistory = { ...history, messages: [{ ...history.messages[0], seq: 8, time: 10 }] };
+  const first = rows(chat, { history: originalHistory })[0];
+  const followup = { role: 'user', id: 'followup', seq: 12, text: '这么慢吗？', time: 1 };
+  const later = { role: 'user', id: 'later', seq: 15, text: '现在进展呢？', time: 2 };
+  const send = user => chat.legacy.nodes.push({ kind: 'steering', messageId: user.id, seq: user.seq,
+    time: user.time, source: { kind: 'user', rpcId: user.id }, content: [{ type: 'text', text: user.text }] });
+  const pending = { requestId: followup.id, placement: 'steering', text: followup.text, time: 1 };
+  let replies = rows(chat, { history: originalHistory });
+  assert.deepEqual(quietChatRows(originalHistory, 'main', { pendingSubmissions: [pending] }, chat, undefined, replies).map(row => row.text),
+    [undefined, '完整正文', followup.text], 'queued input follows the already visible live reply even with a skewed clock');
+  send(followup);
+  chat.legacy.nodes.push({ kind: 'assistant', messageId: 'second', turn: 2, step: 2, seq: 13, time: 0,
+    blocks: [{ kind: 'text', text: '仍在处理。' }] });
+  send(later);
+  chat.timeline.turns.get(2).steps = [{ step: 3, start: { seq: 16 } }];
+  chat.legacy.partial = { turn: 2, step: 3, blocks: [{ kind: 'text', text: '收到新的补充。' }] };
+  const updated = { ...originalHistory, activeReply: { turn: 2, requestId: later.id }, messages: [...originalHistory.messages, followup, later] };
+  replies = rows(chat, { history: updated });
+  assert.deepEqual(replies.map(row => row.text), ['完整正文', '仍在处理。', '收到新的补充。']);
+  assert.equal(replies[0].key, first.key);
+  assert.deepEqual(replies.map(row => row.requestId), ['human', 'followup', 'later']);
+  const ordered = quietChatRows(updated, 'main', {}, chat, undefined, replies);
+  assert.deepEqual(ordered.map(row => row.text), [undefined, '完整正文', followup.text, '仍在处理。', later.text, '收到新的补充。']);
+  const events = [{ type: 'turn/start', seq: 7, data: { turn: 2 } },
+    ...chat.legacy.nodes.map(node => ['user', 'steering'].includes(node.kind)
+      ? { type: 'user/message', seq: node.seq, time: node.time, data: { id: node.messageId, source: node.source, content: node.content || [] } }
+      : { type: 'assistant/message', seq: node.seq, time: node.time, data: { turn: node.turn, step: node.step,
+        message: { id: node.messageId, source: { kind: 'model' }, content: node.blocks.map(({ kind, ...block }) => ({ type: kind, ...block })) } } })];
+  const messages = projectChatMessages(events);
+  assert.deepEqual(messages.filter(row => row.role === 'assistant').map(row => row.id), replies.slice(0, 2).map(row => row.id),
+    'completed request segments are already durable while the latest request is running');
+  assert.deepEqual(quietChatRows({ ...updated, messages }, 'main', {}, chat, undefined,
+    rows(chat, { history: { ...updated, messages } })).map(row => row.id || row.key), ordered.map(row => row.id || row.key));
 });
 
 test('server active reply identity requires an open user-owned turn', () => {

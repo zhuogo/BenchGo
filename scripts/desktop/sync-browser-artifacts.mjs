@@ -1,10 +1,12 @@
-import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
+import { lstat, readFile, readdir, realpath, rmdir, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { assertReleaseVersion, getInstallState, releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
 import { writeArtifact } from '../../plugins/benchgo/scripts/write-artifact.mjs';
 
 const directories = ['lib/preview', 'lib/link-web', 'assets/channel-brands', 'assets/fonts'];
+const runtimeDirectories = ['shared', 'lib/modules', 'src'];
+const runtimeFiles = ['lib/link.mjs'];
 const files = ['lib/UI-LICENSES.txt', 'lib/LINK-THIRD-PARTY-LICENSES.txt', 'assets/icon.svg'];
 const inside = (root, path) => { const child = relative(root, path); return child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child); };
 const info = path => lstat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
@@ -57,11 +59,12 @@ export async function syncDesktopArtifacts({ root, profile = desktopProfile(), w
   const source = await realpath(join(root, 'plugins', 'benchgo'));
   if (source === target || inside(source, target) || inside(target, source)) throw new Error('源码与桌面插件目录重叠，未同步');
   if ((await json(join(source, 'package.json'))).name !== 'benchgo-plugin') throw new Error('源码插件包名无效，未同步');
-  const plan = [];
+  const plan = [], published = new Set(), obsolete = [];
   const visit = async (name, destination = target) => {
     const from = join(source, name), to = join(destination, name);
     const entry = await checked(source, from, true), existing = await checked(destination, to);
     if (existing && entry.isDirectory() !== existing.isDirectory()) throw new Error(`浏览器产物目标类型冲突：${to}`);
+    published.add(to);
     if (entry.isDirectory()) for (const child of await readdir(from)) await visit(join(name, child), destination);
     else plan.push({ from, to, destination });
   };
@@ -70,19 +73,37 @@ export async function syncDesktopArtifacts({ root, profile = desktopProfile(), w
   // A trailing blank line requests that lifecycle without changing YAML settings.
   const patchEntry = runtime ? await checked(profile, patch) : null;
   if (patchEntry && !patchEntry.isFile()) throw new Error('Desktop profile patch must be a regular file');
-  // Validate the complete plan before publishing anything. Do not remove old
-  // files: an already-open preview may still request its previous assets.
-  for (const name of [...(runtime ? ['shared', 'lib/modules', 'src'] : []), ...directories, ...files, 'locale']) await visit(name);
+  // Validate the complete publication and cleanup before changing anything.
+  // Browser assets remain available to pages that loaded an earlier client.
+  for (const name of [...(runtime ? [...runtimeDirectories, ...runtimeFiles] : []), ...directories, ...files, 'locale']) await visit(name);
   // The plugin manager names the enrolled wrapper, not its implementation package.
   await visit('locale', wrapper);
   await visit('lib/client.js');
+  const inspectRuntime = async name => {
+    const path = join(target, name), entry = await checked(profile, path);
+    if (!entry) return;
+    if (entry.isDirectory()) for (const child of await readdir(path)) await inspectRuntime(join(name, child));
+    if (!published.has(path)) obsolete.push({ path, directory: entry.isDirectory() });
+  };
+  if (runtime) for (const name of runtimeDirectories) await inspectRuntime(name);
   for (const { from, to, destination } of plan) {
     await checked(destination, to);
     await write(to, await readFile(from));
+  }
+  for (const item of obsolete) {
+    if (!runtimeDirectories.some(name => {
+      const tree = join(target, name);
+      return item.path !== tree && inside(tree, item.path);
+    })) throw new Error(`运行时代码清理路径越界：${item.path}`);
+    const entry = await checked(profile, item.path, true);
+    if (entry.isDirectory() !== item.directory) throw new Error(`运行时代码清理目标类型已变化：${item.path}`);
+    // Delete validated leaves only; never recurse through a swapped directory.
+    if (item.directory) await rmdir(item.path);
+    else await unlink(item.path);
   }
   if (patchEntry) {
     await checked(profile, patch, true);
     await write(patch, Buffer.concat([await readFile(patch), Buffer.from('\n')]));
   }
-  return { synced: true, target, profile, files: plan.length, runtime, reloadRequested: !!patchEntry };
+  return { synced: true, target, profile, files: plan.length, removed: obsolete.length, runtime, reloadRequested: !!patchEntry };
 }

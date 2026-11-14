@@ -13,9 +13,9 @@ async function readSurface(sessionQuery, sessionId, signal) {
 }
 
 /** Read the official current surface without retaining another transcript. */
-export async function readExecutionProgressReports({ sessionQuery, facts, ticketId, runId, instructionRevision, signal }) {
+export async function readExecutionProgressReports({ sessionQuery, facts, taskId, runId, instructionRevision, signal }) {
   if (!sessionQuery?.readSurface) return [];
-  const sources = (facts.projections || []).filter(row => row.ticketId === ticketId && row.runId === runId
+  const sources = (facts.projections || []).filter(row => row.taskId === taskId && row.runId === runId
     && row.instructionRevision === instructionRevision && typeof row.sessionId === 'string' && Number.isSafeInteger(row.cursor));
   const root = sources.find(row => !row.parentSessionId);
   const selected = [root, ...sources.filter(row => row !== root).slice(-3)].filter(Boolean);

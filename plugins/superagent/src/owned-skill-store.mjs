@@ -8,12 +8,12 @@ const sourceAliases = (source, { includeMemoryIds = true } = {}) => {
   const refs = [source, ...(Array.isArray(source?.references) ? source.references : [])];
   return [...new Set(refs.flatMap(ref => [
     ref?.messageId && ['message', ref.sessionId || '', ref.messageId], ref?.eventId && ['event', ref.channel || '', ref.eventId],
-    ref?.ticketId && ['ticket', ref.ticketId], ref?.taskId && ['task', ref.taskId], ref?.callId && ['call', ref.sessionId || '', ref.callId],
+    ref?.taskId && ['task', ref.taskId], ref?.callId && ['call', ref.sessionId || '', ref.callId],
     ...(includeMemoryIds && Array.isArray(ref?.memoryIds) ? ref.memoryIds.map(id => ['memory', id]) : []),
   ].filter(Boolean).map(value => hash(JSON.stringify(value)))))];
 };
 const sourceReferences = source => [source, ...(Array.isArray(source?.references) ? source.references : [])]
-  .filter(value => value && typeof value === 'object').map(value => Object.fromEntries(['sessionId', 'messageId', 'eventId', 'channel', 'ticketId', 'taskId', 'callId', 'memoryIds']
+  .filter(value => value && typeof value === 'object').map(value => Object.fromEntries(['sessionId', 'messageId', 'eventId', 'channel', 'taskId', 'callId', 'memoryIds']
     .filter(key => value[key] !== undefined).map(key => [key, value[key]]))).filter(value => Object.keys(value).length);
 
 // Metadata and immutable snapshots share the assistant SQLite transaction. The
@@ -96,7 +96,7 @@ export function installOwnedSkillStore({ db, tx }) {
       if (typeof text !== 'string' || !text.trim() || text.length > 4000) throw new Error('Invalid skill feedback');
       if (!['success', 'failure', 'unknown'].includes(outcome)) throw new Error('Invalid skill feedback outcome');
       if (!source || typeof source !== 'object' || Array.isArray(source)
-        || !['ticketId', 'messageId'].some(key => typeof source[key] === 'string' && source[key].trim())) throw new Error('Skill feedback durable source required');
+        || !['taskId', 'messageId'].some(key => typeof source[key] === 'string' && source[key].trim())) throw new Error('Skill feedback durable source required');
       const serialized = JSON.stringify({ ...source, ...(useEventId === undefined ? {} : { useEventId }) });
       if (serialized.length > 16000) throw new Error('Skill feedback source too large');
       return tx(() => {

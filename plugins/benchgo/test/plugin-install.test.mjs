@@ -6,7 +6,7 @@ import { createRequire, registerHooks, syncBuiltinESMExports } from 'node:module
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as tar from 'tar';
-import { prepareRelease, activateRelease, rollbackRelease, getInstallState, releaseBundleName } from '../shared/plugin-install.mjs';
+import { prepareRelease, activateRelease, getInstallState, releaseBundleName } from '../shared/plugin-install.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-install-'));
@@ -31,7 +31,7 @@ async function fixture(t) {
   return { root, releases, profile, put, seed };
 }
 
-test('complete archive installs offline, activates atomically and rolls back with settings and app version preserved', async t => {
+test('complete archive installs offline and upgrades atomically with settings and app version preserved', async t => {
   const { profile, seed } = await fixture(t);
   const first = await prepareRelease(await seed('0.1.0'));
   assert.equal((await getInstallState(profile)).managed, false, 'preparation does not change activation');
@@ -43,24 +43,33 @@ test('complete archive installs offline, activates atomically and rolls back wit
   state = await activateRelease({ profile, release: second });
   assert.equal(state.version, '0.1.1');
   assert.equal(state.appVersion, '0.1.0', 'plugin updates do not change the installed app version');
-  assert.equal(state.previous.version, '0.1.0');
+  assert.equal(Object.hasOwn(state, 'previous'), false);
   const manifest = JSON.parse(await readFile(join(profile, 'package.json')));
+  assert.equal(Object.hasOwn(manifest.dsh.plusInstall, 'previous'), false, 'activation does not store a former-version pointer');
   assert.equal(manifest.dependencies.kept, '1.0.0');
   assert.equal(Object.hasOwn(manifest.dependencies, first.bundleName), false);
   assert.equal(manifest.dsh.profile.bundles.includes(first.bundleName), false);
   assert.equal(await readFile(join(profile, 'cordis.patch.yml'), 'utf8'), '# keep user config\n');
-  state = await rollbackRelease({ profile });
-  assert.equal(state.version, '0.1.0');
-  assert.equal(state.previous.version, '0.1.1');
   assert.equal(state.enabled, true);
 });
 
-test('disabled plugin remains disabled during upgrade and rollback', async t => {
+test('disabled plugin remains disabled during upgrade', async t => {
   const { profile, seed } = await fixture(t);
   await activateRelease({ profile, release: await prepareRelease(await seed('0.1.0')), enabled: false });
   await activateRelease({ profile, release: await prepareRelease(await seed('0.1.1')) });
   assert.equal((await getInstallState(profile)).enabled, false);
-  assert.equal((await rollbackRelease({ profile })).enabled, false);
+});
+
+test('legacy former-version pointers are not exposed and disappear on the next activation', async t => {
+  const { profile, seed } = await fixture(t);
+  const first = await prepareRelease(await seed('0.1.0'));
+  await activateRelease({ profile, release: first, enabled: true });
+  const file = join(profile, 'package.json'), manifest = JSON.parse(await readFile(file));
+  manifest.dsh.plusInstall.previous = { version: '0.0.9', directory: 'obsolete', bundleName: 'obsolete' };
+  await writeFile(file, JSON.stringify(manifest));
+  assert.equal(Object.hasOwn(await getInstallState(profile), 'previous'), false);
+  await activateRelease({ profile, release: await prepareRelease(await seed('0.1.1')) });
+  assert.equal(Object.hasOwn(JSON.parse(await readFile(file)).dsh.plusInstall, 'previous'), false);
 });
 
 test('a running plugin cannot silently activate over a legacy physical package', async t => {
@@ -76,7 +85,7 @@ test('a running plugin cannot silently activate over a legacy physical package',
   assert.equal(await readFile(join(profile, 'node_modules/benchgo/keep.txt'), 'utf8'), 'old plugin files');
 });
 
-test('offline migration removes a legacy junction without deleting its target or the previous release', async t => {
+test('offline migration removes a legacy junction without deleting its target or immutable release files', async t => {
   const { root, profile, seed, put } = await fixture(t);
   const first = await prepareRelease(await seed('0.1.6'));
   await activateRelease({ profile, release: first, enabled: true });
@@ -88,7 +97,7 @@ test('offline migration removes a legacy junction without deleting its target or
   await assert.rejects(lstat(join(profile, 'node_modules/benchgo')), { code: 'ENOENT' });
   assert.equal(await readFile(join(root, 'external-plugin/keep.txt'), 'utf8'), 'preserve linked target');
   assert.equal(JSON.parse(await readFile(join(first.pluginPath, 'package.json'))).version, '0.1.6');
-  assert.equal((await rollbackRelease({ profile })).version, '0.1.6');
+  assert.equal((await getInstallState(profile)).version, '0.1.9');
   assert.equal((await readdir(join(profile, '.benchgo'))).some(name => name.startsWith('.legacy-')), false);
 });
 
@@ -197,15 +206,16 @@ test('shared services already linked beside the plugin are removed so the offici
   assert.equal((await getInstallState(profile)).managed, false);
 });
 
-test('rollback revalidates shared-service compatibility before changing the active version', async t => {
+test('reuse of a prepared release revalidates shared-service compatibility without changing activation', async t => {
   const { root, profile, seed, put } = await fixture(t);
   const runtime = join(root, 'runtime');
   const shared = [{ name: '@deepseek-ai/dsh-llm', version: '0.2.1-alpha.3' }];
   await put('runtime/node_modules/@deepseek-ai/dsh-llm/package.json', { name: shared[0].name, version: shared[0].version });
   await activateRelease({ profile, release: await prepareRelease({ ...await seed('0.1.0', shared), runtime }), enabled: true });
-  await activateRelease({ profile, release: await prepareRelease({ ...await seed('0.1.1', shared), runtime }) });
+  const next = { ...await seed('0.1.1', shared), runtime };
+  await activateRelease({ profile, release: await prepareRelease(next) });
   await put('runtime/node_modules/@deepseek-ai/dsh-llm/package.json', { name: shared[0].name, version: '0.2.2' });
-  await assert.rejects(rollbackRelease({ profile, runtime }), /版本不兼容/);
+  await assert.rejects(prepareRelease(next), /版本不兼容/);
   assert.equal((await getInstallState(profile)).version, '0.1.1');
 });
 
@@ -223,15 +233,14 @@ test('unsafe archive entries and links are rejected before extraction without ch
   assert.deepEqual(await readdir(releases), []);
 });
 
-test('invalid and wrong-platform archives cannot activate and rollback requires a previous release', async t => {
-  const { profile, seed, put, releases } = await fixture(t);
+test('invalid and wrong-platform archives cannot activate', async t => {
+  const { seed, put, releases } = await fixture(t);
   const options = await seed('0.1.0');
   await put('seed-0.1.0/release.json', { schemaVersion: 1, version: '0.1.0', platform: process.platform === 'win32' ? 'linux' : 'win32' });
   await tar.c({ file: options.archive, cwd: options.directory, gzip: true }, ['release.json', 'node_modules']);
   await assert.rejects(prepareRelease(options), /当前系统/);
   assert.deepEqual(await readdir(releases), []);
   await assert.rejects(prepareRelease({ ...options, version: '../0.1.0' }));
-  await assert.rejects(rollbackRelease({ profile }), /没有可回退/);
 });
 
 test('packaged activation resolves atomic writes from the explicit runtime ancestor without release links', async t => {

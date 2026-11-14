@@ -13,8 +13,8 @@
   "id": "01",
   "title": "设备与远程连接",
   "eyebrow": "REMOTE / LINK",
-  "subtitle": "Link 把可信设备接入目标主机的同一套工作台；优先直连，网络不可达时按优先级经自托管中继连接。",
-  "boundary": "图中实线表示已有源码机制，不代表公网或真机验收通过。家庭 NAT、蜂窝网络、Android、ACME 与首次 SSH 部署仍需实测；公共中继控制面、区域调度为后续目标。当前源码仍装配 cloud-access，设计要求的默认入口收敛尚不能标为完成。",
+  "subtitle": "已有：可信配对、直连/中继与远程工作台；目标：统一发现资源、按所属设备执行，并通过 AI 管理连接。",
+  "boundary": "图中实线表示已有源码机制，不代表公网或真机验收通过。家庭 NAT、蜂窝网络、Android、ACME 与首次 SSH 部署仍需实测；公共中继控制面、区域调度为后续目标。当前源码仍装配 cloud-access，设计要求的默认入口收敛尚不能标为完成。 跨设备查询、目标执行、结果回传与聚合导航已接线；AI管理限已有设备及中继优先级/启停申请，首次配对与秘密仍走设备中心。双向需双方授权；本地TLS和浏览器测试不等于襄阳服务器真机验收。",
   "nodes": [
     {
       "id": "entry",
@@ -51,7 +51,7 @@
       "sources": [
         "plugins/link/src/devices/center.mjs"
       ],
-      "note": "owner 管理能力按 hostAdmin 能力开放，不能由远端设备授权替代。",
+      "note": "owner 管理能力按 hostAdmin 能力开放，不能由远端设备授权替代。 当前主机部分设置已接统一配置；AI 连接动作需提取共享领域服务，不能调用页面票据或模拟点击来管理。",
       "state": "implemented",
       "x": 440,
       "y": 160
@@ -111,7 +111,7 @@
         "plugins/link/src/devices/registry.mjs",
         "plugins/link/src/devices/center.mjs"
       ],
-      "note": "地址属于路线；持久化设备记录不能证明当前在线。",
+      "note": "地址属于路线；持久化设备记录不能证明当前在线。 出站目录与入站授权列表分离，身份映射与摘要查询已接线；双向当前需双方分别授权，一次配对双向协商待实施。",
       "state": "implemented",
       "x": 1200,
       "y": 450
@@ -190,7 +190,7 @@
         "plugins/link/src/session/adapter.mjs",
         "plugins/link/src/session/native.mjs"
       ],
-      "note": "Link 独立启停，不硬依赖 Harness 聚合或 SuperAgent；相关服务缺失时按实际能力返回。",
+      "note": "Link 独立启停，不硬依赖 Harness 聚合或 SuperAgent；相关服务缺失时按实际能力返回。 资源服务已供入口助手与侧栏查询；任务回执由入口既有编排tick跟进，真实双机仍待验。",
       "state": "implemented",
       "x": 60,
       "y": 740
@@ -256,6 +256,99 @@
       "state": "partial",
       "x": 1200,
       "y": 740
+    },
+    {
+      "id": "cross-entry",
+      "title": "助手与聚合导航",
+      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "kind": "orchestration",
+      "sub": "同一入口管理多台设备",
+      "symbol": "SuperAgent / sidebar",
+      "plain": "既可点开远端资源，也能直接告诉助手要做什么。",
+      "role": "项目/最近三种范围与助手查询共用资源服务；助手处理已有设备动作及有限中继申请，首次配对、秘密和部署交接设备中心。界面筛选不限制助手已授权查询。",
+      "input": "设备范围、用户明确指令",
+      "output": "定向查询或领域操作",
+      "sources": [
+        "docs/01-设备与远程连接/跨设备协作.md",
+        "docs/02-工作台与Agent/跨设备资源导航.md",
+        "plugins/link/client/resource-navigation.jsx",
+        "plugins/link/client/resource-state.mjs",
+        "plugins/benchgo/client/index.jsx"
+      ],
+      "note": "已接侧栏三种范围及助手查询；已有设备可由助手连接诊断，首次配对与秘密仍通过设备中心。",
+      "state": "implemented",
+      "x": 60,
+      "y": 1040,
+      "doc": "docs/01-设备与远程连接/跨设备协作.md",
+      "page": "docs/02-工作台与Agent/架构.html"
+    },
+    {
+      "id": "cross-service",
+      "title": "共享资源与操作服务",
+      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "kind": "orchestration",
+      "sub": "稳定身份 · 授权能力 · 查询路由",
+      "symbol": "benchgoLink 领域服务扩展",
+      "plain": "知道资源属于哪台机器，再把请求送到那里。",
+      "role": "合并本机与已授权出站目录；协商版本和查询/执行/管理能力。资源键包含 deviceId 与原样 resourceId，复用路线、分页、取消与有限缓存。双向互通按双方实际授权建立。",
+      "input": "可信来源与目标资源引用",
+      "output": "带设备来源的结果 / 操作回执",
+      "sources": [
+        "docs/01-设备与远程连接/跨设备协作.md",
+        "plugins/link/src/devices/resources.mjs",
+        "plugins/link/src/session/adapter.mjs"
+      ],
+      "note": "已接稳定身份、资源分页、取消、部分失败与缓存清理。双方分别配对后可双向访问；一次配对协商反向通道待实施。",
+      "state": "implemented",
+      "x": 440,
+      "y": 1040,
+      "doc": "docs/01-设备与远程连接/跨设备协作.md"
+    },
+    {
+      "id": "cross-target",
+      "title": "目标主机资源与执行",
+      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "kind": "orchestration",
+      "sub": "项目 · 会话 · 模型/Harness · 任务",
+      "symbol": "目标服务适配",
+      "plain": "文件和开发计算留在项目所属设备。",
+      "role": "目标工作区、会话、能力和任务服务负责真实读取及执行。目标缺少能力时明确拒绝；Link 不依赖 SuperAgent 才能查询基本资源。任务的进度、提问和结果按原 executionRef 回传。",
+      "input": "目标授权范围内的请求",
+      "output": "本地主机事实与唯一执行引用",
+      "sources": [
+        "docs/01-设备与远程连接/跨设备协作.md",
+        "plugins/superagent/src/device-collaboration.mjs",
+        "plugins/superagent/src/orchestration-runtime.mjs"
+      ],
+      "note": "已接目标既有任务与Worker链，使用目标模型和项目目录；入口只保留执行引用，既有tick跟进问题/结果。正常拒绝停止观察，未知接收有限核实，不重派。真实双机与供应商请求待验。",
+      "state": "implemented",
+      "x": 820,
+      "y": 1040,
+      "doc": "docs/01-设备与远程连接/跨设备协作.md"
+    },
+    {
+      "id": "cross-admin",
+      "title": "连接与中继管理桥",
+      "kicker": "DEVICE MANAGEMENT / PARTIAL",
+      "kind": "orchestration",
+      "sub": "已有设备动作 · 中继有限修改申请",
+      "symbol": "设备中心 / 原配置事务",
+      "plain": "已有连接直接管理，首次配对和秘密通过设备中心。",
+      "role": "复用原设备中心与配置服务。远端管理单独授权，只能读取脱敏配置、申请已有节点优先级/启停变更和查询原操作；目标主人确认具体差异后执行。不开放owner接口或任意代理。",
+      "input": "明确设备、配置差量与版本",
+      "output": "真实连接事实 / 待确认操作 / 应用结果",
+      "sources": [
+        "docs/01-设备与远程连接/跨设备协作.md",
+        "plugins/link/src/settings-adapter.mjs",
+        "plugins/link/src/devices/center.mjs",
+        "plugins/link/src/pairing/store.mjs",
+        "plugins/link/client/app.jsx"
+      ],
+      "note": "已接已有设备连接/重连/改名/移除/诊断；远端脱敏读取及已有中继priority/enabled申请由目标主人确认。CAS、幂等、过期和unknown可核验。首次配对、秘密、新节点及部署仍走设备中心，模型不拿owner票据。",
+      "state": "partial",
+      "x": 1200,
+      "y": 1040,
+      "doc": "docs/01-设备与远程连接/跨设备协作.md"
     }
   ],
   "edges": [
@@ -354,6 +447,54 @@
       "from": "t",
       "to": "b",
       "kind": "feedback"
+    },
+    {
+      "a": "cross-entry",
+      "b": "cross-service",
+      "label": "统一查询 / 操作",
+      "from": "r",
+      "to": "l",
+      "kind": "support"
+    },
+    {
+      "a": "cross-service",
+      "b": "cross-target",
+      "label": "授权与定向调用",
+      "from": "r",
+      "to": "l",
+      "kind": "support"
+    },
+    {
+      "a": "cross-target",
+      "b": "cross-service",
+      "label": "事实 / 进度 / 结果",
+      "from": "b",
+      "to": "b",
+      "kind": "feedback"
+    },
+    {
+      "a": "cross-service",
+      "b": "cross-admin",
+      "label": "管理能力",
+      "from": "t",
+      "to": "t",
+      "kind": "support"
+    },
+    {
+      "a": "cross-service",
+      "b": "registry",
+      "label": "身份与可信路线",
+      "from": "t",
+      "to": "b",
+      "kind": "support"
+    },
+    {
+      "a": "cross-admin",
+      "b": "center",
+      "label": "复用领域操作",
+      "from": "t",
+      "to": "b",
+      "kind": "support"
     }
   ],
   "steps": [
@@ -397,6 +538,21 @@
       "title": "断线与撤销有明确归属",
       "text": "断线释放流资源；主机撤销设备会清除凭据对应会话并关闭 peer。重新连接不得凭地址绕过身份验证。",
       "edge": 7
+    },
+    {
+      "node": "cross-entry",
+      "title": "已接线：询问襄阳服务器项目",
+      "text": "入口助手读取已保存且授权的设备目录，按稳定身份查询襄阳服务器项目；没有项目、未授权、离线和不支持查询分别回答。"
+    },
+    {
+      "node": "cross-target",
+      "title": "已接线：在项目所在设备完成开发",
+      "text": "入口只传任务和资源引用。目标用本地配置的模型、Harness 与目录执行，入口按原执行引用收进度和结果；断线不重派或迁移执行。"
+    },
+    {
+      "node": "cross-admin",
+      "title": "已接线：用对话管理连接与中继",
+      "text": "已有设备通过共享服务连接、重连和诊断。远端中继只申请已有节点优先级/启停修改，目标主人确认具体差异后执行。首次配对、秘密、新节点和部署仍走设备中心；待确认不冒充已应用。"
     }
   ],
   "docs": [
@@ -411,7 +567,28 @@
     {
       "label": "Link 接口契约",
       "path": "plugins/link/openapi.json"
+    },
+    {
+      "label": "跨设备协作",
+      "path": "docs/01-设备与远程连接/跨设备协作.md"
+    },
+    {
+      "label": "跨设备资源导航",
+      "path": "docs/02-工作台与Agent/跨设备资源导航.md"
     }
   ],
-  "version": "2026-11-11-1"
+  "version": "2026-11-13-cross-device-2",
+  "canvas": {
+    "width": 1580,
+    "height": 1280
+  },
+  "zones": [
+    {
+      "x": 40,
+      "y": 990,
+      "w": 1440,
+      "h": 245,
+      "label": "跨设备资源与有限操作 · 已接线 · 共用 Link 与目标服务"
+    }
+  ]
 }</script><script src="../_assets/architecture.js"></script></body></html>

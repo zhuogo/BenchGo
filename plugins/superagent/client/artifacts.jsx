@@ -1,10 +1,10 @@
 import { Loading } from '../../shared/client/ui/loading.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
-import { Tooltip, Modal, Menu, IconDownloadOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
+import { Tooltip, Modal, Menu } from '@deepseek-ai/dsh-client-ui-primitives';
 import React, { useEffect, useId, useRef, useState } from 'react';
 import css from './artifacts.css';
 import { ArtifactPreview } from '../../shared/client/artifact-preview.jsx';
-import { fileUrl } from '../../shared/client/preview-model.mjs';
+import { FileSaveButton } from '../../shared/client/file-save-button.jsx';
 import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
@@ -20,9 +20,6 @@ const viewPreferenceKey = 'benchgo.superagent.artifacts.view';
 function readViewPreference() {
   try { return localStorage.getItem(viewPreferenceKey) === 'cards' ? 'cards' : 'list'; } catch { return 'list'; }
 }
-const downloadUrl = file => {
-  try { const url = fileUrl(file.downloadUrl || file.url); url.searchParams.set('download', '1'); return url.href; } catch { return undefined; }
-};
 const formatBytes = value => value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`;
 
 function ArtifactCover({ file, category, onOpen }) {
@@ -144,7 +141,7 @@ export function Artifacts({ api }) {
             <ArtifactCover file={file} category={category} onOpen={event => open(file, event)} />
             <FileDetails file={file} onOpen={event => open(file, event)} />
             {category === 'audio' && <audio controls preload="none" src={file.url} aria-label={file.name}>浏览器无法播放此格式，请下载文件。</audio>}
-            <div className="ba-artifact-actions"><Tooltip label="下载" side="top" delayMs={350} portal><a className="ba-artifact-download" href={downloadUrl(file)} download aria-label={`下载 ${file.name}`}><IconDownloadOutlineRegular size={18} /></a></Tooltip><Button variant="ghost" type="button" className="ba-artifact-menu-trigger" aria-label={`管理 ${file.name}`} aria-haspopup="menu" aria-expanded={!!menu && (menu.id || menu.name) === (file.id || file.name)} onClick={event => { menuAnchor.current = event.currentTarget; setMenu(file); }}><UIIcon name="more" size={18} /></Button></div>
+            <div className="ba-artifact-actions"><Tooltip label="下载" side="top" delayMs={350} portal><span className="ba-artifact-save-anchor"><FileSaveButton file={file} className="ba-artifact-download" label={`下载 ${file.name}`} /></span></Tooltip><Button variant="ghost" type="button" className="ba-artifact-menu-trigger" aria-label={`管理 ${file.name}`} aria-haspopup="menu" aria-expanded={!!menu && (menu.id || menu.name) === (file.id || file.name)} onClick={event => { menuAnchor.current = event.currentTarget; setMenu(file); }}><UIIcon name="more" size={18} /></Button></div>
           </article>)}
         </div>}
         {page.nextCursor && <Button variant="ghost" type="button" className="ba-quiet ba-artifact-more" disabled={loading} onClick={() => void load(category, page.nextCursor)}>{loading ? '正在读取…' : '加载更多'}</Button>}

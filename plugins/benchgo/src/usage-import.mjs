@@ -4,15 +4,27 @@ import { join, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseUsageLine, parseOpenCodeMessage } from './usage-import-parsers.mjs';
 
+// Metadata is independent, but keep parsing and budget accounting in file order.
+// A small batch hides Windows filesystem latency without opening unbounded files.
+async function* historyFiles(paths, stopped) {
+  for (let offset = 0; offset < paths.length && !stopped(); offset += 16) {
+    const batch = await Promise.all(paths.slice(offset, offset + 16).map(async path => {
+      try { return { path, info: await stat(path) }; }
+      catch (error) { return { path, error }; }
+    }));
+    for (const file of batch) { if (stopped()) return; yield file; }
+  }
+}
+
 export function usageRoots(env = process.env, home = homedir()) {
   const codex = env.CODEX_HOME || join(home, '.codex');
   return { codex: [join(codex, 'sessions'), join(codex, 'archived_sessions')], claude: [join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'projects')], pi: [join(env.PI_CODING_AGENT_DIR || join(home, '.pi', 'agent'), 'sessions')], opencode: [env.OPENCODE_DATA_DIR || join(env.XDG_DATA_HOME || join(home, '.local', 'share'), 'opencode')] };
 }
 export class MachineUsageImporter {
   constructor(ledger, normalize, { roots = usageRoots(), maxFiles = 10000, maxBytesPerScan = 32 * 1024 * 1024, maxLineBytes = 8 * 1024 * 1024 } = {}) {
-    this.ledger = ledger; this.normalize = normalize; this.roots = roots; this.limits = { maxFiles, maxBytesPerScan, maxLineBytes }; this.path = join(ledger.path, '..', 'usage-import.json'); this.cursors = {}; this.pending = new Map(); this.completeNativeIds = new Set(); this.coverage = { state: 'idle', sources: [], limits: this.limits }; this.closed = false;
+    this.ledger = ledger; this.normalize = normalize; this.roots = roots; this.limits = { maxFiles, maxBytesPerScan, maxLineBytes }; this.path = join(ledger.path, '..', 'usage-import.json'); this.cursors = {}; this.cursorsDirty = false; this.cursorsSaved = false; this.pending = new Map(); this.completeNativeIds = new Set(); this.coverage = { state: 'idle', sources: [], limits: this.limits }; this.closed = false;
   }
-  async open() { try { const saved = JSON.parse(await readFile(this.path, 'utf8')); if (saved.version === 1) this.cursors = saved.cursors ?? {}; } catch (e) { if (e.code !== 'ENOENT') this.coverage.error = '扫描游标不可读，将重新安全去重扫描'; } return this; }
+  async open() { try { const saved = JSON.parse(await readFile(this.path, 'utf8')); if (saved.version === 1) { this.cursors = saved.cursors ?? {}; this.cursorsSaved = true; } } catch (e) { if (e.code !== 'ENOENT') this.coverage.error = '扫描游标不可读，将重新安全去重扫描'; } return this; }
   scan() { if (this.running) return this.running; this.running = this.run().catch(error => { this.coverage.state = 'error'; this.coverage.error = error.code || 'scan-failed'; }).finally(() => { this.running = null; }); return this.running; }
   async run() {
     this.completeNativeIds.clear();
@@ -29,11 +41,11 @@ export class MachineUsageImporter {
           for (const entry of entries) { if (entry.isSymbolicLink()) continue; const path = join(directory, entry.name); if (entry.isDirectory()) await walk(path, depth + 1); else if ((tool === 'opencode' && (entry.name.endsWith('.json') || entry.name === 'opencode.db')) || entry.name.endsWith('.jsonl')) { if (++filesCount > this.limits.maxFiles) { source.truncated = true; break; } paths.push(path); } }
         };
         await walk(root); source.files += paths.length;
-        for (const path of paths) {
+        for await (const { path, info, error } of historyFiles(paths, () => this.closed)) {
           if (this.closed || budget <= 0) { source.truncated = true; source.continuable = !this.closed; break; }
           try {
-            const info = await stat(path);
-            if (tool === 'opencode') { if (path.endsWith('.db')) { const result = await this.sqlite(path, source, budget); budget -= result; this.coverage.scannedBytes += result; } else if (path.split(/[\\/]/u).includes('message')) { if (info.size > this.limits.maxLineBytes || info.size > budget) { source.truncated = true; continue; } const key = path, prior = this.cursors[key]; if (prior?.mtime === info.mtimeMs && prior.size === info.size) continue; const item = JSON.parse(await readFile(path, 'utf8')); const row = parseOpenCodeMessage(item, this.normalize); if (row) this.ledger.put(row); this.cursors[key] = { mtime: info.mtimeMs, size: info.size }; budget -= info.size; this.coverage.scannedBytes += info.size; source.scannedFiles++; } continue; }
+            if (error) throw error;
+            if (tool === 'opencode') { if (path.endsWith('.db')) { const result = await this.sqlite(path, source, budget); budget -= result; this.coverage.scannedBytes += result; } else if (path.split(/[\\/]/u).includes('message')) { if (info.size > this.limits.maxLineBytes || info.size > budget) { source.truncated = true; continue; } const key = path, prior = this.cursors[key]; if (prior?.mtime === info.mtimeMs && prior.size === info.size) continue; const item = JSON.parse(await readFile(path, 'utf8')); const row = parseOpenCodeMessage(item, this.normalize); if (row) this.ledger.put(row); this.cursors[key] = { mtime: info.mtimeMs, size: info.size }; this.cursorsDirty = true; budget -= info.size; this.coverage.scannedBytes += info.size; source.scannedFiles++; } continue; }
             let cursor = this.cursors[path];
             if (!cursor || cursor.ino !== info.ino || info.size < cursor.offset) cursor = { ino: info.ino, offset: 0, state: { nativeId: basename(path, '.jsonl') } };
             let pending = this.pending.get(path);
@@ -69,7 +81,7 @@ export class MachineUsageImporter {
               cursor.state.skipOversize = true;
               consumed = buffer.length;
             }
-            cursor.offset += consumed; this.cursors[path] = cursor; this.pending.delete(path);
+            cursor.offset += consumed; this.cursors[path] = cursor; this.cursorsDirty = true; this.pending.delete(path);
             const nextOffset = readOffset + bytesRead;
             if (cursor.offset < nextOffset) {
               if (nextOffset < info.size) this.pending.set(path, { ino: info.ino, offset: cursor.offset, nextOffset, buffer: buffer.subarray(consumed) });
@@ -87,7 +99,8 @@ export class MachineUsageImporter {
     }
     this.coverage.state = this.coverage.sources.some(source => source.status === 'partial') ? 'partial' : 'ready'; this.coverage.completedAt = new Date().toISOString();
     await this.ledger.flush();
-    const temp = this.path + '.' + randomUUID() + '.tmp'; try { await writeFile(temp, JSON.stringify({ version: 1, cursors: this.cursors }), { mode: 0o600 }); await rename(temp, this.path); } finally { await rm(temp, { force: true }); }
+    if (!this.cursorsDirty && this.cursorsSaved) return;
+    const temp = this.path + '.' + randomUUID() + '.tmp'; try { await writeFile(temp, JSON.stringify({ version: 1, cursors: this.cursors }), { mode: 0o600 }); await rename(temp, this.path); this.cursorsDirty = false; this.cursorsSaved = true; } finally { await rm(temp, { force: true }); }
   }
   async sqlite(path, source, budget) {
     let db;
@@ -107,7 +120,7 @@ export class MachineUsageImporter {
       const rows = db.prepare('SELECT ' + selected.join(',') + ' FROM message WHERE rowid > ? ORDER BY rowid LIMIT 1000').all(offset);
       let complete = rows.length < 1000;
       for (const item of rows) { const size = Buffer.byteLength(String(item.data)); if (bytes + size > budget) { source.truncated = true; complete = false; break; } bytes += size; const info = typeof item.data === 'string' ? JSON.parse(item.data) : item.data; const row = parseOpenCodeMessage({ id: item.id, sessionID: item.session_id, ...info }, this.normalize); if (row) this.ledger.put(row); offset = item.cursor; }
-      this.cursors[path] = { rowid: offset, mtime: file.mtimeMs, walTime, size: file.size, complete }; source.scannedFiles++; if (!complete) { source.truncated = true; source.continuable ||= bytes > 0; } return bytes;
+      this.cursors[path] = { rowid: offset, mtime: file.mtimeMs, walTime, size: file.size, complete }; this.cursorsDirty = true; source.scannedFiles++; if (!complete) { source.truncated = true; source.continuable ||= bytes > 0; } return bytes;
     } catch (e) { source.errors.push(e.code || 'sqlite-unavailable'); return 0; } finally { db?.close(); }
   }
   async close() { this.closed = true; await this.running; }

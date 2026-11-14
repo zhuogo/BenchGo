@@ -55,8 +55,10 @@ test('published server entries include their relative module closure and native 
   assert.equal([...published].some(path => /^(?:agents|autoagent|voice)\//.test(path)), false, 'replaced source directories are excluded from the package');
   for (const module of ['harness', 'superagent', 'voice']) {
     assert.ok(published.has(`lib/modules/${module}/package.json`));
-    if (module !== 'superagent') assert.equal([...published].some(path => path.startsWith(`lib/modules/${module}/shared/`)), false, 'unrelated shared source is not copied into modules');
+    if (module === 'harness') assert.equal([...published].some(path => path.startsWith(`lib/modules/${module}/shared/`)), false, 'unrelated shared source is not copied into modules');
   }
+  assert.deepEqual([...published].filter(path => path.startsWith('lib/modules/voice/shared/')).sort(), ['lib/modules/voice/shared/protocol-catalog.mjs'], 'publish only the voice protocol catalog required by the runtime');
+  assert.ok(checked.has('lib/modules/voice/shared/protocol-catalog.mjs'), 'the published voice runtime must resolve its protocol catalog');
   assert.ok(published.has('lib/modules/superagent/shared/pet-catalog.mjs'), 'pet composition catalog ships with the server');
   assert.ok([...published].some(path => path.startsWith('lib/modules/superagent/assets/pet/')), 'pet source provenance and assets ship with the plugin');
 });

@@ -8,7 +8,7 @@ const object = value => {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 };
 const beforeDispatchCodes = new Set(['ABORTED_BEFORE_DISPATCH', 'FS_SANDBOX_DENIED', 'UNKNOWN_TOOL', 'INVALID_TOOL_ARGS', 'INVALID_ARGUMENTS',
-  'ACTION_TARGET_NOT_FOUND', 'WORKER_TOOL_SCOPE', 'WORKER_AUTHORIZATION_CHANGED', 'WORKER_TICKET_INACTIVE',
+  'ACTION_TARGET_NOT_FOUND', 'WORKER_TOOL_SCOPE', 'WORKER_AUTHORIZATION_CHANGED', 'WORKER_TASK_INACTIVE',
   'MANAGEMENT_OWNER_REQUIRED', 'MANAGEMENT_APPROVAL_UNAVAILABLE', 'MANAGEMENT_APPROVAL_DENIED', 'SETTINGS_UNAVAILABLE', 'CLEANUP_UNAVAILABLE']);
 const unknownFailure = result => result?.failed && !beforeDispatchCodes.has(result.code);
 const output = content => object((content || []).filter(block => block.type === 'text').map(block => block.text).join('\n'));

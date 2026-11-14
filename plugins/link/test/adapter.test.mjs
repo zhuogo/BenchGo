@@ -69,6 +69,93 @@ test('state lists registered Harness sessions and maps official model catalog', 
   assert.deepEqual(f.calls.find(call => call.method === 'list').args, { _request: {} });
 });
 
+test('internal session summaries skip model catalog and accept a request-local project snapshot', async t => {
+  const f = fixture(); t.after(() => f.adapter.close());
+  const expected = (await f.adapter.dispatch({ action: 'state' }, f.device)).sessions;
+  f.calls.length = 0;
+  f.ctx.workspaceRegistry.list = () => { throw new Error('Snapshot must be reused'); };
+  const invoke = f.ctx.typertGateway.invoke;
+  f.ctx.typertGateway.invoke = call => {
+    if (call.method === 'modelCatalog') throw new Error('Catalog unavailable');
+    return invoke(call);
+  };
+  assert.deepEqual(await f.adapter.list(f.device, [f.project]), expected);
+  assert.deepEqual(f.calls.map(call => call.method), ['list']);
+  await assert.rejects(f.adapter.dispatch({ action: 'models' }, f.device), /Catalog unavailable/);
+  await assert.rejects(f.adapter.dispatch({ action: 'sessions' }, f.device), /Unsupported Link action/);
+});
+
+test('session summary requests hold their peer until completion and release it after failure', async t => {
+  const f = fixture(); t.after(() => f.adapter.close());
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let rejectList;
+  f.ctx.typertGateway.invoke = () => new Promise((resolve, reject) => { rejectList = reject; });
+  const pending = f.adapter.list(f.device);
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(45_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.peers[0].signal.aborted, false, 'idle expiry cannot evict an active summary request');
+  rejectList(new Error('List failed'));
+  await assert.rejects(pending, /List failed/);
+  t.mock.timers.tick(45_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.peers[0].signal.aborted, true, 'failed summary requests release their activity hold');
+});
+
+test('state maps 5000 sessions across 20 projects with one registry read', async t => {
+  const f = fixture(); t.after(() => f.adapter.close());
+  const projects = Array.from({ length: 20 }, (_, index) => ({ id: `project-${index}`, path: `/project-${index}`, sessionIds: [] }));
+  const items = Array.from({ length: 5000 }, (_, index) => {
+    const sessionId = `session-${index}`;
+    projects[index % projects.length].sessionIds.push(sessionId);
+    return { sessionId, projections: { values: { title: `Session ${index}` } }, running: index % 2 === 0, updatedAt: 5000 - index };
+  });
+  let projectReads = 0;
+  f.ctx.workspaceRegistry.list = () => { projectReads++; return projects; };
+  const invoke = f.ctx.typertGateway.invoke;
+  f.ctx.typertGateway.invoke = call => call.method === 'list' ? { items } : invoke(call);
+  const state = await f.adapter.dispatch({ action: 'state' }, f.device);
+  assert.equal(projectReads, 1);
+  assert.deepEqual(state.projects, projects.map(project => ({ id: project.id, name: project.id, path: project.path })));
+  assert.deepEqual(state.sessions, items.map((row, index) => ({ id: row.sessionId, projectId: `project-${index % projects.length}`, title: `Session ${index}`, running: row.running, updatedAt: row.updatedAt })));
+});
+
+test('state preserves first project ownership, visibility, titles and source order without caching', async t => {
+  const f = fixture(); t.after(() => f.adapter.close());
+  let projects = [
+    { id: 'first', title: 'First', path: '/first', sessionIds: ['plain', 'nested', 'empty', 'private', 'child', 'subagent'] },
+    { id: 'second', path: '/second', sessionIds: ['nested'] },
+  ];
+  const items = [
+    { sessionId: 'nested', projections: { values: { title: { title: 'Nested title' } } }, running: true, updatedAt: 10 },
+    { sessionId: 'unregistered', updatedAt: 100 },
+    { sessionId: 'private', updatedAt: 90 },
+    { sessionId: 'child', parentSessionId: 'plain', updatedAt: 80 },
+    { sessionId: 'subagent', origin: 'subagent', updatedAt: 70 },
+    { sessionId: 'plain', projections: { values: { title: 'Plain title' } }, running: false, updatedAt: 30 },
+    { sessionId: 'empty', projections: { values: { title: '' } }, updatedAt: 20 },
+  ];
+  let projectReads = 0;
+  f.ctx.workspaceRegistry.list = () => { projectReads++; return projects; };
+  f.ctx.get = name => name === 'assistant' ? { sidebarPrivateSessionIds: async () => ['private'] } : undefined;
+  const invoke = f.ctx.typertGateway.invoke;
+  f.ctx.typertGateway.invoke = call => call.method === 'list' ? { items } : invoke(call);
+  const state = await f.adapter.dispatch({ action: 'state' }, f.device);
+  assert.equal(projectReads, 1);
+  assert.deepEqual(state.sessions, [
+    { id: 'nested', projectId: 'first', title: 'Nested title', running: true, updatedAt: 10 },
+    { id: 'plain', projectId: 'first', title: 'Plain title', running: false, updatedAt: 30 },
+    { id: 'empty', projectId: 'first', title: '新会话', running: undefined, updatedAt: 20 },
+  ]);
+  assert.deepEqual(await f.adapter.list(f.device, projects), state.sessions);
+  assert.equal(projectReads, 1, 'summaries reuse the supplied project snapshot');
+  projects = [{ id: 'replacement', title: 'Replacement', path: '/replacement', sessionIds: ['nested'] }];
+  const refreshed = await f.adapter.dispatch({ action: 'state' }, f.device);
+  assert.equal(projectReads, 2);
+  assert.deepEqual(refreshed.projects, [{ id: 'replacement', name: 'Replacement', path: '/replacement' }]);
+  assert.deepEqual(refreshed.sessions, [{ ...state.sessions[0], projectId: 'replacement' }]);
+});
+
 test('paired Link syncs durable notifications and marks transport delivery for its device', async t => {
   const f = fixture(); t.after(() => f.adapter.close());
   const result = await f.adapter.dispatch({ action: 'notifications', afterSeq: 0 }, f.device);

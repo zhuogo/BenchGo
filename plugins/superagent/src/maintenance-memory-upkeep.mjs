@@ -72,18 +72,18 @@ export function createMemoryUpkeepProcessor({ ctx, store, readSources, now = () 
         ...(observed?.batchId ? { conversationWatermark: store.learning.completeSources(observed.batchId) } : {}),
         hasMore: !!(batch.hasMore || observed?.hasMore) };
     };
-    for (const ticket of batch.items) {
-      if (ticket.status !== 'completed' || !ticket.closedAt) throw new Error('学习材料不是明确已关工单');
-      if ((settings.excludedScopes || []).includes('personal') || excluded(JSON.stringify(ticket))) continue;
-      const originals = (ticket.instructions || []).filter(row => row.source?.role === 'user' && typeof row.text === 'string' && row.text.trim());
+    for (const task of batch.items) {
+      if (task.status !== 'completed' || !task.closedAt) throw new Error('学习材料不是明确已关任务');
+      if ((settings.excludedScopes || []).includes('personal') || excluded(JSON.stringify(task))) continue;
+      const originals = (task.instructions || []).filter(row => row.source?.role === 'user' && typeof row.text === 'string' && row.text.trim());
       const instructions = originals.length <= 3 ? originals : [originals[0], ...originals.slice(-2)];
       if (!instructions.length) continue;
-      const result = ticket.result || {};
-      const rows = instructions.map(row => ({ messageId: `${ticket.ticketId}:${row.id}`, text: row.text.slice(0, 6000),
-        truncated: row.text.length > 6000, source: row.source, ticketId: ticket.ticketId, resultVersion: ticket.resultVersion,
-        closedAt: ticket.closedAt, failed: failed(result), successful: succeeded(result) }));
+      const result = task.result || {};
+      const rows = instructions.map(row => ({ messageId: `${task.taskId}:${row.id}`, text: row.text.slice(0, 6000),
+        truncated: row.text.length > 6000, source: row.source, taskId: task.taskId, resultVersion: task.resultVersion,
+        closedAt: task.closedAt, failed: failed(result), successful: succeeded(result) }));
       sources.push(...rows);
-      digest.push({ ticketId: ticket.ticketId, resultVersion: ticket.resultVersion, status: ticket.status, closedAt: ticket.closedAt,
+      digest.push({ taskId: task.taskId, resultVersion: task.resultVersion, status: task.status, closedAt: task.closedAt,
         instructions: rows.map(({ messageId, text, truncated }) => ({ messageId, text: text.slice(0, 2000), truncated: truncated || text.length > 2000 })),
         result: { summary: clipped(result.summary, 2000) } });
     }
@@ -111,7 +111,7 @@ export function createMemoryUpkeepProcessor({ ctx, store, readSources, now = () 
     const { parsed, routing } = await runMaintenanceReview({ ctx, store, task: 'memory-upkeep', material: digest, signal,
       validate: result => { if (!Array.isArray(result?.memories) || (result.skills !== undefined && !Array.isArray(result.skills))) throw new Error('Invalid learning response'); } });
     if (!Array.isArray(parsed.memories) || parsed.memories.length > 5) throw new Error('学习记忆数量无效');
-    const evidence = source => ({ ...source.source, role: 'user', ticketId: source.ticketId, resultVersion: source.resultVersion,
+    const evidence = source => ({ ...source.source, role: 'user', taskId: source.taskId, resultVersion: source.resultVersion,
       closedAt: source.closedAt, reviewId, excerpt: source.text, excerptTruncated: source.truncated });
     const memories = parsed.memories.map((memory, index) => {
       const source = memory && sources.find(row => row.messageId === memory.sourceMessageId);
@@ -184,7 +184,7 @@ export function createMemoryUpkeepProcessor({ ctx, store, readSources, now = () 
       await checkPolicy();
       await store.learning.setTaskFingerprint('memory-upkeep', fingerprint(current));
     }
-    return { candidates, skills, ...(overview ? { overview } : {}), routing, modelUsed: true, ticketIds: digest.map(row => row.ticketId).filter(Boolean),
+    return { candidates, skills, ...(overview ? { overview } : {}), routing, modelUsed: true, taskIds: digest.map(row => row.taskId).filter(Boolean),
       sourceMessageIds: sources.map(row => row.messageId), ...complete() };
   };
 }

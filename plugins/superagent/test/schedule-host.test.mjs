@@ -83,6 +83,6 @@ test('official Host Schedule persists a due reminder and enters SuperAgent Eval 
     assess: async ({ candidates }) => candidates.map(row => ({ candidateId: row.candidateId, outcome: 'accept', target: trigger.content, acceptance: '提供证据', reason: 'official due reminder' })),
   });
   await runner.tick();
-  assert.equal(store.orchestration.listTickets().length, 1);
-  assert.equal(store.orchestration.listTickets()[0].mandate.admission, 'desktop-schedule');
+  assert.equal(store.orchestration.listTasks().length, 1);
+  assert.equal(store.orchestration.listTasks()[0].mandate.admission, 'desktop-schedule');
 });

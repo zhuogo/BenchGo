@@ -7,6 +7,7 @@ import { createUpdateManifest } from '../desktop/create-update-manifest.mjs';
 import { releaseDownloadUrl, resolveUpdateUrl, DEFAULT_UPDATE_CONFIG, validateReleaseManifest } from '../../plugins/benchgo/shared/update-feed.mjs';
 import { fileDigest } from './record-artifact.mjs';
 import { releaseKind, sha256 } from './github.mjs';
+import { assembleDownloads } from './downloads.mjs';
 
 export const requiredVerification = {
   plugin: ['update-feed', 'plugin-entry-closure', 'production-dependency-closure'],
@@ -58,7 +59,7 @@ async function loadBuild(directory, plan, component, output) {
     receiptUrl: releaseDownloadUrl(`${component}-source.json`, plan.tag) } };
 }
 
-export async function assembleRelease({ plan, buildRoot, outDir, notes, privateKey, publicKey, enforceSource = true }) {
+export async function assembleRelease({ plan, buildRoot, outDir, notes, privateKey, publicKey, enforceSource = true, platforms = [] }) {
   if (plan.schemaVersion !== 1 || plan.kind !== releaseKind || plan.tag !== `v${plan.releaseVersion}`) throw new Error('Invalid release plan');
   if (enforceSource && execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== plan.sourceSha) throw new Error('Release assembly checkout differs from build source');
   if (notes !== undefined && (typeof notes !== 'string' || notes.length > 16_384)) throw new Error('Release notes must be at most 16384 characters');
@@ -99,13 +100,14 @@ export async function assembleRelease({ plan, buildRoot, outDir, notes, privateK
       sha512, releaseDate: plan.createdAt };
     await writeFile(resolve(output, 'latest.yml'), `${JSON.stringify(feed, null, 2)}\n`);
   }
+  if (platforms.length) await assembleDownloads({ plan, manifest, buildRoot, output, platforms, privateKey });
   return { manifest, receipt };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { values } = parseArgs({ options: { plan: { type: 'string' }, builds: { type: 'string' }, out: { type: 'string' } } });
+  const { values } = parseArgs({ options: { plan: { type: 'string' }, builds: { type: 'string' }, out: { type: 'string' }, platforms: { type: 'string' } } });
   const plan = JSON.parse(await readFile(values.plan, 'utf8'));
   assembleRelease({ plan, buildRoot: values.builds, outDir: values.out, notes: process.env.RELEASE_NOTES,
-    privateKey: process.env.BENCHGO_UPDATE_PRIVATE_KEY }).then(result => console.log(`Signed BenchGo ${result.manifest.releaseVersion} from ${result.receipt.sourceSha}`))
+    privateKey: process.env.BENCHGO_UPDATE_PRIVATE_KEY, platforms: values.platforms?.split(',') ?? [] }).then(result => console.log(`Signed BenchGo ${result.manifest.releaseVersion} from ${result.receipt.sourceSha}`))
     .catch(error => { console.error(error.message); process.exitCode = 1; });
 }

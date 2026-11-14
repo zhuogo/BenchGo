@@ -56,11 +56,11 @@ export function createManagementHttp({ settings, taskManagement, profileId, read
   const scope = { owner: 'desktop-owner', mode: 'global' };
   function cleanup(input, peer) {
     managementOwner(peer);
-    if (input.action === 'taskCleanupPreview') return taskManagement.previewCleanup({ scope, ids: input.ticketIds });
+    if (input.action === 'taskCleanupPreview') return taskManagement.previewCleanup({ scope, ids: input.taskIds });
     if (input.action === 'taskCleanupRestorePreview') {
-      const ids = input.ticketIds;
-      if (!Array.isArray(ids) || !ids.length) throw fail('CLEANUP_INPUT_INVALID', '请选择需要恢复展示的工单');
-      const rows = taskManagement.cleanupHistory({ ticketId: ids[0] });
+      const ids = input.taskIds;
+      if (!Array.isArray(ids) || !ids.length) throw fail('CLEANUP_INPUT_INVALID', '请选择需要恢复展示的任务');
+      const rows = taskManagement.cleanupHistory({ taskId: ids[0] });
       const receipt = rows.find(row => row.operation === 'archive'
         && ids.every(id => row.items.some(item => item.id === id)));
       if (!receipt) throw fail('CLEANUP_RECEIPT_NOT_FOUND', '归档记录不存在');
@@ -70,7 +70,7 @@ export function createManagementHttp({ settings, taskManagement, profileId, read
     const preview = taskManagement.getCleanupPreview(input.previewId);
     if (preview.manifestHash !== input.manifestHash) throw fail('CLEANUP_CONFLICT', '清单已变化，请重新预览');
     if ((input.action === 'taskCleanupRestore') !== (preview.type === 'restore')) throw fail('CLEANUP_CONFLICT', '清单类型不属于本次操作');
-    const ids = input.selectedTicketIds;
+    const ids = input.selectedTaskIds;
     const source = { sessionId: 'desktop-owner-page', callId: input.requestId || randomUUID() };
     const confirmedBy = taskManagement.createCleanupConfirmation({ previewId: preview.previewId,
       manifestHash: preview.manifestHash, ids, actorId: 'desktop-owner', source });

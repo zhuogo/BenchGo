@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mountEfficiency } from '../src/plugin.mjs';
@@ -30,76 +30,68 @@ const readyServices = () => ({ tools: {}, agents: {}, agentPresets: {}, sessionP
 
 async function fixture(t, services = readyServices()) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-efficiency-test-'));
-  const live = host(services), calls = [], disposals = [];
+  const live = host(services), calls = [], disposals = [], definitions = [{ name: 'context_status', definition: {} }];
   const adapters = Object.fromEntries(['ops', 'compaction'].map(name => [name, async (_ctx, config) => {
     calls.push({ name, config: structuredClone(config) });
     let ended = false;
-    return { diagnose: () => ({ state: ended ? 'disabled' : 'ready' }), async dispose() { if (!ended) { ended = true; disposals.push(name); } } };
+    return { contextTools: () => ended ? [] : definitions, diagnose: () => ({ state: ended ? 'disabled' : 'ready' }), async dispose() { if (!ended) { ended = true; disposals.push(name); } } };
   }]));
   const service = await mountEfficiency(live.ctx, { directory, adapters });
   await live.settled();
   t.after(async () => { await service.dispose(); await rm(directory, { recursive: true, force: true }); });
-  return { directory, live, service, calls, disposals, adapters };
+  return { directory, live, service, calls, disposals, adapters, definitions };
 }
 
-test('configuration saves merge one feature, remount only that feature, and survive reload', async t => {
-  const { service, directory, calls, disposals, adapters } = await fixture(t);
+test('built-in tools and context management start without settings, routes, or configuration files', async t => {
+  const { service, live, directory, calls } = await fixture(t);
+  assert.deepEqual(calls.map(row => [row.name, row.config]), [
+    ['ops', { enabled: true, shell: false }], ['compaction', { enabled: true }],
+  ]);
+  assert.equal(live.services.benchgoEfficiency, service);
   assert.equal(service.snapshot().features.ops.available, true);
-  await service.update({ revision: 0, features: { ops: { shell: true } } });
-  assert.deepEqual(disposals, ['ops']);
-  assert.equal(calls.filter(row => row.name === 'compaction').length, 1);
-  assert.deepEqual(JSON.parse(await readFile(join(directory, 'efficiency.json'), 'utf8')).features,
-    { ops: { enabled: true, shell: true }, compaction: { enabled: true } });
+  assert.equal(service.snapshot().features.compaction.available, true);
+  assert.equal(service.snapshot().features.ops.version, undefined);
+  assert.equal(service.update, undefined);
+  assert.equal(service.fetch, undefined);
+  assert.deepEqual(live.routes, []);
+  assert.deepEqual(await readdir(directory), []);
+});
+
+test('built-in defaults ignore legacy switches and preserve existing configuration bytes', async t => {
+  const { directory, service, adapters } = await fixture(t);
   await service.dispose();
-  const restored = host(readyServices());
-  const next = await mountEfficiency(restored.ctx, { directory, adapters });
-  await restored.settled();
-  assert.equal(next.snapshot().revision, 1);
-  assert.equal(next.snapshot().features.ops.shell, true);
+  const legacy = '{broken legacy settings';
+  await writeFile(join(directory, 'efficiency.json'), legacy);
+  const root = host(readyServices());
+  const next = await mountEfficiency(root.ctx, { directory, config: { features: { ops: { enabled: false, shell: true }, compaction: { enabled: false } } }, adapters });
+  await root.settled();
+  assert.equal(next.snapshot().features.ops.shell, false);
+  assert.equal(next.snapshot().features.ops.available, true);
+  assert.equal(next.snapshot().features.compaction.available, true);
+  assert.equal(await readFile(join(directory, 'efficiency.json'), 'utf8'), legacy);
   await next.dispose();
 });
 
-test('concurrent stale configuration cannot overwrite another selection', async t => {
-  const { service } = await fixture(t);
-  const result = await Promise.allSettled([
-    service.update({ revision: 0, features: { ops: { enabled: false } } }),
-    service.update({ revision: 0, features: { compaction: { enabled: false } } }),
-  ]);
-  assert.equal(result[0].status, 'fulfilled');
-  assert.equal(result[1].reason.status, 409);
-  assert.equal(service.snapshot().features.compaction.enabled, true);
-  assert.equal(service.snapshot().features.ops.state, 'disabled');
-});
-
-test('owner route survives unavailable optional host services and rejects cross-origin writes', async t => {
-  const { service, live } = await fixture(t, {});
-  assert.equal(live.routes[0].path, '/api/benchgo/efficiency');
-  assert.equal(service.snapshot().features.ops.available, false);
+test('missing host services are reported without disabling other capabilities or mounting settings', async t => {
+  const { service, calls, live } = await fixture(t, { tools: {} });
   assert.equal(service.snapshot().features.ops.state, 'waiting_services');
-  const response = await service.fetch(new Request('http://127.0.0.1:3080/api/benchgo/efficiency', {
-    method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json' },
-    body: JSON.stringify({ revision: 0, features: { ops: { enabled: false } } }),
-  }));
-  assert.equal(response.status, 403);
-  assert.equal(service.snapshot().revision, 0);
+  assert.equal(service.snapshot().features.ops.available, false);
+  assert.equal(service.snapshot().features.compaction.available, true);
+  assert.deepEqual(calls.map(row => row.name), ['compaction']);
+  assert.deepEqual(live.routes, []);
 });
 
-test('invalid settings fail without replacing saved configuration', async t => {
-  const { service } = await fixture(t);
-  await assert.rejects(service.update({ revision: 0, features: { ops: { enabled: 'true' } } }), /无效/);
-  await assert.rejects(service.update({ revision: 0, features: { compaction: { safePointRatio: 0.5 } } }), /无效/);
-  assert.equal(service.snapshot().revision, 0);
+test('diagnostics preserve owned definitions and built-in scopes clean up once', async t => {
+  const { service, definitions, disposals } = await fixture(t);
+  assert.deepEqual(service.contextTools(), definitions);
+  assert.equal((await service.diagnose({})).features.ops.session.state, 'ready');
+  await service.dispose(); await service.dispose();
+  assert.deepEqual(disposals.sort(), ['compaction', 'ops']);
+  assert.deepEqual(service.contextTools(), []);
+  assert.equal(service.snapshot().features.ops.available, false);
 });
 
-test('corrupt persisted settings are retained and fail explicitly', async t => {
-  const { directory, service, adapters } = await fixture(t);
-  await service.dispose();
-  await writeFile(join(directory, 'efficiency.json'), '{broken');
-  await assert.rejects(mountEfficiency(host().ctx, { directory, adapters }), SyntaxError);
-  assert.equal(await readFile(join(directory, 'efficiency.json'), 'utf8'), '{broken');
-});
-
-test('dependency load failure is visible while other capability remains enabled', async t => {
+test('dependency failure reports BenchGo capability names and leaves context management available', async t => {
   const { service, directory, adapters } = await fixture(t);
   await service.dispose();
   const root = host(readyServices());
@@ -107,6 +99,7 @@ test('dependency load failure is visible while other capability remains enabled'
   await root.settled();
   assert.equal(broken.snapshot().features.ops.installed, false);
   assert.equal(broken.snapshot().features.ops.available, false);
+  assert.equal(broken.snapshot().features.ops.error, 'missing 执行工具');
   assert.equal(broken.snapshot().features.compaction.available, true);
   await broken.dispose();
 });
@@ -115,7 +108,7 @@ test('OPS public integration keeps native CLI and official tools unchanged and t
   const configurations = [], disposed = [];
   const module = { integration(config) { configurations.push(config); return { config }; }, diagnose: async () => ({ state: 'ready' }) };
   const ctx = { plugin(value) { const fiber = Promise.resolve(); fiber.dispose = async () => disposed.push(value.config.preset); return fiber; } };
-  const adapter = await mountOps(ctx, {}, { load: async () => module });
+  const adapter = await mountOps(ctx, { shell: true }, { load: async () => module });
   assert.deepEqual(configurations.map(row => row.preset), ['standard', 'ptc', 'cordis']);
   assert.equal(configurations[1].profile, 'ptc');
   assert.ok(configurations.every(row => !row.replaceOfficial && !row.hidePwsh && !row.shell));

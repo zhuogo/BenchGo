@@ -1,5 +1,5 @@
 .cmd-diagnostics{--cmd-diagnostics-muted:var(--dsw-alias-label-secondary,color-mix(in srgb,currentColor 62%,transparent));--cmd-diagnostics-line:var(--dsw-alias-border-l1,color-mix(in srgb,currentColor 14%,transparent));font-size:13px;color:var(--dsw-alias-label-primary,inherit);max-width:760px;min-width:0}
-.cmd-diagnostics h2{font-size:18px;font-weight:600;margin:0 0 8px}
+.cmd-diagnostics-recording{margin-inline-start:12px;font-size:12px;font-weight:400;color:var(--dsw-alias-state-business-primary,var(--bg-ui-accent))}
 .cmd-diagnostics-intro{margin:0 0 24px;line-height:1.6;color:var(--cmd-diagnostics-muted)}
 .cmd-diagnostics-row{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:20px 0;border-block:1px solid var(--cmd-diagnostics-line)}
 .cmd-diagnostics-copy{min-width:0}

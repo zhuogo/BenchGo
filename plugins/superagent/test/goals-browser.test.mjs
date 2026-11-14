@@ -60,8 +60,8 @@ test('goal checklist renders four states without creation and completes, reopens
         assert.equal(await page.getByRole('button', { name: /^(添加|添加目标)$/ }).count(), 0);
         if (mode === 'empty') await page.getByText('在 SuperAgent 对话中提出目标，让助手记录并持续跟进。', { exact: true }).waitFor();
         if (mode === 'data') {
-          assert.equal(await page.getByText(/历史执行目标|关联工单/).count(), 0, 'every goal is a plain checklist item');
-          assert.equal(await page.getByRole('button', { name: '查看工单', exact: true }).count(), 0);
+          assert.equal(await page.getByText(/历史执行目标|关联任务/).count(), 0, 'every goal is a plain checklist item');
+          assert.equal(await page.getByRole('button', { name: '查看任务', exact: true }).count(), 0);
           assert(await page.getByRole('checkbox', { name: '完成：推进发布准备', exact: true }).isEnabled());
         }
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

@@ -39,7 +39,7 @@ async function fixture() {
     };
   ` }, bundle: true, write: false, format: 'iife', jsx: 'automatic', outdir: join(root, 'artifacts/unused-chat-opening-test'),
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
-    alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts'), '@deepseek-ai/dsh-api-gateway/client': join(root,'deepseek-harness/packages/api/gateway/lib/client.node.js') },
+    alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts'), '@deepseek-ai/dsh-util-workspace-path': join(root, 'deepseek-harness/packages/util/workspace-path/src/index.ts'), '@deepseek-ai/dsh-api-gateway/client': join(root,'deepseek-harness/packages/api/gateway/lib/client.node.js') },
     plugins: [{ name: 'opening-fixture', setup(build) {
       build.onLoad({filter:/superagent[\\/]client[\\/]index\.jsx$/},async({path})=>({contents:await readFile(path,'utf8')+'\nexport {openAssistantThread};',loader:'jsx'}));
       build.onLoad({filter:/superagent[\\/]client[\\/]activity-panel\.jsx$/},()=>({contents:'import React from "react";export const ActivityProvider=({children})=><>{children}</>;export const ActivityPanel=()=>null;export const ActivityTrigger=()=>null;',loader:'jsx'}));

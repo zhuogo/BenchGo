@@ -6,20 +6,20 @@ const namespace = executionFactsRemoteNamespace;
 const cursor = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const identity = z.string().min(1).max(1024);
 const jsonObject = z.record(z.string(), z.json());
-const snapshotRequest = z.strictObject({ ticketId: identity.optional() });
+const snapshotRequest = z.strictObject({ taskId: identity.optional() });
 const pageRequest = z.strictObject({
   after: cursor.optional(), through: cursor.optional(),
   limit: z.number().int().min(1).max(1000).optional(),
 });
 const evidenceRequest = z.strictObject({
-  ticketId: identity, runId: identity.optional(),
+  taskId: identity, runId: identity.optional(),
   instructionRevision: z.number().int().positive().optional(),
   after: cursor.optional(), limit: z.number().int().min(1).max(1000).optional(),
 });
 const entry = z.object({
-  seq: cursor, ticketId: identity.nullable(), kind: identity, record: z.json().optional(),
+  seq: cursor, taskId: identity.nullable(), kind: identity, record: z.json().optional(),
 }).catchall(z.json());
-const snapshot = z.object({ cursor, tickets: z.array(jsonObject) }).catchall(z.json());
+const snapshot = z.object({ cursor, tasks: z.array(jsonObject) }).catchall(z.json());
 const page = z.object({ cursor, entries: z.array(entry), hasMore: z.boolean() }).catchall(z.json());
 const frame = z.union([
   z.strictObject({ type: z.literal('snapshot'), snapshot }),

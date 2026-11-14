@@ -1,5 +1,5 @@
 import { isTranscriptUser } from '../src/transcript-message.mjs';
-import { chatPublicationRecordOf, channelMessageRecordOf } from '../../benchgo/shared/public-chat-record.mjs';
+import { chatPublicationRecordOf, channelMessageRecordOf, isHostReplyRequest, isTaskResultReplyRequest } from '../../benchgo/shared/public-chat-record.mjs';
 import { questionBatch, readBoundQuestionReply } from '../../benchgo/shared/question-reply.mjs';
 import { fallbackRequestIds, modelFallbackType, modelFallbackSource } from '../../benchgo/shared/model-fallback.mjs';
 
@@ -13,7 +13,7 @@ export class AgentFeed {
   clear(keepSettled=false){this.attempts.clear();this.steps.clear();if(!keepSettled)this.settledSteps.clear();this.publicationEchoes=[];this.fallback=[];}
   isPublicOnly(){return typeof this.publicOnly==='function'?this.publicOnly():this.publicOnly;}
   canStreamPublicText(event){return (typeof this.streamPublicText==='function'?this.streamPublicText():this.streamPublicText)&&Number.isSafeInteger(this.turn)&&event.data?.turn===this.turn&&Number.isSafeInteger(event.data.step)
-    &&!event.data.parentCallId&&['user','user-question-reply'].includes(this.request?.source?.kind)
+    &&!event.data.parentCallId&&this.conversationalRequest()
     &&!this.publications.has(`request:${this.request.id}`)&&!this.settledSteps.has(this.step(event));}
   observe(event){
     // Reuse the host's exact persisted-fallback identity rules. Retain only
@@ -32,14 +32,17 @@ export class AgentFeed {
     if(event.type==='user/message'&&event.data?.id&&(event.surfaceOp===undefined||event.surfaceOp==='append')){
       const request={id:event.data.id,source:event.data.source};
       if(request.source?.kind===modelFallbackSource){const original=fallbackRequestIds([...this.continuations].sort((a,b)=>a.seq-b.seq)).get(request.id);if(original)this.request=this.requests.get(original)||null;return;}
-      if(!['user','user-question-reply','benchgo-ticket-reply','benchgo-execution-input'].includes(request.source?.kind))return;
+      if(!['user','user-question-reply','benchgo-execution-input'].includes(request.source?.kind)&&!isHostReplyRequest(request))return;
       if(request.source.kind==='user-question-reply'&&!readBoundQuestionReply(event.data,this.questions.get(request.source.callId)))return;
       this.requests.set(request.id,request);
       if(this.requests.size>4096)this.requests.delete(this.requests.keys().next().value);
-      if(['user','user-question-reply','benchgo-ticket-reply','benchgo-execution-input'].includes(request.source?.kind))this.request=request;
+      this.request=request;
     }
+    if(this.suppressedResult(event))this.rememberPublication(event);
   }
   publication(event){return chatPublicationRecordOf(event,this.requests.get(event.data?.requestId));}
+  conversationalRequest(){return ['user','user-question-reply'].includes(this.request?.source?.kind)||isTaskResultReplyRequest(this.request);}
+  suppressedResult(event){const request=this.requests.get(event.data?.requestId);return event.type==='plugin:benchgo-plugin/chat-publication'&&event.ignorable===true&&event.data?.kind==='final'&&event.data.suppressed===true&&event.data.text===undefined&&isTaskResultReplyRequest(request)&&event.data.taskReplyEventKey===request.source.eventKey;}
   publicationKey(event){return event.type==='plugin:benchgo-plugin/channel-message'?`channel:${event.data.mirrorKey}`:`request:${event.data.requestId}`;}
   rememberPublication(event){const key=this.publicationKey(event);if(this.publications.has(key))return false;this.publications.add(key);if(this.publications.size>4096)this.publications.delete(this.publications.values().next().value);return true;}
   publish(event,text){
@@ -75,6 +78,7 @@ export class AgentFeed {
         else if(this.rememberPublication(event))this.onRecord?.(event,{role:'user',text:channel.text});
         continue;
       }
+      if(this.suppressedResult(event)){this.rememberPublication(event);if(event.data.requestId===this.request?.id){this.fallback=[];this.onReset?.();}continue;}
       if(this.publication(event)) {
         // SuperAgent publishes its human-facing reply as a plugin record, not as
         // assistant text; read that text or read-aloud stays silent there.
@@ -108,7 +112,7 @@ export class AgentFeed {
         this.forget(key);
       }
       if(event.type==='turn/end'){
-        if(this.isPublicOnly()&&event.data?.turn===this.turn&&event.data?.reason?.kind==='completed'&&['user','user-question-reply'].includes(this.request?.source?.kind)&&!this.publications.has(`request:${this.request.id}`)&&this.fallback.length){
+        if(this.isPublicOnly()&&event.data?.turn===this.turn&&event.data?.reason?.kind==='completed'&&this.conversationalRequest()&&!this.publications.has(`request:${this.request.id}`)&&this.fallback.length){
           const pending=this.fallback.filter(row=>!row.streamed),text=pending.map(row=>row.text).join('\n\n');
           const projected={...event,data:{...event.data,requestId:this.request.id}};
           this.rememberPublication(projected);

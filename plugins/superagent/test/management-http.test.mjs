@@ -33,8 +33,8 @@ async function fixture(t) {
     readConfig: () => store.getConfig(), readConnection: channel => store.connections.read(channel), readLearning: () => store.memory.learning() });
   let http = createHttp();
   store.orchestration.createThread({ id: 'main', source: { type: 'desktop', id: 'owner' } });
-  const ticket = id => { store.orchestration.createTicket({ id, threadId: 'main', target: id, mandate: {} }); return store.orchestration.cancelTicket(id); };
-  return { directory, store, database, tasks, ticket, get settings() { return settings; }, get http() { return http; },
+  const task = id => { store.orchestration.createTask({ id, threadId: 'main', target: id, mandate: {} }); return store.orchestration.cancelTask(id); };
+  return { directory, store, database, tasks, task, get settings() { return settings; }, get http() { return http; },
     async reopenManagement() {
       await settings.close(); settings = createSettingsManagement({ directory: join(directory, 'settings') });
       await register(); http = createHttp();
@@ -94,31 +94,31 @@ test('page Save retries reuse the same request without another configuration wri
 });
 
 test('cleanup HTTP binds manifest and operation type, archives only its subset, and restores with CAS', async t => {
-  const f = await fixture(t); f.ticket('one'); f.ticket('two');
+  const f = await fixture(t); f.task('one'); f.task('two');
   const call = input => f.http.cleanup(input, owner);
-  const preview = call({ action: 'taskCleanupPreview', ticketIds: ['one', 'two'] });
+  const preview = call({ action: 'taskCleanupPreview', taskIds: ['one', 'two'] });
   const archive = { action: 'taskCleanupCommit', previewId: preview.previewId, manifestHash: preview.manifestHash,
-    selectedTicketIds: ['one'], requestId: 'archive-http' };
+    selectedTaskIds: ['one'], requestId: 'archive-http' };
   assert.throws(() => call({ ...archive, manifestHash: 'different', confirmedBy: true }), { code: 'CLEANUP_CONFLICT' });
   assert.throws(() => call({ ...archive, action: 'taskCleanupRestore' }), { code: 'CLEANUP_CONFLICT' });
-  assert.throws(() => call({ ...archive, selectedTicketIds: ['missing'] }), { code: 'CLEANUP_CONFIRMATION_REQUIRED' });
-  assert.throws(() => f.tasks.update({ kind: 'ticket', id: 'two', operation: 'delete', version: 0 }), { code: 'CLEANUP_PREVIEW_REQUIRED' });
+  assert.throws(() => call({ ...archive, selectedTaskIds: ['missing'] }), { code: 'CLEANUP_CONFIRMATION_REQUIRED' });
+  assert.throws(() => f.tasks.update({ kind: 'task', id: 'two', operation: 'delete', version: 0 }), { code: 'CLEANUP_PREVIEW_REQUIRED' });
   const archived = call(archive);
   assert.deepEqual(call(archive), archived);
-  assert.throws(() => call({ ...archive, selectedTicketIds: ['two'] }), { code: 'IDEMPOTENCY_CONFLICT' });
-  assert.deepEqual(f.store.orchestration.listTickets({ archived: false }).map(row => row.id), ['two']);
-  let restore = call({ action: 'taskCleanupRestorePreview', ticketIds: ['one'] });
+  assert.throws(() => call({ ...archive, selectedTaskIds: ['two'] }), { code: 'IDEMPOTENCY_CONFLICT' });
+  assert.deepEqual(f.store.orchestration.listTasks({ archived: false }).map(row => row.id), ['two']);
+  let restore = call({ action: 'taskCleanupRestorePreview', taskIds: ['one'] });
   let restoreInput = { action: 'taskCleanupRestore', previewId: restore.previewId, manifestHash: restore.manifestHash,
-    selectedTicketIds: ['one'], requestId: 'restore-http' };
+    selectedTaskIds: ['one'], requestId: 'restore-http' };
   assert.throws(() => call({ ...restoreInput, action: 'taskCleanupCommit' }), { code: 'CLEANUP_CONFLICT' });
-  f.tasks.update({ kind: 'ticket', id: 'one', operation: 'rename', title: 'Changed', version: 1 });
+  f.tasks.update({ kind: 'task', id: 'one', operation: 'rename', title: 'Changed', version: 1 });
   assert.throws(() => call(restoreInput), { code: 'CLEANUP_CONFLICT' });
-  restore = call({ action: 'taskCleanupRestorePreview', ticketIds: ['one'] });
+  restore = call({ action: 'taskCleanupRestorePreview', taskIds: ['one'] });
   restoreInput = { ...restoreInput, previewId: restore.previewId, manifestHash: restore.manifestHash };
   const restored = call(restoreInput);
   assert.deepEqual(call(restoreInput), restored);
-  assert.equal(f.database.meta('task-presentation:ticket:one').title, 'Changed');
-  assert.equal(call({ action: 'taskCleanupHistory', ticketId: 'one' }).history.length, 2);
+  assert.equal(f.database.meta('task-presentation:task:one').title, 'Changed');
+  assert.equal(call({ action: 'taskCleanupHistory', taskId: 'one' }).history.length, 2);
 });
 
 test('settings HTTP read and history redact secrets and reject secret or blocked edits', async t => {

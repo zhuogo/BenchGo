@@ -1,6 +1,7 @@
 import { readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { setImmediate as yieldToIO } from 'node:timers/promises';
 import { assertSameOrigin } from '../shared/http.mjs';
 import { readJson } from '../shared/http.mjs';
 import { MachineUsageImporter } from './usage-import.mjs';
@@ -22,7 +23,7 @@ export function normalizeUsage(usage = {}, convention = 'disjoint') {
 }
 
 export class UsageLedger {
-  constructor(directory) { this.path = join(directory, 'usage.json'); this.rows = new Map(); this.writes = Promise.resolve(); this.error = null; }
+  constructor(directory) { this.path = join(directory, 'usage.json'); this.rows = new Map(); this.writes = Promise.resolve(); this.error = null; this.queryCache = new Map(); }
   async open() {
     try { const data = JSON.parse(await readFile(this.path, 'utf8')); if (data.version !== 1 || !Array.isArray(data.rows)) throw Error('Unsupported usage ledger'); for (const row of data.rows) this.rows.set(row.id, row); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -38,7 +39,11 @@ export class UsageLedger {
       for (const key of Object.keys(safe)) if (safe[key] === null && prior[key] !== null) safe[key] = prior[key];
     }
     if (JSON.stringify(prior) === JSON.stringify(safe)) return;
-    this.rows.set(safe.id, safe); this.dirty = true;
+    this.rows.set(safe.id, safe); this.dirty = true; this.queryCache.clear();
+  }
+  delete(id) {
+    if (!this.rows.delete(id)) return;
+    this.dirty = true; this.queryCache.clear();
   }
   flush() {
     if (this.flushing) return this.flushing;
@@ -63,10 +68,23 @@ export class UsageLedger {
     if (!Number.isSafeInteger(page) || page < 1 || ![25, 50, 100].includes(pageSize)) throw Error('无效的分页参数');
     const from = Date.parse(start), to = Date.parse(end);
     if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) throw Error('请选择有效起止日期');
-    let excludedDuplicates = 0;
-    const managed = this.managed?.() ?? new Map(), imported = new Set([...this.rows.values()].filter(row => row.source === 'machine').map(row => row.tool + ':' + row.nativeId));
+    const managed = this.managed?.() ?? new Map();
     const managedKeys = new Set(managed.values());
-    const preferred = new Set([...managedKeys].filter(key => imported.has(key) && this.importer?.coverage.state !== 'scanning' && this.importer?.completeNativeIds.has(key)));
+    const complete = this.importer?.coverage.state !== 'scanning' ? [...managedKeys].filter(key => this.importer?.completeNativeIds.has(key)) : [];
+    // A page change only slices the same interval. Invalidate when usage or the
+    // live/native ownership changes, but keep coverage and write errors fresh.
+    const ownership = JSON.stringify([[...managed], complete, this.rows.size]);
+    if (ownership !== this.queryOwnership) { this.queryCache.clear(); this.queryOwnership = ownership; }
+    const cacheKey = JSON.stringify([start, end, timeZone]);
+    const cached = this.queryCache.get(cacheKey);
+    const respond = result => {
+      const pageCount = Math.max(1, Math.ceil(result.rows.length / pageSize)), currentPage = Math.min(page, pageCount);
+      return { start, end, timeline: result.timeline, page: currentPage, pageSize, pageCount, summary: result.summary, groups: result.groups, records: result.rows.slice((currentPage - 1) * pageSize, currentPage * pageSize), recordCount: result.rows.length, error: this.error, coverage: { ...(this.importer?.coverage ?? { state: 'idle', sources: [] }), ...(this.scanPending ? { state: 'scanning' } : {}), historyState: this.historyState ?? 'idle', excludedDuplicates: result.excludedDuplicates, deduplication: '完整导入的原生会话以本机历史为准；未完整导入的已管理会话保留实时记录，不叠加历史；未匹配会话按原生调用标识独立统计' } };
+    };
+    if (cached) { this.queryCache.delete(cacheKey); this.queryCache.set(cacheKey, cached); return respond(cached); }
+    let excludedDuplicates = 0;
+    const imported = new Set(complete.length ? [...this.rows.values()].filter(row => row.source === 'machine').map(row => row.tool + ':' + row.nativeId) : []);
+    const preferred = new Set(complete.filter(key => imported.has(key)));
     const rows = [...this.rows.values()].filter(row => {
       const nativeKey = row.source === 'machine' ? row.tool + ':' + row.nativeId : managed.get(row.sessionId);
       const duplicate = row.source === 'machine' ? managedKeys.has(nativeKey) && !preferred.has(nativeKey) : nativeKey && preferred.has(nativeKey);
@@ -90,8 +108,10 @@ export class UsageLedger {
         contextWindow: context?.contextWindow ?? null, tokensPerSecond: timed.length ? timed.reduce((n, row) => n + (row.speedOutputTokens ?? row.outputTokens), 0) / timed.reduce((n, row) => n + row.durationMs / 1000, 0) : null, measuredCalls: group.filter(row => row.totalTokens !== null).length };
     };
     const timeline = usageTimeline(rows, { start, end, timeZone });
-    const pageCount = Math.max(1, Math.ceil(rows.length / pageSize)), currentPage = Math.min(page, pageCount);
-    return { start, end, timeline, page: currentPage, pageSize, pageCount, summary: summarize(rows), groups: [...groups.values()].map(group => ({ tool: group[0].tool, model: group[0].model, ...summarize(group) })), records: rows.slice((currentPage - 1) * pageSize, currentPage * pageSize), recordCount: rows.length, error: this.error, coverage: { ...(this.importer?.coverage ?? { state: 'idle', sources: [] }), excludedDuplicates, deduplication: '完整导入的原生会话以本机历史为准；未完整导入的已管理会话保留实时记录，不叠加历史；未匹配会话按原生调用标识独立统计' } };
+    const result = { rows, timeline, summary: summarize(rows), groups: [...groups.values()].map(group => ({ tool: group[0].tool, model: group[0].model, ...summarize(group) })), excludedDuplicates };
+    this.queryCache.set(cacheKey, result);
+    if (this.queryCache.size > 6) this.queryCache.delete(this.queryCache.keys().next().value);
+    return respond(result);
   }
 }
 
@@ -104,7 +124,13 @@ export async function mountUsage(ctx, commander, options = {}) {
   ledger.managed = () => new Map([...(getCommander()?.sessions.values() ?? [])].filter(session => session.nativeId).map(session => [session.id, session.provider + ':' + (session.provider === 'pi' ? session.nativeId.split('/').at(-1)?.replace(/.jsonl$/u, '').split('_').at(-1) : session.nativeId)]));
   ledger.importer = await new MachineUsageImporter(ledger, normalizeUsage, options.enabled === false ? { roots: {} } : options).open();
   let scanTimer, scanRounds = 0, initialScan;
-  const scanMachine = async () => { if (stopped) return; await ledger.importer.scan(); scanRounds++; if (!stopped && !ledger.importer.closed && scanRounds < 100 && ledger.importer.coverage.scannedBytes > 0 && ledger.importer.coverage.sources.some(source => source.continuable)) { scanTimer = setTimeout(scanMachine, 1000); scanTimer.unref?.(); } };
+  const scanMachine = async () => {
+    if (stopped) return;
+    ledger.scanPending = true;
+    await ledger.importer.scan(); scanRounds++;
+    if (!stopped && !ledger.importer.closed && scanRounds < 100 && ledger.importer.coverage.scannedBytes > 0 && ledger.importer.coverage.sources.some(source => source.continuable)) { scanTimer = setTimeout(() => { scanTimer = null; void scanMachine(); }, 1000); scanTimer.unref?.(); }
+    else ledger.scanPending = false;
+  };
   const routes = new Map(), stepFirst = new Map(); let stopped = false, backfill, historySource, flushTimer;
   const scheduleFlush = () => {
     if (stopped || !ledger.dirty || flushTimer) return;
@@ -151,7 +177,7 @@ export async function mountUsage(ctx, commander, options = {}) {
     const firstTime = Number.isFinite(first) ? Number.isFinite(pending) ? Math.min(first, pending) : first : pending;
     if (event.type === 'assistant/attempt') {
       if (Number.isFinite(firstTime)) stepFirst.set(stepKey, firstTime);
-      if (ledger.rows.delete('harness:' + session.id + ':' + event.seq)) ledger.dirty = true;
+      ledger.delete('harness:' + session.id + ':' + event.seq);
       return;
     }
     stepFirst.delete(stepKey);
@@ -162,19 +188,52 @@ export async function mountUsage(ctx, commander, options = {}) {
   ctx.on('session/event', (session, event) => { official(session, event); if (['assistant/message', 'assistant/attempt'].includes(event.type)) scheduleFlush(); });
   ctx.inject(['sessionQuery'], child => {
     const source = child.sessionQuery;
-    if (historySource !== source) backfill = undefined;
+    if (historySource !== source) { backfill = undefined; ledger.historyState = 'idle'; }
     historySource = source;
-    child.effect?.(() => () => { if (historySource === source) historySource = null; });
+    child.effect?.(() => () => { if (historySource === source) { historySource = null; ledger.historyState = 'idle'; } });
   });
   // History is auxiliary: keep real-time collection active, but do not decode
   // every old conversation or walk all native logs on the desktop's cold path.
   const readHistory = () => {
     if (!historySource || stopped) return backfill;
     const source = historySource;
-    return backfill ??= (async () => { for (const record of await source.listSessions()) { if (stopped || historySource !== source) return; try { const snapshot = await source.readSession(record.header.id); if (stopped || historySource !== source) return; const session = { id: record.header.id, inheritedEventCount: snapshot.inheritedEventCount }; for (const event of snapshot.events) official(session, event); } catch { /* Unreadable old sessions must not prevent current usage collection. */ } } await ledger.flush(); })().catch(error => { ledger.error = error.message; });
+    if (backfill) return backfill;
+    ledger.historyState = 'scanning';
+    return backfill = (async () => {
+      // Respond with already collected counts first, then share one background
+      // replay. Yield between batches so long histories do not monopolize chat.
+      await yieldToIO();
+      if (stopped || historySource !== source) return;
+      for (const record of await source.listSessions()) {
+        if (stopped || historySource !== source) return;
+        try {
+          const snapshot = await source.readSession(record.header.id);
+          if (stopped || historySource !== source) return;
+          const session = { id: record.header.id, inheritedEventCount: snapshot.inheritedEventCount };
+          for (let index = 0; index < snapshot.events.length; index++) {
+            if (index && index % 250 === 0) { await yieldToIO(); if (stopped || historySource !== source) return; }
+            official(session, snapshot.events[index]);
+          }
+        } catch { /* Unreadable old sessions must not prevent current usage collection. */ }
+        await yieldToIO();
+      }
+      await ledger.flush();
+      if (historySource === source) ledger.historyState = 'complete';
+    })().catch(error => { if (historySource === source) { ledger.error = error.message; ledger.historyState = 'error'; } });
   };
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/commander/usage', methods: ['POST'], requestBody: 'buffered', async fetch(request) {
-    try { assertSameOrigin(request); const input = await readJson(request); await Promise.all([readHistory(), initialScan ??= scanMachine()]); if (input.refresh === true) await ledger.importer.scan(); return Response.json(ledger.query(input), { headers: { 'cache-control': 'no-store' } }); }
+    try {
+      assertSameOrigin(request); const input = await readJson(request);
+      // Validate before starting auxiliary IO; query's interval cache also makes
+      // this first read reusable after coverage changes below.
+      ledger.query(input);
+      void readHistory();
+      if (!initialScan || input.refresh === true && !ledger.scanPending) {
+        clearTimeout(scanTimer); scanTimer = null; scanRounds = 0;
+        initialScan = scanMachine();
+      }
+      return Response.json(ledger.query(input), { headers: { 'cache-control': 'no-store' } });
+    }
     catch (error) { return Response.json({ error: error.message }, { status: 400 }); }
   } }));
   ctx.effect(() => async () => { stopped = true; clearTimeout(scanTimer); clearTimeout(flushTimer); await backfill; await ledger.importer.close(); await ledger.flush(); });

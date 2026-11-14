@@ -136,7 +136,8 @@ export async function getInstallState(profile) {
   catch (error) { if (error.code === 'ENOENT') return { managed: false, enabled: false }; throw error; }
   const state = manifest.dsh?.plusInstall;
   if (!state || state.schemaVersion !== 1) return { managed: false, enabled: (manifest.dsh?.profile?.bundles ?? []).some(name => LEGACY_BUNDLES.includes(name)) };
-  return { ...state, managed: true, enabled: (manifest.dsh?.profile?.bundles ?? []).includes(state.bundleName), previous: state.previous ?? null };
+  return { schemaVersion: state.schemaVersion, version: state.version, directory: state.directory, bundleName: state.bundleName,
+    root: state.root, appVersion: state.appVersion, managed: true, enabled: (manifest.dsh?.profile?.bundles ?? []).includes(state.bundleName) };
 }
 
 /** Unique immutable wrapper links are created first; one manifest rename activates the whole release. */
@@ -171,10 +172,7 @@ async function activateLocked({ profile, release, enabled, appVersion, migrateLe
   manifest.dependencies[checked.bundleName] = `link:${checked.bundlePath.replaceAll('\\', '/')}`;
   manifest.dsh.profile.bundles = selected.filter(name => !isManagedName(name));
   if (wasEnabled) manifest.dsh.profile.bundles.push(checked.bundleName);
-  const previous = before.managed && before.version !== checked.version
-    ? { version: before.version, directory: before.directory, bundleName: before.bundleName }
-    : before.previous ?? null;
-  manifest.dsh.plusInstall = { schemaVersion: 1, version: checked.version, directory: checked.directory, bundleName: checked.bundleName, root: checked.root, previous, appVersion: appVersion ?? before.appVersion ?? null };
+  manifest.dsh.plusInstall = { schemaVersion: 1, version: checked.version, directory: checked.directory, bundleName: checked.bundleName, root: checked.root, appVersion: appVersion ?? before.appVersion ?? null };
   // Native lookup inside the profile wins over the selected bundle's fallback.
   // Only the offline installer may move an old package a running Host can import.
   const shadows = [LEGACY_PLUGIN_PACKAGE, PLUS_PACKAGE].filter((name, index, names) => names.indexOf(name) === index).map(name => ({ name, path: join(profile, 'node_modules', name) }));
@@ -201,11 +199,4 @@ async function activateLocked({ profile, release, enabled, appVersion, migrateLe
   }
   if (backup) await rm(backup, { recursive: true, force: true });
   return getInstallState(profile);
-}
-
-export async function rollbackRelease({ profile, runtime }) {
-  const state = await getInstallState(profile);
-  if (!state.previous) throw new Error('没有可回退的插件版本');
-  const release = await prepareRelease({ root: state.root, version: state.previous.version, runtime });
-  return activateRelease({ profile, release, runtime });
 }

@@ -29,7 +29,7 @@ test('reserve atomically creates one claimed router-only Assignment and prepared
   const f = await fixture(t), now = Date.now();
   const reserved = f.db.reserveRouterAction({ ...f.input, now });
   assert.equal(reserved.duplicate, false);
-  assert.equal(reserved.ticket.status, 'running');
+  assert.equal(reserved.task.status, 'running');
   assert.equal(reserved.assignment.state, 'claimed');
   assert.equal(reserved.assignment.owner, f.owner);
   assert.equal(reserved.assignment.fence, 1);
@@ -53,27 +53,27 @@ test('verified receipt and authoritative readback settle Run, Result and Outbox 
   assert.equal(settled.state, 'completed');
   assert.deepEqual(settled.receipt, receipt);
   assert.deepEqual(settled.readback, readback);
-  assert.equal(settled.ticket.status, 'completed');
+  assert.equal(settled.task.status, 'completed');
   assert.equal(settled.run.state, 'completed');
-  assert.equal(f.db.results(reserved.ticket.id)[0].readback.name, 'Delta');
-  assert.equal(f.db.deliveries(reserved.ticket.id)[0].state, 'queued');
+  assert.equal(f.db.results(reserved.task.id)[0].readback.name, 'Delta');
+  assert.equal(f.db.deliveries(reserved.task.id)[0].state, 'queued');
   const replay = f.db.settleRouterAction({ sessionId: f.sessionId, callId: f.callId, owner: f.owner, fence: 1, argsHash: f.input.argsHash,
     receipt, readback, verified: true, now: now + 2, validateMandate: f.input.validateMandate });
   assert.equal(replay.duplicate, true);
-  assert.equal(f.db.results(reserved.ticket.id).length, 1);
-  assert.equal(f.db.deliveries(reserved.ticket.id).length, 1);
-  const outgoing = f.db.deliveries(reserved.ticket.id)[0];
+  assert.equal(f.db.results(reserved.task.id).length, 1);
+  assert.equal(f.db.deliveries(reserved.task.id).length, 1);
+  const outgoing = f.db.deliveries(reserved.task.id)[0];
   assert.equal(outgoing.payload.replyState, 'suppressed');
   assert.equal(outgoing.payload.outcome, undefined, 'synchronous Router action is not a Worker completion');
   assert.equal(outgoing.payload.publication, undefined);
   assert.equal(outgoing.payload.text, undefined);
-  assert.equal(outgoing.payload.instructionRevision, reserved.ticket.instructionRevision);
+  assert.equal(outgoing.payload.instructionRevision, reserved.task.instructionRevision);
   assert.equal(outgoing.payload.resultVersion, 1);
   const [claimed] = f.db.claimOutbox('sender', { now: now + 3 });
   assert.equal(deliverySuppression(f.db, claimed), 'router-action-already-replied');
   const deliveryReceipt = { status: 'suppressed', reason: 'router-action-already-replied' };
   f.db.finishOutbox(claimed.id, { owner: 'sender', sent: true, receipt: deliveryReceipt, now: now + 4 });
-  assert.deepEqual(f.db.deliveries(reserved.ticket.id)[0].receipt, deliveryReceipt);
+  assert.deepEqual(f.db.deliveries(reserved.task.id)[0].receipt, deliveryReceipt);
   assert.throws(() => f.db.settleRouterAction({ sessionId: f.sessionId, callId: f.callId, owner: f.owner, fence: 1, argsHash: f.input.argsHash,
     receipt: { configRevision: 9 }, readback, verified: true, now: now + 2, validateMandate: f.input.validateMandate }), { code: 'ROUTER_ACTION_RECEIPT_CONFLICT' });
 });
@@ -93,7 +93,7 @@ test('expired or unknown Router action is uncertain and can never be claimed or 
   const settled = f.db.settleRouterAction({ sessionId: f.sessionId, callId: f.callId, owner: f.owner, fence: 1, argsHash: f.input.argsHash,
     receipt: {}, readback: {}, verified: true, now: now + 1003, validateMandate: f.input.validateMandate });
   assert.equal(settled.state, 'uncertain');
-  assert.equal(f.db.results(reserved.ticket.id).length, 0);
+  assert.equal(f.db.results(reserved.task.id).length, 0);
 });
 
 test('policy revocation at settle preserves observed receipt but refuses false completion', async t => {
@@ -103,7 +103,7 @@ test('policy revocation at settle preserves observed receipt but refuses false c
     receipt: { revision: 2 }, readback: { revision: 2 }, verified: true, now: now + 1, validateMandate: () => false });
   assert.equal(result.state, 'uncertain');
   assert.deepEqual(f.db.getRouterAction(f.sessionId, f.callId).receipt, { revision: 2 });
-  assert.equal(f.db.getTicket(reserved.ticket.id).status, 'waiting');
-  assert.equal(f.db.results(reserved.ticket.id).length, 0);
-  assert.equal(f.db.deliveries(reserved.ticket.id).length, 0);
+  assert.equal(f.db.getTask(reserved.task.id).status, 'waiting');
+  assert.equal(f.db.results(reserved.task.id).length, 0);
+  assert.equal(f.db.deliveries(reserved.task.id).length, 0);
 });

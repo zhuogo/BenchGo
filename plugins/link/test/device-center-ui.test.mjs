@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { deviceIcon, deviceKind, deviceStatus, jobFinished, sshInput, workbenchUrl } from '../client/device-state.mjs';
 import { workbenchNavigationMessage } from '../client/device-navigation.mjs';
+import { deviceSwitchFrameMessage } from '../client/device-switch.mjs';
 
 const require = createRequire(new URL('../../benchgo/package.json', import.meta.url));
 const source = await readFile(new URL('../client/device-center.jsx', import.meta.url), 'utf8');
@@ -38,7 +39,7 @@ function fixture(component, props = {}) {
   const window = { addEventListener(name, fn) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); }, removeEventListener(name, fn) { listeners.get(name)?.delete(fn); } };
   const parent = props.embedded ? { postMessage(data, origin) { this.messages.push({ data, origin }); }, messages: [] } : window;
   const module = { exports: {} };
-  runInNewContext(code, { module, exports: module.exports, URL, URLSearchParams, window, parent, location: { origin: 'http://127.0.0.1:17770', search: props.embedded ? '?parentOrigin=http://127.0.0.1:17770' : '' }, document: { activeElement: null, createElement: () => ({ remove() {} }), head: { append() {} } }, setTimeout(fn) { const id = Math.random(); timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), require: id => id === 'react' ? react : id.includes('device-navigation') ? { workbenchNavigationMessage } : id.includes('device-state') ? { deviceIcon, deviceKind, deviceStatus, jobFinished, sshInput, workbenchUrl, jobFailed: job => ['failed', 'error'].includes(job?.state) } : id.includes('app.jsx') ? { useLinkStyle() {}, LinkSettings() {} } : {} });
+  runInNewContext(code, { module, exports: module.exports, URL, URLSearchParams, window, parent, location: { origin: 'http://127.0.0.1:17770', search: props.embedded ? '?parentOrigin=http://127.0.0.1:17770' + (props.reuseWorkbench ? '&reuseWorkbench=1' : '') : '' }, document: { activeElement: null, createElement: () => ({ remove() {} }), head: { append() {} } }, setTimeout(fn) { const id = Math.random(); timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), require: id => id === 'react' ? react : id.includes('device-navigation') ? { workbenchNavigationMessage } : id.includes('device-switch') ? { deviceSwitchFrameMessage } : id.includes('device-state') ? { deviceIcon, deviceKind, deviceStatus, jobFinished, sshInput, workbenchUrl, jobFailed: job => ['failed', 'error'].includes(job?.state) } : id.includes('app.jsx') ? { useLinkStyle() {}, LinkSettings() {} } : {} });
   const frameWindows = new Map();
   const render = () => { dirty = false; cursor = 0; tree = module.exports[component]({ ...props, runtime }); for (const node of nodes(tree)) if (node.type === 'iframe' && node.props.ref) { if (!frameWindows.has(node.props.src)) frameWindows.set(node.props.src, { messages: [], postMessage(data, origin) { this.messages.push({ data, origin }); } }); node.props.ref({ contentWindow: frameWindows.get(node.props.src) }); } for (const effect of effects.splice(0)) effect(); return tree; };
   const settle = async () => { for (let i = 0; i < 10; i++) { if (dirty) render(); await new Promise(resolve => setImmediate(resolve)); } return tree; };
@@ -50,7 +51,8 @@ test('device state remains unknown before probing and SSH credentials are preser
   assert.equal(deviceIcon({ kind: 'ssh' }), 'server');
   assert.equal(deviceIcon({ deviceType: 'mobile' }), 'mobile');
   assert.equal(deviceIcon({ name: '我的手机' }), 'devices');
-  assert.equal(deviceStatus({ status: 'mystery' }), '未检测'); assert.equal(deviceKind({ kind: 'ssh' }), '服务器');
+  for (const device of [undefined, {}, { status: 'unknown' }, { status: 'mystery' }]) assert.equal(deviceStatus(device), '');
+  for (const [status, label] of Object.entries({ online: '可连接', connected: '已连接', offline: '离线', connecting: '连接中', failed: '连接失败', disconnected: '未连接' })) assert.equal(deviceStatus({ status }), label); assert.equal(deviceKind({ kind: 'ssh' }), '服务器');
   const value = sshInput({ host: ' example.com ', username: ' user ', name: ' a ', port: '22', auth: 'password', password: ' actual secret ', source: 'mirror' });
   assert.equal(value.password, ' actual secret '); assert.equal(value.port, 22); assert.equal(value.host, 'example.com');
   assert.throws(() => sshInput({ host: 'x', username: 'u', port: 0 }), /端口/);
@@ -99,6 +101,19 @@ test('opening another device leaves the device list immediately', async () => {
   assert.equal(view.nodes().some(node => node.props.className === 'dc-workbench-loading'), false);
 });
 
+test('desktop embedded device selection reuses the owner workbench without another select or iframe', async () => {
+  const view = fixture('DeviceCenter', { embedded: true, reuseWorkbench: true }); await view.settle();
+  for (const name of ['开发电脑', '本机']) {
+    await view.nodes().find(node => node.props.className === 'dc-device-open' && textOf(node).includes(name)).props.onClick(); await view.settle();
+    const message = view.parent.messages.at(-1);
+    assert.equal(message.data.type, 'dsh-devices:select');
+    assert.equal(message.data.deviceId, name === '本机' ? 'local' : 'desk');
+    assert.equal(message.origin, 'http://127.0.0.1:17770');
+  }
+  assert.equal(view.calls.some(call => call.action === 'select'), false);
+  assert.equal(view.nodes().some(node => node.type === 'iframe'), false);
+});
+
 test('local device name and remote remarks can be edited and saved independently', async () => {
   for (const kind of ['local', 'computer']) {
     let saved;
@@ -115,6 +130,30 @@ test('local device name and remote remarks can be edited and saved independently
     assert.equal(view.nodes().some(node => node.type === 'input'), false);
     assert.match(textOf(view.tree), /新的名称/);
   }
+});
+
+test('device details keep compact actions and require confirmation before removing a connection', async () => {
+  let closed = 0, removed;
+  const view = fixture('ManageDevice', {
+    device: { id: 'desk', kind: 'computer', name: '开发电脑' },
+    onChanged() {}, onRemoved(id) { removed = id; }, onCloseWorkbench() { closed++; },
+  });
+  await view.settle();
+  const actions = view.nodes().find(node => node.props.className === 'dc-management dc-actions');
+  assert.equal(textOf(actions), '关闭工作台移除连接');
+  assert.equal(view.nodes().some(node => node.type === 'h3'), false);
+  assert.doesNotMatch(textOf(view.tree), /关闭页面会清除|主机任务继续运行|移除保存连接|不撤销授权|卸载或停止服务器/);
+  await view.click('关闭工作台'); assert.equal(closed, 1);
+  await view.click('移除连接');
+  assert.equal(view.calls.length, 0); assert.match(textOf(view.tree), /取消确认移除/);
+  await view.click('取消'); assert.equal(view.calls.length, 0);
+  await view.click('移除连接'); await view.click('确认移除');
+  assert.equal(view.calls.length, 1);
+  assert.equal(view.calls[0].action, 'remove'); assert.equal(view.calls[0].args.deviceId, 'desk');
+  assert.equal(removed, 'desk');
+  const local = fixture('ManageDevice', { device: { id: 'local', kind: 'local', name: '本机' } });
+  await local.settle();
+  assert.equal(local.nodes().some(node => node.props.className === 'dc-management dc-actions'), false);
 });
 
 test('inline name edits cancel, preserve failures and prevent duplicate saves', async () => {
@@ -170,6 +209,64 @@ test('mobile centre keeps fallback until valid navigation is ready and retains f
   assert.equal(topbar().props.className, 'dc-topbar');
 });
 
+test('device center initializes only its mounted exact-origin switch and preserves directory navigation', async () => {
+  const records = [{ id: 'local', name: '本机', kind: 'local', status: 'online', token: 'secret' }, { id: 'desk', name: '开发电脑', kind: 'computer', status: 'online', deviceType: 'desktop', routes: [{ token: 'route-secret' }] }];
+  const view = fixture('DeviceCenter', { runtime: { async call(action) {
+    if (action === 'list') return { devices: [...records], capabilities: {} };
+    if (action === 'select') return { device: records[1], url: 'http://127.0.0.1:17771/s/one/' };
+  } } });
+  await view.settle();
+  await view.nodes().find(node => node.props.className === 'dc-device-open' && textOf(node).includes('开发电脑')).props.onClick(); await view.settle();
+  const frame = view.nodes().find(node => node.type === 'iframe'), child = view.frameWindows.get(frame.props.src);
+  const emit = (source, origin, data) => view.emit({ source, origin, data });
+  const topbar = () => view.nodes().find(node => node.type === 'header');
+  emit({}, 'http://127.0.0.1:17771', { type: 'benchgo:device-switch:ready' });
+  emit(child, 'https://evil.test', { type: 'benchgo:device-switch:ready' }); await view.settle();
+  assert.equal(child.messages.length, 0); assert.equal(topbar().props.className, 'dc-topbar');
+  emit(child, 'http://127.0.0.1:17771', { type: 'benchgo:device-switch:ready' }); await view.settle();
+  assert.match(topbar().props.className, /dc-topbar-switch/);
+  const init = child.messages.find(message => message.data.type === 'benchgo:device-switch:init');
+  assert.equal(init.origin, 'http://127.0.0.1:17771'); assert.equal(init.data.activeId, 'desk');
+  assert.equal(JSON.stringify(init.data.devices), JSON.stringify([{ id: 'local', name: '本机', kind: 'local', status: 'online' }, { id: 'desk', name: '开发电脑', kind: 'computer', status: 'online', deviceType: 'desktop' }]));
+  assert.equal(child.messages.at(-1).data.type, 'dsh-devices:init'); assert.equal(child.messages.at(-1).data.name, '开发电脑');
+  emit(child, 'http://127.0.0.1:17771', { type: 'dsh-devices:show' }); await view.settle();
+  assert.equal(view.nodes().find(node => node.props.className === 'dc-surface').props.hidden, false);
+  assert.equal(topbar().props.className, 'dc-topbar');
+  records[1] = { ...records[1], name: '新名称', status: 'offline' };
+  await view.nodes().find(node => node.props['aria-label'] === '刷新设备').props.onClick(); await view.settle();
+  const refreshed = child.messages.filter(message => message.data.type === 'benchgo:device-switch:init').at(-1);
+  assert.equal(refreshed.data.devices[1].name, '新名称'); assert.equal(refreshed.data.devices[1].status, 'offline');
+  frame.props.onLoad(); await view.settle();
+  assert(child.messages.some(message => message.data.type === 'benchgo:device-switch:probe'));
+  assert.equal(topbar().props.className, 'dc-topbar');
+});
+
+test('embedded device selection syncs failure and permits only the active ready frame to return local', async () => {
+  const view = fixture('DeviceCenter', { embedded: true }); await view.settle();
+  await view.nodes().find(node => node.props.className === 'dc-device-open' && textOf(node).includes('开发电脑')).props.onClick(); await view.settle();
+  const frame = view.nodes().find(node => node.type === 'iframe'), child = view.frameWindows.get(frame.props.src);
+  const emit = (data, origin = 'http://127.0.0.1:17771', source = child) => view.emit({ source, origin, data });
+  const local = { type: 'benchgo:device-switch:select', deviceId: 'local' };
+  const selects = () => view.calls.filter(call => call.action === 'select');
+  emit(local); await view.settle(); assert.equal(selects().length, 1, 'not ready');
+  emit({ type: 'benchgo:device-switch:ready' }); await view.settle();
+  emit(local, 'https://evil.test'); emit(local, 'http://127.0.0.1:17771', {});
+  emit({ ...local, deviceId: 'missing' }); await view.settle(); assert.equal(selects().length, 1);
+  emit({ type: 'benchgo:device-switch:select', deviceId: 'server' }); await view.settle();
+  assert.equal(selects().at(-1).args.deviceId, 'server');
+  const failed = child.messages.filter(message => message.data.type === 'benchgo:device-switch:init').at(-1);
+  assert.equal(failed.data.error, 'SSH 隧道未连接'); assert.equal(failed.data.busy, '');
+  assert.equal(view.nodes().find(node => node.type === 'iframe').props.hidden, false);
+  assert.equal(view.nodes().find(node => node.type === 'header').props.className, 'dc-topbar');
+  emit(local); await view.settle();
+  assert.equal(selects().at(-1).args.deviceId, 'local');
+  assert.equal(view.parent.messages.at(-1).data.type, 'dsh-devices:return-local');
+  assert.equal(view.parent.messages.at(-1).origin, 'http://127.0.0.1:17770');
+  assert.equal(view.nodes().find(node => node.props.className === 'dc-surface').props.hidden, false);
+  const count = selects().length;
+  emit(local); await view.settle(); assert.equal(selects().length, count, 'inactive frame');
+});
+
 test('server reconnect remains an explicit job until completion', async () => {
   const view = fixture('ManageDevice', { device: { id: 'server', name: '云端', kind: 'ssh' }, onChanged() {}, onRemoved() {} }); await view.settle();
   await view.click('重新连接隧道');
@@ -196,6 +293,9 @@ test('connection stays above compact device and relay tabs with retained managem
   const directory = view.nodes().find(node => node.props.className === 'dc-device-directory');
   assert.match(textOf(directory), /本机/); assert.match(textOf(directory), /开发电脑/);
   assert.equal(textOf(directory).indexOf('本机') < textOf(directory).indexOf('开发电脑'), true);
+  const remoteCopy = view.nodes().find(node => node.props.className === 'dc-device-copy' && textOf(node).includes('开发电脑'));
+  assert.equal(textOf(nodes(remoteCopy).find(node => node.type === 'small')), '电脑');
+  assert.doesNotMatch(textOf(directory), /未检测/);
   assert.equal(panel('devices').props.hidden, false);
   assert.equal(panel('connection').props.hidden, undefined);
   assert.equal(panel('relay').props.hidden, true);

@@ -158,4 +158,3 @@ export function contextUri(value) {
   if (!value?.url || !value?.code) return '';
   return `benchgo://pair?${new URLSearchParams({ url: value.url, pin: value.pin || '', code: value.code, ...(value.name ? { name: value.name } : {}) })}`;
 }
-export function requestId() { return globalThis.crypto?.randomUUID?.() || `link-${Date.now()}-${Math.random().toString(36).slice(2)}`; }

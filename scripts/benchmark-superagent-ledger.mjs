@@ -13,7 +13,7 @@ let ledger;
 try {
   ledger = createAssistantLedger({ directory });
   const begin = performance.now();
-  for (let i = 0; i < count; i++) ledger.append({ id: `entry-${i}`, sourceKey: `bench:${i}`, kind: 'trigger', content: `飞书连接原始消息 ${i}，需要保存原文与工单关系。` }, i ? [{ id: `entry-${i - 1}`, relation: 'source' }] : []);
+  for (let i = 0; i < count; i++) ledger.append({ id: `entry-${i}`, sourceKey: `bench:${i}`, kind: 'trigger', content: `飞书连接原始消息 ${i}，需要保存原文与任务关系。` }, i ? [{ id: `entry-${i - 1}`, relation: 'source' }] : []);
   const insertMs = performance.now() - begin;
   const samples = [];
   for (let i = 0; i < 100; i++) {

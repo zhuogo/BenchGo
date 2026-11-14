@@ -2,6 +2,13 @@
 html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
   --dsh-windows-menu-start: 48px;
 }
+/* Desktop owns one caption toggle; ordinary browser and mobile controls remain. */
+html[data-benchgo-desktop-embedded] .cmd-shell-sidebar > [class*="_logoRow"],
+html[data-benchgo-desktop-embedded] .cmd-shell-sidebar [data-sidebar-toggle],
+html[data-benchgo-desktop-embedded] [data-sidebar-opener],
+html[data-benchgo-desktop-embedded] .cmd-mobile-navigation > button { display: none; }
+html[data-benchgo-desktop-embedded] .cmd-sidebar-nav { padding-right: 0; }
+html[data-benchgo-desktop-embedded] .cmd-narrow .cmd-sidebar-nav { padding-top: 0; }
 /* The official sidebar and settings shell stay mounted. Only their geometry changes. */
 .cmd-shell-sidebar:has(.cmd-projects) {
   --dsh-sidebar-inline-padding: 6px;
@@ -41,6 +48,15 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
   padding: 0;
   order: 0;
 }
+.cmd-sidebar-navigation { order: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; gap: 4px; min-width: 0; margin: 0 2px 12px; flex: none; }
+.cmd-sidebar-navigation:has(> .cmd-resource-scope) { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, .8fr); }
+.cmd-shell-sidebar .cmd-sidebar-navigation > .cmd-sidebar-panels { grid-column: span 2; grid-row: auto; min-width: 0; margin: 0; }
+.cmd-shell-sidebar .cmd-sidebar-navigation:has(> .cmd-resource-scope) > .cmd-sidebar-panels { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); }
+.cmd-sidebar-navigation > .cmd-resource-scope { min-width: 0; }
+.cmd-resource-scope-anchor { display: flex; width: 100%; min-width: 0; }
+.cmd-projects .cmd-resource-scope [aria-haspopup="menu"] { display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%; min-width: 0; height: 34px; padding: 6px 2px; font-size: 12px; white-space: nowrap; }
+.cmd-resource-scope-label { overflow: hidden; text-overflow: ellipsis; }
+.cmd-shell-sidebar .cmd-sidebar-navigation .cmd-sidebar-panels [class*="_panelRow"] { justify-content: center; gap: 4px; padding-inline: 2px; }
 /* BenchGo keeps both panel entries pinned on one row, without the official More menu. */
 [class*="_root"]:has(.cmd-projects) [class*="_panelList"] > [class*="_moreAnchor"],
 [class*="_root"]:has(.cmd-projects) [class*="_panelUnpin"] { display: none; }
@@ -171,17 +187,16 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 @keyframes cmd-circle-breathe { 0%, 100% { opacity: .7; } 50% { opacity: 1; } }
 .cmd-section-label { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
 .cmd-sidebar-empty { font-size: 12px; color: var(--cmd-muted); padding: 4px 9px; margin: 4px 0 12px; line-height: 1.7; }
-.cmd-add-project { padding: 9px; margin-bottom: 10px; background: var(--cmd-hover); border-radius: 8px; animation: cmd-reveal 180ms ease both; }
-.cmd-add-project label { font-size: 12px; }
-.cmd-add-project input { font-size: 12px; margin: 6px 0; }
-.cmd-add-project button { width: 100%; text-align: center; background: var(--cmd-line); }
 .cmd-error { color: #bd625b; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; background: #ae4d410a; border: 1px solid #ae4d4125; border-radius: 8px; margin: 8px 0; }
 .cmd-settings { display: flex; flex: none; align-items: center; justify-content: center; width: 36px; height: 36px; min-height: 36px; padding: 0; color: var(--dsw-alias-label-secondary); }
 .cmd-settings svg { transition: transform 300ms ease; }
 .cmd-settings:hover svg { transform: rotate(30deg); }
 
 /* Collapsed rail keeps every action reachable, including the expand control. */
-.cmd-shell-sidebar:has(.cmd-narrow) .cmd-sidebar-panels { display: flex; flex-direction: column; align-items: center; margin: 4px 0 12px; gap: 4px; }
+.cmd-narrow .cmd-sidebar-navigation { display: flex; flex-direction: column; margin: 4px 0 12px; }
+.cmd-narrow .cmd-resource-scope-label { display: none; }
+.cmd-narrow .cmd-resource-scope [aria-haspopup="menu"] { width: 36px; height: 36px; padding: 8px; }
+.cmd-shell-sidebar:has(.cmd-narrow) .cmd-sidebar-panels { display: flex; flex-direction: column; align-items: center; margin: 0; gap: 4px; }
 [class*="_root"]:has(.cmd-narrow) [class*="_panelRow"] { flex: none; width: 36px; height: 36px; padding: 8px; }
 [class*="_root"]:has(.cmd-narrow) > [class*="_logoRow"] { left: 50%; right: auto; width: 36px; transform: translateX(-50%); }
 .cmd-narrow .cmd-sidebar-nav { flex-direction: column; padding: 36px 0 0; margin: 0 0 4px; }
@@ -230,7 +245,8 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 /* Remove only the initial hero headline, leaving the official input and project controls intact. */
 [class*="_headline"]:has([class*="_fishHitbox"]) { display: none; }
 /* Compact project picker; keep the official modal's focus trap and dismissal. */
-.cmd-project-dialog { width: min(360px, 100%); max-height: 100%; padding: 0; gap: 0; border-radius: 16px; font-size: 13px; line-height: 1.45; color: var(--dsw-alias-label-primary, #242424); }
+.cmd-project-dialog { width: min(480px, 100%); max-height: 100%; padding: 0; gap: 0; border-radius: 16px; font-size: 13px; line-height: 1.45; color: var(--dsw-alias-label-primary, #242424); }
+.cmd-project-dialog.cmd-creation-session-dialog { width: min(360px, 100%); }
 .cmd-project-header { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 10px; }
 .cmd-project-header h2 { margin: 0; font-size: 15px; font-weight: 600; line-height: 24px; }
 .cmd-project-dialog button, .cmd-project-dialog input { font: inherit; }
@@ -239,6 +255,22 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 .cmd-project-icon-button { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary, #777); cursor: pointer; }
 .cmd-project-icon-button:hover:not(:disabled), .cmd-folder-root:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, #88888812); color: var(--dsw-alias-label-primary, #242424); }
 .cmd-project-content { display: flex; flex-direction: column; min-height: 0; padding: 0 16px 14px; overflow: auto; scrollbar-width: thin; }
+.cmd-project-toolbar { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; margin-bottom: 12px; }
+.cmd-project-toolbar .cmd-project-tabs { margin-bottom: 0; }
+.cmd-creation-device-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; margin-bottom: 12px; }
+.cmd-creation-device-row > label { color: var(--dsw-alias-label-secondary, #777); font-size: 12px; }
+.cmd-creation-device { display: flex; flex: 0 1 190px; min-width: 0; max-width: 50%; }
+.cmd-creation-device > span { width: 100%; }
+.cmd-creation-device .dowork-select { width: 100%; min-width: 0; min-height: 34px; gap: 8px; padding: 6px 8px; border-radius: 7px; }
+.cmd-creation-device .dowork-select-value { gap: 6px; }
+.cmd-creation-device .dowork-select-label .cmd-creation-device-status { display: none; }
+.cmd-creation-device-status { color: var(--dsw-alias-label-secondary, #777); font-size: 12px; }
+.cmd-project-dialog .dowork-select-option > [data-device-available] { display: inline-flex; flex: none; }
+.cmd-creation-device [data-device-available=true], .cmd-project-dialog .dowork-select-option [data-device-available=true] { color: var(--dsw-alias-state-business-primary, #438bea); }
+.cmd-creation-device [data-device-available=false], .cmd-project-dialog .dowork-select-option [data-device-available=false] { color: var(--dsw-alias-label-tertiary, #888); }
+.cmd-creation-empty { display: grid; justify-items: center; gap: 8px; padding: 24px 8px; color: var(--dsw-alias-label-secondary, #777); text-align: center; }
+.cmd-creation-empty strong { color: var(--dsw-alias-label-primary, #242424); font-size: 13px; font-weight: 500; }
+.cmd-creation-empty p { margin: 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .cmd-project-tabs { display: grid; grid-template-columns: 1fr 1fr; flex: none; gap: 3px; padding: 3px; margin-bottom: 12px; border-radius: 9px; background: var(--dsw-alias-interactive-bg-hover, #88888812); }
 .cmd-project-tabs button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 10px; border: 0; color: var(--dsw-alias-label-secondary, #777); background: transparent; border-radius: 6px; cursor: pointer; white-space: nowrap; }
 .cmd-project-tabs button[aria-selected="true"] { color: var(--dsw-alias-label-primary, #242424); background: var(--dsw-alias-bg-layer-2, #fff); box-shadow: 0 1px 3px #00000012; font-weight: 500; }
@@ -273,7 +305,7 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 .cmd-github-form label { font-weight: 500; font-size: 12px; }
 .cmd-github-form input { min-width: 0; width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l3, #88888825); border-radius: 7px; color: inherit; background: transparent; }
 .cmd-github-form p { margin: 0 0 6px; font-size: 12px; line-height: 1.5; color: var(--dsw-alias-label-secondary, #777); }
-@media (pointer: coarse) { .cmd-project-icon-button { width: 36px; height: 36px; } .cmd-project-tabs button, .cmd-folder-root, .cmd-folder-entries > button, .cmd-project-submit .cmd-dialog-button, .cmd-folder-retry { min-height: 40px; } .cmd-folder-search, .cmd-github-form input { min-height: 40px; } .cmd-project-dialog input { font-size: 16px; } }
+@media (pointer: coarse) { .cmd-project-icon-button { width: 36px; height: 36px; } .cmd-project-tabs button, .cmd-folder-root, .cmd-folder-entries > button, .cmd-project-submit .cmd-dialog-button, .cmd-folder-retry { min-height: 40px; } .cmd-creation-device .dowork-select { min-height: 44px; } .cmd-folder-search, .cmd-github-form input { min-height: 40px; } .cmd-project-dialog input { font-size: 16px; } }
 @media(hover:none) { .cmd-session-more { opacity: 1; } }
 @media(prefers-reduced-motion:reduce) { .cmd-ui-icon, .cmd-ui-icon > span { transition:none!important; animation:none!important; } }
 
@@ -339,8 +371,31 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 }
 .cmd-session-quick-actions{position:absolute;z-index:2;right:31px;top:50%;transform:translateY(-50%);display:flex;align-items:center;gap:1px;opacity:0;background:transparent;transition:opacity 140ms ease}.cmd-session-row:hover .cmd-session-quick-actions,.cmd-session-row:focus-within .cmd-session-quick-actions{opacity:1}.cmd-session-row .cmd-session-quick{min-height:28px;display:flex!important;align-items:center;justify-content:center;width:26px;height:28px;padding:5px!important;background:transparent!important;box-shadow:none;color:color-mix(in srgb,var(--cmd-text) 78%,var(--cmd-muted));transition:color 140ms ease}.cmd-session-quick:hover,.cmd-session-quick:focus-visible{color:var(--cmd-text)}.cmd-session-row:hover .cmd-session>span:not(.cmd-icon):not(.cmd-activity),.cmd-session-row:focus-within .cmd-session>span:not(.cmd-icon):not(.cmd-activity){-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 56px),transparent 100%);mask-image:linear-gradient(to right,#000 calc(100% - 56px),transparent 100%)}.cmd-project-delete{display:flex;margin-right:3px;padding:5px!important;opacity:0;color:var(--cmd-muted)}.cmd-project-name:hover .cmd-project-delete,.cmd-project-name:focus-within .cmd-project-delete{opacity:1}.cmd-project-delete:hover{color:#c05c59!important}
 
+/* One frosted surface separates all three controls from the session metadata. */
+.cmd-session-quick-actions::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0 -28px 0 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, color-mix(in srgb, var(--dsw-specific-sidebar-fill, var(--dsw-alias-bg-base, #fff)) 96%, var(--cmd-text)) 82%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+.cmd-session-row:has(.cmd-session-more[aria-expanded="true"]) .cmd-session-quick-actions { opacity: 1; }
+.cmd-session-row:has(> .cmd-session-quick-actions) :is(.cmd-session-quick, .cmd-session-more):is(:hover, :focus-visible, [aria-expanded="true"]) { background: var(--cmd-hover) !important; }
+.cmd-session-row:has(.cmd-session-more[aria-expanded="true"]) .cmd-session > span:not(.cmd-icon):not(.cmd-activity) {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent 100%);
+}
+@media (hover: none) {
+  .cmd-session-row .cmd-session-quick-actions, .cmd-session-row .cmd-session-more { opacity: 1; }
+}
+
 .cmd-session-row.is-archived .cmd-session { padding-right: 62px; }
 .cmd-session-row.is-archived .cmd-session-quick-actions { right: 3px; opacity: 1; }
+.cmd-session-row.is-archived .cmd-session-quick-actions::before { right: 0; }
 .cmd-session-row.is-archived .cmd-session > span:not(.cmd-icon):not(.cmd-activity) { -webkit-mask-image: none; mask-image: none; }
 
 /* Navigation is a quiet frame; editable controls and floating menus retain boundaries. */
@@ -348,3 +403,6 @@ html[data-windows-titlebar]:has(.cmd-shell-sidebar .cmd-projects) {
 .cmd-section-title .cmd-section-toggle { min-height: 36px; font-weight: 600; color: var(--dsw-alias-label-primary, inherit); }
 .cmd-project-header, .cmd-project-submit { background: transparent; border: 0; border-radius: 0; }
 .cmd-project-submit .bg-ui-button { flex: none; }
+.cmd-resource-scope{position:relative;min-width:0}.cmd-resource-scope>button,.cmd-resource-scope [aria-haspopup=menu]{display:flex;align-items:center;gap:5px}.cmd-resource-scope-menu{width:270px;max-width:calc(100vw - 24px)}.cmd-resource-devices{padding:6px 12px;display:grid;gap:10px}.cmd-resource-devices label{display:flex;align-items:center;gap:8px;min-width:0;font-size:12px}.cmd-resource-devices label span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.cmd-resource-devices small,.cmd-resource-group-title small{color:var(--cmd-muted);font-size:10px}.cmd-resource-save-error{position:absolute;top:100%;right:0;width:220px;background:var(--dsw-alias-bg-layer-2);padding:8px;font-size:12px;z-index:12;color:var(--dsw-alias-state-error-primary)}.cmd-resource-group-title{display:flex;align-items:center;gap:6px;width:100%;padding:10px 8px 4px;color:var(--cmd-muted);font-size:11px;text-align:left}.cmd-resource-group-title span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.cmd-resource-warning{font-size:11px;line-height:1.6;padding:6px 10px;color:var(--cmd-muted);overflow-wrap:anywhere}.cmd-resource-warning button,.cmd-resource-more{font:inherit;color:var(--dsw-alias-state-business-primary);padding:4px 6px}.cmd-resource-device-badge{max-width:70px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none;font-size:10px;color:var(--cmd-muted)}.cmd-resource-stage{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}[class*=centerCol]:has(>.cmd-resource-stage),main:has(>.cmd-resource-stage){position:relative}.cmd-resource-stage iframe{border:0;width:100%;flex:1;min-height:0}.cmd-resource-stage-status{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:12px;background:var(--dsw-alias-bg-base)}.cmd-resource-stage-status[hidden]{display:none}
+.cmd-projects .cmd-resource-group-title{padding:6px 8px;font-size:11px;color:var(--cmd-muted);justify-content:flex-start}.cmd-resource-group-title>.cmd-ui-icon{flex:none}.cmd-resource-group-title>span:not(.cmd-ui-icon){flex:1;min-width:0}.cmd-resource-group-title small{flex:none}html[data-resource-embedded] .cmd-shell-frame{grid-template-columns:0 minmax(0,1fr)!important}html[data-resource-embedded] .cmd-shell-frame>[class*=sidebarCol],html[data-resource-embedded] .cmd-shell-frame>[data-side],html[data-resource-embedded] .cmd-mobile-navigation-fallback{display:none!important}
+.cmd-resource-group-title[data-device-available=true]>.cmd-ui-icon{color:var(--dsw-alias-state-business-primary,#438bea)}.cmd-resource-group-title[data-device-available=false]>.cmd-ui-icon{color:var(--cmd-muted)}

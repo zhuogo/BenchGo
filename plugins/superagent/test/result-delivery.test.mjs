@@ -3,27 +3,27 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resultDelivery, resultOutbox, validateDelivery, deliverySuppression, systemStateDelivery } from '../src/result-delivery.mjs';
+import { resultOutbox, validateDelivery, deliverySuppression, systemStateDelivery } from '../src/result-delivery.mjs';
 import { commitWorkerResult } from '../src/result-commit.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 
-const ticket = { id: 't', title: '原任务', target: '完整要求', instructionRevision: 2, resultVersion: 0, mandate: { source: { channel: 'desktop', sessionId: 'owner' } } };
+const task = { id: 't', title: '原任务', target: '完整要求', instructionRevision: 2, resultVersion: 0, mandate: { source: { channel: 'desktop', sessionId: 'owner' } } };
 const result = { summary: '  原正文\n\n保留段落与结尾。\n', outcome: 'completed', evidenceRefs: [] };
 
-test('Worker body is retained as evidence while outbox only signals completion to Router', () => {
-  const delivery = resultDelivery({ ticket, result });
-  assert.equal(delivery.text, result.summary);
-  assert.equal(delivery.origin, 'worker');
-  assert.deepEqual(resultOutbox({ ticket, result, delivery }), { type: 'ticket.result', ticketId: 't', title: '原任务', source: ticket.mandate.source,
-    instructionRevision: 2, resultVersion: 1, outcome: 'completed', replyState: 'pending', evidenceRefs: [] });
-  assert.equal(validateDelivery({ ...delivery, text: 'x'.repeat(20000) }).text.length, 20000);
+test('only synchronous Router action audits use a suppressed result outbox', () => {
+  const delivery = systemStateDelivery({ state: 'action_verified', code: 'ACTION_VERIFIED', stage: 'action' });
+  const audit = resultOutbox({ task, result, delivery });
+  assert.equal(audit.replyState, 'suppressed');
+  assert.equal(audit.suppressionReason, 'router-action-already-replied');
+  assert.throws(() => resultOutbox({ task, result }));
+  assert.equal(validateDelivery({ action: 'deliver', text: 'x'.repeat(20000) }).text.length, 20000);
 });
 
 test('superseded requirements and sources are suppressed rather than delivered', () => {
-  const row = { ticketId: 't', payload: resultOutbox({ ticket, result, delivery: resultDelivery({ ticket, result }) }) };
-  const database = { getTicket: () => ({ ...ticket, resultVersion: 1 }) };
+  const row = { taskId: 't', payload: { type: 'task.result', taskId: 't', source: task.mandate.source, instructionRevision: 2, resultVersion: 1 } };
+  const database = { getTask: () => ({ ...task, resultVersion: 1 }) };
   assert.equal(deliverySuppression(database, row), null);
-  assert.equal(deliverySuppression({ getTicket: () => ({ ...ticket, resultVersion: 1, instructionRevision: 3 }) }, row), 'superseded-instruction');
+  assert.equal(deliverySuppression({ getTask: () => ({ ...task, resultVersion: 1, instructionRevision: 3 }) }, row), 'superseded-instruction');
   assert.equal(deliverySuppression(database, { ...row, payload: { ...row.payload, source: { channel: 'other' } } }), 'source-mismatch');
 });
 
@@ -32,85 +32,43 @@ async function storedResult(t) {
   let database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   database.createThread({ id: 'main', source: { type: 'desktop', id: 'owner' } });
-  const current = database.createTicket({ threadId: 'main', target: 'original request', mandate: ticket.mandate });
+  const current = database.createTask({ threadId: 'main', target: 'original request', mandate: task.mandate });
   // Only the bound, normally completed execution is the current result.
   database.createAssignment(current.id, { id: 'work' });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const run = database.prepareRun(assignment.id, { ...assignment, sessionId: 'session', directory: '/task' });
   database.updateRun(run.id, { ...assignment, state: 'submitted' });
   const draft = { ...result, instructionRevision: 1, runId: run.id, sessionId: run.sessionId, completion: { kind: 'completed' } };
-  const committed = commitWorkerResult({ database, ticket: current, assignment, result: draft, uniqueKey: 'worker-result' });
-  return { get database() { return database; }, ticket: current, committed,
+  const committed = commitWorkerResult({ database, task: current, assignment, result: draft, uniqueKey: 'worker-result' });
+  return { get database() { return database; }, task: current, committed,
     reopen() { database.close(); database = createAssistantOrchestrationStore({ directory }); } };
 }
 
-for (const receipt of [{ status: 'suppressed', reason: 'superseded' }, { status: 'accepted' }, { status: 'accepted', messageId: 'source-receipt' }]) {
-  test(`execution completion is independent from a persisted Router reply (${receipt.status}/${Boolean(receipt.messageId)})`, async t => {
-    const f = await storedResult(t);
-    const [pending] = f.database.claimOutbox('sender');
-    f.database.finishOutbox(pending.id, { owner: 'sender', sent: true, receipt });
-    assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
-    assert.equal(f.database.results(f.ticket.id)[0].summary, result.summary);
-  });
-}
-
-test('Router reply is immutable through retry and its confirmed source receipt only records delivery', async t => {
+test('result notification survives restart with stable source and version identity', async t => {
   const f = await storedResult(t);
-  const [pending] = f.database.claimOutbox('sender', { now: Date.now() + 1 });
-  const reply = { action: 'deliver', origin: 'router', text: '已整理完成，重点结论在这里。' };
-  f.database.saveOutboxReply(pending.id, { owner: 'sender', publication: reply });
-  assert.throws(() => f.database.saveOutboxReply(pending.id, { owner: 'sender', publication: { ...reply, text: '另一个版本' } }), { code: 'OUTBOX_CONFLICT' });
-  f.database.finishOutbox(pending.id, { owner: 'sender', error: 'confirmed-not-sent', retryMs: 0 });
+  const [notice] = f.database.pendingResultNotifications();
+  assert.equal(f.committed.outbox, null);
+  assert.deepEqual(f.database.deliveries(f.task.id), []);
+  assert.equal(notice.uniqueKey, 'worker-result');
   f.reopen();
-  const [retry] = f.database.claimOutbox('retry');
-  assert.equal(retry.id, pending.id);
-  assert.equal(retry.payload.publication.text, reply.text);
-  assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
-  f.database.finishOutbox(retry.id, { owner: 'retry', sent: true, receipt: { status: 'accepted', messageId: 'source-receipt' } });
-  assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
+  assert.deepEqual(f.database.resultNotification(f.task.id, notice.uniqueKey), notice);
+  f.database.finishResultNotification(f.task.id, notice.uniqueKey, { status: 'accepted', messageId: 'inbox' });
+  assert.deepEqual(f.database.pendingResultNotifications(), []);
+  assert.equal(f.database.results(f.task.id)[0].reply, undefined);
   f.reopen();
-  assert.deepEqual(f.database.claimOutbox('after-restart'), []);
-  assert.equal(f.database.results(f.ticket.id).length, 1);
+  assert.deepEqual(f.database.pendingResultNotifications(), []);
+  assert.equal(f.database.getTask(f.task.id).status, 'completed');
 });
 
-test('suppressed Router reply is retired without reverting execution completion', async t => {
+test('public Router reply confirms delivery separately and is idempotent', async t => {
   const f = await storedResult(t);
-  const [pending] = f.database.claimOutbox('sender');
-  f.database.saveOutboxReply(pending.id, { owner: 'sender',
-    publication: { action: 'deliver', origin: 'router', text: '已完成。' } });
-  f.database.finishOutbox(pending.id, { owner: 'sender', sent: true,
-    receipt: { status: 'suppressed', reason: 'authorization-changed', messageId: 'not-a-source-receipt' } });
-  assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
-  assert.deepEqual(f.database.claimOutbox('retry'), []);
-});
-
-
-test('duplicate receipts remain idempotent and a restart never resends an unknown transport outcome', async t => {
-  const f = await storedResult(t);
-  const [pending] = f.database.claimOutbox('sender');
-  f.database.saveOutboxReply(pending.id, { owner: 'sender', publication: { action: 'deliver', origin: 'router', text: '???' } });
-  f.reopen();
-  assert.deepEqual(f.database.claimOutbox('restart', { now: Date.now() + 61000 }), []);
-  const unknown = f.database.deliveries(f.ticket.id)[0];
-  assert.equal(unknown.state, 'uncertain');
-  assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
-  const receipt = { status: 'accepted', messageId: 'confirmed-source-message' };
-  f.database.reconcileOutbox(unknown.id, { attempts: unknown.attempts, outcome: 'sent', evidence: 'source message lookup', receipt });
-  assert.equal(f.database.finishOutbox(unknown.id, { owner: 'sender', sent: true, receipt }).state, 'sent');
-  f.reopen();
-  assert.deepEqual(f.database.claimOutbox('again'), []);
-  assert.equal(f.database.results(f.ticket.id).length, 1);
-});
-
-test('restart during expression retries only the same pending expression record', async t => {
-  const f = await storedResult(t);
-  const [pending] = f.database.claimOutbox('expression');
-  f.reopen();
-  const [retry] = f.database.claimOutbox('restart', { now: Date.now() + 61000 });
-  assert.equal(retry.id, pending.id);
-  assert.equal(retry.payload.replyState, 'pending');
-  assert.equal(f.database.results(f.ticket.id).length, 1);
-  assert.equal(f.database.getTicket(f.ticket.id).status, 'completed');
+  const [notice] = f.database.pendingResultNotifications();
+  const signal = { ...notice.payload, kind: 'result', eventKey: notice.uniqueKey };
+  const input = { signal, sessionId: 'router', requestId: 'reply-request', messages: [{ id: 'public', text: 'Done.' }] };
+  f.database.confirmResultReply(input); f.database.confirmResultReply(input);
+  assert.deepEqual(f.database.results(f.task.id)[0].reply.messageIds, ['public']);
+  assert.throws(() => f.database.confirmResultReply({ ...input, messages: [{ id: 'other', text: 'changed' }] }), /identity changed/);
+  assert.equal(f.database.results(f.task.id).length, 1);
 });
 
 test('interrupted execution asks for user continuation without promising effect verification', () => {

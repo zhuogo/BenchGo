@@ -17,17 +17,21 @@ test('official child and fork preserve native tools, history and nested delegati
   let dispatched = 0, modelRequests = 0;
   ctx.on('agent/request', (_request, next) => { modelRequests++; return next(); });
   ctx.tools.register({ name: 'read', description: 'Test read', parameters: {}, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => { dispatched++; return 'read'; } });
-  const database = { getTicket: () => ({ mandate: { source: { channel: 'desktop' } } }), getSessionRole: () => null,
+  const database = { getTask: () => ({ mandate: { source: { channel: 'desktop' } } }), getSessionRole: () => null,
     renewAssignment: (_id, input) => ({ allowed: input.validateMandate() }) };
   const parent = await ctx.agents.create({ sessionId: 'benchgo-test-worker', meta: { cwd: process.cwd() }, setup: (scope, agent) => { installWorkerSubagents(scope, agent, {
-    ctx, database, assignment: { id: 'assignment', ticketId: 'ticket' },
+    ctx, database, assignment: { id: 'assignment', taskId: 'task' },
   }); } });
   const child = await ctx.agents.create({ sessionId: 'benchgo-test-child', meta: { cwd: process.cwd(), origin: 'subagent', parentSession: parent.agent.id, delegationDepth: 1 } });
+  const childPrompt = await ctx.systemPrompt.assemble({ scope: child.agent });
+  assert.match(JSON.stringify(childPrompt.sections), /benchgo-worker-progress/);
+  assert.match(JSON.stringify(childPrompt.sections), /进展：/);
   const execute = () => child.agent.ctx.tools.execute({ agent: child.agent, signal: new AbortController().signal, calls: [{ type: 'tool-call', id: `read-${dispatched}`, name: 'read', arguments: '{}' }] });
   assert.equal((await execute()).results[0].result.isError, false);
   assert.equal((await execute()).results[0].result.isError, false);
   assert.equal(dispatched, 2);
   const grandchild = await ctx.agents.create({ sessionId: 'benchgo-test-grandchild', meta: { cwd: process.cwd(), origin: 'subagent', parentSession: child.agent.id, delegationDepth: 2 } });
+  assert.match(JSON.stringify((await ctx.systemPrompt.assemble({ scope: grandchild.agent })).sections), /benchgo-worker-progress/);
   assert.ok(ctx.agents.get('benchgo-test-grandchild'));
   await grandchild.dispose();
   // Exercise the real official fork provider's completed-turn history preparation,

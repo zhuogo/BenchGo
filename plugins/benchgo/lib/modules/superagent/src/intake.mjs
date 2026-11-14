@@ -1,4 +1,4 @@
-import { ticketStopped } from './ticket-lifecycle.mjs';
+import { taskStopped } from './task-lifecycle.mjs';
 import { createHash } from 'node:crypto';
 import { channelAdmissionCheck } from './channel-policy.mjs';
 
@@ -14,8 +14,8 @@ export async function ingestChannelEvent(database, envelope, policy, { onInbound
   if (!event) return { ignored: true, requiresEval: false, gate: { allowed: false, strength: 'ignore', reason: 'protocolRejected' } };
   if (identityOf(event) !== identity) throw new Error('消息归一不得修改已核实的来源身份');
   await recheck?.(event);
-  const subscribed = database.subscriptions({ threadId: event.threadId }).some(row => database.getTicket(row.ticketId)?.status !== 'completed' && !ticketStopped(database.getTicket(row.ticketId)));
-  if (!checked.requested && !subscribed) return { ignored: true, requiresEval: false, gate: { allowed: false, strength: 'ignore', reason: 'notMentioned' } };
+  const subscribed = database.subscriptions({ threadId: event.threadId }).some(row => database.getTask(row.taskId)?.status !== 'completed' && !taskStopped(database.getTask(row.taskId)));
+  if (!channelAdmissionCheck(event, policy).requested && !subscribed) return { ignored: true, requiresEval: false, gate: { allowed: false, strength: 'ignore', reason: 'notMentioned' } };
   const accepted = ingestAssistantEvent(database, event, { ...policy, intakeStage: 'pending' });
   const intakeEvent = database.readIntakeEvent(accepted.trigger.id);
   const result = { ...accepted, intakeEvent, trigger: database.getTrigger(intakeEvent.id) || null };
@@ -52,8 +52,8 @@ export function ingestAssistantEvent(database, event, policy) {
   const attention = !superseded && database.answerAttention(accepted.trigger.id, { sourceAllowed: !!(allowedActor && allowedThread) });
   if (attention) return { ...accepted, requiresEval: false, gate: input.gate, direct: false, attention, delivery: null, ambiguousSubscription: false };
   // Existing subscriptions carry context only, including unmentioned messages.
-  const subscriptions = database.subscriptions({ threadId: event.threadId }).filter(row => database.getTicket(row.ticketId)?.status !== 'completed' && !ticketStopped(database.getTicket(row.ticketId)));
+  const subscriptions = database.subscriptions({ threadId: event.threadId }).filter(row => database.getTask(row.taskId)?.status !== 'completed' && !taskStopped(database.getTask(row.taskId)));
   let delivery = null;
-  if (!explicit && !superseded && subscriptions.length === 1 && allowedThread && allowedActor && accepted.trigger.seq > subscriptions[0].cursorSeq) delivery = database.deliverSubscribedMessage(accepted.trigger.id, { ticketId: subscriptions[0].ticketId });
+  if (!explicit && !superseded && subscriptions.length === 1 && allowedThread && allowedActor && accepted.trigger.seq > subscriptions[0].cursorSeq) delivery = database.deliverSubscribedMessage(accepted.trigger.id, { taskId: subscriptions[0].taskId });
   return { ...accepted, gate: input.gate, direct: !!(direct && allowed), delivery, ambiguousSubscription: subscriptions.length > 1 };
 }

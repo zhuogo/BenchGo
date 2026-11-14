@@ -69,8 +69,8 @@ export function createNotificationSound(environment = globalThis) {
 export const notificationSound = createNotificationSound();
 
 export function notificationKeys(data = {}, scope = '') {
-  return [data.eventId && `event:${data.eventId}`, data.ticketReplyEventKey && `ticket-event:${data.ticketReplyEventKey}`,
-    data.ticketStateEventKey && `ticket-event:${data.ticketStateEventKey}`, data.sourceEventId && `ticket-event:${data.sourceEventId}`,
+  return [data.eventId && `event:${data.eventId}`, data.taskReplyEventKey && `task-event:${data.taskReplyEventKey}`,
+    data.taskStateEventKey && `task-event:${data.taskStateEventKey}`, data.sourceEventId && `task-event:${data.sourceEventId}`,
     data.requestId && `request:${scope}:${data.requestId}`, data.mirrorKey && `channel:${data.mirrorKey}`].filter(Boolean);
 }
 

@@ -8,13 +8,18 @@ export function shellUi(){return {name:'commander-shell-ui',setup(build){
   build.onLoad({filter:/ui-settings-general[\\/]src[\\/]client[\\/]SettingsRoot\.tsx$/},async({path})=>{
     let source=(await readFile(path,'utf8')).replaceAll('\r\n','\n');
     source=once(source,'className={css.overlay} role="presentation"', "className={css.overlay + ' cmd-settings-overlay'} role=\"presentation\"");
-    // The official row expects one account trigger. Plus provides six tools,
-    // so native update/reconnect actions need a separate row above that group.
+    // BenchGo owns the only update entry; connection recovery keeps its own row.
     source=once(source,'className={clsx(css.triggerRow, !wide && css.railRow)}', "className={clsx(css.triggerRow, !wide && css.railRow, 'cmd-sidebar-footer')}");
     const status=source.match(/        <ConnectionIndicator\n[\s\S]*?          t=\{t\} view=\{desktopUpdate\} onOpen=\{openDesktopUpdate\} \/>/u)?.[0];
     if(!status)throw Error('Official settings status controls changed');
+    const connection=once(status.slice(0,status.indexOf('        <DesktopUpdateIndicator')).trimEnd(),
+      "state={wide && desktopUpdate.presentation?.phase !== 'installing' ? connectionIndicator : undefined}",
+      'state={wide ? connectionIndicator : undefined}');
     source=once(source,status,'');
-    source=once(source,"        {renderSlot('settings.launcher', {", '        <div className="cmd-sidebar-status">\n'+status+'\n        </div>\n'+"        {renderSlot('settings.launcher', {");
+    source=once(source,"import { DesktopUpdateIndicator } from './DesktopUpdateIndicator.tsx'\n",'');
+    source=once(source,'useDesktopUpdate, openDesktopUpdate, useStore, actions, useShortcuts,','useStore, actions, useShortcuts,');
+    source=once(source,'  const desktopUpdate = useDesktopUpdate(state => state)\n','');
+    source=once(source,"        {renderSlot('settings.launcher', {", '        <div className="cmd-sidebar-status">\n'+connection+'\n        </div>\n'+"        {renderSlot('settings.launcher', {");
     source=once(source,'function navIcon(id: string) {',
       'function navIcon(id: string) {\n'+
       '  if (id === "link") return <span className={css.navIcon} style={{ display: "inline-flex", width: 16, height: 16 }} aria-hidden="true" dangerouslySetInnerHTML={{ __html: '+JSON.stringify(linkIcon)+' }} />\n'+
@@ -25,6 +30,29 @@ export function shellUi(){return {name:'commander-shell-ui',setup(build){
   });
   build.onLoad({filter:/ui-sidebar[\\/]src[\\/]client[\\/]SidebarRoot\.tsx$/},async({path})=>{
     let source=(await readFile(path,'utf8')).replaceAll('\r\n','\n');
+    // Published Hosts can use the same release number before panel icons moved
+    // into a Factory. Keep its registered Factory when present; the lazy
+    // fallback only exercises the old owner's child slot on older Hosts.
+    source=once(source,'  & PropsRenderFactories\n', "  & PropsRenderFactories\n  & PropsRenderSlots<'sidebar.panellist'>\n");
+    source=once(source,'/** Each panel row subscribes only to its own selection state. */',
+      "function LegacyPanelIcon({ id, size, active, renderSlot }: { id: string; size: number; active: boolean } & PropsRenderSlots<'sidebar.panellist'>) {\n"+
+      "  return renderSlot('sidebar.panellist', { size, active }, { only: id })\n"+
+      '}\n\n/** Each panel row subscribes only to its own selection state. */');
+    source=once(source,'setPinned, trackEntryClick, renderFactorySlot,', 'setPinned, trackEntryClick, renderFactorySlot, renderSlot,');
+    source=once(source,'  const active = usePanelInfo(info => info.activePanelId === id)',
+      "  const active = usePanelInfo(info => info.activePanelId === id)\n"+
+      '  const iconProps = { id, size: wide ? 16 : 18, active }\n'+
+      '  const legacyIcon = <LegacyPanelIcon {...iconProps} renderSlot={renderSlot} />');
+    source=once(source,"{renderFactorySlot('sidebar.panel.icon', { id, size: wide ? 16 : 18, active })}",
+      "{renderFactorySlot?.('sidebar.panel.icon', iconProps, { fallback: legacyIcon }) ?? legacyIcon}");
+    source=once(source,'                  renderFactorySlot={renderFactorySlot}',
+      '                  renderFactorySlot={renderFactorySlot}\n                  renderSlot={renderSlot}');
+    source=once(source,"import clsx from 'clsx'", "import { createPortal } from 'react-dom'\nimport clsx from 'clsx'");
+    source=once(source,"  const toggleLabel = collapsed ? t('toggle.open') : t('toggle.collapse')", "  const [captionCollapsed, setCaptionCollapsed] = useState<boolean | null>(null)\n  useEffect(() => {\n    if (!document.documentElement.hasAttribute('data-windows-titlebar')) return\n    const sync = (event: Event) => { const value = (event as CustomEvent).detail?.collapsed; setCaptionCollapsed(typeof value === 'boolean' ? value : null) }\n    document.addEventListener('benchgo:desktop-sidebar-state', sync)\n    return () => document.removeEventListener('benchgo:desktop-sidebar-state', sync)\n  }, [])\n  const toggleLabel = (captionCollapsed ?? collapsed) ? t('toggle.open') : t('toggle.collapse')");
+    source=once(source,'        onClick={() => { toggleSidebar() }}', "        onClick={() => {\n          if (windowsTitlebar && !document.dispatchEvent(new Event('benchgo:sidebar-toggle', { cancelable: true }))) return\n          toggleSidebar()\n        }}");
+    // The one caption control must stay usable while a retained remote page
+    // makes the local shell inert. Keep the official button, tooltip and action.
+    source=once(source,'{!darwinDesktop && toggle}', '{!darwinDesktop && (windowsTitlebar ? createPortal(toggle, document.body) : toggle)}');
     source=once(source,'const wide = drawer || (windowsTitlebar ? !collapsed : !collapsed || !settled)','const wide = drawer || !collapsed');
     source=once(source,'style={wide ? { width: !drawer && collapsed ? lastWideWidth.current : width } : undefined}', "style={{ width: '100%', minWidth: 0 }}");
     source=once(source,'css.root, !wide && css.collapsed, !wide && animateRail.current && css.railIn,', "css.root, 'cmd-shell-sidebar', !wide && css.collapsed,");

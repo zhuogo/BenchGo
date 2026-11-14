@@ -1,3 +1,4 @@
+import { currentTaskReplySignal } from './task-reply.mjs';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -14,7 +15,7 @@ function objectJson(value) {
 }
 
 /** Durable delivery only. Admission and transport authorization remain host responsibilities. */
-export function installDirectReplyStore({ db, tx }) {
+export function installDirectReplyStore({ db, tx, api }) {
   db.exec(`CREATE TABLE IF NOT EXISTS sa_direct_replies(
     id TEXT PRIMARY KEY, candidate_id TEXT UNIQUE REFERENCES sa_candidates(id),
     trigger_id TEXT NOT NULL REFERENCES sa_triggers(id), thread_id TEXT NOT NULL REFERENCES sa_threads(id),
@@ -28,6 +29,8 @@ export function installDirectReplyStore({ db, tx }) {
       outcome TEXT NOT NULL, evidence TEXT NOT NULL, receipt TEXT, created_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS sa_direct_reply_reconciliation_reply ON sa_direct_reply_reconciliations(reply_id,id);`);
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS sa_direct_reply_owner_trigger ON sa_direct_replies(trigger_id) WHERE kind='owner'");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS sa_direct_reply_router_identity ON sa_direct_replies(json_extract(gate,'$.requestId')) WHERE kind='router'");
+  const routerCurrent = row => row?.kind === 'router' && currentTaskReplySignal(api, row.gate.signal);
   const get = id => db.prepare('SELECT * FROM sa_direct_replies WHERE id=?').get(id);
   const value = row => row && ({ id: row.id, candidateId: row.candidate_id, triggerId: row.trigger_id,
     threadId: row.thread_id, text: row.text, kind: row.kind, source: JSON.parse(row.source),
@@ -54,6 +57,31 @@ export function installDirectReplyStore({ db, tx }) {
         reply.text.trim(), input.outcome, source, actor, gate, input.policyVersion, now, at, at);
     },
     api: {
+      routerReplyCurrent: routerCurrent,
+      enqueueRouterReply({ signal, sessionId, requestId, messages, now = Date.now() }) {
+        return tx(() => {
+          if (!['result', 'state'].includes(signal?.kind) || !currentTaskReplySignal(api, signal)
+            || ['desktop', 'link'].includes(signal.source.channel) || !sessionId || !requestId
+            || !Array.isArray(messages) || !messages.length || messages.some(row => typeof row.id !== 'string' || typeof row.text !== 'string'))
+            throw new Error('Router reply requires a current original-source signal');
+          const text = messages.map(row => row.text).filter(value => value.trim()).join('\n\n');
+          if (!text.trim() || text.length > 200000) throw new Error('Router reply requires bounded public text');
+          const existing = db.prepare("SELECT * FROM sa_direct_replies WHERE kind='router' AND json_extract(gate,'$.requestId')=?").get(requestId);
+          if (existing) {
+            if (existing.text !== text || !isDeepStrictEqual(JSON.parse(existing.source), signal.source)) throw fail('DIRECT_REPLY_SOURCE_CONFLICT', 'Router reply original changed');
+            return { ...value(existing), duplicate: true };
+          }
+          const task = api.getTask(signal.taskId);
+          const trigger = db.prepare('SELECT t.* FROM sa_triggers t JOIN sa_task_triggers tt ON tt.trigger_id=t.id WHERE tt.task_id=? ORDER BY t.seq LIMIT 1').get(task.id);
+          if (!trigger) throw new Error('Router reply original trigger is unavailable');
+          const replyId = randomUUID(), at = new Date(time(now)).toISOString();
+          const gate = { signal, sessionId, requestId, messages: messages.map(row => ({ id: row.id, text: row.text })) };
+          db.prepare(`INSERT INTO sa_direct_replies(id,candidate_id,trigger_id,thread_id,text,kind,source,actor,gate,policy_version,state,next_at,created_at,updated_at)
+            VALUES (?,NULL,?,?,?,'router',?,?,?,?,'queued',?,?,?)`).run(replyId, trigger.id, task.threadId, text,
+              objectJson(signal.source), objectJson({ kind: 'machine', id: 'router' }), objectJson(gate), 'saved-result', now, at, at);
+          return value(get(replyId));
+        });
+      },
       enqueueChannelOwnerReply({ triggerId, source, text, policyVersion, now = Date.now() }) {
         return tx(() => {
           const trigger = db.prepare('SELECT * FROM sa_triggers WHERE id=?').get(ownerId(triggerId));
@@ -119,6 +147,10 @@ export function installDirectReplyStore({ db, tx }) {
           db.prepare('UPDATE sa_direct_replies SET state=?,owner=NULL,lease_until=NULL,last_error=?,receipt=COALESCE(?,receipt),next_at=?,updated_at=? WHERE id=?')
             .run(state, sent ? null : String(error || (suppressed ? 'delivery-suppressed' : 'delivery-failed')).slice(0, 1000), receiptJson,
               state === 'queued' ? now + retryMs : row.next_at, new Date(now).toISOString(), id);
+          if (sent && receipt?.status === 'accepted' && row.kind === 'router') {
+            const gate = JSON.parse(row.gate);
+            if (gate.signal.kind === 'result') api.confirmResultReply({ ...gate, receipt, now }, { inTransaction: true });
+          }
           return value(get(id));
         });
       },
@@ -144,6 +176,10 @@ export function installDirectReplyStore({ db, tx }) {
           db.prepare('UPDATE sa_direct_replies SET state=?,owner=NULL,lease_until=NULL,last_error=?,receipt=COALESCE(?,receipt),next_at=?,updated_at=? WHERE id=?')
             .run(state, outcome === 'sent' ? null : outcome === 'not_sent' ? 'verified-not-sent' : 'delivery-still-unknown', receiptJson,
               state === 'queued' ? now + 30000 : row.next_at, at, id);
+          if (outcome === 'sent' && receipt?.status === 'accepted' && row.kind === 'router') {
+            const gate = JSON.parse(row.gate);
+            if (gate.signal.kind === 'result') api.confirmResultReply({ ...gate, receipt, now }, { inTransaction: true });
+          }
           return value(get(id));
         });
       },
@@ -154,6 +190,15 @@ export function installDirectReplyStore({ db, tx }) {
         if (state !== undefined) { ownerId(state); where.push('state=?'); args.push(state); }
         return db.prepare(`SELECT * FROM sa_direct_replies${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC,id LIMIT ?`)
           .all(...args, limitValue(limit, 100)).map(value);
+      },
+      sentDirectReplyPage({ after = 0, through, limit = 100 } = {}) {
+        if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(through) || through < after) throw new TypeError('Invalid direct reply recovery cursor');
+        const size = Math.min(limitValue(limit, 100), 200);
+        const rows = db.prepare(`SELECT rowid AS position,* FROM sa_direct_replies NOT INDEXED
+          WHERE rowid>? AND rowid<=? AND state='sent' AND json_extract(receipt,'$.status')='accepted' AND json_extract(receipt,'$.messageId') IS NOT NULL
+          ORDER BY rowid LIMIT ?`).all(after, through, size + 1);
+        const hasMore = rows.length > size, page = rows.slice(0, size);
+        return { entries: page.map(value), cursor: hasMore ? page.at(-1).position : through, hasMore };
       },
     },
   };

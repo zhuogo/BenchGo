@@ -11,7 +11,7 @@ const text = (value, max, label) => {
 };
 const array = (value, max, label) => { if (!Array.isArray(value) || value.length > max) throw new Error(`${label}无效`); return value; };
 const ref = source => { const { excerpt, excerptTruncated, ...value } = source || {}; return value; };
-const realSource = source => object(source) && !!(source.messageId || source.eventId || source.taskId || source.callId || source.ticketId);
+const realSource = source => object(source) && !!(source.messageId || source.eventId || source.taskId || source.callId);
 const markdown = value => value.replace(/[\r\n]+/gu, ' ').replace(/[<>\[\]]/gu, '');
 const sections = [['whenToUse', 'When to Use'], ['procedure', 'Procedure'], ['pitfalls', 'Pitfalls'], ['verification', 'Verification']];
 const sourceIds = (value, sources) => {
@@ -20,7 +20,7 @@ const sourceIds = (value, sources) => {
   return value.map(id => { const found = sources.find(source => source.id === id); if (!found) throw new Error('来源引用不存在'); return found; });
 };
 const citation = sources => [...new Set(sources.map(row => row.memoryIds?.length ? row.memoryIds.map(id => `[[memory:${id}]]`).join(' ')
-  : `[source:${row.source?.messageId || row.source?.eventId || row.source?.taskId || row.source?.ticketId || row.source?.callId || row.id}]`))].join(' ');
+  : `[source:${row.source?.messageId || row.source?.eventId || row.source?.taskId || row.source?.callId || row.id}]`))].join(' ');
 const sourceBinding = (sources, task, reviewId) => ({ role: 'assistant', type: 'maintenance', task, reviewId,
   references: [...new Map(sources.filter(row => realSource(row.source)).map(row => [JSON.stringify(ref(row.source)), ref(row.source)])).values()] });
 const memoryIds = sources => [...new Set(sources.flatMap(row => row.memoryIds || []))];

@@ -1,11 +1,11 @@
 import test from 'node:test';
-import * as ticketBoard from '../client/ticket-board.mjs';
+import * as taskBoard from '../client/task-board.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
-const code = transformSync(readFileSync(new URL('../client/tickets.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
+const code = transformSync(readFileSync(new URL('../client/tasks.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 const walk = node => node && typeof node === 'object' && node.props ? [node, ...(node.children || []).flatMap(walk)] : [];
 function harness({ fail = false } = {}) {
   const state = [], refs = [], calls = [], module = { exports: {} }; let cursor = 0, refCursor = 0;
@@ -13,17 +13,17 @@ function harness({ fail = false } = {}) {
     useState: value => { const at = cursor++; if (!(at in state)) state[at] = value; return [state[at], next => { state[at] = typeof next === 'function' ? next(state[at]) : next; }]; },
     useId: () => 'task-test', useRef: value => refs[refCursor++] ||= { current: value }, useCallback: fn => fn, useMemo: fn => fn(), useEffect() {}, useLayoutEffect() {} };
   const Modal = () => null;
-  const activity = { rows: [], error: '', refresh: async () => {}, refreshTickets: async () => {} };
-  runInNewContext(code, { module, exports: module.exports, require: name => name.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => true, null] } : name.endsWith('use-activity.jsx') ? { useAssistantActivity: () => activity } : name.endsWith('ticket-board.mjs') ? ticketBoard : name.endsWith('/ui/button.jsx') ? { Button: 'button' } : name.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : name === 'react' ? react : { Modal, useDirtyRegistry: () => () => () => {} } });
+  const activity = { rows: [], error: '', refresh: async () => {}, refreshTasks: async () => {} };
+  runInNewContext(code, { module, exports: module.exports, require: name => name.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => true, null] } : name.endsWith('use-activity.jsx') ? { useAssistantActivity: () => activity } : name.endsWith('task-board.mjs') ? taskBoard : name.endsWith('/ui/button.jsx') ? { Button: 'button' } : name.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : name === 'react' ? react : { Modal, useDirtyRegistry: () => () => () => {} } });
   const props = { api: async (action, args) => {
     calls.push({ action, args });
     if (action === 'state') return { config: { revision: 7, workerConcurrency: 2 } };
     if (fail) throw new Error('版本冲突');
     return { revision: 8, workerConcurrency: args.patch.workerConcurrency };
   } };
-  return { calls, render() { cursor = refCursor = 0; return walk(module.exports.Tickets(props)); }, Modal };
+  return { calls, render() { cursor = refCursor = 0; return walk(module.exports.Tasks(props)); }, Modal };
 }
-test('ticket header action is connected and concurrency changes submit only their field', async () => {
+test('task header action is connected and concurrency changes submit only their field', async () => {
   const h = harness();
   h.render().find(n => n.props.label === '设置').props.onClick();
   await new Promise(resolve => setImmediate(resolve));

@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { migrateTaskLedger } from './task-storage-migration.mjs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -25,6 +26,7 @@ export function createAssistantLedger({ directory } = {}) {
   required(directory, 'directory');
   mkdirSync(directory, { recursive: true });
   const db = new DatabaseSync(join(directory, 'ledger.db'));
+  try { migrateTaskLedger(db); } catch (error) { db.close(); throw error; }
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS ledger_records(id TEXT PRIMARY KEY, kind TEXT NOT NULL, source_key TEXT UNIQUE NOT NULL, content TEXT NOT NULL, metadata TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE VIRTUAL TABLE IF NOT EXISTS ledger_fts USING fts5(id UNINDEXED, terms);

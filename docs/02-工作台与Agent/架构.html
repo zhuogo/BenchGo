@@ -14,7 +14,7 @@
   "title": "工作台与 Agent",
   "eyebrow": "WORKSPACE / AGENT",
   "subtitle": "一个客户端组织项目、官方会话与原生 Agent；Interactive、Workbench 在基础层内部装配，任务业务由 SuperAgent 负责。",
-  "boundary": "图示来自当前工作区源码。外部 Agent 能力各异；本机工作台、SSH、真实原生会话和安装版界面需分别验收，不能由构建成功推定。",
+  "boundary": "图示来自当前工作区源码。外部 Agent 能力各异；本机工作台、SSH、真实原生会话和安装版界面需分别验收，不能由构建成功推定。 跨设备查询、目标执行、结果回传与聚合导航已接线；AI管理限已有设备及中继优先级/启停申请，首次配对与秘密仍走设备中心。双向需双方授权；本地TLS和浏览器测试不等于襄阳服务器真机验收。",
   "nodes": [
     {
       "id": "base",
@@ -72,7 +72,7 @@
         "plugins/benchgo/client/sidebar-state.mjs",
         "plugins/benchgo/src/web.mjs"
       ],
-      "note": "工单业务属于 SuperAgent，导航不另建执行队列。",
+      "note": "任务业务属于 SuperAgent，导航不另建执行队列。 项目/最近可选择本机、全部或指定设备，目标导航已接线，最近聚合保留原会话归属。",
       "state": "implemented",
       "x": 820,
       "y": 160
@@ -93,7 +93,7 @@
         "plugins/harness/src/plugin.mjs",
         "upstream.json"
       ],
-      "note": "SuperAgent Worker 直接使用官方 Agent，不经 Commander 另建推理循环。",
+      "note": "SuperAgent Router 与 Worker 均直接使用官方 Agent，不经 Commander 另建推理循环；Router 保留专属产品管理与协调工具，环境操作从第一次探查起交给 Worker，能力装配与分工见 SuperAgent 模型与上下文、任务与执行。",
       "state": "implemented",
       "x": 1200,
       "y": 160
@@ -232,7 +232,7 @@
       "sub": "本机 owner 范围的工程工作台",
       "symbol": "mountWorkbench() / ownerWebServer()",
       "plain": "在工作台里处理本机工程文件和终端。",
-      "role": "内部装配 dsh-better-sidebar 与 SSH 适配；HTTP/WebSocket 校验官方认证、来源及项目边界，设置通过公共配置管理注册并重装作用域。",
+      "role": "内置文件、Git、终端、文档与音视频预览及 SSH 适配；使用固定安全配置，无第三方设置页或安装器；HTTP/WebSocket 校验官方认证、来源及项目边界。",
       "input": "本机 owner 会话、项目、配置",
       "output": "文件、Git、终端界面与可用性快照",
       "sources": [
@@ -264,6 +264,97 @@
       "state": "implemented",
       "x": 1200,
       "y": 740
+    },
+    {
+      "id": "cross-scope",
+      "title": "项目 / 最近显示范围",
+      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "kind": "orchestration",
+      "sub": "当前设备 · 全部 · 指定设备",
+      "symbol": "共享显示设置",
+      "plain": "一个设置同时控制项目和最近列表。",
+      "role": "默认当前工作台所属设备；全部包括已授权但暂时离线的设备。选择持久化并保持草稿和列表位置，筛选不改变助手能力或执行地点。",
+      "input": "用户选择的设备集合",
+      "output": "侧栏查询范围",
+      "sources": [
+        "docs/02-工作台与Agent/跨设备资源导航.md",
+        "plugins/link/client/resource-navigation.jsx",
+        "plugins/link/client/resource-state.mjs",
+        "plugins/benchgo/client/index.jsx"
+      ],
+      "note": "已接当前/全部/指定范围，服务端保存与重载、保存失败重试。浏览器 fixture 已验，真实双机待验。",
+      "state": "implemented",
+      "x": 60,
+      "y": 1040,
+      "doc": "docs/02-工作台与Agent/跨设备资源导航.md"
+    },
+    {
+      "id": "cross-query",
+      "title": "共享资源查询",
+      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "kind": "orchestration",
+      "sub": "按设备查询 · 分页 · 部分失败",
+      "symbol": "Link 资源服务",
+      "plain": "某台设备离线，不影响其他设备的项目出现。",
+      "role": "复用统一跨设备服务按需查询摘要，限制并发、取消过期请求；缓存带来源和观测时间。保留各设备原有最近候选，不将项目全部会话重复收进最近。",
+      "input": "范围与逐设备分页条件",
+      "output": "可辨识的项目 / 最近摘要",
+      "sources": [
+        "docs/01-设备与远程连接/跨设备协作.md",
+        "plugins/link/src/devices/resources.mjs",
+        "plugins/link/src/session/adapter.mjs"
+      ],
+      "note": "已接共享 Link 资源服务，旧目标无法核验最近候选时返回不支持。可见时每30秒刷新摘要，不同步完整历史。",
+      "state": "implemented",
+      "x": 440,
+      "y": 1040,
+      "doc": "docs/01-设备与远程连接/跨设备协作.md"
+    },
+    {
+      "id": "cross-navigation",
+      "title": "同一工作台打开资源",
+      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "kind": "orchestration",
+      "sub": "设备标记 · 原始资源 ID · 返回路径",
+      "symbol": "deviceId + project/session ID",
+      "plain": "在当前工作台打开远端内容，清楚知道正在操作哪台设备。",
+      "role": "项目按设备分组，最近按活动时间近似排序并注明设备；打开与后续操作锁定所属主机，不把远端路径或 ID 当本地资源。保留当前对话、草稿及返回位置。",
+      "input": "带设备身份的项目 / 会话",
+      "output": "目标工作台内容",
+      "sources": [
+        "docs/02-工作台与Agent/跨设备资源导航.md",
+        "plugins/link/client/resource-navigation.jsx",
+        "plugins/link/client/resource-state.mjs",
+        "plugins/benchgo/client/index.jsx"
+      ],
+      "note": "内容区复用目标 Link 工作台并校验窗口来源，保留入口侧栏与草稿；目标设备操作展开原侧栏，避免复制业务菜单。",
+      "state": "implemented",
+      "x": 820,
+      "y": 1040,
+      "doc": "docs/02-工作台与Agent/跨设备资源导航.md"
+    },
+    {
+      "id": "cross-availability",
+      "title": "真实可用性与恢复",
+      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "kind": "orchestration",
+      "sub": "空 · 加载 · 错误 · 有数据 / 离线",
+      "symbol": "observedAt / freshness",
+      "plain": "查不到和没有数据，是两种状态。",
+      "role": "首次加载有文字反馈，刷新保留条目；每设备独立错误、重试和过期提示。离线保留缓存但不伪装可执行，撤销后清除受限资源；选中不改变可用状态色。",
+      "input": "各设备真实状态与缓存事实",
+      "output": "可理解且可恢复的界面",
+      "sources": [
+        "docs/02-工作台与Agent/跨设备资源导航.md",
+        "plugins/link/client/resource-navigation.jsx",
+        "plugins/link/client/resource-state.mjs",
+        "plugins/benchgo/client/index.jsx"
+      ],
+      "note": "已接四态、离线缓存、重试和身份变化清理；已检查浏览器 fixture 的明暗与窄屏，真实双机仍待验。",
+      "state": "implemented",
+      "x": 1200,
+      "y": 1040,
+      "doc": "docs/02-工作台与Agent/跨设备资源导航.md"
     }
   ],
   "edges": [
@@ -339,6 +430,46 @@
       "label": "SSH 适配",
       "from": "r",
       "to": "l"
+    },
+    {
+      "a": "workspace",
+      "b": "cross-scope",
+      "label": "显示范围入口",
+      "from": "t",
+      "to": "t",
+      "kind": "support"
+    },
+    {
+      "a": "cross-scope",
+      "b": "cross-query",
+      "label": "选择设备",
+      "from": "r",
+      "to": "l",
+      "kind": "support"
+    },
+    {
+      "a": "cross-query",
+      "b": "cross-navigation",
+      "label": "资源引用",
+      "from": "r",
+      "to": "l",
+      "kind": "support"
+    },
+    {
+      "a": "cross-navigation",
+      "b": "cross-availability",
+      "label": "打开 / 恢复",
+      "from": "r",
+      "to": "l",
+      "kind": "support"
+    },
+    {
+      "a": "cross-query",
+      "b": "cross-availability",
+      "label": "可用性事实",
+      "from": "b",
+      "to": "b",
+      "kind": "feedback"
     }
   ],
   "steps": [
@@ -388,6 +519,21 @@
       "title": "在明确边界内处理工程",
       "text": "文件、Git、终端限定本机 owner；SSH 先探测并确认指纹。",
       "edge": 9
+    },
+    {
+      "node": "cross-scope",
+      "title": "已接线：项目和最近显示多设备资源",
+      "text": "在侧栏设置中选择当前设备、所有已连接设备或指定设备。项目按设备分组；最近保留原有候选语义，再按活动时间聚合。"
+    },
+    {
+      "node": "cross-navigation",
+      "title": "已接线：打开远端项目并保持当前上下文",
+      "text": "条目始终携带所属设备；打开远端内容保留入口对话和草稿。开发在项目主机的模型、Harness 与文件环境进行。"
+    },
+    {
+      "node": "cross-availability",
+      "title": "已接线：离线和失败仍可理解",
+      "text": "逐设备显示加载、空、错误和数据；保留有时间标注的离线缓存，支持单设备重试，不把未知状态当作零项目。"
     }
   ],
   "docs": [
@@ -410,7 +556,28 @@
     {
       "label": "任务列表交互",
       "path": "docs/02-工作台与Agent/任务列表交互.md"
+    },
+    {
+      "label": "跨设备资源导航",
+      "path": "docs/02-工作台与Agent/跨设备资源导航.md"
+    },
+    {
+      "label": "跨设备服务与执行归属",
+      "path": "docs/01-设备与远程连接/跨设备协作.md"
     }
   ],
-  "version": "2026-11-11-1"
+  "version": "2026-11-13-cross-device-2",
+  "canvas": {
+    "width": 1580,
+    "height": 1280
+  },
+  "zones": [
+    {
+      "x": 40,
+      "y": 990,
+      "w": 1440,
+      "h": 245,
+      "label": "跨设备项目 / 最近 · 已接线 · 沿用现有侧栏与工作台"
+    }
+  ]
 }</script><script src="../_assets/architecture.js"></script></body></html>

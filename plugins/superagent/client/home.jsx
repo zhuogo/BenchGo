@@ -28,7 +28,7 @@ function ActivitySection({ title, rows, tone, onOpenResources }) {
 export function AssistantHome({ api, assistantName, assistantConfig, onOpenResources, input, inputActions }) {
   const { rows, error, loading, refresh, updated } = useAssistantActivity(api);
   const groups = groupHomeActivity(rows || []);
-  const hasWork = groups.attention.length + groups.active.length + groups.completed.length > 0;
+  const hasWork = groups.attention.length + groups.active.length > 0;
   const root = useRef(null), [notice, setNotice] = useState('');
   const canDraft = input?.phase === 'plain' && !input.draft && !input.occurrences?.length;
   const prepare = prompt => {
@@ -53,7 +53,6 @@ export function AssistantHome({ api, assistantName, assistantConfig, onOpenResou
     {rows === null && !error ? <div className="ba-home-loading" role="status"><span />正在整理工作简报…</div> : <div className="ba-home-brief">
       <ActivitySection title="需要你关注" rows={groups.attention} tone="attention" onOpenResources={onOpenResources} />
       <ActivitySection title="正在推进" rows={groups.active} tone="active" onOpenResources={onOpenResources} />
-      <ActivitySection title="最近完成" rows={groups.completed} tone="completed" onOpenResources={onOpenResources} />
       {!hasWork && rows !== null && !error && rows.length > 0 && <div className="ba-home-rest"><span>当前没有需要推进的事项。</span><Button variant="ghost" type="button" onClick={() => onOpenResources('tasks')}>查看任务记录</Button></div>}
     </div>}
     <nav className="ba-home-starters" aria-label="开始一项工作">{starters.map((starter, index) => <Button variant="ghost" type="button" key={starter.title} onClick={() => prepare(starter.prompt)} disabled={!canDraft} title={!canDraft ? '请先完成当前草稿，再使用快捷起草' : `起草：${starter.title}`}><span className="ba-home-starter-index">0{index + 1}</span><span className="ba-home-starter-copy"><strong>{starter.title}</strong><small>{starter.detail}</small></span><span className="ba-home-arrow" aria-hidden="true">↗</span></Button>)}</nav>

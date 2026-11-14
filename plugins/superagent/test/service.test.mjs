@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
+import { projectChatMessages } from '../src/chat-publication.mjs';
 import { publicConfig } from '../../voice/src/config.mjs';
 import { createSettingsManagement } from '../../benchgo/src/settings-management.mjs';
 import { installRoleHost, loadRolePackage } from './role-host-fixture.mjs';
@@ -55,6 +56,13 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.ok(ctx.get('subagents'), 'the official subagent service must be ready before mounting SuperAgent');
   await ctx.plugin(SessionPersistence.default || SessionPersistence, { root: join(directory, 'official-sessions'), compression: 'none' });
   await ctx.plugin(SessionQuery.default || SessionQuery, { path: ':memory:', openAt: 'first-search' });
+  await ctx.plugin((await loadRolePackage('storage/storage', '@deepseek-ai/dsh-storage')).default);
+  await ctx.plugin(await loadRolePackage('storage/storage-json', '@deepseek-ai/dsh-storage-json'), { root: join(directory, 'official-storage') });
+  await ctx.plugin(await loadRolePackage('storage/storage-domain', '@deepseek-ai/dsh-storage-domain'), { backend: 'json' });
+  await ctx.plugin((await loadRolePackage('session/session-title', '@deepseek-ai/dsh-session-title')).default,
+    { fallbackMaxWords: 5, fallbackMaxBytes: 40, maxTitleBytes: 80 });
+  await ctx.plugin((await loadRolePackage('session/session-projection-cache', '@deepseek-ai/dsh-session-projection-cache')).default,
+    { writeEveryEvents: 200, writeIntervalMs: 5000 });
   const tokenRequire = createRequire(new URL('../../../deepseek-harness/packages/llm/token-meter/package.json', import.meta.url));
   await ctx.plugin((await import(pathToFileURL(tokenRequire.resolve('@deepseek-ai/dsh-token-meter')).href)).default);
   let duringStream, maintenanceReply;
@@ -114,6 +122,8 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.throws(() => missingSessionsContext.sessions.get('saved-router-session'), { message: 'cannot get property "sessions" without inject' });
   await missingSessionsFiber.dispose();
   assert.ok(assistantInject.includes('sessions'), 'the real plugin must retain the session flush dependency');
+  for (const name of ['sessionTitle', 'sessionPersistence', 'sessionProjectionCache'])
+    assert.ok(assistantInject.includes(name), `the scoped plugin must receive the official ${name} service`);
   assert.ok(assistantInject.includes('benchgoSettings'), 'the scoped plugin must receive the real settings manager');
   let appFiber;
   let mountTimer;
@@ -211,23 +221,26 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   ctx.provide('benchgoLink', { status: () => ({ enabled: true, devices: [{ id: 'phone', name: '手机', deviceType: 'mobile', lastSeenAt: 123, tokenHash: 'PRIVATE' }], pending: [] }) });
   const executionTool = ctx.tools.get('assistant_execution_manage', agent);
   assert.deepEqual(executionTool.parameters.properties.operation.enum, ['resume']);
-  const ticketsTool = ctx.tools.get('assistant_tickets', agent);
-  assert.ok(ticketsTool);
-  assert.deepEqual(await ticketsTool.execute({}, { agent }), { tickets: [], nextOffset: null });
-  await assert.rejects(ticketsTool.execute({}, { agent: { id: 'child' } }), /只有总助手/);
-  await assert.rejects(ticketsTool.execute({ op: 'get' }, { agent }), /需要 id/);
+  const tasksTool = ctx.tools.get('assistant_tasks', agent);
+  assert.ok(tasksTool);
+  assert.deepEqual(tasksTool.parameters.properties.archived, { type: 'boolean' });
+  assert.deepEqual(await tasksTool.execute({}, { agent }), { tasks: [], nextOffset: null });
+  await assert.rejects(tasksTool.execute({}, { agent: { id: 'child' } }), /只有总助手/);
+  await assert.rejects(tasksTool.execute({ op: 'get' }, { agent }), /需要 id/);
   app.store.orchestration.ingest({ dedupeKey: 'query-test', thread: { id: 'query-test', source: { type: 'desktop', id: 'query-test' } }, source: {}, actor: { kind: 'human', id: 'desktop-owner' }, content: 'Query proof', mode: 'direct' });
-  const queryTicket = app.store.orchestration.createTicket({ threadId: 'query-test', target: 'Query proof', status: 'waiting', mandate: { source: { channel: 'desktop', sessionId: String(agent.id) }, project: { id: 'project' } } });
-  const queried = await ticketsTool.execute({ projectId: 'project' }, { agent });
-  assert.equal(queried.tickets[0].id, queryTicket.id);
-  assert.equal((await ticketsTool.execute({ op: 'get', id: queryTicket.id }, { agent })).ticket.target, 'Query proof');
-  app.store.orchestration.cancelTicket(queryTicket.id);
-  for (const name of ['assistant_projects', 'assistant_settings', 'assistant_task_cleanup', 'assistant_generate_image', 'assistant_summarize', 'assistant_analyze_image']) assert.ok(ctx.tools.get(name, agent), name);
+  const queryTask = app.store.orchestration.createTask({ threadId: 'query-test', target: 'Query proof', status: 'waiting', mandate: { source: { channel: 'desktop', sessionId: String(agent.id) }, project: { id: 'project' } } });
+  const queried = await tasksTool.execute({ projectId: 'project' }, { agent });
+  assert.equal(queried.tasks[0].id, queryTask.id);
+  assert.equal(queried.tasks[0].taskMeta.version, 0);
+  assert.equal((await tasksTool.execute({ op: 'get', id: queryTask.id }, { agent })).task.target, 'Query proof');
+  app.store.orchestration.cancelTask(queryTask.id);
+  for (const name of ['assistant_projects', 'assistant_settings', 'assistant_task_manage', 'assistant_task_cleanup', 'assistant_generate_image', 'assistant_summarize', 'assistant_analyze_image']) assert.ok(ctx.tools.get(name, agent), name);
   assert.equal(ctx.tools.get('assistant_config', agent), undefined);
   const projectsTool = ctx.tools.get('assistant_projects', agent);
   const projectsResult = await projectsTool.execute({}, { signal: new AbortController().signal, agent });
+  assert.equal(projectsResult.scope, 'local');
   assert.deepEqual(projectsResult.projects[0], {
-    id: 'project', path: projectRoot, title: 'Project',
+    id: 'project', path: projectRoot, title: 'Project', isDefault: false,
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z', sessionIds: ['session-1'],
   });
   assert.equal(Object.getPrototypeOf(projectsResult.projects[0]), Object.prototype);
@@ -261,117 +274,142 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.match(JSON.stringify(modelRequests.at(-1)), /persistentGoals/);
   assert.match(JSON.stringify(modelRequests.at(-1)), /长期维护产品知识库/, 'the actual model request sees current unfinished goals');
   response = await call({ action: 'send', text: 'hello', requestId: 'mounted-request' }); assert.equal((await response.json()).duplicate, true);
-  // A committed Worker result must pass through this injected Router context,
-  // durably flush its natural draft, then receive the original desktop receipt.
+  // A committed Worker result enters this Router inbox exactly once.
+  // Its ordinary native assistant messages must be visible and confirmed locally.
   const deliveryPolicy = await readAssessmentPolicy(app.store, ctx.workspaceRegistry);
   const sourceMessage = agent.session.snapshotEvents().find(event => event.type === 'user/message' && event.data?.source?.requestId === 'mounted-request').data;
-  const resultTicket = app.store.orchestration.createTicket({ threadId: `desktop:${agent.id}`, title: '完整交付验证', target: '保存并交付成果',
+  const resultTask = app.store.orchestration.createTask({ threadId: `desktop:${agent.id}`, title: '完整交付验证', target: '保存并交付成果',
     mandate: { source: { channel: 'desktop', sessionId: agent.id, threadId: 'main', messageId: sourceMessage.id },
       actorId: 'desktop-owner', admission: 'desktop-approved-delegation', policyVersion: deliveryPolicy.desktopVersion,
       controlledActions: 'require-current-policy-and-harness-approval' } });
-  // Reserve outbox claims only while this test prepares the draft itself.
-  // Leave native timers running for the later attention and lifecycle checks.
-  const outboxClaims = t.mock.method(app.store.orchestration, 'claimOutbox', () => []);
-  let committed, prepared;
-  try {
-    app.store.orchestration.createAssignment(resultTicket.id, { id: 'scoped-worker-assignment' });
-    const [resultAssignment] = app.store.orchestration.claimAssignments('test-worker', { validateMandate: () => true, assignmentId: 'scoped-worker-assignment' });
-    const resultOwnership = { owner: resultAssignment.owner, fence: resultAssignment.fence };
-    const resultRun = app.store.orchestration.prepareRun(resultAssignment.id, { ...resultOwnership, sessionId: 'scoped-worker-session', directory });
-    app.store.orchestration.updateRun(resultRun.id, { ...resultOwnership, state: 'submitted' });
-    const workerResult = { summary: '原始成果已保存', runId: resultRun.id, sessionId: resultRun.sessionId, instructionRevision: 1, completion: { kind: 'completed' } };
-    app.store.orchestration.saveWorkerDraft(resultAssignment.id, { runId: resultRun.id, ...resultOwnership, result: workerResult });
-    app.store.orchestration.updateRun(resultRun.id, { ...resultOwnership, state: 'verifying', evidence: workerResult });
-    committed = commitWorkerResult({ database: app.store.orchestration, ticket: resultTicket, assignment: resultAssignment, uniqueKey: 'scoped-worker-result', result: workerResult });
-    assert.equal(app.store.orchestration.getTicket(resultTicket.id).status, 'completed');
-    for (let attempt = 0; attempt < 120; attempt++) {
-      prepared = await app.engine.prepareTicketReply(committed.outbox);
-      if (prepared.status === 'ready') break;
-      assert.equal(prepared.status, 'pending', JSON.stringify(prepared));
-      await new Promise(resolve => setTimeout(resolve, 25));
-    }
-    assert.equal(prepared.status, 'ready');
-    assert.equal(prepared.text, 'Mounted reply');
-    assert.deepEqual(await app.engine.prepareTicketReply(committed.outbox), prepared, 'saved Router draft is reused across outbox attempts');
-    assert.equal(app.store.orchestration.deliveries(resultTicket.id)[0].state, 'queued');
-  } finally {
-    outboxClaims.mock.restore();
-  }
-  for (let attempt = 0; attempt < 100 && app.store.orchestration.deliveries(resultTicket.id)[0]?.state !== 'sent'; attempt++) await new Promise(resolve => setTimeout(resolve, 25));
-  const delivered = app.store.orchestration.deliveries(resultTicket.id);
-  assert.equal(delivered.length, 1);
-  assert.equal(delivered[0].state, 'sent');
-  assert.equal(delivered[0].receipt.status, 'accepted');
-  assert.ok(delivered[0].receipt.messageId);
-  assert.equal(delivered[0].payload.publication.origin, 'router');
-  assert.equal(delivered[0].payload.publication.text, 'Mounted reply');
-  assert.equal(app.store.orchestration.getTicket(resultTicket.id).status, 'completed');
-  assert.equal(agent.session.snapshotEvents().filter(event => event.type === 'plugin:benchgo-plugin/chat-publication'
-    && event.data?.kind === 'ticket-reply' && event.data.ticketReplyEventKey === committed.outbox.uniqueKey).length, 1);
-  assert.equal(app.database.notifications().events.filter(event => event.taskId === resultTicket.id).length, 1);
+  app.store.orchestration.createAssignment(resultTask.id, { id: 'scoped-worker-assignment' });
+  const [resultAssignment] = app.store.orchestration.claimAssignments('test-worker', { validateMandate: () => true, assignmentId: 'scoped-worker-assignment' });
+  const resultOwnership = { owner: resultAssignment.owner, fence: resultAssignment.fence };
+  const resultRun = app.store.orchestration.prepareRun(resultAssignment.id, { ...resultOwnership, sessionId: 'scoped-worker-session', directory });
+  let resultWorker = await ctx.agents.create({ sessionId: resultRun.sessionId, meta: { cwd: directory, agentPreset: 'standard' } });
+  assert.equal(ctx.sessionTitle.get(resultWorker.agent.session).title, resultTask.title,
+    'a real official Worker session uses the bound Task title before its first prompt');
+  const renameResultTask = async (title, version) => {
+    const response = await call({ action: 'taskUpdate', kind: 'task', id: resultTask.id, operation: 'rename', title, version });
+    assert.equal(response.status, 200, await response.clone().text());
+    return response.json();
+  };
+  let renamedResultTask = await renameResultTask('整理交付成果', 0);
+  assert.equal(ctx.sessionTitle.get(resultWorker.agent.session).title, renamedResultTask.taskMeta.title,
+    'the owner Task rename API synchronizes a managed live official title');
+  await resultWorker.dispose();
+  renamedResultTask = await renameResultTask('核对交付说明', renamedResultTask.taskMeta.version);
+  const coldWorkerHeader = (await ctx.sessionPersistence.stat(resultRun.sessionId)).header;
+  for (let attempt = 0; attempt < 100
+    && ctx.sessionProjectionCache.cachedSnapshot(coldWorkerHeader)?.values.title !== renamedResultTask.taskMeta.title; attempt++)
+    await new Promise(resolve => setTimeout(resolve, 10));
+  const coldWorkerLog = await ctx.sessionQuery.readSession(resultRun.sessionId);
+  assert.equal(coldWorkerLog.events.findLast(event => event.type === 'session/title').data.title, renamedResultTask.taskMeta.title);
+  assert.equal(ctx.sessionProjectionCache.cachedSnapshot(coldWorkerHeader).values.title, renamedResultTask.taskMeta.title,
+    'a cold rename rebuilds the official listing cache after the title is persisted');
+  resultWorker = await ctx.agents.resume({ resumeSessionId: resultRun.sessionId });
+  const manualWorkerTitle = ctx.sessionTitle.rename(resultWorker.agent.session, renamedResultTask.taskMeta.title);
+  await renameResultTask('更新交付说明', renamedResultTask.taskMeta.version);
+  assert.deepEqual(ctx.sessionTitle.get(resultWorker.agent.session), manualWorkerTitle,
+    'an explicit same-text session rename takes ownership and survives subsequent Task renames');
+  await resultWorker.dispose();
+  app.store.orchestration.updateRun(resultRun.id, { ...resultOwnership, state: 'submitted' });
+  const workerResult = { summary: '原始成果已保存', runId: resultRun.id, sessionId: resultRun.sessionId, instructionRevision: 1, completion: { kind: 'completed' } };
+  app.store.orchestration.saveWorkerDraft(resultAssignment.id, { runId: resultRun.id, ...resultOwnership, result: workerResult });
+  app.store.orchestration.updateRun(resultRun.id, { ...resultOwnership, state: 'verifying', evidence: workerResult });
+  const committed = commitWorkerResult({ database: app.store.orchestration, task: resultTask, assignment: resultAssignment, uniqueKey: 'scoped-worker-result', result: workerResult });
+  assert.equal(app.store.orchestration.getTask(resultTask.id).status, 'completed');
+  const notice = app.store.orchestration.resultNotification(resultTask.id, committed.result.deliveryKey);
+  assert.ok(notice);
+  const accepted = await app.engine.notifyTaskResult(notice);
+  assert.equal(accepted.status, 'accepted');
+  assert.ok(accepted.messageId);
+  assert.equal(accepted.text, undefined, 'inbox acceptance does not return a prepared draft');
+  const duplicate = await app.engine.notifyTaskResult(notice);
+  assert.equal(duplicate.messageId, accepted.messageId, 'result identity deduplicates the ordinary Router inbox turn');
+  for (let attempt = 0; attempt < 120 && !app.store.orchestration.results(resultTask.id).at(-1).reply; attempt++)
+    await new Promise(resolve => setTimeout(resolve, 25));
+  await agent.whenIdle();
+  const replied = app.store.orchestration.results(resultTask.id).at(-1);
+  assert.ok(replied.reply, 'the ordinary Router turn confirms its original public messages');
+  assert.equal(replied.reply.sessionId, agent.id);
+  assert.equal(replied.reply.requestId, accepted.messageId);
+  assert.deepEqual(app.store.orchestration.deliveries(resultTask.id), []);
+  assert.equal(app.store.orchestration.getTask(resultTask.id).status, 'completed');
+  const replyMessages = projectChatMessages(agent.session.snapshotEvents()).filter(message =>
+    replied.reply.messageIds.includes(message.id));
+  assert.equal(replyMessages.length, 1);
+  assert.equal(replyMessages[0].text, 'Mounted reply');
+  assert.equal(replyMessages[0].requestId, accepted.messageId);
+  const replyEvent = agent.session.snapshotEvents().find(event => event.seq === replyMessages[0].seq);
+  assert.equal(replyEvent.type, 'assistant/message', 'result reply is an ordinary native assistant event');
+  const resultHistory = await (await call({ action: 'history' })).json();
+  for (const messageId of replied.reply.messageIds)
+    assert.ok(resultHistory.messages.some(message => message.id === messageId && message.text === 'Mounted reply'),
+      'ordinary result messages are directly visible in public history');
   // The empty project is not an executable fixture: reserve claims so a timer
   // cannot start unrelated work during the cleanup and lifecycle checks.
   const claimAssignments = app.store.orchestration.claimAssignments;
   app.store.orchestration.claimAssignments = () => [];
   t.after(() => { app.store.orchestration.claimAssignments = claimAssignments; });
-  const stoppedTicket = app.store.orchestration.cancelTicket(app.store.orchestration.createTicket({ threadId: 'query-test', target: 'Stopped proof',
+  const stoppedTask = app.store.orchestration.cancelTask(app.store.orchestration.createTask({ threadId: 'query-test', target: 'Stopped proof',
     mandate: { source: { channel: 'desktop', sessionId: String(agent.id) }, project: { id: 'project' } } }).id);
-  assert.equal(stoppedTicket.executionControl.stopped, true);
-  const cleanupIds = [queryTicket.id, stoppedTicket.id];
-  const beforeCleanup = cleanupIds.map(id => app.store.orchestration.getTicket(id));
+  assert.equal(stoppedTask.executionControl.stopped, true);
+  const cleanupIds = [queryTask.id, stoppedTask.id];
+  const beforeCleanup = cleanupIds.map(id => app.store.orchestration.getTask(id));
   const readCleanupDomain = () => {
     const db = new DatabaseSync(app.store.orchestration.path, { readOnly: true });
-    try { return db.prepare('SELECT * FROM sa_tickets WHERE id IN (?,?) ORDER BY id').all(...cleanupIds); }
+    try { return db.prepare('SELECT * FROM sa_tasks WHERE id IN (?,?) ORDER BY id').all(...cleanupIds); }
     finally { db.close(); }
   };
   const beforeCleanupDomain = readCleanupDomain();
   for (const action of ['taskCleanupPreview', 'taskCleanupCommit', 'taskCleanupHistory', 'taskCleanupRestorePreview', 'taskCleanupRestore']) {
-    assert.equal((await call({ action, ticketIds: cleanupIds }, undefined)).status, 403, action);
-    assert.equal((await call({ action, ticketIds: cleanupIds }, { principal: { kind: 'device' } })).status, 403, action);
+    assert.equal((await call({ action, taskIds: cleanupIds }, undefined)).status, 403, action);
+    assert.equal((await call({ action, taskIds: cleanupIds }, { principal: { kind: 'device' } })).status, 403, action);
   }
-  const cleanupPreviewResponse = await call({ action: 'taskCleanupPreview', ticketIds: [...cleanupIds, 'missing-cleanup-ticket'] });
+  const cleanupPreviewResponse = await call({ action: 'taskCleanupPreview', taskIds: [...cleanupIds, 'missing-cleanup-task'] });
   assert.equal(cleanupPreviewResponse.status, 200, await cleanupPreviewResponse.clone().text());
   const cleanupPreview = await cleanupPreviewResponse.json();
   assert.deepEqual(cleanupPreview.items.map(row => row.id).sort(), [...cleanupIds].sort());
-  assert.deepEqual(cleanupPreview.excluded.map(row => [row.id, row.code]), [['missing-cleanup-ticket', 'TICKET_NOT_FOUND']]);
+  assert.deepEqual(cleanupPreview.excluded.map(row => [row.id, row.code]), [['missing-cleanup-task', 'TASK_NOT_FOUND']]);
   const cleanupInput = { action: 'taskCleanupCommit', previewId: cleanupPreview.previewId, manifestHash: cleanupPreview.manifestHash,
-    selectedTicketIds: [queryTicket.id], requestId: 'service-cleanup-subset' };
+    selectedTaskIds: [queryTask.id], requestId: 'service-cleanup-subset' };
   assert.equal((await call({ ...cleanupInput, manifestHash: 'changed-manifest' })).status, 409);
   const cleanupResponse = await call(cleanupInput);
   assert.equal(cleanupResponse.status, 200, await cleanupResponse.clone().text());
   const cleanupReceipt = await cleanupResponse.json();
   assert.equal(cleanupReceipt.operation, 'archive');
-  assert.deepEqual(cleanupReceipt.items.map(row => row.id), [queryTicket.id]);
+  assert.deepEqual(cleanupReceipt.items.map(row => row.id), [queryTask.id]);
   assert.deepEqual((await (await call(cleanupInput)).json()), cleanupReceipt, 'page retries reuse the durable archive receipt');
-  assert.deepEqual(cleanupIds.map(id => app.store.orchestration.getTicket(id)),
-    beforeCleanup.map(row => row.id === queryTicket.id ? { ...row, archived: true } : row), 'authoritative projection reflects only the approved archive subset');
-  assert.deepEqual(readCleanupDomain(), beforeCleanupDomain, 'archive preserves every stored Ticket domain column');
-  assert.equal(app.store.orchestration.listTickets({ archived: true }).some(row => row.id === queryTicket.id), true);
-  assert.equal(app.store.orchestration.listTickets({ archived: false }).some(row => row.id === queryTicket.id), false);
-  assert.equal(app.store.orchestration.listTickets({ archived: false }).some(row => row.id === stoppedTicket.id), true);
-  const cleanupHistory = await (await call({ action: 'taskCleanupHistory', ticketId: queryTicket.id })).json();
+  assert.deepEqual(cleanupIds.map(id => app.store.orchestration.getTask(id)),
+    beforeCleanup.map(row => row.id === queryTask.id ? { ...row, archived: true } : row), 'authoritative projection reflects only the approved archive subset');
+  assert.deepEqual(readCleanupDomain(), beforeCleanupDomain, 'archive preserves every stored Task domain column');
+  assert.equal(app.store.orchestration.listTasks({ archived: true }).some(row => row.id === queryTask.id), true);
+  assert.equal(app.store.orchestration.listTasks({ archived: false }).some(row => row.id === queryTask.id), false);
+  assert.equal(app.store.orchestration.listTasks({ archived: false }).some(row => row.id === stoppedTask.id), true);
+  const cleanupHistory = await (await call({ action: 'taskCleanupHistory', taskId: queryTask.id })).json();
   assert.deepEqual(cleanupHistory.history, [cleanupReceipt]);
-  const restorePreviewResponse = await call({ action: 'taskCleanupRestorePreview', ticketIds: [queryTicket.id] });
+  const restorePreviewResponse = await call({ action: 'taskCleanupRestorePreview', taskIds: [queryTask.id] });
   assert.equal(restorePreviewResponse.status, 200, await restorePreviewResponse.clone().text());
   const restorePreview = await restorePreviewResponse.json();
   assert.equal(restorePreview.type, 'restore');
-  assert.deepEqual(restorePreview.items.map(row => row.id), [queryTicket.id]);
+  assert.deepEqual(restorePreview.items.map(row => row.id), [queryTask.id]);
   const restoreInput = { action: 'taskCleanupRestore', previewId: restorePreview.previewId, manifestHash: restorePreview.manifestHash,
-    selectedTicketIds: [queryTicket.id], requestId: 'service-cleanup-restore' };
+    selectedTaskIds: [queryTask.id], requestId: 'service-cleanup-restore' };
   const restoredResponse = await call(restoreInput);
   assert.equal(restoredResponse.status, 200, await restoredResponse.clone().text());
   const restoredReceipt = await restoredResponse.json();
   assert.equal(restoredReceipt.operation, 'restore');
-  assert.deepEqual(restoredReceipt.items.map(row => row.id), [queryTicket.id]);
+  assert.deepEqual(restoredReceipt.items.map(row => row.id), [queryTask.id]);
   assert.deepEqual((await (await call(restoreInput)).json()), restoredReceipt);
-  assert.deepEqual(cleanupIds.map(id => app.store.orchestration.getTicket(id)), beforeCleanup, 'restore only changes presentation');
-  assert.deepEqual(readCleanupDomain(), beforeCleanupDomain, 'restore preserves every stored Ticket domain column');
-  assert.equal(app.store.orchestration.listTickets({ archived: false }).some(row => row.id === queryTicket.id), true);
-  assert.equal(app.store.orchestration.listTickets({ archived: true }).some(row => row.id === queryTicket.id), false);
-  assert.deepEqual((await (await call({ action: 'taskCleanupHistory', ticketId: queryTicket.id })).json()).history,
+  assert.deepEqual(cleanupIds.map(id => app.store.orchestration.getTask(id)), beforeCleanup, 'restore only changes presentation');
+  assert.deepEqual(readCleanupDomain(), beforeCleanupDomain, 'restore preserves every stored Task domain column');
+  assert.equal(app.store.orchestration.listTasks({ archived: false }).some(row => row.id === queryTask.id), true);
+  assert.equal(app.store.orchestration.listTasks({ archived: true }).some(row => row.id === queryTask.id), false);
+  assert.deepEqual((await (await call({ action: 'taskCleanupHistory', taskId: queryTask.id })).json()).history,
     [restoredReceipt, cleanupReceipt]);
   // Keep claims reserved through the scoped-tool contract checks below. These
-  // queued tickets deliberately have no executable project/worker fixture;
+  // queued tasks deliberately have no executable project/worker fixture;
   // asynchronous claiming would turn an immediate queued stop into cancelling.
   let streamFailure;
   duringStream = async () => { try {
@@ -384,7 +422,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.deepEqual(delegateTool.parameters.required, ['text']);
   assert.equal(delegateTool.parameters.required.includes('provider'), false);
   assert.equal(delegateTool.parameters.required.includes('model'), false);
-  assert.equal(delegateTool.parameters.properties.duplicateOfTicketId.type, 'string');
+  assert.equal(delegateTool.parameters.properties.duplicateOfTaskId.type, 'string');
   const settingsCatalog = await ctx.tools.get('assistant_settings', agent).execute({ op: 'catalog', adapterId: 'superagent' }, { agent });
   const configSchema = settingsCatalog.entries.find(row => row.namespace === 'superagent').schema.properties;
   assert.equal(configSchema.models.maxItems, 32);
@@ -413,57 +451,57 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   await assert.rejects(delegateTool.execute(delegation, { agent: { id: 'child' }, authorized: true }), /只有总助手/);
   await assert.rejects(delegateTool.execute({ ...delegation, provider: 'mounted', model: 'exact' }, { agent, authorized: true }));
   const requestsBeforeDelegation = modelRequests.length;
-  const ticket = await delegateTool.execute(delegation, { agent, authorized: true });
-  assert.equal(ticket.mandate.instruction, 'Inspect project');
-  assert.equal(ticket.acceptance, delegation.text);
+  const task = await delegateTool.execute(delegation, { agent, authorized: true });
+  assert.equal(task.mandate.instruction, 'Inspect project');
+  assert.equal(task.acceptance, delegation.text);
   assert.equal(modelRequests.length, requestsBeforeDelegation, 'mounted admission does not request another model');
-  assert.equal(ticket.mandate.scopeCheck, undefined);
-  assert.equal((await delegateTool.execute(delegation, { agent, authorized: true })).id, ticket.id);
-  assert.ok((await (await call({ action: 'tickets' })).json()).tickets.some(row => row.id === ticket.id));
-  assert.equal((await (await call({ action: 'ticketStop', ticketId: ticket.id })).json()).executionControl.stopped, true);
-  const pauseTicket = app.store.orchestration.createTicket({ threadId: ticket.threadId, target: 'Pause original investigation', mandate: ticket.mandate });
-  const controlTool = ctx.tools.get('assistant_ticket_control', agent);
+  assert.equal(task.mandate.scopeCheck, undefined);
+  assert.equal((await delegateTool.execute(delegation, { agent, authorized: true })).id, task.id);
+  assert.ok((await (await call({ action: 'tasks' })).json()).tasks.some(row => row.id === task.id));
+  assert.equal((await (await call({ action: 'taskStop', taskId: task.id })).json()).executionControl.stopped, true);
+  const pauseTask = app.store.orchestration.createTask({ threadId: task.threadId, target: 'Pause original investigation', mandate: task.mandate });
+  const controlTool = ctx.tools.get('assistant_task_control', agent);
   assert.ok(controlTool.parameters.properties.operation.enum.includes('pause'));
   assert.ok(controlTool.parameters.properties.operation.enum.includes('resume'));
   app.store.orchestration.createThread({ id: 'foreign-source', source: { type: 'feishu', id: 'foreign-source' } });
-  const globalTickets = [
+  const globalTasks = [
     { channel: 'desktop', sessionId: 'another-desktop', threadId: 'another-side' },
     { channel: 'feishu', sourceType: 'group', conversationId: 'channel-group' },
-  ].map(source => app.store.orchestration.createTicket({ threadId: 'foreign-source', target: 'Global management fixture', mandate: { ...ticket.mandate, source } }));
-  for (const row of globalTickets) {
-    assert.equal((await ticketsTool.execute({ op: 'get', id: row.id }, { agent })).ticket.id, row.id);
+  ].map(source => app.store.orchestration.createTask({ threadId: 'foreign-source', target: 'Global management fixture', mandate: { ...task.mandate, source } }));
+  for (const row of globalTasks) {
+    assert.equal((await tasksTool.execute({ op: 'get', id: row.id }, { agent })).task.id, row.id);
     await assert.rejects(controlTool.execute({ id: row.id, operation: 'supplement' }, { agent }), /不属于当前会话/);
-    assert.equal((await controlTool.execute({ id: row.id, operation: 'pause' }, { agent })).ticket.executionControl.paused, true);
-    assert.deepEqual((await controlTool.execute({ id: row.id, operation: 'resume' }, { agent })).ticket.executionControl, {});
-    assert.deepEqual(app.store.orchestration.getTicket(row.id).mandate, row.mandate);
+    assert.equal((await controlTool.execute({ id: row.id, operation: 'pause' }, { agent })).task.executionControl.paused, true);
+    assert.deepEqual((await controlTool.execute({ id: row.id, operation: 'resume' }, { agent })).task.executionControl, {});
+    assert.deepEqual(app.store.orchestration.getTask(row.id).mandate, row.mandate);
   }
-  const pauseReceipt = await controlTool.execute({ id: pauseTicket.id, operation: 'pause' }, { agent });
-  assert.equal(pauseReceipt.ticket.executionControl.paused, true);
+  const pauseReceipt = await controlTool.execute({ id: pauseTask.id, operation: 'pause' }, { agent });
+  assert.equal(pauseReceipt.task.executionControl.paused, true);
   assert.equal(pauseReceipt.input.kind, 'pause'); assert.equal(pauseReceipt.input.state, 'applied');
   assert.equal(app.store.orchestration.getTrigger(pauseReceipt.triggerId).content, 'Inspect project');
-  assert.equal(app.store.orchestration.getTicket(pauseTicket.id).executionControl.paused, true);
-  app.store.orchestration.cancelTicket(pauseTicket.id);
-  const questionTicket = app.store.orchestration.createTicket({ threadId: ticket.threadId, target: 'Question', mandate: ticket.mandate });
-  app.store.orchestration.createAssignment(questionTicket.id, {});
+  assert.equal(app.store.orchestration.getTask(pauseTask.id).executionControl.paused, true);
+  app.store.orchestration.cancelTask(pauseTask.id);
+  const questionTask = app.store.orchestration.createTask({ threadId: task.threadId, target: 'Question', mandate: task.mandate });
+  app.store.orchestration.createAssignment(questionTask.id, {});
   const [questionAssignment] = claimAssignments.call(app.store.orchestration, 'test-worker', { validateMandate: () => true });
   const ownership = { owner: questionAssignment.owner, fence: questionAssignment.fence };
   const questionRun = app.store.orchestration.prepareRun(questionAssignment.id, { ...ownership, sessionId: 'question-session', directory });
   app.store.orchestration.updateRun(questionRun.id, { ...ownership, state: 'submitted' });
   const [attention] = app.store.orchestration.openAttention(questionAssignment.id, { ...ownership, sessionId: questionRun.sessionId, callId: 'ask', questions: [{ id: 'q', question: 'Which?', options: [{ label: 'Exact' }] }] });
-  const answerInput = { action: 'ticketAnswer', ticketId: questionTicket.id, attentionId: attention.id, instructionRevision: 1, requestId: 'answer', answer: { selected: ['Exact'] } };
+  const answerInput = { action: 'taskAnswer', taskId: questionTask.id, attentionId: attention.id, instructionRevision: 1, requestId: 'answer', answer: { selected: ['Exact'] } };
   let questionNotifications = [];
   for (let attempt = 0; attempt < 60; attempt++) {
-    questionNotifications = app.database.notifications().events.filter(event => event.taskId === questionTicket.id);
+    questionNotifications = app.database.notifications().events.filter(event => event.taskId === questionTask.id);
     if (questionNotifications.length) break;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   assert.equal(questionNotifications.length, 1);
-  assert.equal(questionNotifications[0].type, 'ticket.attention');
+  assert.equal(questionNotifications[0].type, 'task.attention');
   assert.equal(questionNotifications[0].text, 'Which?\nExact');
   const pendingHistory = await (await call({ action: 'history' })).json();
   assert.equal(pendingHistory.notifications.find(row => row.attentionId === attention.id).currentAttention.id, attention.id);
   assert.equal((await call(answerInput)).status, 200);
-  const invalidReview = await call({ action: 'ticketRetryReview', ticketId: questionTicket.id, expectedResultVersion: 1 });
+  const invalidReview = await call({ action: 'taskRetryReview', taskId: questionTask.id, expectedResultVersion: 1 });
   assert.equal(invalidReview.status, 400);
   assert.match(await invalidReview.text(), /未知总助手操作/);
   assert.equal((await (await call(answerInput)).json()).duplicate, true);
@@ -473,13 +511,13 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const chatQuestion = chatHistory.notifications.find(row => row.attentionId === attention.id);
   assert.equal(chatQuestion.attention.state, 'answered');
   assert.equal(chatQuestion.attention.instructionRevision, questionAssignment.instructionRevision);
-  assert.equal(chatQuestion.currentInstructionRevision, questionTicket.instructionRevision);
-  assert.equal(chatQuestion.currentResultVersion, questionTicket.resultVersion);
+  assert.equal(chatQuestion.currentInstructionRevision, questionTask.instructionRevision);
+  assert.equal(chatQuestion.currentResultVersion, questionTask.resultVersion);
   assert.equal(chatQuestion.currentAttention, null);
   assert.equal(chatQuestion.currentResult, null);
   assert.equal(chatQuestion.currentPauseReason, null);
   assert.ok(Array.isArray(await (await call({ action: 'requestState' })).json()));
-  app.store.orchestration.cancelTicket(questionTicket.id);
+  app.store.orchestration.cancelTask(questionTask.id);
   } catch (error) { streamFailure = error; } };
   await call({ action: 'send', text: 'Inspect project', requestId: 'current-authority-turn' });
   await agent.whenIdle();
@@ -488,7 +526,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   await assert.rejects(memoryTool.execute({ content: '无当前用户回合' }, { agent, callId: 'outside-turn' }), /当前原始用户消息/);
   await assert.rejects(memoryTool.execute({ content: '伪造来源' }, { agent: { id: 'child' }, callId: 'spoofed', authorized: true }), { code: 'WORKER_MEMORY_WRITE_DENIED' });
   duringStream = async () => { try {
-    const before = app.store.orchestration.listTickets().length;
+    const before = app.store.orchestration.listTasks().length;
     const exec = { agent, callId: 'direct-memory', signal: new AbortController().signal };
     const memory = await memoryTool.execute({ content: '偏好完整说明' }, exec);
     const duplicate = await memoryTool.execute({ content: '偏好完整说明' }, exec);
@@ -503,7 +541,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     await assert.rejects(memoryTool.execute({ id: memory.id, content: '过期修改', revision: memory.revision }, { ...exec, callId: 'stale-memory' }), { code: 'REVISION_CONFLICT' });
     assert.deepEqual(await memoryTool.execute({ id: memory.id, remove: true, revision: corrected.revision }, { ...exec, callId: 'forget-memory' }), { removed: true });
     assert.equal((await app.store.memory.search({ query: '简洁说明' })).length, 0);
-    assert.equal(app.store.orchestration.listTickets().length, before, 'memory CRUD creates no action Ticket or approval workflow');
+    assert.equal(app.store.orchestration.listTasks().length, before, 'memory CRUD creates no action Task or approval workflow');
   } catch (error) { streamFailure = error; } };
   await call({ action: 'send', text: '请记住偏好完整说明，再纠正并遗忘这条记忆。', requestId: 'direct-memory-turn' });
   await agent.whenIdle();
@@ -754,7 +792,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
       const chatIdentity = state => ({ mainSessionId: state.mainSessionId, threads: state.threads,
         sessionLineage: state.sessionLineage, requestIds: state.requests.map(row => row.requestId).sort() });
       const before = { sessions: (await ctx.sessionQuery.listSessions()).map(row => row.header.id).sort(),
-        chats: chatIdentity(await app.store.getState()), tickets: app.store.orchestration.listTickets().map(row => row.id).sort(),
+        chats: chatIdentity(await app.store.getState()), tasks: app.store.orchestration.listTasks().map(row => row.id).sort(),
         transcript: agent.session.snapshotEvents().length };
       const memoryRun = await reviewTicks[0]();
       assert.equal(memoryRun.completed, 1, JSON.stringify(memoryRun));
@@ -773,7 +811,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
       assert.match(alignment.content, new RegExp(original.data.id));
       assert.deepEqual((await ctx.sessionQuery.listSessions()).map(row => row.header.id).sort(), before.sessions, 'maintenance creates no official session');
       assert.deepEqual(chatIdentity(await app.store.getState()), before.chats, 'maintenance creates no chat, side chat or Router request');
-      assert.deepEqual(app.store.orchestration.listTickets().map(row => row.id).sort(), before.tickets, 'maintenance creates no Ticket');
+      assert.deepEqual(app.store.orchestration.listTasks().map(row => row.id).sort(), before.tasks, 'maintenance creates no Task');
       assert.equal(agent.session.snapshotEvents().length, before.transcript, 'background execution never takes a Router turn');
       assert.equal(maintenanceRequests.length, 2);
       assert.ok(maintenanceRequests.every(request => request.tools.length === 0));

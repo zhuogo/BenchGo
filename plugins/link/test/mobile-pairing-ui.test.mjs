@@ -4,10 +4,9 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { deviceName, rememberDeviceName } from '../client/pairing-state.mjs';
-import { defaultProjectId, recentSessions } from '../client/mobile-state.mjs';
 
 const require = createRequire(new URL('../../benchgo/package.json', import.meta.url));
-const source = await readFile(new URL('../client/mobile.jsx', import.meta.url), 'utf8');
+const source = await readFile(new URL('../client/pairing.jsx', import.meta.url), 'utf8');
 const code = require('esbuild').transformSync(source, { loader: 'jsx', format: 'cjs' }).code;
 const nodes = value => value && typeof value === 'object' ? [value, ...(value.children || []).flatMap(nodes)] : [];
 const textOf = value => typeof value === 'object' ? (value?.children || []).map(textOf).join('') : String(value ?? '');
@@ -19,7 +18,7 @@ function fixture({ initial = null, pairError = '', deferPair = false, native = t
   const slots = [], effects = [], calls = [], listeners = new Map(), timers = new Map();
   const emit = () => { for (const fn of listeners.get('link:bootstrap') || []) fn(); };
   const runtime = {
-    bootstrap: () => identity, isNative: () => native, contextUri: uri, requestId: () => 'request-id',
+    bootstrap: () => identity, isNative: () => native, contextUri: uri,
     isLocalIdentitySave: () => local > 0 ? (local--, true) : false,
     saveIdentity(value) { identity = value; local++; emit(); },
     clearIdentity() { identity = null; }, scan() {},
@@ -36,7 +35,7 @@ function fixture({ initial = null, pairError = '', deferPair = false, native = t
         return { requestId: 'pair-request', pollToken: 'private-poll', expiresAt: Date.now() + 60_000 };
       }
       if (action === 'pair/status') return { status, ...(status === 'approved' ? { token: 'approved-token', deviceId: 'device', ...(hostName ? { hostName } : {}) } : {}) };
-      if (action === 'state') return { projects: [], sessions: [], models: [] };
+      throw new Error('Unexpected retired workspace RPC: ' + action);
     },
   };
   const react = {
@@ -52,8 +51,8 @@ function fixture({ initial = null, pairError = '', deferPair = false, native = t
     history: { replaceState() {} },
   };
   const module = { exports: {} };
-  runInNewContext(code, { module, exports: module.exports, window, location: { origin: 'https://desk.example.com', hash, pathname: '/link/', search: '' }, navigator: { onLine: true }, document: { getElementById: () => ({}) }, AbortController, URL, URLSearchParams, queueMicrotask, setTimeout(fn) { const id = timers.size + 1; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), require: id => id === 'react' ? react : id.includes('pairing-state') ? { deviceName, rememberDeviceName } : id.includes('mobile-state') ? { defaultProjectId, recentSessions } : id.includes('app.jsx') ? { Button: 'Button', ErrorText: 'ErrorText', StatusDot: 'StatusDot', useLinkStyle() {} } : {} });
-  const render = () => { dirty = false; cursor = 0; tree = module.exports.LinkMobileApp({ runtime }); for (const effect of effects.splice(0)) effect(); return tree; };
+  runInNewContext(code, { module, exports: module.exports, window, location: { origin: 'https://desk.example.com', hash, pathname: '/link/', search: '' }, navigator: { onLine: true }, document: { getElementById: () => ({}) }, AbortController, URL, URLSearchParams, queueMicrotask, setTimeout(fn) { const id = timers.size + 1; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), require: id => id === 'react' ? react : id.includes('pairing-state') ? { deviceName, rememberDeviceName } : id.includes('app.jsx') ? { Button: 'Button', ErrorText: 'ErrorText', StatusDot: 'StatusDot', useLinkStyle() {} } : {} });
+  const render = () => { dirty = false; cursor = 0; tree = module.exports.LinkPairingApp({ runtime }); for (const effect of effects.splice(0)) effect(); return tree; };
   const settle = async () => { for (let i = 0; i < 12; i++) { if (dirty || !tree) render(); await new Promise(resolve => setImmediate(resolve)); } return tree; };
   return { runtime, calls, render, settle, get tree() { return tree; }, get identity() { return identity; }, scan(value = scanIdentity()) { identity = value; emit(); }, status(value) { status = value; }, recover() { pairFailure = ''; }, resolvePair() { deferred?.(); }, async tick() { const ready = [...timers.values()]; timers.clear(); for (const fn of ready) await fn(); return settle(); } };
 }
@@ -89,7 +88,8 @@ test('initial scan automatically requests approval once and displays recognized 
   view.status('approved'); await view.tick();
   assert.equal(view.identity.token, 'approved-token');
   assert.equal(view.identity.code, 'SCAN.CODE');
-  assert.equal(nodes(view.tree).some(node => node.props.id === 'pair-code'), false);
+  assert.equal(view.tree, null);
+  assert.equal(view.calls.some(call => !['pair', 'pair/status'].includes(call.action)), false);
 });
 
 test('scan events connect using the chosen name; a new scan ignores stale pending responses', async () => {
@@ -145,4 +145,14 @@ test('rejected requests cannot reuse single-use codes and a new scan recovers', 
   assert.equal(nodes(view.tree).find(node => node.type === 'Button' && textOf(node) === '使用地址连接').props.disabled, true);
   view.scan(scanIdentity('NEW.CODE')); view.status('pending'); await view.settle();
   assert.equal(view.calls.filter(call => call.action === 'pair').length, 2);
+});
+
+test('expired requests preserve the single-use boundary until a new code is supplied', async () => {
+  const view = fixture({ initial: scanIdentity() }); await view.settle();
+  view.status('expired'); await view.tick();
+  assert(textOf(view.tree).includes('配对码已过期'));
+  assert.equal(nodes(view.tree).find(node => node.type === 'Button' && textOf(node) === '使用地址连接').props.disabled, true);
+  const polls = view.calls.filter(call => call.action === 'pair/status').length;
+  await view.tick();
+  assert.equal(view.calls.filter(call => call.action === 'pair/status').length, polls);
 });

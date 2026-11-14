@@ -14,10 +14,10 @@ function State({ kind, title, detail, children }) {
   </div>;
 }
 
-export function InteractiveReply({ text = '', streaming = false, labels = defaultLabels, onSubmit, disabled = false, onlyCards = false }) {
+export function InteractiveReply({ text = '', streaming = false, labels = defaultLabels, onSubmit, disabled = false, onlyCards = false, renderMarkdown }) {
   const segments = useMemo(() => splitInteractive(text, streaming), [text, streaming]);
   return <><style>{css}</style>{segments.map((segment, index) => segment.kind === 'markdown'
-    ? !onlyCards && <MarkdownText key={`md-${index}`} text={segment.text} labels={labels} streaming={streaming} />
+    ? !onlyCards && (renderMarkdown ? <React.Fragment key={`md-${index}`}>{renderMarkdown({ text: segment.text, labels, streaming })}</React.Fragment> : <MarkdownText key={`md-${index}`} text={segment.text} labels={labels} streaming={streaming} />)
     : <InteractiveCard key={segment.key} segment={segment} onSubmit={onSubmit} disabled={disabled || streaming} />)}</>;
 }
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
@@ -30,6 +30,7 @@ async function fixture(t) {
     for (const base of [source, target, wrapper]) await put(join(base, `locale/${language}.json`), JSON.stringify({ meta: { title: base === source ? 'BenchGo' : language === 'en' ? 'Base' : '基础层' } }));
   }
   for (const file of ['lib/server/seed.zip', 'lib/modules/superagent/src/service.mjs', 'lib/link.mjs', 'src/plugin.mjs', 'cordis.patch.yml']) await put(join(target, file), 'preserve:'+file);
+  await put(join(source, 'lib/link.mjs'), 'new:lib/link.mjs');
   return { root, profile, source, target, directory, wrapper, state, manifest, save, put };
 }
 
@@ -64,7 +65,7 @@ test('reload sync publishes runtime modules and shared imports while preserving 
   const f = await fixture(t);
   const patch = join(f.profile, 'cordis.patch.yml'), settings = '# user settings\n[]\n';
   await f.put(patch, settings);
-  const runtime = ['lib/modules/superagent/src/service.mjs', 'lib/modules/superagent/src/legacy-execution-release.mjs', 'shared/public-chat-record.mjs', 'src/plugin.mjs'];
+  const runtime = ['lib/modules/superagent/src/service.mjs', 'lib/modules/superagent/src/legacy-execution-release.mjs', 'shared/public-chat-record.mjs', 'src/plugin.mjs', 'lib/link.mjs'];
   for (const file of runtime) await f.put(join(f.source, file), 'new:' + file);
   const before = await readFile(join(f.profile, 'package.json'), 'utf8');
   const result = await syncDesktopArtifacts(f);
@@ -72,9 +73,80 @@ test('reload sync publishes runtime modules and shared imports while preserving 
   assert.equal(result.reloadRequested, true);
   assert.equal(await readFile(patch, 'utf8'), settings + '\n');
   for (const file of runtime) assert.equal(await readFile(join(f.target, file), 'utf8'), 'new:' + file);
-  for (const file of ['lib/server/seed.zip', 'lib/link.mjs', 'cordis.patch.yml']) assert.equal(await readFile(join(f.target, file), 'utf8'), 'preserve:' + file);
+  for (const file of ['lib/server/seed.zip', 'cordis.patch.yml']) assert.equal(await readFile(join(f.target, file), 'utf8'), 'preserve:' + file);
   assert.equal(await readFile(join(f.profile, 'package.json'), 'utf8'), before);
   assert.equal(JSON.parse(await readFile(join(f.target, 'package.json'), 'utf8')).version, '0.1.1');
+});
+
+test('runtime sync validates the Link server artifact before publishing any files', async t => {
+  const f = await fixture(t);
+  for (const file of ['lib/modules/superagent/src/service.mjs', 'shared/value.mjs', 'src/plugin.mjs']) await f.put(join(f.source, file), 'new:' + file);
+  await rm(join(f.source, 'lib/link.mjs'));
+  let writes = 0;
+  await assert.rejects(syncDesktopArtifacts({ ...f, write: async () => { writes++; } }), /产物缺失/u);
+  assert.equal(writes, 0);
+  assert.equal(await readFile(join(f.target, 'lib/link.mjs'), 'utf8'), 'preserve:lib/link.mjs');
+});
+
+test('runtime sync removes obsolete owned code and empty directories while keeping browser resources and other files', async t => {
+  const f = await fixture(t);
+  for (const file of ['lib/modules/superagent/src/service.mjs', 'shared/value.mjs', 'src/plugin.mjs']) await f.put(join(f.source, file), 'new:' + file);
+  const obsolete = ['lib/modules/superagent/src/retired.mjs', 'lib/modules/removed-package/nested/retired.mjs', 'shared/retired.mjs', 'src/retired.mjs'];
+  const preserved = ['lib/preview/old-chunk.js', 'lib/link-web/old-chunk.js', 'assets/fonts/old.woff2', 'state/user.db'];
+  for (const file of [...obsolete, ...preserved]) await f.put(join(f.target, file), 'retained:' + file);
+  const result = await syncDesktopArtifacts(f);
+  assert.equal(result.removed, obsolete.length + 2);
+  for (const file of [...obsolete, 'lib/modules/removed-package']) await assert.rejects(lstat(join(f.target, file)), { code: 'ENOENT' });
+  for (const file of preserved) assert.equal(await readFile(join(f.target, file), 'utf8'), 'retained:' + file);
+  assert.equal(await readFile(join(f.target, 'lib/server/seed.zip'), 'utf8'), 'preserve:lib/server/seed.zip');
+  assert.equal(await readFile(join(f.target, 'src/plugin.mjs'), 'utf8'), 'new:src/plugin.mjs');
+});
+
+test('browser-only sync does not inspect or clean obsolete runtime trees', async t => {
+  const f = await fixture(t);
+  await f.put(join(f.target, 'shared/retired.mjs'), 'keep-runtime');
+  await f.put(join(f.root, 'external/keep.mjs'), 'external');
+  await symlink(join(f.root, 'external'), join(f.target, 'lib/modules/retired-link'), process.platform === 'win32' ? 'junction' : 'dir');
+  const result = await syncDesktopBrowserArtifacts(f);
+  assert.equal(result.removed, 0);
+  assert.equal(await readFile(join(f.target, 'shared/retired.mjs'), 'utf8'), 'keep-runtime');
+  assert.equal((await lstat(join(f.target, 'lib/modules/retired-link'))).isSymbolicLink(), true);
+  assert.equal(await readFile(join(f.root, 'external/keep.mjs'), 'utf8'), 'external');
+});
+
+for (const mode of ['outside', 'stale-link', 'source-link']) test(`runtime cleanup rejects ${mode} before publishing or removing files`, async t => {
+  const f = await fixture(t);
+  for (const file of ['lib/modules/superagent/src/service.mjs', 'shared/value.mjs', 'src/plugin.mjs']) await f.put(join(f.source, file), 'new:' + file);
+  const stale = join(f.target, 'lib/modules/superagent/src/retired.mjs');
+  await f.put(stale, 'retired-code');
+  const external = join(f.root, 'external');
+  await f.put(join(external, 'keep.mjs'), 'external-code');
+  if (mode === 'outside') { f.state.directory = external; await f.save(); }
+  else {
+    const link = mode === 'stale-link' ? join(f.target, 'lib/modules/retired-link') : join(f.source, 'shared/linked');
+    await symlink(external, link, process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  let writes = 0;
+  await assert.rejects(syncDesktopArtifacts({ ...f, write: async () => { writes++; } }));
+  assert.equal(writes, 0);
+  assert.equal(await readFile(stale, 'utf8'), 'retired-code');
+  assert.equal(await readFile(join(external, 'keep.mjs'), 'utf8'), 'external-code');
+});
+
+test('runtime cleanup rechecks ancestors if a directory is replaced by a link during publication', async t => {
+  const f = await fixture(t);
+  for (const file of ['lib/modules/superagent/src/service.mjs', 'shared/value.mjs', 'src/plugin.mjs']) await f.put(join(f.source, file), 'new:' + file);
+  const staleDirectory = join(f.target, 'shared/retired'), external = join(f.root, 'external');
+  await f.put(join(staleDirectory, 'keep.mjs'), 'retired-code');
+  await f.put(join(external, 'keep.mjs'), 'external-code');
+  await assert.rejects(syncDesktopArtifacts({ ...f, write: async (path, bytes) => {
+    await f.put(path, bytes);
+    if (path === join(f.target, 'lib/client.js')) {
+      await rm(staleDirectory, { recursive: true });
+      await symlink(external, staleDirectory, process.platform === 'win32' ? 'junction' : 'dir');
+    }
+  } }), /符号链接/u);
+  assert.equal(await readFile(join(external, 'keep.mjs'), 'utf8'), 'external-code');
 });
 
 test('runtime sync rejects linked runtime trees before publishing any files', async t => {

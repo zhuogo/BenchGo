@@ -23,8 +23,8 @@ export function probeRemote(target, { timeout = 2500, signal } = {}) {
   });
 }
 /** Verify pinned self-signed peers before sending HTTP bytes or credentials. */
-export function remoteAgent(target) {
-  const agent = new Agent({ keepAlive: true, maxSockets: 64 });
+export function remoteAgent(target, { maxSockets = 64, maxFreeSockets = 2 } = {}) {
+  const agent = new Agent({ keepAlive: true, maxSockets, maxFreeSockets });
   if (target.pin) agent.createConnection = (options, callback) => {
     const socket = connect({ ...options, rejectUnauthorized: false, servername: undefined });
     const error = value => { socket.destroy(); callback(value); };
@@ -46,9 +46,9 @@ export function remoteJson(target, path, input, { agent, token = target.token, s
       let body = '', bytes = 0;
       res.on('data', chunk => { bytes += chunk.length; if (bytes > 1024 * 1024) req.destroy(new Error('主机响应过大')); else body += chunk; });
       res.on('error', reject);
-      res.on('end', () => { try { const value = JSON.parse(body); if (res.statusCode >= 400) throw Object.assign(new Error(value.error || '主机返回 HTTP ' + res.statusCode), { statusCode: res.statusCode }); resolve({ value, headers: res.headers }); } catch (reason) { reject(reason); } });
+      res.on('end', () => { try { const value = JSON.parse(body); if (res.statusCode >= 400) throw Object.assign(new Error(value.error || '主机返回 HTTP ' + res.statusCode), { statusCode: res.statusCode, status: res.statusCode, code: value.code }); resolve({ value, headers: res.headers }); } catch (reason) { reject(reason); } });
     });
-    req.on('error', reject); req.on('timeout', () => req.destroy(new Error('连接超时，请检查主机是否在线')));
+    req.on('error', reject); req.on('timeout', () => req.destroy(Object.assign(new Error('连接超时，请检查主机是否在线'), { code: 'ETIMEDOUT' })));
     req.end(JSON.stringify(input));
   }).finally(() => { if (own) agent.destroy(); });
 }

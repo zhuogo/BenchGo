@@ -366,3 +366,28 @@ test('relay pairing is automatic and falls back to LAN when the relay disconnect
   await view.find(view.render(), '生成连接信息').props.onClick();
   assert.equal(view.calls.at(-1).input.mode, 'lan');
 });
+
+test('pairing grants are opt-in and checked choices are sent explicitly', async()=>{
+ const view=fixture({origin:'http://localhost:3000'});view.render();const stop=view.effects[1]();await new Promise(setImmediate);
+ await view.find(view.render(),'生成连接信息').props.onClick();assert.deepEqual(JSON.parse(JSON.stringify(view.calls.at(-1))),{action:'pairing',input:{mode:'lan'}});
+ const pair=nodes(view.render()).find(node=>node.type===view.exports.PairingDialog);pair.props.onClose();
+ let tree=view.render();const grant=label=>nodes(tree).find(node=>node.type==='label'&&textOf(node)===label).children.find(node=>node.type==='input');
+ grant('允许委派和跟进本机任务').props.onChange({target:{checked:true}});tree=view.render();grant('允许查询连接及申请修改中继').props.onChange({target:{checked:true}});
+ await view.find(view.render(),'生成连接信息').props.onClick();assert.deepEqual(JSON.parse(JSON.stringify(view.calls.at(-1).input)),{mode:'lan',collaboration:true,management:true});stop();
+});
+test('failed single-field grant keeps authoritative capabilities and other fields unchanged',async()=>{
+ let fail=true;const view=fixture({respond:async(action,input,status)=>{if(action==='grant-device'){if(fail)throw Error('授权保存失败');status.devices[0].capabilities=['management','collaboration'];}return {...status};}});
+ view.status.devices=[{id:'legacy',name:'旧设备',capabilities:['management']}];view.render();const stop=view.effects[1]();await new Promise(setImmediate);
+ const box=label=>nodes(view.render()).find(node=>node.type==='input'&&node.props['aria-label']===label);
+ await box('旧设备：任务协作').props.onChange({target:{checked:true}});assert.equal(box('旧设备：任务协作').props.checked,false);assert.equal(box('旧设备：连接与中继管理').props.checked,true);assert.match(textOf(view.render()),/授权保存失败/);assert.deepEqual(JSON.parse(JSON.stringify(view.calls.at(-1))),{action:'grant-device',input:{id:'legacy',collaboration:true}});
+ fail=false;await box('旧设备：任务协作').props.onChange({target:{checked:true}});assert.equal(box('旧设备：任务协作').props.checked,true);assert.equal(box('旧设备：连接与中继管理').props.checked,true);stop();
+});
+test('specific relay approval refreshes status after operation receipt without replacing device catalog',async()=>{
+ const view=fixture({respond:async(action,input,status)=>{if(action==='management-decide'){status.pendingManagement=[];return {id:input.operationId,state:'applied'};}return {...status};}});
+ view.status.devices=[{id:'phone',name:'保留设备',capabilities:['management']}];view.status.relay={nodes:[{id:'relay',url:'https://relay.example.com'}]};view.status.pendingManagement=[{id:'operation',deviceName:'远端电脑',ops:[{path:['nodes',0,'priority'],value:7},{path:['nodes',0,'enabled'],value:false}]}];view.render();const stop=view.effects[1]();await new Promise(setImmediate);
+ const tree=view.render();assert.match(textOf(tree),/https:\/\/relay.example.com：优先级改为 7/);assert.match(textOf(tree),/https:\/\/relay.example.com：停用/);
+ await view.find(tree,'应用这次修改').props.onClick();assert.deepEqual(JSON.parse(JSON.stringify(view.calls.slice(-2))),[{action:'management-decide',input:{operationId:'operation',allow:true}},{action:'status',input:{}}]);assert.match(textOf(view.render()),/保留设备/);assert.match(textOf(view.render()),/修改已保存并应用/);assert.doesNotMatch(textOf(view.render()),/远端电脑 请求修改/);stop();
+});
+for(const [state,message] of [['failed','修改未完成：中继不可用'],['expired','请求已过期']])test('management '+state+' result stays explicit while device catalog survives',async()=>{
+ const view=fixture({respond:async(action,input,status)=>action==='management-decide'?{id:input.operationId,state,error:{message:'中继不可用'}}:{...status}});view.status.devices=[{id:'desk',name:'已有设备'}];view.status.pendingManagement=[{id:'operation',ops:[]}];view.render();const stop=view.effects[1]();await new Promise(setImmediate);await view.find(view.render(),'应用这次修改').props.onClick();assert(textOf(view.render()).includes(message));assert.match(textOf(view.render()),/已有设备/);stop();
+});

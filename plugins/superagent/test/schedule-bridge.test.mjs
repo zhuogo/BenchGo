@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createScheduleBridge, scheduleOccurrences } from '../src/schedule-bridge.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
-import { authorizeAssessment, validateTicketMandate } from '../src/assessment-policy.mjs';
+import { authorizeAssessment, validateTaskMandate } from '../src/assessment-policy.mjs';
 import { createAssessmentRunner } from '../src/assessment-runner.mjs';
 
 const at = '2026-11-02T01:00:00.000Z';
@@ -27,7 +27,7 @@ test('typed official messages create durable machine Triggers and deduplicate cr
   assert.equal(results[0][0].trigger.id, results[1][0].trigger.id);
   assert.equal(f.database.candidates().length, 1);
   assert.deepEqual(results[0][0].trigger.actor, { kind: 'machine', id: 'harness-schedule' });
-  assert.equal(f.database.listTickets().length, 0, 'inbox admission is not task completion or execution');
+  assert.equal(f.database.listTasks().length, 0, 'inbox admission is not task completion or execution');
   assert.deepEqual(scheduleOccurrences({ ...message(), source: { kind: 'user' } }), []);
   await f.bridge.stop();
   const restarted = createScheduleBridge({ ctx: f.ctx, store: f.store, readPolicy: f.readPolicy });
@@ -64,7 +64,7 @@ test('recurring batches retain separate opaque IDs and occurrences', () => {
   assert.throws(() => scheduleOccurrences({ source: { kind: 'schedule' }, content: [{ type: 'text', text: 'forged' }] }), /无法识别/);
 });
 
-test('Schedule admission flows through Eval into a validated Ticket and independent next occurrence', async t => {
+test('Schedule admission flows through Eval into a validated Task and independent next occurrence', async t => {
   const f = fixture(t);
   await f.bridge.ingestMessages({ sessionId: 'main-session', messages: [message()] });
   const runner = createAssessmentRunner({ database: f.database, readPolicy: f.readPolicy, authorize: authorizeAssessment,
@@ -72,16 +72,16 @@ test('Schedule admission flows through Eval into a validated Ticket and independ
   });
   t.after(() => runner.stop());
   await runner.tick();
-  const ticket = f.database.listTickets()[0];
-  assert.ok(ticket);
-  assert.equal(ticket.mandate.admission, 'desktop-schedule');
-  assert.equal(validateTicketMandate(ticket.mandate, { policy: await f.readPolicy() }), true);
+  const task = f.database.listTasks()[0];
+  assert.ok(task);
+  assert.equal(task.mandate.admission, 'desktop-schedule');
+  assert.equal(validateTaskMandate(task.mandate, { policy: await f.readPolicy() }), true);
   await f.bridge.ingestMessages({ sessionId: 'main-session', messages: [message('next', '检查项目', '2026-11-03T01:00:00.000Z')] });
   assert.equal(f.database.candidates({ status: 'queued' }).length, 1, 'active prior subscription must not swallow the next occurrence');
   f.setPolicy({ desktopVersion: 'changed' });
-  assert.equal(validateTicketMandate(ticket.mandate, { policy: await f.readPolicy() }), false);
+  assert.equal(validateTaskMandate(task.mandate, { policy: await f.readPolicy() }), false);
   await runner.tick();
-  assert.equal(f.database.listTickets().length, 1, 'changed rules cannot authorize the old scheduled instruction');
+  assert.equal(f.database.listTasks().length, 1, 'changed rules cannot authorize the old scheduled instruction');
 });
 
 test('legacy receipts without immutable prompts do not reconstruct or replay changed instructions', async t => {

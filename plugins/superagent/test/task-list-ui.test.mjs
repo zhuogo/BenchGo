@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
-import * as ticketTitle from '../src/ticket-title.mjs';
-import * as ticketState from '../client/ticket-state.mjs';
+import * as taskTitle from '../src/task-title.mjs';
+import * as taskState from '../client/task-state.mjs';
 import * as activityData from '../client/activity-data.mjs';
 const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
 const code = transformSync(readFileSync(new URL('../client/task-list.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
@@ -12,8 +12,8 @@ const walk = node => node && typeof node === 'object' && node.props ? [node, ...
 function harness(fail = false) {
   let cursor = 0, changed = 0, opened = 0; const state = [], calls = [], archived = [], restored = [], module = { exports: {} };
   const react = { useEffect() {}, createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }), useState: initial => { const i = cursor++; if (!(i in state)) state[i] = initial; return [state[i], value => state[i] = value]; } };
-  runInNewContext(code, { module, exports: module.exports, window: { confirm: () => true }, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => true, null] } : id === 'react' ? react : id.endsWith('ticket-title.mjs') ? ticketTitle : id.endsWith('ticket-state.mjs') ? ticketState : id.endsWith('activity-data.mjs') ? activityData : id.endsWith('.css') ? '' : {} });
-  const props = { kind: 'ticket', row: { id: 't1', status: 'waiting', executionControl: { stopped: true }, taskMeta: { version: 4 } }, title: 'Task', summary: 'Summary', onChanged: () => changed++, onOpen: () => opened++, onArchive: row => archived.push(row), onRestore: row => restored.push(row), api: async (...args) => { calls.push(args); if (fail) throw new Error('版本冲突'); } };
+  runInNewContext(code, { module, exports: module.exports, window: { confirm: () => true }, require: id => id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => true, null] } : id === 'react' ? react : id.endsWith('task-title.mjs') ? taskTitle : id.endsWith('task-state.mjs') ? taskState : id.endsWith('activity-data.mjs') ? activityData : id.endsWith('.css') ? '' : {} });
+  const props = { kind: 'task', row: { id: 't1', status: 'waiting', executionControl: { stopped: true }, taskMeta: { version: 4 } }, title: 'Task', summary: 'Summary', onChanged: () => changed++, onOpen: () => opened++, onArchive: row => archived.push(row), onRestore: row => restored.push(row), api: async (...args) => { calls.push(args); if (fail) throw new Error('版本冲突'); } };
   return { calls, archived, restored, get changed() { return changed; }, get opened() { return opened; }, render(extra = {}) { cursor = 0; return walk(module.exports.TaskListRow({ ...props, ...extra })); } };
 }
 test('goal completion retains version and refreshes only after success without hiding details', async () => {
@@ -34,7 +34,7 @@ test('goal deletion retains its versioned update contract', async () => {
   assert.deepEqual(h.archived, []);
   assert.deepEqual(h.restored, []);
 });
-test('terminal tickets open archive review with the exact row instead of deleting it', async () => {
+test('terminal tasks open archive review with the exact row instead of deleting it', async () => {
   for (const state of [{ status: 'completed' }, { status: 'waiting', executionControl: { stopped: true } }]) {
     const h = harness(), row = { id: 't1', ...state, instructionRevision: 2, taskMeta: { version: 4 }, taskCanOrganize: true };
     const nodes = h.render({ row }), archive = nodes.find(n => n.props.icon === 'archive');
@@ -76,7 +76,7 @@ test('rename submits display title and conflicts preserve draft', async () => {
   assert(h.render().some(n => n.props.role === 'alert' && n.children.includes('版本冲突')));
 });
 
-test('ticket rename limits Unicode characters while goal names keep their existing contract', async () => {
+test('task rename limits Unicode characters while goal names keep their existing contract', async () => {
   const h = harness();
   h.render().find(node => node.props.label === '重命名').props.onClick();
   h.render().find(node => node.props['aria-label'] === '任务名称').props.onChange({ target: { value: '📰一二三四五六七八九十十一' } });
@@ -89,7 +89,7 @@ test('ticket rename limits Unicode characters while goal names keep their existi
   await goal.render({ kind: 'goal' }).find(node => node.props.label === '保存名称').props.onClick();
   assert.equal(goal.calls[0][1].title, '这是一个超过十个字符的持续目标名称');
 });
-test('completed tickets show a read-only status icon and preserve details without strike-through', () => {
+test('completed tasks show a read-only status icon and preserve details without strike-through', () => {
   const nodes = harness().render({ row: { id: 't1', status: 'completed' } });
   assert.equal(nodes.some(n => n.props.type === 'checkbox'), false);
   assert(nodes.some(n => n.props.role === 'img' && n.props['aria-label'] === '完成'));

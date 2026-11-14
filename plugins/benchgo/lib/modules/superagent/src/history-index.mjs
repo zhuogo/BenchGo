@@ -1,13 +1,17 @@
 // Session events are append-only. Keep small pagination metadata beside the
 // engine's existing bounded transcript cache instead of rescanning tool traces.
-export function updateHistoryIndex(events, index = { watermark: 0, imageCalls: new Set(), images: [] }) {
+export function updateHistoryIndex(events, index = { watermark: 0, imageCalls: new Map(), images: [] }) {
   for (let i = index.watermark; i < events.length; i++) {
     const event = events[i];
     if (event.type === 'request/header') index.header = event.data.header.config;
-    else if (event.type === 'turn/end') index.lastEnd = event.data.reason;
+    else if (event.type === 'turn/start') index.imageGroupId = `turn:${event.seq}`;
+    else if (event.type === 'turn/end') { index.lastEnd = event.data.reason; index.imageGroupId = null; }
     else if (event.type === 'assistant/message') {
+      // Capture the call's turn, not the result's arrival time. Results can land
+      // after a boundary; old/incomplete transcripts fall back to one message.
+      const groupId = index.imageGroupId ?? `message:${event.data.message.id ?? event.seq}`;
       for (const block of event.data.message.content) {
-        if (block.type === 'tool-call' && block.name === 'assistant_generate_image') index.imageCalls.add(block.id);
+        if (block.type === 'tool-call' && block.name === 'assistant_generate_image') index.imageCalls.set(block.id, groupId);
       }
     } else if (event.type === 'tool/result') {
       const message = event.data.message;
@@ -15,7 +19,7 @@ export function updateHistoryIndex(events, index = { watermark: 0, imageCalls: n
       try {
         const value = JSON.parse(message.content.filter(block => block.type === 'text').map(block => block.text).join(''));
         if (!/^[a-zA-Z0-9_-]+\.(png|jpe?g|webp)$/.test(value.filename)) continue;
-        index.images.push({ seq: event.seq, image: { id: message.id, name: value.filename,
+        index.images.push({ seq: event.seq, image: { id: message.id, groupId: index.imageCalls.get(message.toolCallId), name: value.filename,
           url: `api/commander/assistant/artifact?file=${encodeURIComponent(value.filename)}` } });
       } catch { /* Invalid or incomplete tool results are not image attachments. */ }
     }

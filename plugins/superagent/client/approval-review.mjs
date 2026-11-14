@@ -1,6 +1,6 @@
 export function sameReviewOrigin(a, b) {
   if (a?.kind !== b?.kind) return false;
-  if (a?.kind === 'worker') return ['ticketId', 'assignmentId', 'runId', 'sessionId', 'ownerSessionId', 'ownerThreadId'].every(key => a[key] && a[key] === b[key]);
+  if (a?.kind === 'worker') return ['taskId', 'assignmentId', 'runId', 'sessionId', 'ownerSessionId', 'ownerThreadId'].every(key => a[key] && a[key] === b[key]);
   return a?.kind === 'router' && ['sessionId', 'ownerSessionId', 'ownerThreadId'].every(key => a[key] && a[key] === b[key]);
 }
 
@@ -76,7 +76,7 @@ export function reviewReminderMatches(row, entry) {
   if (!binding.approvalId || binding.eventKey !== `approval:${binding.sessionId}:${binding.approvalId}`) return false;
   if (!pending.callId || binding.callId !== pending.callId || binding.sessionId !== pending.sessionId
     || binding.sessionId !== origin.sessionId || binding.ownerThreadId !== origin.ownerThreadId) return false;
-  if (origin.kind === 'worker' && !['ticketId', 'assignmentId', 'runId'].every(key => origin[key] && binding[key] === origin[key])) return false;
+  if (origin.kind === 'worker' && !['taskId', 'assignmentId', 'runId'].every(key => origin[key] && binding[key] === origin[key])) return false;
   if (pending.toolName !== 'assistant_external_action') return false;
   try {
     const reason = pending.reason;

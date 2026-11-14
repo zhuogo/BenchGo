@@ -47,7 +47,6 @@ try {
       await mkdir(runtime, { recursive: true, mode: 0o700 });
       await atomic(join(runtime, 'package.json'), JSON.stringify({ private: true, dependencies: {
         '@deepseek-ai/dsh': manifest.harnessVersion,
-        '@deepseek-ai/cordis': '4.0.5-alpha.2',
         '@deepseek-ai/dsh-atomic-write': manifest.harnessVersion,
         '@deepseek-ai/dsh-llm': manifest.harnessVersion
       } }));
@@ -60,7 +59,8 @@ try {
       const profile = join(base, 'home/profiles/web');
       if (!(await present(join(profile, 'package.json')))) {
         const boot = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js')).href);
-        boot.initProfile(profile, boot.PROFILE_TEMPLATES.web.bundles);
+        const { PROFILE_TEMPLATES } = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-official-bundles/lib/index.js')).href);
+        boot.initProfile(profile, PROFILE_TEMPLATES.web.bundles);
       }
       const release = await helper.prepareRelease({ directory: incoming, root: join(profile, '.benchgo/releases'), version: manifest.pluginVersion, runtime });
       const webPort = installed?.webPort ?? await freePort(), port = installed?.port ?? await freePort();

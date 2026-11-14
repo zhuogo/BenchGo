@@ -35,13 +35,13 @@ test('official Worker requests carry context once in the applied task package, i
   const source = { channel: 'desktop', sessionId: 'owner', messageId: 'original' };
   const mandate = { actorId: 'desktop-owner', source, instruction: 'Original explicit user requirements', policyVersion: 'current', admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval' };
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'Original target', acceptance: 'Original checks', mandate });
-  database.createAssignment(ticket.id, { text: 'Assigned leaf scope' });
+  const task = database.createTask({ threadId: 'thread', target: 'Original target', acceptance: 'Original checks', mandate });
+  database.createAssignment(task.id, { text: 'Assigned leaf scope' });
   const revise = (revision, text) => {
     const revisedSource = { ...source, messageId: `revision-${revision}` };
     const { trigger } = database.ingest({ dedupeKey: `revision-${revision}`, thread: { id: 'thread', source: { type: 'desktop', id: 'owner' } }, source: revisedSource,
       actor: { kind: 'human', id: 'desktop-owner' }, content: text, mode: 'direct' });
-    return database.changeTicket(ticket.id, { operation: 'revise', expectedInstructionRevision: revision - 1, target: `Target ${revision}`, acceptance: `Checks ${revision}`,
+    return database.changeTask(task.id, { operation: 'revise', expectedInstructionRevision: revision - 1, target: `Target ${revision}`, acceptance: `Checks ${revision}`,
       reason: 'User updated requirements', requestKey: `revision-${revision}`, mandate: { ...mandate, source: revisedSource, instruction: text },
       triggerId: trigger.id, model: { providerId: 'context-test', modelId: 'opaque-worker' }, validateMandate: () => true });
   };
@@ -69,17 +69,20 @@ test('official Worker requests carry context once in the applied task package, i
   await store.updateConfig({ models, workerModels: models });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: models[0], workerModels: models }), authorizeAction: async () => ({ allowed: true }) });
-  const result = await executor(assignment, { ticket: database.getTicket(ticket.id), signal: AbortSignal.timeout(15000), renew: async () => {} });
+  const result = await executor(assignment, { task: database.getTask(task.id), signal: AbortSignal.timeout(15000), renew: async () => {} });
   assert.equal(result.summary, 'Completed revised task');
   assert.equal(result.completion.kind, 'completed');
   assert.equal(requests.length, 2);
   for (const [index, request] of requests.entries()) {
+    assert.match(JSON.stringify(request), /benchgo-worker-progress|Keep the task timeline understandable/);
     const runtime = request.messages.findLast(message => message.source?.kind === 'runtime-context');
     assert.ok(runtime, 'the real request contains an official runtime context snapshot');
     const sections = runtime.source.sections;
     assert.ok(!sections.some(section => section.name === 'benchgo-worker-context'));
     const packages = sections.filter(section => section.name === 'benchgo-assignment');
     assert.equal(packages.length, 1);
+    assert.match(packages[0].text, /For image results, include actual browser-accessible image URLs and their source links in the final message/);
+    assert.match(packages[0].text, /never invent URLs, and state when inline preview is unavailable/);
     const snapshot = JSON.parse(packages[0].text.split('\nTask package:\n')[1]);
     assert.equal(snapshot.instructionRevision, index + 2);
     assert.equal(snapshot.target, `Target ${index + 2}`);
@@ -90,6 +93,6 @@ test('official Worker requests carry context once in the applied task package, i
     assert.deepEqual(snapshot.context.map(input => input.text), index ? ['FIRST_CONTEXT_INPUT', 'LIVE_CONTEXT_INPUT'] : ['FIRST_CONTEXT_INPUT']);
     assert.equal(snapshot.context[0].source.messageId, 'revision-2');
     assert.equal(snapshot.assignmentId, assignment.id);
-    assert.equal(snapshot.ticketId, ticket.id);
+    assert.equal(snapshot.taskId, task.id);
   }
 });

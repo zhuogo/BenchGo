@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { ticketPaused, ticketStates as businessTicketStates } from './ticket-lifecycle.mjs';
+import { taskPaused, taskStates as businessTaskStates } from './task-lifecycle.mjs';
 import { inspectMaintenanceHealth, MAINTENANCE_WATCHDOG_REASONS } from './maintenance-health.mjs';
 
 const summaries = Object.freeze({
@@ -15,7 +15,7 @@ const summaries = Object.freeze({
 const hostReasons = new Set(['FACTS_STALE', 'SCHEDULER_STALLED', ...MAINTENANCE_WATCHDOG_REASONS]);
 const executionReasons = Object.keys(summaries).filter(code => !hostReasons.has(code));
 const terminal = new Set(['completed', 'failed', 'closed', 'cancelled']);
-const ticketStates = new Set(businessTicketStates);
+const taskStates = new Set(businessTaskStates);
 const assignmentStates = new Set(['queued', 'claimed', 'waiting', 'paused', 'uncertain', ...terminal]);
 const runStates = new Set(['prepared', 'submitted', 'running', 'waiting', 'verifying', 'uncertain', ...terminal]);
 const MAX_EXECUTIONS = 1000;
@@ -26,15 +26,15 @@ const time = value => typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\
 const iso = value => new Date(value).toISOString();
 const cursor = facts => integer(facts?.currentCursor) ? facts.currentCursor : integer(facts?.cursor) ? facts.cursor : null;
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const executionKey = execution => digest([execution.ticketId, execution.assignmentId, execution.runId,
+const executionKey = execution => digest([execution.taskId, execution.assignmentId, execution.runId,
   execution.sessionId, execution.fence, execution.instructionRevision]);
 const keyFor = (reasonCode, execution) => execution ? `${reasonCode}:${executionKey(execution)}` : reasonCode;
 
 function identity(row) {
-  const value = { ticketId: row?.ticket?.id, assignmentId: row?.assignment?.id,
+  const value = { taskId: row?.task?.id, assignmentId: row?.assignment?.id,
     runId: row?.run?.id, sessionId: row?.run?.sessionId, fence: row?.assignment?.fence,
-    instructionRevision: row?.ticket?.instructionRevision };
-  if (!['ticketId', 'assignmentId', 'runId', 'sessionId'].every(field => id(value[field]))
+    instructionRevision: row?.task?.instructionRevision };
+  if (!['taskId', 'assignmentId', 'runId', 'sessionId'].every(field => id(value[field]))
     || !integer(value.fence) || !integer(value.instructionRevision, 1)
     || row.run.instructionRevision !== value.instructionRevision) return null;
   return value;
@@ -47,9 +47,9 @@ function priorCandidate(value, key) {
   let execution;
   if (!hostReasons.has(value.reasonCode)) {
     const source = value.execution;
-    if (!source || !['ticketId', 'assignmentId', 'runId', 'sessionId'].every(field => id(source[field]))
+    if (!source || !['taskId', 'assignmentId', 'runId', 'sessionId'].every(field => id(source[field]))
       || !integer(source.fence) || !integer(source.instructionRevision, 1)) return null;
-    execution = { ticketId: source.ticketId, assignmentId: source.assignmentId, runId: source.runId,
+    execution = { taskId: source.taskId, assignmentId: source.assignmentId, runId: source.runId,
       sessionId: source.sessionId, fence: source.fence, instructionRevision: source.instructionRevision };
   }
   if (key !== keyFor(value.reasonCode, execution)) return null;
@@ -62,7 +62,7 @@ function priorCandidate(value, key) {
 
 /** Tri-state wait: true is an evidenced exemption; null cannot prove either work or a hang. */
 function legitimateWait(row, now) {
-  if (ticketPaused(row.ticket) || ['user', 'approval', 'paused'].includes(row.wait?.kind)) return true;
+  if (taskPaused(row.task) || ['user', 'approval', 'paused'].includes(row.wait?.kind)) return true;
   if (row.wait?.kind === 'none') return false;
   if (['background-job', 'long-operation'].includes(row.wait?.kind)) {
     const until = time(row.wait.expectedUntil);
@@ -99,7 +99,7 @@ export function inspectWatchdogFacts({ facts, previous = {}, config = {}, now = 
   if (!bootId) unknown('bootId', 'unavailable');
   if (facts?.complete !== true || facts?.truncated !== false) unknown('snapshot', 'incomplete');
   if (records.length > MAX_EXECUTIONS) unknown('executions', 'limit-exceeded');
-  const candidates = {}, findings = [], conditions = [], resolvedKeys = [], checked = new Set(), previousByTicket = new Map();
+  const candidates = {}, findings = [], conditions = [], resolvedKeys = [], checked = new Set(), previousByTask = new Map();
   const previousEntries = previous && typeof previous === 'object' && !Array.isArray(previous) ? Object.entries(previous) : [];
   if (previousEntries.length > MAX_CANDIDATES) { complete = false; unknown('candidates', 'limit-exceeded'); }
   for (const [key, value] of previousEntries.slice(0, MAX_CANDIDATES)) {
@@ -107,8 +107,8 @@ export function inspectWatchdogFacts({ facts, previous = {}, config = {}, now = 
     if (stored) {
       candidates[key] = { ...stored, interrupted: true };
       if (stored.execution) {
-        const list = previousByTicket.get(stored.execution.ticketId) || [];
-        list.push(key); previousByTicket.set(stored.execution.ticketId, list);
+        const list = previousByTask.get(stored.execution.taskId) || [];
+        list.push(key); previousByTask.set(stored.execution.taskId, list);
       }
     }
   }
@@ -179,7 +179,7 @@ export function inspectWatchdogFacts({ facts, previous = {}, config = {}, now = 
       continue;
     }
     coverage.executions.inspected++;
-    if (!ticketStates.has(row.ticket.status) || !assignmentStates.has(row.assignment.state) || !runStates.has(row.run.state)) {
+    if (!taskStates.has(row.task.status) || !assignmentStates.has(row.assignment.state) || !runStates.has(row.run.state)) {
       complete = false; unknown('domainState', 'unavailable', execution);
       for (const reasonCode of executionReasons) inspect(reasonCode, execution, null);
       continue;
@@ -187,7 +187,7 @@ export function inspectWatchdogFacts({ facts, previous = {}, config = {}, now = 
     if (!Array.isArray(row.watermarks) || !row.watermarks.length || row.watermarks.some(watermark => watermark?.complete !== true)) {
       complete = false; unknown('watermarks', 'incomplete', execution);
     }
-    const ended = row.ticket.status === 'completed' || row.ticket.executionControl?.stopped || terminal.has(row.run.state);
+    const ended = row.task.status === 'completed' || row.task.executionControl?.stopped || terminal.has(row.run.state);
     const waiting = legitimateWait(row, now);
     if (waiting === null) unknown('wait', 'unavailable-or-unbounded', execution);
     const suspended = ended || waiting === true;
@@ -212,14 +212,14 @@ export function inspectWatchdogFacts({ facts, previous = {}, config = {}, now = 
       : waiting === null || request?.state !== 'inflight' || !Number.isFinite(deadline)
         || !Number.isFinite(requestStarted) || requestStarted > now || deadline < requestStarted ? null : deadline <= now);
     const stop = row.stop, requested = time(stop?.requestedAt), confirmed = time(stop?.confirmedAt);
-    const explicitlyPaused = ticketPaused(row.ticket) || row.wait?.kind === 'paused';
+    const explicitlyPaused = taskPaused(row.task) || row.wait?.kind === 'paused';
     const stopConfirmed = Number.isFinite(confirmed) && confirmed <= now && (!Number.isFinite(requested) || confirmed >= requested);
     inspect('STOP_UNCONFIRMED', execution, ended || explicitlyPaused || stopConfirmed ? false
       : stop?.requestedAt === null && stop?.confirmationOverdue === false ? false
         : !Number.isFinite(requested) || requested > now || typeof stop?.confirmationOverdue !== 'boolean' ? null : stop.confirmationOverdue);
     // A fresh authoritative replacement or explicit terminal state retires
     // alerts belonging to the former execution; omission alone cannot do so.
-    for (const key of previousByTicket.get(execution.ticketId) || []) {
+    for (const key of previousByTask.get(execution.taskId) || []) {
       const candidate = candidates[key];
       if (!candidate) continue;
       if (ended || executionKey(candidate.execution) !== executionKey(execution)) {

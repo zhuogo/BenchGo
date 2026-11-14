@@ -25,14 +25,14 @@ export function superagentSessionInventory({ state, database, records = [] }) {
   const projections = new Map(database.executionProjections().map(row => [row.sessionId, row]));
   for (const id of projections.keys()) add(id);
   for (let offset = 0; ; offset += 100) {
-    const tickets = database.listTickets({ limit: 100, offset });
-    for (const ticket of tickets) for (const assignment of database.assignments(ticket.id)) for (const run of database.runs(assignment.id)) {
+    const tasks = database.listTasks({ limit: 100, offset });
+    for (const task of tasks) for (const assignment of database.assignments(task.id)) for (const run of database.runs(assignment.id)) {
       add(run.sessionId);
       const role = roles.get(run.sessionId);
-      if (!role || role.role === 'worker' && role.ticketId === ticket.id && role.assignmentId === assignment.id && role.runId === run.id)
-        executions.set(run.sessionId, { ticket, assignment, run, role: 'worker', parentSessionId: null });
+      if (!role || role.role === 'worker' && role.taskId === task.id && role.assignmentId === assignment.id && role.runId === run.id)
+        executions.set(run.sessionId, { task, assignment, run, role: 'worker', parentSessionId: null });
     }
-    if (tickets.length < 100) break;
+    if (tasks.length < 100) break;
   }
   const children = new Map();
   for (const header of headers.values()) {
@@ -50,21 +50,21 @@ export function superagentSessionInventory({ state, database, records = [] }) {
     const parent = executions.get(header.parentSession), role = roles.get(header.id);
     if (executions.has(header.id)) continue;
     if (role && (role.role !== 'child-worker' || role.parentSessionId !== header.parentSession
-      || role.runId !== parent.run.id || role.ticketId !== parent.ticket.id || role.assignmentId !== parent.assignment.id)) continue;
+      || role.runId !== parent.run.id || role.taskId !== parent.task.id || role.assignmentId !== parent.assignment.id)) continue;
     const projection = projections.get(header.id);
     if (projection && (projection.parentSessionId !== header.parentSession || projection.runId !== parent.run.id
-      || projection.ticketId !== parent.ticket.id || projection.assignmentId !== parent.assignment.id)) continue;
+      || projection.taskId !== parent.task.id || projection.assignmentId !== parent.assignment.id)) continue;
     executions.set(header.id, { ...parent, role: 'child-worker', parentSessionId: header.parentSession });
     executionQueue.push(header.id);
   }
   const sessions = [];
-  for (const [sessionId, { ticket, assignment, run, role, parentSessionId }] of executions) {
+  for (const [sessionId, { task, assignment, run, role, parentSessionId }] of executions) {
     if (!headers.has(sessionId)) continue;
     // Input admission belongs to the original official session, including cold runs.
     const promptable = true;
-    sessions.push({ available: true, sessionId, ticketId: ticket.id, title: ticket.title || ticket.target,
-      assignmentId: assignment.id, runId: run.id, role, parentSessionId, status: ticket.status, runState: run.state,
-      placement: ticket.mandate?.project ? 'project' : 'ungrouped', promptable });
+    sessions.push({ available: true, sessionId, taskId: task.id, title: task.title || task.target,
+      assignmentId: assignment.id, runId: run.id, role, parentSessionId, status: task.status, runState: run.state,
+      placement: task.mandate?.project ? 'project' : 'ungrouped', promptable });
   }
   return { privateSessionIds: [...privateIds], ownedSessionIds: [...owned], sessions, executions, roles, projections, headers };
 }
@@ -88,8 +88,8 @@ export async function readOwnedSessionRole({ store, sessionId, listSessions }) {
   if (!inventory.ownedSessionIds.includes(sessionId)) return null;
   const execution = inventory.executions.get(sessionId);
   if (execution) {
-    const { role, parentSessionId, ticket, assignment, run } = execution;
-    const identity = { role, ticketId: ticket.id, assignmentId: assignment.id, runId: run.id,
+    const { role, parentSessionId, task, assignment, run } = execution;
+    const identity = { role, taskId: task.id, assignmentId: assignment.id, runId: run.id,
       ...(parentSessionId ? { parentSessionId } : {}) };
     const result = pending(identity);
     if (role === 'child-worker') Object.assign(result, { expected: null, actual: null, status: 'ready', reason: null });
@@ -98,10 +98,10 @@ export async function readOwnedSessionRole({ store, sessionId, listSessions }) {
   const projection = inventory.projections.get(sessionId);
   if (projection) {
     const root = inventory.executions.get(projection.rootSessionId);
-    if (root && root.run.id === projection.runId && root.ticket.id === projection.ticketId && root.assignment.id === projection.assignmentId)
-      return blocked({ role: sessionId === root.run.sessionId ? 'worker' : 'child-worker', ticketId: root.ticket.id,
+    if (root && root.run.id === projection.runId && root.task.id === projection.taskId && root.assignment.id === projection.assignmentId)
+      return blocked({ role: sessionId === root.run.sessionId ? 'worker' : 'child-worker', taskId: root.task.id,
         assignmentId: root.assignment.id, runId: root.run.id, ...(projection.parentSessionId ? { parentSessionId: projection.parentSessionId } : {}) },
-      '该历史执行会话缺少可核验的原生会话目录记录，请从所属工单查看执行记录。');
+      '该历史执行会话缺少可核验的原生会话目录记录，请从所属任务查看执行记录。');
   }
   // Follow only official subagent edges, retaining native child-session behavior.
   const visited = new Set();
@@ -119,36 +119,36 @@ export async function readOwnedSessionRole({ store, sessionId, listSessions }) {
   return blocked({ role: 'child-worker' }, '该 SuperAgent 历史会话归属尚无法完整核验，请从 SuperAgent 查看原任务。');
 }
 
-/** Resolve only persisted Ticket/Assignment/Run ownership, never UI input. */
+/** Resolve only persisted Task/Assignment/Run ownership, never UI input. */
 export function findExecutionSessionOwner(database, sessionId) {
   if (typeof sessionId !== 'string' || !sessionId) return null;
   for (let offset = 0; ; offset += 100) {
-    const tickets = database.listTickets({ limit: 100, offset });
-    for (const ticket of tickets) for (const assignment of database.assignments(ticket.id)) {
+    const tasks = database.listTasks({ limit: 100, offset });
+    for (const task of tasks) for (const assignment of database.assignments(task.id)) {
       const run = database.runs(assignment.id).find(item => item.sessionId === sessionId);
-      if (run) return { ticket, assignment, run };
+      if (run) return { task, assignment, run };
     }
-    if (tickets.length < 100) break;
+    if (tasks.length < 100) break;
   }
   return null;
 }
 
-export function executionSessionProjection(database, ticketId) {
-  const ticket = database.getTicket(ticketId);
-  if (!ticket) return null;
-  const runs = database.assignments(ticketId).flatMap(assignment => database.runs(assignment.id).map(run => ({ assignment, run })));
+export function executionSessionProjection(database, taskId) {
+  const task = database.getTask(taskId);
+  if (!task) return null;
+  const runs = database.assignments(taskId).flatMap(assignment => database.runs(assignment.id).map(run => ({ assignment, run })));
   const current = runs.findLast(({ assignment, run }) => run.fence === assignment.fence) || runs.at(-1);
   if (!current) return { available: false, reason: 'execution-session-unavailable' };
-  return { available: true, ticketId, title: ticket.title || ticket.target, sessionId: current.run.sessionId,
-    assignmentId: current.assignment.id, runId: current.run.id, status: ticket.status,
-    placement: ticket.mandate?.project ? 'project' : 'ungrouped' };
+  return { available: true, taskId, title: task.title || task.target, sessionId: current.run.sessionId,
+    assignmentId: current.assignment.id, runId: current.run.id, status: task.status,
+    placement: task.mandate?.project ? 'project' : 'ungrouped' };
 }
 
 /** Official membership validates the bound project's execution cwd against
  * workspace.path; the Run directory separately retains task artifacts. */
-export async function attachExecutionSession(ctx, agent, { ticket, run }) {
+export async function attachExecutionSession(ctx, agent, { task, run }) {
   const registry = ctx.get?.('workspaceRegistry') || ctx.workspaceRegistry;
-  const project = ticket.mandate?.project;
+  const project = task.mandate?.project;
   let workspace;
   if (project) {
     if (!registry?.resolveByPath) throw new Error('Official workspace registry is unavailable');

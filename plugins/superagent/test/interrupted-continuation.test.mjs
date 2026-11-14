@@ -44,7 +44,7 @@ const events = () => [
   { type: 'turn/start', data: { turn: 1 } }, { type: 'step/start', data: { turn: 1, step: 1 } }, call(), result(),
 ].map((event, seq) => ({ ...event, seq, time: 1000 }));
 
-async function fixture(t, { persistent = false } = {}) {
+async function fixture(t, { persistent = false, failed = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-interrupted-'));
   const filename = persistent ? join(directory, 'ledger.sqlite') : ':memory:';
   const database = createAssistantOrchestrationStore({ filename });
@@ -53,14 +53,19 @@ async function fixture(t, { persistent = false } = {}) {
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'main' } });
   const mandate = { policyVersion: 'd1', actorId: 'desktop-owner', admission: 'desktop-approved-delegation',
     source: { channel: 'desktop', sessionId: 'main', messageId: 'original' }, controlledActions: 'require-current-policy-and-harness-approval' };
-  const ticket = database.createTicket({ threadId: 'thread', target: 'produce result', mandate });
-  const initial = database.createAssignment(ticket.id, {});
+  const task = database.createTask({ threadId: 'thread', target: 'produce result', mandate });
+  const initial = database.createAssignment(task.id, {});
   const [assignment] = database.claimAssignments('original-owner', { assignmentId: initial.id, validateMandate: () => true });
   const run = database.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence, sessionId: 'original-session', directory: work });
   const models = [{ providerId: 'ExactProvider', modelId: 'Exact/Original', options: { maxTokens: 111 } }];
   database.freezeWorkerModelRoute({ assignmentId: assignment.id, runId: run.id, owner: assignment.owner, fence: assignment.fence, models, index: 0 });
   database.updateRun(run.id, { owner: assignment.owner, fence: assignment.fence, state: 'submitted' });
   database.updateRun(run.id, { owner: assignment.owner, fence: assignment.fence, state: 'uncertain' });
+  if (failed) {
+    database.confirmExecutionStopped(assignment.id, { owner: assignment.owner, fence: assignment.fence });
+    database.recordAssignmentFailure(assignment.id, { owner: assignment.owner, fence: assignment.fence,
+      code: 'WORKER_HOST_STOPPED', message: 'Assignment worker stopped', effects: { effectsVerified: true, unknownCallIds: [] } });
+  }
   database.renewAssignment(assignment.id, { owner: assignment.owner, fence: assignment.fence, validateMandate: () => false });
   let locked = false, closed = 0, reads = 0;
   const log = { events: events() };
@@ -71,7 +76,7 @@ async function fixture(t, { persistent = false } = {}) {
   const policy = { desktopVersion: 'd1', workerModels: [{ providerId: 'ChangedProvider', modelId: 'Changed/New' }] };
   const input = { ctx, database, assignmentId: assignment.id, fence: assignment.fence, instructionRevision: 1,
     readPolicy: async () => policy, signal: new AbortController().signal };
-  return { directory, work, filename, database, ticket, assignment, run, models, log, ctx, policy, input, locked: () => locked, closed: () => closed, reads: () => reads };
+  return { directory, work, filename, database, task, assignment, run, models, log, ctx, policy, input, locked: () => locked, closed: () => closed, reads: () => reads };
 }
 
 test('official writer inspection queues the original run and freezes its identity, fence and model', async t => {
@@ -85,7 +90,7 @@ test('official writer inspection queues the original run and freezes its identit
   assert.deepEqual(run.interruptedRecoveries, [{ fromFence: f.assignment.fence, instructionRevision: 1,
     sessionId: 'original-session', observation: executionEvidence(f.log).transcript, at: run.interruptedRecoveries[0].at }]);
   assert.deepEqual(f.database.getWorkerExecutionState(run.id).models, f.models);
-  assert.equal(f.database.getTicket(f.ticket.id).resultVersion, 0);
+  assert.equal(f.database.getTask(f.task.id).resultVersion, 0);
   const repaired = [...f.log.events, ...interruptedTurnClosers(f.log.events)];
   verifyInterruptedTranscript(repaired, run.evidence);
   assert.throws(() => verifyInterruptedTranscript([...repaired, { type: 'user/message', seq: repaired.length, data: {} }], run.evidence), { code: 'EVIDENCE_MISMATCH' });
@@ -99,8 +104,8 @@ for (const problem of ['live', 'pending-read', 'unknown-send', 'pending-ptc', 'r
     if (problem === 'pending-ptc') f.log.events.push({ seq: 4, type: 'tool/ptc-dispatch-start', data: { subCallId: 'nested', name: 'read', arguments: {} } });
     if (problem === 'unknown-send') f.log.events.push({ ...call('send', 'assistant_external_action', { operation: 'submit' }), seq: 4 }, { ...result('send', '{"state":"submitted"}'), seq: 5 });
     if (problem === 'revoked') f.policy.desktopVersion = 'd2';
-    if (problem === 'paused') f.database.pauseTicket(f.ticket.id);
-    if (problem === 'stopped') f.database.cancelTicket(f.ticket.id);
+    if (problem === 'paused') f.database.pauseTask(f.task.id);
+    if (problem === 'stopped') f.database.cancelTask(f.task.id);
     if (problem === 'completed' || problem === 'user-aborted') {
       const closing = interruptedTurnClosers(f.log.events); closing.at(-1).data.reason = problem === 'completed' ? { kind: 'completed' } : { kind: 'aborted', reason: { kind: 'user' } };
       f.log.events.push(...closing);
@@ -115,7 +120,7 @@ for (const problem of ['live', 'pending-read', 'unknown-send', 'pending-ptc', 'r
 
 test('authorization is rechecked after session inspection and before queuing', async t => {
   const f = await fixture(t);
-  f.input.readPolicy = async () => { f.database.pauseTicket(f.ticket.id); return f.policy; };
+  f.input.readPolicy = async () => { f.database.pauseTask(f.task.id); return f.policy; };
   await assert.rejects(requestInterruptedContinuation(f.input), { code: 'MANDATE_REVOKED' });
   assert.equal(f.closed(), 1);
 });
@@ -132,9 +137,18 @@ test('a changed transcript cannot borrow the inspected continuation boundary', (
   assert.throws(() => verifyInterruptedTranscript([...changed, ...interruptedTurnClosers(changed)], saved), { code: 'EVIDENCE_MISMATCH' });
 });
 
-test('executor uses official resume and followup in the original session with its original model', async t => {
-  const f = await fixture(t);
+for (const ending of ['interrupted', 'disposed']) test(`executor resumes ${ending} in the original official session and model`, async t => {
+  const f = await fixture(t, { failed: ending === 'disposed' });
+  if (ending === 'disposed') {
+    const closing = interruptedTurnClosers(f.log.events);
+    closing.at(-1).data.reason = { kind: 'aborted', reason: { kind: 'disposed' } };
+    f.log.events.push(...closing);
+    assert.equal(f.database.getAssignment(f.assignment.id).executionStopped.fence, f.assignment.fence);
+    assert.equal(f.database.getTask(f.task.id).continuationWait.code, 'EXECUTION_FAILED');
+  }
   await requestInterruptedContinuation(f.input);
+  assert.equal(f.database.getTask(f.task.id).continuationWait, null);
+  assert.equal(f.database.getAssignment(f.assignment.id).executionStopped, undefined);
   const [assignment] = f.database.claimAssignments('continued-owner', { validateMandate: () => true });
   // User edits and unrelated large files must not block the original session.
   await writeFile(join(f.work, 'saved.txt'), 'user changed after inspection');
@@ -163,10 +177,11 @@ test('executor uses official resume and followup in the original session with it
   };
   await installContinuationRoleHost(t, f.ctx);
   const execute = createAssignmentExecutor({ ctx: f.ctx, database: f.database, workspaceRoot: f.directory, readPolicy: f.input.readPolicy, authorizeAction: async () => ({ allowed: true }) });
-  const result = await execute(assignment, { ticket: f.database.getTicket(f.ticket.id), signal: f.input.signal, renew: async () => {} });
+  const result = await execute(assignment, { task: f.database.getTask(f.task.id), signal: f.input.signal, renew: async () => {} });
   assert.equal(message.source.kind, 'benchgo-interrupted-continuation');
   assert.equal(selected[0].provider, 'ExactProvider'); assert.equal(selected[0].model, 'Exact/Original');
   assert.equal(result.runId, f.run.id); assert.equal(result.sessionId, 'original-session'); assert.equal(result.summary, 'continued result'); assert.equal(disposed, true);
+  assert.equal(f.database.runs(assignment.id).length, 1);
   assert.equal(Object.hasOwn(result, 'checkpoint'), false);
   assert.equal(f.database.getAssignment(assignment.id).interruptedContinuation, undefined, 'dispatch consumes only the queued continuation marker');
   assert.equal(f.database.runs(assignment.id)[0].interruptedRecoveries[0].fromFence, f.assignment.fence, 'the observed continuation receipt survives execution updates');
@@ -185,15 +200,15 @@ test('working directory identity changes still prevent official continuation', a
   };
   await installContinuationRoleHost(t, f.ctx);
   const execute = createAssignmentExecutor({ ctx: f.ctx, database: f.database, workspaceRoot: f.directory, readPolicy: f.input.readPolicy, authorizeAction: async () => ({ allowed: true }) });
-  await assert.rejects(execute(assignment, { ticket: f.database.getTicket(f.ticket.id), signal: f.input.signal, renew: async () => {} }), /working directory changed/);
+  await assert.rejects(execute(assignment, { task: f.database.getTask(f.task.id), signal: f.input.signal, renew: async () => {} }), /working directory changed/);
   assert.equal(f.database.runs(assignment.id)[0].state, 'prepared');
 });
 
 test('pause or authorization changes between queuing and claim cannot resume work', async t => {
   const f = await fixture(t);
   await requestInterruptedContinuation(f.input);
-  f.database.pauseTicket(f.ticket.id);
+  f.database.pauseTask(f.task.id);
   assert.equal(f.database.claimAssignments('other', { validateMandate: () => true }).length, 0);
-  f.database.resumeTicket(f.ticket.id);
+  f.database.resumeTask(f.task.id);
   assert.equal(f.database.claimAssignments('other', { validateMandate: () => false }).length, 0);
 });

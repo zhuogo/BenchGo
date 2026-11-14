@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openExecutionSession, executionSessionNavigation, registerExecutionSessionDiscovery } from '../client/execution-session-navigation.mjs';
 
-test('running and completed Ticket entries select the same Session in the official workspace or restoring archive', async () => {
+test('running and completed Task entries select the same Session in the official workspace or restoring archive', async () => {
   const calls = [], ctx = { sessions: { list: { getSnapshot: () => ({ ids: ['same'] }) }, refresh: async () => calls.push(['refresh']) }, uiWorkspace: { openSession: id => calls.push(['panel', id]) }, uiWorkspace: { openSession: id => calls.push(['session', id]) } };
   await openExecutionSession(ctx, { available: true, sessionId: 'same', closed: false });
   await openExecutionSession(ctx, { available: true, sessionId: 'same', closed: true });

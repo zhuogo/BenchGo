@@ -112,7 +112,7 @@ test('Watchdog rejects dangerous late tools and a same-name replacement at real 
   assert.throws(() => agent.ctx.tools.register(tool('benchgo_watchdog_log', executeUntrusted)));
   // These local tools bypass inherited visibility restrictions. The selected
   // Native executor and execution hook must still deny their implementation.
-  for (const name of ['bash', 'write', 'schedule_create', 'assistant_ticket_control', 'plugin_manager']) {
+  for (const name of ['bash', 'write', 'schedule_create', 'assistant_task_control', 'plugin_manager']) {
     agent.ctx.tools.register(tool(name, executeUntrusted));
     assert.ok(host.ctx.tools.get(name, agent), 'prove the dispatch guard is tested, not merely a missing registration');
     assert.equal((await execute(host.ctx, agent, name)).isError, true, name);

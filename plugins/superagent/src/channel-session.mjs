@@ -68,7 +68,7 @@ export function createChannelSessionHost({ ctx, store, engine, receiveOwnerMessa
       if (!source?.channel || source.channel === 'desktop') return null;
       const text = outbox.payload?.publication?.text ?? outbox.payload?.text ?? outbox.text;
       if (typeof text !== 'string' || !text) return null;
-      return mirror({ source, threadId: outbox.threadId || source.threadId, key: `delivery:${outbox.kind || 'ticket'}:${outbox.id}`,
+      return mirror({ source, threadId: outbox.threadId || source.threadId, key: `delivery:${outbox.kind || 'task'}:${outbox.id}`,
         text, direction: 'delivery', deliveredAt: outbox.sentAt ?? outbox.updatedAt });
     },
     async onSourceMessage(input) {

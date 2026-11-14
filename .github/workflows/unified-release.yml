@@ -42,7 +42,7 @@ jobs:
           RELEASE_REF: ${{ github.ref }}
         run: test "$RELEASE_REF" = refs/heads/main
       - name: Verify release planner
-        run: node --test scripts/release/release.test.mjs
+        run: node --test scripts/release/release.test.mjs scripts/release/downloads.test.mjs
       - name: Plan only changed components against the last signed unified release
         id: plan
         env:
@@ -97,13 +97,30 @@ jobs:
       source_sha: ${{ needs.plan.outputs.sha }}
       release_version: ${{ inputs.version }}
     secrets: inherit
+  macos:
+    needs: plan
+    if: inputs.publish
+    uses: ./.github/workflows/macos-package.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.sha }}
+      release_version: ${{ inputs.version }}
+    secrets: inherit
+  linux:
+    needs: plan
+    if: inputs.publish
+    uses: ./.github/workflows/linux-package.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.sha }}
+      release_version: ${{ inputs.version }}
+    secrets: inherit
   publish:
-    needs: [plan, plugin, windows, android]
+    needs: [plan, plugin, windows, android, macos, linux]
     if: >-
       always() && inputs.publish && needs.plan.result == 'success' &&
       (needs.plugin.result == 'success' || needs.plugin.result == 'skipped') &&
       (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
-      (needs.android.result == 'success' || needs.android.result == 'skipped')
+      (needs.android.result == 'success' || needs.android.result == 'skipped') &&
+      needs.macos.result == 'success' && needs.linux.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -132,7 +149,7 @@ jobs:
           path: artifacts/release-builds
           merge-multiple: false
       - name: Verify provenance and checksums, reuse unchanged immutable assets, then sign one manifest
-        run: node scripts/release/assemble.mjs --plan artifacts/release-plan/release-plan.json --builds artifacts/release-builds --out artifacts/release-ready
+        run: node scripts/release/assemble.mjs --plan artifacts/release-plan/release-plan.json --builds artifacts/release-builds --out artifacts/release-ready --platforms mac-arm64,mac-x64,linux-server
       - uses: actions/upload-artifact@v4
         with:
           name: benchgo-release-ready

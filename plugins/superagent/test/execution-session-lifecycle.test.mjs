@@ -88,7 +88,7 @@ test('official AgentLoop disposal preserves a cold Worker in the catalog before 
   closed = true;
   manager.handleSessionRemoved(sessionId);
   await removed(sessionId);
-  assert.equal(refreshes, 3, 'completed Ticket remains discoverable');
+  assert.equal(refreshes, 3, 'completed Task remains discoverable');
   await openExecutionSession(client, { available: true, sessionId, closed: true });
   assert.equal(refreshes, 4);
   assert.equal(ctx.agents.get(sessionId), undefined, 'viewing history does not restart the Worker');

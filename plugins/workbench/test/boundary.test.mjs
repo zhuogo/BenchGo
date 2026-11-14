@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { localOwnerRejection, ownerWebServer, contextFacade } from '../src/boundary.mjs';
@@ -54,18 +54,27 @@ test('project composition rejects alternate sidechat and task APIs', async () =>
   await route.handler({ ...request(), url: '/sidebar/api/fs.tree' }, {});
   assert.equal(calls, 1);
 });
-test('preferences survive reload, merge single edits and reject parallel agent entrances', async () => {
+test('built-in preferences ignore retired overrides, reject edits and return isolated snapshots', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-workbench-'));
   try {
+    const retired = '{"value":{"agentOpenTools":true,"htmlViewerNoSandbox":true,"tabsEnabled":{"sidechat":true}}}';
+    await writeFile(join(directory, 'workbench.json'), retired);
     const settings = await openPreferences(directory);
-    await settings.update(SIDEBAR_NS, { editorExplorer: false, viewersEnabled: { text: true } }, 0);
-    await settings.update(SIDEBAR_NS, { viewersEnabled: { image: false } }, 1);
-    await assert.rejects(settings.update(SIDEBAR_NS, { editorExplorer: true }, 0), /其他页面/);
-    await assert.rejects(settings.update(SIDEBAR_NS, { tabsEnabled: { sidechat: true } }), /现有入口/);
-    await assert.rejects(settings.update(SIDEBAR_NS, { agentOpenTools: true }), /统一管理/);
+    await assert.rejects(settings.update(SIDEBAR_NS, { editorExplorer: false }, 0), /固定配置/);
+    await assert.rejects(settings.update(SIDEBAR_NS, { agentOpenTools: true }), /固定配置/);
+    settings.snapshot().value.tabsEnabled.sidechat = true;
     const restored = (await openPreferences(directory)).snapshot();
-    assert.equal(restored.value.editorExplorer, false);
-    assert.deepEqual(restored.value.viewersEnabled, { text: true, image: false });
-    assert.equal(restored.revision, 2);
+    assert.equal(restored.value.editorExplorer, true);
+    assert.equal(restored.value.editorGitGutter, true);
+    assert.equal(restored.value.agentOpenTools, false);
+    assert.equal(restored.value.htmlViewerNoSandbox, false);
+    assert.equal(restored.value.htmlViewerDefaultUnsafe, false);
+    assert.equal(restored.value.autoOpenSubagent, false);
+    assert.equal(restored.value.autoOpenJobs, false);
+    assert.deepEqual(restored.value.tabsEnabled, { sidechat: false, subagent: false });
+    assert.deepEqual(restored.value.viewersEnabled, {});
+    assert.equal(restored.revision, 0);
+    assert.equal(await readFile(join(directory, 'workbench.json'), 'utf8'), retired);
+    assert.deepEqual(settings.describe(), [{ ns: SIDEBAR_NS, ...restored, user: {} }]);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

@@ -60,5 +60,5 @@ test('real official Session channel records survive JSON/V4 restore without occu
   assert.deepEqual(restored.snapshotEvents().reduce(applyChannelSessionSource, null), { channel: 'feishu', sourceType: 'direct', conversationId: 'private' });
   // Reopening the same session preserves the central mirror identity and does
   // not turn these records into a followup/inject or another action ledger.
-  assert.deepEqual(restored.snapshotEvents().filter(channelMessageRecordOf).map(event => event.data.mirrorKey), ['intake:original-trigger', 'delivery:ticket:outbox']);
+  assert.deepEqual(restored.snapshotEvents().filter(channelMessageRecordOf).map(event => event.data.mirrorKey), ['intake:original-trigger', 'delivery:task:outbox']);
 });

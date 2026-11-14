@@ -5,14 +5,14 @@ import { Tooltip, Menu, writeClipboard, IconCopyOutlineMedium, IconCheckOutlineM
 const reactions = [['👍', '赞同'], ['❤️', '喜欢'], ['😂', '有趣'], ['🎉', '庆祝'], ['🤔', '思考'], ['👎', '不赞同']];
 const usageLabels = { inputTokens: '输入', outputTokens: '输出', totalTokens: '合计', cacheReadTokens: '缓存读取', cacheWriteTokens: '缓存写入', reasoningTokens: '推理' };
 
-export function MessageActions({ row, saved = null, api, onRefresh, threadId = 'main' }) {
+export function MessageActions({ row, saved = null, agentReaction = null, assistantName = '', api, onRefresh, threadId = 'main' }) {
   return <CachedMessageActions messageKey={row.key} text={row.text || ''} time={row.time} role={row.role}
-    provisional={!!row.provisional} usage={row.usage} saved={saved} api={api} onRefresh={onRefresh} threadId={threadId} />;
+    provisional={!!row.provisional} usage={row.usage} saved={saved} agentReaction={agentReaction} assistantName={assistantName} api={api} onRefresh={onRefresh} threadId={threadId} />;
 }
 
 // Live token updates recreate projected rows. Only fields used by the controls
 // cross this memo boundary, so settled history does no per-token formatting work.
-const CachedMessageActions = memo(function CachedMessageActions({ messageKey, text, time, role, provisional, usage: recordedUsage, saved, api, onRefresh, threadId }) {
+const CachedMessageActions = memo(function CachedMessageActions({ messageKey, text, time, role, provisional, usage: recordedUsage, saved, agentReaction, assistantName, api, onRefresh, threadId }) {
   const [panel, setPanel] = useState(''), [copied, setCopied] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [override, setOverride] = useState(undefined);
   const [side, setSide] = useState('top');
@@ -53,7 +53,10 @@ const CachedMessageActions = memo(function CachedMessageActions({ messageKey, te
   }, [time]);
   const usage = useMemo(() => Object.entries(usageLabels).filter(([key]) => Number.isFinite(recordedUsage?.[key]) && recordedUsage[key] >= 0), [recordedUsage]);
   return <div className="ba-message-actions" ref={root} data-open={panel ? 'true' : undefined} onKeyDown={event => { if (event.key === 'Escape' && panel) { event.preventDefault(); event.stopPropagation(); setPanel(''); trigger.current?.focus({ preventScroll: true }); } }} onBlur={event => { if (!root.current?.contains(event.relatedTarget) && !popup.current?.contains(event.relatedTarget)) setPanel(''); }}>
-    {reaction && <Button variant="ghost" type="button" className="ba-reaction-chip" aria-label={`取消回应 ${reaction}`} disabled={busy} onClick={() => react(reaction)}>{reaction}</Button>}
+    {(reaction || agentReaction) && <div className="ba-reaction-row">
+      {agentReaction && <span className="ba-reaction-chip" data-reactor="assistant" role="img" title={`${assistantName || 'BenchGo'} 的回应`} aria-label={`${assistantName || 'BenchGo'} 回应了 ${agentReaction}`}>{agentReaction}</span>}
+      {reaction && <Button variant="ghost" type="button" className="ba-reaction-chip" aria-label={`取消回应 ${reaction}`} disabled={busy} onClick={() => react(reaction)}>{reaction}</Button>}
+    </div>}
     <div className="ba-message-toolbar" role="group" aria-label="消息操作">
       <Tooltip side="top" portal delayMs={250} label={copied ? '已复制' : '复制'}><Button variant="ghost" type="button" data-copied={copied || undefined} aria-label={copied ? '已复制' : '复制消息'} onClick={copy}>{copied ? <IconCheckOutlineMedium size={18} /> : <IconCopyOutlineMedium size={18} />}</Button></Tooltip>
       {!provisional && <Tooltip side="top" portal delayMs={250} label="表情回应"><Button variant="ghost" type="button" aria-label="表情回应" aria-haspopup="dialog" aria-expanded={panel === 'reactions'} onClick={event => togglePanel('reactions', event)}><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="5.75"/><path d="M5.4 9.6c.6 1 1.5 1.5 2.6 1.5s2-.5 2.6-1.5"/><circle cx="5.8" cy="6.5" r=".7" fill="currentColor" stroke="none"/><circle cx="10.2" cy="6.5" r=".7" fill="currentColor" stroke="none"/></svg></Button></Tooltip>}

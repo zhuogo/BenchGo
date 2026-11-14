@@ -8,6 +8,7 @@ import { request as tlsRequest } from 'node:https';
 import { connect as connectHttp2 } from 'node:http2';
 import { once } from 'node:events';
 import { WebSocket } from 'ws';
+import { gzipSync, gunzipSync } from 'node:zlib';
 import { openStore } from '../src/pairing/store.mjs';
 import { loadIdentity } from '../src/transport/tls.mjs';
 import { createWorkbench } from '../src/transport/workbench.mjs';
@@ -17,7 +18,7 @@ function request(f, path, { method = 'POST', body = {}, token, cookie, headers =
   return new Promise((resolve, reject) => {
     const req = tlsRequest({ host: '127.0.0.1', port: f.server.port, path, method, servername: 'localhost', ca: f.identity.cert, headers: { 'content-type': 'application/json', ...(token ? { authorization: 'Bearer ' + token } : {}), ...(cookie ? { cookie } : {}), ...headers } }, res => {
       const chunks = []; res.on('data', chunk => chunks.push(chunk)); res.on('error', reject);
-      res.on('end', () => { const text = Buffer.concat(chunks).toString(); let value; try { value = JSON.parse(text); } catch { value = text; } resolve({ status: res.statusCode, headers: res.headers, value }); });
+      res.on('end', () => { const bytes = Buffer.concat(chunks), text = bytes.toString(); let value; try { value = JSON.parse(text); } catch { value = text; } resolve({ status: res.statusCode, headers: res.headers, value, bytes }); });
     }); req.on('error', reject); req.end(method === 'POST' ? JSON.stringify(body) : undefined);
   });
 }
@@ -31,7 +32,7 @@ async function setup(t) {
   await writeFile(join(directory, 'private.txt'), 'secret');
   await symlink(join(directory, 'private.txt'), join(root, 'escape.txt'));
   const store = await openStore(join(directory, 'state')), identity = await loadIdentity(directory);
-  const calls = [], opened = [], disposed = [], voiceSockets = [];
+  const calls = [], opened = [], disposed = [], voiceSockets = [], rendered = [];
   const ctx = {
     get(name) { return name === 'voice' ? this.voice : undefined; },
     voice: { acceptRealtimeSocket(ws) { voiceSockets.push(ws); ws.on('message', (data, binary) => ws.send(data, { binary })); } },
@@ -39,14 +40,14 @@ async function setup(t) {
       createPeer(options) { return { principal: options.principal, id: 'peer-' + (calls.length + 1), async dispose() { disposed.push(this.id); } }; },
       createSharedFetchHandler(channel) { assert.equal(channel, '/api'); return { requestBodyMode() { return 'buffered'; }, async fetch(request, peer) { calls.push({ path: new URL(request.url).pathname, body: request.method === 'POST' ? await request.json() : null, peer, cookie: request.headers.get('cookie'), auth: request.headers.get('authorization') }); return Response.json({ ok: true, preset: 'same-host', voice: 'same-config' }); } }; },
     },
-    webServer: { renderIndex(html) { return html.replace('<head>', '<head><script>globalThis.__DSH_BOOT__={entries:[]}</script><script src="/plugins/test.js"></script>'); } },
+    webServer: { renderIndex(html, peer) { assert.equal(peer?.principal.deviceId, store.state.devices[0]?.id); rendered.push(peer); return html.replace('<head>', '<head><script>globalThis.__DSH_BOOT__={entries:[]}</script><script src="/plugins/test.js"></script>'); } },
     clientModules: { async fetchBundle(request) { return new Response('globalThis.sharedPlugin=true;', { headers: { 'content-type': 'text/javascript' } }); } },
     typertGateway: { wireStream: { failure(error) { return { message: error.message, code: 'gateway/internal', details: {} }; }, async open(endpoint, payload, uplink, peer, signal) { opened.push({ endpoint, payload, peer, signal }); return { async *[Symbol.asyncIterator]() { if (endpoint === 'fixture/echo') for await (const item of uplink) yield { received: item }; else yield { sameUI: true }; } }; } } },
   };
   const workbench = createWorkbench(ctx, store, { workbenchRoot: root, webRoot: pathToFileURL(web + '/') });
   const config = validateConfig({ enabled: true, host: '127.0.0.1', port: 0 }, store.state);
   const server = await listen({ identity, config, webRoot: pathToFileURL(web + '/'), store, workbench, dispatch() {}, onError() {} });
-  const f = { store, identity, workbench, server, calls, opened, disposed, ctx, voiceSockets };
+  const f = { store, identity, workbench, server, calls, opened, disposed, ctx, voiceSockets, rendered, root };
   f.call = (path, options) => request(f, path, options);
   const pair = store.begin(), pending = store.request(pair.code, 'Workbench test');
   await store.decide(pending.requestId, true);
@@ -106,6 +107,34 @@ async function login(f) {
   for (const flag of ['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/link/workbench/']) assert(header.includes(flag));
   return header.split(';')[0];
 }
+
+test('workbench compresses negotiated text assets without touching HTML, API, ranges or existing encodings', async t => {
+  const f = await setup(t), cookie = await login(f), source = 'globalThis.compressed=true;\n'.repeat(2000);
+  await writeFile(join(f.root, 'large.js'), source);
+  const call = (path, headers = {}, method = 'GET') => f.call('/link/workbench/' + path, { cookie, method, headers });
+  const compressed = await call('large.js', { 'accept-encoding': 'br, gzip;q=0.8' });
+  assert.equal(compressed.headers['content-encoding'], 'gzip'); assert.match(compressed.headers.vary, /Accept-Encoding/);
+  assert.equal(compressed.headers['content-length'], undefined); assert.equal(gunzipSync(compressed.bytes).toString(), source);
+  assert(compressed.bytes.length < Buffer.byteLength(source) / 4);
+  for (const value of ['identity', 'gzip;q=0, *;q=1', 'gzip;q=invalid', 'gzip;q=0.0']) {
+    const response = await call('large.js', { 'accept-encoding': value });
+    assert.equal(response.headers['content-encoding'], undefined); assert.equal(response.value, source);
+  }
+  const head = await call('large.js', { 'accept-encoding': 'gzip' }, 'HEAD');
+  assert.equal(head.headers['content-encoding'], 'gzip'); assert.equal(head.bytes.length, 0);
+  assert.equal((await call('large.js', { 'accept-encoding': 'gzip', range: 'bytes=0-4' })).headers['content-encoding'], undefined);
+  const html = await call('', { 'accept-encoding': 'gzip' });
+  assert.equal(html.headers['content-encoding'], undefined); assert.match(html.value, /workbench\.js/);
+  assert.equal((await call('api/session/get', { 'accept-encoding': 'gzip' }, 'POST')).headers['content-encoding'], undefined);
+  f.ctx.clientModules.fetchBundle = async () => new Response(source, { headers: { 'content-type': 'text/javascript', etag: '"revision"' } });
+  const plugin = await call('plugins/combo?rev=fixture', { 'accept-encoding': 'gzip' });
+  assert.equal(plugin.headers['content-encoding'], 'gzip'); assert.equal(plugin.headers.etag, 'W/"revision"'); assert.equal(gunzipSync(plugin.bytes).toString(), source);
+  const encoded = gzipSync(source);
+  f.ctx.clientModules.fetchBundle = async () => new Response(encoded, { headers: { 'content-type': 'text/javascript', 'content-encoding': 'gzip' } });
+  assert.deepEqual((await call('plugins/combo?rev=encoded', { 'accept-encoding': 'gzip' })).bytes, encoded, 'never double-compress');
+  await f.store.revoke(f.deviceId); await f.workbench.revoke(f.deviceId);
+  assert.equal((await call('large.js', { 'accept-encoding': 'gzip' })).status, 401, 'authorization precedes every static response');
+});
 function voiceSocket(f, cookie, options = {}) {
   return new WebSocket(`wss://127.0.0.1:${f.server.port}/link/workbench/api/voice/realtime`, { ca: f.identity.cert, servername: 'localhost', origin: `https://127.0.0.1:${f.server.port}`, headers: cookie ? { cookie } : {}, ...options });
 }
@@ -172,6 +201,7 @@ test('workbench requires approved device cookie, serves shared index and blocks 
   assert.equal((await f.call('/link/workbench/api/benchgo/preview-assets/sheet-worker.js', { method: 'GET', cookie })).status, 200);
   assert.equal(f.calls.at(-1).path, '/api/benchgo/preview-assets/sheet-worker.js');
   assert(f.calls.every(call => call.peer === f.calls[0].peer && call.peer.principal.kind === 'owner' && call.peer.principal.deviceId === f.deviceId && !call.cookie && !call.auth));
+  assert.equal(f.rendered[0], f.calls[0].peer, 'page rendering and API requests use the same approved device peer');
   await f.store.revoke(f.deviceId); await f.workbench.revoke(f.deviceId);
   assert.equal((await f.call('/link/workbench/api/voice', { cookie })).status, 401);
   assert.equal((await f.call('/link/workbench/asset.js', { method: 'GET', cookie })).status, 401);

@@ -27,10 +27,10 @@ test('records are immutable and links cannot dangle; append is atomic', async t 
   assert.equal(store.append(input).duplicate, false);
   assert.equal(store.append(input).duplicate, true);
   assert.throws(() => store.append({ ...input, content: '改写' }), { code: 'LEDGER_CONFLICT' });
-  assert.throws(() => store.append({ ...input, id: 't2', sourceKey: 'e2' }, [{ id: 'missing', relation: 'ticket' }]), { code: 'LEDGER_NOT_FOUND' });
+  assert.throws(() => store.append({ ...input, id: 't2', sourceKey: 'e2' }, [{ id: 'missing', relation: 'task' }]), { code: 'LEDGER_NOT_FOUND' });
   assert.throws(() => store.read('t2'), { code: 'LEDGER_NOT_FOUND' });
-  store.append({ id: 'ticket1', kind: 'ticket', sourceKey: 'ticket1', content: '任务' }, [{ id: 't1', relation: 'source' }]);
-  assert.equal(store.related('t1')[0].fromId, 'ticket1');
+  store.append({ id: 'task1', kind: 'task', sourceKey: 'task1', content: '任务' }, [{ id: 't1', relation: 'source' }]);
+  assert.equal(store.related('t1')[0].fromId, 'task1');
 });
 test('long original is losslessly paged including emoji', async t => {
   const { store } = await fixture(t);

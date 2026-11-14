@@ -2,13 +2,13 @@
 
 内部源码包，由 `benchgo-plugin` 基础入口装配；不增加安装包或 Cordis 顶层入口。
 
-- `dsh-ops@0.5.0`：使用其公开 `dsh-ops/integration`，对官方 `standard`、`ptc`、`cordis` 预设提供原生文件工具、结果分页与按需发现。保留官方工具；Bash 默认关闭，可单独启用。`minimal` 不增加工具；外部 Codex、Claude Code 等 CLI 的工具不受影响。
-- `smart-compaction@0.3.15`：注册 `context_status` 与 `compact_now`，使用官方会话投影和现有压缩服务。`safePointRatio:false`，不增加第二套自动压缩触发。SuperAgent 辅助模型压缩路由继续有效。
-- SuperAgent Router 只允许本模块实际拥有的上下文工具定义；文件操作仍委派 Worker。同名替代工具不会继承信任。
+- 执行工具：内置启用，对官方 `standard`、`ptc`、`cordis` 预设提供原生文件工具、结果分页与按需发现。保留官方工具与审批；不增加额外 Bash。`minimal` 不增加工具；外部 Codex、Claude Code 等 CLI 的工具不受影响。
+- 上下文管理：内置 `context_status` 与 `compact_now`，使用官方会话投影和现有压缩服务。`safePointRatio:false`，不增加第二套自动压缩触发。SuperAgent 辅助模型压缩路由继续有效。
+- SuperAgent Router 仅保留专属产品管理、协调与已装配的上下文工具，通用执行工具由角色工具门排除；Worker 保留当前作用域实际可用的执行增强。工具热注册、移除与替换遵循官方注册表，不能借重名或热注册获得 Router 执行权限。分工见[任务与执行](../../docs/06-superagent/任务与执行.md#router-与持续主会话)，授权见[自有会话角色装配](../../docs/06-superagent/模型与上下文.md#自有会话角色装配)。
 
 `mountEfficiency(ctx, { directory })` 在 `connection` 就绪后调用，内部独立等待官方服务。返回的服务通过 `ctx.benchgoEfficiency` 使用；`snapshot()` 返回宿主装配状态，`diagnose(agent)` 才查询具体会话的工具与压缩可用性。宿主装配成功不代表性能提升或一次真实任务已成功。
 
-`GET /api/benchgo/efficiency` 返回配置版本与能力状态。`POST` 使用 `{ revision, features: { ops?: { enabled?, shell? }, compaction?: { enabled? } } }` 合并保存，版本冲突返回 409。配置存入数据目录的 `efficiency.json`，成功保存后仅重挂变化的能力；停用保留配置与所有会话数据。路由继承官方 owner 认证，并检查请求来源。
+两项能力按内置策略装配，不注册设置页面、通用配置适配器或 HTTP 配置接口；不再读写旧 `efficiency.json`，既有文件与会话保持原样。宿主服务生命周期仍由 Cordis 管理，服务缺失如实显示为不可用。
 
 参考版本与许可证：
 

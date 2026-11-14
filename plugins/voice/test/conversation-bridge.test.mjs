@@ -245,9 +245,9 @@ test('原始层记录读取原会话正文与可信发布，模式不依赖 Supe
 
 test('Router 通话历史复用公开投影，模式省略或伪造也不返回内部事件', async () => {
   const f = fixture(), calls = [];
-  f.emit('user/message', { id: 'private', source: { kind: 'benchgo-ticket-reply' }, content: [{ type: 'text', text: 'PRIVATE INPUT' }] });
+  f.emit('user/message', { id: 'private', source: { kind: 'benchgo-task-reply' }, content: [{ type: 'text', text: 'PRIVATE INPUT' }] });
   answer(f, [{ type: 'text', text: 'PRIVATE DRAFT' }]);
-  const publication = f.emit('plugin:benchgo-plugin/chat-publication', { kind: 'ticket-reply', requestId: 'notice', text: '请确认权限。' }, { ignorable: true });
+  const publication = f.emit('plugin:benchgo-plugin/chat-publication', { kind: 'task-reply', requestId: 'notice', text: '请确认权限。' }, { ignorable: true });
   const messages = [{ id: 'reply:notice', role: 'assistant', kind: 'final', seq: publication.seq, text: '请确认权限。', approval: { privateMetadata: 'PRIVATE' } }];
   f.ctx.assistant = { async dispatch(input) {
     calls.push(input);

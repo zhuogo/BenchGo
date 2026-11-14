@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { validateWatchdogSignal } from './watchdog-observation-route.mjs';
-import { ticketPaused } from './ticket-lifecycle.mjs';
+import { taskPaused } from './task-lifecycle.mjs';
 import { inspectMaintenanceHealth, MAINTENANCE_WATCHDOG_REASONS } from './maintenance-health.mjs';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -25,19 +25,19 @@ export function watchdogRouterSignal(database, observation, principal) {
   observation = validateWatchdogSignal(observation, principal.targetId);
   if (observation.kind === 'host' && observation.execution)
     throw Object.assign(new Error('Watchdog 观察类别与身份不一致'), { code: 'WATCHDOG_SIGNAL_INVALID' });
-  const ticket = observation.execution && database.getTicket(observation.execution.ticketId);
+  const task = observation.execution && database.getTask(observation.execution.taskId);
   return { kind: 'watchdog', eventKey: `watchdog:${hash([observation.targetId, observation.incidentKey, observation.phase])}`,
-    ...(observation.execution ? { ticketId: observation.execution.ticketId,
+    ...(observation.execution ? { taskId: observation.execution.taskId,
       instructionRevision: observation.execution.instructionRevision } : {}),
-    source: structuredClone(ticket?.mandate?.source || { channel: 'watchdog', targetId: principal.targetId, threadId: 'main' }),
+    source: structuredClone(task?.mandate?.source || { channel: 'watchdog', targetId: principal.targetId, threadId: 'main' }),
     observation };
 }
 
 /** A newer incident phase retires only its older notices, never execution state. */
 export function watchdogNoticeCurrent(signal, requests) {
   const incident = watchdogIncidentIdentity(signal);
-  return !requests.some(row => !row.suppressed && watchdogIncidentIdentity(row.ticketReply) === incident
-    && phases[row.ticketReply.observation.phase] > phases[signal.observation.phase]);
+  return !requests.some(row => !row.suppressed && watchdogIncidentIdentity(row.taskReply) === incident
+    && phases[row.taskReply.observation.phase] > phases[signal.observation.phase]);
 }
 
 /** Re-read the shared execution projection at admission, dispatch, tools and publication. */
@@ -65,20 +65,20 @@ export function inspectWatchdogRouterSignal(database, signal, snapshot, { now = 
     }
     return { valid: true, facts: { interfaceReachable: true, observedAt: snapshot.observedAt } };
   }
-  const ticket = database.getTicket(identity.ticketId), assignment = database.getAssignment(identity.assignmentId);
+  const task = database.getTask(identity.taskId), assignment = database.getAssignment(identity.assignmentId);
   const run = assignment && database.runs(assignment.id).find(row => row.id === identity.runId);
-  if (!ticket || !assignment || !run || assignment.ticketId !== ticket.id
-    || ticket.instructionRevision !== identity.instructionRevision || (run.instructionRevision ?? assignment.instructionRevision ?? 1) !== identity.instructionRevision
+  if (!task || !assignment || !run || assignment.taskId !== task.id
+    || task.instructionRevision !== identity.instructionRevision || (run.instructionRevision ?? assignment.instructionRevision ?? 1) !== identity.instructionRevision
     || assignment.fence !== identity.fence || run.fence !== identity.fence || run.sessionId !== identity.sessionId
-    || JSON.stringify(ticket.mandate.source) !== JSON.stringify(signal.source)) return invalid('execution-identity-changed');
-  const facts = snapshot.executions?.find(row => row.ticket?.id === ticket.id && row.assignment?.id === assignment.id
+    || JSON.stringify(task.mandate.source) !== JSON.stringify(signal.source)) return invalid('execution-identity-changed');
+  const facts = snapshot.executions?.find(row => row.task?.id === task.id && row.assignment?.id === assignment.id
     && row.assignment.fence === identity.fence && row.run?.id === run.id && row.run.sessionId === identity.sessionId
-    && row.ticket.instructionRevision === identity.instructionRevision && row.run.instructionRevision === identity.instructionRevision);
+    && row.task.instructionRevision === identity.instructionRevision && row.run.instructionRevision === identity.instructionRevision);
   if (!facts || observation.evidenceCursor === null) return invalid('execution-evidence-unavailable');
-  const ended = ticket.status === 'completed' || ticket.executionControl?.stopped || terminal.has(run.state);
+  const ended = task.status === 'completed' || task.executionControl?.stopped || terminal.has(run.state);
   if (observation.phase !== 'resolved') {
     if (passiveReasons.has(observation.reasonCode) && (facts.wait?.kind !== 'none' || ended
-      || ticketPaused(ticket) || ticket.status === 'waiting')) return invalid('execution-waiting-or-closed');
+      || taskPaused(task) || task.status === 'waiting')) return invalid('execution-waiting-or-closed');
     if (observation.reasonCode === 'EXECUTION_INACTIVE' && !(assignment.state === 'claimed'
       && ['submitted', 'running'].includes(run.state) && facts.executionAlive?.status === 'absent')) return invalid('execution-active-or-unknown');
     if (observation.reasonCode === 'LEASE_EXPIRED' && !(assignment.state === 'claimed' && assignment.leaseUntil <= now)) return invalid('lease-not-expired');
@@ -86,7 +86,7 @@ export function inspectWatchdogRouterSignal(database, signal, snapshot, { now = 
       && facts.request.deadline && Date.parse(facts.request.deadline) <= now)) return invalid('request-deadline-not-exceeded');
     if (observation.reasonCode === 'STOP_UNCONFIRMED' && facts.stop?.confirmationOverdue !== true) return invalid('stop-not-overdue');
   } else if (observation.kind === 'execution') {
-    const waiting = ['user', 'approval', 'paused'].includes(facts.wait?.kind) || ticketPaused(ticket)
+    const waiting = ['user', 'approval', 'paused'].includes(facts.wait?.kind) || taskPaused(task)
       || ['background-job', 'long-operation'].includes(facts.wait?.kind) && Date.parse(facts.wait.expectedUntil) > now;
     const cleared = ended || observation.reasonCode === 'EXECUTION_INACTIVE' && (waiting || assignment.state !== 'claimed'
       || !['submitted', 'running'].includes(run.state) || ['running', 'idle'].includes(facts.executionAlive?.status))

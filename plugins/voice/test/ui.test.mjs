@@ -68,8 +68,8 @@ test('non-streaming ASR and buffered playback keep independent features availabl
     assert.equal(nodes(tree).find(node => node.type === 'CallEntry').props.disabled, true);
     assert.equal(buttons.find(node => node.props['aria-label'] === '语音转文本').props.disabled, false);
     assert.equal(buttons.find(node => node.props['aria-label'] === '自动朗读开启').props.disabled, false);
-    assert(nodes(tree).some(node => node.props.label === callStreamingReason(config)));
-    assert(nodes(tree).some(node => node.type === 'button' && node.children.includes(blocked === 'tts' ? '通话需开启流式播放 · 配置' : '通话需流式识别 · 配置')));
+    assert.equal(nodes(tree).find(node => node.type === 'CallEntry').props.hint, callStreamingReason(config));
+    assert(!buttons.some(node => node.props.className?.includes('voice-text-button')));
   }
 });
 test('ordinary conversation remains available when decision configuration is unavailable', () => {

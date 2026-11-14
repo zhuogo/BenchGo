@@ -1,8 +1,9 @@
 export const reactionScope = (threadId, sessionId) => JSON.stringify([threadId, sessionId || null]);
+export const reactionEmojis = Object.freeze(['👍', '❤️', '😂', '🎉', '🤔', '👎']);
 
 /** Reactions are local feedback, never an instruction or an approval. */
 export async function setMessageReaction({ engine, database }, { threadId = 'main', messageKey, emoji }) {
-  if (typeof messageKey !== 'string' || messageKey.length > 500 || (emoji !== null && !['👍', '❤️', '😂', '🎉', '🤔', '👎'].includes(emoji))) throw new Error('Invalid message reaction');
+  if (typeof messageKey !== 'string' || messageKey.length > 500 || (emoji !== null && !reactionEmojis.includes(emoji))) throw new Error('Invalid message reaction');
   const first = await engine.history(threadId, { limit: 200 });
   let found = false;
   if (messageKey.startsWith('message:')) {

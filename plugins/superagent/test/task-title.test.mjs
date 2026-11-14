@@ -1,0 +1,77 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
+import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
+import { assertSpecificTaskDescription, normalizeTaskTitle, TASK_TITLE_MAX_CHARS } from '../src/task-title.mjs';
+
+test('task titles retain the AI label and cap it at ten Unicode characters', () => {
+  assert.equal(TASK_TITLE_MAX_CHARS, 10);
+  assert.equal(normalizeTaskTitle('今日新闻摘要', '调查今天新闻的完整任务'), '今日新闻摘要');
+  assert.equal(normalizeTaskTitle('一二三四五六七八九十十一'), '一二三四五六七八九十');
+  const title = normalizeTaskTitle('😀一二三四五六七八九十');
+  assert.equal(title, '😀一二三四五六七八九');
+  assert.equal(Array.from(title).length, TASK_TITLE_MAX_CHARS);
+});
+
+test('legacy missing titles use a short display fallback without changing task requirements', () => {
+  const task = { target: '请调研今天的国内外新闻并整理六到十条摘要', acceptance: '注明来源和时间，保持六到十条，并且不要求产物文件。' };
+  const before = structuredClone(task);
+  const title = normalizeTaskTitle(undefined, task.target);
+  assert.equal(title, Array.from(task.target).slice(0, 10).join(''));
+  assert.deepEqual(task, before);
+  assert.equal(normalizeTaskTitle(' \n\t ', task.target), title);
+  assert.equal(normalizeTaskTitle(null, null), '未命名任务');
+});
+
+test('task titles collapse whitespace and remove control characters before limiting', () => {
+  assert.equal(normalizeTaskTitle(' \t今日\n新闻\u0000摘要\u007f '), '今日 新闻 摘要');
+  assert.equal(normalizeTaskTitle(123, '  任务\r\n进展  '), '任务 进展');
+});
+
+test('admission rejects exact placeholder labels without guessing or rewriting concrete descriptions', () => {
+  for (const title of ['执行任务', ' 处理请求。 ', 'New Task', 'process request']) {
+    assert.throws(() => assertSpecificTaskDescription({ title, target: '为用户调研AI获客项目并交付带来源的清单' }), { code: 'TASK_DESCRIPTION_GENERIC', field: 'title' });
+  }
+  for (const target of ['执行任务', '处理用户请求！', 'Execute Task']) {
+    assert.throws(() => assertSpecificTaskDescription({ title: '获客项目清单', target }), { code: 'TASK_DESCRIPTION_GENERIC', field: 'target' });
+  }
+  const concrete = { title: '处理请求日志', target: '修复处理请求页面，并给出故障原因与验证结果' };
+  const before = structuredClone(concrete);
+  assert.doesNotThrow(() => assertSpecificTaskDescription(concrete));
+  assert.deepEqual(concrete, before, 'business text containing these words remains literal and unchanged');
+  assert.equal(normalizeTaskTitle('执行任务'), '执行任务', 'historical display normalization remains independent from new admission validation');
+});
+
+test('persisted titles stay separate from full target and acceptance, including legacy rows', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-task-title-'));
+  const filename = join(directory, 'assistant.db');
+  let database = createAssistantOrchestrationStore({ filename });
+  t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
+  database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
+  const target = '请调研2026年11月4日新闻热点，提供六到十条中文摘要并注明来源与时间。';
+  const acceptance = '政治经济、科技和社会民生均需覆盖；区分多源与单源；无需生成文件。';
+  const task = database.createTask({ threadId: 'thread', title: '😀一二三四五六七八九十', target, acceptance, mandate: {} });
+  assert.equal(task.title, '😀一二三四五六七八九');
+  const renamed = database.updateTask(task.id, { title: '今日新闻摘要汇总与来源核对' });
+  assert.equal(renamed.title, '今日新闻摘要汇总与来');
+  assert.equal(renamed.instructionRevision, task.instructionRevision);
+  database.close();
+  const raw = new DatabaseSync(filename);
+  try {
+    const saved = raw.prepare('SELECT title,target,acceptance FROM sa_tasks WHERE id=?').get(task.id);
+    assert.equal(saved.title, renamed.title);
+    assert.equal(saved.target, target);
+    assert.equal(saved.acceptance, acceptance);
+    raw.prepare("UPDATE sa_tasks SET title='' WHERE id=?").run(task.id);
+  } finally { raw.close(); }
+  database = createAssistantOrchestrationStore({ filename });
+  const legacy = database.getTask(task.id);
+  assert.equal(legacy.title, Array.from(target).slice(0, 10).join(''));
+  assert.equal(legacy.target, target);
+  assert.equal(legacy.acceptance, acceptance);
+  assert.equal(legacy.mandate.target, target);
+  assert.equal(legacy.mandate.acceptance, acceptance);
+});

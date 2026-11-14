@@ -10,8 +10,9 @@ export function useChatScroll(rows, sessionKey) {
     const scroller = content?.closest('[data-assistant-scroll]');
     if (!scroller) return;
     setHost(scroller.parentElement);
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const owner = createChatScroll({ scroller, content, sessionKey,
-      reducedMotion: () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+      reducedMotion: () => motion.matches,
       onChange: next => setState(previous => previous.visible === next.visible && previous.unread === next.unread ? previous : next),
     });
     controller.current = owner;
@@ -20,8 +21,8 @@ export function useChatScroll(rows, sessionKey) {
     return () => { observer.disconnect(); owner.dispose(); controller.current = null; };
   }, [sessionKey]);
   useLayoutEffect(() => { controller.current?.update(rows); });
-  return { root, host, ...state, returnToBottom: () => {
+  return { root, host, ...state, returnToBottom: event => {
     root.current?.closest('[data-assistant-scroll]')?.focus({ preventScroll: true });
-    controller.current?.bottom(true);
+    controller.current?.bottom(event?.detail > 0);
   } };
 }

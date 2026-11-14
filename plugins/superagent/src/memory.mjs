@@ -29,7 +29,7 @@ const dailyDocument = timestamp => `memory/${String(timestamp || now()).slice(0,
 const derivedDocument = name => /^memory\/(?:people|groups)\//u.test(name) || /^dreams\//u.test(name);
 const limit = (value, fallback, max) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : fallback;
 const cleanText = value => String(value || '').replace(/<!--[\s\S]*?(?:-->|$)/gu, '');
-const sourceFields = new Set(['type', 'kind', 'role', 'sessionId', 'messageId', 'eventId', 'taskId', 'callId', 'threadId', 'channel', 'document', 'reviewId', 'ticketId', 'resultVersion', 'profileId', 'turnId', 'entry', 'resultHash', 'artifactId']);
+const sourceFields = new Set(['type', 'kind', 'role', 'sessionId', 'messageId', 'eventId', 'taskId', 'callId', 'threadId', 'channel', 'document', 'reviewId', 'resultVersion', 'profileId', 'turnId', 'entry', 'resultHash', 'artifactId']);
 // Journals and derived receipts retain citations, never raw evidence text or arbitrary payloads.
 const sourceReference = source => ({
   ...Object.fromEntries(Object.entries(source || {}).filter(([key, value]) => sourceFields.has(key) && ['string', 'number', 'boolean'].includes(typeof value))),

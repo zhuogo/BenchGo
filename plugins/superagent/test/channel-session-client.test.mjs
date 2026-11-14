@@ -7,10 +7,10 @@ const require = createRequire(new URL('../../../deepseek-harness/apps/web/packag
 const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
 const result = await build({ entryPoints: [fileURLToPath(new URL('../client/channel-session.jsx', import.meta.url))], bundle: true, write: false,
   platform: 'node', format: 'esm', alias: { react: dirname(require.resolve('react/package.json')) }, nodePaths: [fileURLToPath(new URL('../../benchgo/node_modules/', import.meta.url))], logLevel: 'silent' });
-const { channelMessageDefinition: definition, registerChannelSessionRows } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { channelMessageDefinition: definition, registerChannelMessages } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 const source = { channel: 'feishu', sourceType: 'direct', conversationId: 'private-chat', senderId: 'owner', identityEvidence: { account: 'bot' } };
 const record = (direction = 'inbound') => ({ type: 'plugin:benchgo-plugin/channel-message', ignorable: true, seq: 4, time: 1731000000000,
-  data: { mirrorKey: direction === 'inbound' ? 'intake:id' : 'delivery:ticket:id', direction, source, text: direction === 'inbound' ? '收到消息' : '已交付结果' } });
+  data: { mirrorKey: direction === 'inbound' ? 'intake:id' : 'delivery:task:id', direction, source, text: direction === 'inbound' ? '收到消息' : '已交付结果' } });
 
 test('channel mirror Definition builds the same official context data without a message write or model turn', () => {
   for (const direction of ['inbound', 'delivery']) {
@@ -33,12 +33,14 @@ test('channel mirror Definition builds the same official context data without a 
     { ...record(), data: { ...record().data, direction: 'outbound' } }]) assert.equal(definition.match(event), null);
 });
 
-test('channel registration retains sidebar labels and disposes the official Definition with its context effect', () => {
-  const labels = [], disposed = [], effects = [];
+test('channel registration owns the official Definition lifecycle without modifying sidebar metadata', () => {
+  const disposed = [], effects = [];
+  const dispose = () => disposed.push('definition');
   const ctx = { effect(register) { effects.push(register); return register(); },
-    uiConversation: { events: { register(value) { assert.equal(value, definition); return () => disposed.push('definition'); } } },
-    slots: { inject(name, register) { labels.push(name); register(); return () => disposed.push(name); }, register(_meta, component) { assert.equal(typeof component, 'function'); return () => {}; } } };
-  const cleanup = registerChannelSessionRows(ctx);
-  assert.deepEqual(labels, ['sidebar.session.row.trailing', 'benchgo.sidebar.session.row.trailing']); assert.equal(effects.length, 1);
-  cleanup(); assert.deepEqual(disposed, [...labels, 'definition']);
+    uiConversation: { events: { register(value) { assert.equal(value, definition); return dispose; } } },
+    slots: { inject() { assert.fail('Channel messages do not add sidebar badges'); }, register() { assert.fail('Channel messages do not replace sidebar rows'); } } };
+  const cleanup = registerChannelMessages(ctx);
+  assert.equal(effects.length, 1);
+  assert.equal(cleanup, dispose);
+  cleanup(); assert.deepEqual(disposed, ['definition']);
 });

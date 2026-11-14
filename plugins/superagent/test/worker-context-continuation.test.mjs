@@ -5,9 +5,9 @@ import { continueWorkerContext } from '../src/worker-context-continuation.mjs';
 function fixture(ids = []) {
   let pending = ids.map(id => ({ id }));
   return {
-    assignment: { ticketId: 'ticket' },
-    database: { pendingSubscriptionMessages(ticketId) { assert.equal(ticketId, 'ticket'); return pending; },
-      pendingTicketInputs: () => [], getTicket: () => ({ id: 'ticket', status: 'running', executionControl: {} }) },
+    assignment: { taskId: 'task' },
+    database: { pendingSubscriptionMessages(taskId) { assert.equal(taskId, 'task'); return pending; },
+      pendingTaskInputs: () => [], getTask: () => ({ id: 'task', status: 'running', executionControl: {} }) },
     set(ids) { pending = ids.map(id => ({ id })); },
   };
 }
@@ -25,7 +25,7 @@ test('unconsumed context fails instead of inventing a receipt or spinning', asyn
   const f = fixture(['first']); let turns = 0;
   await assert.rejects(continueWorkerContext({ ...f, runTurn: async () => turns++ }), /did not consume/);
   assert.equal(turns, 1);
-  assert.deepEqual(f.database.pendingSubscriptionMessages('ticket'), [{ id: 'first' }]);
+  assert.deepEqual(f.database.pendingSubscriptionMessages('task'), [{ id: 'first' }]);
 });
 
 test('pause or attention keeps pending context for the resumed worker', async () => {

@@ -14,6 +14,7 @@ import css from './pet-editor.css';
 import { retainAssistantSession } from './session-retain.mjs';
 import { ConversationWidth } from './conversation-width.jsx';
 import { ResourceState } from './resource-state.jsx';
+import { createReplyFileOpener } from './reply-file-navigation.mjs';
 
 export const SuperAgentSurfaceContext = createContext(false);
 const HomeContext = createContext(null);
@@ -26,6 +27,7 @@ export const assistantConversationChildren = {
 
 function FixedChatView({ renderSlot, useSession, useConversation, useInput, useProjection, inputActions }) {
   const home = useContext(HomeContext);
+  const openFile = useMemo(() => createReplyFileOpener(home?.ctx, home?.sessionId), [home?.ctx, home?.sessionId]);
   const session = useSession(value => value);
   const conversation = useConversation(value => value);
   const input = useInput(value => value);
@@ -40,7 +42,7 @@ function FixedChatView({ renderSlot, useSession, useConversation, useInput, useP
     && (session.blank || session.awaitingFirstTurn)
     && quietChatRows(home.history, home.threadId, session, conversation.views?.get('chat'), inbox).length === 0;
   // Keep the official content factory/composer; never mount its raw execution transcript.
-  return <div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll="" tabIndex={0} aria-label="聊天记录">{designIntent && home && designIntent.threadId === home.threadId && <div className="ba-note" role="status">{designIntent.kind === 'refine' ? '请在输入框说明希望继续调整的地方。' : '请在输入框描述你希望的形象。'}<Button variant="ghost" type="button" className="ba-quiet" onClick={() => petDesignIntent.clear()}>关闭提示</Button></div>}{showHome && <AssistantHome {...home} input={input} inputActions={inputActions} />}{home && <QuietChat home={home} session={session} chat={conversation.views?.get('chat')} inbox={inbox} />}</div></div>;
+  return <div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll="" tabIndex={0} aria-label="聊天记录">{designIntent && home && designIntent.threadId === home.threadId && <div className="ba-note" role="status">{designIntent.kind === 'refine' ? '请在输入框说明希望继续调整的地方。' : '请在输入框描述你希望的形象。'}<Button variant="ghost" type="button" className="ba-quiet" onClick={() => petDesignIntent.clear()}>关闭提示</Button></div>}{showHome && <AssistantHome {...home} input={input} inputActions={inputActions} />}{home && <QuietChat home={home} session={session} chat={conversation.views?.get('chat')} inbox={inbox} onOpenFile={openFile} />}</div></div>;
 }
 
 function PetConversationStatus({ home, session, chat }) {

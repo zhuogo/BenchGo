@@ -21,7 +21,7 @@ test('desktop ingress retains full immutable original, skips Eval and deduplicat
     assert.equal(first.candidate, null);
     assert.equal(second.duplicate, true);
     assert.equal(first.trigger.id, second.trigger.id);
-    assert.deepEqual(database.listTickets(), []);
+    assert.deepEqual(database.listTasks(), []);
     assert.throws(() => recordDesktopTrigger(database, { ...input, message: { ...input.message, content: [{ type: 'text', text: 'changed' }] } }), { code: 'TRIGGER_CONFLICT' });
     assert.equal(recordDesktopTrigger(database, { ...input, message: { ...input.message, source: { kind: 'plugin' } } }), null);
   } finally { database.close(); }
@@ -33,16 +33,16 @@ test('Router gates exact definitions, operations, nested calls and unknown tools
   const agent = {}, inherited = captureRouterTools(tools, agent);
   definitions.set('assistant_config', { name: 'assistant_config' });
   let guard, executions = 0;
-  installRouterPermissionGate({ tools, on: (name, callback) => { assert.equal(name, 'tools/execute'); guard = callback; } }, { agent, inherited, controlled: captureRouterTools(tools, agent) });
+  installRouterPermissionGate({ tools, on: (name, callback) => { if (name === 'tools/execute') guard = callback; } }, { agent, inherited, controlled: captureRouterTools(tools, agent) });
   const invoke = (name, args = {}, extra = {}) => guard({ agent, name, arguments: args, signal: new AbortController().signal, ...extra }, async () => ++executions);
-  await assert.rejects(invoke('read'), { code: 'ROUTER_TICKET_REQUIRED' });
-  await assert.rejects(invoke('str_replace_editor', { command: 'view' }), { code: 'ROUTER_TICKET_REQUIRED' });
+  await assert.rejects(invoke('read'), { code: 'ROUTER_TASK_REQUIRED' });
+  await assert.rejects(invoke('str_replace_editor', { command: 'view' }), { code: 'ROUTER_TASK_REQUIRED' });
   await invoke('assistant_config');
-  for (const name of ['bash', 'mcp__read_fake', 'run_code', 'assistant_unregistered']) await assert.rejects(invoke(name), { code: 'ROUTER_TICKET_REQUIRED' });
-  await assert.rejects(invoke('str_replace_editor', { command: 'create' }), { code: 'ROUTER_TICKET_REQUIRED' });
-  await assert.rejects(invoke('bash', { ticketId: 'forged', readOnly: true }, { parent: Symbol('nested') }), { code: 'ROUTER_TICKET_REQUIRED' });
+  for (const name of ['bash', 'mcp__read_fake', 'run_code', 'assistant_unregistered']) await assert.rejects(invoke(name), { code: 'ROUTER_TASK_REQUIRED' });
+  await assert.rejects(invoke('str_replace_editor', { command: 'create' }), { code: 'ROUTER_TASK_REQUIRED' });
+  await assert.rejects(invoke('bash', { taskId: 'forged', readOnly: true }, { parent: Symbol('nested') }), { code: 'ROUTER_TASK_REQUIRED' });
   definitions.set('read', { name: 'read' });
-  await assert.rejects(invoke('read'), { code: 'ROUTER_TICKET_REQUIRED' });
+  await assert.rejects(invoke('read'), { code: 'ROUTER_TASK_REQUIRED' });
   // A call routed to another agent is not this gate's to decide: it passes on.
   assert.equal(await invoke('assistant_config', {}, { agent: {} }), 2);
   assert.equal(executions, 2);
@@ -50,7 +50,7 @@ test('Router gates exact definitions, operations, nested calls and unknown tools
 
 test('Router denies every investigation from the first call while coordination and delegation remain available', async () => {
   const agent = {};
-  const investigations = ['read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'skill', 'str_replace_editor'];
+  const investigations = ['read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'skill', 'skills_read', 'str_replace_editor', 'plugin_manager', 'mcp__notes__read', 'run_code', 'spawn_agent'];
   const definitions = new Map([...investigations, 'ask_user_question', 'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete'].map(name => [name, { name }]));
   let restriction;
   const tools = { schemas: () => [...definitions.values()], get: name => definitions.get(name), restrict: filter => { restriction = filter; } };
@@ -61,9 +61,9 @@ test('Router denies every investigation from the first call while coordination a
   const invoke = (name, callId) => guard({ agent, name, callId, signal: new AbortController().signal }, async () => ++dispatched);
   install();
   assert.deepEqual(restriction, { allow: ['ask_user_question', 'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete'] });
-  for (const name of investigations) await assert.rejects(invoke(name, name), { code: 'ROUTER_TICKET_REQUIRED' });
+  for (const name of investigations) await assert.rejects(invoke(name, name), { code: 'ROUTER_TASK_REQUIRED' });
   install();
-  await assert.rejects(invoke('read', 'after-resume'), { code: 'ROUTER_TICKET_REQUIRED' });
+  await assert.rejects(invoke('read', 'after-resume'), { code: 'ROUTER_TASK_REQUIRED' });
   await invoke('assistant_delegate', 'delegate');
   await invoke('ask_user_question', 'question');
   await invoke('schedule_create', 'schedule-create');
@@ -93,9 +93,9 @@ test('Router leaves another agent’s calls to that agent’s own gate', async (
   await invoke({ agent: otherAgent, name: 'ask_user_question' });
   assert.equal(dispatched, 3);
   // Its own inherited execution tool is still denied.
-  await assert.rejects(invoke({ name: 'read' }), { code: 'ROUTER_TICKET_REQUIRED' });
+  await assert.rejects(invoke({ name: 'read' }), { code: 'ROUTER_TASK_REQUIRED' });
   assert.equal(dispatched, 3);
   // The gate leaves diagnostic results to the official executor and Router;
   // it does not turn one denied call into a hard chat failure.
-  assert.deepEqual(listeners, ['tools/execute']);
+  assert.deepEqual(listeners, ['system-prompt/assemble', 'tools/execute']);
 });

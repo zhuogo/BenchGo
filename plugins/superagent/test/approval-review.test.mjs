@@ -3,16 +3,16 @@ import assert from 'node:assert/strict';
 import { findReviewReminder, reviewReminderMatches, reviewActionDetails, reviewApprovalResponse, reviewConnectionError, reviewDisplayText, reviewDisplayValue, reviewSessionOpenError, sameReviewOrigin } from '../client/approval-review.mjs';
 import { approvalReminderNavigation } from '../client/approval-flow.mjs';
 
-const worker = { kind: 'worker', ticketId: 'ticket', assignmentId: 'assignment', runId: 'run', sessionId: 'worker', ownerSessionId: 'router', ownerThreadId: 'main' };
+const worker = { kind: 'worker', taskId: 'task', assignmentId: 'assignment', runId: 'run', sessionId: 'worker', ownerSessionId: 'router', ownerThreadId: 'main' };
 const router = { kind: 'router', sessionId: 'router', ownerSessionId: 'router', ownerThreadId: 'main' };
 
-const binding = { sessionId: 'worker', callId: 'call', approvalId: 'durable-id', actionId: 'action', ticketId: 'ticket', assignmentId: 'assignment', runId: 'run', ownerThreadId: 'main', eventKey: 'approval:worker:durable-id' };
+const binding = { sessionId: 'worker', callId: 'call', approvalId: 'durable-id', actionId: 'action', taskId: 'task', assignmentId: 'assignment', runId: 'run', ownerThreadId: 'main', eventKey: 'approval:worker:durable-id' };
 const reminder = () => ({ role: 'assistant', requestId: 'reminder', approval: { ...binding } });
 const entry = () => ({ origin: { ...worker }, pending: { sessionId: 'worker', callId: 'call', key: 'approval:unrelated-client-sequence', toolName: 'assistant_external_action', answerable: true, reason: '批准本次具体外部动作（仅本次有效）：\n' + JSON.stringify({ actionId: 'action' }) } });
 
 test('inline reminder matches the trusted action and run, never the transient client key or unrelated request', () => {
   assert(reviewReminderMatches(reminder(), entry()));
-  for (const key of ['sessionId', 'callId', 'actionId', 'ticketId', 'assignmentId', 'runId', 'ownerThreadId', 'eventKey']) {
+  for (const key of ['sessionId', 'callId', 'actionId', 'taskId', 'assignmentId', 'runId', 'ownerThreadId', 'eventKey']) {
     const row = reminder(); row.approval[key] = 'wrong'; assert(!reviewReminderMatches(row, entry()), key);
   }
   for (const change of [{ answerable: false }, { toolName: 'other' }, { reason: '{"actionId":"action"}' }, { callId: undefined }]) {

@@ -16,7 +16,7 @@ const deferred = () => {
 };
 function execution(now = epoch, overdue = false) {
   return {
-    ticket: { id: 'ticket', status: 'running', instructionRevision: 1 },
+    task: { id: 'task', status: 'running', instructionRevision: 1 },
     assignment: { id: 'assignment', state: 'claimed', owner: 'owner', fence: 1, leaseUntil: now + 60000 },
     run: { id: 'run', sessionId: 'session', state: 'running', instructionRevision: 1 },
     executionAlive: { status: 'running', observedAt: iso(now), bootId: 'boot-1' },

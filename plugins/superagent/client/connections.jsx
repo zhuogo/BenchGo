@@ -219,7 +219,7 @@ export function Connections({ api, onDirtyChange, active = true }) {
   const verification = [
     { label: '平台认证', value: authentication(status) === 'verified' ? '已验证' : authentication(status) === 'host-authenticated' ? '主机认证' : authentication(status) === 'failed' ? '认证失败' : '未验证', tone: ['verified', 'host-authenticated'].includes(authentication(status)) ? 'success' : authentication(status) === 'failed' ? 'error' : 'neutral' },
     { label: '消息接收', value: status?.events === 'verified' ? '已验证' : '未验证', tone: status?.events === 'verified' ? 'success' : 'neutral' },
-    { label: '结果发送', value: status?.sending === 'pull' ? '工单 / API 取结果' : status?.sending === 'verified' ? '已验证' : status?.sending === 'accepted' ? '已受理' : '未验证', tone: ['verified', 'pull'].includes(status?.sending) ? 'success' : status?.sending === 'accepted' ? 'pending' : 'neutral' },
+    { label: '结果发送', value: status?.sending === 'pull' ? '任务 / API 取结果' : status?.sending === 'verified' ? '已验证' : status?.sending === 'accepted' ? '已受理' : '未验证', tone: ['verified', 'pull'].includes(status?.sending) ? 'success' : status?.sending === 'accepted' ? 'pending' : 'neutral' },
   ];
   return <section className="ba-group ba-connections" data-channel={channel}>{confirmation}<style>{css + feishuCss}</style>
     {!!catalog.length && <SegmentedControl options={catalog.map(item => ({ value: item.id, label: item.label, icon: <ChannelBrandIcon channel={item.id} available={!synced[item.id]?.stale && available(item.id === channel ? status : item.status)} size={18} /> }))} value={channel} onChange={choose} disabled={busy} label="多平台渠道" tabIdPrefix="ba-channel" panelId="ba-channel-panel" />}

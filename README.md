@@ -21,16 +21,15 @@ BenchGo 基于官方 DeepSeek Harness，不修改其源码。桌面、网页和 
 
 ## 安装工作台
 
-Windows 安装包见 [Releases](https://github.com/zhuogo/BenchGo/releases)。安装后包含 BenchGo 基础层、Harness 聚合、SuperAgent、Voice 和 Link，无需逐项安装插件。
+官网提供[下载](https://benchgo.cn/download)和[使用文档](https://benchgo.cn/docs)，安装包与校验文件保存在 [Releases](https://github.com/zhuogo/BenchGo/releases)。下载页只展示实际已发布的资产。Windows x64 提供 EXE，macOS Apple Silicon / Intel 提供 DMG 和 ZIP；安装后包含 BenchGo 基础层、Harness 聚合、SuperAgent、Voice 和 Link，无需逐项安装插件。macOS 当前采用 ad-hoc 签名，未经过 Apple 公证；Windows 未宣称发行者认证。
 
-Linux：
+Linux 服务端使用发行版中的 `benchgo-<version>-linux-server.tar.gz`，支持 Ubuntu / Debian x64 和 systemd 用户服务。校验同页 SHA256SUMS 后解压，在解压目录执行：
 
 ```sh
-npm install -g benchgo
-benchgo install
+(umask 077; bash install.sh github connect > connection.json)
 ```
 
-也可以 `npx benchgo install`。需要 Node.js 22+。
+`connection.json` 含设备授权凭据，请私密保管。也可在 BenchGo「设备 → 添加 → SSH 服务器」完成部署与连接。此包是无桌面窗口的服务端，不是 Linux Desktop，不支持 ARM64；内置离线插件，首次安装仍需联网获取固定版本官方 Harness 和必要时的 Node.js 24.9+。具体要求、更新与服务管理以包内 README 为准。
 
 ## 安装中继
 
@@ -74,7 +73,7 @@ docs                  设计与实现记录
 deepseek-harness      官方引擎，子模块，不修改
 ```
 
-Windows 安装包、Android APK 和 npm 发布由 GitHub Actions 构建。正式签名密钥不进入仓库。
+Windows EXE、macOS 双架构 DMG/ZIP、Android 发行签名 APK 和 Linux 服务端归档由统一 GitHub Actions 流程构建；全平台验证通过后发布不可变版本及签名下载清单。npm 发布使用独立手动入口。正式签名密钥不进入仓库。iOS 当前使用浏览器访问 Link，不提供原生 IPA。
 
 五个源码包统一交付为一个 `benchgo-plugin`，在 DSH 的 BenchGo 插件详情中通过五个 Cordis 入口分别管理。基础层提供公共服务；SuperAgent 依赖 Harness 聚合，Voice 与 Link 不硬依赖总助手或聚合运行时。客户端仍只注册 `benchgo-plugin`，已有接口与数据标识保持兼容。整体机制见[总架构](docs/总架构.html)，目录、依赖及验证边界见[源码架构](docs/02-工作台与Agent/源码架构.md)。docs 按板块组织，小模块可独立成文；同一主题只维护一份设计，跨模块通过链接引用。
 

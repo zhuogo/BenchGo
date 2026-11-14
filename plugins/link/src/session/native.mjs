@@ -9,10 +9,20 @@ export function createNativeAdapter(ctx) {
     if (!commander) throw Object.assign(new Error('Harness 聚合模块不可用，请在 BenchGo 插件中启用'), { status: 503 });
     return commander;
   };
-  const projectOf = session => ctx.workspaceRegistry.list().find(p => p.id === session.projectId && p.path === session.cwd);
-  const visible = session => session?.ownerSessionId?.startsWith('commander-web:') && !session.archived && projectOf(session);
-  const wire = s => ({ id: `native:${s.id}`, projectId: s.projectId, title: s.title || s.provider, running: ['running', 'waiting', 'connecting'].includes(s.status), updatedAt: s.updatedAt, engine: s.provider });
-  const list = () => ctx.get('commander')?.list().filter(visible).map(wire) ?? [];
+  const candidate = session => session?.ownerSessionId?.startsWith('commander-web:') && !session.archived;
+  const visible = session => candidate(session) && ctx.workspaceRegistry.list().some(p => p.id === session.projectId && p.path === session.cwd);
+  const wire = s => ({ id: `native:${s.id}`, native: true, projectId: s.projectId, title: s.title || s.provider, running: ['running', 'waiting', 'connecting'].includes(s.status), updatedAt: s.updatedAt, engine: s.provider });
+  const list = availableProjects => {
+    const sessions = ctx.get('commander')?.list().filter(candidate) ?? [];
+    if (!sessions.length) return [];
+    const pathsByProject = new Map();
+    for (const project of availableProjects ?? ctx.workspaceRegistry.list()) {
+      let paths = pathsByProject.get(project.id);
+      if (!paths) pathsByProject.set(project.id, paths = new Set());
+      paths.add(project.path);
+    }
+    return sessions.filter(session => pathsByProject.get(session.projectId)?.has(session.cwd)).map(wire);
+  };
   const dispatch = async input => {
     if (!input.id?.startsWith('native:')) throw new Error('会话不存在');
     const commander = requireCommander();

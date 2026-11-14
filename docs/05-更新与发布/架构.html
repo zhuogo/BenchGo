@@ -147,10 +147,10 @@
       "title": "主机更新协调与互斥",
       "kicker": "HOST UPDATE SERVICE",
       "kind": "orchestration",
-      "sub": "检查、下载、安装、回退统一 admission",
+      "sub": "检查、下载、安装统一 admission",
       "symbol": "createUpdates() · mountUpdates()",
       "plain": "更新当前连接的主机，同时避开正在执行的任务。",
-      "role": "通过 /api/commander/updates 比较组件与兼容条件，返回统一 decision；用户只操作检查更新或立即更新。安装前检查 managed/兼容/忙碌，下载后再次检查任务，阻止并发变更。",
+      "role": "通过 /api/commander/updates 比较组件与兼容条件，返回统一 decision；用户只操作检查更新或长按更新。安装前检查 managed/兼容/忙碌，下载后再次检查任务，阻止并发变更。",
       "input": "更新动作、当前版本、profile、运行任务状态",
       "output": "真实更新状态或冲突原因",
       "sources": [
@@ -186,12 +186,12 @@
       "title": "官方 profile 锁内激活",
       "kicker": "ATOMIC ACTIVATION",
       "kind": "execution",
-      "sub": "切换 manifest 指针，保存上一版本",
+      "sub": "锁内切换 manifest 激活指针",
       "symbol": "activateRelease()",
       "plain": "切换下次启动加载的版本，不覆盖运行中的代码。",
-      "role": "在官方 profile 写锁内更新 composition/manifest，登记 current 与 previous；失败恢复可运行状态，处理已验证的旧包遮蔽。",
+      "role": "在官方 profile 写锁内更新 composition/manifest，登记当前激活版本；失败恢复可运行状态，处理已验证的旧包遮蔽。",
       "input": "prepared release、profile、runtime",
-      "output": "激活指针与 previous 回退记录",
+      "output": "当前激活指针与待重启状态",
       "sources": [
         "plugins/benchgo/shared/plugin-install.mjs",
         "scripts/desktop/plugin-bundle.mjs"
@@ -220,26 +220,6 @@
       "note": "必须检查物理包、官方解析入口与客户端，不只检查 manifest 版本。",
       "state": "implemented",
       "x": 440,
-      "y": 740
-    },
-    {
-      "id": "rollback",
-      "title": "回退到上一完整版本",
-      "kicker": "ROLLBACK BRANCH",
-      "kind": "orchestration",
-      "sub": "检查任务与兼容，再切换上一版本",
-      "symbol": "rollbackRelease()",
-      "plain": "新版本出问题时，切回仍保留的上一版。",
-      "role": "读取 previous，检查完整发行记录与运行时兼容，再沿用 profile 激活机制切换；回退同样重启后生效。",
-      "input": "上一发行记录、空闲主机、兼容 runtime",
-      "output": "回退激活指针与待重启状态",
-      "sources": [
-        "plugins/benchgo/shared/plugin-install.mjs",
-        "plugins/benchgo/src/updates.mjs"
-      ],
-      "note": "有运行或等待交互的任务时不回退；不是删除用户数据重新安装。",
-      "state": "implemented",
-      "x": 820,
       "y": 740
     },
     {
@@ -331,21 +311,6 @@
       "to": "l"
     },
     {
-      "a": "restart",
-      "b": "rollback",
-      "label": "需要回退时",
-      "from": "r",
-      "to": "l"
-    },
-    {
-      "a": "rollback",
-      "b": "activate",
-      "label": "锁内切换上一版",
-      "from": "b",
-      "to": "b",
-      "kind": "feedback"
-    },
-    {
       "a": "publish",
       "b": "platform",
       "label": "独立平台发行",
@@ -387,7 +352,7 @@
     {
       "node": "activate",
       "title": "准备成功后切换激活指针",
-      "text": "安全解包到不可变 release，在官方 profile 写锁内切换 manifest 并保留上一版。此时状态是待重启。",
+      "text": "安全解包到不可变 release，在官方 profile 写锁内切换 manifest。此时状态是待重启。",
       "edge": 7
     },
     {
@@ -395,12 +360,6 @@
       "title": "重启并核对实际加载",
       "text": "启动后核对真实包、官方解析路径、五入口及客户端；仅看到下载完成或 manifest 新版本不能判定成功。",
       "edge": 8
-    },
-    {
-      "node": "rollback",
-      "title": "必要时回退并再次重启",
-      "text": "在主机空闲时验证上一完整版本与引擎兼容，沿用同一激活机制回退，保留配置和会话。",
-      "edge": 9
     }
   ],
   "docs": [

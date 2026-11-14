@@ -8,6 +8,7 @@ import * as ssh from 'benchgo-workbench-vendor:ssh';
 import { contextFacade } from '../src/boundary.mjs';
 import css from './style.css';
 import { localWorkbenchPage } from './local-surface.mjs';
+import { mountWorkbenchPreviews } from './previews.jsx';
 
 const PANEL = 'benchgo-workbench';
 const localPage = host => localWorkbenchPage(location, host.connection);
@@ -46,9 +47,9 @@ export function WorkbenchPage({ host, runtime }) {
     try { await api({ action: 'ssh.confirm', challenge: candidate.challenge, fingerprint: candidate.fingerprint }); setCandidate(null); await refresh(); }
     catch (e) { setOperationError(e.message); } finally { setBusy(false); }
   };
-  return <section className="bg-workbench"><style>{css}</style><header><div><h1>工作台</h1><p>编辑项目文件、查看 Git 变更和管理远程服务器。</p></div><DeviceLauncher /></header>
+  return <section className="bg-workbench"><style>{css}</style><header><div><h1>工作台</h1><p>编辑项目文件、预览文档与音视频、查看 Git 变更和管理远程服务器。</p></div><DeviceLauncher /></header>
     {!localPage(host) ? <div className="bg-workbench-empty"><UIIcon name="devices" size={28} /><h2>从本机打开运维工作台</h2><p>远程连接继续使用设备中心和当前会话的官方工具。</p></div> : loading && !state ? <Loading label="正在读取工作台状态" /> : error ? <div className="bg-workbench-empty" role="alert"><h2>工作台暂时不可用</h2><p>{error}</p><Button onClick={refresh}>重试</Button></div> : <>
-      <section><h2>项目</h2><p>文件、Git 和终端跟随当前项目对话。</p><div className="bg-workbench-actions">{[['editor', '文件'], ['git', 'Git 变更'], ['terminal-bottom', '终端']].map(([type, label]) => <Button key={type} variant="outline" disabled={!state.sidebar.available || !serviceState.sidebar} onClick={() => open(type)}>{label}</Button>)}</div>{(!state.sidebar.available || serviceState.error) && <p role="status">{state.sidebar.error || serviceState.error || '工作台组件正在连接…'}</p>}</section>
+      <section><h2>项目</h2><p>文件、Git 和终端跟随当前项目对话；打开文档、表格、演示文稿或音视频文件即可预览。</p><div className="bg-workbench-actions">{[['editor', '文件'], ['git', 'Git 变更'], ['terminal-bottom', '终端']].map(([type, label]) => <Button key={type} variant="outline" disabled={!state.sidebar.available || !serviceState.sidebar} onClick={() => open(type)}>{label}</Button>)}</div>{(!state.sidebar.available || serviceState.error) && <p role="status">{state.sidebar.error || serviceState.error || '工作台组件正在连接…'}</p>}</section>
       <section><h2>远程运维</h2><p>先核对服务器的 SHA256 指纹，再在运维面板配置认证、终端、SFTP 和端口转发。</p>
         <form onSubmit={probe}><label>服务器地址<input required value={address} onChange={e => { setAddress(e.target.value); setCandidate(null); }} placeholder="服务器 IP 或域名" autoComplete="off" /></label><label className="bg-workbench-port">SSH 端口<input required type="number" min="1" max="65535" value={port} onChange={e => { setPort(e.target.value); setCandidate(null); }} /></label><Button type="submit" variant="outline" disabled={busy}>{busy ? '正在处理…' : '读取指纹'}</Button></form>
         {candidate && <div className="bg-workbench-trust"><strong>{candidate.host}:{candidate.port}</strong><code>{candidate.fingerprint}</code><p>请与服务器管理员或控制台提供的指纹核对。</p><div className="bg-workbench-actions"><Button disabled={busy} onClick={confirm}>确认并信任此指纹</Button><Button variant="ghost" disabled={busy} onClick={() => setCandidate(null)}>取消</Button></div></div>}
@@ -69,13 +70,22 @@ export function mountWorkbenchClient(ctx) {
     const provide = (name, service) => {
       if (name === 'betterSidebar') {
         const register = service.registerTab.bind(service);
-        service.registerTab = descriptor => ['sidechat', 'subagent'].includes(descriptor.id) ? () => {} : register(descriptor);
+        service.registerTab = descriptor => {
+          if (['sidechat', 'subagent'].includes(descriptor.id)) return () => {};
+          const { settings, ...builtin } = descriptor;
+          return register(builtin);
+        };
         runtime.sidebar = service; update({ sidebar: true });
       }
       return child.provide(name, service);
     };
-    try { sidebar.apply(contextFacade(child, { provide })); }
-    catch (error) { update({ error: error.message, sidebar: false }); }
+    const slots = new Proxy(child.slots, { get(target, key) {
+      if (key === 'inject') return (name, callback) => name.startsWith('settings.') ? () => {} : target.inject(name, callback);
+      if (key === 'register') return (options, component) => options.name.startsWith('settings.') ? () => {} : target.register(options, component);
+      const value = target[key]; return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    try { sidebar.apply(contextFacade(child, { provide, slots })); if (runtime.sidebar) mountWorkbenchPreviews(child, runtime.sidebar); }
+    catch (error) { console.error('BenchGo 工作台加载失败', error); update({ error: '文件工作台加载失败，请刷新重试', sidebar: false }); }
     child.effect(() => () => { runtime.sidebar = null; update({ sidebar: false }); });
   });
   ctx.inject(ssh.inject, child => {

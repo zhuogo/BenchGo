@@ -4,11 +4,12 @@ import { join } from 'node:path';
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write';
 import { DataOwner } from '../../benchgo/shared/data-owner.mjs';
 import { watchdogPublicConfig } from './watchdog-config.mjs';
+import { migrateTaskState } from './task-storage-migration.mjs';
 
 const copy = value => structuredClone(value);
 export const watchdogDigest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const invalid = () => Object.assign(new Error('监督记录格式无效，已保留原文件'), { code: 'WATCHDOG_STORE_INVALID' });
-/** One independent supervisor owns only its observation journal, never the Ticket ledger. */
+/** One independent supervisor owns only its observation journal, never the Task ledger. */
 export async function createWatchdogStore({ directory, config, now = Date.now }) {
   const root = join(directory, 'watchdog'), filename = join(root, 'state.json');
   await mkdir(root, { recursive: true, mode: 0o700 });
@@ -31,6 +32,7 @@ export async function createWatchdogStore({ directory, config, now = Date.now })
         scheduleId: config.scheduleId || null, configRevision: 0, configHistory: [], checks: [], incidents: [], signals: [], candidates: {},
         lastCheckAt: null, nextProbeAt: null, probeFailures: 0, degraded: [] };
     }
+    state = migrateTaskState(state).value;
     state.auxiliaryActivity ??= [];
     if (!Array.isArray(state.auxiliaryActivity)) throw invalid();
     const current = watchdogPublicConfig(config), hash = watchdogDigest(current);

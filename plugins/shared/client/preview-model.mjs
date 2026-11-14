@@ -1,17 +1,19 @@
 export const TEXT_LIMIT = 2 * 1024 * 1024;
 export const BINARY_LIMIT = 25 * 1024 * 1024;
+export const PPTX_SCRIPT_LIMIT = 8 * 1024 * 1024;
 export function previewKind(name = '') {
   const ext = name.split('.').at(-1).toLowerCase();
   if (['md', 'markdown'].includes(ext)) return 'markdown';
   if (ext === 'json') return 'json';
   if (['xlsx', 'xls', 'csv', 'tsv'].includes(ext)) return 'sheet';
   if (ext === 'docx') return 'docx';
-  if (['ppt', 'pptx', 'doc', 'odt', 'rtf'].includes(ext)) return 'office';
+  if (ext === 'pptx') return 'pptx';
+  if (['ppt', 'doc', 'odt', 'rtf'].includes(ext)) return 'office';
   if (ext === 'pdf') return 'pdf';
   if (['html', 'htm'].includes(ext)) return 'html';
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'].includes(ext)) return 'image';
-  if (['mp3', 'wav', 'ogg', 'm4a', 'flac'].includes(ext)) return 'audio';
-  if (['mp4', 'webm', 'mov'].includes(ext)) return 'video';
+  if (['mp3', 'wav', 'wave', 'ogg', 'oga', 'opus', 'm4a', 'flac', 'aac', 'wma', 'aif', 'aiff', 'amr', 'ape', 'caf', 'mka'].includes(ext)) return 'audio';
+  if (['mp4', 'webm', 'mov', 'qt', 'm4v', 'mkv', 'avi', 'wmv', 'flv', 'ogv', 'mpeg', 'mpg', '3gp', '3g2', 'm2ts'].includes(ext)) return 'video';
   return 'text';
 }
 export function fileUrl(value, base = globalThis.document?.baseURI || globalThis.location?.href) {
@@ -23,13 +25,32 @@ export function fileUrl(value, base = globalThis.document?.baseURI || globalThis
   return url;
 }
 export function pdfUrl(value, base) { const url = fileUrl(value, base); url.searchParams.set('preview', 'pdf'); url.searchParams.delete('download'); return url.href; }
+// Workbench file streams explicitly disable conversion; older delivery URLs
+// retain their existing optional PDF conversion contract.
+export function documentPdfUrl(file, base) {
+  if (file.pdfUrl === false) return null;
+  return file.pdfUrl ? fileUrl(file.pdfUrl, base).href : pdfUrl(file.url, base);
+}
+export function pptxFrameDocument(script, id, nonce) {
+  if (!/^[a-zA-Z0-9-]+$/.test(id) || !/^[a-zA-Z0-9_-]{24,}$/.test(nonce)) throw new Error('预览会话无效');
+  if (typeof script !== 'string' || new TextEncoder().encode(script).byteLength > PPTX_SCRIPT_LIMIT) throw new Error('演示预览组件超过大小限制');
+  const safeScript = script.replace(/<\/script/gi, value => value.replace('/', '\\/'));
+  // The authenticated parent fetches the fixed local renderer as inert text.
+  // Only this nonce-bearing script executes, solely in the opaque sandbox.
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; media-src data: blob:; connect-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:100%;font:14px/1.5 system-ui,sans-serif;background:#eee;color:#242424}#slides{min-height:100%;box-sizing:border-box;padding:12px;overflow:auto}a{pointer-events:none}canvas,img,svg{max-width:100%}</style></head><body><div id="slides"></div><script nonce="${nonce}" data-preview-id="${id}">${safeScript}</script></body></html>`;
+}
 export async function readPreview(response, limit, signal) {
   if (!response.ok) {
     let message = (await response.text()).slice(0, 1000);
-    try { message = JSON.parse(message).error || message; } catch { /* Plain text endpoints. */ }
+    try {
+      const value = JSON.parse(message), detail = value?.error;
+      message = typeof detail === 'string' ? detail : typeof detail?.message === 'string' ? detail.message : typeof value?.message === 'string' ? value.message : typeof value === 'string' ? value : '';
+    } catch { /* Plain text endpoints. */ }
     throw new Error(message.slice(0, 500) || `读取失败 (${response.status})`);
   }
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   if (Number(response.headers.get('content-length')) > limit) { await response.body?.cancel(); throw new Error('文件超过快览大小限制，请下载查看'); }
+  if (!response.body) return new Uint8Array();
   const reader = response.body.getReader(), chunks = [];
   let size = 0;
   try {

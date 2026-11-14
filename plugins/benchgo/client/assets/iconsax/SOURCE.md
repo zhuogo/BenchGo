@@ -11,6 +11,8 @@ and CloseCircle (close) from the same iconsax-react 0.0.8 release.
 No runtime package dependency or CDN requests. catalog.json is the same asset content used for bundling.
 Brand marks for Codex, Claude, Pi and OpenCode are kept distinct from interface icons.
 
+Filter (filter): locally authored slider SVGs matching the existing 24px grid and rounded strokes; not extracted from Iconsax. Used for resource display scope.
+
 Device symbols: Monitor (computer), Mobile, Driver (server), Devices; same iconsax-react 0.0.8 source and MIT license.
 
 Unarchive (unarchive): ArchiveSlash, Linear and Bold paths from iconsax-react 0.0.8; same MIT license.

@@ -14,6 +14,7 @@ import { mountInteractivePrompt } from '../lib/modules/interactive/src/prompt.mj
 import { mountWorkbench } from '../lib/modules/workbench/src/plugin.mjs';
 import { createSettingsManagement } from './settings-management.mjs';
 import { createOfficialSettingsAdapter } from './settings-official.mjs';
+import { hostScope } from '../shared/host-scope.mjs';
 
 export const name = 'benchgo';
 
@@ -27,6 +28,7 @@ export function moduleAvailability(ctx) {
 
 /** Shared configuration and owner APIs survive optional module disposal. */
 export async function apply(ctx, config = {}) {
+  hostScope(ctx);
   const directory = config.dataDir ?? await prepareDefaultDataDirectory();
   await mkdir(directory, { recursive: true, mode: 0o700 });
   ctx.provide('benchgo', { config, directory });

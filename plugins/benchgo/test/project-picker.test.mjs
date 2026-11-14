@@ -12,7 +12,7 @@ const compiled = transformSync(readFileSync(new URL('../client/project-picker.js
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const listing = (path, entries = []) => ({ path, parent: '/', home: '/home', entries });
 
-async function mount({ api, desktop, onSelected = () => {}, onClose = () => {} }) {
+async function mount({ api, desktop, onSelected = () => {}, onClose = () => {}, ...pickerProps }) {
   const dom = new JSDOM('<!doctype html><div id="root"></div>'), previous = new Map();
   for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true })) {
     previous.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
@@ -28,7 +28,7 @@ async function mount({ api, desktop, onSelected = () => {}, onClose = () => {} }
   const root = createRoot(dom.window.document.getElementById('root'));
   const flush = callback => React.act(async () => { callback?.(); await new Promise(resolve => setImmediate(resolve)); });
   const button = label => [...dom.window.document.querySelectorAll('button')].find(node => node.textContent === label || node.getAttribute('aria-label') === label);
-  await flush(() => root.render(React.createElement(module.exports.ProjectPicker, { api, onSelected, onClose })));
+  await flush(() => root.render(React.createElement(module.exports.ProjectPicker, { api, onSelected, onClose, ...pickerProps })));
   return {
     document: dom.window.document, window: dom.window, button, flush,
     click: label => flush(() => { const node = button(label); assert(node, `Missing button: ${label}`); node.click(); }),
@@ -147,5 +147,29 @@ test('a disconnected drive keeps other drive shortcuts available for recovery', 
     assert.equal(view.document.querySelector('[role="alert"]'), null);
     assert.equal(view.document.querySelector('[aria-label="当前目录"]').textContent, 'C:\\');
     assert.equal(view.button('添加项目').disabled, false);
+  } finally { await view.dispose(); }
+});
+
+test('an unmounted picker ignores a late project creation result', async () => {
+  const pending = deferred(), selected = [];
+  const view = await mount({ api: async action => action === 'project' ? pending.promise : listing('/home'), onSelected: project => selected.push(project) });
+  await view.click('添加项目');
+  await view.dispose();
+  pending.resolve({ project: { id: 'late-project' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(selected, []);
+});
+
+test('project toolbar places the optional device control beside the existing tabs', async () => {
+  const view = await mount({ api: async () => listing('/home'), toolbarEnd: React.createElement('button', { type: 'button', 'aria-label': '目标设备' }, '服务器') });
+  try {
+    const toolbar = view.document.querySelector('.cmd-project-toolbar');
+    assert(toolbar);
+    assert.equal(toolbar.querySelector('[role="tablist"]')?.getAttribute('aria-label'), '添加方式');
+    assert.equal(toolbar.querySelector('[aria-label="目标设备"]')?.textContent, '服务器');
+    assert.equal(view.document.querySelectorAll('[role="dialog"]').length, 1);
+    await view.click('GitHub');
+    assert.equal(view.document.querySelector('.cmd-project-toolbar'), toolbar);
+    assert.equal(view.document.querySelector('[role="tab"][aria-selected="true"]')?.textContent, 'GitHub');
   } finally { await view.dispose(); }
 });

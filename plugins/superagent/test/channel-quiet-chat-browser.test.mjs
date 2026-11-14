@@ -31,7 +31,7 @@ async function fixture() {
       const placement=queued?'queued':'steering';
       const human={id:'human',source:{kind:'user',rpcId:'human-rpc'},content:[{type:'text',text:'这是运行中补充的真实要求'}]};
       const ordering=['mixed','reordered'].includes(stage),second={...human,id:'second',source:{kind:'user',rpcId:'second-rpc'},content:[{type:'text',text:'这是第二条排队要求'}]};
-      const inbox=ordering?{'next-turn':stage==='reordered'?[second,human]:[human,second]}:inputMode&&stage==='inbox'?{[queued?'next-turn':'next-step']:[human,{...human,id:'private',source:{kind:'benchgo-ticket-reply'},content:[{type:'text',text:'PRIVATE_NOTICE'}]}]}:{};
+      const inbox=ordering?{'next-turn':stage==='reordered'?[second,human]:[human,second]}:inputMode&&stage==='inbox'?{[queued?'next-turn':'next-step']:[human,{...human,id:'private',source:{kind:'benchgo-task-reply'},content:[{type:'text',text:'PRIVATE_NOTICE'}]}]}:{};
       let Official, retains=0;
       const ctx={effect:fn=>fn(),slots:{inject:(_name,fn)=>fn(),register:(_meta,Component)=>{Official=Component;return()=>{}}},
         uiConversation:{binding:()=>({activate:()=>{}})},sessions:{retain:()=>{retains++;if(mode==='error')throw Error('offline');return {binding:{session:{getSnapshot:()=>({openState:mode==='settled-error'&&retains===1?'error':'open'})}},ready:mode==='loading'?new Promise(()=>{}):Promise.resolve(),release(){}}}}};
@@ -49,10 +49,10 @@ async function fixture() {
       const renderFactorySlot=(_name,_props,children)=>{const View=children.slots.views;return <View {...hooks}/>};
       const renderSlot=()=> <Official {...hooks} renderFactorySlot={renderFactorySlot}/>;
       const history={sessionId:'feishu-session',threadId:inputMode?'main':'channel-thread',messages:inputMode&&stage==='history'?[{id:'human',rpcId:'human-rpc',seq:7,role:'user',text:human.content[0].text,time:1794218400100},{id:'formal',role:'assistant',kind:'final',text:'正式回复保持可见',time:1794218400200}]:mode==='history'?messages:[],hasMore:false,
-        requests:inputMode?[{threadId:'main',requestId:'internal',status:'failed',text:'PRIVATE_NOTICE',error:'PRIVATE_ERROR',ticketReply:{}}]:[]};
+        requests:inputMode?[{threadId:'main',requestId:'internal',status:'failed',text:'PRIVATE_NOTICE',error:'PRIVATE_ERROR',taskReply:{}}]:[]};
       if(ordering)history.messages=[{id:'formal',role:'assistant',kind:'final',text:'正式回复保持可见',time:1794218400200}];
       if(mode.startsWith('segments-')){history.messages=[{id:'human',role:'user',seq:1,text:'检查服务器状态'}];history.activeReply={turn:1,requestId:'human'};if(mode==='segments-history')history.messages.push(...['我先检查服务器的状态。','检查完成，服务运行正常。'].map((text,i)=>({id:'reply:human:1:'+(i+1),role:'assistant',kind:'final',requestId:'human',segment:true,text})));}
-      const api=async name=>name==='petCatalog'?{}:name==='tickets'?{tickets:[]}:name==='goals'?{goals:[]}:{};
+      const api=async name=>name==='petCatalog'?{}:name==='tasks'?{tasks:[]}:name==='goals'?{goals:[]}:{};
       const id=++serial;
       root.render(<ActivityProvider><div key={mode==='history'?'data':mode.startsWith('segments-')?'segments':mode} data-render={id} className='ba-root' style={{height:720,display:'flex',flexDirection:'column',maxWidth:960,margin:'auto'}}><style>{css}</style><header style={{padding:16}}>{inputMode?'BenchGo 主聊天':'feishu · oc_exact'}</header><AssistantConversation ctx={ctx} sessionId='feishu-session' threadId={inputMode?'main':'channel-thread'} history={history} api={api} assistantName='BenchGo' assistantConfig={{cardMotion:false,cardHtml:'<b>PRIVATE_CUSTOM_CARD</b>'}} SessionProvider={({children})=>children} renderSlot={renderSlot} onRefresh={noop} onOpenResources={noop}/></div></ActivityProvider>);
       return id;
@@ -60,7 +60,8 @@ async function fixture() {
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-channel-quiet-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')),
-      '@deepseek-ai/dsh-client-ui-primitives':join(root,'deepseek-harness/packages/client/ui-primitives/src/index.ts') },
+      '@deepseek-ai/dsh-client-ui-primitives':join(root,'deepseek-harness/packages/client/ui-primitives/src/index.ts'),
+      '@deepseek-ai/dsh-util-workspace-path':join(root,'deepseek-harness/packages/util/workspace-path/src/index.ts') },
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.woff2': 'dataurl', '.woff': 'dataurl', '.ttf': 'dataurl', '.png': 'dataurl' },
     plugins:[sharedUiStyles()],define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   const script = bundle.outputFiles.find(file => file.path.endsWith('.js')).text;

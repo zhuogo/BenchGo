@@ -7,6 +7,7 @@ import { registerAssistantFetchRoute } from '../src/assistant-fetch-route.mjs';
 import { resolveApprovalOrigins } from '../src/execution-approval-origin.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { channelSessionKey } from '../src/channel-policy.mjs';
+import { createAssistantDispatch } from '../src/assistant-dispatch.mjs';
 
 const requireBenchgo = createRequire(new URL('../../benchgo/package.json', import.meta.url));
 const { transformSync } = requireBenchgo('esbuild');
@@ -26,6 +27,15 @@ const sourceHook = registerHooks({ resolve(specifier, context, next) {
 } });
 const { HostConnectionService } = await import('../../../deepseek-harness/packages/client/connection/src/rpc-host.ts');
 const { Context } = await import(pathToFileURL(requireBenchgo.resolve('@deepseek-ai/cordis')).href);
+
+test('task list dispatch preserves the caller filters and forwards its pagination offset', async () => {
+  const requests = [], values = [{ id: 'page-task' }];
+  const dispatch = createAssistantDispatch({ shutdown: new AbortController(),
+    orchestrationRuntime: { state(request) { requests.push(request); return values; } }, projectTasks: tasks => tasks,
+  });
+  assert.deepEqual(await dispatch({ action: 'tasks', archived: true, taskId: 'opaque-id', limit: 1000, offset: 2000 }), { tasks: values });
+  assert.deepEqual(requests, [{ newestFirst: true, archived: true, taskId: 'opaque-id', limit: 1000, offset: 2000 }]);
+});
 
 test('assistant Fetch propagates cancellation to the query execution context', async () => {
   let route, entered;
@@ -61,16 +71,16 @@ test('official shared Fetch dispatch reaches the registered assistant route with
     const sessionId = `router-${threadId}`, mandate = { source: { channel: 'desktop', threadId, sessionId, messageId: `human-${threadId}` },
       policyVersion: policy.desktopVersion, actorId: 'desktop-owner', admission: 'desktop-approved-delegation',
       controlledActions: 'require-current-policy-and-harness-approval' };
-    const ticket = database.createTicket({ threadId: 'ledger-thread', title: `${threadId} send`, target: 'send approved exact body', mandate });
-    database.createAssignment(ticket.id, { executor: 'harness' });
+    const task = database.createTask({ threadId: 'ledger-thread', title: `${threadId} send`, target: 'send approved exact body', mandate });
+    database.createAssignment(task.id, { executor: 'harness' });
     const [assignment] = database.claimAssignments(`owner-${threadId}`, { validateMandate: () => true });
     const run = database.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence,
       sessionId: `worker-${threadId}`, directory: 'workspace' });
     database.updateRun(run.id, { owner: assignment.owner, fence: assignment.fence, state: 'submitted' });
-    runs[threadId] = { ticket, assignment, run };
+    runs[threadId] = { task, assignment, run };
   }
   const invocations = [], store = { getState: async () => state, orchestration: database };
-  const engine = { ticketOwnerScope: async threadId => ({ threadId, sessionIds: [`router-${threadId}`] }) };
+  const engine = { taskOwnerScope: async threadId => ({ threadId, sessionIds: [`router-${threadId}`] }) };
   registerAssistantFetchRoute({ connection, async dispatch(input, peer) {
     invocations.push({ input, peer });
     if (input.action === 'approvalOrigins') return resolveApprovalOrigins({ store, engine, input, peer, readPolicy: async () => policy });
@@ -88,7 +98,7 @@ test('official shared Fetch dispatch reaches the registered assistant route with
     assert.equal(response.headers.get('cache-control'), 'no-store');
     const { origins } = await response.json();
     assert.equal(origins.length, 1);
-    assert.equal(origins[0].ticketId, runs.main.ticket.id);
+    assert.equal(origins[0].taskId, runs.main.task.id);
     assert.equal(origins[0].runId, runs.main.run.id);
     assert.equal(origins[0].sessionId, 'worker-main');
     assert.equal(origins[0].ownerSessionId, 'router-main');
@@ -113,13 +123,13 @@ test('official shared Fetch dispatch reaches the registered assistant route with
     policy.connection = { enabled: true, appId: 'trusted-app', ownerOpenIds: ['channel-owner'] };
     const mandate = { policyVersion: policy.version, source, actorId: 'channel-owner',
       admission: 'explicit-owner', controlledActions: 'require-current-policy-and-harness-approval' };
-    // Production retained cancelled pre-unified-source tickets outside auto-archive.
-    const legacy = database.createTicket({ threadId: 'ledger-thread', target: 'historical channel task',
+    // Production retained cancelled pre-unified-source tasks outside auto-archive.
+    const legacy = database.createTask({ threadId: 'ledger-thread', target: 'historical channel task',
       mandate: { ...mandate, source: { channel: 'feishu' } } });
-    database.cancelTicket(legacy.id);
-    database.createTicket({ threadId: 'ledger-thread', target: 'unverified current task', mandate: { ...mandate, source: undefined } });
-    const ticket = database.createTicket({ threadId: 'ledger-thread', target: 'valid channel task', mandate });
-    database.createAssignment(ticket.id, { executor: 'harness' });
+    database.cancelTask(legacy.id);
+    database.createTask({ threadId: 'ledger-thread', target: 'unverified current task', mandate: { ...mandate, source: undefined } });
+    const task = database.createTask({ threadId: 'ledger-thread', target: 'valid channel task', mandate });
+    database.createAssignment(task.id, { executor: 'harness' });
     const [assignment] = database.claimAssignments('channel-worker', { validateMandate: () => true });
     const run = database.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence,
       sessionId: 'worker-channel', directory: 'workspace' });
@@ -132,13 +142,13 @@ test('official shared Fetch dispatch reaches the registered assistant route with
     assert(!origins.some(row => row.sessionId === 'router-broken'));
     const decision = await call({ action: 'approvalOrigins', sessionId: 'worker-channel', toolName: 'assistant_external_action' });
     assert.equal(decision.status, 200);
-    assert.deepEqual((await decision.json()).origins.map(row => row.ticketId), [ticket.id]);
-    assert.deepEqual(database.getTicket(legacy.id).mandate.source, { channel: 'feishu' });
+    assert.deepEqual((await decision.json()).origins.map(row => row.taskId), [task.id]);
+    assert.deepEqual(database.getTask(legacy.id).mandate.source, { channel: 'feishu' });
   });
 
   await t.test('JSON identity and Worker ids cannot override trusted owner or server-side origin projection', async () => {
     const response = await call({ ...input, principal: { kind: 'device' }, peer: { principal: { kind: 'device' } },
-      ownerSessionId: 'forged-router', ownerThreadId: 'side', runId: runs.side.run.id, ticketId: runs.side.ticket.id });
+      ownerSessionId: 'forged-router', ownerThreadId: 'side', runId: runs.side.run.id, taskId: runs.side.task.id });
     assert.equal(response.status, 200);
     assert.deepEqual((await response.json()).origins.map(origin => origin.sessionId), ['worker-main']);
     assert.strictEqual(invocations.at(-1).peer, connection.browserPeer);

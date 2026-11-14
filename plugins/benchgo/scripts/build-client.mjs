@@ -31,7 +31,10 @@ try {
 }
 record.environment.DSH_CLIENT_TITLE = 'BenchGo';
 const define = Object.fromEntries(['DSH_CLIENT_TITLE', 'DSH_CLIENT_VERSION', 'DSH_CLIENT_COMMIT_HASH', 'DSH_CLIENT_GIT_DIRTY'].map(key => ['process.env.' + key, JSON.stringify(record.environment[key]) ?? 'undefined']));
-const result = await build({ entryPoints: [fileURLToPath(new URL('../client/index.jsx', import.meta.url))], nodePaths: [fileURLToPath(new URL('../node_modules', import.meta.url))], bundle: true, minify: true, write: false, format: 'cjs', platform: 'browser', define, external: ['react-dom', 'react', 'react/jsx-runtime', '@deepseek-ai/*'], plugins: [workbenchClientAdapters(), sharedUiStyles(), officialModelsStore(), officialModelsUi(), shellUi()], jsx: 'automatic', target: 'es2022', loader: { '.css': 'text', '.svg': 'text' }, logLevel: 'warning' });
+const result = await build({ entryPoints: [fileURLToPath(new URL('../client/index.jsx', import.meta.url))], nodePaths: [fileURLToPath(new URL('../node_modules', import.meta.url))], bundle: true, minify: true, write: false, format: 'cjs', platform: 'browser', define,
+  // Pure address helpers ship with this client; never request an extra runtime module.
+  alias: { '@deepseek-ai/dsh-util-workspace-path': fileURLToPath(new URL('../../../deepseek-harness/packages/util/workspace-path/src/index.ts', import.meta.url)) },
+  external: ['react-dom', 'react', 'react/jsx-runtime', '@deepseek-ai/*'], plugins: [workbenchClientAdapters(), sharedUiStyles(), officialModelsStore(), officialModelsUi(), shellUi()], jsx: 'automatic', target: 'es2022', loader: { '.css': 'text', '.svg': 'text' }, logLevel: 'warning' });
 if (/process.env.DSH_CLIENT_/.test(result.outputFiles[0].text)) throw Error('Unresolved official browser build metadata');
 await mkdir(new URL('../lib/', import.meta.url), { recursive: true });
 await writeUiLicenses(fileURLToPath(new URL('../lib/UI-LICENSES.txt', import.meta.url)));

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { quietChatRows, historyReconcileSeq } from '../client/quiet-chat.mjs';
 import { projectReplyStream, projectReplyRows, conversationActivity } from '../client/reply-stream.mjs';
-import { continuationRecovery, ticketSnapshot } from '../client/ticket-state.mjs';
+import { continuationRecovery, taskSnapshot } from '../client/task-state.mjs';
 import { PartialArguments } from '@deepseek-ai/dsh-util-values';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -28,7 +28,7 @@ test('running human input remains visible from accepted echo through official in
   for (const [target, placement] of [['next-step', 'steering'], ['next-turn', 'queued']]) {
     const pending = { requestId: 'rpc', placement, text: '补充要求', time: 10, attachments: [] };
     const message = { id: 'human', source: { kind: 'user', rpcId: 'rpc' }, content: [{ type: 'text', text: '补充要求' }] };
-    const inbox = { [target]: [message, { ...message, id: 'internal', source: { kind: 'benchgo-ticket-reply' } }] };
+    const inbox = { [target]: [message, { ...message, id: 'internal', source: { kind: 'benchgo-task-reply' } }] };
     const echo = quietChatRows({}, 'main', { pendingSubmissions: [pending] });
     assert.equal(echo.length, 1); assert.equal(echo[0].submissionState, placement);
     const accepted = quietChatRows({}, 'main', { pendingSubmissions: [pending] }, undefined, inbox);
@@ -47,12 +47,12 @@ test('running human input remains visible from accepted echo through official in
 });
 
 test('private scheduling, recovery and execution requests cannot masquerade as human messages or send failures', () => {
-  const requests = ['ticketReply', 'ticketState', 'executionInput'].flatMap(key => ['queued', 'failed', 'uncertain'].map(status => ({
+  const requests = ['taskReply', 'taskState', 'executionInput'].flatMap(key => ['queued', 'failed', 'uncertain'].map(status => ({
     threadId: 'main', requestId: `${key}:${status}`, status, text: 'PRIVATE_NOTICE', error: 'PRIVATE_ERROR', [key]: {},
   })));
   requests.push({ threadId: 'main', requestId: 'schedule', status: 'failed', text: 'PRIVATE_SCHEDULE',
     message: { source: { kind: 'schedule' } } });
-  assert.deepEqual(quietChatRows({ requests, messages: [{ id: 'private', role: 'user', text: 'PRIVATE_NOTICE', source: { kind: 'benchgo-ticket-reply' } }] }), []);
+  assert.deepEqual(quietChatRows({ requests, messages: [{ id: 'private', role: 'user', text: 'PRIVATE_NOTICE', source: { kind: 'benchgo-task-reply' } }] }), []);
 });
 
 test('official inbox order survives retired echoes, edited queue order and skewed client clocks', () => {
@@ -82,8 +82,8 @@ test('quiet chat admits user and explicit final only, never raw or streaming ste
 
 test('delivery is source-bound, deduplicated, and ordered with final replies', () => {
   const history = { messages: [{ id: 'u', role: 'user', time: 1 }, { id: 'f', role: 'assistant', kind: 'final', time: 3 }], notifications: [
-    { id: 'n', type: 'ticket.result', origin: 'router', publication: { action: 'deliver' }, threadId: 'side', text: 'Done', createdAt: 2 },
-    { id: 'n', type: 'ticket.result', origin: 'router', publication: { action: 'deliver' }, threadId: 'side', text: 'Done', createdAt: 2 },
+    { id: 'n', type: 'task.result', origin: 'router', publication: { action: 'deliver' }, threadId: 'side', text: 'Done', createdAt: 2 },
+    { id: 'n', type: 'task.result', origin: 'router', publication: { action: 'deliver' }, threadId: 'side', text: 'Done', createdAt: 2 },
     { id: 'unknown', text: 'Unbound' },
     { id: 'empty', threadId: 'side', text: '' },
   ] };
@@ -112,14 +112,14 @@ test('failed and uncertain inbox requests expose their real system error without
   }
 });
 
-const stateNotification = { type: 'ticket.result', eventId: 'notice:1', threadId: 'main', ticketId: 'ticket', title: '资料整理',
+const stateNotification = { type: 'task.result', eventId: 'notice:1', threadId: 'main', taskId: 'task', title: '资料整理',
   text: '【资料整理】\n\n系统状态：系统状态：执行记录已保留，等待恢复条件。', createdAt: 1,
   publication: { origin: 'system', systemState: { state: 'continuation_wait', code: 'MODEL_UNAVAILABLE', stage: 'execution' } } };
 
 test('chat hides legacy metadata and Worker drafts while preserving Router expression and actual questions', () => {
   const router = { ...stateNotification, eventId: 'router', origin: 'router', text: '我已整理好结果，重点如下。',
     publication: { action: 'deliver', origin: 'router', text: '我已整理好结果，重点如下。' } };
-  const question = { eventId: 'question', type: 'ticket.attention', origin: 'worker', threadId: 'main', text: '你更倾向哪个范围？',
+  const question = { eventId: 'question', type: 'task.attention', origin: 'worker', threadId: 'main', text: '你更倾向哪个范围？',
     attention: { id: 'q', question: { question: '你更倾向哪个范围？' } } };
   const notifications = [stateNotification, router, question,
     { ...router, eventId: 'worker', origin: 'worker', publication: { action: 'deliver', origin: 'worker', text: '原始执行报告' } },
@@ -133,21 +133,21 @@ test('chat hides legacy metadata and Worker drafts while preserving Router expre
 });
 
 test('a persisted Router message replaces only its event and duplicate delivery UUIDs cannot replay it', () => {
-  const notification = { ...stateNotification, origin: 'router', ticketStateEventKey: 'assignment-system-state:worker:4:execution',
+  const notification = { ...stateNotification, origin: 'router', taskStateEventKey: 'assignment-system-state:worker:4:execution',
     publication: { action: 'deliver', origin: 'router', text: '资料整理暂时在等待恢复。' }, text: '资料整理暂时在等待恢复。' };
-  const report = { id: 'reply:state', role: 'assistant', kind: 'final', text: '资料整理暂时在等待恢复，执行记录已保留。', time: 2, ticketStateEventKey: 'notice:1' };
-  const matching = { ...report, ticketStateEventKey: notification.ticketStateEventKey };
+  const report = { id: 'reply:state', role: 'assistant', kind: 'final', text: '资料整理暂时在等待恢复，执行记录已保留。', time: 2, taskStateEventKey: 'notice:1' };
+  const matching = { ...report, taskStateEventKey: notification.taskStateEventKey };
   assert.deepEqual(quietChatRows({ notifications: [notification], messages: [matching] }).map(row => row.id), [report.id]);
-  for (const change of [{ ticketStateEventKey: 'other' }, { ticketStateEventKey: undefined }, { streaming: true }, { kind: 'draft' }, { text: '' }]) {
+  for (const change of [{ taskStateEventKey: 'other' }, { taskStateEventKey: undefined }, { streaming: true }, { kind: 'draft' }, { text: '' }]) {
     assert(quietChatRows({ notifications: [notification], messages: [{ ...matching, ...change }] }).some(row => row.notification), 'unrelated, unfinished or empty messages cannot hide Router delivery');
   }
   assert.equal(quietChatRows({ notifications: [notification, { ...notification, eventId: 'another-uuid' }] }).length, 1);
-  assert(quietChatRows({ notifications: [{ ...notification, eventId: 'notification-uuid' }], messages: [{ ...report, ticketStateEventKey: 'notification-uuid' }] }).some(row => row.notification), 'notification UUID cannot replace the persisted outbox identity');
-  assert.equal(quietChatRows({ notifications: [{ ...notification, ticketStateEventKey: undefined, eventKey: 'event-key' }], messages: [{ ...report, eventKey: 'event-key', ticketStateEventKey: undefined }] }).length, 1);
+  assert(quietChatRows({ notifications: [{ ...notification, eventId: 'notification-uuid' }], messages: [{ ...report, taskStateEventKey: 'notification-uuid' }] }).some(row => row.notification), 'notification UUID cannot replace the persisted outbox identity');
+  assert.equal(quietChatRows({ notifications: [{ ...notification, taskStateEventKey: undefined, eventKey: 'event-key' }], messages: [{ ...report, eventKey: 'event-key', taskStateEventKey: undefined }] }).length, 1);
 });
 
 test('legacy state stays out of chat and ordinary send errors remain visible', () => {
-  const history = { messages: [{ id: 'report', role: 'assistant', kind: 'final', text: '状态报告', ticketStateEventKey: 'notice:1' }],
+  const history = { messages: [{ id: 'report', role: 'assistant', kind: 'final', text: '状态报告', taskStateEventKey: 'notice:1' }],
     notifications: [stateNotification, { ...stateNotification, eventId: 'notice:2' }],
     requests: [{ threadId: 'main', requestId: 'send', status: 'failed', text: '用户消息', error: '连接中断，消息发送失败', createdAt: 2 }] };
   const rows = quietChatRows(history);
@@ -156,9 +156,9 @@ test('legacy state stays out of chat and ordinary send errors remain visible', (
   assert(rows.some(row => row.role === 'system' && row.text === '连接中断，消息发送失败'));
 });
 
-test('ticket acknowledgements require Router provenance and durable request identity', () => {
-  const ack = { eventId: 'ack', type: 'ticket.accepted', threadId: 'main', origin: 'router', ticketId: 'ticket', requestId: 'request', text: '好，我来整理。' };
-  for (const invalid of [{ origin: undefined }, { origin: 'system' }, { ticketId: undefined }, { requestId: undefined }]) {
+test('task acknowledgements require Router provenance and durable request identity', () => {
+  const ack = { eventId: 'ack', type: 'task.accepted', threadId: 'main', origin: 'router', taskId: 'task', requestId: 'request', text: '好，我来整理。' };
+  for (const invalid of [{ origin: undefined }, { origin: 'system' }, { taskId: undefined }, { requestId: undefined }]) {
     assert.equal(quietChatRows({ notifications: [{ ...ack, ...invalid }] }).length, 0);
   }
   assert.equal(quietChatRows({ notifications: [ack] })[0].text, ack.text);
@@ -182,8 +182,8 @@ test('option accompanies its body and uses the validated endpoint, never approva
   const code = transformSync(readFileSync(new URL('../client/quiet-chat.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
   const react = { createElement: (type, props, ...children) => typeof type === 'function' ? type(props || {}) : ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null && x !== false) }), memo: component => component, useCallback: callback => callback, useState: value => [value, () => {}], useRef: () => ({ current: null }), useEffect() {}, useSyncExternalStore: (_subscribe, snapshot) => snapshot() };
   const module = { exports: {} }, calls = [];
-  runInNewContext(code, { module, exports: module.exports, require: id => id.endsWith('approval-review.jsx') ? { useApprovalIndex: () => ({ entries: [], current: { current: [] } }), InlineApproval: 'InlineApproval' } : id.endsWith('approval-flow.mjs') ? { approvalReminderNavigation: { subscribe() {}, getSnapshot: () => null } } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('ticket-state.mjs') ? { continuationRecovery, ticketSnapshot } : id.endsWith('ticket-attention.jsx') ? { TicketAttention: 'TicketAttention' } : id.endsWith('message-actions.jsx') ? { MessageActions: 'MessageActions' } : id === 'react' ? react : id.endsWith('use-chat-scroll.jsx') ? { useChatScroll: () => ({ root: null, host: null }) } : id.endsWith('quiet-chat.mjs') ? { quietChatRows, historyReconcileSeq } : id.endsWith('reply-stream.mjs') ? { projectReplyStream, projectReplyRows, conversationActivity } : id.endsWith('conversation-activity.jsx') ? { ConversationActivity: 'ConversationActivity' } : {} });
-  const tree = module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side', api: async (...args) => calls.push(args), history: { notifications: [{ eventId: 'e', type: 'ticket.result', origin: 'router', publication: { action: 'ask' }, threadId: 'side', text: '方案已准备好', options: ['就这么办'] }] } } });
+  runInNewContext(code, { module, exports: module.exports, require: id => id.endsWith('approval-review.jsx') ? { useApprovalIndex: () => ({ entries: [], current: { current: [] } }), InlineApproval: 'InlineApproval' } : id.endsWith('approval-flow.mjs') ? { approvalReminderNavigation: { subscribe() {}, getSnapshot: () => null } } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('task-state.mjs') ? { continuationRecovery, taskSnapshot } : id.endsWith('task-attention.jsx') ? { TaskAttention: 'TaskAttention' } : id.endsWith('message-actions.jsx') ? { MessageActions: 'MessageActions' } : id === 'react' ? react : id.endsWith('use-chat-scroll.jsx') ? { useChatScroll: () => ({ root: null, host: null }) } : id.endsWith('quiet-chat.mjs') ? { quietChatRows, historyReconcileSeq } : id.endsWith('reply-stream.mjs') ? { projectReplyStream, projectReplyRows, conversationActivity } : id.endsWith('conversation-activity.jsx') ? { ConversationActivity: 'ConversationActivity' } : {} });
+  const tree = module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side', api: async (...args) => calls.push(args), history: { notifications: [{ eventId: 'e', type: 'task.result', origin: 'router', publication: { action: 'ask' }, threadId: 'side', text: '方案已准备好', options: ['就这么办'] }] } } });
   const walk = node => node && typeof node === 'object' ? [node, ...(node.children || []).flatMap(walk)] : [];
   const nodes = walk(tree);
   assert(nodes.some(node => node.props?.text === '方案已准备好'));
@@ -202,33 +202,33 @@ test('option accompanies its body and uses the validated endpoint, never approva
   const questionApi = async () => {};
   const statusAndQuestion = walk(module.exports.QuietChat({ session: { running: true }, home: { api: questionApi, threadId: 'side', history: { notifications: [
     { eventId: 'system', threadId: 'side', text: '执行模型暂不可用', publication: { origin: 'system', systemState: { state: 'continuation_wait', code: 'MODEL_UNAVAILABLE', stage: 'execution' } } },
-    { eventId: 'ask', type: 'ticket.attention', threadId: 'side', ticketId: 'original', instructionRevision: 1, currentInstructionRevision: 2, currentResultVersion: 3, ticketStatus: 'waiting', text: '采用哪个范围？', options: ['国内外'], attention: { id: 'a', question: { question: '采用哪个范围？' }, state: 'waiting' } },
+    { eventId: 'ask', type: 'task.attention', threadId: 'side', taskId: 'original', instructionRevision: 1, currentInstructionRevision: 2, currentResultVersion: 3, taskStatus: 'waiting', text: '采用哪个范围？', options: ['国内外'], attention: { id: 'a', question: { question: '采用哪个范围？' }, state: 'waiting' } },
   ] } } }));
   assert(!statusAndQuestion.some(node => node.type === 'article' && node.props['data-role'] === 'system'));
   const fallbackTree = walk(module.exports.QuietChat({ session: { running: false }, home: { history: { notifications: [stateNotification] } } }));
   assert(!fallbackTree.some(node => node.type === 'article'));
-  assert(!fallbackTree.some(node => node.type === 'TicketWaiting' || node.props?.['aria-label'] === '工单执行会话'));
-  const question = statusAndQuestion.find(node => node.type === 'TicketAttention');
-  assert.equal(question.props.ticket.id, 'original');
-  assert.equal(question.props.ticket.instructionRevision, 2);
-  assert.equal(question.props.ticket.resultVersion, 3);
-  assert.equal(question.props.ticket.status, 'waiting');
+  assert(!fallbackTree.some(node => node.type === 'TaskWaiting' || node.props?.['aria-label'] === '任务执行会话'));
+  const question = statusAndQuestion.find(node => node.type === 'TaskAttention');
+  assert.equal(question.props.task.id, 'original');
+  assert.equal(question.props.task.instructionRevision, 2);
+  assert.equal(question.props.task.resultVersion, 3);
+  assert.equal(question.props.task.status, 'waiting');
   assert.equal(question.props.api, questionApi);
   assert(!statusAndQuestion.some(node => node.type === 'button' && node.children?.includes('国内外')), 'Attention options belong to the version-bound answer form');
   const recoveryCalls = [];
-  const recoveryEvent = { ticketId: 'original', ticketStatus: 'waiting', currentInstructionRevision: 2, currentResultVersion: 3,
+  const recoveryEvent = { taskId: 'original', taskStatus: 'waiting', currentInstructionRevision: 2, currentResultVersion: 3,
     continuationWait: { code: 'EXECUTION_BUDGET_EXHAUSTED', sourceResultVersion: 3 }, threadId: 'side', text: '已答复，系统等待续做资源' };
   const recoveryTree = walk(module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side', api: async (...args) => recoveryCalls.push(args), history: { notifications: [{ ...recoveryEvent, eventId: 'old', createdAt: 1 }, { ...recoveryEvent, eventId: 'new', createdAt: 2 }] } } }));
-  assert(!recoveryTree.some(node => node.type === 'TicketWaiting'));
-  assert(!statusAndQuestion.some(node => node.type === 'TicketWaiting'), 'question card is not followed by a duplicate waiting panel');
+  assert(!recoveryTree.some(node => node.type === 'TaskWaiting'));
+  assert(!statusAndQuestion.some(node => node.type === 'TaskWaiting'), 'question card is not followed by a duplicate waiting panel');
   assert.equal(recoveryCalls.length, 0);
   const opened = [];
   for (const executionSession of [undefined, { available: false }, { available: true, sessionId: 'worker' }]) {
     const tree = walk(module.exports.QuietChat({ session: { running: false }, home: { threadId: 'side',
       onOpenExecution: value => opened.push(value), onRefresh: () => opened.push('refresh'),
       history: { notifications: [{ ...recoveryEvent, eventId: 'current', executionSession }] } } }));
-    assert(!tree.some(node => node.type === 'TicketWaiting' || node.props?.['aria-label'] === '工单执行会话'));
-    for (const label of ['查看执行会话', '刷新状态', '停止工单']) assert(!tree.some(node => node.type === 'button' && node.children.includes(label)));
+    assert(!tree.some(node => node.type === 'TaskWaiting' || node.props?.['aria-label'] === '任务执行会话'));
+    for (const label of ['查看执行会话', '刷新状态', '停止任务']) assert(!tree.some(node => node.type === 'button' && node.children.includes(label)));
   }
   assert.deepEqual(opened, []);
   assert.equal(module.exports.ScheduleLifecycle, undefined);

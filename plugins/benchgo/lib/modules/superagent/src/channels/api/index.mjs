@@ -5,7 +5,7 @@ import { beforeDelivery } from '../delivery-outcome.mjs';
 export const channelDefinition = {
   id: 'api', label: 'API Service', defaults: { accountId: 'benchgo-api' }, fields: [{ key: 'accountId', label: '接入名称', type: 'text', required: true }],
   capabilities: { externalActions: [], direct: true, text: true, pullResults: true, attachments: false },
-  help: '复用 BenchGo 已认证 API。通过 connectionAction / submit 提交或续聊，使用 tickets 查询工单与结果；不需要另建服务或密钥。',
+  help: '复用 BenchGo 已认证 API。通过 connectionAction / submit 提交或续聊，使用 tasks 查询任务与结果；不需要另建服务或密钥。',
 };
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f\x7f]/.test(value);
@@ -38,7 +38,7 @@ export function createApiAdapter(options) {
     async operation(input, { principal } = {}) {
       if (principal?.kind !== 'owner') throw fail('API 需要已认证的 BenchGo 主人会话', 403);
       if (!id(principal?.id || principal?.userId)) throw fail('Authenticated principal ID is required', 403);
-      if (input.operation !== 'submit') throw fail('API 操作不支持；工单结果通过 tickets 查询，直接回复通过 connectionReplies 查询');
+      if (input.operation !== 'submit') throw fail('API 操作不支持；任务结果通过 tasks 查询，直接回复通过 connectionReplies 查询');
       const c = await read(); if (!c.enabled) throw fail('API 链接未启用', 409);
       const event = gatewaySource('api', c, input, { id: principal.id || principal.userId, kind: 'human' });
       await authorizeChannel(options, 'receive', event.source, event.actor);
@@ -52,7 +52,7 @@ export function createApiAdapter(options) {
         await authorizeChannel(options, 'send', source);
         if (!c.enabled || source?.channel !== 'api' || source.accountId !== c.accountId) throw fail('API 交付来源已撤销', 403);
       });
-      // Tickets and direct replies each have a durable, owner-readable result mailbox.
+      // Tasks and direct replies each have a durable, owner-readable result mailbox.
       return { status: 'accepted', messageId: `pull:${createHash('sha256').update(String(idempotencyKey)).digest('hex')}`, deliveryMode: 'pull' };
     },
     dispose() { disposed = true; },

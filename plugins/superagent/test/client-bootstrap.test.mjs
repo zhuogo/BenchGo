@@ -20,7 +20,7 @@ function load(path, overrides = {}) {
   return module.exports;
 }
 
-test('declared client dependencies authorize uiConversation in optional child scope', async () => {
+test('declared client dependencies authorize native conversation and delivery services in optional child scope', async () => {
   const entry = load('../../benchgo/client/index.jsx');
   const effects = [], errors = [], activated = [];
   const conversation = load('../client/conversation.jsx', { react: {
@@ -28,11 +28,13 @@ test('declared client dependencies authorize uiConversation in optional child sc
     useState: initial => [initial, value => { if (typeof value === 'string' && value) errors.push(value); }],
   } });
   const ctx = new Context();
+  const sidebarRight = { openResource() {} };
   for (const name of entry.inject) ctx.provide(name, name === 'uiConversation' ? { binding: id => ({ activate: target => activated.push([id, target]) }) }
-    : name === 'sessions' ? { retain: () => ({ ready: Promise.resolve(), release() {} }) } : {});
+    : name === 'sessions' ? { retain: () => ({ ready: Promise.resolve(), release() {} }) } : name === 'sidebarRight' ? sidebarRight : {});
   let cleanup;
   const fiber = ctx.plugin({ inject: entry.inject, apply: parent => {
     parent.plugin({ apply: child => {
+      assert.equal(child.sidebarRight, sidebarRight, 'local delivery inherits the declared native Sidebar service');
       conversation.AssistantConversation({ ctx: child, sessionId: 'main-session' });
       cleanup = effects[0]();
     } });
@@ -52,15 +54,18 @@ test('assistant conversation retains the official composer without a replacement
 });
 
 test('first registered main panel opens SuperAgent and remount does not steal navigation', () => {
-  const assistant = load('../client/index.jsx');
   const operations = [];
+  const assistant = load('../client/index.jsx', { './execution-session-navigation.mjs': {
+    executionSessionNavigation: { close: () => operations.push(['close-execution']) },
+    registerExecutionSessionDiscovery() {},
+  } });
   const ctx = {
     effect: effect => effect(),
     layout: { panelInfo: { getSnapshot: () => ({ activePanelId: 'other' }) }, selectPanel: id => operations.push(['select', id]) },
     slots: { inject: (_name, mount) => mount(), register: options => { operations.push(['register', options.key]); return () => {}; } },
   };
   assistant.mountAssistant(ctx);
-  assert.deepEqual(operations, [['register', 'benchgo-assistant'], ['select', 'benchgo-assistant']]);
+  assert.deepEqual(operations, [['register', 'benchgo-assistant'], ['close-execution'], ['select', 'benchgo-assistant']]);
   operations.length = 0;
   assistant.mountAssistant(ctx);
   assert.deepEqual(operations, [['register', 'benchgo-assistant']]);

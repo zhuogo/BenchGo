@@ -5,12 +5,20 @@ import { LinkIconMedium, Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primi
 import { Tooltip as BubbleTooltip } from '../../shared/client/ui/tooltip.jsx';
 import { UIIcon } from './iconsax.jsx';
 
-/** Browsing selects host folders; an Electron chooser is only offered by the desktop bridge. */
-export function ProjectPicker({ api, onClose, onSelected }) {
-  const [tab, setTab] = useState('browse'), [listing, setListing] = useState(null), [roots, setRoots] = useState([]), [query, setQuery] = useState('');
-  const [url, setUrl] = useState(''), [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState(''), [browseError, setBrowseError] = useState('');
+export function ProjectDialog({ title = '添加项目', busy = false, onClose, children, className = '' }) {
+  const close = () => { if (!busy) onClose(); };
+  return <Modal open headless onClose={close} title={title} className={'cmd-project-dialog ' + className}>
+    <header className="cmd-project-header"><h2>{title}</h2><button type="button" className="cmd-project-icon-button" aria-label="关闭" disabled={busy} onClick={close}><UIIcon name="close" size={16} /></button></header>
+    <div className="cmd-project-content">{children}</div>
+  </Modal>;
+}
+
+/** Browsing selects host folders; a remote target must never use the local desktop chooser. */
+export function ProjectPicker({ api, onClose, onSelected, embedded = false, onBusyChange, draft, onDraftChange, allowDesktop = true, toolbarEnd }) {
+  const [tab, setTab] = useState(draft?.tab || 'browse'), [listing, setListing] = useState(null), [roots, setRoots] = useState([]), [query, setQuery] = useState('');
+  const [url, setUrl] = useState(draft?.url || ''), [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState(''), [browseError, setBrowseError] = useState('');
   const generation = useRef(0), mounted = useRef(true), browseTarget = useRef(), id = useId();
-  const desktop = globalThis.__DSH_DIRECTORY_PICKER__;
+  const desktop = allowDesktop && globalThis.__DSH_DIRECTORY_PICKER__;
   const browse = async path => {
     const version = ++generation.current; browseTarget.current = path; setLoading(true); setBrowseError(''); setError(''); setQuery('');
     try { const result = await api('browse', path ? { path } : {}); if (mounted.current && version === generation.current) { setListing(result); setRoots(result.roots ?? []); } }
@@ -18,9 +26,11 @@ export function ProjectPicker({ api, onClose, onSelected }) {
     finally { if (mounted.current && version === generation.current) setLoading(false); }
   };
   useEffect(() => { mounted.current = true; void browse(); return () => { mounted.current = false; generation.current++; }; }, []);
+  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
+  useEffect(() => { onDraftChange?.({ tab, url }); }, [tab, url, onDraftChange]);
   const add = async operation => {
     if (busy) return; setBusy(true); setError('');
-    try { const result = await operation(); if (result?.project) await onSelected(result.project); }
+    try { const result = await operation(); if (mounted.current && result?.project) await onSelected(result.project); }
     catch (e) { if (mounted.current) setError(e.message); }
     finally { if (mounted.current) setBusy(false); }
   };
@@ -36,14 +46,14 @@ export function ProjectPicker({ api, onClose, onSelected }) {
   };
   const entries = (listing?.entries ?? []).filter(entry => entry.name.toLowerCase().includes(query.trim().toLowerCase()));
   const folderName = listing?.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || listing?.path;
-  const close = () => { if (!busy) onClose(); };
-  return <Modal open headless onClose={close} title="添加项目" className="cmd-project-dialog">
-    <header className="cmd-project-header"><h2>添加项目</h2><button type="button" className="cmd-project-icon-button" aria-label="关闭" disabled={busy} onClick={close}><UIIcon name="close" size={16} /></button></header>
-    <div className="cmd-project-content">
+  const content = <>
+    <div className="cmd-project-toolbar">
       <div className="cmd-project-tabs" role="tablist" aria-label="添加方式">
         <button type="button" role="tab" id={`${id}-browse-tab`} aria-controls={`${id}-browse-panel`} aria-selected={tab === 'browse'} tabIndex={tab === 'browse' ? 0 : -1} onKeyDown={tabKeys} onClick={() => changeTab('browse')} disabled={busy}><UIIcon name="folderOpen" size={16} selected={tab === 'browse'} />文件夹</button>
         <button type="button" role="tab" id={`${id}-github-tab`} aria-controls={`${id}-github-panel`} aria-selected={tab === 'github'} tabIndex={tab === 'github' ? 0 : -1} onKeyDown={tabKeys} onClick={() => changeTab('github')} disabled={busy}><LinkIconMedium kind="url" href="https://github.com" size={16} />GitHub</button>
       </div>
+      {toolbarEnd}
+    </div>
       {tab === 'browse' ? <div className="cmd-folder-browser" role="tabpanel" id={`${id}-browse-panel`} aria-labelledby={`${id}-browse-tab`}>
         {roots.length > 0 && <div className="cmd-folder-roots" role="group" aria-label="磁盘"><span>磁盘</span>{roots.map(root => <BubbleTooltip key={root.path} label={root.path} portal><button type="button" className="cmd-folder-root" aria-label={`打开磁盘 ${root.name}`} disabled={loading || busy} onClick={() => void browse(root.path)}>{root.name}</button></BubbleTooltip>)}</div>}
         <div className="cmd-folder-location">
@@ -63,6 +73,6 @@ export function ProjectPicker({ api, onClose, onSelected }) {
         {error && <div className="cmd-project-error" role="alert">{error}</div>}
         <div className="cmd-project-submit"><Button type="submit" className="cmd-dialog-button cmd-dialog-primary" disabled={busy || !url.trim()}>{busy ? '克隆中…' : '克隆并添加'}</Button></div>
       </form>}
-    </div>
-  </Modal>;
+  </>;
+  return embedded ? content : <ProjectDialog busy={busy} onClose={onClose}>{content}</ProjectDialog>;
 }

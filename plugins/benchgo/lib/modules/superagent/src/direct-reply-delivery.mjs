@@ -4,7 +4,7 @@ import { sendSourceDelivery, deliveryLease } from './source-delivery.mjs';
 import { channelSourceAllowed } from './channel-policy.mjs';
 import { isDeepStrictEqual } from 'node:util';
 
-/** Durable human-facing answers share channel transports, never invent Tickets. */
+/** Durable human-facing answers share channel transports, never invent Tasks. */
 export function createDirectReplyDelivery({ database, readPolicy, getAdapter, signal, onDelivered }) {
   const owner = `direct-reply:${randomUUID()}`;
   let running;
@@ -21,10 +21,12 @@ export function createDirectReplyDelivery({ database, readPolicy, getAdapter, si
         continue;
       }
       const trigger = database.getTrigger(row.triggerId);
+      const routerReply = row.kind === 'router';
       const ownerReply = row.kind === 'owner';
-      const target = ownerReply ? row.source : trigger?.source;
+      const target = ownerReply || routerReply ? row.source : trigger?.source;
       const connection = policy.connections?.[target?.channel];
-      const permission = ownerReply ? { allowed: trigger?.actor.id === 'desktop-owner' && trigger.actor.kind === 'human'
+      const permission = routerReply ? { allowed: Boolean(database.routerReplyCurrent(row))
+        && channelSourceAllowed(target.channel === 'feishu' ? policy.connection : connection?.config, target, connection) } : ownerReply ? { allowed: trigger?.actor.id === 'desktop-owner' && trigger.actor.kind === 'human'
         && trigger.source.channel === 'desktop' && trigger.source.kind === 'channel-owner-reply' && trigger.content === row.text
         && isDeepStrictEqual(trigger.source.deliveryTarget, target)
         && channelSourceAllowed(target.channel === 'feishu' ? policy.connection : connection?.config, target, connection) }

@@ -1,9 +1,9 @@
-import { executionStatusText } from './ticket-lifecycle.mjs';
+import { executionStatusText } from './task-lifecycle.mjs';
 
-const kinds = new Set(['turn/start', 'turn/end', 'step/start', 'step/end', 'tool/call', 'tool/result', 'assistant/message', 'assistant/attempt', 'subagent/catalog', 'subagent/returned', 'subagent/start', 'subagent/end', 'execution', 'recovery-unavailable', 'ticket', 'assignment', 'run', 'result', 'delivery', 'attention', 'input', 'requirements', 'goal']);
+const kinds = new Set(['turn/start', 'turn/end', 'step/start', 'step/end', 'tool/call', 'tool/result', 'assistant/message', 'assistant/attempt', 'subagent/catalog', 'subagent/returned', 'subagent/start', 'subagent/end', 'execution', 'recovery-unavailable', 'task', 'assignment', 'run', 'result', 'delivery', 'attention', 'input', 'requirements', 'goal']);
 const statuses = new Set(['queued', 'pending', 'running', 'active', 'waiting', 'blocked', 'pausing', 'paused', 'stopping', 'stopped', 'cancelled', 'completed', 'failed', 'uncertain', 'delivering', 'ready', 'assigned', 'succeeded']);
 const activities = new Set(['idle', 'running', 'thinking', 'tool', 'working', 'waiting', 'blocked', 'paused', 'stopping', 'stopped', 'completed', 'failed', 'unknown',
-  '正在处理任务', '正在搜索网页', '正在读取网页', '正在读取文件', '正在修改文件', '正在执行命令', '正在协调子 Worker',
+  '正在处理任务', '正在搜索网页', '正在读取网页', '正在读取文件', '正在修改文件', '正在执行命令', '正在协调子 Worker', '正在协调并行任务',
   '正在等待问题答复', '正在使用工具', '工具调用失败，正在处理', '本轮执行已结束', '正在等待处理', '执行已停止', '执行遇到错误', '执行状态待核实']);
 const count = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, 1_000_000_000) : 0;
 const identity = value => typeof value === 'string' && value.length <= 512 ? value : '';
@@ -40,10 +40,10 @@ export function redactExecutionText(value, limit = 600) {
 /** Facts plus bounded, redacted public Worker reports from the official surface. */
 export function createExecutionSummaryInput(input = {}, { maxInputCharacters = 8000 } = {}) {
   const facts = input.facts || input;
-  const ticketId = identity(input.ticketId), runId = identity(input.runId);
+  const taskId = identity(input.taskId), runId = identity(input.runId);
   const instructionRevision = count(input.instructionRevision), watermark = count(input.watermark ?? facts.cursor);
-  const projections = (facts.projections || []).filter(row => row.ticketId === ticketId && (!runId || row.runId === runId) && (!instructionRevision || row.instructionRevision === instructionRevision));
-  const entries = (facts.entries || []).filter(row => row.ticketId === ticketId && (!runId || row.runId === runId) && (!instructionRevision || row.instructionRevision === instructionRevision) && count(row.seq) <= watermark && kinds.has(row.kind)).slice(-80);
+  const projections = (facts.projections || []).filter(row => row.taskId === taskId && (!runId || row.runId === runId) && (!instructionRevision || row.instructionRevision === instructionRevision));
+  const entries = (facts.entries || []).filter(row => row.taskId === taskId && (!runId || row.runId === runId) && (!instructionRevision || row.instructionRevision === instructionRevision) && count(row.seq) <= watermark && kinds.has(row.kind)).slice(-80);
   const events = new Map(), refs = new Set();
   for (const row of entries) {
     events.set(row.kind, (events.get(row.kind) || 0) + 1);
@@ -62,10 +62,10 @@ export function createExecutionSummaryInput(input = {}, { maxInputCharacters = 8
   // Keep every supplied report citeable even when its ref already appeared
   // near the beginning of a busy event window.
   for (const report of progressReports) { refs.delete(report.evidenceRef); refs.add(report.evidenceRef); }
-  const status = input.status ?? facts.runtime?.ticket?.status ?? state?.status;
-  const control = input.executionControl ?? facts.runtime?.ticket?.executionControl ?? {};
+  const status = input.status ?? facts.runtime?.task?.status ?? state?.status;
+  const control = input.executionControl ?? facts.runtime?.task?.executionControl ?? {};
   const result = {
-    binding: { ticketId, runId, instructionRevision, watermark, fence: count(facts.runtime?.assignment?.fence) },
+    binding: { taskId, runId, instructionRevision, watermark, fence: count(facts.runtime?.assignment?.fence) },
     target: redactExecutionText(input.target, 800),
     acceptance: (Array.isArray(input.acceptance) ? input.acceptance : [input.acceptance]).slice(0, 8).map(value => redactExecutionText(value, 240)).filter(Boolean),
     status: statuses.has(status) ? status : 'unknown', activity: activities.has(state?.activity) ? state.activity : 'unknown',
@@ -82,15 +82,15 @@ export function createExecutionSummaryInput(input = {}, { maxInputCharacters = 8
 }
 
 export function deterministicExecutionSummary(input) {
-  const ticket = input.facts?.runtime?.ticket ?? input.runtime?.ticket ?? {};
-  const status = input.status ?? ticket.status;
-  const control = input.executionControl ?? ticket.executionControl ?? {};
+  const task = input.facts?.runtime?.task ?? input.runtime?.task ?? {};
+  const status = input.status ?? task.status;
+  const control = input.executionControl ?? task.executionControl ?? {};
   if (status === 'completed') return '任务执行已完成';
   if (control.stopped) return '执行已停止';
   if (control.stopRequested) return '已请求停止，等待执行端确认';
   if (control.paused) return '任务已暂停，等待恢复';
   if (control.pauseRequested) return '已请求暂停，等待执行端确认';
-  if ((input.continuationWait ?? ticket.continuationWait)?.code === 'EXECUTION_FAILED') return '执行失败，等待调整或重试';
+  if ((input.continuationWait ?? task.continuationWait)?.code === 'EXECUTION_FAILED') return '执行失败，等待调整或重试';
   if (typeof input.progress === 'string' && input.progress.trim()) return redactExecutionText(executionStatusText(input.progress), 80);
   const labels = { waiting: '正在等待所需答复或条件', running: '正在处理' };
   return labels[status] || '正在处理';

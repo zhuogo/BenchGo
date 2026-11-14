@@ -1,5 +1,5 @@
 import { createAssessmentSourceReader } from './assessment-source.mjs';
-import { conciseTicketSummary } from './desktop-ticket-access.mjs';
+import { conciseTaskSummary } from './desktop-task-access.mjs';
 import { randomUUID } from 'node:crypto';
 import { assessCandidates } from './assessment.mjs';
 import { buildAssessmentContextWindow, readSourceReference } from './assessment-context.mjs';
@@ -25,10 +25,10 @@ export function createAssessmentRunner({ database, llm, readPolicy, authorize, r
     const lease = database.claimEval(threadId, { owner, policyVersion: policy.version, timeoutMs, limit: 8 });
     if (!lease) return;
     const candidates = database.candidates({ threadId, status: 'evaluating', limit: 1000 }).filter(row => lease.candidateIds.includes(row.id));
-    const tickets = database.listTickets({ threadId }).map(ticket => ({ id: ticket.id, title: ticket.title,
-      status: ticket.status, instructionRevision: ticket.instructionRevision, summary: conciseTicketSummary(ticket),
-      target: ticket.target?.slice(0, 1000), acceptance: ticket.acceptance?.slice(0, 1000),
-      result: ticket.resultVersion > 0 ? { ticketId: ticket.id, version: ticket.resultVersion } : null }));
+    const tasks = database.listTasks({ threadId }).map(task => ({ id: task.id, title: task.title,
+      status: task.status, instructionRevision: task.instructionRevision, summary: conciseTaskSummary(task),
+      target: task.target?.slice(0, 1000), acceptance: task.acceptance?.slice(0, 1000),
+      result: task.resultVersion > 0 ? { taskId: task.id, version: task.resultVersion } : null }));
     const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(timeoutMs)]);
     const cards = await abortable(Promise.all(candidates.map(async row => {
       const context = buildAssessmentContextWindow({ ...database.assessmentContext(row.triggerId), triggerId: row.triggerId,
@@ -41,7 +41,7 @@ export function createAssessmentRunner({ database, llm, readPolicy, authorize, r
         newerSourceMessageExists: database.sourceMessageSuperseded(original) };
       const externalReference = await readSourceReference({ readContext, source: target?.pointer?.source, signal, maxCharacters: Math.floor(12000 / candidates.length) });
       if (externalReference) context.externalReference = externalReference;
-      return { candidateId: row.id, trigger: { id: row.triggerId, threadId, ...target }, context, gate: row.gate, tickets };
+      return { candidateId: row.id, trigger: { id: row.triggerId, threadId, ...target }, context, gate: row.gate, tasks };
     })), signal);
     const assistantContext = readAssistantContext ? await abortable(readAssistantContext(), signal) : undefined;
     const decisions = await abortable(assess({ llm, model: policy.model, models: policy.models, routingConfig: policy.routingConfig, rules: policy.rules, projects: policy.projects, candidates: cards, signal, assistantContext, readSource: createAssessmentSourceReader({ database, candidates: cards }) }), signal);
@@ -51,10 +51,10 @@ export function createAssessmentRunner({ database, llm, readPolicy, authorize, r
       if (current.version !== lease.policyVersion) break;
       const candidate = candidates.find(row => row.id === decision.candidateId);
       if (!candidate) throw new Error('Assessment returned an unknown candidate');
-      const originalProject = ['revise', 'adjustment'].includes(decision.outcome) && decision.ticketId ? database.getTicket(decision.ticketId)?.mandate.project : undefined;
+      const originalProject = ['revise', 'adjustment'].includes(decision.outcome) && decision.taskId ? database.getTask(decision.taskId)?.mandate.project : undefined;
       const authorityDecision = originalProject && decision.projectId === undefined ? { ...decision, projectId: originalProject.id } : decision;
       const trigger = database.readIntakeEvent(candidate.triggerId);
-      const permission = await authorize({ policy: current, candidate, trigger, decision: authorityDecision, ticket: decision.ticketId ? database.getTicket(decision.ticketId) : undefined });
+      const permission = await authorize({ policy: current, candidate, trigger, decision: authorityDecision, task: decision.taskId ? database.getTask(decision.taskId) : undefined });
       signal.throwIfAborted();
       // Recheck after asynchronous authorization; an old authorization cannot commit.
       if ((await readPolicy(threadId)).version !== lease.policyVersion) break;
@@ -62,11 +62,11 @@ export function createAssessmentRunner({ database, llm, readPolicy, authorize, r
         evalId: lease.id, owner, policyVersion: current.version,
         outcome: permission?.allowed === true ? permission.outcome || decision.outcome : 'notExplicit',
         assessment: { ...(permission?.routerAttention ? { requestedOutcome: decision.outcome, routerAttention: true } : {}), reason: decision.reason, ruleIds: decision.ruleIds || [], authorizationReason: permission?.reason },
-        mode: current.mode, enabledRuleIds: current.enabledRuleIds || [], ticketId: decision.ticketId,
+        mode: current.mode, enabledRuleIds: current.enabledRuleIds || [], taskId: decision.taskId,
         ...(['answer', 'ask'].includes(decision.outcome) && permission?.allowed === true ? { reply: { text: decision.replyText, source: trigger.source, actor: trigger.actor, gate: candidate.gate, policyVersion: current.version } } : {}),
-        ...(decision.outcome === 'accept' && permission?.allowed === true ? { replyText: decision.replyText, ticket: { title: decision.title, target: decision.target, mandate: { ...permission.mandate, acceptance: decision.acceptance, policyVersion: current.version, triggerId: candidate.triggerId } } } : {}),
+        ...(decision.outcome === 'accept' && permission?.allowed === true ? { replyText: decision.replyText, task: { title: decision.title, target: decision.target, mandate: { ...permission.mandate, acceptance: decision.acceptance, policyVersion: current.version, triggerId: candidate.triggerId } } } : {}),
         ...(['revise', 'adjustment'].includes(decision.outcome) && permission?.allowed === true ? { change: { expectedInstructionRevision: decision.expectedInstructionRevision,
-          target: decision.target, acceptance: decision.acceptance, model: database.assignments(decision.ticketId).at(-1)?.model || current.workerModels?.[0] || current.model,
+          target: decision.target, acceptance: decision.acceptance, model: database.assignments(decision.taskId).at(-1)?.model || current.workerModels?.[0] || current.model,
           mandate: { ...permission.mandate, policyVersion: current.version, triggerId: candidate.triggerId } } } : {}),
       });
     }

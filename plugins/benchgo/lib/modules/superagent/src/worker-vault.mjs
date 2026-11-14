@@ -1,5 +1,5 @@
-import { ticketExecutionBlocked } from './ticket-lifecycle.mjs';
-import { validateTicketMandate } from './assessment-policy.mjs';
+import { taskExecutionBlocked } from './task-lifecycle.mjs';
+import { validateTaskMandate } from './assessment-policy.mjs';
 
 const output = { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] };
 const fail = (code, message) => Object.assign(new Error(message), { code });
@@ -10,12 +10,12 @@ export function installWorkerVault(scope, agent, { ctx, database, assignment, ru
   const renew = async exec => {
     exec.signal.throwIfAborted();
     if (exec.agent !== agent || String(agent.id) !== run.sessionId || String(agent.session?.id) !== run.sessionId || !exec.callId) throw fail('VAULT_WORKER_MISMATCH', '保险库仅供当前 Worker 运行使用');
-    const policy = await readPolicy(), ticket = database.getTicket(assignment.ticketId), current = database.getAssignment(assignment.id);
+    const policy = await readPolicy(), task = database.getTask(assignment.taskId), current = database.getAssignment(assignment.id);
     const active = database.runs(assignment.id).find(item => item.id === run.id);
-    if (!ticket || ticketExecutionBlocked(ticket) || !current || current.owner !== assignment.owner || current.fence !== assignment.fence || current.state !== 'claimed'
-      || !active || active.owner !== assignment.owner || active.fence !== assignment.fence || active.sessionId !== run.sessionId || !['submitted', 'running'].includes(active.state)) throw fail('VAULT_WORKER_STALE', '工单或运行身份已变化，不能使用保险库');
-    const result = database.renewAssignment(assignment.id, { owner: assignment.owner, fence: assignment.fence, leaseMs, validateMandate: mandate => validateTicketMandate(mandate, { policy }) });
-    if (!result.allowed) throw fail('VAULT_MANDATE_REVOKED', '当前工单授权不允许使用保险库');
+    if (!task || taskExecutionBlocked(task) || !current || current.owner !== assignment.owner || current.fence !== assignment.fence || current.state !== 'claimed'
+      || !active || active.owner !== assignment.owner || active.fence !== assignment.fence || active.sessionId !== run.sessionId || !['submitted', 'running'].includes(active.state)) throw fail('VAULT_WORKER_STALE', '任务或运行身份已变化，不能使用保险库');
+    const result = database.renewAssignment(assignment.id, { owner: assignment.owner, fence: assignment.fence, leaseMs, validateMandate: mandate => validateTaskMandate(mandate, { policy }) });
+    if (!result.allowed) throw fail('VAULT_MANDATE_REVOKED', '当前任务授权不允许使用保险库');
     exec.signal.throwIfAborted();
   };
   scope.tools.register({ name: 'assistant_vault_list', description: 'List credential references, addresses or names, and custom credential names only. Values are never available to the model. Missing credentials require Resources > Vault secure input. Saving credentials does not connect browser login or other execution capabilities; report unavailable execution support honestly.',

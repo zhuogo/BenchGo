@@ -56,7 +56,7 @@ async function body(request) {
 }
 
 /** Separate encrypted carrier: it exposes only Link's allowlist, never the Host admin API. */
-export async function listen({ identity, config, webRoot, store, dispatch, workbench, onError, routes }) {
+export async function listen({ identity, config, webRoot, store, dispatch, workbench, onError, routes, runRequest = operation => operation() }) {
   const rates = new Map(), deviceRates = new Map();
   const relayKey = randomBytes(32);
   const signRelaySource = source => createHmac('sha256', relayKey).update(source).digest('hex');
@@ -105,7 +105,7 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
   // Harness opens several persistent subscriptions. Multiplex them over HTTP/2
   // so session navigation and uplink calls cannot exhaust a browser's H1 pool.
   // Keep HTTP/1.1 for existing native clients and reverse proxies.
-  const server = createSecureServer({ key: identity.key, cert: identity.cert, minVersion: 'TLSv1.2', allowHTTP1: true }, async (req, res) => {
+  const server = createSecureServer({ key: identity.key, cert: identity.cert, minVersion: 'TLSv1.2', allowHTTP1: true }, (req, res) => runRequest(async () => {
     try {
       const { url, rate, device } = authorize(req);
       if (url.pathname.startsWith('/link/workbench/')) {
@@ -132,7 +132,7 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
       if (url.pathname === '/link/api/pair/status') {
         const input = await body(req);
         const result = store.poll(input.requestId, input.pollToken);
-        return send(res, 200, { ...result, ...(result.status === 'approved' && routes ? { routes: routes() } : {}) });
+        return send(res, 200, { ...result, ...(result.status === 'approved' && routes ? { routes: routes(), hostId: 'sha256:' + identity.pin } : {}) });
       }
       if (!['/link/api/rpc', '/link/api/workbench'].includes(url.pathname)) throw fail('未找到', 404);
       if (!device) throw fail('设备授权已失效，请重新配对', 401);
@@ -144,9 +144,9 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
       const input = await body(req);
       if (!active || !store.state.devices.some(d => d.id === device.id)) throw fail('设备授权已失效', 401);
       return send(res, 200, await dispatch(input, device));
-    } catch (e) { if (res.headersSent) res.destroy(); else send(res, e.status ?? 400, { error: e.message }); }
-  });
-  server.on('upgrade', (req, socket, head) => {
+    } catch (e) { if (res.headersSent) res.destroy(); else send(res, e.status ?? 400, { error: e.message, code: e.code }); }
+  }));
+  server.on('upgrade', (req, socket, head) => runRequest(() => {
     socket.on('error', () => {});
     try {
       const { url } = authorize(req, true);
@@ -157,7 +157,7 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
       const status = error.status ?? 400;
       socket.end(`HTTP/1.1 ${status} Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
     }
-  });
+  }));
   server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
   server.on('session', session => { sessions.add(session); session.once('close', () => sessions.delete(session)); });
   // Mobile links can pause while a request body crosses a high-latency network;

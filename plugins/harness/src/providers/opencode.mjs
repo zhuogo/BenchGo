@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
 import { commandCatalog, compactCommand } from '../commands.mjs';
 
 // OpenCode v1 HTTP/SSE adapter. v2 has a different contract and is deliberately

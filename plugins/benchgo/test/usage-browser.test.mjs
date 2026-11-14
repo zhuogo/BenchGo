@@ -84,3 +84,98 @@ test('usage dialog renders four states and every local-date preset keeps measure
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });
+
+test('usage loads cached ranges immediately, follows background import and stops requests when closed', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  const ledger = new UsageLedger('/unused'), requests = [], pending = [];
+  for (let index = 0; index < 123; index++) ledger.put({ id: 'usage-' + index, tool: 'codex', model: 'Exact Model', time: new Date().toISOString(), totalTokens: 100, inputTokens: 80, outputTokens: 20, cacheReadTokens: 0 });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, timezoneId: 'Asia/Shanghai' });
+  page.setDefaultTimeout(6000);
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  try {
+    const html = await fixture();
+    await page.route('**/*', route => {
+      if (route.request().url() === 'http://localhost/') return route.fulfill({ contentType: 'text/html', body: html });
+      if (route.request().url().endsWith('/api/commander/usage')) { requests.push(route.request().postDataJSON()); pending.push(route); return; }
+      return route.abort();
+    });
+    const response = async (coverage = {}, status = 200) => {
+      await page.waitForFunction(() => document.querySelector('.cmd-usage')?.getAttribute('aria-busy') === 'true');
+      for (let wait = 0; !pending.length && wait < 100; wait++) await page.waitForTimeout(20);
+      const route = pending.shift(); assert(route, 'expected one pending usage request');
+      return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(status === 200 ? { ...ledger.query(route.request().postDataJSON()), coverage } : { error: '暂时无法刷新' }) });
+    };
+    await page.goto('http://localhost/');
+    await page.getByRole('button', { name: '用量统计', exact: true }).click();
+    await response({ state: 'idle', historyState: 'scanning' });
+    await page.getByText('正在同步历史用量，已采集数据会持续更新…', { exact: true }).waitFor();
+    await page.waitForTimeout(1100);
+    assert.equal(requests.length, 2);
+    await response({ state: 'idle', historyState: 'complete' });
+    await page.waitForFunction(() => !document.body.textContent.includes('正在同步历史用量，已采集数据会持续更新…'));
+    await page.getByRole('button', { name: '关闭', exact: true }).click();
+    await page.getByRole('button', { name: '用量统计', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.cmd-usage-metric strong')?.textContent === '12,300');
+    assert.equal(requests.length, 2, 'freshly cached complete range does not reload');
+    await page.getByRole('tab', { name: '详细使用记录', exact: true }).click();
+    await page.getByRole('button', { name: '下一页', exact: true }).click();
+    await response();
+    await page.waitForFunction(() => document.querySelector('.cmd-usage-pagination span[aria-live]')?.textContent === '2 / 3');
+    await page.getByRole('button', { name: '3 天', exact: true }).click();
+    assert.equal(await page.locator('.cmd-usage-metric').count(), 0, 'a new range never displays totals from the previous range');
+    await response();
+    assert.equal(requests.length, 4, 'range change from page two requests page one only');
+    assert.equal(requests.at(-1).page, 1);
+    await page.getByRole('tab', { name: '概览', exact: true }).click();
+    await page.getByRole('button', { name: '刷新用量统计', exact: true }).click();
+    assert.equal(await page.locator('.cmd-usage-metric strong').first().textContent(), '12,300');
+    await response({}, 503);
+    await page.getByRole('alert').filter({ hasText: '暂时无法刷新' }).waitFor();
+    assert.equal(requests.at(-1).refresh, true);
+    assert.equal(await page.locator('.cmd-usage-metric strong').first().textContent(), '12,300');
+    await page.getByRole('button', { name: '重试', exact: true }).click();
+    await response({ state: 'scanning' });
+    assert.equal(requests.at(-1).refresh, undefined, 'retry reloads without triggering another full scan');
+    await page.getByText('正在同步历史用量，已采集数据会持续更新…', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '关闭', exact: true }).click();
+    const beforeClose = requests.length;
+    await page.waitForTimeout(1200);
+    assert.equal(requests.length, beforeClose, 'closed dialogs stop background polling');
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('an older range response cannot replace the active range even when transport ignores abort', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, timezoneId: 'Asia/Shanghai' });
+  page.setDefaultTimeout(6000);
+  const ledger = new UsageLedger('/unused');
+  ledger.put({ id: 'usage', tool: 'codex', time: new Date().toISOString(), totalTokens: 100 });
+  let first, requestCount = 0;
+  try {
+    const html = await fixture();
+    // Keep the old response deliverable to exercise the component's stale-result guard.
+    await page.addInitScript(() => { const fetch = window.fetch; window.fetch = (url, options) => fetch(url, { ...options, signal: undefined }); });
+    await page.route('**/*', route => {
+      if (route.request().url() === 'http://localhost/') return route.fulfill({ contentType: 'text/html', body: html });
+      if (route.request().url().endsWith('/api/commander/usage')) {
+        requestCount++;
+        if (requestCount === 1) { first = route; return; }
+        const data = ledger.query(route.request().postDataJSON()); data.summary.totalTokens = 200;
+        return route.fulfill({ contentType: 'application/json', body: JSON.stringify(data) });
+      }
+      return route.abort();
+    });
+    await page.goto('http://localhost/');
+    await page.getByRole('button', { name: '用量统计', exact: true }).click();
+    await page.getByRole('status', { name: '正在加载用量统计…' }).waitFor();
+    for (let wait = 0; !first && wait < 100; wait++) await page.waitForTimeout(20);
+    assert(first);
+    await page.getByRole('button', { name: '3 天', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.cmd-usage-metric strong')?.textContent === '200');
+    await first.fulfill({ contentType: 'application/json', body: JSON.stringify(ledger.query(first.request().postDataJSON())) });
+    await page.waitForTimeout(150);
+    assert.equal(await page.locator('.cmd-usage-metric strong').first().innerText(), '200');
+    assert.equal(requestCount, 2);
+  } finally { await browser.close(); }
+});

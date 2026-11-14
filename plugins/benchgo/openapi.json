@@ -401,7 +401,7 @@
               },
               "goalCreate": {
                 "type": "object",
-                "description": "创建清单目标：goal 只含 objective（1–2000 字）与 requestId。不初始化会话、不派工、不要求项目。返回 id、objective、status、rowVersion。",
+                "description": "创建清单目标：goal 只含 objective（1–2000 字）与 requestId。不初始化会话、不启动执行、不要求项目。返回 id、objective、status、rowVersion。",
                 "additionalProperties": true
               },
               "goalGet": {
@@ -419,7 +419,7 @@
               },
               "history": {
                 "type": "object",
-                "description": "主聊与旁聊的受控聊天历史：真实用户消息、assistant_reply 显式发布、官方 completed 回合确认的无工具调用终答，以及本来源已审核通知；不返回工具、过程说明或思维链。支持 before/limit 分页。notifications 包含四阶段 schedule.lifecycle 系统事实，以及同来源工单的当前结果、问题和暂停原因；仅当前待答问题可操作。",
+                "description": "主聊与旁聊的受控聊天历史：真实用户消息、assistant_reply 显式发布、官方 completed 回合确认的无工具调用终答，以及本来源已审核通知；不返回工具、过程说明或思维链。支持 before/limit 分页。notifications 包含四阶段 schedule.lifecycle 系统事实，以及同来源任务的当前结果、问题和暂停原因；仅当前待答问题可操作。",
                 "properties": {
                   "activeReply": {
                     "type": [
@@ -464,7 +464,7 @@
                         },
                         "usage": {
                           "type": "object",
-                          "description": "最终回复那次模型请求的官方用量，不是工单总量；缺失不补零。",
+                          "description": "最终回复那次模型请求的官方用量，不是任务总量；缺失不补零。",
                           "additionalProperties": {
                             "type": "number",
                             "minimum": 0
@@ -675,7 +675,7 @@
               },
               "send": {
                 "type": "object",
-                "description": "持久接收消息，Router 运行中仍可排队。返回 threadId/sessionId/requestId/messageId/status 和可选 duplicate；相同 requestId 不重发，内容或 replyContext 不同拒绝。queued/processing 不是任务完成。Router 用户可见 text 通过官方实时流显示，reasoning/工具参数不公开；正式回复成功后持久保存。cancel 取消该会话当前回合及排队请求，不隐含取消已委派工单。",
+                "description": "持久接收消息，Router 运行中仍可排队。返回 threadId/sessionId/requestId/messageId/status 和可选 duplicate；相同 requestId 不重发，内容或 replyContext 不同拒绝。queued/processing 不是任务完成。Router 用户可见 text 通过官方实时流显示，reasoning/工具参数不公开；正式回复成功后持久保存。cancel 取消该会话当前回合及排队请求，不隐含取消已委派任务。",
                 "additionalProperties": true
               },
               "requestState": {
@@ -799,39 +799,39 @@
                 "type": "object",
                 "additionalProperties": true
               },
-              "ticketAnswer": {
+              "taskAnswer": {
                 "type": "object",
-                "description": "回答明确 attentionId 对应的原问题，需 ticketId/instructionRevision/requestId/answer。仅信息、权限、范围问题建立 Attention；答复关联原单并在原 Assignment/Run/session 续做，不扩大授权。",
+                "description": "回答明确 attentionId 对应的原问题，需 taskId/instructionRevision/requestId/answer。仅信息、权限、范围问题建立 Attention；答复关联原任务并在原 Assignment/Run/session 续做，不扩大授权。",
                 "additionalProperties": true
               },
-              "ticketPause": {
+              "taskPause": {
                 "type": "object",
-                "description": "暂停原工单，执行确认停止及保存检查点前为 pausing。",
+                "description": "暂停原任务，执行确认停止及保存检查点前为 pausing。",
                 "additionalProperties": true
               },
-              "ticketResume": {
+              "taskResume": {
                 "type": "object",
-                "description": "恢复暂停工单或原单续做等待。续做必须提供当前 expectedResultVersion（执行未提交时可为0）；不设执行时长或 Goal 额度（2026-11-06 拆除预算闸门）。版本、停止、撤权、检查点或外部效果未核实时拒绝，返回 queued:false/code 或错误。",
+                "description": "恢复暂停任务或原任务续做等待。续做必须提供当前 expectedResultVersion（执行未提交时可为0）；不设执行时长或 Goal 额度。版本、停止、撤权、检查点或外部效果未核实时拒绝，返回 queued:false/code 或错误。",
                 "additionalProperties": true
               },
-              "ticketChange": {
-                "$ref": "#/components/schemas/AssistantTicket",
-                "description": "终态工单的 revise/reopen/adjustment 均创建关联新单；adjustmentOfTicketId 指向原单，新单 instructionRevision=1/resultVersion=0。原 completed 状态与结果保留；进行中仅允许 revise。"
+              "taskChange": {
+                "$ref": "#/components/schemas/AssistantTask",
+                "description": "进行中的任务使用 revise 更新要求；已完成成果使用 adjustment 创建关联的新任务。adjustmentOfTaskId 指向原任务，新任务 instructionRevision=1/resultVersion=0，原任务及结果保留。"
               },
-              "tickets": {
+              "tasks": {
                 "type": "object",
-                "description": "工单及结果记录。独立 title 最多10个Unicode字符，target/acceptance保留完整任务要求。Worker 自校验后提交结果，真实缺用户决定为 blocked+Attention。系统故障 publication.origin=system 与 AI 正文分开。普通信息答复不能替代动作审批。",
+                "description": "任务及结果记录。独立 title 最多10个Unicode字符，target/acceptance保留完整任务要求。Worker 自校验后提交结果，真实缺用户决定为 blocked+Attention。系统故障 publication.origin=system 与 AI 正文分开。普通信息答复不能替代动作审批。",
                 "additionalProperties": true,
                 "properties": {
-                  "tickets": {
+                  "tasks": {
                     "type": "array",
                     "items": {
-                      "$ref": "#/components/schemas/AssistantTicket"
+                      "$ref": "#/components/schemas/AssistantTask"
                     }
                   }
                 }
               },
-              "ticketStop": {
+              "taskStop": {
                 "type": "object",
                 "additionalProperties": true
               },
@@ -927,7 +927,7 @@
               },
               "notificationOption": {
                 "type": "object",
-                "description": "选项原文作为普通用户意愿发送，不构成审批。校验来源会话和工单结果版本，同一 eventId 的选择使用持久发送幂等键。",
+                "description": "选项原文作为普通用户意愿发送，不构成审批。校验来源会话和任务结果版本，同一 eventId 的选择使用持久发送幂等键。",
                 "required": [
                   "threadId",
                   "sessionId",
@@ -1034,15 +1034,15 @@
                     }
                   }
                 },
-                "description": "Owner-authenticated direct channel reply mailbox. Optional channel and threadId filters; newest 100 entries. No Ticket is created for answer/ask."
+                "description": "Owner-authenticated direct channel reply mailbox. Optional channel and threadId filters; newest 100 entries. No Task is created for answer/ask."
               },
               "directReplyReconcile": {
                 "$ref": "#/components/schemas/AssistantDirectReply",
-                "description": "仅 owner；返回原直答记录及持久核实历史，不新建工单。"
+                "description": "仅 owner；返回原直答记录及持久核实历史，不新建任务。"
               },
               "outboxReconcile": {
                 "$ref": "#/components/schemas/AssistantOutboxDelivery",
-                "description": "仅 owner；返回原工单投递。核实历史位于顶层 reconciliations，确认回执位于 receipt；原 payload 保持不变，工单执行与结果不重复。"
+                "description": "仅 owner；返回原任务投递。核实历史位于顶层 reconciliations，确认回执位于 receipt；原 payload 保持不变，任务执行与结果不重复。"
               },
               "executionSessions": {
                 "type": "object",
@@ -1055,7 +1055,7 @@
                       "type": "object",
                       "required": [
                         "sessionId",
-                        "ticketId",
+                        "taskId",
                         "title",
                         "available"
                       ],
@@ -1064,7 +1064,7 @@
                           "type": "string",
                           "minLength": 1
                         },
-                        "ticketId": {
+                        "taskId": {
                           "type": "string",
                           "minLength": 1
                         },
@@ -1159,7 +1159,7 @@
                           "type": "string",
                           "minLength": 1
                         },
-                        "ticketId": {
+                        "taskId": {
                           "type": "string",
                           "minLength": 1
                         },
@@ -1183,7 +1183,7 @@
                           },
                           "then": {
                             "required": [
-                              "ticketId",
+                              "taskId",
                               "assignmentId",
                               "runId"
                             ]
@@ -1295,8 +1295,8 @@
           "assistant_delegate": {
             "$ref": "#/components/schemas/AssistantDelegationInput"
           },
-          "assistant_ticket_change": {
-            "$ref": "#/components/schemas/AssistantTicketChangeInput"
+          "assistant_task_change": {
+            "$ref": "#/components/schemas/AssistantTaskChangeInput"
           }
         }
       }
@@ -1304,7 +1304,7 @@
     "/api/commander/assistant/channels/webhook": {
       "post": {
         "summary": "签名事件交给统一 Router",
-        "description": "HMAC-SHA256 密钥来自 signingSecretRef；签名十六进制值覆盖 timestamp + \".\" + 原始请求字节。时间窗为五分钟。requestId 持久去重，身份取配置唯一 ownerIds，输入不可声明身份。结果通过已认证 tickets 查询。",
+        "description": "HMAC-SHA256 密钥来自 signingSecretRef；签名十六进制值覆盖 timestamp + \".\" + 原始请求字节。时间窗为五分钟。requestId 持久去重，身份取配置唯一 ownerIds，输入不可声明身份。结果通过已认证 tasks 查询。",
         "parameters": [
           {
             "in": "header",
@@ -1627,78 +1627,164 @@
         }
       }
     },
-    "/api/benchgo/efficiency": {
+    "/api/benchgo/workbench/media": {
       "get": {
-        "summary": "读取效率增强配置与状态",
-        "description": "返回增强配置与实际可用状态；available 表示官方宿主适配器已就绪，单个 Agent 的能力需另行诊断。",
+        "summary": "Read built-in document and media preview files",
+        "description": "Authenticated local owner only. Uses the official Session directory and realpath fence. Streams with single Range, If-Range and cancellation support.",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A file inside the actual Session working directory; caller-supplied cwd is ignored."
+          },
+          {
+            "name": "download",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Range",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "revision?scope?features.ops/compaction??"
+            "description": "Complete file"
+          },
+          "206": {
+            "description": "Requested byte range"
           },
           "403": {
-            "description": "请求未通过同源访问校验"
+            "description": "Access boundary rejected"
+          },
+          "404": {
+            "description": "Session or file not found"
+          },
+          "409": {
+            "description": "Session directory unavailable or file changed"
+          },
+          "416": {
+            "description": "Invalid byte range; Content-Range reports file size"
           }
         }
       },
-      "post": {
-        "summary": "更新效率增强配置",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "revision",
-                  "features"
-                ],
-                "additionalProperties": false,
-                "properties": {
-                  "revision": {
-                    "type": "integer",
-                    "minimum": 0
-                  },
-                  "features": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                      "ops": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "properties": {
-                          "enabled": {
-                            "type": "boolean"
-                          },
-                          "shell": {
-                            "type": "boolean"
-                          }
-                        }
-                      },
-                      "compaction": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "properties": {
-                          "enabled": {
-                            "type": "boolean"
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
+      "head": {
+        "summary": "Read media response headers",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
             }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A file inside the actual Session working directory; caller-supplied cwd is ignored."
           }
-        },
+        ],
         "responses": {
           "200": {
-            "description": "保存配置并更新 revision，返回与 GET 相同的状态结构"
+            "description": "File length and type, without a body"
           },
-          "400": {
-            "description": "请求或配置格式无效"
+          "206": {
+            "description": "Requested byte range headers"
+          }
+        }
+      }
+    },
+    "/api/benchgo/workbench/media/meta": {
+      "get": {
+        "summary": "Read built-in preview file metadata",
+        "description": "Same authentication and workspace boundary as media reads. Returns {ok:true,value:{path,name,size,mime}}.",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           },
-          "409": {
-            "description": "配置版本已变化，请刷新后重试"
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A file inside the actual Session working directory; caller-supplied cwd is ignored."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File metadata"
+          },
+          "403": {
+            "description": "Access boundary rejected"
+          },
+          "404": {
+            "description": "Session or file not found"
+          }
+        }
+      },
+      "head": {
+        "summary": "Read metadata response headers",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A file inside the actual Session working directory; caller-supplied cwd is ignored."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata headers without a body"
           }
         }
       }
@@ -2294,12 +2380,12 @@
               "taskCleanupPreview",
               "taskCleanupRestore",
               "taskCleanupRestorePreview",
-              "ticketAnswer",
-              "ticketChange",
-              "ticketPause",
-              "ticketResume",
-              "ticketStop",
-              "tickets",
+              "taskAnswer",
+              "taskChange",
+              "taskPause",
+              "taskResume",
+              "taskStop",
+              "tasks",
               "notificationOption",
               "messageReaction",
               "connectionReplies",
@@ -2373,7 +2459,7 @@
           "runId": {
             "type": "string"
           },
-          "ticketId": {
+          "taskId": {
             "type": "string"
           },
           "previewHash": {
@@ -2579,7 +2665,7 @@
             "type": "string",
             "minLength": 1
           },
-          "ticketIds": {
+          "taskIds": {
             "type": "array",
             "minItems": 1,
             "maxItems": 1000,
@@ -2589,7 +2675,7 @@
               "minLength": 1
             }
           },
-          "selectedTicketIds": {
+          "selectedTaskIds": {
             "type": "array",
             "minItems": 1,
             "maxItems": 1000,
@@ -2609,7 +2695,7 @@
           },
           "archived": {
             "type": "boolean",
-            "description": "tickets: filter explicit user-managed archive visibility before limit; omitted keeps both scopes."
+            "description": "tasks: filter explicit user-managed archive visibility before limit; omitted keeps both scopes."
           },
           "cursor": {
             "oneOf": [
@@ -2631,12 +2717,12 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "ticketChange"
+                  "const": "taskChange"
                 }
               }
             },
             "then": {
-              "$ref": "#/components/schemas/AssistantTicketChangeInput"
+              "$ref": "#/components/schemas/AssistantTaskChangeInput"
             }
           },
           {
@@ -3008,13 +3094,13 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "tickets"
+                  "const": "tasks"
                 }
               }
             },
             "then": {
               "properties": {
-                "ticketId": {
+                "taskId": {
                   "type": "string",
                   "minLength": 1
                 },
@@ -3126,7 +3212,7 @@
               "required": [
                 "previewId",
                 "manifestHash",
-                "selectedTicketIds",
+                "selectedTaskIds",
                 "requestId"
               ]
             }
@@ -3143,7 +3229,7 @@
             },
             "then": {
               "required": [
-                "ticketIds"
+                "taskIds"
               ]
             }
           },
@@ -3321,7 +3407,7 @@
             }
           }
         ],
-        "description": "主人管理接口。注册配置通过通用 schema/路径读写，页面与 Router 共用权威存储、CAS、脱敏审计和回滚。高风险确认绑定本次差异；工单清理须先持久预览，再确认精确子集，归档保留墓碑与成果，恢复不重开执行。"
+        "description": "主人管理接口。注册配置通过通用 schema/路径读写，页面与 Router 共用权威存储、CAS、脱敏审计和回滚。高风险确认绑定本次差异；任务清理须先持久预览，再确认精确子集，归档保留墓碑与成果，恢复不重开执行。"
       },
       "VaultEntry": {
         "type": "object",
@@ -3857,11 +3943,7 @@
           },
           "document": {
             "type": "string",
-            "enum": [
-              "MEMORY.md",
-              "USER.md",
-              "TOOLS.md"
-            ]
+            "pattern": "^(?:MEMORY\\.md|USER\\.md|TOOLS\\.md|memory/\\d{4}-\\d{2}-\\d{2}\\.md)$"
           },
           "scope": {
             "type": "string"
@@ -3988,7 +4070,7 @@
           },
           "workerModels": {
             "$ref": "#/components/schemas/AssistantModelQueue",
-            "description": "缺省或空数组跟随 Router；省略模型的工单由此队列执行。"
+            "description": "缺省或空数组跟随 Router；省略模型的任务由此队列执行。"
           },
           "auxiliary": {
             "$ref": "#/components/schemas/AssistantAuxiliaryModels"
@@ -4006,7 +4088,7 @@
           },
           "workerModels": {
             "$ref": "#/components/schemas/AssistantModelQueue",
-            "description": "缺省或空数组跟随 Router；省略模型的工单由此队列执行。"
+            "description": "缺省或空数组跟随 Router；省略模型的任务由此队列执行。"
           },
           "auxiliary": {
             "$ref": "#/components/schemas/AssistantAuxiliaryModels"
@@ -4252,7 +4334,7 @@
         "type": "object",
         "required": [
           "id",
-          "ticketId",
+          "taskId",
           "state",
           "attempts",
           "payload",
@@ -4265,7 +4347,7 @@
             "minLength": 1,
             "pattern": "\\S"
           },
-          "ticketId": {
+          "taskId": {
             "type": "string",
             "minLength": 1,
             "pattern": "\\S"
@@ -4529,7 +4611,7 @@
             "type": "string",
             "format": "date-time"
           },
-          "ticketId": {
+          "taskId": {
             "type": "string",
             "minLength": 1,
             "pattern": "\\S"
@@ -4568,7 +4650,7 @@
             },
             "then": {
               "required": [
-                "ticketId"
+                "taskId"
               ]
             }
           }
@@ -4601,7 +4683,7 @@
         "type": "object",
         "required": [
           "id",
-          "ticketId",
+          "taskId",
           "assignmentId",
           "sessionId",
           "callId",
@@ -4614,7 +4696,7 @@
             "minLength": 1,
             "pattern": "\\S"
           },
-          "ticketId": {
+          "taskId": {
             "type": "string",
             "minLength": 1,
             "pattern": "\\S"
@@ -4674,9 +4756,9 @@
         "properties": {
           "type": {
             "enum": [
-              "ticket.result",
-              "ticket.attention",
-              "ticket.accepted",
+              "task.result",
+              "task.attention",
+              "task.accepted",
               "schedule.lifecycle"
             ]
           },
@@ -4700,7 +4782,7 @@
               "type": "string"
             }
           },
-          "ticketId": {
+          "taskId": {
             "type": "string"
           },
           "publication": {
@@ -4712,7 +4794,7 @@
           "schedule": {
             "$ref": "#/components/schemas/AssistantScheduleLifecycle"
           },
-          "ticketStatus": {
+          "taskStatus": {
             "type": "string"
           },
           "currentInstructionRevision": {
@@ -4762,7 +4844,7 @@
           }
         },
         "additionalProperties": true,
-        "description": "正式发布通知；schedule.lifecycle 为宿主系统事实卡。history 对同来源桌面工单投影 currentResult/currentAttention/currentPauseReason，均可为 null；历史正文不改写为当前状态。",
+        "description": "正式发布通知；schedule.lifecycle 为宿主系统事实卡。history 对同来源桌面任务投影 currentResult/currentAttention/currentPauseReason，均可为 null；历史正文不改写为当前状态。",
         "allOf": [
           {
             "if": {
@@ -4817,7 +4899,7 @@
         "type": "object",
         "required": [
           "assignmentId",
-          "ticketId",
+          "taskId",
           "sessionId",
           "callId",
           "questionId",
@@ -4833,7 +4915,7 @@
             "minLength": 1,
             "pattern": "\\S"
           },
-          "ticketId": {
+          "taskId": {
             "type": "string",
             "minLength": 1,
             "pattern": "\\S"
@@ -4998,14 +5080,14 @@
           }
         ]
       },
-      "AssistantTicket": {
+      "AssistantTask": {
         "type": "object",
         "required": [
           "id",
           "status",
           "instructionRevision",
           "resultVersion",
-          "adjustmentOfTicketId",
+          "adjustmentOfTaskId",
           "liveSummary"
         ],
         "properties": {
@@ -5030,7 +5112,7 @@
             "type": "integer",
             "minimum": 0
           },
-          "adjustmentOfTicketId": {
+          "adjustmentOfTaskId": {
             "type": [
               "string",
               "null"
@@ -5073,11 +5155,11 @@
           },
           "archived": {
             "type": "boolean",
-            "description": "Explicit user-managed presentation metadata; completing a ticket never archives it automatically."
+            "description": "Explicit user-managed presentation metadata; completing a task never archives it automatically."
           }
         },
         "additionalProperties": true,
-        "description": "终态工单的 revise/reopen/adjustment 均创建关联新单；adjustmentOfTicketId 指向原单，新单 instructionRevision=1/resultVersion=0。原 completed 状态与结果保留；进行中仅允许 revise。"
+        "description": "进行中的任务使用 revise 更新要求；已完成成果使用 adjustment 创建关联的新任务。adjustmentOfTaskId 指向原任务，新任务 instructionRevision=1/resultVersion=0，原任务及结果保留。"
       },
       "AssistantDelegationInput": {
         "type": "object",
@@ -5109,7 +5191,7 @@
             "pattern": "\\S",
             "maxLength": 200
           },
-          "duplicateOfTicketId": {
+          "duplicateOfTaskId": {
             "type": "string",
             "minLength": 1,
             "pattern": "\\S",
@@ -5117,7 +5199,7 @@
           }
         },
         "additionalProperties": true,
-        "description": "assistant_delegate 工具输入；执行仅使用系统工作角色模型队列，创建会话时冻结，不接受单工单 provider/model 覆盖。duplicateOfTicketId 只关联同来源当前在办工单，不扩大授权、不重复派工。 请求标识与当前要求版本由宿主根据真实输入持有，模型无需填写。",
+        "description": "assistant_delegate 工具输入；执行仅使用系统工作角色模型队列，创建会话时冻结，不接受单任务 provider/model 覆盖。duplicateOfTaskId 只关联同来源当前在办任务，不扩大授权、不重复创建任务。 请求标识与当前要求版本由宿主根据真实输入持有，模型无需填写。",
         "not": {
           "anyOf": [
             {
@@ -5148,7 +5230,7 @@
           ]
         }
       },
-      "AssistantTicketChangeInput": {
+      "AssistantTaskChangeInput": {
         "type": "object",
         "required": [
           "id",
@@ -5200,7 +5282,7 @@
           }
         },
         "additionalProperties": true,
-        "description": "进行中仅允许 revise，原执行会话在下一工具边界整份应用；终态使用 adjustment 创建关联新单，原结果保持不变。模型仅由系统工作角色配置决定，不接受单工单覆盖。 请求标识与当前要求版本由宿主根据真实输入持有，模型无需填写。",
+        "description": "进行中仅允许 revise，原执行会话在下一工具边界整份应用；终态使用 adjustment 创建关联的新任务，原结果保持不变。模型仅由系统工作角色配置决定，不接受单任务覆盖。 请求标识与当前要求版本由宿主根据真实输入持有，模型无需填写。",
         "not": {
           "anyOf": [
             {
@@ -5251,7 +5333,7 @@
           }
         },
         "additionalProperties": false,
-        "description": "清单目标：一句目标文字，跨会话保留，不派工。"
+        "description": "清单目标：一句目标文字，跨会话保留，不启动执行。"
       },
       "ManagedSettingOperation": {
         "type": "object",

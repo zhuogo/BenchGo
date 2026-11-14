@@ -29,10 +29,11 @@ async function fixture() {
     const ctx={layout:{panelInfo:{getSnapshot:()=>panel,subscribe:()=>()=>{}},selectPanel:id=>window.openedPanels.push(id)},sessions:{list:{getSnapshot:()=>sessions,subscribe:()=>()=>{}}},uiSession:{sessionStatus:{getSnapshot:()=>statuses,subscribe:()=>()=>{}}}};
     window.openedPanels=[];window.threadEvents=[];
     document.addEventListener('benchgo:assistant-thread',event=>window.threadEvents.push(event.detail));
-    createRoot(document.getElementById('root')).render(<><style>{tokens}{themeBase}{hostCss}{css}</style><aside style={{width:208}}><AssistantSidebarEntry ctx={ctx}/></aside><main><textarea aria-label='当前草稿' defaultValue='保留这段草稿'/><div aria-label='全局工单'>所有来源的工单</div></main></>);
+    createRoot(document.getElementById('root')).render(<><style>{tokens}{themeBase}{hostCss}{css}</style><aside style={{width:208}}><AssistantSidebarEntry ctx={ctx}/></aside><main><textarea aria-label='当前草稿' defaultValue='保留这段草稿'/><div aria-label='全局任务'>所有来源的任务</div></main></>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-sidebar-list-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')),
+      '@deepseek-ai/dsh-util-workspace-path': join(root, 'deepseek-harness/packages/util/workspace-path/src/index.ts'),
       '@deepseek-ai/dsh-api-gateway/client': requireOfficial.resolve('@deepseek-ai/dsh-api-gateway/client') },
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.woff2': 'dataurl', '.woff': 'dataurl', '.ttf': 'dataurl' }, plugins: [{ name: 'official-sidebar-primitives-source', setup(build) {
       // Use the pinned official components directly when workspace lib outputs are absent.
@@ -154,7 +155,7 @@ test('sidebar switches only its list, preserves source identities and renders al
     assert.deepEqual(await page.evaluate(() => window.threadEvents), []);
     assert.deepEqual(await page.evaluate(() => window.openedPanels), []);
     assert.equal(await page.getByRole('textbox', { name: '当前草稿' }).inputValue(), '保留这段草稿');
-    assert.equal(await page.getByLabel('全局工单').textContent(), '所有来源的工单');
+    assert.equal(await page.getByLabel('全局任务').textContent(), '所有来源的任务');
     await page.keyboard.press('End');
     await page.getByRole('button', { name: '固定群聊', exact: false }).waitFor();
     await page.getByRole('button', { name: '固定群聊', exact: false }).click();

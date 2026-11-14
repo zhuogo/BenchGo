@@ -85,10 +85,10 @@ async function fixture(t, { mode, proposal }) {
           assert.equal(facts.available, true);
           assert.equal(facts.devices[0].id, 'phone');
           assert.equal(facts.liveConnections, 'unknown');
-          assert.equal(database.listTickets().length, 0);
+          assert.equal(database.listTasks().length, 0);
           yield* text('Link 有一台已授权手机，当前实时在线状态未知。');
         } else {
-          assert.equal(database.listTickets().length, 1);
+          assert.equal(database.listTasks().length, 1);
           yield* text('已安排你要求的只读巡检，结果回来后告诉你。');
         }
       } else throw new Error(`Unexpected scripted Router step ${routerSteps}`);
@@ -118,7 +118,7 @@ async function fixture(t, { mode, proposal }) {
 }
 
 for (const question of ['有其他设备连接我们这台机器吗？', '手机最后一次访问是什么时候？']) {
-  test(`Router selects the read-only tool without admission review or a Ticket: ${question}`, async t => {
+  test(`Router selects the read-only tool without admission review or a Task: ${question}`, async t => {
     const f = await fixture(t, { mode: 'direct' });
     await f.engine.send({ text: question, requestId: 'device-question' });
     await f.agent.whenIdle();
@@ -126,7 +126,7 @@ for (const question of ['有其他设备连接我们这台机器吗？', '手机
     assert.ok(f.dispatched.every(row => row.sessionId === f.agent.id));
     assert.equal(f.routerSteps(), 2);
     assert.equal(f.linkReads(), 1);
-    assert.equal(f.database.listTickets().length, 0);
+    assert.equal(f.database.listTasks().length, 0);
     assert.equal(f.requests.length, 3, 'only the preceding conversation and two current Router steps run');
     assert.equal(f.ctx.sessions.list().length, 1);
     const events = f.agent.session.snapshotEvents();
@@ -146,13 +146,13 @@ for (const request of ['请只读检查香港服务器负载、内存、磁盘�
     assert.ok(f.dispatched.every(row => row.sessionId === f.agent.id));
     assert.equal(f.routerSteps(), 2);
     assert.equal(f.linkReads(), 0);
-    const [ticket] = f.database.listTickets();
-    assert.ok(ticket);
-    assert.equal(f.database.listTickets().length, 1);
-    assert.equal(ticket.mandate.instruction, request);
-    assert.equal(ticket.target, proposal.text);
-    assert.equal(ticket.mandate.scopeCheck, undefined);
-    assert.deepEqual(f.database.assignments(ticket.id)[0].model, f.workerModel);
+    const [task] = f.database.listTasks();
+    assert.ok(task);
+    assert.equal(f.database.listTasks().length, 1);
+    assert.equal(task.mandate.instruction, request);
+    assert.equal(task.target, proposal.text);
+    assert.equal(task.mandate.scopeCheck, undefined);
+    assert.deepEqual(f.database.assignments(task.id)[0].model, f.workerModel);
     assert.equal(f.requests.length, 3, 'delegation adds no review generation to the two Router steps');
     assert.ok(f.requests.every(row => row.model === f.routerModel.modelId));
     assert.equal(f.ctx.sessions.list().length, 1, 'admission does not create another Router session');

@@ -5,8 +5,8 @@ import { Dialog, DialogContent, DialogTitle } from '../../shared/client/ui/dialo
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import css from './task-list.css';
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
-import { normalizeTicketTitle, TICKET_TITLE_MAX_CHARS } from '../src/ticket-title.mjs';
-import { ticketLabels } from './ticket-state.mjs';
+import { normalizeTaskTitle, TASK_TITLE_MAX_CHARS } from '../src/task-title.mjs';
+import { taskLabels } from './task-state.mjs';
 import { activeActivityStates, terminalActivityStates } from './activity-data.mjs';
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import { TaskMarkdown } from './task-document.jsx';
@@ -40,30 +40,30 @@ export function TaskDetail({ open, title, onClose, dirty = false, children, foot
   return <><Dialog open={open} onOpenChange={value => { if (!value) close(); }}><style>{css}</style><DialogContent className="ba-task-dialog" aria-describedby={undefined} onOpenAutoFocus={() => { opener.current = document.activeElement; }} onCloseAutoFocus={event => { if (opener.current?.isConnected) { event.preventDefault(); opener.current.focus(); } }}><DialogTitle>{typeof title === 'string' ? <Tooltip label={title} onlyWhenClipped><span className="ba-task-dialog-title-text" tabIndex={0}>{title}</span></Tooltip> : title}</DialogTitle><div className="ba-root ba-task-dialog-body">{children}</div>{footer && <footer className="ba-root ba-task-dialog-footer">{footer}</footer>}</DialogContent></Dialog>{confirmation}</>;
 }
 
-export function TicketFacts({ ticket }) {
-  const begin = Date.parse(ticket.createdAt), end = Date.parse(ticket.closedAt || ticket.completedAt || ticket.execution?.updatedAt || ticket.updatedAt);
+export function TaskFacts({ task }) {
+  const begin = Date.parse(task.createdAt), end = Date.parse(task.closedAt || task.completedAt || task.execution?.updatedAt || task.updatedAt);
   const elapsed = Number.isFinite(begin) && Number.isFinite(end) && end >= begin ? Math.floor((end - begin) / 60000) : null;
-  const currentRevision = ticket.instructionRevision ?? 1;
-  const versions = [...new Map((ticket.revisions || []).filter(row => row.instructionRevision < currentRevision).map(row => [row.instructionRevision, row])).values()]
+  const currentRevision = task.instructionRevision ?? 1;
+  const versions = [...new Map((task.revisions || []).filter(row => row.instructionRevision < currentRevision).map(row => [row.instructionRevision, row])).values()]
     .sort((a, b) => b.instructionRevision - a.instructionRevision);
-  versions.unshift({ ...ticket.revisions?.find(row => row.instructionRevision === currentRevision), instructionRevision: currentRevision, target: ticket.target, acceptance: ticket.acceptance });
-  return <section className="ba-task-instructions" aria-label="任务要求">{versions.map(row => <Disclosure key={row.instructionRevision} className="ba-ticket-document ba-ticket-requirement" defaultOpen={row.instructionRevision === currentRevision} title={<span className="ba-ticket-requirement-title"><UIIcon name="edit" size={18} /><span>要求版本 {row.instructionRevision}</span>{row.instructionRevision === currentRevision && <span className="ba-ticket-version">当前</span>}</span>}>
+  versions.unshift({ ...task.revisions?.find(row => row.instructionRevision === currentRevision), instructionRevision: currentRevision, target: task.target, acceptance: task.acceptance });
+  return <section className="ba-task-instructions" aria-label="任务要求">{versions.map(row => <Disclosure key={row.instructionRevision} className="ba-task-document ba-task-requirement" defaultOpen={row.instructionRevision === currentRevision} title={<span className="ba-task-requirement-title"><UIIcon name="edit" size={18} /><span>要求版本 {row.instructionRevision}</span>{row.instructionRevision === currentRevision && <span className="ba-task-version">当前</span>}</span>}>
     <TaskMarkdown text={row.target || '原始要求未记录'} />
-    {row.acceptance && <section className="ba-ticket-document-section"><h3>验收条件</h3><TaskMarkdown text={row.acceptance} /></section>}
-    {row.reason && <section className="ba-ticket-document-section"><h3>变更原因</h3><TaskMarkdown text={row.reason} /></section>}
+    {row.acceptance && <section className="ba-task-document-section"><h3>验收条件</h3><TaskMarkdown text={row.acceptance} /></section>}
+    {row.reason && <section className="ba-task-document-section"><h3>变更原因</h3><TaskMarkdown text={row.reason} /></section>}
     {row.createdAt && <time className="ba-note" dateTime={row.createdAt}>{new Date(row.createdAt).toLocaleString('zh-CN')}</time>}
   </Disclosure>)}<span className="ba-note">截至最近记录 · {elapsed === null ? '耗时未知' : elapsed < 1 ? '不到 1 分钟' : elapsed < 60 ? `${elapsed} 分钟` : `${Math.floor(elapsed / 60)} 小时 ${elapsed % 60} 分钟`}</span></section>;
 }
 
 export function TaskListRow({ api, kind, row, title: inputTitle, summary, completed = false, completionLocked = false, onChanged, onOpen, onArchive, onRestore, actions = [], onDirtyChange }) {
   const [confirm, confirmation] = useConfirmation();
-  const title = kind === 'ticket' ? normalizeTicketTitle(inputTitle, row.target) : inputTitle;
+  const title = kind === 'task' ? normalizeTaskTitle(inputTitle, row.target) : inputTitle;
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [editing, setEditing] = useState(false), [draft, setDraft] = useState(title);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
-  const checked = kind === 'ticket' ? row.status === 'completed' : row.taskMeta?.completed || completed;
+  const checked = kind === 'task' ? row.status === 'completed' : row.taskMeta?.completed || completed;
   const pending = row.taskCanOrganize === false;
   const cleanup = !!(row.cleanup?.id || row.taskMeta?.archived);
-  const archiveDisabled = pending || (kind === 'ticket' ? row.status !== 'completed' && !row.executionControl?.stopped : !terminalActivityStates.has(row.status));
+  const archiveDisabled = pending || (kind === 'task' ? row.status !== 'completed' && !row.executionControl?.stopped : !terminalActivityStates.has(row.status));
   const change = async (operation, extra = {}) => {
     if (busy) return;
     setBusy(true); setError('');
@@ -72,10 +72,10 @@ export function TaskListRow({ api, kind, row, title: inputTitle, summary, comple
     finally { setBusy(false); }
   };
   const remove = async () => { if (await confirm({ title: `删除“${title}”？`, description: '该条目将从任务列表移除，执行记录仍会保留。', confirmLabel: '删除', destructive: true })) void change('delete'); };
-  const rename = () => { if (draft.trim()) return change('rename', { title: kind === 'ticket' ? normalizeTicketTitle(draft) : draft.trim() }); };
-  return <article className={`ba-task-list-row${checked && kind !== 'ticket' ? ' is-complete' : ''}`}>{confirmation}<style>{css}</style>
-    {kind === 'ticket' ? <span className="ba-task-check ba-activity-detail-status" data-status={row.status} role="img" aria-label={ticketLabels[row.status] || '等待'}><TaskStatusGlyph status={row.status} /></span> : <Tooltip label={pending ? '请先停止任务，等待执行结束' : completionLocked ? '目标已完成' : checked ? '取消完成标记' : '标记已完成'}><label className="ba-task-check" tabIndex={pending || completionLocked ? 0 : undefined}><input type="checkbox" checked={!!checked} disabled={busy || completionLocked || pending} aria-label={`${completionLocked ? '已完成' : checked ? '取消完成' : '标记完成'}：${title}`} onChange={() => change(checked ? 'reopen' : 'complete')} /></label></Tooltip>}
-    <div className="ba-task-list-content">{editing ? <form className="ba-task-rename" onSubmit={event => { event.preventDefault(); void rename(); }}><input autoFocus aria-label="任务名称" maxLength={kind === 'ticket' ? undefined : 200} value={draft} disabled={busy} onChange={event => { setDraft(kind === 'ticket' ? Array.from(event.target.value).slice(0, TICKET_TITLE_MAX_CHARS).join('') : event.target.value); onDirtyChange?.(true); }} /><TaskIconButton icon="check" label="保存名称" disabled={busy || !draft.trim()} onClick={rename} /><TaskIconButton icon="close" label="取消重命名" disabled={busy} onClick={() => { setEditing(false); onDirtyChange?.(false); }} /></form> : <button type="button" className="ba-task-open" onClick={onOpen}><strong>{title}</strong>{summary && <span>{summary}</span>}</button>}{error && <p role="alert" className="ba-task-list-error">{error}</p>}</div>
-    <div className="ba-task-row-actions">{actions.map(action => <TaskIconButton key={action.label} {...action} disabled={busy || action.disabled} />)}<TaskIconButton icon="edit" label="重命名" disabled={busy || editing} onClick={() => { setDraft(title); setEditing(true); onDirtyChange?.(true); }} />{kind === 'ticket' ? <TaskIconButton icon={cleanup ? 'refresh' : 'archive'} label={cleanup ? '恢复展示' : archiveDisabled ? '执行结束后可归档' : '归档'} disabled={busy || editing || archiveDisabled || !(cleanup ? onRestore : onArchive)} onClick={() => (cleanup ? onRestore : onArchive)?.(row)} /> : <TaskIconButton icon="trash" label={pending ? '请先停止任务，等待执行结束' : '删除'} disabled={busy || pending} onClick={remove} />}</div>
+  const rename = () => { if (draft.trim()) return change('rename', { title: kind === 'task' ? normalizeTaskTitle(draft) : draft.trim() }); };
+  return <article className={`ba-task-list-row${checked && kind !== 'task' ? ' is-complete' : ''}`}>{confirmation}<style>{css}</style>
+    {kind === 'task' ? <span className="ba-task-check ba-activity-detail-status" data-status={row.status} role="img" aria-label={taskLabels[row.status] || '等待'}><TaskStatusGlyph status={row.status} /></span> : <Tooltip label={pending ? '请先停止任务，等待执行结束' : completionLocked ? '目标已完成' : checked ? '取消完成标记' : '标记已完成'}><label className="ba-task-check" tabIndex={pending || completionLocked ? 0 : undefined}><input type="checkbox" checked={!!checked} disabled={busy || completionLocked || pending} aria-label={`${completionLocked ? '已完成' : checked ? '取消完成' : '标记完成'}：${title}`} onChange={() => change(checked ? 'reopen' : 'complete')} /></label></Tooltip>}
+    <div className="ba-task-list-content">{editing ? <form className="ba-task-rename" onSubmit={event => { event.preventDefault(); void rename(); }}><input autoFocus aria-label="任务名称" maxLength={kind === 'task' ? undefined : 200} value={draft} disabled={busy} onChange={event => { setDraft(kind === 'task' ? Array.from(event.target.value).slice(0, TASK_TITLE_MAX_CHARS).join('') : event.target.value); onDirtyChange?.(true); }} /><TaskIconButton icon="check" label="保存名称" disabled={busy || !draft.trim()} onClick={rename} /><TaskIconButton icon="close" label="取消重命名" disabled={busy} onClick={() => { setEditing(false); onDirtyChange?.(false); }} /></form> : <button type="button" className="ba-task-open" onClick={onOpen}><strong>{title}</strong>{summary && <span>{summary}</span>}</button>}{error && <p role="alert" className="ba-task-list-error">{error}</p>}</div>
+    <div className="ba-task-row-actions">{actions.map(action => <TaskIconButton key={action.label} {...action} disabled={busy || action.disabled} />)}<TaskIconButton icon="edit" label="重命名" disabled={busy || editing} onClick={() => { setDraft(title); setEditing(true); onDirtyChange?.(true); }} />{kind === 'task' ? <TaskIconButton icon={cleanup ? 'refresh' : 'archive'} label={cleanup ? '恢复展示' : archiveDisabled ? '执行结束后可归档' : '归档'} disabled={busy || editing || archiveDisabled || !(cleanup ? onRestore : onArchive)} onClick={() => (cleanup ? onRestore : onArchive)?.(row)} /> : <TaskIconButton icon="trash" label={pending ? '请先停止任务，等待执行结束' : '删除'} disabled={busy || pending} onClick={remove} />}</div>
   </article>;
 }

@@ -1,4 +1,4 @@
-import { ticketStopped } from './ticket-lifecycle.mjs';
+import { taskStopped } from './task-lifecycle.mjs';
 // Read-only saved-result and interrupted-execution facts.
 export const stopConfirmationNoticeMs = 30_000;
 
@@ -8,11 +8,11 @@ export function hasSavedCompletion(run) {
     && !evidence.interrupted && !evidence.waitingPause && !evidence.waitingAttention;
 }
 
-export function executionUncertainty(database, ticket, { now = Date.now() } = {}) {
-  if (!ticket || ticket.status === 'completed' || ticketStopped(ticket)) return null;
-  const assignments = database.assignments(ticket.id);
-  const assignment = [...assignments].reverse().find(row => (row.instructionRevision ?? 1) === ticket.instructionRevision
-    && (row.state === 'uncertain' || ticket.executionControl?.pauseRequested && ['claimed', 'uncertain'].includes(row.state) && row.leaseUntil <= now));
+export function executionUncertainty(database, task, { now = Date.now() } = {}) {
+  if (!task || task.status === 'completed' || taskStopped(task)) return null;
+  const assignments = database.assignments(task.id);
+  const assignment = [...assignments].reverse().find(row => (row.instructionRevision ?? 1) === task.instructionRevision
+    && (row.state === 'uncertain' || task.executionControl?.pauseRequested && ['claimed', 'uncertain'].includes(row.state) && row.leaseUntil <= now));
   if (!assignment) return null;
   const run = database.runs(assignment.id).find(row => row.fence === assignment.fence);
   const hasCompletedResult = hasSavedCompletion(run);
@@ -28,18 +28,18 @@ export function executionUncertainty(database, ticket, { now = Date.now() } = {}
   };
   const interruption = interruptedReasons[failure?.code] || '原执行会话已中断，缺少可核对的完整结束记录。';
   const nextStep = failure?.effects?.effectsVerified === false
-    ? '尚不能确认工具或外部操作是否结束，请先核实原执行记录和实际结果，再继续原工单。'
-    : '请查看原执行记录并排除该阻塞，再继续原工单。';
+    ? '尚不能确认工具或外部操作是否结束，请先核实原执行记录和实际结果，再继续原任务。'
+    : '请查看原执行记录并排除该阻塞，再继续原任务。';
   return { reasonCode, reason: hasCompletedResult ? '执行原稿已保留，系统正在自动完成保存收尾，无需授权。' : interruption + nextStep,
     ...(hasCompletedResult ? { automatic: true, attempts: recovery?.attempts || 0, nextCheckAt: recovery?.nextAttemptAt ?? now } : {}),
     hasCompletedResult, assignmentId: assignment.id, runId: run?.id || null, sessionId: run?.sessionId || null,
-    fence: assignment.fence, instructionRevision: ticket.instructionRevision };
+    fence: assignment.fence, instructionRevision: task.instructionRevision };
 
 }
 
-export function executionStopConfirmation(database, ticket, { now = Date.now() } = {}) {
-  if (!ticket?.executionControl?.stopRequested || ticket.executionControl?.stopped) return { stopRequestedAt: null, stopConfirmationOverdue: false };
-  const pending = database.assignments(ticket.id).filter(row => row.stopRequest
+export function executionStopConfirmation(database, task, { now = Date.now() } = {}) {
+  if (!task?.executionControl?.stopRequested || task.executionControl?.stopped) return { stopRequestedAt: null, stopConfirmationOverdue: false };
+  const pending = database.assignments(task.id).filter(row => row.stopRequest
     && row.stopRequest.fence === row.fence && !(row.executionStopped?.fence === row.fence
       && row.executionStopped?.owner === row.stopRequest.owner));
   const requestedAt = pending.map(row => row.stopRequest.at).filter(value => Number.isFinite(Date.parse(value))).sort()[0] || null;

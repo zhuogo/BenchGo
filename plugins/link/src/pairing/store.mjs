@@ -77,24 +77,24 @@ export async function openStore(directory) {
         try { await persist(); } catch (error) { state.workbenchSessions = previous; throw error; }
       });
     },
-    pending() { prune(); return [...pending.values()].filter(p => p.status === 'pending').map(({ id, name, createdAt, expiresAt }) => ({ id, name, createdAt, expiresAt })); },
-    begin() {
+    pending() { prune(); return [...pending.values()].filter(p => p.status === 'pending').map(({ id, name, createdAt, expiresAt, capabilities }) => ({ id, name, createdAt, expiresAt, capabilities })); },
+    begin(grants = {}) {
       prune(); if (pairings.size + pending.size >= 32) throw new Error('配对请求过多，请稍后重试');
       const code = secret(), expiresAt = Date.now() + 300_000;
-      pairings.set(hash(code), { expiresAt }); return { code, expiresAt };
+      pairings.set(hash(code), { expiresAt, capabilities: ['collaboration', 'management'].filter(key => grants[key] === true) }); return { code, expiresAt };
     },
     request(code, name, deviceType = 'unknown') {
       prune(); const key = hash(text(code, '配对码', 128)); const value = pairings.get(key);
       if (!value) throw new Error('配对码已使用或过期');
       pairings.delete(key);
       const pollToken = secret(), id = randomUUID();
-      pending.set(id, { id, name: text(name || `BenchGo-${randomBytes(3).toString('hex')}`, '设备名称', 100), deviceType: ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pollHash: hash(pollToken), status: 'pending' });
+      pending.set(id, { id, capabilities: value.capabilities || [], name: text(name || `BenchGo-${randomBytes(3).toString('hex')}`, '设备名称', 100), deviceType: ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pollHash: hash(pollToken), status: 'pending' });
       return { requestId: id, pollToken, expiresAt: value.expiresAt };
     },
     poll(id, pollToken) {
       prune(); const p = pending.get(id);
       if (!p || !sameSecret(pollToken, p.pollHash)) throw new Error('配对请求已过期或验证失败');
-      return { status: p.status, ...(p.status === 'approved' ? { token: p.token, deviceId: p.deviceId, hostName: state.name, name: state.name } : {}) };
+      return { status: p.status, ...(p.status === 'approved' ? { token: p.token, deviceId: p.deviceId, hostName: state.name, name: state.name, capabilities: state.devices.find(device => device.id === p.deviceId)?.capabilities || [] } : {}) };
     },
     async decide(id, allow) {
       prune(); const p = pending.get(id);
@@ -102,7 +102,7 @@ export async function openStore(directory) {
       if (!allow) { p.status = 'rejected'; return; }
       if (state.devices.length >= 32) throw new Error('最多配对 32 台设备，请先撤销不用的设备');
       p.status = 'approving';
-      const token = secret(), device = { id: randomUUID(), name: p.name, deviceType: p.deviceType, tokenHash: hash(token), pairedAt: Date.now(), lastSeenAt: Date.now() };
+      const token = secret(), device = { capabilities: p.capabilities || [], id: randomUUID(), name: p.name, deviceType: p.deviceType, tokenHash: hash(token), pairedAt: Date.now(), lastSeenAt: Date.now() };
       state.devices.push(device);
       try { await persist(); } catch (e) { state.devices = state.devices.filter(d => d !== device); p.status = 'pending'; throw e; }
       p.token = token; p.deviceId = device.id; p.status = 'approved';
@@ -111,6 +111,13 @@ export async function openStore(directory) {
       if (typeof token !== 'string' || token.length > 256) return;
       const d = state.devices.find(d => sameSecret(token, d.tokenHash));
       if (d) d.lastSeenAt = Date.now(); return d;
+    },
+    async grantDevice(id, grants) {
+      const device = state.devices.find(row => row.id === id); if (!device) throw new Error('设备不存在');
+      for (const key of ['collaboration','management']) if (grants[key] !== undefined && typeof grants[key] !== 'boolean') throw new Error('授权范围无效');
+      const previous = device.capabilities; const next = new Set(previous || []);
+      for (const key of ['collaboration','management']) if (grants[key] === true) next.add(key); else if (grants[key] === false) next.delete(key);
+      device.capabilities = [...next]; try { await persist(); } catch (error) { device.capabilities = previous; throw error; }
     },
     async renameDevice(id, name) {
       const device = state.devices.find(device => device.id === id);

@@ -25,11 +25,13 @@ test('conversation menu follows its actual trigger across scrolling, layout chan
     installIconSprite({effect:effect=>effect(),on(){}},undefined);
     moduleSource.update({base:true,harness:true,superagent:false,link:false});
     const ids=Array.from({length:40},(_,i)=>'session-'+i);
-    const sessions={ids,byId:Object.fromEntries(ids.map((id,i)=>[id,{id,title:'测试对话 '+i,blank:false,updatedAt:40-i}]))};
+    const childIds=['subagent','voice-subagent'];
+    const records=()=>Object.fromEntries([...ids.map((id,i)=>[id,{id,title:'测试对话 '+i,blank:false,updatedAt:40-i,...i===0?{parentId:'ordinary-parent'}:{}}]),...childIds.map(id=>[id,{id,title:'隐藏子代理 '+id,origin:'subagent',parentId:'session-0',blank:id==='voice-subagent',projectionValues:{benchgoVoice:{used:id==='voice-subagent'}}}])]);
+    const sessions={ids:[...ids,...childIds],byId:records()};
     const workspaces={phase:'ready',items:[],archivedSessionIds:[],pinnedSessionIds:[]},statuses=new Map();
     const source=snapshot=>({getSnapshot:()=>snapshot,subscribe:()=>()=>{}});
     const host={layout:{panelInfo:source({activePanelId:null})},sessions:{list:source(sessions)},workspaces:{list:source(workspaces)},uiSession:{sessionStatus:source(statuses)},remoteAccess:{source:()=>source(true)},uiWorkspace:{openSession(){}}};
-    window.scenario=mode=>{sessions.ids=mode==='data'?ids:[];sessions.byId=mode==='data'?Object.fromEntries(ids.map((id,i)=>[id,{id,title:'测试对话 '+i,blank:false,updatedAt:40-i}])):{};workspaces.phase=mode==='loading'?'loading':'ready';setFixtureState({projects:[],sessions:[],loaded:mode!=='loading',error:mode==='error'?'连接失败，请重试':''});};
+    window.scenario=mode=>{sessions.ids=mode==='data'?[...ids,...childIds]:mode==='empty'?childIds:[];sessions.byId=records();workspaces.phase=mode==='loading'?'loading':'ready';setFixtureState({projects:[],sessions:[],loaded:mode!=='loading',error:mode==='error'?'连接失败，请重试':''});};
     window.scenario('data');
     createRoot(document.getElementById('root')).render(<><style>{tokens}{themeBase}{hostCss}</style><aside className="cmd-shell-sidebar" style={{display:'flex',flexDirection:'column',width:280,height:'100vh'}}><Projects host={host} open={()=>{}} newSession={()=>{}} renderSlot={()=>null}/></aside><main>工作台内容</main></>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-sidebar-menu'), format: 'iife', jsx: 'automatic',
@@ -39,7 +41,7 @@ test('conversation menu follows its actual trigger across scrolling, layout chan
     plugins: [{ name: 'sidebar-fixture', setup(build) {
       build.onLoad({ filter: /benchgo[\\/]client[\\/]index\.jsx$/ }, async ({ path }) => {
         // Mount the real sidebar without loading unrelated application entry points.
-        const keep = ['shared/client/ui/index', 'sidebar-state.mjs', "from 'react'", 'icons.json', 'dsh-client-ui-primitives', 'iconsax.jsx', 'modules.mjs', 'session-info.mjs'];
+        const keep = ['shared/client/ui/index', 'sidebar-state.mjs', 'resource-navigation.jsx', 'resource-state.mjs', "from 'react'", 'icons.json', 'dsh-client-ui-primitives', 'iconsax.jsx', 'modules.mjs', 'session-info.mjs'];
         const source = (await readFile(path, 'utf8')).split('\n').filter(line => !line.startsWith('import ') || keep.some(value => line.includes(value))).join('\n');
         return { loader: 'jsx', resolveDir: dirname(path), contents: source + '\nexport {Projects}; export function setFixtureState(value){update(value);}' };
       });
@@ -65,6 +67,9 @@ test('conversation menu follows its actual trigger across scrolling, layout chan
     await page.addScriptTag({ content: bundle.outputFiles.find(file => file.path.endsWith('.js')).text });
     const trigger = index => page.getByRole('button', { name: '对话操作：测试对话 ' + index, exact: true });
     const menu = page.locator('.cmd-actions-popover');
+    await trigger(0).waitFor();
+    assert.equal(await page.locator('.cmd-session').count(),40,'ordinary branches stay visible while both subagent rows are hidden');
+    assert.equal(await page.getByText(/隐藏子代理/).count(),0);
     const aligned = async index => {
       await page.waitForFunction(label => {
         const button = document.querySelector('button[aria-label="' + label + '"]'), menu = document.querySelector('.cmd-actions-popover');
@@ -89,7 +94,16 @@ test('conversation menu follows its actual trigger across scrolling, layout chan
     await trigger(6).click(); await aligned(6);
     assert.equal(await trigger(5).getAttribute('aria-expanded'), 'false');
     assert.equal(await trigger(6).getAttribute('aria-expanded'), 'true');
+    await page.keyboard.press('Escape');
+    await page.getByRole('button',{name:'搜索对话',exact:true}).click();
+    const search=page.getByRole('textbox',{name:'搜索对话内容',exact:true});
+    await search.fill('隐藏子代理');
+    await page.waitForFunction(()=>!document.querySelector('.cmd-session-row'));
+    await search.fill('测试对话 0');
+    await trigger(0).waitFor();
+    await search.fill('');
     await page.setViewportSize({ width: 500, height: 600 });
+    await trigger(6).click();
     await page.waitForFunction(() => { const r = document.querySelector('.cmd-actions-popover')?.getBoundingClientRect(); return r && r.left >= 11 && r.right <= innerWidth - 11 && r.top >= 11 && r.bottom <= innerHeight - 11; });
     await page.screenshot({ path: join(screenshots, 'conversation-narrow.png') });
     await page.setViewportSize({ width: 1200, height: 900 });

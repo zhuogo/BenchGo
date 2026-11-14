@@ -1,4 +1,4 @@
-.ba-root:has(.ba-activity-panel){position:relative}
+.ba-root:has(.ba-activity-panel){position:relative;overflow-x:clip}
 /* Keep the complete conversation, including its elevated composer, below the board. */
 .ba-root:has(>.ba-activity-panel)>.ba-main{position:relative;isolation:isolate;z-index:0}
 .ba-root .ba-activity-trigger{display:inline-flex;align-items:center;justify-content:center;gap:4px;flex:none;min-width:32px;min-height:32px;padding:4px;border:0;border-radius:8px;background:transparent;color:var(--ba-muted);cursor:pointer}
@@ -7,6 +7,7 @@
 .ba-activity-panel-icon{transform:scaleX(-1)}
 .ba-activity-panel[hidden],.ba-activity-backdrop[hidden]{display:none!important}
 .ba-activity-backdrop{display:none}
+.ba-activity-panel[data-state=closing],.ba-activity-backdrop[data-state=closing]{pointer-events:none}
 
 /* A 360px rail: 16px gutters + 328px content, shared by tabs, cards and footer. */
 .ba-board{

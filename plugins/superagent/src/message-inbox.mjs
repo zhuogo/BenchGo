@@ -2,28 +2,29 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { readModelFallbacks } from './model-fallback.mjs';
 import { readQuestionReply, readBoundQuestionReply } from './question-reply.mjs';
-import { ticketReplySource, ticketReplyInstruction, ticketReplyIdentity } from './ticket-reply.mjs';
+import { taskReplySource, taskReplyInstruction, taskReplyIdentity } from './task-reply.mjs';
 import { watchdogIncidentIdentity, watchdogNoticeCurrent, watchdogNotificationIdentity } from './watchdog-router-signal.mjs';
 import { approvalSignalBinding } from './approval-chat-binding.mjs';
 
 const active = new Set(['queued', 'processing', 'prepared']);
 const fingerprint = (threadId, text, context) => createHash('sha256').update(JSON.stringify(context === undefined ? [threadId, text] : [threadId, text, context])).digest('hex');
-const ticketReplyMessageSource = (signal, threadId) => {
+const taskReplyMessageSource = (signal, threadId) => {
   const approval = approvalSignalBinding(signal, threadId);
-  return { kind: ticketReplySource, replyKind: signal.kind, eventKey: signal.eventKey, ticketId: signal.ticketId,
+  return { kind: taskReplySource, replyKind: signal.kind, eventKey: signal.eventKey, taskId: signal.taskId,
+    ...(signal.kind === 'result' ? { replyMode: 'conversation' } : {}),
     ...(approval ? { approval } : {}) };
 };
 
 function replySnapshot(value) {
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)
-    || Object.keys(value).some(key => !['eventId', 'ticketId', 'instructionRevision', 'resultVersion', 'question'].includes(key))
+    || Object.keys(value).some(key => !['eventId', 'taskId', 'instructionRevision', 'resultVersion', 'question'].includes(key))
     || typeof value.eventId !== 'string' || !value.eventId || value.eventId.length > 200
-    || typeof value.ticketId !== 'string' || !value.ticketId || value.ticketId.length > 200
+    || typeof value.taskId !== 'string' || !value.taskId || value.taskId.length > 200
     || !Number.isSafeInteger(value.instructionRevision) || value.instructionRevision < 1
     || (value.resultVersion !== null && value.resultVersion !== undefined && (!Number.isSafeInteger(value.resultVersion) || value.resultVersion < 1))
     || typeof value.question !== 'string' || value.question.length > 200_000) throw new Error('无效回复关联');
-  return { eventId: value.eventId, ticketId: value.ticketId, instructionRevision: value.instructionRevision,
+  return { eventId: value.eventId, taskId: value.taskId, instructionRevision: value.instructionRevision,
     resultVersion: value.resultVersion ?? null, question: value.question };
 }
 
@@ -53,7 +54,7 @@ function receiptEnding(reason) {
 }
 
 /** Reuses state.requests: one durable inbox, one host writer per conversation. */
-export function createMessageInbox({ getState, updateState, ensureSession, getAgent, readSession, beforeDispatch, onDispatch, onChange = () => {}, now = Date.now, isStopped = () => false }) {
+export function createMessageInbox({ getState, updateState, ensureSession, getAgent, readSession, beforeDispatch, onDispatch, onSettled, onChange = () => {}, now = Date.now, isStopped = () => false }) {
   const drains = new Map();
   const receipt = row => ({ threadId: row.threadId, sessionId: row.sessionId ?? null, requestId: row.requestId, messageId: row.messageId, status: row.status === 'sent' ? 'processed' : row.status, ...(row.error ? { error: row.error } : {}) });
   const patch = async (requestId, change) => updateState(state => ({ requests: (state.requests || []).map(row => row.requestId === requestId ? { ...row, ...change,
@@ -65,7 +66,10 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
       try {
         if (!row.sessionId) throw new Error('缺少原始会话标识');
         const { events } = await readSession(row.sessionId);
-        await patch(row.requestId, messageReceiptFromEvents(row, events));
+        const ending = messageReceiptFromEvents(row, events);
+        await patch(row.requestId, ending);
+        // Downstream bookkeeping never changes whether the Router finished.
+        await onSettled?.({ ...row, ...ending });
       } catch (error) { await patch(row.requestId, { status: 'uncertain', error: `无法核实原消息交付：${error.message}` }); }
     }
   }
@@ -81,7 +85,7 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
         if (isStopped() || agent?.status === 'running') return;
         await reconcile(threadId, agent);
         const queued = ((await getState()).requests || []).filter(item => item.threadId === threadId && item.status === 'queued');
-        const row = queued.find(item => !item.ticketReply && !item.executionInput) || queued[0];
+        const row = queued.find(item => !item.taskReply && !item.executionInput) || queued[0];
         if (!row || isStopped()) return;
         agent ||= await ensureSession({ threadId });
         if (isStopped() || agent.status === 'running') return;
@@ -121,48 +125,49 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
     return operation;
   }
   return {
-    async enqueueTicketReply({ threadId, signal, retry = false, retryMessageId, suppressReason }) {
-      const requestId = `ticket-reply:${signal.eventKey}`, digest = fingerprint(threadId, signal);
+    async enqueueTaskReply({ threadId, signal, retry = false, retryMessageId, suppressReason }) {
+      const requestId = `task-reply:${signal.eventKey}`, digest = fingerprint(threadId, signal);
       await updateState(state => {
         if (signal.kind === 'watchdog') {
-          const sameId = (state.requests || []).find(row => row.ticketReply?.kind === 'watchdog'
-            && (row.ticketReply.observation.id === signal.observation.id || row.watchdogReceipts?.some(receipt => receipt.id === signal.observation.id)));
+          const sameId = (state.requests || []).find(row => row.taskReply?.kind === 'watchdog'
+            && (row.taskReply.observation.id === signal.observation.id || row.watchdogReceipts?.some(receipt => receipt.id === signal.observation.id)));
           const alias = sameId?.watchdogReceipts?.find(receipt => receipt.id === signal.observation.id);
-          if (sameId && (alias ? alias.fingerprint !== digest : ticketReplyIdentity(sameId.ticketReply) !== ticketReplyIdentity(signal))) throw new Error('Watchdog 信号标识冲突');
+          if (sameId && (alias ? alias.fingerprint !== digest : taskReplyIdentity(sameId.taskReply) !== taskReplyIdentity(signal))) throw new Error('Watchdog 信号标识冲突');
         }
         const previous = (state.requests || []).find(row => row.requestId === requestId);
         if (previous) {
-          if (signal.kind === 'watchdog' && previous.ticketReply?.kind === 'watchdog' && !retry) {
-            if (previous.threadId !== threadId || watchdogNotificationIdentity(previous.ticketReply) !== watchdogNotificationIdentity(signal))
+          if (signal.kind === 'watchdog' && previous.taskReply?.kind === 'watchdog' && !retry) {
+            if (previous.threadId !== threadId || watchdogNotificationIdentity(previous.taskReply) !== watchdogNotificationIdentity(signal))
               throw new Error('Watchdog 观察事件标识冲突');
-            if (previous.ticketReply.observation.id !== signal.observation.id && !previous.watchdogReceipts?.some(receipt => receipt.id === signal.observation.id)) {
+            if (previous.taskReply.observation.id !== signal.observation.id && !previous.watchdogReceipts?.some(receipt => receipt.id === signal.observation.id)) {
               if ((previous.watchdogReceipts?.length || 0) >= 64) throw new Error('Watchdog 观察事件重复标识过多');
               return { requests: state.requests.map(row => row.requestId === requestId
                 ? { ...row, watchdogReceipts: [...(row.watchdogReceipts || []), { id: signal.observation.id, fingerprint: digest }] } : row) };
             }
             return {};
           }
-          if (previous.threadId !== threadId || ticketReplyIdentity(previous.ticketReply) !== ticketReplyIdentity(signal)) throw new Error('工单回复标识冲突');
+          if (previous.threadId !== threadId || taskReplyIdentity(previous.taskReply) !== taskReplyIdentity(signal)) throw new Error('任务回复标识冲突');
           if (retry && retryMessageId !== undefined && previous.messageId !== retryMessageId) return {};
           if (retry && ['failed', 'processed'].includes(previous.status) && !previous.suppressed) {
-            const message = createUserMessage({ source: ticketReplyMessageSource(signal, threadId), content: [{ type: 'text', text: ticketReplyInstruction(signal) }] });
+            const message = createUserMessage({ source: taskReplyMessageSource(signal, threadId), content: [{ type: 'text', text: taskReplyInstruction(signal) }] });
             return { requests: state.requests.map(row => row.requestId === requestId ? { ...row, messageId: message.id, message,
-              sessionId: null, ticketReply: signal, fingerprint: digest, status: 'queued', error: undefined,
-              attempt: (row.attempt || 1) + 1, retryAt: undefined, updatedAt: new Date(now()).toISOString() } : row) };
+              sessionId: null, taskReply: signal, fingerprint: digest, status: 'queued', error: undefined,
+              attempt: (row.attempt || 1) + 1, retryAt: undefined, replyNotified: undefined, replyRetryAt: undefined, replyError: undefined,
+              updatedAt: new Date(now()).toISOString() } : row) };
           }
           if (previous.status !== 'queued') return {};
-          return { requests: state.requests.map(row => row.requestId === requestId ? { ...row, fingerprint: digest, ticketReply: signal,
-            message: { ...row.message, source: ticketReplyMessageSource(signal, threadId), content: [{ type: 'text', text: ticketReplyInstruction(signal) }] } } : row) };
+          return { requests: state.requests.map(row => row.requestId === requestId ? { ...row, fingerprint: digest, taskReply: signal,
+            message: { ...row.message, source: taskReplyMessageSource(signal, threadId), content: [{ type: 'text', text: taskReplyInstruction(signal) }] } } : row) };
         }
-        const message = createUserMessage({ source: ticketReplyMessageSource(signal, threadId),
-          content: [{ type: 'text', text: ticketReplyInstruction(signal) }] });
+        const message = createUserMessage({ source: taskReplyMessageSource(signal, threadId),
+          content: [{ type: 'text', text: taskReplyInstruction(signal) }] });
         const superseded = signal.kind === 'watchdog' && !watchdogNoticeCurrent(signal, state.requests || []);
         return { requests: [...(state.requests || []).map(row => !suppressReason && signal.kind === 'watchdog' && row.status === 'queued'
-          && watchdogIncidentIdentity(row.ticketReply) === watchdogIncidentIdentity(signal)
-          && !watchdogNoticeCurrent(row.ticketReply, [{ ticketReply: signal }])
+          && watchdogIncidentIdentity(row.taskReply) === watchdogIncidentIdentity(signal)
+          && !watchdogNoticeCurrent(row.taskReply, [{ taskReply: signal }])
           ? { ...row, status: 'processed', suppressed: true, suppressionReason: 'watchdog-incident-superseded', message: undefined } : row),
         { requestId, threadId, messageId: message.id, message,
-          ticketReply: signal, fingerprint: digest, attempt: 1,
+          taskReply: signal, fingerprint: digest, attempt: 1,
           status: suppressReason || superseded ? 'processed' : 'queued',
           ...(suppressReason || superseded ? { suppressed: true, suppressionReason: suppressReason || 'watchdog-incident-superseded' } : {}),
           createdAt: new Date(now()).toISOString() }] };
@@ -227,7 +232,7 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
     },
     async hasPending(threadId) { return ((await getState()).requests || []).some(row => row.threadId === threadId && active.has(row.status)); },
     async state(threadId) {
-      return ((await getState()).requests || []).filter(row => row.threadId === threadId && !row.ticketReply && !row.executionInput).map(row => ({ ...receipt(row), createdAt: row.createdAt, updatedAt: row.updatedAt,
+      return ((await getState()).requests || []).filter(row => row.threadId === threadId && !row.taskReply && !row.executionInput).map(row => ({ ...receipt(row), createdAt: row.createdAt, updatedAt: row.updatedAt,
         ...(row.questionReply ? { questionReply: row.questionReply, text: row.questionReply.text }
           : row.message ? { text: row.message.content?.filter(block => block.type === 'text').map(block => block.text).join('') ?? '' } : {}) }));
     },

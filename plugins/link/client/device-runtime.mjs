@@ -18,6 +18,8 @@ export const deviceRuntime = {
       reject: 'hostReject',
       revoke: 'hostRevoke',
       'rename-device': 'hostRenameDevice',
+      'grant-device': 'hostGrantDevice',
+      'management-decide': 'hostManagementDecide',
     };
     if (!actions[action]) return Promise.reject(new Error('当前设备中心不支持此高级设置，请在主机设置中操作'));
     return deviceRuntime.call(actions[action], input);

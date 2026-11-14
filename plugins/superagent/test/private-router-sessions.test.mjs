@@ -13,14 +13,14 @@ test('private Router identities include historical and deleted side chats while 
 
 function inventoryFixture() {
  const state = { mainSessionId: 'main', threads: [{ id: 'im', sessionId: 'im', sourceKey: 'channel' }, { id: 'side', sessionId: 'side', archived: true }], sessionLineage: { main: ['old-main'], deleted: ['deleted-side'] } };
- const ticket = { id: 't', title: 'Task', status: 'running', mandate: {} };
+ const task = { id: 't', title: 'Task', status: 'running', mandate: {} };
  const assignment = { id: 'a', owner: 'owner', fence: 2, state: 'claimed', leaseUntil: 200 };
  const run = { id: 'r', sessionId: 'worker', owner: 'owner', fence: 2, state: 'running' };
  const historical = { id: 'old-r', sessionId: 'old-worker', owner: 'old', fence: 1, state: 'uncertain' };
  const roles = [{ sessionId: 'forgotten-router', role: 'router', threadId: 'deleted' },
-   { sessionId: 'child', role: 'child-worker', ticketId: 't', assignmentId: 'a', runId: 'r', parentSessionId: 'worker' }];
- const projections = [{ sessionId: 'projected-only', rootSessionId: 'worker', parentSessionId: 'worker', ticketId: 't', assignmentId: 'a', runId: 'r' }];
- const database = { listTickets: () => [ticket], assignments: () => [assignment], runs: () => [historical, run], listSessionRoles: () => roles, executionProjections: () => projections,
+   { sessionId: 'child', role: 'child-worker', taskId: 't', assignmentId: 'a', runId: 'r', parentSessionId: 'worker' }];
+ const projections = [{ sessionId: 'projected-only', rootSessionId: 'worker', parentSessionId: 'worker', taskId: 't', assignmentId: 'a', runId: 'r' }];
+ const database = { listTasks: () => [task], assignments: () => [assignment], runs: () => [historical, run], listSessionRoles: () => roles, executionProjections: () => projections,
    getSessionRole: () => null }; // Cold sessions: no assembly audit has been saved yet.
  const records = [
    { id: 'grandchild', origin: 'subagent', parentSession: 'child' },
@@ -32,9 +32,9 @@ function inventoryFixture() {
    { id: 'ordinary', title: 'SuperAgent Worker', cwd: '/same/project' },
    { id: 'worker' }, { id: 'old-worker' },
  ].map(header => ({ header, persisted: true, live: false }));
- const gate = { ticketId: 't', assignmentId: 'a', runId: 'r', sessionId: 'worker', owner: 'owner', fence: 2 };
+ const gate = { taskId: 't', assignmentId: 'a', runId: 'r', sessionId: 'worker', owner: 'owner', fence: 2 };
  const agents = { get: id => id === 'worker' ? { ctx: { get: () => gate } } : undefined };
- return { state, database, records, agents, now: 100, ticket, assignment, run, gate, roles, projections };
+ return { state, database, records, agents, now: 100, task, assignment, run, gate, roles, projections };
 }
 
 test('sidebar hides Router surfaces while exposing original Worker and official subagent sessions', () => {
@@ -56,8 +56,8 @@ for (const boundary of ['expired', 'fence', 'owner', 'unclaimed', 'completed', '
  if (boundary === 'fence') f.run.fence = 1;
  if (boundary === 'owner') f.gate.owner = 'stale';
  if (boundary === 'unclaimed') f.assignment.state = 'uncertain';
- if (boundary === 'completed') f.ticket.status = 'completed';
- if (boundary === 'stopped') f.ticket.executionControl = { stopRequested: true };
+ if (boundary === 'completed') f.task.status = 'completed';
+ if (boundary === 'stopped') f.task.executionControl = { stopRequested: true };
  if (boundary === 'missing-agent') f.agents.get = () => undefined;
  if (boundary === 'wrong-gate') f.gate.runId = 'foreign';
  const row = superagentSessionInventory(f).sessions.find(row => row.sessionId === 'worker');
@@ -65,11 +65,11 @@ for (const boundary of ['expired', 'fence', 'owner', 'unclaimed', 'completed', '
 });
 
 test('a paused but live leased Worker can receive input without granting execution continuation', () => {
- const f = inventoryFixture(); f.ticket.executionControl = { paused: true };
+ const f = inventoryFixture(); f.task.executionControl = { paused: true };
  assert.equal(superagentSessionInventory(f).sessions.find(row => row.sessionId === 'worker').promptable, true);
 });
 
-test('conflicting role or execution projection cannot relabel a foreign child into a Ticket', () => {
+test('conflicting role or execution projection cannot relabel a foreign child into a Task', () => {
  const f = inventoryFixture();
  f.roles.find(row => row.sessionId === 'child').runId = 'foreign';
  f.projections.push({ sessionId: 'legacy-child', parentSessionId: 'old-worker', runId: 'foreign' });
@@ -87,11 +87,11 @@ for (const sessionId of ['grandchild', 'legacy-child', 'router-child', 'projecte
  assert.equal(role.sessionId, sessionId);
  assert.ok(['router', 'worker', 'child-worker'].includes(role.role));
  if (['grandchild', 'legacy-child'].includes(sessionId)) {
-   assert.equal(role.role, 'child-worker'); assert.equal(role.ticketId, 't');
+   assert.equal(role.role, 'child-worker'); assert.equal(role.taskId, 't');
    assert.equal(role.parentSessionId, sessionId === 'grandchild' ? 'child' : 'old-worker');
    assert.equal(role.status, 'ready'); assert.equal(role.actual, null);
  } else if (sessionId === 'projected-only') {
-   assert.equal(role.role, 'child-worker'); assert.equal(role.ticketId, 't');
+   assert.equal(role.role, 'child-worker'); assert.equal(role.taskId, 't');
    assert.equal(role.parentSessionId, 'worker'); assert.equal(role.status, 'blocked');
    assert.match(role.reason.message, /目录记录/);
  } else if (sessionId === 'router-child') {

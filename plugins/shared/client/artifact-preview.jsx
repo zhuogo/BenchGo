@@ -1,20 +1,22 @@
-import { Tooltip, IconDownloadOutlineRegular, IconCodeOutlineRegular, IconInspectOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
+import { Tooltip, IconCodeOutlineRegular, IconInspectOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { BINARY_LIMIT, TEXT_LIMIT, checkOfficeArchive, decodeText, fileUrl, frameDocument, pdfUrl, previewKind, readPreview, visibleRows } from './preview-model.mjs';
+import { BINARY_LIMIT, PPTX_SCRIPT_LIMIT, TEXT_LIMIT, checkOfficeArchive, decodeText, documentPdfUrl, fileUrl, frameDocument, pptxFrameDocument, previewKind, readPreview, visibleRows } from './preview-model.mjs';
 import { CustomSelect } from './custom-select.jsx';
 import { Button } from './ui/button.jsx';
 import { Loading } from './ui/loading.jsx';
+import { FileSaveButton } from './file-save-button.jsx';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import css from './artifact-preview.css';
 
 const asset = name => new URL(`api/benchgo/preview-assets/${name}.js`, document.baseURI).href;
 const load = name => import(/* @vite-ignore */ asset(name));
 const textKinds = ['text', 'markdown', 'json', 'html'];
-function Frame({ html, title }) {
-  const frame = useRef(null), [scheme, setScheme] = useState('light');
+function usePreviewScheme(frame) {
+  const [scheme, setScheme] = useState('light');
   useLayoutEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const read = () => {
+      if (!frame.current) return;
       const style = getComputedStyle(frame.current), rgb = style.backgroundColor.match(/^rgba?\((\d+)[, ]+(\d+)[, ]+(\d+)/);
       const dark = rgb ? Number(rgb[1]) * .2126 + Number(rgb[2]) * .7152 + Number(rgb[3]) * .0722 < 128 : style.colorScheme === 'dark' || (style.colorScheme.includes('dark') && media.matches);
       setScheme(dark ? 'dark' : 'light');
@@ -24,6 +26,10 @@ function Frame({ html, title }) {
     read(); media.addEventListener('change', read);
     return () => { observer.disconnect(); media.removeEventListener('change', read); };
   }, []);
+  return scheme;
+}
+function Frame({ html, title }) {
+  const frame = useRef(null), scheme = usePreviewScheme(frame);
   return <iframe ref={frame} className="bg-preview-frame" title={title} sandbox="" referrerPolicy="no-referrer" srcDoc={frameDocument(html, scheme)} />;
 }
 
@@ -93,16 +99,68 @@ function Pdf({ bytes, onRetry }) {
   }, [doc, page, zoom]);
   return <div className="bg-pdf" ref={holder}><div className="bg-preview-tools"><button type="button" disabled={!doc || page <= 1} onClick={() => setPage(p => p - 1)}>上一页</button><span>{page} / {doc?.numPages || '—'}</span><button type="button" disabled={!doc || page >= doc.numPages} onClick={() => setPage(p => p + 1)}>下一页</button><label>缩放 <CustomSelect aria-label={'\u7f29\u653e'} value={String(zoom)} onChange={value => setZoom(Number(value))} options={[{ value: '1', label: '\u9002\u5408\u5bbd\u5ea6' }, { value: '1.5', label: '150%' }, { value: '2', label: '200%' }]} /></label></div>{busy && <Loading label="正在渲染页面…" compact />}{error && <div role="alert"><p>{error}</p><button type="button" onClick={onRetry}>重试</button></div>}<div className="bg-pdf-page"><canvas ref={canvas} aria-label={`第 ${page} 页`} role="img" /></div><p className="bg-preview-note">逐页快览；需要全文检索或辅助阅读时，请下载原文件。</p></div>;
 }
+function Pptx({ bytes, name, onRetry }) {
+  const frame = useRef(null), id = useRef(crypto.randomUUID()), nonce = useRef(crypto.randomUUID().replaceAll('-', '')), deadline = useRef(null);
+  const [runner, setRunner] = useState('');
+  const [state, setState] = useState('loading'), [error, setError] = useState(''), [count, setCount] = useState(0);
+  const frameDocument = useMemo(() => runner ? pptxFrameDocument(runner, id.current, nonce.current) : '', [runner]);
+  const [ratio, setRatio] = useState(0), [height, setHeight] = useState(0), scheme = usePreviewScheme(frame), schemeRef = useRef(scheme);
+  schemeRef.current = scheme;
+  const theme = () => frame.current?.contentWindow?.postMessage({ type: 'benchgo:pptx-theme', id: id.current, dark: schemeRef.current === 'dark' }, '*');
+  useEffect(theme, [scheme]);
+  useEffect(() => {
+    const controller = new AbortController(), signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
+    (async () => {
+      const response = await fetch(asset('pptx'), { credentials: 'same-origin', signal });
+      const source = decodeText(await readPreview(response, PPTX_SCRIPT_LIMIT, signal));
+      if (!source.trim()) throw new Error('演示预览组件内容为空');
+      if (!controller.signal.aborted) setRunner(source);
+    })().catch(cause => { if (!controller.signal.aborted) { clearTimeout(deadline.current); setError(`演示预览组件加载失败：${cause.message || '请重试'}`); setState('error'); } });
+    return () => controller.abort();
+  }, []);
+  useLayoutEffect(() => {
+    if (!frame.current || !ratio || count !== 1) return;
+    const node = frame.current, measure = () => setHeight(Math.max(180, (node.clientWidth - 24) * ratio + 24));
+    const observer = new ResizeObserver(measure); observer.observe(node); measure();
+    return () => observer.disconnect();
+  }, [ratio, count]);
+  useLayoutEffect(() => {
+    let sent = false;
+    const timer = deadline.current = setTimeout(() => { setError('演示文稿解析超时，请重试或下载原文件查看'); setState('error'); }, 30000);
+    const receive = event => {
+      if (event.source !== frame.current?.contentWindow || event.data?.type !== 'benchgo:pptx' || event.data.id !== id.current) return;
+      if (event.data.state === 'waiting' && !sent) {
+        sent = true; const buffer = bytes.slice().buffer;
+        theme();
+        frame.current.contentWindow.postMessage({ type: 'benchgo:pptx-open', id: id.current, bytes: buffer }, '*', [buffer]);
+      } else if (['ready', 'empty', 'error'].includes(event.data.state)) {
+        clearTimeout(timer); setCount(event.data.count || 0); setError(event.data.message || ''); setState(event.data.state);
+        if (event.data.width > 0 && event.data.height > 0) setRatio(event.data.height / event.data.width);
+      }
+    };
+    addEventListener('message', receive);
+    return () => { clearTimeout(timer); removeEventListener('message', receive); };
+  }, [bytes]);
+  return <div className="bg-pptx" aria-busy={state === 'loading'}>
+    {state === 'loading' && <PreviewState title="正在解析演示文稿…" loading />}
+    {state === 'error' && <PreviewState title="暂时无法预览" description={error} error onRetry={onRetry} />}
+    {state === 'empty' && <PreviewState title="演示文稿还是空的" description="文件没有可展示的幻灯片。" />}
+    {state !== 'error' && <iframe ref={frame} title={`${name} 幻灯片`} className="bg-preview-frame bg-pptx-frame" style={height && state === 'ready' ? { height: Math.min(height, window.innerHeight * .65) } : undefined} data-ready={state === 'ready'} sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={frameDocument} />}
+    {state === 'ready' && <p className="bg-preview-note">共 {count} 页 · 本地快览，外部资源和链接已禁用；复杂图表、动画、字体及部分排版可能与原文件有差异。</p>}
+  </div>;
+}
 function Content({ file, kind, converted, source }) {
   const [data, setData] = useState(null), [error, setError] = useState(''), [revision, setRevision] = useState(0);
   useEffect(() => {
     const controller = new AbortController(); let alive = true;
     setData(null); setError('');
     (async () => {
-      const url = converted || kind === 'office' ? pdfUrl(file.url) : fileUrl(file.url).href;
+      const url = converted || kind === 'office' ? documentPdfUrl(file) : fileUrl(file.url).href;
+      if (!url) throw new Error('此旧版文档格式需下载后打开，或另存为 DOCX、XLSX、PPTX 后预览');
       const actual = converted || kind === 'office' ? 'pdf' : kind;
       const bytes = await readPreview(await fetch(url, { signal: controller.signal, credentials: 'same-origin' }), textKinds.includes(actual) ? TEXT_LIMIT : BINARY_LIMIT, controller.signal);
-      if (['sheet', 'docx'].includes(actual)) checkOfficeArchive(bytes);
+      if (!bytes.length) { if (alive) setData({ bytes, kind: actual }); return; }
+      if (['sheet', 'docx', 'pptx'].includes(actual)) checkOfficeArchive(bytes);
       let value = { bytes, kind: actual };
       if (textKinds.includes(actual)) {
         value.text = decodeText(bytes);
@@ -113,28 +171,29 @@ function Content({ file, kind, converted, source }) {
       if (alive) setData(value);
     })().catch(cause => { if (alive && !controller.signal.aborted) setError(cause.message || '预览失败'); });
     return () => { alive = false; controller.abort(); };
-  }, [file.url, kind, converted, revision]);
+  }, [file.url, file.pdfUrl, kind, converted, revision]);
   if (error) return <PreviewState title="暂时无法预览" description={error} error onRetry={() => setRevision(v => v + 1)} />;
   if (!data) return <PreviewState title="正在打开文件…" description="正在读取内容，请稍候。" loading />;
-  if (textKinds.includes(data.kind) && !data.text?.trim()) return <PreviewState title="这个文件还是空的" description="文件尚未写入内容，可以返回继续浏览。" />;
+  if (!data.bytes.length || textKinds.includes(data.kind) && !data.text?.trim()) return <PreviewState title="这个文件还是空的" description="文件尚未写入内容，可以返回继续浏览。" />;
   if (data.kind === 'sheet') return <Sheet bytes={data.bytes} onRetry={() => setRevision(v => v + 1)} />;
   if (data.kind === 'pdf') return <Pdf bytes={data.bytes} onRetry={() => setRevision(v => v + 1)} />;
+  if (data.kind === 'pptx') return <Pptx bytes={data.bytes} name={file.name} onRetry={() => setRevision(v => v + 1)} />;
   return <>
     {data.kind === 'html' && <p className="bg-preview-note">安全预览：脚本、外部资源和页面跳转已禁用。自包含 HTML 可直接展示，完整交互请下载后打开。</p>}
-    {data.kind === 'docx' && <p className="bg-preview-note">文档排版可能与 Office 有差异，可尝试 PDF 预览。</p>}
+    {data.kind === 'docx' && <p className="bg-preview-note">本地文档快览，排版可能与原文件有差异。{file.pdfUrl !== false && '可尝试 PDF 预览。'}</p>}
     {data.note && <p role="alert">{data.note}</p>}
     {source || data.kind === 'text' || data.note ? <pre className="bg-preview-text" tabIndex={0}>{data.text || '（空文件）'}</pre> : data.kind === 'json' ? <div className="bg-json"><JsonNode name="根节点" value={data.json} /></div> : <Frame html={data.html} title={`${file.name} 内容`} />}
   </>;
 }
-export function ArtifactPreview({ file, onClose }) {
-  const kind = previewKind(file.name), [converted, setConverted] = useState(false), [source, setSource] = useState(false), back = useRef(null);
-  useEffect(() => { back.current?.focus({ preventScroll: true }); setConverted(false); setSource(false); }, [file.url]);
-  let url, download;
-  try { url = fileUrl(file.url).href; const target = fileUrl(file.downloadUrl || file.url); target.searchParams.set('download', '1'); download = target.href; } catch { /* Invalid descriptors are not navigable. */ }
+export function ArtifactPreview({ file, onClose, embedded = false }) {
+  const kind = ['image', 'audio', 'video'].includes(file.kind) ? file.kind : previewKind(file.name), [converted, setConverted] = useState(false), [source, setSource] = useState(false), back = useRef(null);
+  useEffect(() => { back.current?.focus({ preventScroll: true }); setConverted(false); setSource(false); }, [file.url, file.pdfUrl]);
+  let url;
+  try { url = fileUrl(file.url).href; } catch { /* Invalid descriptors are not navigable. */ }
   const media = ['image', 'audio', 'video'].includes(kind);
-  return <section className="bg-preview" aria-label="文件预览" onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose?.(); } }}><style>{css}</style>
-    <header className="bg-preview-header"><Button ref={back} variant="ghost" className="bg-preview-back" onClick={onClose}>← 返回</Button><Tooltip label={file.name} side="top" delayMs={450} onlyWhenClipped portal><h2 tabIndex={0}>{file.name}</h2></Tooltip><div className="bg-preview-actions">{download && <Tooltip label="下载原文件" side="top" delayMs={350} portal><a className="bg-preview-download" href={download} download aria-label={`下载 ${file.name}`}><IconDownloadOutlineRegular size={18} /></a></Tooltip>}{url && ['markdown', 'json', 'html'].includes(kind) && <Tooltip label={source ? '查看预览' : '查看原文'} side="top" delayMs={350} portal><Button variant="ghost" className="bg-preview-mode" aria-label={source ? '查看预览' : '查看原文'} aria-pressed={source} onClick={() => setSource(value => !value)}>{source ? <IconInspectOutlineRegular size={18} /> : <IconCodeOutlineRegular size={18} />}</Button></Tooltip>}</div></header>
-    {['docx', 'doc'].includes(file.name.split('.').at(-1)?.toLowerCase()) && <div className="bg-preview-tools"><button type="button" aria-pressed={converted} onClick={() => setConverted(v => !v)}>{converted ? '文档预览' : '尝试 PDF 预览'}</button></div>}
+  return <section className={`bg-preview${embedded ? ' bg-preview-embedded' : ''}`} aria-label="文件预览" onKeyDown={event => { if (event.key === 'Escape' && onClose) { event.stopPropagation(); onClose(); } }}><style>{css}</style>
+    <header className="bg-preview-header">{!embedded && <Button ref={back} variant="ghost" className="bg-preview-back" onClick={onClose}>← 返回</Button>}<Tooltip label={file.name} side="top" delayMs={450} onlyWhenClipped portal><h2 tabIndex={0}>{file.name}</h2></Tooltip><div className="bg-preview-actions">{url && <Tooltip label="下载原文件" side="top" delayMs={350} portal><span className="bg-preview-save-anchor"><FileSaveButton file={file} className="bg-preview-download" label={`下载 ${file.name}`} /></span></Tooltip>}{url && ['markdown', 'json', 'html'].includes(kind) && <Tooltip label={source ? '查看预览' : '查看原文'} side="top" delayMs={350} portal><Button variant="ghost" className="bg-preview-mode" aria-label={source ? '查看预览' : '查看原文'} aria-pressed={source} onClick={() => setSource(value => !value)}>{source ? <IconInspectOutlineRegular size={18} /> : <IconCodeOutlineRegular size={18} />}</Button></Tooltip>}</div></header>
+    {file.pdfUrl !== false && ['docx', 'doc'].includes(file.name.split('.').at(-1)?.toLowerCase()) && <div className="bg-preview-tools"><button type="button" aria-pressed={converted} onClick={() => setConverted(v => !v)}>{converted ? '文档预览' : '尝试 PDF 预览'}</button></div>}
     {!url ? <PreviewState title="文件地址不可用" description="请返回列表刷新后重新打开。" error /> : media ? <Media key={url} kind={kind} url={url} name={file.name} /> : <Content key={file.url + converted} file={file} kind={kind} converted={converted} source={source} />}
   </section>;
 }

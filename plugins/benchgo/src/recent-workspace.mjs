@@ -3,6 +3,16 @@ import { isAbsolute, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { profileDirectory } from './projects.mjs';
 
+/** Read the sidebar's durable Recent identity without creating or renaming a workspace. */
+export async function readRecentWorkspace(directory) {
+  if (!directory) return undefined;
+  try {
+    const saved = JSON.parse(await readFile(join(directory, 'recent-workspace.json'), 'utf8'));
+    if (typeof saved.id !== 'string' || typeof saved.path !== 'string' || !isAbsolute(saved.path)) throw new Error('Invalid recent workspace record');
+    return saved;
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
 /** Commander owns recovery identity; the official first-use marker is never rewritten. */
 export function recentWorkspaceActions(ctx, directory) {
   const file = join(directory, 'recent-workspace.json');
@@ -10,11 +20,7 @@ export function recentWorkspaceActions(ctx, directory) {
   return {
     ensure({ workspaceId } = {}) {
       const task = queue.then(async () => {
-        let saved;
-        try {
-          saved = JSON.parse(await readFile(file, 'utf8'));
-          if (typeof saved.id !== 'string' || typeof saved.path !== 'string' || !isAbsolute(saved.path)) throw new Error('Invalid recent workspace record');
-        } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        const saved = await readRecentWorkspace(directory);
         // A valid official default takes priority; otherwise recover our durable identity.
         const existing = (typeof workspaceId === 'string' && ctx.workspaceRegistry.get(workspaceId))
           || (saved && ctx.workspaceRegistry.get(saved.id));

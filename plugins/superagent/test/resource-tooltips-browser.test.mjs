@@ -17,7 +17,7 @@ test('execution summaries and timestamps use keyboard-accessible bubbles without
     import React from 'react';import {createRoot} from 'react-dom/client';
     import {TaskExecution} from './plugins/superagent/client/task-execution.jsx';
     const summary='正在核对项目来源与构建状态。'.repeat(25);
-    createRoot(document.getElementById('root')).render(<TaskExecution ticketStatus='running' execution={{observed:true,updatedAt:'2026-11-09T03:00:00Z',worker:{id:'worker',label:'核对项目来源与构建状态',status:'running',activity:summary,updatedAt:'2026-11-09T03:00:00Z'}}}/>);
+    createRoot(document.getElementById('root')).render(<TaskExecution taskStatus='running' execution={{observed:true,updatedAt:'2026-11-09T03:00:00Z',worker:{id:'worker',label:'核对项目来源与构建状态',status:'running',activity:summary,updatedAt:'2026-11-09T03:00:00Z'}}}/>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-resource-tooltip-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts') },
@@ -28,19 +28,20 @@ test('execution summaries and timestamps use keyboard-accessible bubbles without
     await page.setContent('<!doctype html><html><body style="margin:0;font:14px/1.6 Arial,sans-serif"><main id="root" style="margin:18px"></main></body></html>');
     await page.addStyleTag({ content: result.outputFiles.filter(file => file.path.endsWith('.css')).map(file => file.text).join('\n') });
     await page.addScriptTag({ content: result.outputFiles.find(file => file.path.endsWith('.js')).text });
-    const worker = page.locator('[data-worker-id=worker]');
+    const worker = page.locator('[data-worker-id=worker] p');
     await worker.waitFor();
     assert.equal(await page.locator('.ba-task-execution [title]').count(), 0);
     await worker.focus();
     const bubble = page.getByRole('tooltip');
     await bubble.waitFor();
-    assert.match(await bubble.innerText(), /正在核对项目来源与构建状态。.*最近活动：/s);
+    assert.equal(await bubble.innerText(), '运行中');
+    assert.match(await worker.innerText(), /正在核对项目来源与构建状态/);
     const bounds = await bubble.boundingBox();
     assert(bounds.x >= 0 && bounds.x + bounds.width <= 391, 'long descriptions stay within the viewport');
     assert.equal(await worker.getAttribute('aria-describedby'), await bubble.getAttribute('id'));
     await worker.blur();
     await bubble.waitFor({ state: 'hidden' });
-    const timestamp = page.locator('.ba-execution-updated time');
+    const timestamp = page.locator('.ba-execution-worker-body time');
     await timestamp.focus();
     await bubble.waitFor();
     assert.match(await bubble.innerText(), /2026/);

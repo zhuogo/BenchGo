@@ -17,7 +17,7 @@ import { UIIcon } from './iconsax.jsx';
 import { mountModelPicker, mountNativeActivity } from './model-picker.jsx';
 import { moduleSource, startModuleLifecycle } from './modules.mjs';
 import { mountProviderSettings } from './provider-settings.jsx';
-import { ProjectPicker } from './project-picker.jsx';
+import { ResourceCreationDialog } from './resource-creation.jsx';
 import { ToolSettingsSection, mountToolSettingsStyle } from './tool-settings.jsx';
 import { conversationInfo, copyConversationInfo } from './session-info.mjs';
 import { startSidebarPolling } from './sidebar-refresh.mjs';
@@ -25,7 +25,8 @@ import { UpdateLauncher, mountUpdatesStyle } from './updates.jsx';
 import { mountBrand } from '../../link/client/brand.jsx';
 import { DeviceLauncher } from '../../link/client/device-launcher.jsx';
 import { DeviceSwitch } from '../../link/client/device-switch.jsx';
-import { mountEfficiencySettings } from './efficiency-settings.jsx';
+import { useResourceNavigation, ResourceScope, RemoteProjects, ResourceDeviceState, ResourceStage, remoteRecentRows, installResourceReceiver } from '../../link/client/resource-navigation.jsx';
+import { resourceKey, sortResourceRecents } from '../../link/client/resource-state.mjs';
 import { mountDiagnosticsSettings } from './diagnostics-settings.jsx';
 import { perfTrace } from '../../shared/client/perf-trace.mjs';
 import { mountInteractiveClient } from '../../interactive/client/official.jsx';
@@ -82,7 +83,7 @@ function SettingsLauncher({ host, wide, settingsOpen, openSettings, settingsShor
 function Hint({ label, children, side, gap }) { return <Tooltip label={label} side={side} gap={gap} delayMs={450} portal>{children}</Tooltip>; }
 function ErrorLine({ message }) { return message ? <div className="cmd-error" role="alert">{message}</div> : null; }
 
-export const inject = ['slots', 'layout', 'uiWorkspace', 'uiSession', 'uiConversation', 'sessions', 'locale', 'remote', 'remote.session', 'workspaces', 'modelDirectories', 'conversation', 'theme', 'connection'];
+export const inject = ['slots', 'layout', 'uiWorkspace', 'uiSession', 'uiConversation', 'sidebarRight', 'sessions', 'locale', 'remote', 'remote.session', 'workspaces', 'modelDirectories', 'conversation', 'theme', 'connection'];
 export function apply(ctx) {
   ctx.effect(() => startModuleLifecycle(ctx, {
     base: mountBaseUi,
@@ -106,7 +107,6 @@ function mountBaseUi(ctx) {
   mountModelPicker(ctx);
   mountProviderSettings(ctx);
   mountMediaSettings(ctx);
-  mountEfficiencySettings(ctx);
   mountDiagnosticsSettings(ctx);
   mountInteractiveClient(ctx);
   mountWorkbenchClient(ctx);
@@ -169,12 +169,12 @@ function mountBaseUi(ctx) {
     operation.finally(() => opening.delete(id)).catch(() => { /* The caller displays the original failure. */ });
     return operation;
   };
-  const newSession = projectId => { void startSidebarSession(ctx, data.projects, projectId, defaultWorkspaceId, ensureRecent).then(target => update({ projectId: target, selected: null, error: '' })).catch(error => update({ error: error.message })); };
+  const newSession = (projectId, propagateError = false) => { return startSidebarSession(ctx, data.projects, projectId, defaultWorkspaceId, ensureRecent).then(target => update({ projectId: target, selected: null, error: '' })).catch(error => { update({ error: error.message }); if (propagateError) throw error; }); };
   ctx.slots.inject('sidebar.brand.mark', () => ctx.slots.register({ name: 'sidebar.brand.mark', priority: -10 }, () => null));
   ctx.slots.inject('sidebar.brand.name', () => ctx.slots.register({ name: 'sidebar.brand.name', priority: -10 }, () => null));
   for (const name of ['conversation.hero.brand.mark']) ctx.slots.inject(name, () => ctx.slots.register({ name, priority: -10 }, () => null));
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'desktop-onboarding', priority: -10 }, () => null));
-  for (const [id, name] of [['plugins','plugins'], ['schedules','schedules']]) ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id, priority: -10, order: id === 'plugins' ? 0 : 10, label: () => id === 'plugins' ? '工具' : '自动化任务' }, ({ active }) => <UIIcon name={name} size={16} selected={active} />));
+  for (const [id, name] of [['plugins','plugins'], ['schedules','schedules']]) ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id, priority: -10, order: id === 'plugins' ? 0 : 10, label: () => id === 'plugins' ? '工具' : '定时任务' }, ({ active }) => <UIIcon name={name} size={16} selected={active} />));
   const theme = createThemeSource(ctx);
   ctx.slots.inject('settings.launcher', () => ctx.slots.register({ name: 'settings.launcher', priority: -10, inject: () => ({ host: ctx, theme }) }, SettingsLauncher));
   mountSidebarProjects(ctx, open, newSession);
@@ -219,10 +219,25 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
     try { localStorage.setItem('commander.sidebar.sections', JSON.stringify(next)); } catch { /* Storage may be unavailable. */ }
     return next;
   });
-  const [adding, setAdding] = useState(false), [error, setError] = useState('');
+  const [error, setError] = useState('');
   const [renameTarget, setRenameTarget] = useState(null);
   const [filter, setFilter] = useState(''), [searching, setSearching] = useState(false), [showArchived, setShowArchived] = useState(false), [archivedThreadCount, setArchivedThreadCount] = useState(0);
   const [expanded, setExpanded] = useState({});
+  const navigation = useResourceNavigation(modules.link, showArchived);
+  const [remoteTarget, setRemoteTarget] = useState(null), [targetAction, setTargetAction] = useState(null);
+  useEffect(() => { if(remoteTarget && (!navigation.devices.some(d=>d.id===remoteTarget.device.id) || Object.values(navigation.pages).some(page=>page.deviceId===remoteTarget.device.id&&['UNAUTHORIZED','IDENTITY_CHANGED'].includes(page.code))))setRemoteTarget(null); }, [navigation.devices,navigation.pages]);
+  useEffect(() => {
+    if (!remoteTarget) return;
+    const selectedPanel = host.layout.panelInfo.getSnapshot().activePanelId;
+    return host.layout.panelInfo.subscribe(() => { if (host.layout.panelInfo.getSnapshot().activePanelId !== selectedPanel) setRemoteTarget(null); });
+  }, [host, remoteTarget]);
+  const openRemote = (device, resource) => setRemoteTarget({ device, resource, requestId: crypto.randomUUID() });
+  const newLocalSession = (projectId, propagateError = false) => { setRemoteTarget(null); return newSession(projectId, propagateError); };
+  const begin = (action) => {
+    if (action === 'newSession' && (!modules.link || navigation.enabled === false || (navigation.scope.mode === 'current' && navigation.devices.length <= 1))) { newLocalSession(); return; }
+    setTargetAction(action);
+  };
+  useEffect(() => installResourceReceiver(host, { open, newSession: projectId => newSession(projectId, true), addProject: () => setTargetAction('addProject'), projectApi: api }), [host, open, newSession]);
   const [archivePhase, setArchivePhase] = useState('idle');
   const archiveTimers = useRef([]), archiveSwitching = useRef(false);
   useEffect(() => () => archiveTimers.current.forEach(clearTimeout), []);
@@ -258,7 +273,7 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
   // attaching their immutable execution cwd to the default Workspace.
   const ungrouped = harness.ids.filter(id => harness.byId[id] && !accounted.has(id)).map(id => ({ id, ungrouped: true }));
   const rows = [
-    ...d.sessions.filter(s => (!harness.byId[s.ownerSessionId] || (s.parentId && !s.harnessAdopted)) && (s.title || ['running', 'waiting', 'connecting', 'failed'].includes(s.status)) && (showArchived ? s.archived : !s.archived)).map(s => ({ ...s, status: sidebarSessionStatus(undefined, statuses.get(s.id), s), native: true })),
+    ...d.sessions.filter(s => harness.byId[s.ownerSessionId]?.origin !== 'subagent' && (!harness.byId[s.ownerSessionId] || (s.parentId && !s.harnessAdopted)) && (s.title || ['running', 'waiting', 'connecting', 'failed'].includes(s.status)) && (showArchived ? s.archived : !s.archived)).map(s => ({ ...s, status: sidebarSessionStatus(undefined, statuses.get(s.id), s), native: true })),
     ...[...members, ...ungrouped].filter(({ id }) => isSidebarSessionVisible(harness.byId[id]) && !(d.deletedHarnessIds ?? []).includes(id) && archivedIds.has(id) === showArchived).map(member => { const { id } = member; return { ...member, archived: archivedIds.has(id), nativeId: nativeFor(id)?.id, title: sidebarSessionTitle(harness.byId[id]), provider: nativeFor(id)?.provider ?? 'deepseek', model: nativeFor(id)?.model, status: sidebarSessionStatus(harness.byId[id], statuses.get(id), nativeFor(id)), updatedAt: sidebarSessionUpdatedAt(harness.byId[id]) }; }),
   ].filter(row => (d.loaded || !row.ungrouped) && !isPrivate(row.id) && !isPrivate(row.ownerSessionId)).filter(matches).sort((a, b) => Number(workspaces.pinnedSessionIds?.includes(b.id) ?? false) - Number(workspaces.pinnedSessionIds?.includes(a.id) ?? false)
     || (Number(b.updatedAt) || Date.parse(b.updatedAt) || 0) - (Number(a.updatedAt) || Date.parse(a.updatedAt) || 0));
@@ -269,7 +284,8 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
   ].filter(row => !isPrivate(row.id) && !isPrivate(row.ownerSessionId));
   const projects = projectWorkspaces(workspaceProjects);
   const recentIds = new Set(recentRows(rows, workspaceProjects).map(row => row.id));
-  const recents = rows.filter(row => row.ungrouped || recentIds.has(row.id));
+  const recents = sortResourceRecents([...(navigation.showLocal ? rows.filter(row => row.ungrouped || recentIds.has(row.id)).map(row => ({...row, deviceId:navigation.activeId, kind:'sessions',resourceId:row.id,pinned:workspaces.pinnedSessionIds?.includes(row.id)})) : []), ...remoteRecentRows(navigation,filter,showArchived)]);
+  const recentLoaded = (!navigation.showLocal || d.loaded) && navigation.remote.every(device => { const page = navigation.pages[device.id+'\0recent']; return page?.available === true && !page.loading; });
   const recentActivity = workspaceActivity(workspaceProjects.find(p => p.isDefault), live);
   const currentActionSession = actionSession && (rows.find(session => session.id === actionSession.id) || actionSession);
   const forkAccess = host.get?.('remoteAccess')?.source('session', currentActionSession?.id || '', 'session/fork') || NO_FORK_ACCESS;
@@ -325,9 +341,10 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
     catch (e) { setError(e.message); } finally { setBusy(false); }
   };
   const row = s => {
+    if(s.remote) return <div className="cmd-session-row" key={resourceKey(s)}><Tooltip label={s.device.name+' · '+(s.title||'新对话')}><button type="button" className="cmd-session" onClick={()=>openRemote(s.device,{kind:'sessions',resourceId:s.resourceId||s.id,native:s.native===true})}><SessionIcon provider={s.provider||'deepseek'} status={s.status}/><span>{s.title||'新对话'}</span><small className="cmd-resource-device-badge">{s.device.name}</small></button></Tooltip></div>;
     const selected = activePanel == null && isSidebarSessionSelected(s, activeHarnessId);
     return <div key={s.id} className={`cmd-session-row ${showArchived ? 'is-archived' : ''} ${selected ? 'is-selected' : ''}`}>
-    <button type="button" className={`cmd-session ${liveStates.has(s.status) ? 'cmd-is-active' : ''} ${selected ? 'cmd-selected' : ''}`} aria-current={selected ? 'page' : undefined} onClick={() => { setActionSession(null); if(s.native) open(s.id).catch(e => setError(e.message)); else { update({ selected: null, projectId: s.projectId }); host.uiWorkspace.openSession(s.id); } }}><SessionIcon provider={s.provider} status={s.status} /><span onDoubleClick={event => { event.stopPropagation(); if (!s.native) setRenameTarget(s); }}>{s.title || names[s.provider]}{!s.native && <small style={{ marginInlineStart: 6, color: 'var(--cmd-muted)' }}>{renderSlot('benchgo.sidebar.session.row.trailing', { sessionId: s.id })}</small>}</span></button>
+    <button type="button" className={`cmd-session ${liveStates.has(s.status) ? 'cmd-is-active' : ''} ${selected ? 'cmd-selected' : ''}`} aria-current={selected ? 'page' : undefined} onClick={() => { setRemoteTarget(null); setActionSession(null); if(s.native) open(s.id).catch(e => setError(e.message)); else { update({ selected: null, projectId: s.projectId }); host.uiWorkspace.openSession(s.id); } }}><SessionIcon provider={s.provider} status={s.status} /><span onDoubleClick={event => { event.stopPropagation(); if (!s.native) setRenameTarget(s); }}>{s.title || names[s.provider]}{!s.native && <small style={{ marginInlineStart: 6, color: 'var(--cmd-muted)' }}>{renderSlot('benchgo.sidebar.session.row.trailing', { sessionId: s.id })}</small>}</span>{modules.link && navigation.scope.mode !== 'current' && <small className="cmd-resource-device-badge">{navigation.devices.find(device=>device.id===navigation.activeId)?.name}</small>}</button>
     <div className="cmd-session-quick-actions">
       {!showArchived && <Hint label={workspaces.pinnedSessionIds?.includes(s.id) ? '取消置顶' : '置顶'}><button type="button" className="cmd-session-quick" aria-label={workspaces.pinnedSessionIds?.includes(s.id) ? '取消置顶' : '置顶会话'} onClick={event => { event.stopPropagation(); void togglePin(s); }}>{workspaces.pinnedSessionIds?.includes(s.id) ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />}</button></Hint>}
       <Hint label={showArchived ? '取消归档' : '归档'}><button type="button" className="cmd-session-quick" aria-label={showArchived ? '取消归档对话' : '归档对话'} disabled={busy} onClick={event => { event.stopPropagation(); void operate(s, 'archive'); }}><UIIcon name={showArchived ? 'unarchive' : 'archive'} size={14} /></button></Hint>
@@ -338,31 +355,45 @@ function Projects({ host, open, newSession, expandSidebar, renderSlot, panelNavi
   };
   return <section className={`cmd-projects ${wide ? '' : 'cmd-narrow'}`} aria-label="项目与对话">
     <nav className="cmd-sidebar-nav" aria-label="快捷工具栏">
-      {modules.link && <DeviceSwitch />}
       {modules.link && <DeviceLauncher />}
-      <Tooltip label="新聊天" delayMs={450} portal><button type="button" className="cmd-new-chat" onClick={() => newSession()} aria-label="创建新聊天"><UIIcon name="edit" size={16} /></button></Tooltip>
+      <Tooltip label="新聊天" delayMs={450} portal><button type="button" className="cmd-new-chat" onClick={() => begin('newSession')} aria-label="创建新聊天"><UIIcon name="edit" size={16} /></button></Tooltip>
       <Tooltip label="搜索对话" delayMs={450} portal><button type="button" className="cmd-search-toggle" onClick={() => { if (!wide) expandSidebar?.(); if (wide && searching) setFilter(''); setSearching(!wide || !searching); }} aria-label="搜索对话" aria-expanded={searching} aria-pressed={searching}><UIIcon name="search" size={16} /></button></Tooltip>
+      {modules.link && <DeviceSwitch />}
     </nav>
-    {panelNavigation}
+    <div className="cmd-sidebar-navigation" onClickCapture={event => { if (event.target.closest('.cmd-sidebar-panels button, .cmd-sidebar-panels a')) setRemoteTarget(null); }}>
+      {panelNavigation}
+      {modules.link && navigation.enabled !== false && <ResourceScope navigation={navigation} />}
+    </div>
     {wide && searching && <div className="cmd-search-panel"><label className="cmd-search-field"><UIIcon name="search" size={16} /><input autoFocus className="cmd-search" placeholder="搜索对话…" aria-label="搜索对话内容" value={filter} onChange={e => setFilter(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') { setSearching(false); setFilter(''); } }} /><Hint label="关闭搜索"><button type="button" aria-label="关闭搜索" onClick={() => { setSearching(false); setFilter(''); }}><UIIcon name="plus" size={14} className="cmd-search-close" /></button></Hint></label></div>}
     {contentMounted.current && <div className="cmd-sidebar-content" hidden={!wide}>
     {showArchived && <div className="cmd-section-title cmd-archive-toolbar"><span>已归档</span><Hint label="清空归档"><button type="button" aria-label="清空归档" disabled={busy || (!rows.some(item => item.archived) && !archivedThreadCount)} onClick={() => setConfirmClearArchive(true)}><UIIcon name="trash" size={14} /></button></Hint></div>}
     {modules.superagent && <AssistantSidebarEntry ctx={host} showArchived={showArchived} />}
-    <div className="cmd-section-title"><button type="button" className="cmd-section-toggle" aria-expanded={sections.projects} aria-controls="cmd-project-section" onClick={() => toggleSection('projects')}><span>{showArchived ? '已归档项目' : '项目'}</span><UIIcon name="chevronDown" size={12} /></button>{!showArchived && <Hint label="添加项目"><button aria-label="添加项目目录" onClick={() => setAdding(!adding)}><UIIcon name="plus" size={16} /></button></Hint>}</div>
-    {!showArchived && adding && <ProjectPicker host={host} api={api} onClose={() => setAdding(false)} onSelected={async project => { await refresh(); setAdding(false); newSession(project.id); }} />}
+    <div className="cmd-section-title"><button type="button" className="cmd-section-toggle" aria-expanded={sections.projects} aria-controls="cmd-project-section" onClick={() => toggleSection('projects')}><span>{showArchived ? '已归档项目' : '项目'}</span><UIIcon name="chevronDown" size={12} /></button>{!showArchived && <Hint label="添加项目"><button aria-label="添加项目目录" onClick={() => begin('addProject')}><UIIcon name="plus" size={16} /></button></Hint>}</div>
 
     <ErrorLine message={d.error || error || sidebarCapabilityWarning(d.capabilities)} />
     <div id="cmd-project-section" className="cmd-section-body" data-open={sections.projects} inert={!sections.projects ? '' : undefined}><div className="cmd-section-inner">
-    {!projectsLoaded && <p className="cmd-sidebar-empty">正在读取项目…</p>}
-    {projects.filter(p => !showArchived || rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))).map(p => {
+    {navigation.showLocal && modules.link && navigation.scope.mode !== 'current' && <div className="cmd-resource-group-title"><UIIcon name="computer" size={13}/><span>{navigation.devices.find(d=>d.id===navigation.activeId)?.name || '当前设备'}</span><small>当前工作台</small></div>}
+    {navigation.scope.mode==='selected'&&!navigation.selected.length&&<p className="cmd-sidebar-empty">请选择设备</p>}
+    {navigation.showLocal && !projectsLoaded && <p className="cmd-sidebar-empty">正在读取项目…</p>}
+    {(navigation.showLocal ? projects : []).filter(p => !showArchived || rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))).map(p => {
       const activity = workspaceActivity(p, live);
-      return <div className="cmd-project" key={p.id}><div className="cmd-project-name"><button aria-expanded={!!expanded[p.id]} onClick={() => setExpanded(v => ({ ...v, [p.id]: !v[p.id] }))}><UIIcon name="folder" size={16} selected={!!expanded[p.id]} /><span>{p.title}</span>{activity && <Activity status={activity} className="cmd-project-activity" />}<UIIcon name="chevronDown" className={expanded[p.id] ? 'cmd-project-chevron cmd-rotated' : 'cmd-project-chevron'} size={12} /></button>{!showArchived && <Hint label="新聊天"><button className="cmd-project-new" onClick={() => newSession(p.id)} aria-label={`在 ${p.title} 新聊天`}><UIIcon name="plus" size={16} /></button></Hint>}{!showArchived && !p.isDefault && <Hint label="删除项目"><button type="button" className="cmd-project-delete" aria-label={`删除项目 ${p.title}`} onClick={() => setConfirmProjectDelete(p)}><UIIcon name="trash" size={14} /></button></Hint>}</div>{(showArchived || expanded[p.id]) && <div className="cmd-project-children">{rows.filter(s => s.projectId === p.id || (p.path && s.cwd === p.path)).map(row)}{!rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path)) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档对话' : '还没有对话'}</p>}</div>}</div>;
+      return <div className="cmd-project" key={p.id}><div className="cmd-project-name"><button aria-expanded={!!expanded[p.id]} onClick={() => { setRemoteTarget(null); setExpanded(v => ({ ...v, [p.id]: !v[p.id] })); }}><UIIcon name="folder" size={16} selected={!!expanded[p.id]} /><span>{p.title}</span>{activity && <Activity status={activity} className="cmd-project-activity" />}<UIIcon name="chevronDown" className={expanded[p.id] ? 'cmd-project-chevron cmd-rotated' : 'cmd-project-chevron'} size={12} /></button>{!showArchived && <Hint label="新聊天"><button className="cmd-project-new" onClick={() => newLocalSession(p.id)} aria-label={`在 ${p.title} 新聊天`}><UIIcon name="plus" size={16} /></button></Hint>}{!showArchived && !p.isDefault && <Hint label="删除项目"><button type="button" className="cmd-project-delete" aria-label={`删除项目 ${p.title}`} onClick={() => setConfirmProjectDelete(p)}><UIIcon name="trash" size={14} /></button></Hint>}</div>{(showArchived || expanded[p.id]) && <div className="cmd-project-children">{rows.filter(s => s.projectId === p.id || (p.path && s.cwd === p.path)).map(row)}{!rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path)) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档对话' : '还没有对话'}</p>}</div>}</div>;
     })}
-    {projectsLoaded && !(showArchived ? projects.some(p => rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))) : projects.length) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档项目' : '暂无项目'}</p>}
+    {navigation.showLocal && projectsLoaded && !(showArchived ? projects.some(p => rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))) : projects.length) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档项目' : '暂无项目'}</p>}
+    <RemoteProjects navigation={navigation} filter={filter} onOpen={openRemote} archived={showArchived}/>
     </div></div>
-    <div className="cmd-section-title cmd-recent-title"><button type="button" className="cmd-section-toggle" aria-expanded={sections.recent} aria-controls="cmd-recent-section" onClick={() => toggleSection('recent')}><span className="cmd-section-label">{showArchived ? '已归档最近' : '最近'}{!showArchived && recentActivity && <Activity status={recentActivity} />}</span><UIIcon name="chevronDown" size={12} /></button>{!showArchived && <Hint label="新聊天"><button type="button" aria-label="最近新聊天" onClick={() => newSession()}><UIIcon name="plus" size={16} /></button></Hint>}</div>
-    <div id="cmd-recent-section" className="cmd-section-body" data-open={sections.recent} inert={!sections.recent ? '' : undefined}><div className="cmd-section-inner"><div className="cmd-recents" data-transition={archivePhase}>{recents.map(row)}{d.loaded && !recents.length && (filter || showArchived) && <p className="cmd-sidebar-empty">{filter ? '没有找到对话' : '暂无归档对话'}</p>}</div></div></div>
+    <div className="cmd-section-title cmd-recent-title"><button type="button" className="cmd-section-toggle" aria-expanded={sections.recent} aria-controls="cmd-recent-section" onClick={() => toggleSection('recent')}><span className="cmd-section-label">{showArchived ? '已归档最近' : '最近'}{!showArchived && recentActivity && <Activity status={recentActivity} />}</span><UIIcon name="chevronDown" size={12} /></button>{!showArchived && <Hint label="新聊天"><button type="button" aria-label="最近新聊天" onClick={() => begin('newSession')}><UIIcon name="plus" size={16} /></button></Hint>}</div>
+    <div id="cmd-recent-section" className="cmd-section-body" data-open={sections.recent} inert={!sections.recent ? '' : undefined}><div className="cmd-section-inner"><div className="cmd-recents" data-transition={archivePhase}>{recents.map(row)}{navigation.remote.map(device=><ResourceDeviceState key={device.id} navigation={navigation} device={device} kind="recent" hideEmpty/>)}{recentLoaded && !recents.length && <p className="cmd-sidebar-empty">{filter ? '没有找到对话' : showArchived ? '暂无归档对话' : '暂无最近对话'}</p>}</div></div></div>
     </div>}
+    <ResourceStage target={remoteTarget} onClose={()=>setRemoteTarget(null)}/>
+    {targetAction && <ResourceCreationDialog action={targetAction} navigation={modules.link ? navigation : { ...navigation, enabled: false }} api={api} onClose={() => setTargetAction(null)} onSelected={async (project, device) => {
+      if (device.id === navigation.activeId) { await refresh(); await newLocalSession(project.id, true); }
+      else openRemote(device, { kind: 'projects', resourceId: project.id, intent: 'newSession' });
+      setTargetAction(null);
+    }} onNewSession={async device => {
+      if (device.id === navigation.activeId) await newLocalSession(undefined, true);
+      else openRemote(device, { kind: 'projects', intent: 'newSession' });
+    }} />}
     <Menu open={wide && !showArchived && !!actionSession} onClose={() => { if(!busy)setActionSession(null); }} anchor={null} anchorRef={actionAnchor} side="right" align="end" portal autoFocus compact listClassName="cmd-actions-popover">
       {currentActionSession && <>
         <div className="cmd-session-details"><Icon provider={currentActionSession.provider} size={16} /><span>{names[currentActionSession.provider] || currentActionSession.provider}{currentActionSession.model ? ' · ' + currentActionSession.model : ''}</span></div>

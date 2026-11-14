@@ -1,18 +1,18 @@
 import { channelMessageRecordOf, channelMessageRecordType } from './channel-session-record.mjs';
-import { chatPublicationRecordOf } from '../../benchgo/shared/public-chat-record.mjs';
+import { chatPublicationRecordOf, hostReplyPublicationOf, isHostReplyRequest, isTaskResultReplyRequest } from '../../benchgo/shared/public-chat-record.mjs';
 import { appendPluginRecord } from '@deepseek-ai/dsh-session';
 import { fallbackRequestIds, readModelFallbacks, modelFallbackType } from './model-fallback.mjs';
 import { questionBatch, questionAnswers, questionReplyText, readQuestionReply } from './question-reply.mjs';
-import { ticketReplySource } from './ticket-reply.mjs';
 import { approvalChatBinding } from './approval-chat-binding.mjs';
 
 export const chatPublicationType = 'plugin:benchgo-plugin/chat-publication';
 export const executionInputSource = 'benchgo-execution-input';
 const fail = message => Object.assign(new Error(message), { code: 'CHAT_PUBLICATION_REJECTED' });
 const userEvent = (event, events) => event.type === 'user/message' && (event.data?.source?.kind === 'user' || readQuestionReply(event.data, events));
-const internalReply = request => request?.source?.kind === ticketReplySource;
+const internalReply = isHostReplyRequest;
+const conversationalReply = request => !internalReply(request) || isTaskResultReplyRequest(request);
 const executionReply = request => request?.source?.kind === executionInputSource;
-const replyEvent = (event, events) => userEvent(event, events) || event.type === 'user/message' && [ticketReplySource, executionInputSource].includes(event.data?.source?.kind);
+const replyEvent = (event, events) => userEvent(event, events) || event.type === 'user/message' && (internalReply(event.data) || executionReply(event.data));
 // Resolve internal notices to their original identity so they cannot
 // accidentally become a reply to the preceding human message.
 const replyContinuations = events => {
@@ -43,11 +43,11 @@ export function activeChatReply(events, { includeInternal = false } = {}) {
     else if (event.type === 'turn/end' && event.data?.turn === turn) { turn = undefined; requestId = undefined; }
   }
   const request = events.find(event => event.type === 'user/message' && event.data?.id === requestId)?.data;
-  return turn !== undefined && requestId && (includeInternal || !internalReply(request)) ? { turn, requestId } : null;
+  return turn !== undefined && requestId && (includeInternal || conversationalReply(request)) ? { turn, requestId } : null;
 }
 
 /** A projection, never a replacement for the private execution transcript. */
-export function projectChatMessages(events) {
+export function projectChatMessages(events, { approvalForRequest } = {}) {
   const continuations = replyContinuations(events);
   const requests = new Map(events.filter(event => replyEvent(event, events)).map(event => [event.data.id, event.data]));
   const users = new Set(), published = new Set(), channelMirrors = new Set(), rows = [];
@@ -55,8 +55,10 @@ export function projectChatMessages(events) {
   for (const event of events) {
     if (replyEvent(event, events)) users.add(event.data.id);
     else if (event.type === chatPublicationType && event.ignorable === true && event.data?.kind === 'final'
-      && users.has(event.data.requestId) && !internalReply(requests.get(event.data.requestId))
-      && typeof event.data.text === 'string' && event.data.text.trim() && event.data.text.length <= 16000) explicit.add(event.data.requestId);
+      && users.has(event.data.requestId) && conversationalReply(requests.get(event.data.requestId))
+      && (typeof event.data.text === 'string' && event.data.text.trim() && event.data.text.length <= 16000
+        || isTaskResultReplyRequest(requests.get(event.data.requestId)) && event.data.suppressed === true
+          && event.data.text === undefined && event.data.taskReplyEventKey === requests.get(event.data.requestId).source.eventKey)) explicit.add(event.data.requestId);
   }
   users.clear();
   let turn, request, lastAssistant, publicParts = [];
@@ -70,6 +72,11 @@ export function projectChatMessages(events) {
     }
   };
   const asked = new Map(), answered = new Set();
+  const finishRequestParts = () => {
+    if (request?.id && !internalReply(request) && !executionReply(request)
+      && !explicit.has(request.id) && !published.has(request.id)) appendParts(request.id);
+    publicParts = [];
+  };
   for (const event of events) {
     const channelRecord = channelMessageRecordOf(event);
     if (channelRecord) {
@@ -85,6 +92,9 @@ export function projectChatMessages(events) {
     }
     if (event.type === 'turn/start') { turn = event.data?.turn; request = undefined; lastAssistant = undefined; publicParts = []; }
     if (replyEvent(event, events)) {
+      // Steering starts a new request inside the same official turn. Earlier
+      // public text has already been shown and keeps its original identity.
+      finishRequestParts();
       users.add(event.data.id);
       request = event.data;
       lastAssistant = undefined; publicParts = [];
@@ -106,13 +116,16 @@ export function projectChatMessages(events) {
       lastAssistant = undefined; publicParts = [];
     } else if (event.type === chatPublicationType && event.ignorable === true) {
       const row = event.data;
-      if (row?.kind === 'ticket-reply' && internalReply(requests.get(row.requestId)) && ['approval', 'recovery', 'watchdog'].includes(requests.get(row.requestId).source.replyKind)) {
+      if (internalReply(requests.get(row?.requestId)) && ['state', 'approval', 'recovery', 'watchdog'].includes(requests.get(row.requestId).source.replyKind)) {
         if (users.has(row.requestId) && !published.has(row.requestId) && chatPublicationRecordOf(event, requests.get(row.requestId))) {
           published.add(row.requestId);
           const source = requests.get(row.requestId).source;
-          const approval = source.replyKind === 'approval' && row.ticketReplyEventKey === source.eventKey
-            && source.approval?.ticketId === source.ticketId && source.approval?.eventKey === source.eventKey
-            ? approvalChatBinding(source.approval) : null;
+          const storedApproval = source.replyKind === 'approval' && approvalForRequest?.(row.requestId, source.eventKey);
+          const approval = source.replyKind !== 'approval' ? null
+            : row.taskReplyEventKey === source.eventKey && source.approval?.taskId === source.taskId
+              && source.approval?.eventKey === source.eventKey ? approvalChatBinding(source.approval)
+              : row.taskReplyEventKey === undefined && storedApproval?.eventKey === source.eventKey
+                ? approvalChatBinding(storedApproval) : null;
           rows.push({ seq: event.seq, id: `reply:${row.requestId}`, role: 'assistant', kind: 'final', requestId: row.requestId,
             text: row.text, content: [{ type: 'text', text: row.text }], time: event.time, ...(approval ? { approval } : {}) });
         }
@@ -141,7 +154,7 @@ export function projectChatMessages(events) {
       if (text.trim()) publicParts.push(event);
     } else if (event.type === 'turn/end') {
       if (turn !== undefined && event.data?.turn === turn && event.data?.reason?.kind === 'completed'
-        && request?.id && !internalReply(request) && !executionReply(request) && !explicit.has(request.id) && !published.has(request.id)) {
+        && request?.id && conversationalReply(request) && !executionReply(request) && !explicit.has(request.id) && !published.has(request.id)) {
         if (publicParts.length) {
           published.add(request.id);
           appendParts(request.id);
@@ -150,7 +163,7 @@ export function projectChatMessages(events) {
       turn = undefined; request = undefined; lastAssistant = undefined; publicParts = [];
     }
   }
-  return rows;
+  return rows.sort((a, b) => a.seq - b.seq);
 }
 
 /** Notification identities use the public projection; transcript text stays at this boundary. */
@@ -175,6 +188,15 @@ export function installChatPublication(scope, agent, { onPublish, canPublish, ap
     if (subject !== agent) return;
     const events = agent.session.snapshotEvents(), active = activeChatReply(events, { includeInternal: true });
     const request = events.find(event => event.type === 'user/message' && event.data?.id === active?.requestId)?.data;
+    if (isTaskResultReplyRequest(request)) {
+      if (active.turn !== turn || events.some(event => event.type === chatPublicationType && event.data?.kind === 'final' && event.data.requestId === request.id)) return;
+      if (!await permitted(request)) {
+        signal?.throwIfAborted();
+        appendRecord(agent.session, chatPublicationType, { kind: 'final', requestId: request.id,
+          taskReplyEventKey: request.source.eventKey, suppressed: true });
+      }
+      return;
+    }
     if (executionReply(request)) {
       if (active.turn !== turn || events.some(event => event.type === chatPublicationType && event.data?.kind === 'final' && event.data.requestId === request.id)) return;
       const last = events.findLast(event => event.type === 'assistant/message' && event.data?.turn === turn)?.data?.message;
@@ -186,21 +208,21 @@ export function installChatPublication(scope, agent, { onPublish, canPublish, ap
       onPublish?.({ requestId: request.id });
       return;
     }
-    if (internalReply(request)) {
-      if (active.turn !== turn || events.some(event => event.type === chatPublicationType && event.data?.kind === 'ticket-reply' && event.data.requestId === request.id)) return;
+    if (internalReply(request) && !isTaskResultReplyRequest(request)) {
+      if (active.turn !== turn || events.some(event => hostReplyPublicationOf(event, request))) return;
       const last = events.findLast(event => event.type === 'assistant/message' && event.data?.turn === turn)?.data?.message;
       if (last?.source?.kind !== 'model' || last.content?.some(block => block.type === 'tool-call')) return;
       const text = textBlocks(last.content).map(block => block.text).join('\n');
       if (!text.trim() || text.length > 16000 || !await permitted(request)) return;
       signal?.throwIfAborted();
-      appendRecord(agent.session, chatPublicationType, { kind: 'ticket-reply', requestId: request.id,
-        ticketReplyEventKey: request.source.eventKey, text });
+      appendRecord(agent.session, chatPublicationType, { kind: 'task-reply', requestId: request.id,
+        taskReplyEventKey: request.source.eventKey, text });
       return;
     }
   });
   scope.tools.register({
     name: 'assistant_reply',
-    description: 'Publish your natural conversational reply and end this turn. Choose the wording and detail yourself. In a host internal Ticket reply turn, save the draft for host delivery instead. An internal state or approval notice may use suppress=true when no interruption is needed. This grants no approval or action authority.',
+    description: 'Publish your natural conversational reply and end this turn. Choose the wording and detail yourself. A task result admitted for conversation publishes normally. Other internal task notices retain host delivery; an internal state or approval notice may use suppress=true when no interruption is needed. This grants no approval or action authority.',
     parameters: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 16000 }, suppress: { type: 'boolean' } }, additionalProperties: false },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute({ text, suppress = false }, execution) {
@@ -210,10 +232,11 @@ export function installChatPublication(scope, agent, { onPublish, canPublish, ap
       const active = activeChatReply(events, { includeInternal: true });
       const request = events.findLast(event => replyEvent(event, events) && (!active || event.data.id === active.requestId))?.data;
       if (!request?.id) throw fail('没有可回复的用户请求');
-      const internal = internalReply(request), kind = internal ? 'ticket-reply' : 'final';
+      const internal = internalReply(request), kind = conversationalReply(request) ? 'final' : 'task-reply';
       if (suppress && (!internal || !['state', 'approval'].includes(request.source.replyKind) || text !== undefined)) throw fail('仅内部状态或审批提醒可选择静默');
       if (!suppress && (typeof text !== 'string' || !text.trim() || text.length > 16000)) throw fail('正式回复正文无效');
-      const existing = events.find(event => event.type === chatPublicationType && event.data?.kind === kind && event.data.requestId === request.id);
+      const existing = events.find(event => kind !== 'final' ? hostReplyPublicationOf(event, request)
+        : event.type === chatPublicationType && event.data?.kind === kind && event.data.requestId === request.id);
       if (existing) {
         if (existing.data.text !== text || !!existing.data.suppressed !== suppress) throw fail('本次请求已发布正式回复；不能重复或改写已发送内容');
         execution.concludeTurn();
@@ -221,9 +244,9 @@ export function installChatPublication(scope, agent, { onPublish, canPublish, ap
       }
       const publish = allowed => {
         execution.signal?.throwIfAborted();
-        if (!allowed) throw fail('工单状态或授权已变化，本次状态说明不再发布');
+        if (!allowed) throw fail('任务状态或授权已变化，本次状态说明不再发布');
         appendRecord(agent.session, chatPublicationType, { kind, requestId: request.id, ...(suppress ? { suppressed: true } : { text }),
-          ...(internal ? { ticketReplyEventKey: request.source.eventKey } : {}) });
+          ...(internal ? { taskReplyEventKey: request.source.eventKey } : {}) });
         execution.concludeTurn();
         onPublish?.({ requestId: request.id });
         return { published: true, requestId: request.id };

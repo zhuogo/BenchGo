@@ -22,7 +22,7 @@ const send = async (ws, data, options) => {
 };
 const requestHeaders = (headers, path) => {
   const result = {};
-  for (const key of ['accept', 'accept-language', 'content-type', 'content-length', 'range', 'if-none-match', 'if-modified-since', 'cookie']) {
+  for (const key of ['accept', 'accept-encoding', 'accept-language', 'content-type', 'content-length', 'range', 'if-none-match', 'if-modified-since', 'cookie']) {
     if (typeof headers[key] === 'string') result[key] = key === 'cookie' ? workbenchCookie(headers[key]) : headers[key];
   }
   if (['/link/api/rpc', '/link/api/workbench'].includes(path) && typeof headers.authorization === 'string') result.authorization = headers.authorization;
@@ -134,7 +134,9 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
       if (!res.headersSent && !res.destroyed) { res.writeHead(error.status ?? 502, { 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' }); res.end(error.status ? error.message : '目标设备连接中断'); }
     }
   };
-  const server = createSecureServer({ key: identity.key, cert: identity.cert, minVersion: 'TLSv1.2', allowHTTP1: true }, (req, res) => {
+  // Queue browser startup bursts at the HTTP/2 layer, leaving room in the
+  // shared 64-transaction budget for another device and long-lived streams.
+  const server = createSecureServer({ key: identity.key, cert: identity.cert, minVersion: 'TLSv1.2', allowHTTP1: true, settings: { maxConcurrentStreams: 32 } }, (req, res) => {
     const headers = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' };
     try {
       const authority = req.headers[':authority'] || req.headers.host;
@@ -246,5 +248,3 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
     },
   };
 }
-
-export const relayRoutes = Object.freeze({ control: CONTROL, data: DATA, probe: PROBE, workbench: WORKBENCH, voice: VOICE });

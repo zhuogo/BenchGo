@@ -31,7 +31,7 @@ export function apply(ctx) {
   ctx.effect(() => async () => { if (activeController === controller) activeController = undefined; callView.dispose(); await controller.dispose(); });
   const openSettings = () => { const shell = ctx.slots.entries('sidebar.settings').find(entry => entry.children?.['settings.section']); const actions = shell?.store?.create().actions; if (!actions?.openSection) throw Error('请从侧栏设置 → 媒体 → 语音打开配置。'); actions.openSection('media'); };
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'benchgo-voice-call', inject: () => ({ controller, callView, sessionStatus: ctx.uiSession.sessionStatus, openSettings }) }, VoiceCallHost));
-  ctx.slots.inject('conversation.input.activity', () => ctx.slots.register({ name: 'conversation.input.activity', priority: -10, inject: () => ({ controller, callView, sessionStatus: ctx.uiSession.sessionStatus, openSettings, micTargets }) }, VoiceActivity));
+  ctx.slots.inject('conversation.input.activity', () => ctx.slots.register({ name: 'conversation.input.activity', priority: -10, inject: () => ({ controller, callView, sessionStatus: ctx.uiSession.sessionStatus, micTargets }) }, VoiceActivity));
   ctx.inject(['shortcuts'], scope => { scope.effect(() => installMicShortcut({ shortcuts: scope.shortcuts, controller, targets: micTargets }), 'voice: microphone shortcut'); });
   void controller.load().catch(() => {});
 }
@@ -54,7 +54,7 @@ export function normalizeTtsSpeed(value) {
   return Number.isFinite(speed) && speed >= TTS_SPEED_MIN && speed <= TTS_SPEED_MAX ? Math.round(speed * 100) / 100 : DEFAULT_TTS_SPEED;
 }
 const phaseLabels = { idle: '准备中', starting: '正在连接', listening: '正在聆听', transcribing: '正在识别', thinking: '正在思考', speaking: '正在回应', waiting: '等待授权或交互' };
-function VoiceActivity({ controller, callView, sessionStatus, sessionId, inputActions, locked, onActiveChange, openSettings, micTargets }) {
+function VoiceActivity({ controller, callView, sessionStatus, sessionId, inputActions, locked, onActiveChange, micTargets }) {
   const state = useVoice(controller), [pending, setPending] = useState(false), [error, setError] = useState('');
   const [hasHistory, setHasHistory] = useState(false);
   const generation = useRef(0), activityRef = useRef(null), mic = useRef(null);
@@ -122,8 +122,6 @@ function VoiceActivity({ controller, callView, sessionStatus, sessionId, inputAc
     {!recording && (config.call || hasHistory || own && state.conversationMessages?.length > 0) && <CallEntry available={!!config.call && callReady} disabled={state.mode !== 'call' && (!config.call || !canStart || !callReady)} hint={state.mode === 'call' ? '查看正在进行的通话；结束后可在此开始新通话' : callReady && config.call ? '开始通话' : callReason || unavailable + ' 不可用，请打开设置 → 媒体 → 语音'} onStart={startCall} onHistory={() => callView.history(sessionId)}><CallIcon /></CallEntry>}
     {!recording && (active || reading) && <div className={'voice-status voice-phase-' + state.phase} role="status"><span className="voice-status-dot" /><span className="voice-status-text">{state.transcript || phaseLabels[state.phase] || '语音处理中'}</span></div>}
     {!active && pending && <span className="voice-inline-note" role="status">连接中…</span>}
-    {unavailable && <button type="button" className="voice-text-button voice-settings-link" onClick={() => run(() => { if (!openSettings) throw Error('请打开设置 → 媒体 → 语音'); openSettings(); })}>{unavailable} 不可用 · 配置语音</button>}
-    {!unavailable && config.call && callReason && <Hint label={callReason}><button type="button" className="voice-text-button voice-settings-link" onClick={() => run(() => { if (!openSettings) throw Error(callReason); openSettings(); })}>{config.tts?.stream === false ? '通话需开启流式播放 · 配置' : '通话需流式识别 · 配置'}</button></Hint>}
     {message && <span className="voice-inline-error" role="alert">{message}</span>}
   </div>;
 }

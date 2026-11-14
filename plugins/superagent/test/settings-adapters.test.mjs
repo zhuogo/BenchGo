@@ -8,10 +8,6 @@ import { createAssistantSettingsAdapter } from '../src/settings-adapter.mjs';
 import { createConnectionSettingsAdapter } from '../src/connection-settings-adapter.mjs';
 import { VoiceConfig } from '../../voice/src/config.mjs';
 import { createVoiceSettingsAdapter } from '../../voice/src/settings-adapter.mjs';
-import { openPreferences, SIDEBAR_NS } from '../../workbench/src/preferences.mjs';
-import { createWorkbenchSettingsAdapter } from '../../workbench/src/settings-adapter.mjs';
-import { createEfficiencySettingsAdapter } from '../../efficiency/src/settings-adapter.mjs';
-import { mountEfficiency } from '../../efficiency/src/plugin.mjs';
 import { applySettingsOps } from '../../benchgo/shared/settings-adapter-utils.mjs';
 
 async function directory(t) { const path = await mkdtemp(join(tmpdir(), 'benchgo-settings-adapters-')); t.after(() => rm(path, { recursive: true, force: true })); return path; }
@@ -43,26 +39,6 @@ test('Voice CAS stays inside original queue and redacts/rejects secret edits whi
   assert.equal(store.value.tts.speed, 1.2);
 });
 
-test('Workbench updates original override store, unset restores defaults, and honest reload boundary remains', async t => {
-  const store = await openPreferences(await directory(t)), adapter = createWorkbenchSettingsAdapter(store), events = [];
-  const dispose = adapter.subscribe(event => events.push(event)); t.after(dispose);
-  let current = await adapter.read(SIDEBAR_NS);
-  const saved = await adapter.apply(SIDEBAR_NS, { ops: [set(['editorExplorer'], false), set(['viewersEnabled', 'opaque-viewer'], true)], expected: expected(current) });
-  assert.equal(saved.application.state, 'reload-required');
-  assert.equal(store.snapshot().value.editorExplorer, false);
-  current = await adapter.read(SIDEBAR_NS);
-  await adapter.apply(SIDEBAR_NS, { ops: [{ op: 'unset', path: ['editorExplorer'] }], expected: expected(current) });
-  assert.equal(store.snapshot().value.editorExplorer, true);
-  assert.equal(store.snapshot().value.viewersEnabled['opaque-viewer'], true);
-  await assert.rejects(adapter.apply(SIDEBAR_NS, { ops: [set(['htmlViewerNoSandbox'], true)], expected: expected(await adapter.read(SIDEBAR_NS)) }), { code: 'SETTINGS_PATH_BLOCKED' });
-  assert.equal(events.length, 2);
-  await store.update(SIDEBAR_NS, { pluginSettings: { opaque: { password: 'private-extension-secret' } } }, store.snapshot().revision);
-  const redacted = await adapter.read(SIDEBAR_NS);
-  assert.ok(!JSON.stringify(redacted).includes('private-extension-secret'));
-  assert.equal(redacted.value.pluginSettings, undefined);
-  assert.equal(redacted.secrets[0].set, true);
-});
-
 test('Assistant and all registered Connections share original stores, model identity, document hash CAS and policy transactions', async t => {
   const dataDirectory = await mkdtemp(join(tmpdir(), 'benchgo-settings-assistant-'));
   const store = await createAssistantStore({ dataDirectory }); t.after(() => { store.close(); return rm(dataDirectory, { recursive: true, force: true }); });
@@ -90,24 +66,6 @@ test('Assistant and all registered Connections share original stores, model iden
   assert.equal(saved.value.appId, 'Opaque:App/Case');
   assert.equal(saved.application.state, 'pending');
   await assert.rejects(connections.apply('superagent-connections:feishu', { ops: [set(['appId'], 'stale')], expected: expected(current) }), { code: 'REVISION_CONFLICT' });
-});
-
-test('Efficiency exposes configuration only and reports actual unavailable remount instead of live success', async t => {
-  const disposers = [], provided = {};
-  const ctx = {
-    get: key => provided[key], provide: (key, value) => { provided[key] = value; }, logger: { warn() {} },
-    effect(callback) { disposers.push(callback()); },
-    inject() { return { async dispose() {} }; },
-    connection: { fetch: { register() { return () => {}; } } },
-  };
-  const service = await mountEfficiency(ctx, { directory: await directory(t) }); t.after(async () => { for (const dispose of disposers.reverse()) await dispose?.(); });
-  const adapter = createEfficiencySettingsAdapter(service), current = await adapter.read('benchgo-efficiency');
-  assert.equal(current.value.features.ops.state, undefined);
-  const saved = await adapter.apply('benchgo-efficiency', { ops: [set(['features', 'compaction', 'enabled'], false)], expected: expected(current) });
-  assert.equal(saved.application.state, 'pending');
-  assert.equal(saved.value.features.compaction.enabled, false);
-  assert.equal(saved.value.features.ops.shell, false);
-  await assert.rejects(adapter.apply('benchgo-efficiency', { ops: [set(['features', 'ops', 'shell'], true)], expected: expected(current) }), { code: 'REVISION_CONFLICT' });
 });
 
 test('adapter operations reject prototype paths and avoid mutating original input', () => {

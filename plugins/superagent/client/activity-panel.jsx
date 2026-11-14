@@ -1,7 +1,7 @@
 import { TaskDetail, TaskIconButton, TaskStatusGlyph as StatusGlyph, TaskStatusTitle } from './task-list.jsx';
-import { TicketWaiting } from './ticket-waiting.jsx';
+import { TaskWaiting } from './task-waiting.jsx';
 import { TaskExecution } from './task-execution.jsx';
-import { ticketWaiting } from './ticket-state.mjs';
+import { taskWaiting } from './task-state.mjs';
 import taskCss from './task-list.css';
 import { Button } from '../../shared/client/ui/button.jsx';
 import React, { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
@@ -14,12 +14,12 @@ import { ResourceState } from './resource-state.jsx';
 import { petImageUrl } from './pet-state.mjs';
 import { assistantConfigSync } from './config-sync.mjs';
 import css from './activity-panel.css';
-import { activityLabels as labels, boardTicketRows } from './activity-data.mjs';
+import { activityLabels as labels, boardTaskRows } from './activity-data.mjs';
 import { useAssistantActivity } from './use-activity.jsx';
-import { normalizeTicketTitle } from '../src/ticket-title.mjs';
+import { normalizeTaskTitle } from '../src/task-title.mjs';
 import { ApprovalReview } from './approval-review.jsx';
 
-const taskTitle = row => row?.kind === 'ticket' ? normalizeTicketTitle(row.taskMeta?.title || row.title, row.target) : row?.taskMeta?.title || row?.title || '任务详情';
+const taskTitle = row => row?.kind === 'task' ? normalizeTaskTitle(row.taskMeta?.title || row.title, row.target) : row?.taskMeta?.title || row?.title || '任务详情';
 
 const dateValue = value => { const date = new Date(value); return value && Number.isFinite(date.getTime()) ? date : null; };
 const stamp = value => dateValue(value)?.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) || '时间未知';
@@ -67,7 +67,7 @@ function BoardEmpty({ identity, onReturn }) {
   return <div className="ba-board-empty" role="status">
     <BoardPet identity={identity} size={88} />
     <strong>下一件事，一起完成</strong>
-    <p>进行、等待和已完成的工单会显示在这里，归档记录可在任务管理查看。</p>
+    <p>进行、等待和已完成的任务会显示在这里，归档记录可在任务管理查看。</p>
     <Button variant="outline" onClick={onReturn}>回到聊天<UIIcon name="chevronLeft" className="ba-board-arrow" size={14} /></Button>
   </div>;
 }
@@ -76,9 +76,11 @@ const BoardRow = React.memo(function BoardRow({ row, onOpen }) {
   const children = row.execution?.children || [];
   const childCounts = row.execution?.childCounts || { total: children.length, completed: children.filter(child => child.status === 'completed').length, failed: children.filter(child => child.status === 'failed').length };
   const hasChildren = childCounts.total > 0;
-  const summary = row.summaryText || (hasChildren && row.progressSummary
+  const summary = row.executionNotice?.reasonCode === 'session-interrupted'
+    ? row.execution?.summary?.text || row.execution?.worker?.activity || '执行中断'
+    : row.summaryText || (hasChildren && row.progressSummary
     ? row.execution.worker?.status === 'completed' ? '执行已结束' : row.execution.summary?.text || row.execution.worker?.activity || row.phase : row.progressSummary || row.detail || row.phase);
-  const childLabel = `${childCounts.total} 个子任务，${childCounts.completed || 0} 个已返回父 Worker${childCounts.failed ? `，${childCounts.failed} 个失败` : ''}`;
+  const childLabel = `${childCounts.total} 个子任务，${childCounts.completed || 0} 个已完成${childCounts.failed ? `，${childCounts.failed} 个失败` : ''}`;
   return <article className="ba-activity-task ba-board-row" data-task-key={row.key}>
     <button type="button" className="ba-board-task-open" aria-label={title} onClick={() => onOpen(row.key)}>
       <span className="ba-board-iconbox" data-status={row.status} aria-hidden="true"><StatusGlyph status={row.status} /></span>
@@ -99,7 +101,7 @@ export function ActivityProvider({ children }) {
 export function ActivityTrigger({ api }) {
   const { open, setOpen, trigger, id } = useContext(ActivityContext);
   const { rows } = useAssistantActivity(api);
-  const count = boardTicketRows(rows || []).length;
+  const count = boardTaskRows(rows || []).length;
   const label = open ? '收起看板' : '展开看板';
   return <Tooltip label={label} side="bottom" delayMs={450} portal><Button variant="ghost" ref={trigger} type="button" className="ba-activity-trigger" aria-label={label} aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}><IconPanelLeftOutlineRegular className="ba-activity-panel-icon" size={15} />{count > 0 && <span className="ba-activity-count" aria-hidden="true">{count}</span>}</Button></Tooltip>;
 }
@@ -114,8 +116,10 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
   const [identityError, setIdentityError] = useState(''), [identityLoading, setIdentityLoading] = useState(false);
   const syncedIdentity = useSyncExternalStore(assistantConfigSync.subscribe, assistantConfigSync.getSnapshot);
   const identity = syncedIdentity || fetchedIdentity || assistantConfig;
-  const { rows, error, loading, updated, refresh, refreshTickets, connection, completeness } = useAssistantActivity(api);
-  const panel = useRef(null);
+  const { rows, error, loading, updated, refresh, refreshTasks, connection, completeness } = useAssistantActivity(api);
+  const panel = useRef(null), backdrop = useRef(null), motion = useRef([]), openNow = useRef(open);
+  const [present, setPresent] = useState(open);
+  if (open && !present) setPresent(true);
   const previous = useRef(null);
   const selectTask = useCallback(key => { listPosition.current = { top: panel.current?.querySelector('.ba-activity-body')?.scrollTop || 0, opener: document.activeElement }; setSelectedKey(key); }, []);
   const returnToList = () => { setSelectedKey(null); requestAnimationFrame(() => { const body = panel.current?.querySelector('.ba-activity-body'); if (body) body.scrollTop = listPosition.current.top; listPosition.current.opener?.focus({ preventScroll: true }); }); };
@@ -164,7 +168,28 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
     }
     return () => animations.forEach(animation => animation.cancel());
   }, [rows, open, tab, selectedKey]);
-  useEffect(() => { if (open) panel.current?.focus(); }, [open ]);
+  useEffect(() => { if (open) panel.current?.focus({ preventScroll: true }); }, [open ]);
+  useLayoutEffect(() => {
+    openNow.current = open;
+    const running = motion.current.filter(animation => animation.playState === 'running');
+    if (running.length) { running.forEach(animation => animation.reverse()); return; }
+    motion.current.forEach(animation => animation.cancel()); motion.current = [];
+    const element = panel.current;
+    if (!present || !element) return;
+    if (!element.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { if (!open) setPresent(false); return; }
+    const overlay = window.matchMedia('(max-width: 1000px)').matches;
+    const shown = overlay ? { transform: 'translateX(0)' } : { marginRight: '0px', opacity: 1 };
+    const gone = overlay ? { transform: 'translateX(100%)' } : { marginRight: `${-element.offsetWidth}px`, opacity: 0 };
+    const timing = open ? { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'both' } : { duration: 200, easing: 'cubic-bezier(.4,0,.9,.6)', fill: 'both' };
+    const list = [element.animate(open ? [gone, shown] : [shown, gone], timing)];
+    if (overlay && backdrop.current?.animate) list.push(backdrop.current.animate(open ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }], timing));
+    motion.current = list;
+    list[0].finished.then(() => {
+      if (motion.current !== list) return;
+      if (openNow.current) { list.forEach(animation => animation.cancel()); motion.current = []; } else setPresent(false);
+    }, () => {});
+  }, [open]);
+  useLayoutEffect(() => { if (!present) { motion.current.forEach(animation => animation.cancel()); motion.current = []; } }, [present]);
   useEffect(() => {
     if (!open) return;
     const main = panel.current?.parentElement?.querySelector(':scope > .ba-main');
@@ -175,8 +200,9 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
     return () => { media.removeEventListener('change', update); main.inert = wasInert; };
   }, [open]);
   const selected = rows?.find(row => row.key === selectedKey);
-  const selectedWaiting = selected?.kind === 'ticket' ? ticketWaiting(selected) : null;
-  const sorted = boardTicketRows(rows || []).sort((a, b) => (dateValue(b.time)?.getTime() || 0) - (dateValue(a.time)?.getTime() || 0));
+  const selectedWaiting = selected?.kind === 'task' ? taskWaiting(selected) : null;
+  const selectedInterrupted = selectedWaiting?.executionNotice?.reasonCode === 'session-interrupted';
+  const sorted = boardTaskRows(rows || []).sort((a, b) => (dateValue(b.time)?.getTime() || 0) - (dateValue(a.time)?.getTime() || 0));
   const active = sorted.filter(row => row.status === 'running');
   const attention = sorted.filter(row => row.status === 'waiting');
   const completed = sorted.filter(row => row.status === 'completed');
@@ -196,8 +222,9 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
   };
   const tabs = [['tasks', '任务', sorted.length], ['approvals', '审核', approvalCount], ['identity', '身份', 0]].map(([value, label, count]) => ({ value, icon: tabIcons[value], label: <>{label}{(count > 0 || value === 'approvals') && <span className="ba-board-tab-count">{count ?? '—'}</span>}</> }));
   const loadingState = <ResourceState kind="loading" title="正在读取任务" description="正在同步进度与结果，请稍候。" />;
-  return <><div className="ba-activity-backdrop" hidden={!open} onClick={close} aria-hidden="true" />
-    <aside id={id} ref={panel} hidden={!open} tabIndex={-1} className="ba-activity-panel ba-board" aria-label="助手看板" onKeyDown={onKeyDown}>
+  const closing = present && !open ? 'closing' : undefined;
+  return <><div ref={backdrop} className="ba-activity-backdrop" hidden={!present} data-state={closing} onClick={close} aria-hidden="true" />
+    <aside id={id} ref={panel} hidden={!present} data-state={closing} tabIndex={-1} className="ba-activity-panel ba-board" aria-label="助手看板" onKeyDown={onKeyDown}>
       <header className="ba-board-head"><div className="ba-board-heading"><span>助手看板</span><Tooltip label="收起看板" side="bottom" delayMs={450} portal><Button variant="ghost" className="ba-icon" aria-label="收起看板" onClick={close}><UIIcon name="close" size={16} /></Button></Tooltip></div>
         <div className="ba-board-companion"><BoardPet identity={identity} /><div className="ba-board-identity"><strong title={name}>{name}</strong><span className="ba-board-sync" data-state={syncState}><i aria-hidden="true" />{syncLabel}</span></div></div>
       </header>
@@ -205,7 +232,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
       <div hidden={!!selected} id={`${id}-content`} role="tabpanel" aria-labelledby={`${id}-tab-${tab}`} tabIndex={0} className="ba-activity-body ba-board-body">
         {actionError && <ResourceState kind="error" title="操作未能完成" description={actionError.message} actionLabel="重新读取" onAction={async () => { setActionError(null); await refresh(); }} />}
         {error && tab === 'tasks' && <ResourceState kind="error" title="暂时无法更新任务" description={`${rows !== null ? '已保留上次的任务记录，请重试。' : '任务记录暂时无法读取，请检查连接后重试。'} ${error}`} onAction={refresh} />}
-        {tab === 'tasks' && completeness?.truncated && <p className="ba-activity-detail-note" role="status">当前仅同步了部分工单，未读取到的记录仍未知。</p>}
+        {tab === 'tasks' && completeness?.truncated && <p className="ba-activity-detail-note" role="status">当前仅同步了部分任务，未读取到的记录仍未知。</p>}
         {tab === 'tasks' && <>{rows === null && !error && loadingState}
           {attention.length > 0 && <section className="ba-board-section"><h3 className="ba-board-day">等待<span>{attention.length}</span></h3>{attention.map(renderRow)}</section>}
           {rows !== null && active.length > 0 && <section className="ba-board-section"><button type="button" className="ba-board-section-head" aria-expanded={activeOpen} aria-controls={`${id}-active`} onClick={() => setActiveOpen(value => !value)}><span>进行中</span><span className="ba-board-section-count">{active.length}</span><UIIcon name="chevronDown" size={13} /></button><div id={`${id}-active`} hidden={!activeOpen}>{active.map(renderRow)}</div></section>}
@@ -219,12 +246,13 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
         </section>}
       </div><footer hidden={!!selected} className="ba-board-footer"><TaskIconButton icon="category" label="前往任务管理" onClick={() => openResource('tasks')} /><span className="ba-board-updated" title={updated ? `上次同步：${stamp(updated)}` : undefined}>{error || identityError ? '连接待恢复' : updated ? `${timeShort(updated)} 更新` : '尚未同步'}</span><TaskIconButton icon="refresh" label="刷新看板" spinning={manualRefreshing} aria-disabled={loading || identityLoading || manualRefreshing} onClick={() => { if (!loading && !identityLoading) void refreshAll(); }} /></footer>
     <style>{taskCss}</style>
-    <TaskDetail inline open={!!selected && open} title={selected && <TaskStatusTitle title={taskTitle(selected)} status={selected.status} label={labels[selected.status]} />} onClose={returnToList} footer={selected && <div className="ba-activity-detail-actions">
-      {selected.kind === 'ticket' && selected.executionSession?.available && <TaskIconButton icon="external" label={openingExecution ? '正在打开执行会话…' : '查看执行会话'} disabled={openingExecution || !onOpenExecution} onClick={async event => { event.currentTarget.closest('.ba-task-inline')?.focus({ preventScroll: true }); setOpeningExecution(true); setActionError(null); try { await onOpenExecution(selected.executionSession); } catch (cause) { setActionError({ row: selected, message: `执行会话暂时无法打开：${cause.message || cause}` }); } finally { setOpeningExecution(false); } }} />}
-      <TaskIconButton icon="refresh" label="刷新记录" spinning={manualRefreshing} aria-disabled={manualRefreshing} onClick={() => refreshWithFeedback(() => refreshTickets([selected.id]))} />
-      <TaskIconButton icon="category" label="前往任务管理" onClick={() => openResource('tasks', { ticketId: selected.id })} /></div>}>{selected && <>
-      {actionError?.row.key === selected.key && <ResourceState kind="error" title="操作未能完成" description={actionError.message} actionLabel="重新读取" onAction={async () => { setActionError(null); await refreshTickets([selected.id]); }} />}
-      {selected.kind === 'ticket' && <TaskExecution key={selected.key} execution={selected.execution} ticketStatus={selected.status} executionControl={selected.executionControl} stale={!!error} sessionAvailable={selected.executionSession?.available} outcome={selected.status === 'completed' ? selected.detail : undefined} />}
-      {selected.kind === 'ticket' && selectedWaiting && <TicketWaiting compact hideRefresh key={`${selected.id}:${selected.instructionRevision}:${selected.resultVersion}`} api={api} ticket={selected} onRefresh={() => refreshTickets([selected.id])} onOpenResources={openResource} />}
+    <TaskDetail inline open={!!selected && present} title={selected && <TaskStatusTitle title={taskTitle(selected)} status={selected.status} label={labels[selected.status]} />} onClose={returnToList} footer={selected && <div className="ba-activity-detail-actions">
+      {selectedInterrupted && <TaskWaiting actionsOnly compact hideRefresh key={`${selected.id}:${selected.instructionRevision}:${selected.resultVersion}`} api={api} task={selected} onRefresh={() => refreshTasks([selected.id])} onOpenResources={openResource} />}
+      {selected.kind === 'task' && selected.executionSession?.available && <TaskIconButton icon="external" label={openingExecution ? '正在打开执行会话…' : '查看执行会话'} disabled={openingExecution || !onOpenExecution} onClick={async event => { event.currentTarget.closest('.ba-task-inline')?.focus({ preventScroll: true }); setOpeningExecution(true); setActionError(null); try { await onOpenExecution(selected.executionSession); } catch (cause) { setActionError({ row: selected, message: `执行会话暂时无法打开：${cause.message || cause}` }); } finally { setOpeningExecution(false); } }} />}
+      <TaskIconButton icon="refresh" label="刷新记录" spinning={manualRefreshing} aria-disabled={manualRefreshing} onClick={() => refreshWithFeedback(() => refreshTasks([selected.id]))} />
+      <TaskIconButton icon="category" label="前往任务管理" onClick={() => openResource('tasks', { taskId: selected.id })} /></div>}>{selected && <>
+      {actionError?.row.key === selected.key && <ResourceState kind="error" title="操作未能完成" description={actionError.message} actionLabel="重新读取" onAction={async () => { setActionError(null); await refreshTasks([selected.id]); }} />}
+      {selected.kind === 'task' && <TaskExecution key={selected.key} execution={selected.execution} taskStatus={selected.status} executionControl={selected.executionControl} stale={!!error} sessionAvailable={selected.executionSession?.available} outcome={selected.status === 'completed' ? selected.detail : undefined} />}
+      {selected.kind === 'task' && selectedWaiting && !selectedInterrupted && <TaskWaiting compact hideRefresh key={`${selected.id}:${selected.instructionRevision}:${selected.resultVersion}`} api={api} task={selected} onRefresh={() => refreshTasks([selected.id])} onOpenResources={openResource} />}
     </>}</TaskDetail></aside></>;
 }

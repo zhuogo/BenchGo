@@ -32,6 +32,14 @@
     "/api/devices": {
       "post": {
         "summary": "设备保存、配对、切换与服务器管理",
+        "x-action-responses": {
+          "devices": { "$ref": "#/components/schemas/DeviceDirectory" },
+          "resources": { "$ref": "#/components/schemas/ResourceAggregate" },
+          "resourceScope": { "type": "object", "required": ["scope"], "properties": { "scope": { "$ref": "#/components/schemas/ResourceScope" } } },
+          "setResourceScope": { "type": "object", "required": ["scope"], "properties": { "scope": { "$ref": "#/components/schemas/ResourceScope" } } },
+          "hostGrantDevice": { "type": "object", "properties": { "devices": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "capabilities": { "type": "array", "items": { "enum": ["collaboration", "management"] } } } } }, "pendingManagement": { "type": "array", "items": { "$ref": "#/components/schemas/ManagementOperation" } } } },
+          "hostManagementDecide": { "$ref": "#/components/schemas/ManagementOperation" }
+        },
         "x-device-naming": "rename 的 deviceId=local 修改本机持久名称并用于配对身份；其他设备 rename 仅保存本机管理备注，不修改被控端。hostRenameDevice 的 id/name 对已授权访问本机的设备保存本地备注，对应 owner rename-device；hostStatus.devices 的 name 显示备注，originalName 保留设备原始身份名。list 本机行返回真实名称。已批准配对返回 hostName 和 name（均为被控主机名称）；缺少名称生成稳定随机名。设备连接持久开启，hostConfigure.enabled 仅为旧客户端兼容字段，不再关闭连接。",
         "requestBody": {
           "required": true,
@@ -67,7 +75,7 @@
         }
       ],
       "post": {
-        "summary": "官方 owner 通道：打开当前主机设备中心",
+        "summary": "官方 owner 通道：设备目录、资源查询与显示范围",
         "requestBody": {
           "required": true,
           "content": {
@@ -79,11 +87,19 @@
                 ],
                 "properties": {
                   "action": {
-                    "const": "launch"
+                    "enum": ["launch", "devices", "select", "resources", "resourceScope", "setResourceScope"]
                   },
                   "parentOrigin": {
                     "type": "string"
-                  }
+                  },
+                  "deviceId": { "type": "string" },
+                  "deviceIds": { "type": "array", "maxItems": 33, "items": { "type": "string" } },
+                  "kind": { "$ref": "#/components/schemas/ResourceKind" },
+                  "projectId": { "type": "string" },
+                  "offset": { "type": "integer", "minimum": 0, "maximum": 100000 },
+                  "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+                  "resource": { "$ref": "#/components/schemas/OpenResource" },
+                  "scope": { "$ref": "#/components/schemas/ResourceScope" }
                 },
                 "additionalProperties": false
               }
@@ -92,7 +108,8 @@
         },
         "responses": {
           "200": {
-            "description": "返回 {url}：一次性本机设备中心入口"
+            "description": "launch返回一次性入口{url}；devices返回{activeId,devices}；resources返回{devices:[ResourcePage],partial}；resourceScope/setResourceScope返回{scope}；select返回{device,url,resource?}。",
+            "content": { "application/json": { "schema": { "anyOf": [ { "$ref": "#/components/schemas/DeviceDirectory" }, { "$ref": "#/components/schemas/ResourceAggregate" }, { "type": "object", "properties": { "scope": { "$ref": "#/components/schemas/ResourceScope" }, "url": { "type": ["string", "null"] }, "device": { "$ref": "#/components/schemas/Device" }, "resource": { "$ref": "#/components/schemas/OpenResource" } } } ] } } }
           },
           "400": {
             "description": "输入错误或操作失败"
@@ -104,7 +121,7 @@
             "description": "来源未授权"
           }
         },
-        "description": "本机返回隔离环回入口。设备中心不会把 owner 会话或管理凭据转发给远程工作台；远程设备继续使用独立设备认证。"
+        "description": "仅官方owner共享Fetch通道；身份由宿主browserPeer绑定，JSON不能自报owner。launch返回隔离入口；devices是出站目录，不是入站授权列表。resources有界并发、分页、超时与部分失败；范围只改变侧栏显示，不缩减助手授权。deviceId为local表示工作台所属主机，activeId仅是连接选择记录。setResourceScope只保存本项。远程设备继续使用独立设备认证，不转发owner会话。"
       }
     },
     "/api/commander-link": {
@@ -139,7 +156,7 @@
                           "rename-device",
                           "relay-configure",
                           "relay-test",
-                          "relay-pool-configure"
+                          "relay-pool-configure", "grant-device", "management-decide"
                         ]
                       },
                       "url": {
@@ -181,7 +198,12 @@
                       },
                       "id": {
                         "type": "string"
-                      }
+                      },
+                      "collaboration": { "type": "boolean" },
+                      "management": { "type": "boolean" },
+                      "operationId": { "type": "string" },
+                      "allow": { "type": "boolean" },
+                      "nodes": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
                     },
                     "additionalProperties": false
                   }
@@ -214,7 +236,7 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/LinkSessionRequest" }
+              "schema": { "anyOf": [ { "$ref": "#/components/schemas/LinkSessionRequest" }, { "$ref": "#/components/schemas/DirectedDeviceInput" } ] }
             }
           }
         },
@@ -233,6 +255,60 @@
   },
   "components": {
     "schemas": {
+      "ResourceKind": { "enum": ["projects", "sessions", "recent", "models", "capabilities", "tasks"], "description": "tasks需目标真实适配器；当前未提供时明确UNSUPPORTED，不能将错误当空集合。旧目标recent语义不可核实时不回退全会话。" },
+      "ResourceScope": {
+        "type": "object", "required": ["mode", "deviceIds"], "additionalProperties": false,
+        "properties": { "mode": { "enum": ["current", "all", "selected"] }, "deviceIds": { "type": "array", "maxItems": 33, "uniqueItems": true, "items": { "type": "string" } } }
+      },
+      "OpenResource": {
+        "type": "object", "required": ["kind", "resourceId"],
+        "properties": { "deviceId": { "type": "string" }, "kind": { "enum": ["projects", "sessions"] }, "resourceId": { "type": "string", "minLength": 1, "maxLength": 200 } }
+      },
+      "DeviceDirectory": {
+        "type": "object", "required": ["activeId", "devices"],
+        "properties": { "activeId": { "type": "string" }, "devices": { "type": "array", "maxItems": 33, "items": { "allOf": [ { "$ref": "#/components/schemas/Device" }, { "type": "object", "properties": { "direction": { "enum": ["local", "outbound"] }, "hostId": { "type": ["string", "null"] }, "authorizationId": { "type": ["string", "null"] }, "observedAt": { "type": "integer" } } } ] } } }
+      },
+      "ResourceSummary": {
+        "type": "object", "required": ["deviceId", "kind", "resourceId"],
+        "description": "有界白名单摘要，按deviceId+kind+resourceId归属；ID按不透明标识原样保留。项目可含name/title/path/sessionIds/isDefault；会话可含projectId/title/running/updatedAt/archived/pinned/native/ungrouped/engine/status；模型只返回标识和可用性，不含凭据。",
+        "properties": { "deviceId": { "type": "string" }, "kind": { "$ref": "#/components/schemas/ResourceKind" }, "resourceId": { "type": "string" } }, "additionalProperties": true
+      },
+      "ResourcePage": {
+        "type": "object", "required": ["deviceId", "available", "code", "reason", "observedAt", "freshness", "items", "offset", "limit", "hasMore"],
+        "properties": {
+          "deviceId": { "type": "string" }, "available": { "type": "boolean" }, "code": { "type": "string" }, "reason": { "type": ["string", "null"] },
+          "observedAt": { "type": ["integer", "null"], "description": "最近成功查询的入口观察时间；失败不能刷新成当前时间。" },
+          "attemptedAt": { "type": "integer" }, "lastSuccessfulAt": { "type": "integer" }, "freshness": { "enum": ["fresh", "stale", "unknown"] },
+          "items": { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/ResourceSummary" } },
+          "offset": { "type": "integer", "minimum": 0 }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 }, "total": { "type": "integer", "minimum": 0 }, "hasMore": { "type": "boolean" },
+          "hostId": { "type": ["string", "null"] }, "protocolVersion": { "type": "integer" }
+        },
+        "description": "仅available=true且items为空表示查询成功且范围内无资源。OFFLINE表示网络不可达，UNAUTHORIZED表示授权失效，IDENTITY_CHANGED表示身份或证书异常，UNSUPPORTED表示能力不支持，QUERY_FAILED表示业务或响应错误；业务错误不将设备标为离线。认证请求成功会恢复设备目录的可连接状态，取消不改可达状态。短暂查询失败可保留stale摘要；未授权、身份变化或设备移除立即清除此设备全部缓存，items为空且freshness=unknown。"
+      },
+      "ResourceAggregate": { "type": "object", "required": ["devices", "partial"], "properties": { "devices": { "type": "array", "maxItems": 33, "items": { "$ref": "#/components/schemas/ResourcePage" } }, "partial": { "type": "boolean" } } },
+      "ManagementOperation": {
+        "type": "object", "required": ["id", "operationId", "requestId", "deviceId", "namespace", "expected", "ops", "state", "createdAt", "expiresAt"],
+        "properties": {
+          "id": { "type": "string" }, "operationId": { "type": "string" }, "requestId": { "type": "string" }, "deviceId": { "type": "string" }, "deviceName": { "type": "string" },
+          "namespace": { "const": "benchgo-link-relay" }, "expected": { "type": "object", "required": ["fingerprint"], "properties": { "fingerprint": { "type": "string" } } },
+          "ops": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "$ref": "#/components/schemas/RelayManagementOp" } },
+          "state": { "enum": ["pending", "applying", "applied", "failed", "unknown", "expired", "rejected", "revoked"] },
+          "createdAt": { "type": "integer" }, "expiresAt": { "type": "integer" }, "requiresConfirmation": { "type": "boolean" },
+          "result": { "type": "object", "additionalProperties": true }, "error": { "type": "object", "properties": { "code": { "type": "string" }, "message": { "type": "string" } } }
+        },
+        "description": "按认证device绑定，保留期内requestId+精确差异幂等；20分钟过期。target owner批准后CAS应用，断线查原operation，不重复提交。最多保留128条，容量满时先淘汰已结束或已过期记录；未决与unknown不自动删除。旧回执已淘汰时查询返回NOT_FOUND，不推断效果或自动重放。重启遇执行中记录标unknown，不自动重跑。hostStatus.pendingManagement仅返回仍待审批的非秘密摘要。"
+      },
+      "RelayManagementOp": {
+        "type": "object", "required": ["op", "path", "value"], "additionalProperties": false,
+        "properties": { "op": { "const": "set" }, "path": { "type": "array", "minItems": 3, "maxItems": 3, "prefixItems": [ { "const": "nodes" }, { "type": "string", "pattern": "^[0-9]+$" }, { "enum": ["priority", "enabled"] } ], "items": false }, "value": { "oneOf": [ { "type": "boolean" }, { "type": "integer", "minimum": 0, "maximum": 1000000 } ] } },
+        "description": "仅已有中继节点；priority值为整数，enabled值为boolean；不得增删节点、地址或秘密。"
+      },
+      "DirectedDeviceInput": {
+        "type": "object", "required": ["action"],
+        "properties": { "action": { "enum": ["state", "models", "create", "history", "send", "cancel", "respond", "resources", "collaboration", "management"] }, "operation": { "type": "string" }, "requestId": { "type": "string", "maxLength": 200 }, "operationId": { "type": "string" }, "kind": { "$ref": "#/components/schemas/ResourceKind" }, "namespace": { "enum": ["benchgo-link-relay", "benchgo-link-transport"] }, "expected": { "type": "object", "properties": { "fingerprint": { "type": "string" } } }, "ops": { "type": "array", "maxItems": 20, "items": { "$ref": "#/components/schemas/RelayManagementOp" } } },
+        "additionalProperties": true,
+        "description": "有限定向协议，不接受任意HTTP/SSH或owner action。collaboration只允许delegate/get/lookup/control/change且需显式collaboration grant；management只允许status/relay-test/settings-read/settings-prepare/operation且需独立management grant。settings-read支持transport/relay命名空间；settings-prepare仅relay既有节点priority/enabled，返回ManagementOperation等待目标真实主人审批；operation按operationId查同设备原申请。资源与原会话动作沿既有访问授权。目标从TLS认证绑定principal，JSON principal不能扩大权限。"
+      },
       "DeviceRequest": {
         "type": "object",
         "required": [
@@ -264,12 +340,25 @@
               "relayAction",
               "hostRelayConfigure",
               "hostRelayTest",
-              "hostRelayPoolConfigure"
+              "hostRelayPoolConfigure",
+              "devices", "resources", "resourceScope", "setResourceScope", "callDevice", "hostGrantDevice", "hostManagementDecide"
             ]
           },
           "deviceId": {
             "type": "string"
           },
+          "deviceIds": { "type": "array", "maxItems": 33, "items": { "type": "string" } },
+          "kind": { "$ref": "#/components/schemas/ResourceKind" },
+          "projectId": { "type": "string" },
+          "offset": { "type": "integer", "minimum": 0, "maximum": 100000 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "scope": { "$ref": "#/components/schemas/ResourceScope" },
+          "resource": { "$ref": "#/components/schemas/OpenResource" },
+          "collaboration": { "type": "boolean", "description": "hostPairing显式申请协作授权；hostGrantDevice按id升级或撤销既有入站授权，默认不授权。" },
+          "management": { "type": "boolean", "description": "独立有限管理授权，不是owner权限。" },
+          "operationId": { "type": "string" },
+          "allow": { "type": "boolean", "description": "hostManagementDecide真实主人单次批准或拒绝精确配置差异。" },
+          "input": { "$ref": "#/components/schemas/DirectedDeviceInput" },
           "jobId": {
             "type": "string"
           },

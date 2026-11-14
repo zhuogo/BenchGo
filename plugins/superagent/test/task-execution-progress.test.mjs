@@ -26,6 +26,7 @@ const modules = await Promise.all(['@deepseek-ai/dsh-session', '@deepseek-ai/dsh
   '@deepseek-ai/dsh-session-persistence-jsonl', '@deepseek-ai/dsh-agent-loop'].map(load));
 const Query = await import(pathToFileURL(requireQuery.resolve('@deepseek-ai/dsh-session-query-sqlite')).href);
 const { createTaskExecutionProgress } = await import('../src/task-execution-progress.mjs');
+const { publicExecutionActivity } = await import('../src/worker-progress.mjs');
 const { createAssistantOrchestrationStore } = await import('../src/orchestration-store.mjs');
 
 async function fixture(t, { begin = true, target = 'PRIVATE TARGET', acceptance = 'PRIVATE ACCEPTANCE' } = {}) {
@@ -34,8 +35,8 @@ async function fixture(t, { begin = true, target = 'PRIVATE TARGET', acceptance 
   const source = { channel: 'desktop', sessionId: 'owner', messageId: 'first', threadId: 'main' };
   const mandate = { actorId: 'desktop-owner', source, instruction: 'first', policyVersion: 'current', admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval' };
   const { trigger } = database.ingest({ dedupeKey: 'first', thread: { id: 'desktop:owner', source: { type: 'desktop', id: 'owner' } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: 'first', mode: 'direct' });
-  const ticket = database.createTicket({ threadId: trigger.threadId, target, acceptance, mandate });
-  database.createAssignment(ticket.id, { id: 'assignment', text: ticket.target });
+  const task = database.createTask({ threadId: trigger.threadId, target, acceptance, mandate });
+  database.createAssignment(task.id, { id: 'assignment', text: task.target });
   const [assignment] = database.claimAssignments('test-owner', { validateMandate: () => true });
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'worker', directory });
@@ -72,10 +73,10 @@ async function fixture(t, { begin = true, target = 'PRIVATE TARGET', acceptance 
     observers.push(progress); try { await progress.ready; } finally { host.ctx.on = on; }
   }
   await newHost(); const worker = await createAgent(run.sessionId); if (begin) await start();
-  return { directory, source, mandate, ticket, assignment, run, ownership, worker, createAgent, start,
+  return { directory, source, mandate, task, assignment, run, ownership, worker, createAgent, start,
     get database() { return database; }, get host() { return host; }, get progress() { return progress; },
     notify: (...args) => eventObserver(...args),
-    read: () => progress.batch()(database.getTicket(ticket.id), database.assignments(ticket.id)),
+    read: () => progress.batch()(database.getTask(task.id), database.assignments(task.id)),
     async restart({ clearProjection = false } = {}) {
       await progress?.dispose(); await host.close(); database.close();
       if (clearProjection) { const raw = new DatabaseSync(join(directory, 'assistant.db')); try { raw.exec('DELETE FROM sa_execution_projection'); } finally { raw.close(); } }
@@ -104,8 +105,8 @@ test('real Session events project phases and safe counters without private tool/
   const projection = f.database.getExecutionProjection(session.id);
   assert.deepEqual(projection.state.tools, { calls: 1, results: 1, errors: 1, active: [], incomplete: false });
   assert.equal(projection.cursor, last.seq); assert.equal(projection.state.lastEvent.category, 'search');
-  assert.equal(f.database.getTicket(f.ticket.id).status, 'running');
-  assert.doesNotMatch(JSON.stringify([f.read(), projection, f.database.executionEvidence({ ticketId: f.ticket.id })]), /PRIVATE|web_search|OPAQUE_CODE|arguments/);
+  assert.equal(f.database.getTask(f.task.id).status, 'running');
+  assert.doesNotMatch(JSON.stringify([f.read(), projection, f.database.executionEvidence({ taskId: f.task.id })]), /PRIVATE|web_search|OPAQUE_CODE|arguments/);
   end(session); assert.equal(f.read().worker.activity, '本轮执行已结束'); assert.equal(f.read().watermark.sessionSeq, session.seq - 1);
 });
 
@@ -116,7 +117,7 @@ test('persisted completion overrides stale session activity and exposes no savin
   f.database.updateRun(f.run.id, { ...f.ownership, state: 'verifying', evidence });
   assert.notEqual(f.read().phase, 'verifying');
   assert.doesNotMatch(f.read().worker.activity, /正在保存执行结果/);
-  f.database.commitResult(f.ticket.id, { assignment: f.assignment, uniqueKey: 'completed-projection',
+  f.database.commitResult(f.task.id, { assignment: f.assignment, uniqueKey: 'completed-projection',
     status: 'completed', result: evidence });
   const projection = f.read();
   assert.equal(projection.phase, 'finished');
@@ -135,7 +136,76 @@ test('worker activity retains ordered changes, deduplicates resets and replays c
   assert.doesNotMatch(JSON.stringify(history), /PRIVATE|arguments|read_file|write_file/);
   await f.restart({ clearProjection: true });
   assert.deepEqual(f.read().worker.history, history, 'a discarded display projection is rebuilt from the official log');
-  assert.equal(f.database.getTicket(f.ticket.id).status, 'running', 'a completed turn never completes the domain ticket');
+  assert.equal(f.database.getTask(f.task.id).status, 'running', 'a completed turn never completes the domain task');
+});
+
+test('executor public status survives tool and step resets, redacts secrets and replays from official history', async t => {
+  const f = await fixture(t), session = f.worker.agent.session;
+  let step = 1;
+  const report = (text, extra = {}, type = 'assistant/message') => session.append(type, { turn: 1, step, stream: [],
+    message: llm.createMessage({ role: 'assistant', content: [{ type: 'text', text }],
+      source: { kind: 'model', provider: 'opaque-provider', model: 'opaque/model' } }), ...extra }, type === 'assistant/message' ? { surfaceOp: 'append' } : undefined);
+  turn(session);
+  report('进展：检查注册邮箱是否收到验证邮件');
+  call(session, 'read'); result(session); session.append('step/end', { turn: 1, step });
+  step = 2; session.append('step/start', { turn: 1, step });
+  assert.equal(f.read().worker.activity, '检查注册邮箱是否收到验证邮件');
+  assert.equal(f.read().worker.activitySource, 'report');
+  report('进展：检查注册邮箱是否收到验证邮件');
+  assert.equal(f.read().worker.history.filter(row => row.activitySource === 'report').length, 1);
+  report('PRIVATE LONG OUTPUT\n' + '进展：' + '长'.repeat(121));
+  assert.equal(f.read().worker.activity, '检查注册邮箱是否收到验证邮件');
+  report('进展: 检查接口 token=PRIVATE_TOKEN\nPRIVATE OTHER BODY');
+  assert.equal(f.read().worker.activity, '检查接口 token=[秘密已隐藏]');
+  assert.doesNotMatch(JSON.stringify(f.database.getExecutionProjection(session.id)), /PRIVATE/);
+  session.append('assistant/message', { turn: 1, step, stream: [], message: llm.createMessage({ role: 'assistant',
+    content: [{ type: 'tool-call', id: 'failed-call', name: 'read', arguments: '{}' }],
+    source: { kind: 'model', provider: 'opaque', model: 'opaque' } }) }, { surfaceOp: 'append' });
+  session.append('tool/call', { turn: 1, step, callId: 'failed-call', name: 'read', arguments: '{}' });
+  session.append('tool/result', { turn: 1, step, message: llm.createToolResultMessage({ callId: 'failed-call',
+    content: [{ type: 'text', text: 'PRIVATE FAILURE' }], isError: true }) }, { surfaceOp: 'append' });
+  assert.equal(f.read().worker.activity, '工具调用失败，正在处理');
+  assert.equal(f.read().worker.activitySource, 'runtime');
+  report('进展：验证邮件尚未收到，等待重试');
+  session.append('step/end', { turn: 1, step }); session.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+  const history = f.read().worker.history;
+  assert.equal(history.at(-1).activitySource, 'runtime');
+  await f.restart({ clearProjection: true });
+  const recovered = await f.host.ctx.sessionQuery.observeSession('worker'); recovered[Symbol.dispose]();
+  assert.deepEqual(f.read().worker.history, history);
+});
+
+test('only explicit complete public status lines enter the projection', () => {
+  const event = { type: 'assistant/message', data: { message: { role: 'assistant', source: { kind: 'model' },
+    content: [{ type: 'text', text: '进展：检查验证邮件' }] } } };
+  assert.equal(publicExecutionActivity(event), '检查验证邮件');
+  for (const patch of [{ parentCallId: 'nested' }, { interrupted: true }]) {
+    assert.equal(publicExecutionActivity({ ...event, data: { ...event.data, ...patch } }), '');
+  }
+  assert.equal(publicExecutionActivity({ ...event, type: 'assistant/attempt' }), '');
+  assert.equal(publicExecutionActivity({ type: 'assistant/message' }), '');
+  for (const content of [[{ type: 'reasoning', text: '进展：PRIVATE REASONING' }],
+    [{ type: 'text', text: '普通正文与最终结果' }], [{ type: 'text', text: '进展：' + '长'.repeat(121) }],
+    [{ type: 'text', text: '```text\n进展：文档中的示例\n```' }], [{ type: 'text', text: '~~~\n进展：文档中的示例\n~~~' }]]) {
+    assert.equal(publicExecutionActivity({ ...event, data: { ...event.data, message: { ...event.data.message, content } } }), '');
+  }
+});
+
+test('new turns reset the prior report and child reports use the same projection', async t => {
+  const f = await fixture(t), parent = f.worker.agent.session;
+  turn(parent); catalog(parent, 'report-child');
+  const child = await f.createAgent('report-child', { origin: 'subagent', parentSession: parent.id, delegationDepth: 1 });
+  const session = child.agent.session;
+  turn(session);
+  session.append('assistant/message', { turn: 1, step: 1, stream: [], message: llm.createMessage({ role: 'assistant',
+    content: [{ type: 'reasoning', text: '进展：PRIVATE REASONING' }, { type: 'text', text: '进展：验证项目构建结果' }],
+    source: { kind: 'model', provider: 'opaque', model: 'opaque' } }) }, { surfaceOp: 'append' });
+  assert.equal(f.database.getExecutionProjection(session.id).state.activity, '验证项目构建结果');
+  assert.equal(f.read().children[0].history.at(-1).activitySource, 'report');
+  end(session); turn(session, 2);
+  assert.equal(f.database.getExecutionProjection(session.id).state.activitySource, 'runtime');
+  assert.equal(f.database.getExecutionProjection(session.id).state.activity, '正在处理任务');
+  assert.doesNotMatch(JSON.stringify(f.database.getExecutionProjection(session.id)), /PRIVATE REASONING/);
 });
 
 test('bounded main and child history exposes truncation and excludes history before the current run', async t => {
@@ -219,14 +289,14 @@ test('missing child history stays visible and incomplete', async t => {
 test('current requirements and applied requirements remain distinct on the same Run', async t => {
   const f = await fixture(t), session = f.worker.agent.session; turn(session); call(session); result(session);
   const source = { ...f.source, messageId: 'revision' };
-  const { trigger } = f.database.ingest({ dedupeKey: 'revision', thread: { id: f.ticket.threadId, source: { type: 'desktop', id: 'owner' } }, source,
+  const { trigger } = f.database.ingest({ dedupeKey: 'revision', thread: { id: f.task.threadId, source: { type: 'desktop', id: 'owner' } }, source,
     actor: { kind: 'human', id: 'desktop-owner' }, content: 'revision', mode: 'direct' });
-  f.database.changeTicket(f.ticket.id, { operation: 'revise', expectedInstructionRevision: 1, target: 'PRIVATE REVISED TARGET', acceptance: 'PRIVATE REVISED CHECK',
+  f.database.changeTask(f.task.id, { operation: 'revise', expectedInstructionRevision: 1, target: 'PRIVATE REVISED TARGET', acceptance: 'PRIVATE REVISED CHECK',
     reason: 'correction', requestKey: 'revision', triggerId: trigger.id, model: { providerId: 'opaque', modelId: 'Opaque/ID' },
     mandate: { ...f.mandate, source, instruction: 'revision' }, validateMandate: () => true });
   assert.equal(f.read().instructionRevision, 2); assert.equal(f.read().appliedInstructionRevision, 1); assert.equal(f.read().runId, f.run.id);
-  assert.equal(f.database.pendingTicketInputs(f.ticket.id).length, 1);
-  f.database.applyTicketRevision(f.assignment.id, { ...f.ownership, runId: f.run.id, boundaryId: 'next-step' });
+  assert.equal(f.database.pendingTaskInputs(f.task.id).length, 1);
+  f.database.applyTaskRevision(f.assignment.id, { ...f.ownership, runId: f.run.id, boundaryId: 'next-step' });
   assert.equal(f.read().appliedInstructionRevision, 2); assert.equal(f.read().runId, f.run.id);
 });
 
@@ -247,7 +317,7 @@ test('ordinary fork lineage, stale child activation and disposed observers canno
   assert.equal(f.database.executionFactCursor(), stopped); assert.equal(f.database.getExecutionProjection('unseen-child'), null);
 });
 
-test('cold interrupted-turn repair is observation evidence and never a completed Ticket or flush claim', async t => {
+test('cold interrupted-turn repair is observation evidence and never a completed Task or flush claim', async t => {
   const f = await fixture(t), session = f.worker.agent.session;
   turn(session); call(session, 'read');
   const sourceEnd = session.seq - 1;
@@ -256,7 +326,7 @@ test('cold interrupted-turn repair is observation evidence and never a completed
   assert.equal(saved.cursor > sourceEnd, true, 'official observation adds interrupted-turn closers');
   assert.equal(saved.sourceDurability, 'persisted'); assert.equal(saved.flushedCursor, -1);
   assert.equal(f.read().worker.status, 'unknown'); assert.notEqual(f.read().phase, 'finished');
-  assert.equal(f.database.getTicket(f.ticket.id).status, 'running');
+  assert.equal(f.database.getTask(f.task.id).status, 'running');
   assert.equal(f.database.runs(f.assignment.id)[0].state, 'submitted');
   assert.equal(f.host.ctx.agents.list().length, 0);
 });
@@ -273,21 +343,21 @@ test('runtime evidence uses the shared source and domain commit signals with red
     const snapshot = runtime.executionFacts.evidenceSnapshot();
     assert.equal(snapshot.executions.length, 1); assert.equal(snapshot.schedulerHeartbeat, null);
     const evidence = snapshot.executions[0];
-    assert.equal(evidence.ticket.id, f.ticket.id); assert.equal(evidence.run.id, f.run.id);
+    assert.equal(evidence.task.id, f.task.id); assert.equal(evidence.run.id, f.run.id);
     assert.equal(evidence.assignment.fence, f.assignment.fence); assert.equal(typeof evidence.assignment.leaseUntil, 'number');
     assert.equal(evidence.executionAlive.status, 'idle'); assert.equal(evidence.request.state, 'unknown');
     assert.equal(evidence.request.deadline, null);
     assert.equal(evidence.watermarks[0].sourceSeq, session.seq - 1);
     assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE|arguments|opaque-provider|opaque\/model/);
-    assert.throws(() => runtime.executionFacts.evidence({ ticketId: f.ticket.id, runId: 'foreign-run' }), { code: 'EXECUTION_FACT_BINDING' });
+    assert.throws(() => runtime.executionFacts.evidence({ taskId: f.task.id, runId: 'foreign-run' }), { code: 'EXECUTION_FACT_BINDING' });
     const before = runtime.executionFacts.currentCursor(), committed = [];
     const unsubscribe = runtime.executionFacts.subscribe(value => committed.push(value));
-    f.database.pauseTicket(f.ticket.id);
+    f.database.pauseTask(f.task.id);
     await Promise.resolve(); unsubscribe();
     assert.equal(committed.length, 1); assert.equal(committed[0] > before, true);
-    assert.equal(runtime.executionFacts.page({ after: before }).entries.some(row => row.kind === 'ticket' && row.ticketId === f.ticket.id), true);
+    assert.equal(runtime.executionFacts.page({ after: before }).entries.some(row => row.kind === 'task' && row.taskId === f.task.id), true);
     assert.equal(runtime.executionFacts.evidenceSnapshot().executions[0].wait.kind, 'paused');
-    assert.equal(runtime.executionFacts.snapshot({ ticketId: f.ticket.id }).tickets[0].execution.watermark.sessionSeq, session.seq - 1);
+    assert.equal(runtime.executionFacts.snapshot({ taskId: f.task.id }).tasks[0].execution.watermark.sessionSeq, session.seq - 1);
   } finally { await runtime.stop(); }
 });
 
@@ -308,7 +378,7 @@ test('official live jobs prove only execution-owned background work, without inv
         return { done: done.promise, cancel() { done.resolve({ status: 'killed' }); } }; } });
     return { id, async settle() { done.resolve({ status: 'completed' }); await done.promise; await Promise.resolve(); } };
   }
-  const read = () => runtime.executionFacts.evidence({ ticketId: f.ticket.id }).runtime;
+  const read = () => runtime.executionFacts.evidence({ taskId: f.task.id }).runtime;
   try {
     await runtime.executionFacts.ready;
     start(); // Official list(owner) includes this unowned job: explicitly exclude it.
@@ -324,7 +394,7 @@ test('official live jobs prove only execution-owned background work, without inv
     const child = await f.createAgent('job-child', { origin: 'subagent', parentSession: f.run.sessionId, delegationDepth: 1 });
     catalog(f.worker.agent.session, child.agent.id); start(child.agent.id);
     assert.equal(read().wait.kind, 'background-job');
-    f.database.pauseTicket(f.ticket.id);
+    f.database.pauseTask(f.task.id);
     assert.equal(read().wait.kind, 'paused', 'explicit waits retain priority over background work');
   } finally { await runtime.stop(); }
 });

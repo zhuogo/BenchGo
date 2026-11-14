@@ -12,9 +12,9 @@ const required = (value, name) => {
 };
 
 /** Atomic, non-replayable reservations for synchronous root-Router mutations. */
-export function installRouterActionStore({ db, tx, api, insertTicket }) {
+export function installRouterActionStore({ db, tx, api, insertTask }) {
   db.exec(`CREATE TABLE IF NOT EXISTS sa_router_actions(
-    action_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, ticket_id TEXT NOT NULL UNIQUE REFERENCES sa_tickets(id),
+    action_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, task_id TEXT NOT NULL UNIQUE REFERENCES sa_tasks(id),
     assignment_id TEXT NOT NULL UNIQUE REFERENCES sa_assignments(id), run_id TEXT NOT NULL UNIQUE REFERENCES sa_runs(id),
     session_id TEXT NOT NULL, call_id TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(session_id,call_id));`);
   const rowFor = (sessionId, callId) => db.prepare('SELECT * FROM sa_router_actions WHERE session_id=? AND call_id=?').get(sessionId, callId);
@@ -24,7 +24,7 @@ export function installRouterActionStore({ db, tx, api, insertTicket }) {
     const evidence = run?.evidence || {};
     const state = assignment?.state || 'missing', receipt = evidence.receipt ?? null, readback = evidence.readback ?? null;
     return { actionKey: row.action_key, sessionId: row.session_id, callId: row.call_id,
-      ticket: api.getTicket(row.ticket_id), assignment, run,
+      task: api.getTask(row.task_id), assignment, run,
       state, receipt, readback, error: evidence.error ?? null, createdAt: row.created_at,
       action: { actionKey: row.action_key, sessionId: row.session_id, callId: row.call_id,
         toolName: run?.routerAction?.toolName, argsHash: run?.routerAction?.argsHash,
@@ -59,16 +59,16 @@ export function installRouterActionStore({ db, tx, api, insertTicket }) {
         if (mandate.action?.toolName !== toolName || mandate.action?.callId !== callId || mandate.action?.argsHash !== argsHash
           || mandate.action?.threadId !== mandate.source.threadId) throw fail('MANDATE_ACTION_MISMATCH', 'Router action Mandate does not bind the frozen tool input');
         const at = new Date(now).toISOString();
-        const ticket = insertTicket({ id: `router-action:${digest(actionKey)}`, threadId: trigger.threadId,
+        const task = insertTask({ id: `router-action:${digest(actionKey)}`, threadId: trigger.threadId,
           target, acceptance, mandate, status: 'running', sourceTriggerIds: [triggerId] });
         const assignmentId = `router-action:${digest(actionKey)}`;
-        const payload = { executor: 'router-action', action: { sessionId, messageId, callId, toolName, argsHash, triggerId }, instructionRevision: ticket.instructionRevision };
-        db.prepare("INSERT INTO sa_assignments(id,ticket_id,payload,state,priority,owner,lease_until,fence,attempts,created_at,updated_at) VALUES (?,?,?,'claimed',?,?,?,?,?,?,?)")
-          .run(assignmentId, ticket.id, json(payload), Number.MAX_SAFE_INTEGER, owner, now + leaseMs, 1, 1, at, at);
+        const payload = { executor: 'router-action', action: { sessionId, messageId, callId, toolName, argsHash, triggerId }, instructionRevision: task.instructionRevision };
+        db.prepare("INSERT INTO sa_assignments(id,task_id,payload,state,priority,owner,lease_until,fence,attempts,created_at,updated_at) VALUES (?,?,?,'claimed',?,?,?,?,?,?,?)")
+          .run(assignmentId, task.id, json(payload), Number.MAX_SAFE_INTEGER, owner, now + leaseMs, 1, 1, at, at);
         const runId = randomUUID(), directory = `router-action:${digest(actionKey)}`;
         db.prepare('INSERT INTO sa_runs VALUES (?,?,?,?,?,?,?,?)').run(runId, assignmentId, 1, owner, 'prepared', json({ sessionId, directory,
           routerAction: { sessionId, messageId, callId, toolName, argsHash, triggerId, threadId: mandate.source.threadId } }), at, at);
-        db.prepare('INSERT INTO sa_router_actions VALUES (?,?,?,?,?,?,?,?)').run(actionKey, fingerprint, ticket.id, assignmentId, runId, sessionId, callId, at);
+        db.prepare('INSERT INTO sa_router_actions VALUES (?,?,?,?,?,?,?,?)').run(actionKey, fingerprint, task.id, assignmentId, runId, sessionId, callId, at);
         const action = actionValue(rowFor(sessionId, callId));
         return { ...action, duplicate: false };
       });
@@ -96,18 +96,18 @@ export function installRouterActionStore({ db, tx, api, insertTicket }) {
             db.prepare("UPDATE sa_runs SET state='uncertain',payload=?,updated_at=? WHERE id=? AND state IN ('prepared','submitted','running','verifying')").run(json(payload), new Date(now).toISOString(), actionRow.run_id);
             db.prepare("UPDATE sa_assignments SET state='uncertain',owner=NULL,lease_until=NULL,updated_at=? WHERE id=? AND state='claimed' AND owner=? AND fence=?").run(new Date(now).toISOString(), actionRow.assignment_id, owner, fence);
           }
-          db.prepare("UPDATE sa_tickets SET status='waiting',updated_at=? WHERE id=? AND status<>'completed'").run(new Date(now).toISOString(), actionRow.ticket_id);
+          db.prepare("UPDATE sa_tasks SET status='waiting',updated_at=? WHERE id=? AND status<>'completed'").run(new Date(now).toISOString(), actionRow.task_id);
           return { ...actionValue(actionRow), duplicate: false };
         }
         if (assignment.state !== 'claimed' || assignment.owner !== owner || assignment.fence !== fence || assignment.leaseUntil <= now)
           throw fail('FENCING_CONFLICT', 'Only the live Router action owner can settle verified evidence');
         const trigger = api.getTrigger(run.routerAction.triggerId);
-        try { validateOwner(trigger, { sessionId, messageId: run.routerAction.messageId, mandate: action.ticket.mandate, validateMandate }); }
+        try { validateOwner(trigger, { sessionId, messageId: run.routerAction.messageId, mandate: action.task.mandate, validateMandate }); }
         catch (authorizationError) {
           const payload = { ...parse(db.prepare('SELECT payload FROM sa_runs WHERE id=?').get(actionRow.run_id).payload), evidence: { receipt, readback, verified: false, error: authorizationError.message } };
           db.prepare("UPDATE sa_runs SET state='uncertain',payload=?,updated_at=? WHERE id=?").run(json(payload), new Date(now).toISOString(), actionRow.run_id);
           db.prepare("UPDATE sa_assignments SET state='uncertain',owner=NULL,lease_until=NULL,updated_at=? WHERE id=?").run(new Date(now).toISOString(), actionRow.assignment_id);
-          db.prepare("UPDATE sa_tickets SET status='waiting',updated_at=? WHERE id=? AND status<>'completed'").run(new Date(now).toISOString(), actionRow.ticket_id);
+          db.prepare("UPDATE sa_tasks SET status='waiting',updated_at=? WHERE id=? AND status<>'completed'").run(new Date(now).toISOString(), actionRow.task_id);
           return { ...actionValue(actionRow), duplicate: false };
         }
         const at = new Date(now).toISOString();
@@ -115,19 +115,19 @@ export function installRouterActionStore({ db, tx, api, insertTicket }) {
           receipt: JSON.parse(json(receipt)), readback: JSON.parse(json(readback)), verified: true };
         const runPayload = { ...parse(db.prepare('SELECT payload FROM sa_runs WHERE id=?').get(actionRow.run_id).payload), evidence };
         db.prepare("UPDATE sa_runs SET state='verifying',payload=?,updated_at=? WHERE id=? AND state IN ('prepared','submitted','running')").run(json(runPayload), at, actionRow.run_id);
-        const ticket = action.ticket, version = ticket.resultVersion + 1;
+        const task = action.task, version = task.resultVersion + 1;
         const delivery = systemStateDelivery({ state: 'action_verified', code: 'ACTION_VERIFIED', stage: 'action' });
         const result = { delivery, actionReceipt: evidence.receipt, readback: evidence.readback, action: { kind: evidence.kind, toolName: evidence.toolName, callId, argsHash, verified: true },
-          summary, ticketId: ticket.id, instructionRevision: ticket.instructionRevision, version, committedAt: at, runId: actionRow.run_id, sessionId: run.sessionId };
-        db.prepare('INSERT INTO sa_results VALUES (?,?,?,?)').run(ticket.id, version, json(result), at);
-        db.prepare("UPDATE sa_tickets SET status='completed',result_version=?,updated_at=? WHERE id=? AND result_version=? AND status IN ('running','waiting')").run(version, at, ticket.id, ticket.resultVersion);
+          summary, taskId: task.id, instructionRevision: task.instructionRevision, version, committedAt: at, runId: actionRow.run_id, sessionId: run.sessionId };
+        db.prepare('INSERT INTO sa_results VALUES (?,?,?,?)').run(task.id, version, json(result), at);
+        db.prepare("UPDATE sa_tasks SET status='completed',result_version=?,updated_at=? WHERE id=? AND result_version=? AND status IN ('running','waiting')").run(version, at, task.id, task.resultVersion);
         db.prepare("UPDATE sa_assignments SET state='completed',owner=NULL,lease_until=NULL,updated_at=? WHERE id=? AND state='claimed' AND owner=? AND fence=?").run(at, actionRow.assignment_id, owner, fence);
         db.prepare("UPDATE sa_runs SET state='completed',updated_at=? WHERE id=? AND state='verifying'").run(at, actionRow.run_id);
         const uniqueKey = `router-action-result:${actionRow.action_key}`;
-        const outboxId = randomUUID(), outboxPayload = resultOutbox({ ticket, result: { evidenceRefs: [{ runId: actionRow.run_id, callId, argsHash }] }, delivery });
-        db.prepare("INSERT INTO sa_outbox(id,unique_key,ticket_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
-          .run(outboxId, uniqueKey, ticket.id, json(outboxPayload), now, at, at);
-        return { ...actionValue(actionRow), result, outbox: api.deliveries(ticket.id).at(-1), duplicate: false };
+        const outboxId = randomUUID(), outboxPayload = resultOutbox({ task, result: { evidenceRefs: [{ runId: actionRow.run_id, callId, argsHash }] }, delivery });
+        db.prepare("INSERT INTO sa_outbox(id,unique_key,task_id,payload,state,attempts,next_at,created_at,updated_at) VALUES (?,?,?,?,'queued',0,?,?,?)")
+          .run(outboxId, uniqueKey, task.id, json(outboxPayload), now, at, at);
+        return { ...actionValue(actionRow), result, outbox: api.deliveries(task.id).at(-1), duplicate: false };
       });
     },
   };

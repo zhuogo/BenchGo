@@ -1,13 +1,16 @@
 import { DatabaseSync } from 'node:sqlite';
+import { migrateTaskStorage } from './task-storage-migration.mjs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { notificationPublication } from './notification-publication.mjs';
 import { installTaskCleanupStore } from './task-cleanup-store.mjs';
+import { installTaskCleanupContinuationStore } from './task-cleanup-continuation-store.mjs';
+import { reactionEmojis } from './message-reaction.mjs';
 
 const encode = value => JSON.stringify(value);
-const decode = row => row ? { ...JSON.parse(row.payload), ...(row.unique_key?.startsWith('ticket-delivery:')
-  ? { ticketStateEventKey: row.unique_key.slice('ticket-delivery:'.length) } : {}) } : null;
+const decode = row => row ? { ...JSON.parse(row.payload), ...(row.unique_key?.startsWith('task-delivery:')
+  ? { taskStateEventKey: row.unique_key.slice('task-delivery:'.length) } : {}) } : null;
 
 /** Durable notification and Goal storage for the current SuperAgent baseline. */
 export function createAssistantRuntimeStore({ directory, filename, afterCommit } = {}) {
@@ -15,6 +18,7 @@ export function createAssistantRuntimeStore({ directory, filename, afterCommit }
   if (directory) mkdirSync(directory, { recursive: true });
   const path = filename || join(directory, 'assistant.db');
   const db = new DatabaseSync(path);
+  try { migrateTaskStorage(db); } catch (error) { db.close(); throw error; }
   db.exec(`PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS task_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, unique_key TEXT UNIQUE NOT NULL, task_id TEXT NOT NULL, payload TEXT NOT NULL);
@@ -25,6 +29,7 @@ export function createAssistantRuntimeStore({ directory, filename, afterCommit }
     CREATE TABLE IF NOT EXISTS task_delivery_receipts (event_id TEXT NOT NULL, device_id TEXT NOT NULL, received_at TEXT NOT NULL, PRIMARY KEY(event_id,device_id));
     CREATE TABLE IF NOT EXISTS assistant_goals (id TEXT PRIMARY KEY, request_id TEXT UNIQUE, status TEXT NOT NULL, row_version INTEGER NOT NULL, payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS assistant_message_reactions (scope TEXT NOT NULL, message_key TEXT NOT NULL, emoji TEXT NOT NULL, PRIMARY KEY(scope,message_key));
+    CREATE TABLE IF NOT EXISTS assistant_authored_reactions (scope TEXT NOT NULL, message_key TEXT NOT NULL, emoji TEXT NOT NULL, PRIMARY KEY(scope,message_key));
 `);
   let closed = false, inTransaction = false;
   const committed = () => { if (!inTransaction) { try { afterCommit?.(); } catch { /* Observation cannot undo a committed domain write. */ } } };
@@ -51,9 +56,19 @@ export function createAssistantRuntimeStore({ directory, filename, afterCommit }
       return Object.fromEntries(db.prepare('SELECT message_key,emoji FROM assistant_message_reactions WHERE scope=?').all(scope).map(row => [row.message_key, row.emoji]));
     },
     setMessageReaction(scope, messageKey, emoji) {
-      if (emoji !== null && !['👍', '❤️', '😂', '🎉', '🤔', '👎'].includes(emoji)) throw new Error('Invalid message reaction');
+      if (emoji !== null && !reactionEmojis.includes(emoji)) throw new Error('Invalid message reaction');
       if (emoji === null) db.prepare('DELETE FROM assistant_message_reactions WHERE scope=? AND message_key=?').run(scope, messageKey);
       else db.prepare('INSERT INTO assistant_message_reactions VALUES (?,?,?) ON CONFLICT(scope,message_key) DO UPDATE SET emoji=excluded.emoji').run(scope, messageKey, emoji);
+      return { messageKey, emoji };
+    },
+    // The assistant's own reactions stay separate so they never replace the user's.
+    assistantReactions(scope) {
+      return Object.fromEntries(db.prepare('SELECT message_key,emoji FROM assistant_authored_reactions WHERE scope=?').all(scope).map(row => [row.message_key, row.emoji]));
+    },
+    setAssistantReaction(scope, messageKey, emoji) {
+      if (emoji !== null && !reactionEmojis.includes(emoji)) throw new Error('Invalid message reaction');
+      if (emoji === null) db.prepare('DELETE FROM assistant_authored_reactions WHERE scope=? AND message_key=?').run(scope, messageKey);
+      else db.prepare('INSERT INTO assistant_authored_reactions VALUES (?,?,?) ON CONFLICT(scope,message_key) DO UPDATE SET emoji=excluded.emoji').run(scope, messageKey, emoji);
       return { messageKey, emoji };
     },
     meta(key) { const row = db.prepare('SELECT value FROM task_meta WHERE key=?').get(key); return row ? JSON.parse(row.value) : null; },
@@ -195,11 +210,12 @@ export function createAssistantRuntimeStore({ directory, filename, afterCommit }
   };
   // Standalone SQLite writes autocommit. Inside a transaction the outer commit
   // emits once; rollback never wakes execution-fact consumers.
-  for (const name of ['setMessageReaction', 'setMeta', 'event', 'delivered', 'retryDelivery', 'insertGoal', 'updateGoal']) {
+  for (const name of ['setMessageReaction', 'setAssistantReaction', 'setMeta', 'event', 'delivered', 'retryDelivery', 'insertGoal', 'updateGoal']) {
     if (typeof api[name] !== 'function') continue;
     const write = api[name];
     api[name] = (...args) => { const result = write(...args); committed(); return result; };
   }
   api.taskCleanup = installTaskCleanupStore({ db, transaction });
+  api.taskCleanupContinuations = installTaskCleanupContinuationStore({ db, transaction });
   return api;
 }

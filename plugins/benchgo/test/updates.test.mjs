@@ -16,13 +16,12 @@ async function fixture(t, options = {}) {
   if (options.minAppVersion !== undefined) manifest.minAppVersion = options.minAppVersion;
   if (options.releaseVersion !== undefined) manifest.releaseVersion = options.releaseVersion;
   const bytes = Buffer.from(JSON.stringify(manifest)), signature = sign(null, bytes, privateKey).toString('base64');
-  const state = { managed: true, root: join(directory, 'releases'), version: '0.1.2', appVersion: '0.1.2', previous: '0.1.1', ...options.state };
+  const state = { managed: true, root: join(directory, 'releases'), version: '0.1.2', appVersion: '0.1.2', ...options.state };
   let activated = 0, busy = false, downloads = 0, httpStatus = options.httpStatus;
   const install = {
     getInstallState: async () => ({ ...state }),
     prepareRelease: async ({ archive, version }) => { assert.deepEqual(await readFile(archive), artifact); return { version }; },
     activateRelease: async ({ release }) => { activated++; state.version = release.version; },
-    rollbackRelease: async () => { state.version = state.previous; },
   };
   const fetcher = async url => {
     if (httpStatus) return new Response(null, { status: httpStatus });
@@ -111,7 +110,7 @@ test('unmanaged installations and running tasks cannot mutate plugin versions', 
   const f = await fixture(t, { state: { managed: false } });
   await assert.rejects(f.service.dispatch({ action: 'install' }), /先升级一次应用/);
   f.state.managed = true; f.setBusy(true);
-  await assert.rejects(f.service.dispatch({ action: 'rollback' }), /任务/);
+  await assert.rejects(f.service.dispatch({ action: 'install' }), /任务/);
   assert.equal(f.downloads(), 0);
 });
 
@@ -134,10 +133,13 @@ test('incompatible engine and stale release are never offered as installable', a
   }
 });
 
-test('rollback selects saved previous version and requires restarting', async t => {
+test('removed former-version action is rejected and status exposes no downgrade capability', async t => {
   const f = await fixture(t);
-  await f.service.dispatch({ action: 'rollback' }); await f.service.settled();
-  assert.equal(f.state.version, '0.1.1'); assert.equal((await f.service.status()).restartRequired, true);
+  await assert.rejects(f.service.dispatch({ action: 'rollback' }), /未知更新操作/);
+  const status = await f.service.status();
+  assert.equal(f.state.version, '0.1.2'); assert.equal(status.restartRequired, false);
+  assert.equal(Object.hasOwn(status, 'canRollback'), false);
+  assert.equal(status.lastAction, null); assert.equal(f.downloads(), 0); assert.equal(f.activated(), 0);
 });
 
 test('concurrent install requests admit only one download', async t => {
@@ -154,7 +156,7 @@ test('management route rejects cross-origin requests before parsing', async t =>
   const cleanups = [];
   const ctx = { get: () => undefined, effect: fn => { const cleanup = fn(); if (typeof cleanup === 'function') cleanups.push(cleanup); }, connection: { fetch: { register: route => { handler = route.fetch; return () => {}; } } } };
   const service = await mountUpdates(ctx, { store: { directory }, list: () => [] }); t.after(() => service.close());
-  const response = await handler(new Request('https://host/api/commander/updates', { method: 'POST', headers: { origin: 'https://evil.test', 'content-type': 'application/json' }, body: '{"action":"rollback"}' }));
+  const response = await handler(new Request('https://host/api/commander/updates', { method: 'POST', headers: { origin: 'https://evil.test', 'content-type': 'application/json' }, body: '{"action":"install"}' }));
   assert.equal(response.status, 403);
 });
 
@@ -215,7 +217,7 @@ test('a signed release can confirm reused host components without rebuilding the
   }
 });
 
-test('public release confirmation requires known compatible active host components and never rolls back', async t => {
+test('public release confirmation requires known compatible active host components and never lowers its identity', async t => {
   const cases = [
     { appVersionInFeed: '0.2.0' },
     { appVersionInFeed: '0.2.0', state: { appVersion: null }, expected: 'blocked' },
@@ -289,7 +291,7 @@ test('one decision prioritizes compatible plugin, mandatory app and remaining ap
   assert.equal((await f.service.status()).decision.action, 'plugin');
   f.setBusy(true);
   let status = await f.service.status();
-  assert.equal(status.decision.enabled, false); assert.equal(status.canInstall, false); assert.equal(status.canRollback, false);
+  assert.equal(status.decision.enabled, false); assert.equal(status.canInstall, false);
   await assert.rejects(f.service.dispatch({ action: 'install' }), /任务/);
   f.setBusy(false); await f.service.dispatch({ action: 'install' }); await f.service.settled();
   status = await f.service.status();

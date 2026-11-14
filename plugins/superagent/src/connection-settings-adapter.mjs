@@ -5,7 +5,7 @@ const channelFor = namespace => { const channel = channelIds.find(id => namespac
 export function createConnectionSettingsAdapter(connections, { applyConfig } = {}) {
   return {
     id: 'superagent-connections',
-    async schema() { return channelIds.map(channel => ({ namespace: namespaceFor(channel), title: `${channelDefinition(channel).label}链接`, schema: connectionSettingsSchema(channel), risk: 'confirm', impact: '变更接入身份、准入范围或凭据引用，使用既有渠道服务重连；不改变原工单授权', sensitivePaths: [], applies: applyConfig ? 'live' : 'reload' })); },
+    async schema() { return channelIds.map(channel => ({ namespace: namespaceFor(channel), title: `${channelDefinition(channel).label}链接`, schema: connectionSettingsSchema(channel), risk: 'confirm', impact: '变更接入身份、准入范围或凭据引用，使用既有渠道服务重连；不改变原任务授权', sensitivePaths: [], applies: applyConfig ? 'live' : 'reload' })); },
     async read(namespace) { return connections.settingsSnapshot(channelFor(namespace)); },
     async normalizeOps(namespace, { ops, current }) {
       const actual = connectionConfig(channelFor(namespace), applySettingsOps(current.value, ops, { base: current.base }));

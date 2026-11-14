@@ -3,21 +3,21 @@ import assert from 'node:assert/strict';
 import { replyNotificationOption } from '../src/notification-option.mjs';
 
 function fixture() {
-  const event = { eventId: 'event', taskId: 'ticket', threadId: 'side', instructionRevision: 2, resultVersion: 3, text: '这份结果要放进哪个位置？', options: ['放进仓库', '先不放'] };
-  const ticket = { mandate: { source: { threadId: 'side' } }, instructionRevision: 2, resultVersion: 3, status: 'completed' };
+  const event = { eventId: 'event', taskId: 'task', threadId: 'side', instructionRevision: 2, resultVersion: 3, text: '这份结果要放进哪个位置？', options: ['放进仓库', '先不放'] };
+  const task = { mandate: { source: { threadId: 'side' } }, instructionRevision: 2, resultVersion: 3, status: 'completed' };
   const sent = [];
-  const dependencies = { database: { notifications: () => ({ events: [event], hasMore: false }) }, orchestration: { getTicket: id => id === 'ticket' ? ticket : null }, engine: { send: async input => { sent.push(input); return { ...input, messageId: 'message' }; } } };
-  return { event, ticket, sent, dependencies, input: { eventId: 'event', threadId: 'side', text: '放进仓库' } };
+  const dependencies = { database: { notifications: () => ({ events: [event], hasMore: false }) }, orchestration: { getTask: id => id === 'task' ? task : null }, engine: { send: async input => { sent.push(input); return { ...input, messageId: 'message' }; } } };
+  return { event, task, sent, dependencies, input: { eventId: 'event', threadId: 'side', text: '放进仓库' } };
 }
 test('option sends original intent with a stable one-event idempotency key', async () => {
   const f = fixture(); await replyNotificationOption(f.dependencies, f.input);
   await replyNotificationOption(f.dependencies, f.input);
   assert.deepEqual(f.sent, Array(2).fill({ threadId: 'side', text: '放进仓库', requestId: 'notification-option:event',
-    replyContext: { eventId: 'event', ticketId: 'ticket', instructionRevision: 2, resultVersion: 3, question: f.event.text } }));
+    replyContext: { eventId: 'event', taskId: 'task', instructionRevision: 2, resultVersion: 3, question: f.event.text } }));
   assert.equal(f.sent[0].approval, undefined);
 });
 test('cross-thread, fabricated and stale choices never reach send', async () => {
-  for (const change of [f => f.input.threadId = 'main', f => f.input.text = '花钱', f => f.ticket.instructionRevision++, f => f.ticket.resultVersion++, f => f.ticket.executionControl = { stopped: true }, f => f.ticket.mandate.source.threadId = 'other', f => { delete f.event.instructionRevision; delete f.ticket.instructionRevision; }, f => { delete f.event.resultVersion; delete f.ticket.resultVersion; }]) {
+  for (const change of [f => f.input.threadId = 'main', f => f.input.text = '花钱', f => f.task.instructionRevision++, f => f.task.resultVersion++, f => f.task.executionControl = { stopped: true }, f => f.task.mandate.source.threadId = 'other', f => { delete f.event.instructionRevision; delete f.task.instructionRevision; }, f => { delete f.event.resultVersion; delete f.task.resultVersion; }]) {
     const f = fixture(); change(f);
     await assert.rejects(replyNotificationOption(f.dependencies, f.input));
     assert.equal(f.sent.length, 0);
@@ -26,10 +26,10 @@ test('cross-thread, fabricated and stale choices never reach send', async () => 
 
 test('legacy desktop source without a thread retains its main-chat ownership', async () => {
   const f = fixture();
-  f.input.threadId = 'main'; f.event.threadId = 'main'; delete f.ticket.mandate.source.threadId;
+  f.input.threadId = 'main'; f.event.threadId = 'main'; delete f.task.mandate.source.threadId;
   await replyNotificationOption(f.dependencies, f.input);
   assert.equal(f.sent[0].threadId, 'main');
-  assert.equal(f.sent[0].replyContext.ticketId, 'ticket');
+  assert.equal(f.sent[0].replyContext.taskId, 'task');
 });
 test('option lookup follows durable global cursor past filtered pages', async () => {
   const f = fixture(), cursors = [];
@@ -40,14 +40,14 @@ test('option lookup follows durable global cursor past filtered pages', async ()
 
 test('Attention choice answers its exact saved question rather than dispatching a bare option', async () => {
   const f = fixture(), replies = [];
-  f.event.attentionId = 'attention'; f.ticket.status = 'waiting';
-  f.dependencies.orchestration.attentions = ticketId => ticketId === 'ticket' ? [
+  f.event.attentionId = 'attention'; f.task.status = 'waiting';
+  f.dependencies.orchestration.attentions = taskId => taskId === 'task' ? [
     { id: 'other-attention', resultVersion: 3, question: { options: [{ label: '放进仓库' }] } },
     { id: 'attention', resultVersion: 3, question: { options: [{ label: '放进仓库' }] } },
   ] : [];
   f.dependencies.orchestration.answerDesktopAttention = input => { replies.push(input); return { id: input.attentionId }; };
   assert.deepEqual(await replyNotificationOption(f.dependencies, f.input), { id: 'attention' });
-  assert.deepEqual(replies, [{ ticketId: 'ticket', attentionId: 'attention', instructionRevision: 2,
+  assert.deepEqual(replies, [{ taskId: 'task', attentionId: 'attention', instructionRevision: 2,
     requestId: 'notification-option:event', answer: { selected: ['放进仓库'] } }]);
   assert.equal(f.sent.length, 0);
 });

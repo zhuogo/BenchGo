@@ -15,7 +15,7 @@ const executablePath = [process.env.CHROMIUM_EXECUTABLE_PATH, chromium.executabl
 const screenshots = join(root, 'artifacts/unified-updates');
 let fixturePromise;
 
-// Only the host boundary is synthetic. Modal, tooltip, picker, disclosure and
+// Only the host boundary is synthetic. Modal, tooltip, picker, information dialog and
 // UpdateLauncher use their production implementations and shared theme sheets.
 // The compile-time location adapter models the Desktop-owned local origin;
 // ordinary HTTPS cases retain a remote identity even when a bridge is present.
@@ -34,7 +34,7 @@ async function fixture() {
       const root=createRoot(document.getElementById('root'));let serial=0;
       const initial=()=>({config:{source:'mirror',mirrorUrl:''},current:{app:'0.1.0',plugin:'0.1.1',engine:'0.2.2-rc.1'},
         installation:'desktop',phase:'idle',release:{plugin:{version:'0.1.1',available:false,compatible:true},app:{version:'0.1.0',available:false}},
-        managed:true,canInstall:false,canRollback:false,restartRequired:false,busy:false});
+        managed:true,canInstall:false,restartRequired:false,busy:false});
       let mode='current',state=initial();window.updateCalls=[];window.desktopOpens=0;window.nativeStatusReads=0;
       window.dshDesktop={updates:{open:async()=>{window.desktopOpens++;},status:async()=>{window.nativeStatusReads++;return {phase:'idle'};},subscribe:()=>()=>{}}};
       window.fetch=async(url,options)=>{
@@ -115,6 +115,16 @@ async function fits(page, dialog) {
   }
 }
 
+async function holdUpdate(page, dialog) {
+  const button = dialog.getByRole('button', { name: '长按 2 秒更新', exact: true });
+  const box = await button.boundingBox();
+  assert(box, 'the hold action is visible');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(2050);
+  await page.mouse.up();
+}
+
 test('unified updates render honest states beside the workbench in both themes and viewport sizes', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
   await mkdir(screenshots, { recursive: true });
   const browser = await chromium.launch({ headless: true, executablePath });
@@ -131,14 +141,20 @@ test('unified updates render honest states beside the workbench in both themes a
         if (mode !== 'loading') assert.equal(await details.getAttribute('aria-expanded'), 'false', 'component versions start collapsed');
         else assert.equal(await details.count(), 0, 'initial loading does not fabricate component versions');
         assert.equal(await dialog.getByText('0.2.2-rc.1', { exact: false }).isVisible(), false, 'engine detail stays out of the primary card');
-        if (mode === 'available') await dialog.getByRole('button', { name: '立即更新', exact: true }).waitFor();
+        if (mode === 'available') await dialog.getByRole('button', { name: '长按 2 秒更新', exact: true }).waitFor();
         else if (mode === 'restart') await dialog.getByText(/重启.*生效/).first().waitFor();
-        else if (mode === 'error') { await dialog.getByRole('alert').waitFor(); assert.match(await dialog.getByRole('alert').innerText(), /测试更新服务暂不可用/); }
+        else if (mode === 'error') {
+          await dialog.getByRole('alert').waitFor();
+          assert.match(await dialog.getByRole('alert').innerText(), /测试更新服务暂不可用/);
+          assert.doesNotMatch(await dialog.getByRole('alert').innerText(), /api\/commander\/updates/, 'technical endpoint paths stay out of the user-facing error');
+          assert.match(await dialog.locator('.cmd-update-card-heading').innerText(), /暂时无法检查更新/);
+          assert.doesNotMatch(await dialog.locator('.cmd-update-card-heading').innerText(), /已是最新版本/, 'a failed check never advertises stale current status');
+        }
         else if (mode === 'loading') {
           await dialog.getByText('正在读取更新信息', { exact: true }).waitFor();
-          assert.equal(await dialog.getByRole('button', { name: /^(检查更新|立即更新)$/ }).count(), 0, 'initial loading cannot submit another update request');
+          assert.equal(await dialog.getByRole('button', { name: /^(检查更新|长按 2 秒更新)$/ }).count(), 0, 'initial loading cannot submit another update request');
         }
-        else assert.equal(await dialog.getByRole('button', { name: '立即更新', exact: true }).count(), 0, 'an unpublished channel cannot advertise an install');
+        else assert.equal(await dialog.getByRole('button', { name: '长按 2 秒更新', exact: true }).count(), 0, 'an unpublished channel cannot advertise an install');
         await fits(page, dialog);
         await page.screenshot({ path: join(screenshots, `${dark ? 'dark' : 'light'}-${width}-${mode}.png`) });
         assert.deepEqual(errors, []);
@@ -156,12 +172,14 @@ test('unified update details, source picker and install preserve native keyboard
     const details = dialog.getByRole('button', { name: '版本详情', exact: true });
     await details.click();
     assert.equal(await details.getAttribute('aria-expanded'), 'true');
-    await dialog.getByText('0.2.2-rc.1', { exact: false }).waitFor();
-    await dialog.getByRole('button', { name: '更新内容', exact: true }).click();
-    await dialog.getByText('改善任务看板、语音与更新体验。', { exact: true }).waitFor();
+    const information = page.getByRole('dialog', { name: '版本详情', exact: true });
+    await information.getByText('0.2.2-rc.1', { exact: false }).waitFor();
+    await information.getByText('改善任务看板、语音与更新体验。', { exact: true }).waitFor();
     await fits(page, dialog);
     await page.screenshot({ path: join(screenshots, 'light-390-version-details.png') });
-    await details.click();
+    await page.keyboard.press('Escape');
+    await information.waitFor({ state: 'detached' });
+    assert(await dialog.isVisible(), 'Escape dismisses information before the update modal');
     const source = dialog.locator('.dowork-select');
     await source.click();
     await page.getByRole('listbox').waitFor();
@@ -173,10 +191,10 @@ test('unified update details, source picker and install preserve native keyboard
     await source.click();
     await page.getByRole('option', { name: 'GitHub 直连', exact: true }).click();
     await page.waitForFunction(() => window.updateCalls.some(call => call.action === 'configure' && call.source === 'github'));
-    await dialog.getByRole('button', { name: '立即更新', exact: true }).click();
+    await holdUpdate(page, dialog);
     await dialog.getByText(/重启.*生效/).first().waitFor();
     assert.equal(await page.evaluate(() => window.updateCalls.filter(call => call.action === 'install').length), 1);
-    assert.equal(await dialog.getByRole('button', { name: '立即更新', exact: true }).count(), 0);
+    assert.equal(await dialog.getByRole('button', { name: '长按 2 秒更新', exact: true }).count(), 0);
     await page.keyboard.press('Escape');
     await dialog.waitFor({ state: 'detached' });
     assert(await launcher.evaluate(node => document.activeElement === node), 'closing the modal returns focus to its actual sidebar launcher');
@@ -191,7 +209,7 @@ test('application-only updates use the same primary action and delegate to the d
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' });
     page.setDefaultTimeout(6000);
     const { dialog } = await mount(page, 'app', false, true);
-    await dialog.getByRole('button', { name: '立即更新', exact: true }).click();
+    await holdUpdate(page, dialog);
     await page.waitForFunction(() => window.desktopOpens === 1);
     assert.equal(await page.evaluate(() => window.updateCalls.filter(call => call.action === 'install').length), 0, 'an application update never invokes the plugin installer');
     assert.equal(await dialog.getByRole('button', { name: '检查应用更新', exact: true }).count(), 0);
@@ -204,7 +222,7 @@ test('a remote host update cannot invoke a local Desktop bridge carried into the
     const page = await browser.newPage({ viewport: { width: 390, height: 900 }, reducedMotion: 'reduce' });
     page.setDefaultTimeout(6000);
     const { dialog } = await mount(page, 'app');
-    const update = dialog.getByRole('button', { name: '立即更新', exact: true });
+    const update = dialog.getByRole('button', { name: '长按 2 秒更新', exact: true });
     await update.waitFor();
     assert(await update.isDisabled(), 'the remote application update requires action on its host');
     await dialog.getByText('请在当前连接主机上打开 BenchGo，完成应用更新。', { exact: true }).waitFor();
@@ -212,5 +230,89 @@ test('a remote host update cannot invoke a local Desktop bridge carried into the
     assert.equal(await dialog.getByRole('button', { name: '检查安装器更新', exact: true }).count(), 0);
     assert.deepEqual(await page.evaluate(() => ({ opens: window.desktopOpens, statusReads: window.nativeStatusReads })), { opens: 0, statusReads: 0 });
     await page.screenshot({ path: join(screenshots, 'light-390-remote-application.png') });
+  } finally { await browser.close(); }
+});
+
+test('hold confirmation animates progress, cancels quickly and never executes a short click', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 900 }, reducedMotion: 'no-preference' });
+    const { dialog } = await mount(page, 'available', true);
+    const update = dialog.getByRole('button', { name: '长按 2 秒更新', exact: true });
+    await update.click();
+    assert.equal(await page.evaluate(() => window.updateCalls.filter(call => call.action === 'install').length), 0);
+    const box = await update.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(650);
+    assert.equal(await update.getAttribute('data-holding'), 'true');
+    const progress = await update.evaluate(node => {
+      const elements = [node, ...node.querySelectorAll('*')];
+      for (const element of elements) {
+        const matrix = getComputedStyle(element).transform;
+        if (matrix !== 'none') { const scale = new DOMMatrixReadOnly(matrix).a; if (scale > 0.05 && scale < 0.9) return scale; }
+      }
+      for (const pseudo of ['::before', '::after']) {
+        const matrix = getComputedStyle(node, pseudo).transform;
+        if (matrix !== 'none') { const scale = new DOMMatrixReadOnly(matrix).a; if (scale > 0.05 && scale < 0.9) return scale; }
+      }
+      return null;
+    });
+    assert(progress !== null, 'the two-second hold has an actual intermediate transform progress');
+    await page.screenshot({ path: join(screenshots, 'dark-390-hold-progress.png') });
+    await page.mouse.up();
+    await page.waitForTimeout(240);
+    assert.notEqual(await update.getAttribute('data-holding'), 'true');
+    assert.equal(await page.evaluate(() => window.updateCalls.filter(call => call.action === 'install').length), 0);
+    await page.screenshot({ path: join(screenshots, 'dark-390-hold-cancelled.png') });
+    const details = dialog.getByRole('button', { name: '版本详情', exact: true });
+    assert.equal(await page.getByRole('dialog', { name: '版本详情', exact: true }).count(), 0);
+    await details.click();
+    const information = page.getByRole('dialog', { name: '版本详情', exact: true });
+    await information.waitFor();
+    const motion = await information.evaluate(node => node.getAnimations().map(animation => ({ duration: animation.effect.getTiming().duration, keyframes: animation.effect.getKeyframes().map(frame => ({ opacity: frame.opacity, transform: frame.transform })) })));
+    assert(motion.some(animation => animation.duration > 0 && animation.duration <= 240), 'details use a brief entry animation');
+    await page.waitForTimeout(240);
+    await fits(page, dialog);
+    await page.screenshot({ path: join(screenshots, 'dark-390-version-details.png') });
+    await page.keyboard.press('Escape');
+    await information.waitFor({ state: 'detached' });
+    await update.focus();
+    await page.keyboard.down('Space');
+    await page.waitForTimeout(350);
+    await page.keyboard.up('Space');
+    await page.waitForTimeout(2050);
+    assert.equal(await page.evaluate(() => window.updateCalls.filter(call => call.action === 'install').length), 0, 'releasing Space before two seconds cancels');
+    await page.keyboard.down('Enter');
+    await page.waitForFunction(() => window.updateCalls.filter(call => call.action === 'install').length === 1);
+    await page.keyboard.up('Enter');
+    assert.equal(await page.evaluate(() => window.updateCalls.filter(call => call.action === 'install').length), 1);
+  } finally { await browser.close(); }
+});
+
+test('captured touchscreen movement cancels and a context menu never interrupts a complete hold', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 900 }, hasTouch: true, isMobile: true, reducedMotion: 'reduce' });
+    const { dialog } = await mount(page, 'available');
+    const button = dialog.getByRole('button', { name: '长按 2 秒更新', exact: true });
+    const box = await button.boundingBox(), x = box.x + box.width / 2, y = box.y + box.height / 2;
+    const input = await page.context().newCDPSession(page);
+    await button.evaluate(node => node.addEventListener('pointerdown', event => { window.touchPointer = event.pointerId; }, { once: true }));
+    await input.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] });
+    await page.waitForTimeout(350);
+    assert(await button.evaluate(node => node.hasPointerCapture(window.touchPointer)), 'the browser captures the active touchscreen pointer');
+    await input.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: box.x - 8, y, id: 1 }] });
+    await page.waitForTimeout(100);
+    await input.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await page.waitForTimeout(1800);
+    assert.equal(await page.evaluate(() => window.updateCalls.filter(call => call.action === 'install').length), 0, 'moving outside cancels even under implicit pointer capture');
+    await input.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 2 }] });
+    await page.waitForTimeout(600);
+    await button.dispatchEvent('contextmenu', { bubbles: true, cancelable: true });
+    await page.waitForFunction(() => window.updateCalls.filter(call => call.action === 'install').length === 1);
+    await input.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    assert.equal(await page.evaluate(() => window.updateCalls.filter(call => call.action === 'install').length), 1);
+    await input.detach();
   } finally { await browser.close(); }
 });

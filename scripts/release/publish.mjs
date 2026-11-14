@@ -8,6 +8,7 @@ import { compareVersions, validateReleaseManifest } from '../../plugins/benchgo/
 import { github, githubJson, assetBytes, findPreviousRelease, readSignedRelease, releaseKind, sha256 } from './github.mjs';
 import { fileDigest } from './record-artifact.mjs';
 import { immutableArtifact } from './assemble.mjs';
+import { verifyDownloads } from './downloads.mjs';
 
 const sendJson = (path, method, body) => githubJson(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const getRelease = tag => githubJson(`/releases/tags/${encodeURIComponent(tag)}`, { missing: true });
@@ -67,9 +68,9 @@ async function upload(release, path, { replace = false } = {}) {
   release.assets = [...release.assets.filter(item => item.name !== name), asset];
 }
 
-async function verifyReferencedArtifacts(manifest) {
+async function verifyReferencedArtifacts(manifest, downloads) {
   const releaseCache = new Map();
-  for (const artifact of [manifest.plugin, manifest.app, manifest.android]) {
+  for (const artifact of [manifest.plugin, manifest.app, manifest.android, ...(downloads?.files ?? [])]) {
     immutableArtifact(artifact);
     const url = new URL(artifact.url), pieces = url.pathname.split('/'), tag = pieces.at(-2), name = pieces.at(-1);
     if (!releaseCache.has(tag)) releaseCache.set(tag, await getRelease(tag));
@@ -110,6 +111,7 @@ export async function publishRelease({ plan, directory }) {
   const manifest = validateReleaseManifest(JSON.parse(raw.toString('utf8'))), source = JSON.parse(await readFile(resolve(output, 'release-source.json'), 'utf8'));
   if (manifest.releaseVersion !== plan.releaseVersion || manifest.sourceSha !== plan.sourceSha || source.kind !== releaseKind
     || source.sourceSha !== plan.sourceSha || source.manifestSha256 !== sha256(raw) || source.releaseVersion !== plan.releaseVersion) throw new Error('Release metadata is not bound to the planned source');
+  const downloads = await verifyDownloads({ directory: output, plan, publicKey });
   validatePublishBaseline({ plan, current: await findPreviousRelease() });
   const channelRelease = await getRelease('plugin-updates');
   const channel = await readChannelForPublication(channelRelease, plan, raw, signatureBytes, publicKey);
@@ -137,7 +139,7 @@ export async function publishRelease({ plan, directory }) {
   }
   if (release.draft) release = await sendJson(`/releases/${release.id}`, 'PATCH', { draft: false, make_latest: 'false' });
   if ((await githubJson(`/commits/${tag}`)).sha !== plan.sourceSha) throw new Error('Published release tag does not match verified source');
-  await verifyReferencedArtifacts(manifest);
+  await verifyReferencedArtifacts(manifest, downloads);
   // Recheck after uploads: a newer channel written outside this serialized workflow must win.
   const refreshedChannel = await getRelease('plugin-updates');
   validateChannelAdvance(await readChannelForPublication(refreshedChannel, plan, raw, signatureBytes, publicKey), manifest);

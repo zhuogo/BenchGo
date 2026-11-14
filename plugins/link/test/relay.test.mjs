@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { request as httpsRequest } from 'node:https';
+import { connect as connectHttp2 } from 'node:http2';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
+import { gunzipSync } from 'node:zlib';
 import { openStore } from '../src/pairing/store.mjs';
 import { loadIdentity } from '../src/transport/tls.mjs';
 import { listen, validateConfig } from '../src/transport/server.mjs';
@@ -16,6 +18,7 @@ import { createRelayHost } from '../src/transport/relay-host.mjs';
 import { testRelayConnection } from '../src/transport/relay-probe.mjs';
 import { relayPathAllowed } from '../src/transport/relay-protocol.mjs';
 import { createWorkbench } from '../src/transport/workbench.mjs';
+import { createDeviceProxy } from '../src/devices/proxy.mjs';
 
 async function freePort() {
   const server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening');
@@ -38,6 +41,9 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
   const targetDir = join(directory, 'target'), relayDir = join(directory, 'relay'), workbenchRoot = join(directory, 'workbench');
   await mkdir(targetDir); await mkdir(relayDir); await mkdir(workbenchRoot);
   await writeFile(join(workbenchRoot, 'index.html'), '<!doctype html><html><head></head><body>real-workbench</body></html>');
+  await mkdir(join(workbenchRoot, 'assets'));
+  const asset = 'globalThis.relayCompression=true;\n'.repeat(2000);
+  await writeFile(join(workbenchRoot, 'assets/large.js'), asset);
   const targetIdentity = await loadIdentity(targetDir), relayIdentity = await loadIdentity(relayDir);
   const store = await openStore(join(directory, 'devices'));
   const relayPort = await freePort(), relayOrigin = `https://localhost:${relayPort}`;
@@ -99,6 +105,32 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
   const page = await request(relayPort, '/link/workbench/', { cookie: `${cookie}; dsh_owner=owner-secret` });
   assert.equal(page.status, 200); assert.match(page.body.toString(), /real-workbench/);
   assert.deepEqual(forwardedWorkbenchCookies, [cookie]);
+  const compressed = await request(relayPort, '/link/workbench/assets/large.js', { cookie, headers: { 'accept-encoding': 'gzip' } });
+  assert.equal(compressed.headers['content-encoding'], 'gzip'); assert.equal(gunzipSync(compressed.body).toString(), asset);
+  assert(compressed.body.length < Buffer.byteLength(asset) / 4);
+  const identity = await request(relayPort, '/link/workbench/assets/large.js', { cookie, headers: { 'accept-encoding': 'gzip;q=0' } });
+  assert.equal(identity.headers['content-encoding'], undefined); assert.equal(identity.body.toString(), asset);
+  const proxy = await createDeviceProxy({ url: relayOrigin, pin: relayIdentity.pin, token: tokenValue }, { parentOrigin: 'http://127.0.0.1:4444' });
+  try {
+    const login = await fetch(await proxy.enter(), { redirect: 'manual' }), location = login.headers.get('location');
+    const proxyPage = await fetch(proxy.origin + location);
+    assert.equal(proxyPage.headers.get('content-encoding'), null); assert.match(await proxyPage.text(), /real-workbench/);
+    const response = await fetch(proxy.origin + location + 'assets/large.js');
+    assert.equal(response.headers.get('content-encoding'), 'gzip'); assert.equal(await response.text(), asset);
+  } finally { await proxy.close(); }
+
+  const multiplexed = connectHttp2(relayOrigin, { ca: relayIdentity.cert });
+  t.after(() => multiplexed.destroy());
+  const [limits] = await once(multiplexed, 'remoteSettings');
+  assert.equal(limits.maxConcurrentStreams, 32, 'browser bursts queue below the shared relay transaction budget');
+  const startup = await Promise.all(Array.from({ length: 80 }, () => new Promise((resolve, reject) => {
+    const stream = multiplexed.request({ ':method': 'GET', ':path': '/link/api/info', origin: relayOrigin });
+    let status;
+    stream.on('response', headers => { status = headers[':status']; });
+    stream.on('error', reject); stream.on('end', () => resolve(status)); stream.resume();
+  })));
+  assert(startup.every(status => status === 200), 'a cold-start resource burst must not return capacity errors');
+  multiplexed.close();
 
   const payload = Buffer.alloc(1_500_000, 0x41);
   const streamed = await request(relayPort, '/link/workbench/api/stream/echo', { method: 'POST', body: payload, cookie, headers: { 'content-type': 'application/octet-stream' } });

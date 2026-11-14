@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, appendFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, appendFile, readFile, rename, stat, utimes, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MachineUsageImporter, usageRoots } from '../src/usage-import.mjs';
@@ -48,6 +48,52 @@ test('bounded scan resumes partial JSONL and tolerates missing roots', async () 
     importer.limits.maxBytesPerScan = 4096; await importer.scan(); assert.equal(ledger.rows.size, 1); assert.equal(importer.coverage.sources[1].status, 'missing');
     await appendFile(path, '{'); await importer.scan(); assert.equal(importer.completeNativeIds.size, 0); assert.equal(ledger.rows.size, 1);
     await appendFile(path, '}\n'); await importer.scan(); assert.equal(ledger.rows.size, 1);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+test('unchanged scans reuse saved cursors across metadata batches and still import new appends', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'usage-import-batches-'));
+  try {
+    const root = join(dir, 'codex'); await mkdir(root);
+    const paths = Array.from({ length: 40 }, (_, index) => join(root, index + '.jsonl'));
+    await Promise.all(paths.map((path, index) => writeFile(path,
+      line({ type: 'session_meta', payload: { id: 'native-' + index } }) +
+      line({ type: 'token_usage_record', timestamp: time, payload: { response_id: 'first', usage, thread_token_usage: usage } }))));
+    const ledger = await new UsageLedger(dir).open();
+    const importer = await new MachineUsageImporter(ledger, normalizeUsage, { roots: { codex: [root] } }).open();
+    await importer.scan();
+    assert.equal(ledger.rows.size, 40); assert.equal(importer.completeNativeIds.size, 40);
+    const savedTime = new Date('2020-01-01T00:00:00Z');
+    await utimes(importer.path, savedTime, savedTime);
+    await importer.scan();
+    assert.equal(importer.coverage.scannedBytes, 0); assert.equal(importer.completeNativeIds.size, 40);
+    assert.equal((await stat(importer.path)).mtimeMs, +savedTime);
+    const reopened = await new MachineUsageImporter(ledger, normalizeUsage, { roots: { codex: [root] } }).open();
+    await reopened.scan();
+    assert.equal((await stat(reopened.path)).mtimeMs, +savedTime);
+    await appendFile(paths[20], line({ type: 'token_usage_record', timestamp: time, payload: { response_id: 'next', usage, thread_token_usage: { ...usage, total_tokens: 240 } } }));
+    await reopened.scan();
+    assert.equal(ledger.rows.size, 41); assert.equal(reopened.completeNativeIds.size, 40);
+    assert.equal(JSON.parse(await readFile(reopened.path, 'utf8')).cursors[paths[20]].offset, (await stat(paths[20])).size);
+    assert.notEqual((await stat(reopened.path)).mtimeMs, +savedTime);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+test('file rotation and truncation reset cursors without losing earlier ledger rows', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'usage-import-rotation-'));
+  try {
+    const root = join(dir, 'codex'); await mkdir(root); const path = join(root, 'session.jsonl');
+    const log = (id, padding = '') => line({ type: 'session_meta', payload: { id }, padding }) + line({ type: 'token_usage_record', timestamp: time, payload: { response_id: id, usage, thread_token_usage: usage } });
+    await writeFile(path, log('original'));
+    const ledger = await new UsageLedger(dir).open();
+    const importer = await new MachineUsageImporter(ledger, normalizeUsage, { roots: { codex: [root] } }).open();
+    await importer.scan();
+    await rename(path, path + '.old'); await writeFile(path, log('rotated', 'x'.repeat(200)));
+    await importer.scan();
+    assert.equal(ledger.rows.size, 2); assert.equal(importer.completeNativeIds.has('codex:rotated'), true);
+    assert.equal(importer.completeNativeIds.has('codex:original'), false);
+    await writeFile(path, log('truncated'));
+    await importer.scan();
+    assert.equal(ledger.rows.size, 3); assert.equal(importer.completeNativeIds.has('codex:truncated'), true);
+    assert.equal(importer.completeNativeIds.has('codex:rotated'), false);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 test('OpenCode SQLite revisits updated usage on an existing row', async () => {

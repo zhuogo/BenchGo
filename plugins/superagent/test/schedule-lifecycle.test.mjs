@@ -16,12 +16,12 @@ async function fixture(t) {
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   const entry = { id: 'opaque/schedule', title: '每天检查', prompt: 'PRIVATE INSTRUCTION', target: { kind: 'session', sessionId: 'main-session' }, createdAt: at };
   let state = { mainSessionId: 'main-session', threads: [] }, catalog = [entry], available = true;
-  const triggers = new Map(), tickets = new Map(), results = new Map(), receipts = [];
+  const triggers = new Map(), tasks = new Map(), results = new Map(), receipts = [];
   const ctx = { get: () => available ? { catalog: async () => catalog, history: async () => ({ records: receipts }) } : undefined };
   const store = { getState: async () => state, orchestration: {
-    getTrigger: id => triggers.get(id), getTicket: id => tickets.get(id),
+    getTrigger: id => triggers.get(id), getTask: id => tasks.get(id),
     results: id => results.get(id) || [],
-    listTickets: ({ ownerSessionIds, offset, limit }) => [...tickets.values()].filter(row => ownerSessionIds.includes(row.mandate.source.sessionId)).slice(offset, offset + limit),
+    listTasks: ({ ownerSessionIds, offset, limit }) => [...tasks.values()].filter(row => ownerSessionIds.includes(row.mandate.source.sessionId)).slice(offset, offset + limit),
   } };
   let lifecycle = createScheduleLifecycle({ ctx, store, database });
   const admit = (time = at) => {
@@ -29,7 +29,7 @@ async function fixture(t) {
     triggers.set(triggerId(source.sessionId, entry.id, time), { source, actor: { kind: 'machine', id: 'harness-schedule' } });
     return source;
   };
-  return { entry, tickets, results, triggers, receipts, admit, get lifecycle() { return lifecycle; }, get database() { return database; },
+  return { entry, tasks, results, triggers, receipts, admit, get lifecycle() { return lifecycle; }, get database() { return database; },
     occurrence: (time = at) => lifecycle.occurrence({ entry: { ...entry, sessionId: 'main-session' }, occurrence: { occurrence_at: time } }),
     setState: value => { state = value; }, setCatalog: value => { catalog = value; }, disableHost: () => { available = false; },
     restart: () => { database.close(); database = createAssistantRuntimeStore({ directory }); lifecycle = createScheduleLifecycle({ ctx, store, database }); },
@@ -41,10 +41,10 @@ test('four lifecycle stages persist, deduplicate retries and respect main-chat c
   await Promise.all([f.lifecycle.sync(), f.lifecycle.sync()]);
   const source = f.admit();
   await Promise.all([f.occurrence(), f.occurrence()]);
-  f.tickets.set('done', { id: 'done', title: '每天检查', status: 'completed', updatedAt: at, mandate: { admission: 'desktop-schedule', source } });
+  f.tasks.set('done', { id: 'done', title: '每天检查', status: 'completed', updatedAt: at, mandate: { admission: 'desktop-schedule', source } });
   const failedAt = '2026-11-06T10:00:00.000Z';
   const failedSource = f.admit(failedAt);
-  f.tickets.set('failed', { id: 'failed', title: '每天检查', status: 'waiting', instructionRevision: 1, resultVersion: 1, updatedAt: failedAt, mandate: { admission: 'desktop-schedule', source: failedSource } });
+  f.tasks.set('failed', { id: 'failed', title: '每天检查', status: 'waiting', instructionRevision: 1, resultVersion: 1, updatedAt: failedAt, mandate: { admission: 'desktop-schedule', source: failedSource } });
   f.results.set('failed', [{ version: 1, instructionRevision: 1, outcome: 'failed', committedAt: failedAt }]);
   await f.lifecycle.sync();
   const events = f.database.chatNotifications('main').events;
@@ -67,17 +67,17 @@ test('only owned sessions and recorded official occurrences can project facts', 
   f.setCatalog([{ ...f.entry, target: { kind: 'session', sessionId: 'foreign' } },
     { ...f.entry, id: 'archived', target: { kind: 'session', sessionId: 'archived' } }]);
   f.setState({ mainSessionId: 'other', threads: [{ sessionId: 'main-session', archived: true }] });
-  f.tickets.set('done', { id: 'done', status: 'completed', updatedAt: at, mandate: { admission: 'desktop-schedule', source } });
-  await f.occurrence(); await f.lifecycle.ticket({ id: 'done' }); await f.lifecycle.sync();
+  f.tasks.set('done', { id: 'done', status: 'completed', updatedAt: at, mandate: { admission: 'desktop-schedule', source } });
+  await f.occurrence(); await f.lifecycle.task({ id: 'done' }); await f.lifecycle.sync();
   assert.equal(f.database.notifications().events.length, 0);
 });
 
-test('terminal projection reads persistent Ticket and reconstructs after schedule service removal', async t => {
+test('terminal projection reads persistent Task and reconstructs after schedule service removal', async t => {
   const f = await fixture(t), source = f.admit();
   f.disableHost();
-  await f.lifecycle.ticket({ id: 'forged', status: 'completed', updatedAt: at, mandate: { admission: 'desktop-schedule', source } });
+  await f.lifecycle.task({ id: 'forged', status: 'completed', updatedAt: at, mandate: { admission: 'desktop-schedule', source } });
   assert.equal(f.database.notifications().events.length, 0);
-  f.tickets.set('real', { id: 'real', status: 'completed', updatedAt: at, mandate: { admission: 'desktop-schedule', source } });
+  f.tasks.set('real', { id: 'real', status: 'completed', updatedAt: at, mandate: { admission: 'desktop-schedule', source } });
   await f.lifecycle.sync();
   assert.deepEqual(f.database.notifications().events.map(row => row.schedule.phase), ['triggered', 'completed']);
 });

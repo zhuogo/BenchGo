@@ -1,10 +1,9 @@
-export const OPS_VERSION = '0.5.0';
 export const OPS_PRESETS = Object.freeze(['standard', 'ptc', 'cordis']);
 
 /** Use the upstream public preset integration; never replace a CLI's own tools. */
-export async function mountOps(ctx, config = {}, { load = () => import('dsh-ops/integration') } = {}) {
+export async function mountOps(ctx, _config = {}, { load = () => import('dsh-ops/integration') } = {}) {
   const module = await load();
-  if (typeof module.integration !== 'function' || typeof module.diagnose !== 'function') throw new Error('dsh-ops 集成接口不可用');
+  if (typeof module.integration !== 'function' || typeof module.diagnose !== 'function') throw new Error('执行工具集成接口不可用');
   const fibers = [];
   let disposed = false;
   try {
@@ -12,7 +11,7 @@ export async function mountOps(ctx, config = {}, { load = () => import('dsh-ops/
       const plugin = module.integration({
         preset, profile: preset === 'ptc' ? 'ptc' : 'native',
         files: true, residentTools: true, discovery: true,
-        shell: config.shell === true, replaceOfficial: false, hidePwsh: false,
+        shell: false, replaceOfficial: false, hidePwsh: false,
         promptPolicy: true, required: true, allowSystemShellFallback: false,
       });
       const fiber = ctx.plugin(plugin);
@@ -33,7 +32,7 @@ export async function mountOps(ctx, config = {}, { load = () => import('dsh-ops/
       disposed = true;
       const results = await Promise.allSettled(fibers.reverse().map(fiber => fiber.dispose()));
       const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
-      if (errors.length) throw new AggregateError(errors, 'OPS 作用域清理失败');
+      if (errors.length) throw new AggregateError(errors, '执行工具作用域清理失败');
     },
   };
 }

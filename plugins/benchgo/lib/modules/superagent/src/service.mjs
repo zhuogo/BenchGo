@@ -1,9 +1,11 @@
 import { createTaskManagement } from './task-management.mjs';
+import { createExecutionSessionTitles } from './execution-session-title.mjs';
 import { createAssistantPet } from './pet.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { createAssistantStore } from './store.mjs';
 import { cleanupAssistant } from './service-cleanup.mjs';
+import { createTaskCleanupContinuation } from './task-cleanup-continuation.mjs';
 import { createAssistantSystemFiles } from './system-files.mjs';
 import { createAssistantEngine } from './engine.mjs';
 import { registerNativePromptIngress } from './native-prompt-ingress.mjs';
@@ -17,7 +19,7 @@ import { createExecutionSummaries } from './execution-summary.mjs';
 import { installWatchdogObservationRoute } from './watchdog-observation-route.mjs';
 import { readWatchdogToken } from './watchdog-config.mjs';
 import { createAuxiliaryOperations } from './auxiliary-operations.mjs';
-import { createTicketRevisionService } from './ticket-revision-service.mjs';
+import { createTaskRevisionService } from './task-revision-service.mjs';
 import { createGoalChecklist } from './goal-checklist.mjs';
 import { createAssistantReviewWorker } from './review-worker.mjs';
 import { createAssistantDeliveryWorker } from './delivery-worker.mjs';
@@ -46,9 +48,9 @@ import { createOrchestrationRuntime } from './orchestration-runtime.mjs';
 import { createMaintenanceProcessor } from './maintenance-processors.mjs';
 import { registerOwnedSkillProvider } from './owned-skill-provider.mjs';
 import { createDesktopDelegationService } from './desktop-delegation-service.mjs';
-import { createDesktopTicketAccess } from './desktop-ticket-access.mjs';
-import { createDesktopTicketControl } from './desktop-ticket-control.mjs';
-import { createModelActionTicketExecutor } from './model-action-ticket.mjs';
+import { createDesktopTaskAccess } from './desktop-task-access.mjs';
+import { createDesktopTaskControl } from './desktop-task-control.mjs';
+import { createModelActionTaskExecutor } from './model-action-task.mjs';
 import { createAssistantDeviceStatus } from './device-status.mjs';
 import { createAssistantSettingsAdapter } from './settings-adapter.mjs';
 import { createConnectionSettingsAdapter } from './connection-settings-adapter.mjs';
@@ -59,6 +61,7 @@ import { createAssistantArtifacts } from './artifacts.mjs';
 import { profileDocuments } from './profile-documents.mjs';
 import { createRouterTools } from './router-tools.mjs';
 import { createAssistantDispatch } from './assistant-dispatch.mjs';
+import { createDeviceCollaboration } from './device-collaboration.mjs';
 
 /** Channel uploads require a concrete, saved HTTP/SSE ASR protocol. */
 export async function channelVoiceAvailability(voice, providers) {
@@ -94,7 +97,7 @@ export async function mountAssistant(ctx, commander, providers) {
   let channelCredentials;
   let database, goals, reviewWorker, deliveryWorker, engine, watchdogRetryTimer, disposal, feishu, feishuStream, channels, assessmentRunner, assessmentTimer, orchestrationRuntime, scheduleBridge, routerWatchdog;
   let notificationQueue = Promise.resolve(), skillProvider, unsubscribeSkills, unsubscribeLearning, scheduleLifecycle, externalActionStore, unregisterExternalActions, channelSessions;
-  let disposeFactsRemote, executionSummaries, disposeWatchdogRoute;
+  let disposeFactsRemote, executionSummaries, disposeWatchdogRoute, cleanupContinuations, executionSessionTitles;
   let settings;
   const unregisterSettings = [];
   const projectSchedules = async () => {
@@ -109,7 +112,7 @@ export async function mountAssistant(ctx, commander, providers) {
       () => feishuStream?.stop(),
     ],
     // Thunks isolate synchronous throws as well as rejected async disposers.
-    stop: [() => executionSummaries?.dispose(), () => channels?.dispose(), () => scheduleBridge?.stop(),
+    stop: [() => executionSessionTitles?.dispose(), () => executionSummaries?.dispose(), () => channels?.dispose(), () => scheduleBridge?.stop(),
       () => orchestrationRuntime?.stop(), () => assessmentRunner?.stop(), () => feishuStream?.dispose(),
       () => deliveryWorker?.stop(), () => reviewWorker?.stop(),
       () => engine?.dispose(), () => notificationQueue, () => feishu?.dispose()],
@@ -164,14 +167,17 @@ export async function mountAssistant(ctx, commander, providers) {
   const externalRegistry = createExternalActionRegistry();
   ctx.provide('benchgoExternalActions', createExternalActionHost({ ctx, store: externalActionStore, registry: externalRegistry,
     onApprovalPending: input => engine?.notifyApprovalPending(input) }));
+  let collaboration;
   orchestrationRuntime = createOrchestrationRuntime({ ctx, store, feishu, channels,
+    observeRemote: () => collaboration?.tick(),
+    maintainTasks: () => cleanupContinuations?.tick(),
     notifyExecutionInput: input => engine.notifyExecutionInput(input),
-    prepareTicketReply: delivery => engine.prepareTicketReply(delivery),
-    onDelivered: outbox => channelSessions.onDelivery(outbox), deliverDesktop: async delivery => {
-    const ticket = store.orchestration.getTicket(delivery.ticketId);
-    const event = database.notify({ id: ticket.id, threadId: ticket.mandate.source.threadId }, delivery.payload.type,
-      { ...delivery.payload, ticketStateEventKey: delivery.uniqueKey, title: ticket.title, status: ticket.status }, `ticket-delivery:${delivery.uniqueKey}`);
-    try { await scheduleLifecycle?.ticket(ticket); }
+    notifyTaskResult: notice => engine.notifyTaskResult(notice),
+    onDelivered: outbox => outbox.kind === 'router' ? undefined : channelSessions.onDelivery(outbox), deliverDesktop: async delivery => {
+    const task = store.orchestration.getTask(delivery.taskId);
+    const event = database.notify({ id: task.id, threadId: task.mandate.source.threadId }, delivery.payload.type,
+      { ...delivery.payload, taskStateEventKey: delivery.uniqueKey, title: task.title, status: task.status }, `task-delivery:${delivery.uniqueKey}`);
+    try { await scheduleLifecycle?.task(task); }
     catch (error) { ctx.logger?.warn?.(`SuperAgent Schedule projection: ${error.code || error.name}`); }
     return { status: 'accepted', messageId: event.id };
   } });
@@ -186,31 +192,35 @@ export async function mountAssistant(ctx, commander, providers) {
     afterCommit: () => store.orchestration.flushExecutionFactChanges() });
   store.orchestration.installExecutionFactRuntimeSources();
   scheduleLifecycle = createScheduleLifecycle({ ctx, store, database });
-  const desktopDelegation = createDesktopDelegationService({ ctx, store });
+  const desktopDelegation = createDesktopDelegationService({ ctx, store, wake: () => orchestrationRuntime.tick() });
   // The owner's current instruction is the authorization; the receipt only versions the exact difference.
-  const ticketChanges = createTicketRevisionService({ ctx, store, requestExpansion: async ({ trigger }) =>
+  const taskChanges = createTaskRevisionService({ ctx, store, requestExpansion: async ({ trigger }) =>
     ({ approved: true, id: randomUUID(), triggerId: trigger.id, actorId: trigger.actor.id }) });
-  const desktopTickets = createDesktopTicketAccess(store.orchestration);
-  const ticketControl = createDesktopTicketControl({ ctx, database: store.orchestration });
+  const taskControl = createDesktopTaskControl({ ctx, database: store.orchestration });
   goals = createGoalChecklist({ database });
-  const taskManagement = createTaskManagement({ database, orchestration: store.orchestration, goals });
-  const projectTickets = rows => taskManagement.project('ticket', rows).map(row => {
+  executionSessionTitles = createExecutionSessionTitles({ ctx, database: store.orchestration, metadata: database });
+  const taskManagement = createTaskManagement({ database, orchestration: store.orchestration, goals,
+    onTaskRename: taskId => { void executionSessionTitles.syncTask(taskId); } });
+  cleanupContinuations = createTaskCleanupContinuation({ database, orchestration: store.orchestration, taskManagement, signal: shutdown.signal,
+    onUpdate: update => engine.notifyTaskCleanup(update) });
+  const desktopTasks = createDesktopTaskAccess(store.orchestration, taskManagement);
+  const projectTasks = rows => taskManagement.project('task', rows).map(row => {
     const summary = store.orchestration.executionSummary(row.id);
     const current = summary?.instructionRevision === row.instructionRevision
       && summary.runId === (row.execution?.runId || 'pending') ? summary : null;
     return { ...row, currentSummary: current,
       execution: row.execution ? { ...row.execution, summary: current } : row.execution };
   });
-  orchestrationRuntime.executionFacts.setTicketProjection(projectTickets);
+  orchestrationRuntime.executionFacts.setTaskProjection(projectTasks);
   await orchestrationRuntime.executionFacts.ready;
   disposeFactsRemote = await installExecutionFactsRemote({ ctx, facts: orchestrationRuntime.executionFacts });
   executionSummaries = createExecutionSummaries({ executionFacts: orchestrationRuntime.executionFacts,
     store: store.orchestration, llm: ctx.llm, sessionQuery: ctx.sessionQuery, getConfig: () => store.getConfig(),
     config: ctx.get('benchgo')?.config?.executionSummary,
-    onChange: ticketId => store.orchestration.recordExecutionDisplayChange({ ticketId, kind: 'summary' }),
+    onChange: taskId => store.orchestration.recordExecutionDisplayChange({ taskId, kind: 'summary' }),
     onError: error => ctx.logger?.warn?.(`SuperAgent execution summary: ${error.code || error.name}`) });
   void executionSummaries.ready.catch(error => ctx.logger?.warn?.(`SuperAgent execution summary: ${error.code || error.name}`));
-  const modelActions = createModelActionTicketExecutor({
+  const modelActions = createModelActionTaskExecutor({
     ctx, database: store.orchestration, workspace: store.paths.workspace,
     readPolicy: () => readAssessmentPolicy(store, ctx.workspaceRegistry),
     perform: async ({ name, args, exec, actionKey }) => {
@@ -276,9 +286,9 @@ export async function mountAssistant(ctx, commander, providers) {
     return {
       schemaVersion: 1,
       available: {
-        chat: true, sideChats: true, memory: true, documents: true, tickets: true,
+        chat: true, sideChats: true, memory: true, documents: true, tasks: true,
         goals: true, triggers: scheduleBridge.available(), skills: !!ctx.get?.('skills'), media: true,
-        summary: true, vision: !!ctx.get?.('attachments'), ticketRevisions: true, evaluationDisposition: true,
+        summary: true, vision: !!ctx.get?.('attachments'), taskRevisions: true, evaluationDisposition: true,
         linkNotifications: true, backgroundReview: true, multiProfile: false, vectorMemory: false,
         ...voice.available,
       },
@@ -316,15 +326,29 @@ export async function mountAssistant(ctx, commander, providers) {
   const management = createManagementHttp({ settings, taskManagement, profileId: store.profileId,
     readConfig: () => store.getConfig(), readConnection: channel => store.connections.read(channel), readLearning: () => store.memory.learning() });
   const deviceStatus = createAssistantDeviceStatus({ ctx, store });
+  collaboration = createDeviceCollaboration({ ctx, store, runtimeStore: database, signal: shutdown.signal,
+    onUpdate: value => engine.notifyRemoteExecution(value) });
   const artifacts = createAssistantArtifacts({ workspace: store.paths.workspace });
   const auxiliary = createAuxiliaryOperations({ ctx, store, artifacts, shutdown: shutdown.signal });
-  const setupTools = createRouterTools({ ctx, commander, store, shutdown, historySearch, readLedger, goals, orchestrationRuntime, settings, projectSchedules, pet, desktopDelegation,
-    ticketChanges, desktopTickets, ticketControl, taskManagement, modelActions, capabilities, deviceStatus, auxiliary,
+  const setupTools = createRouterTools({ ctx, commander, store, database, shutdown, historySearch, readLedger, goals, orchestrationRuntime, settings, projectSchedules, pet, desktopDelegation,
+    taskChanges, desktopTasks, taskControl, taskManagement, cleanupContinuations, modelActions, capabilities, deviceStatus, auxiliary, collaboration,
     get engine() { return engine; } });
   engine = await createAssistantEngine({ ctx, store, setupTools, scheduleBridge,
+    readTaskCleanupContinuation: id => database.taskCleanupContinuations.get(id),
+    readRemoteExecutions: () => database.meta('remote-executions') || [],
     resumeExecutionSession: input => orchestrationRuntime.resumeExecutionSession(input),
     readWatchdogFacts,
     onSourceMessage: input => channelSessions.onSourceMessage(input),
+    onTaskReply: async input => {
+      if (!['result', 'state'].includes(input.signal.kind)) return;
+      const { signal } = input;
+      if (signal.source.channel === 'desktop' && signal.kind === 'result') {
+        const confirmed = store.orchestration.confirmResultReply(input);
+        if (!confirmed && store.orchestration.resultNotification(signal.taskId, signal.eventKey)) throw new Error('Public Router reply confirmation unavailable');
+        return confirmed || { status: 'suppressed', reason: 'task-superseded' };
+      }
+      else if (!['desktop', 'link'].includes(signal.source.channel)) store.orchestration.enqueueRouterReply(input);
+    },
     onClearMain: () => database.clearMainChatNotifications() });
   const watchdogTarget = ctx.get('benchgo')?.config?.watchdogTarget;
   if (watchdogTarget?.enabled === true) {
@@ -362,13 +386,13 @@ export async function mountAssistant(ctx, commander, providers) {
   shutdown.signal.throwIfAborted();
   await reviewWorker.runOnce();
   reviewWorker.start();
-  watchdogRetryTimer = setInterval(() => { engine.retryWatchdogSignals().catch(error => ctx.logger?.warn?.(`SuperAgent supervision signal: ${error.code || error.name}`)); }, 30_000);
+  watchdogRetryTimer = setInterval(() => { engine.retryTaskReplies().catch(error => ctx.logger?.warn?.(`SuperAgent supervision signal: ${error.code || error.name}`)); }, 30_000);
   watchdogRetryTimer.unref?.();
   const state = async () => ({ config: await store.getConfig(), petExpression: pet.event(), media: { ...await media.availability(), video: { available: false, reason: '当前引擎尚未提供视频生成能力' } }, profile: await store.getProfile(), memories: await store.listMemories(), state: { ...await store.getState(), notifications: database.notifications().events } });
   const systemFiles = createAssistantSystemFiles({ directory: store.paths.directory, desktop: () => ctx.get?.('sessionController') });
   const dispatch = createAssistantDispatch({ ctx, store, shutdown, historySearch, readLedger, channelCredentials, database, goals, engine, feishu, feishuStream, channels, orchestrationRuntime,
-    executionSummaries, projectSchedules, pet, restartFeishu, evaluations, ticketChanges, taskManagement, projectTickets, capabilities, management, state,
-    artifacts, auxiliary, systemFiles, skillProvider });
+    executionSummaries, projectSchedules, pet, restartFeishu, evaluations, taskChanges, taskManagement, projectTasks, capabilities, management, state,
+    artifacts, auxiliary, systemFiles, skillProvider, collaboration });
   ctx.effect(() => registerAssistantFetchRoute({ connection: ctx.connection, dispatch }));
   for (const [name, handler] of [['transcribe', media.handlers.transcribe], ['speech', media.handlers.speech], ['worklet', media.handlers.worklet]]) {
     ctx.effect(() => ctx.connection.fetch.register({ path: `/api/commander/assistant/voice/${name}`, methods: [name === 'worklet' ? 'GET' : 'POST'], requestBody: name === 'worklet' ? 'buffered' : 'streaming', async fetch(request) {
@@ -384,7 +408,7 @@ export async function mountAssistant(ctx, commander, providers) {
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/commander/assistant/pet-asset', methods: ['GET'], requestBody: 'buffered', fetch: request => pet.fetchAsset(request) }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/commander/assistant/artifact', methods: ['GET'], requestBody: 'buffered', fetch: request => artifacts.fetch(request) }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/commander/assistant/system-file', methods: ['GET'], requestBody: 'buffered', fetch: request => systemFiles.fetch(request) }));
-  return { store, engine, database, dispatch, dispose,
+  return { store, engine, database, dispatch, dispose, collaboration: collaboration.receive,
     sidebarPrivateSessionIds: async () => {
       const [snapshot, records] = await Promise.all([store.getState(), ctx.sessionQuery.listSessions()]);
       return superagentSessionInventory({ state: snapshot, database: store.orchestration, records }).privateSessionIds;

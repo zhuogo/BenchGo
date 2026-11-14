@@ -1,4 +1,3 @@
-export const COMPACTION_VERSION = '0.3.15';
 export const COMPACTION_TOOLS = Object.freeze(['compact_now', 'context_status']);
 
 const service = (ctx, name) => { try { return ctx.get(name); } catch { return undefined; } };
@@ -11,7 +10,7 @@ export async function mountCompaction(ctx, _config = {}, { load = () => import('
   // Do not assume two matching names came from the same implementation.
   if (existing.length) throw new Error(`上下文工具名称冲突：${existing.join(', ')}`);
   const module = await load();
-  if (typeof module.apply !== 'function') throw new Error('smart-compaction 入口不可用');
+  if (typeof module.apply !== 'function') throw new Error('上下文管理入口不可用');
   const fiber = ctx.plugin(module, { safePointRatio: false });
   try { await fiber; } catch (error) { await fiber.dispose(); throw error; }
   const definitions = COMPACTION_TOOLS.map(name => ({ name, definition: tools.get(name) }));

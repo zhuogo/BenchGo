@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { createNotificationFactGate } from '../client/notification-sound.mjs';
+import { createActivityStore } from '../client/activity-data.mjs';
 
 // Worktrees may share a built official dependency tree through node_modules.
 const checkout = fileURLToPath(new URL('../../../deepseek-harness/', import.meta.url));
@@ -53,12 +54,12 @@ function factStore() {
     currentCursor: () => entries.length,
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     append(count = 1, kind = 'progress') {
-      for (let i = 0; i < count; i++) entries.push({ seq: entries.length + 1, ticketId: 'ticket-1', kind });
+      for (let i = 0; i < count; i++) entries.push({ seq: entries.length + 1, taskId: 'task-1', kind });
       for (const listener of listeners) listener();
     },
     async snapshot(request) {
       calls.push(['snapshot', request]);
-      const result = { cursor: entries.length, tickets: [{ id: 'ticket-1' }], bootId: 'boot-1', observedAt: 'now', completeness: { complete: true }, ...(facts.publicChatNotifications ? { publicChatNotifications: true } : {}) };
+      const result = { cursor: entries.length, tasks: [{ id: 'task-1' }], bootId: 'boot-1', observedAt: 'now', completeness: { complete: true }, ...(facts.publicChatNotifications ? { publicChatNotifications: true } : {}) };
       await facts.duringSnapshot?.();
       return result;
     },
@@ -68,7 +69,7 @@ function factStore() {
       const cursor = selected.at(-1)?.seq ?? after;
       return { cursor, entries: selected, hasMore: cursor < through };
     },
-    evidence(request) { calls.push(['evidence', request]); return { ticketId: request.ticketId, references: [] }; },
+    evidence(request) { calls.push(['evidence', request]); return { taskId: request.taskId, references: [] }; },
   };
   return facts;
 }
@@ -96,17 +97,17 @@ async function setup(t, facts = factStore()) {
 test('official strict Gateway dispatches the registered service and validates its wire requests', async t => {
   const b = await setup(t);
   assert.equal(b.ctx.typert.local.get('benchgoExecutionFacts/stream').mode, 'stream');
-  assert.deepEqual(await b.invoke('snapshot', { ticketId: 'ticket-1' }), {
-    cursor: 0, tickets: [{ id: 'ticket-1' }], bootId: 'boot-1', observedAt: 'now', completeness: { complete: true },
+  assert.deepEqual(await b.invoke('snapshot', { taskId: 'task-1' }), {
+    cursor: 0, tasks: [{ id: 'task-1' }], bootId: 'boot-1', observedAt: 'now', completeness: { complete: true },
   });
   b.facts.append(3);
   assert.deepEqual(await b.invoke('page', { after: 0, through: 3, limit: 2 }), {
     cursor: 2, entries: b.facts.entries.slice(0, 2), hasMore: true,
   });
-  const evidence = { ticketId: 'ticket-1', runId: 'run-2', instructionRevision: 2, after: 1, limit: 8 };
+  const evidence = { taskId: 'task-1', runId: 'run-2', instructionRevision: 2, after: 1, limit: 8 };
   await b.invoke('evidence', evidence);
   assert.deepEqual(b.facts.calls.at(-1), ['evidence', evidence]);
-  for (const request of [{ principal: { kind: 'owner' } }, { ticketId: '' }]) {
+  for (const request of [{ principal: { kind: 'owner' } }, { taskId: '' }]) {
     await assert.rejects(b.invoke('snapshot', request), { code: 'gateway/input-invalid' });
   }
   await assert.rejects(b.invoke('page', { limit: 0 }), { code: 'gateway/input-invalid' });
@@ -123,7 +124,7 @@ test('owner checks use the actual invocation Peer even if a broader policy permi
   b.ctx.remoteAccess.registerPolicy('test-guest', { bindings: () => [{
     resource: { kind: 'global' }, role: { name: 'test-all', resource: 'global', actions },
   }] });
-  for (const [method, request] of [['snapshot', {}], ['page', {}], ['evidence', { ticketId: 'ticket-1' }]]) {
+  for (const [method, request] of [['snapshot', {}], ['page', {}], ['evidence', { taskId: 'task-1' }]]) {
     await assert.rejects(b.invoke(method, request, guest), error => error.code === 'remote-access/denied' && error.details.reason === 'owner-required');
   }
   const stream = await b.open(undefined, guest);
@@ -276,8 +277,55 @@ async function scopedActivity(t, options = {}) {
   await owner;
   const received = [], failed = [];
   const connect = () => activityEnvironment.connect({ replace: value => received.push(value), update: value => received.push(value), carrierFailed: error => failed.push(error), failed: error => failed.push(error) });
-  return { ...b, client, owner, scope, received, failed, connect, events, notificationSources };
+  return { ...b, client, owner, scope, received, failed, connect, events, notificationSources, activityEnvironment };
 }
+
+test('manual board refresh reuses the actual Remote snapshot stream and awaits its new baseline', async t => {
+  const b = await scopedActivity(t), calls = [];
+  const values = Array.from({ length: 1000 }, (_, index) => ({ id: `t-${index}`, title: `Task ${index}`, status: 'running', archived: index >= 10 }));
+  const snapshot = b.facts.snapshot;
+  b.facts.snapshot = async request => ({ ...await snapshot(request), tasks: values.map(value => ({ ...value })) });
+  const store = createActivityStore(async (action, args) => { calls.push([action, args]); return { goals: [] }; }, b.activityEnvironment);
+  const stop = store.subscribe(() => {}); t.after(stop);
+  await settle(() => store.getSnapshot().rows?.length === 1000);
+  const previous = store.getSnapshot().rows;
+  let release, completed = false;
+  b.facts.duringSnapshot = () => new Promise(resolve => { release = resolve; });
+  const refreshed = store.refresh().then(() => { completed = true; });
+  await settle(() => !!release);
+  assert.equal(completed, false); assert.strictEqual(store.getSnapshot().rows, previous);
+  assert.equal(b.facts.calls.filter(([method]) => method === 'snapshot').length, 2);
+  assert.equal(b.facts.listeners.size, 1, 'restart replaces the follower instead of mounting another transport');
+  values[0].title = '远端新快照'; release(); await refreshed;
+  assert.equal(completed, true); assert.equal(store.getSnapshot().rows[0].title, '远端新快照');
+  assert.equal(store.getSnapshot().rows.length, 1000);
+  assert.strictEqual(store.getSnapshot().rows[999], previous[999]);
+  assert.equal(calls.filter(([action]) => action === 'tasks').length, 0, 'no task-count HTTP fan-out');
+  assert.equal(store.getSnapshot().error, '');
+  stop(); await settle(() => b.facts.listeners.size === 0);
+});
+
+test('the actual Remote generation rejects a superseded snapshot before the store publishes it', async t => {
+  const b = await scopedActivity(t), snapshot = b.facts.snapshot;
+  let title = '原快照', control, release, hold = false;
+  b.facts.snapshot = async request => {
+    const captured = title;
+    const value = await snapshot(request);
+    if (hold) { hold = false; await new Promise(resolve => { release = resolve; }); }
+    return { ...value, tasks: [{ id: 'task-1', title: captured, status: 'running' }] };
+  };
+  const store = createActivityStore(async () => ({ goals: [] }), { connect(sink) { control = b.activityEnvironment.connect(sink); return control; } });
+  const seen = [], stop = store.subscribe(() => { if (store.getSnapshot().rows) seen.push(store.getSnapshot().rows[0].title); }); t.after(stop);
+  await settle(() => store.getSnapshot().rows?.[0].title === '原快照');
+  title = '过期快照'; hold = true;
+  const refreshing = store.refresh(); await settle(() => !!release);
+  title = '最新快照'; control.restart(); release(); await refreshing;
+  assert.equal(store.getSnapshot().rows[0].title, '最新快照');
+  assert.equal(seen.includes('过期快照'), false);
+  assert.equal(b.facts.calls.filter(([method]) => method === 'snapshot').length, 3);
+  assert.equal(b.facts.listeners.size, 1);
+  stop(); await settle(() => b.facts.listeners.size === 0);
+});
 
 test('official business stream wakes chat on publication and reconnect, not progress frames', async t => {
   const b = await scopedActivity(t), control = b.connect(); control.start();

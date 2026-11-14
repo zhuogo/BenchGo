@@ -26,7 +26,7 @@ export function canonicalAction(value) {
   throw fail('ACTION_INVALID', '动作仅支持有限 JSON 数据');
 }
 export const actionHash = value => createHash('sha256').update(JSON.stringify(canonicalAction(value))).digest('hex');
-const bindingKeys = ['profileId', 'actorId', 'ticketId', 'assignmentId', 'runId', 'authorizationVersion', 'policyVersion'];
+const bindingKeys = ['profileId', 'actorId', 'taskId', 'assignmentId', 'runId', 'authorizationVersion', 'policyVersion'];
 function binding(value) {
   const result = Object.fromEntries(bindingKeys.map(key => [key, text(String(value?.[key] ?? ''), key)]));
   return result;
@@ -57,7 +57,7 @@ export function createExternalActionStore({ directory, filename, profileId, now 
     return { ...JSON.parse(row.payload), state: row.state, ...(row.receipt ? { receipt: JSON.parse(row.receipt) } : {}) };
   };
   const checkBinding = (action, context) => {
-    if (actionHash(action.binding) !== actionHash(binding(context))) throw fail('ACTION_BINDING_CHANGED', '工单、运行或当前授权已变化，请重新准备动作');
+    if (actionHash(action.binding) !== actionHash(binding(context))) throw fail('ACTION_BINDING_CHANGED', '任务、运行或当前授权已变化，请重新准备动作');
   };
   return {
     profileId,

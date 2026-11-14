@@ -7,22 +7,22 @@ function fixture(t, callbacks = {}) {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'thread' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'work', mandate: { scope: ['read'] } });
-  database.createAssignment(ticket.id, { executor: 'harness' });
-  const worker = createAssistantAssignmentWorker({ database, readPolicy: async () => ({ version: 1 }), validateMandate: () => true, execute: async () => ({ text: 'done' }), onResult: async result => database.commitResult(ticket.id, { result, uniqueKey: 'result' }), ...callbacks });
+  const task = database.createTask({ threadId: 'thread', target: 'work', mandate: { scope: ['read'] } });
+  database.createAssignment(task.id, { executor: 'harness' });
+  const worker = createAssistantAssignmentWorker({ database, readPolicy: async () => ({ version: 1 }), validateMandate: () => true, execute: async () => ({ text: 'done' }), onResult: async result => database.commitResult(task.id, { result, uniqueKey: 'result' }), ...callbacks });
   t.after(() => worker.stop());
-  return { database, ticket, worker };
+  return { database, task, worker };
 }
 
 test('claims an assignment once and commits execution before completing its lease', async t => {
   let executions = 0;
-  const { database, ticket, worker } = fixture(t, { execute: async () => { executions++; return { text: 'done' }; } });
+  const { database, task, worker } = fixture(t, { execute: async () => { executions++; return { text: 'done' }; } });
   const [first, concurrent] = await Promise.all([worker.runOnce(), worker.runOnce()]);
   assert.equal(first.results[0].status, 'completed');
   assert.deepEqual(first, concurrent);
   assert.equal(executions, 1);
-  assert.equal(database.assignments(ticket.id)[0].state, 'completed');
-  assert.equal(database.results(ticket.id)[0].text, 'done');
+  assert.equal(database.assignments(task.id)[0].state, 'completed');
+  assert.equal(database.results(task.id)[0].text, 'done');
   assert.equal((await worker.runOnce()).claimed, 0);
 });
 
@@ -35,8 +35,8 @@ test('idle worker skips policy reads but an expired lease still triggers reconci
   assert.equal((await worker.runOnce()).claimed, 0);
   assert.equal(reads, 0);
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'thread' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'work', mandate: {} });
-  database.createAssignment(ticket.id, {});
+  const task = database.createTask({ threadId: 'thread', target: 'work', mandate: {} });
+  database.createAssignment(task.id, {});
   assert.equal(database.hasAssignmentWork(), true);
   const [assignment] = database.claimAssignments('expired-owner', { validateMandate: () => true, now: Date.now() - 2000, leaseMs: 1000 });
   assert.equal(database.hasAssignmentWork(), true);
@@ -48,24 +48,24 @@ test('idle worker skips policy reads but an expired lease still triggers reconci
 });
 
 test('execution failure is uncertain and never blindly retried', async t => {
-  const { database, ticket, worker } = fixture(t, { execute: async () => { throw Object.assign(new Error('connection lost after action'), { executionEffects: { effectsVerified: false, unknownCallIds: ['send'] } }); } });
+  const { database, task, worker } = fixture(t, { execute: async () => { throw Object.assign(new Error('connection lost after action'), { executionEffects: { effectsVerified: false, unknownCallIds: ['send'] } }); } });
   assert.equal((await worker.runOnce()).results[0].status, 'uncertain');
-  assert.equal(database.assignments(ticket.id)[0].state, 'uncertain');
+  assert.equal(database.assignments(task.id)[0].state, 'uncertain');
   assert.equal((await worker.runOnce()).claimed, 0);
-  assert.equal(database.results(ticket.id).length, 0);
+  assert.equal(database.results(task.id).length, 0);
 });
 
 test('a parked Attention releases its single slot without being marked completed', async t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   database.createThread({ id: 'thread', source: { type: 'feishu', id: 'thread' } });
-  const first = database.createTicket({ threadId: 'thread', target: 'question', mandate: { actorId: 'owner', source: { channel: 'feishu' } } });
+  const first = database.createTask({ threadId: 'thread', target: 'question', mandate: { actorId: 'owner', source: { channel: 'feishu' } } });
   database.createAssignment(first.id, {});
   let executions = 0;
   const worker = createAssistantAssignmentWorker({ database, readPolicy: async () => ({}), validateMandate: () => true,
     execute: async assignment => {
       executions++;
-      if (assignment.ticketId !== first.id) return { summary: 'independent done', completion: { kind: 'completed' } };
+      if (assignment.taskId !== first.id) return { summary: 'independent done', completion: { kind: 'completed' } };
       const ownership = { owner: assignment.owner, fence: assignment.fence };
       const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'session', directory: 'directory' });
       database.updateRun(run.id, { ...ownership, state: 'submitted' });
@@ -77,18 +77,18 @@ test('a parked Attention releases its single slot without being marked completed
     onResult: async (result, { assignment, beforeCommit }) => {
       await beforeCommit();
       if (result.waitingAttention) database.parkAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence, result });
-      else database.commitResult(assignment.ticketId, { assignment, result, uniqueKey: 'independent-result' });
+      else database.commitResult(assignment.taskId, { assignment, result, uniqueKey: 'independent-result' });
     },
   });
   t.after(() => worker.stop());
   assert.equal((await worker.runOnce()).results[0].status, 'waiting');
-  const other = database.createTicket({ threadId: 'thread', target: 'independent', mandate: {} });
+  const other = database.createTask({ threadId: 'thread', target: 'independent', mandate: {} });
   database.createAssignment(other.id, {});
   assert.equal((await worker.runOnce()).results[0].status, 'completed');
   assert.equal(executions, 2);
-  assert.equal(database.getTicket(first.id).status, 'waiting');
+  assert.equal(database.getTask(first.id).status, 'waiting');
   assert.equal(database.results(first.id).length, 0);
-  database.cancelTicket(first.id);
+  database.cancelTask(first.id);
   const paused = database.assignments(first.id)[0];
   assert.equal(paused.state, 'cancelled');
   assert.equal(database.runs(paused.id)[0].state, 'cancelled');
@@ -98,22 +98,22 @@ test('a parked Attention releases its single slot without being marked completed
 
 test('global policy changes after normal execution do not block saving its result', async t => {
   let permitted = true, delivered = false;
-  const { database, ticket, worker } = fixture(t, {
+  const { database, task, worker } = fixture(t, {
     validateMandate: () => permitted,
     execute: async () => { permitted = false; return { text: 'done' }; },
     onResult: async () => { delivered = true; },
   });
   await worker.runOnce();
   assert.equal(delivered, true);
-  assert.equal(database.assignments(ticket.id)[0].state, 'completed');
+  assert.equal(database.assignments(task.id)[0].state, 'completed');
 });
 
 test('shutdown aborts active execution and preserves uncertainty', async t => {
-  let ready;
+  let ready, stopReason;
   const started = new Promise(resolve => { ready = resolve; });
-  const { database, ticket, worker } = fixture(t, {
+  const { database, task, worker } = fixture(t, {
     execute: async (_assignment, { signal }) => new Promise((_resolve, reject) => {
-      signal.addEventListener('abort', () => reject(Object.assign(signal.reason, { executionEffects: { effectsVerified: false, unknownCallIds: ['pending'] } })), { once: true });
+      signal.addEventListener('abort', () => { stopReason = signal.reason; reject(Object.assign(stopReason, { executionEffects: { effectsVerified: false, unknownCallIds: ['pending'] } })); }, { once: true });
       ready();
     }),
   });
@@ -121,7 +121,9 @@ test('shutdown aborts active execution and preserves uncertainty', async t => {
   await started;
   await worker.stop();
   await pending;
-  assert.equal(database.assignments(ticket.id)[0].state, 'uncertain');
+  assert.equal(stopReason.code, 'WORKER_HOST_STOPPED');
+  assert.equal(database.assignments(task.id)[0].lastFailure.code, 'WORKER_HOST_STOPPED');
+  assert.equal(database.assignments(task.id)[0].state, 'uncertain');
   assert.equal((await worker.runOnce()).skipped, true);
 });
 
@@ -152,8 +154,8 @@ test('a free slot starts new work while another execution remains busy', async t
   });
   const first = worker.runOnce();
   await began;
-  const ticket2 = database.createTicket({ threadId: 'thread', target: 'independent', mandate: {} });
-  database.createAssignment(ticket2.id, {});
+  const task2 = database.createTask({ threadId: 'thread', target: 'independent', mandate: {} });
+  database.createAssignment(task2.id, {});
   const second = await worker.runOnce();
   assert.equal(second.claimed, 1);
   assert.equal(second.results[0].status, 'completed');
@@ -162,11 +164,11 @@ test('a free slot starts new work while another execution remains busy', async t
 });
 
  test('verified ordinary execution failure terminates without reconciliation or replay', async t => {
-  const { database, ticket, worker } = fixture(t, { execute: async () => {
+  const { database, task, worker } = fixture(t, { execute: async () => {
     throw Object.assign(new Error('Configured project unavailable'), { code: 'ENOENT', executionEffects: { effectsVerified: true, unknownCallIds: [] } });
   } });
   assert.equal((await worker.runOnce()).results[0].status, 'failed');
-  const assignment = database.assignments(ticket.id)[0];
+  const assignment = database.assignments(task.id)[0];
   assert.equal(assignment.state, 'failed');
   assert.equal(assignment.firstFailure.message, 'Configured project unavailable');
   assert.equal((await worker.runOnce()).claimed, 0);

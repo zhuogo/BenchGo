@@ -200,7 +200,7 @@ test('excluded, assistant and reflection material is filtered before inference',
 });
 
 const skill = { id: 'skill', name: 'bounded-review', revision: 3, content: '# Existing rules', description: '有限审查',
-  feedback: [{ eventId: 'use:1', text: '这次方法成功完成核验。', outcome: 'success', source: { ticketId: 'ticket', messageId: 'result' } }] };
+  feedback: [{ eventId: 'use:1', text: '这次方法成功完成核验。', outcome: 'success', source: { taskId: 'task', messageId: 'result' } }] };
 const improvement = { skillId: 'skill', skillRevision: 3, name: 'bounded-review', description: '只审查有证据的材料', whenToUse: '有真实来源需要审查时。',
   procedure: '先检查来源再核验结果，以避免误报。', pitfalls: '未知结果不能当成功经验。', verification: '检查来源和实际输出。', sourceIds: ['skill:skill:3:use:1'] };
 test('skill review creates a same-version owned candidate only from actual successful use feedback', async () => {

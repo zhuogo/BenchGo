@@ -1,6 +1,6 @@
 import { isChatUserMessage, readAdmittedQuestionReply } from '../src/question-reply.mjs';
 
-const eventKey = row => row.ticketStateEventKey || row.eventKey || row.eventId || row.id;
+const eventKey = row => row.taskStateEventKey || row.eventKey || row.eventId || row.id;
 // Display-only channel mirrors have explicit provenance; arbitrary context is private.
 const channelMessage = row => row?.kind === 'channel-message' && row.source?.kind === 'benchgo-channel'
   && typeof row.mirrorKey === 'string' && !!row.mirrorKey && ['inbound', 'delivery'].includes(row.direction)
@@ -9,7 +9,7 @@ const channelMessage = row => row?.kind === 'channel-message' && row.source?.kin
   && typeof row.source.channelSource?.sourceType === 'string' && !!row.source.channelSource.sourceType
   && typeof row.text === 'string';
 const publicText = row => typeof row.text === 'string' && !!row.text.trim();
-const internalRequest = row => row.ticketReply || row.ticketState || row.executionInput
+const internalRequest = row => row.taskReply || row.taskState || row.executionInput
   || row.message?.source && !isChatUserMessage(row.message);
 const messageTime = row => {
   const time = row.time == null ? NaN : new Date(row.time).getTime();
@@ -19,16 +19,17 @@ const compareRows = (a, b) => {
   // Pending input follows settled conversation and retains the official inbox
   // order. Its browser echo may disappear or use a different clock.
   if (a.submissionState || b.submissionState) return Number(!!a.submissionState) - Number(!!b.submissionState);
+  if (Number.isFinite(a.seq) && Number.isFinite(b.seq)) return a.seq - b.seq;
   return messageTime(a) - messageTime(b);
 };
 function conversationalNotification(row) {
-  if (row.type === 'ticket.attention') return !!(row.attention || row.currentAttention)?.question?.question;
+  if (row.type === 'task.attention') return !!(row.attention || row.currentAttention)?.question?.question;
   if ([row.origin, row.publication?.origin].some(origin => ['system', 'worker'].includes(origin))) return false;
   if (row.type === 'schedule.lifecycle') return false;
-  if (row.type === 'ticket.result') return (row.origin === 'router' || row.publication?.origin === 'router')
+  if (row.type === 'task.result') return (row.origin === 'router' || row.publication?.origin === 'router')
     && (!row.publication || ['deliver', 'ask'].includes(row.publication.action));
-  if (row.type === 'ticket.accepted') return row.origin === 'router'
-    && typeof row.ticketId === 'string' && !!row.ticketId
+  if (row.type === 'task.accepted') return row.origin === 'router'
+    && typeof row.taskId === 'string' && !!row.taskId
     && typeof row.requestId === 'string' && !!row.requestId && row.text.length <= 6000;
   return false;
 }
@@ -49,7 +50,7 @@ export function historyReconcileSeq(chat) {
 }
 
 /** Defence in depth: only the server publication projection can supply assistant rows. */
-export function quietChatRows(history = {}, threadId = 'main', session = {}, chat, inbox) {
+export function quietChatRows(history = {}, threadId = 'main', session = {}, chat, inbox, replies = []) {
   const rows = (history.messages || []).filter(row => !row.streaming &&
     (channelMessage(row) || (row.kind !== 'channel-message' && ((row.role === 'user' && (!row.source || isChatUserMessage(row))) || (row.role === 'assistant' && row.kind === 'final'
       && ![row.origin, row.publication?.origin].some(origin => ['system', 'worker'].includes(origin)))))))
@@ -149,6 +150,9 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
     rows.push({ ...row, role: 'assistant', kind: 'delivery', key: `notification:${row.eventId || row.id}`,
       time: row.createdAt || row.time, notification: true });
   }
+  // Merge before ordering: appending live replies after the user list moves
+  // steering above the answer that was already visible when it was submitted.
+  for (const reply of replies) if (!rows.some(row => row.key === reply.key)) rows.push(reply);
   return [...new Map(rows.map(row => [row.key, row])).values()]
     .sort(compareRows);
 }

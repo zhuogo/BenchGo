@@ -23,7 +23,7 @@ test('actual Cordis keeps the usage route mounted after the injection callback s
   } finally { await ctx.fiber.dispose(); await rm(dir, { recursive: true, force: true }); }
 });
 
-test('startup leaves historical scans idle while live usage is collected; concurrent queries share the first backfill', async () => {
+test('queries return live usage before slow history and share one background backfill', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'commander-usage-lazy-'));
   const commander = new EventEmitter(); commander.store = { directory: dir }; commander.sessions = new Map();
   const effects = [], hooks = {}, routes = [];
@@ -40,14 +40,25 @@ test('startup leaves historical scans idle while live usage is collected; concur
     hooks['session/event']({ id: 'live' }, event);
     assert.equal(ledger.rows.get('harness:live:1').totalTokens, 12);
     const query = () => routes[0].fetch(new Request('http://app.test/api/commander/usage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ start: '2026-11-10', end: '2026-11-11' }) }));
-    const first = query(), second = query();
+    const results = await Promise.all([query(), query()]);
+    for (const response of results) {
+      const data = await response.json();
+      assert.equal(data.summary.totalTokens, 12);
+      assert.equal(data.coverage.historyState, 'scanning');
+    }
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(listed, 1); assert.equal(scans, 1);
     hooks['session/event']({ id: 'during-history' }, event);
     release();
-    const results = await Promise.all([first, second]);
-    for (const response of results) assert.equal((await response.json()).summary.totalTokens, 36);
-    await query(); assert.equal(listed, 1); assert.equal(scans, 1);
+    let settled;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      settled = await (await query()).json();
+      if (settled.coverage.historyState === 'complete') break;
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(settled.summary.totalTokens, 36);
+    assert.equal(settled.coverage.historyState, 'complete');
+    assert.equal(listed, 1); assert.equal(scans, 1);
     for (const dispose of effects.reverse()) await dispose();
     const stored = await new UsageLedger(dir).open(); assert.equal(stored.rows.size, 3);
   } finally { release(); await rm(dir, { recursive: true, force: true }); }
@@ -101,7 +112,12 @@ test('collection imports own official history once, excludes routed duplicate an
     const nativeRows = [...ledger.rows.values()].filter(row => row.sessionId === 'native');
     assert.equal(nativeRows.filter(row => row.durationMs !== null).length, 0);
     const query = headers => new Request('http://app.test/api/commander/usage', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ start: '2026-10-16', end: '2026-10-17' }) });
-    const response = await route.fetch(query()); assert.equal(response.status, 200); const data = await response.json(); assert.equal(data.recordCount, 3); assert.equal(data.summary.totalTokens, 242); assert.equal(data.summary.tokensPerSecond, null);
+    const response = await route.fetch(query()); assert.equal(response.status, 200);
+    let data = await response.json();
+    for (let attempt = 0; data.coverage.historyState === 'scanning' && attempt < 100; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 5)); data = await (await route.fetch(query())).json();
+    }
+    assert.equal(data.recordCount, 3); assert.equal(data.summary.totalTokens, 242); assert.equal(data.summary.tokensPerSecond, null);
     hooks['session/event']({ id: 'history', inheritedEventCount: 1 }, { seq: 1, type: 'assistant/message', time: Date.parse('2026-10-16'), data: { turn: 1, usage, message: { source: { provider: 'deepseek', model: 'test' } } } });
     assert.equal(ledger.rows.size, 3);
     hooks['session/event']({ id: 'history' }, { seq: 3, type: 'request/header', data: { header: { config: { provider: 'router', model: 'real' } } } });
@@ -187,4 +203,55 @@ test('server pagination returns 50 records while overview aggregates the full in
  const range={start:'2026-10-16',end:'2026-10-17'};
  const first=ledger.query(range),second=ledger.query({...range,page:2}),last=ledger.query({...range,page:3});
  assert.equal(first.records.length,50);assert.equal(first.pageCount,3);assert.equal(first.summary.totalTokens,1353);assert.equal(second.records.length,50);assert.equal(last.records.length,23);assert.equal(first.records.some(row=>second.records.some(other=>other.id===row.id)),false);assert.equal(ledger.query({...range,page:999}).page,3);for(const page of [0,-1,1.2,'2'])assert.throws(()=>ledger.query({...range,page}));assert.throws(()=>ledger.query({...range,pageSize:100000}));
+});
+
+test('cached intervals reflect updates, removals, ownership, native completeness and fresh coverage', () => {
+  const ledger = new UsageLedger('/unused'), time = '2026-11-10T00:00:00Z';
+  const range = { start: '2026-11-10', end: '2026-11-11' };
+  ledger.managed = () => new Map([['session', 'codex:native']]);
+  ledger.importer = { coverage: { state: 'ready' }, completeNativeIds: new Set() };
+  ledger.put({ id: 'live', sessionId: 'session', tool: 'codex', time, totalTokens: 10 });
+  ledger.put({ id: 'imported', source: 'machine', tool: 'codex', nativeId: 'native', time, totalTokens: 100 });
+  const first = ledger.query(range);
+  assert.equal(first.summary.totalTokens, 10);
+  assert.equal(ledger.query({ ...range, page: 2 }).summary, first.summary);
+  ledger.error = 'write failed'; ledger.historyState = 'scanning';
+  const progress = ledger.query(range);
+  assert.equal(progress.error, 'write failed'); assert.equal(progress.coverage.historyState, 'scanning');
+  ledger.importer.completeNativeIds.add('codex:native');
+  assert.equal(ledger.query(range).summary.totalTokens, 100);
+  ledger.importer.coverage = { state: 'scanning' };
+  assert.equal(ledger.query(range).summary.totalTokens, 10);
+  ledger.importer.coverage = { state: 'ready' };
+  ledger.put({ id: 'imported', source: 'machine', tool: 'codex', nativeId: 'native', time, totalTokens: 120 });
+  assert.equal(ledger.query(range).summary.totalTokens, 120);
+  ledger.managed = () => new Map([['session', 'codex:different']]);
+  assert.equal(ledger.query(range).summary.totalTokens, 130);
+  ledger.delete('live'); assert.equal(ledger.query(range).summary.totalTokens, 120);
+  ledger.delete('imported'); assert.equal(ledger.query(range).summary.totalTokens, null);
+  assert.throws(() => ledger.query({ ...range, timeZone: 'invalid' }));
+});
+
+test('slow machine scans and refreshes run behind immediate validated responses', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'commander-usage-background-'));
+  const effects = [], routes = [];
+  const ctx = { effect(fn) { const dispose = fn(); if (dispose) effects.push(dispose); }, on() {}, inject() {}, connection: { fetch: { register(route) { routes.push(route); return () => {}; } } } };
+  let release;
+  try {
+    const ledger = await mountUsage(ctx, { store: { directory: dir }, sessions: new Map(), on() {}, off() {} }, { enabled: false });
+    let scans = 0;
+    ledger.importer.scan = async () => { scans++; await new Promise(resolve => { release = resolve; }); ledger.importer.coverage = { state: 'ready', sources: [], scannedBytes: 0 }; };
+    const request = (input = {}) => routes[0].fetch(new Request('http://app.test/api/commander/usage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ start: '2026-11-10', end: '2026-11-11', ...input }) }));
+    assert.equal((await request({ page: 0 })).status, 400); assert.equal(scans, 0);
+    assert.equal((await request({ timeZone: 'invalid' })).status, 400); assert.equal(scans, 0);
+    const first = await (await request()).json();
+    assert.equal(first.coverage.state, 'scanning'); assert.equal(scans, 1);
+    await request({ refresh: true }); assert.equal(scans, 1);
+    release(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal((await (await request()).json()).coverage.state, 'ready');
+    const refresh = await (await request({ refresh: true })).json();
+    assert.equal(scans, 2); assert.equal(refresh.coverage.state, 'scanning');
+    release(); await new Promise(resolve => setImmediate(resolve));
+    for (const dispose of effects.reverse()) await dispose();
+  } finally { release?.(); await rm(dir, { recursive: true, force: true }); }
 });

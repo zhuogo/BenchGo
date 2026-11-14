@@ -3,7 +3,6 @@ export function isRecentWorkspace(workspace){return workspace?.isDefault===true;
 export const recentWorkspace=projects=>projects.find(isRecentWorkspace);
 export const projectWorkspaces=projects=>projects.filter(project=>!isRecentWorkspace(project));
 export function recentRows(rows,projects){const defaults=new Set(projects.filter(isRecentWorkspace).map(p=>p.id??p.workspaceId));return rows.filter(row=>defaults.has(row.projectId)||projects.some(p=>isRecentWorkspace(p)&&typeof p.path==='string'&&p.path.length>0&&p.path===row.cwd));}
-export function displayWorkspaceTitle(workspace){return isRecentWorkspace(workspace)?'最近':workspace.title;}
 /** Completion is an unread notification owned and acknowledged by the official main view. */
 export function sidebarSessionStatus(official,ui,native){
   if(ui?.pendingInteraction||native?.status==='waiting')return 'waiting';
@@ -41,8 +40,8 @@ export function sidebarWorkspaces(snapshot,fallback=[],defaultId){
 export function isSidebarSessionSelected(session,activeSessionId){
   return typeof activeSessionId==='string'&&activeSessionId.length>0&&(session.id===activeSessionId||(session.native===true&&session.ownerSessionId===activeSessionId&&(!session.parentId||session.harnessAdopted===true)));
 }
-/** Voice calls have durable plugin activity even before an official Agent turn starts. */
-export function isSidebarSessionVisible(session){return !!session&&(!session.blank||session.projectionValues?.benchgoVoice?.used===true);}
+/** Official subagents use parent navigation; voice activity keeps ordinary blank sessions visible. */
+export function isSidebarSessionVisible(session){return !!session&&session.origin!=='subagent'&&(!session.blank||session.projectionValues?.benchgoVoice?.used===true);}
 /** The host display title falls back to cwd; a voice-only Session has a meaningful title of its own. */
 export function sidebarSessionTitle(session){return session?.title||(session?.projectionValues?.benchgoVoice?.used===true?'语音对话':session?.displayTitle)||'新对话';}
 export function sidebarSessionUpdatedAt(session){

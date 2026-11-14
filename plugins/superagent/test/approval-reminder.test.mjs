@@ -29,15 +29,15 @@ hook.deregister();
 
 const identity = { assignmentId: 'assignment', runId: 'run', sessionId: 'worker', callId: 'call', actionId: 'action' };
 function fixture() {
-  const ticket = { id: 'ticket', title: '发送报告', status: 'running', instructionRevision: 1,
+  const task = { id: 'task', title: '发送报告', status: 'running', instructionRevision: 1,
     mandate: { actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'router-side', threadId: 'side', messageId: 'human' } } };
-  const assignment = { id: 'assignment', ticketId: ticket.id, state: 'claimed', owner: 'owner', fence: 1, leaseUntil: 2000 };
+  const assignment = { id: 'assignment', taskId: task.id, state: 'claimed', owner: 'owner', fence: 1, leaseUntil: 2000 };
   const run = { id: 'run', owner: 'owner', fence: 1, sessionId: 'worker', state: 'running' };
-  const database = { getAssignment: () => assignment, getTicket: () => ticket, runs: () => [run], appliedTicketSnapshot: () => ({}) };
+  const database = { getAssignment: () => assignment, getTask: () => task, runs: () => [run], appliedTaskSnapshot: () => ({}) };
   const call = { type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'call', name: 'assistant_external_action',
     arguments: JSON.stringify({ operation: 'submit', actionId: 'action' }) }] } } };
   const asked = { type: 'approval/asked', data: { id: 'official-ask', toolName: 'assistant_external_action', callId: 'call', reason: 'PRIVATE EXACT BODY' } };
-  return { database, ticket, assignment, run, events: [call, asked], call, asked };
+  return { database, task, assignment, run, events: [call, asked], call, asked };
 }
 
 test('approval reminder requires an unpaired official audit for the exact Worker submit, never prepare pending', () => {
@@ -60,13 +60,13 @@ test('PTC-dispatched Worker submissions retain the same official audit identity'
 
 for (const change of ['stopped', 'expired', 'fence', 'session', 'toolScope', 'channel', 'actor']) test(`approval reminder fails closed for ${change}`, () => {
   const f = fixture();
-  if (change === 'stopped') f.ticket.executionControl = { stopped: true };
+  if (change === 'stopped') f.task.executionControl = { stopped: true };
   if (change === 'expired') f.assignment.leaseUntil = 1000;
   if (change === 'fence') f.run.fence++;
   if (change === 'session') f.run.sessionId = 'other-worker';
-  if (change === 'toolScope') f.ticket.mandate.toolScope = ['read'];
-  if (change === 'channel') f.ticket.mandate.source.channel = 'feishu';
-  if (change === 'actor') f.ticket.mandate.actorId = 'other';
+  if (change === 'toolScope') f.task.mandate.toolScope = ['read'];
+  if (change === 'channel') f.task.mandate.source.channel = 'feishu';
+  if (change === 'actor') f.task.mandate.actorId = 'other';
   assert.equal(approvalReminderSignal(f.database, identity, f.events, 1000), null);
 });
 
@@ -79,7 +79,7 @@ test('expression rechecks the exact ask; decided, unreadable and stopped notices
   f.events.push({ type: 'approval/decided', data: { id: signal.approvalId, outcome: 'allowed-once' } });
   assert.equal(await currentApprovalReminderSignal(options), null);
   assert.equal(await currentApprovalReminderSignal({ ...options, readSession: async () => { throw Error('unavailable'); } }), null);
-  f.ticket.status = 'completed';
+  f.task.status = 'completed';
   assert.equal(await currentApprovalReminderSignal({ ...options, readSession: () => assert.fail('inactive historical notices do not read Worker logs') }), null);
 });
 

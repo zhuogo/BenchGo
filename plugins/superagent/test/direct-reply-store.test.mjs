@@ -18,11 +18,11 @@ async function setup(t) {
   return { db, candidate, input };
 }
 
-test('direct reply commits atomically without a ticket and cannot duplicate its candidate', async t => {
+test('direct reply commits atomically without a task and cannot duplicate its candidate', async t => {
   const { db, candidate, input } = await setup(t);
   const result = db.decide(candidate.id, input);
-  assert.equal(result.ticket, null);
-  assert.equal(result.decision.ticketId, null);
+  assert.equal(result.task, null);
+  assert.equal(result.decision.taskId, null);
   assert.equal(result.decision.outcome, 'answer');
   assert.equal(db.directReplies()[0].triggerId, candidate.triggerId);
   assert.throws(() => db.decide(candidate.id, input), { code: 'CANDIDATE_NOT_ACTIVE' });

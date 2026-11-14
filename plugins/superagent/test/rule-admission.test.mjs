@@ -8,6 +8,7 @@ import { readAdmissionRules } from '../src/admission-rules.mjs';
 import { readAssessmentPolicy, authorizeAssessment } from '../src/assessment-policy.mjs';
 import { ingestAssistantEvent } from '../src/intake.mjs';
 import { createAssessmentRunner } from '../src/assessment-runner.mjs';
+import { taskReplySignal } from '../src/task-reply.mjs';
 import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
 
 test('written rules require a nonempty exact heading and ignore fenced examples', () => {
@@ -34,32 +35,44 @@ for (const scenario of ['auto', 'manual', 'unknown-rule', 'ignore', 'revoked', '
     return candidates.map(row => ({ candidateId: row.candidateId, outcome: scenario === 'ignore' ? 'ignore' : 'accept', target: 'Inspect CI', acceptance: 'Evidence', reason: 'Written rule', ruleIds: [scenario === 'unknown-rule' ? 'missing' : 'ci-check'] }));
   } });
   await runner.tick(); await runner.stop();
-  const tickets = store.orchestration.listTickets();
+  const tasks = store.orchestration.listTasks();
   if (['manual', 'unknown-rule', 'ignore'].includes(scenario)) {
-    assert.equal(tickets.length, 0);
+    assert.equal(tasks.length, 0);
     assert.equal(store.orchestration.getDecision(store.orchestration.candidates()[0].id).outcome, scenario === 'ignore' ? 'ignore' : 'notExplicit');
     return;
   }
-  assert.equal(tickets.length, 1);
-  assert.deepEqual(tickets[0].mandate.ruleIds, ['ci-check']);
+  assert.equal(tasks.length, 1);
+  assert.deepEqual(tasks[0].mandate.ruleIds, ['ci-check']);
   if (scenario === 'revoked') {
     store.connections.update({ admissionMode: 'manual' }, { revision: 1 });
     store.close(); store = await createAssistantStore({ dataDirectory: directory });
   }
   let executions = 0, sends = 0;
   runtime = createOrchestrationRuntime({ ctx: {}, store,
-    execute: async (_assignment, context) => { executions++; if (scenario === 'revoked-during-run') { store.connections.update({ enabledRuleIds: [] }, { revision: 1 }); await context.renew(); } return { summary: 'CI inspected', outcome: 'completed', evidenceRefs: ['test:evidence'] }; },
-    prepareTicketReply: async delivery => {
-      assert.equal(delivery.payload.text, undefined);
-      assert.equal(delivery.payload.publication, undefined);
-      assert.equal(store.orchestration.getTicket(delivery.ticketId).status, 'waiting');
-      assert.equal(store.orchestration.results(delivery.ticketId).at(-1).summary, 'CI inspected');
-      return { status: 'ready', text: 'CI 已检查完成，相关证据已经保存。' };
+    execute: async (_assignment, context) => { executions++; if (scenario === 'revoked-during-run') { store.connections.update({ enabledRuleIds: [] }, { revision: 1 }); await context.renew(); } return { summary: 'CI inspected', outcome: 'completed', completion: { kind: 'completed' }, evidenceRefs: ['test:evidence'] }; },
+    notifyTaskResult: async notice => {
+      assert.equal(notice.payload.text, undefined);
+      assert.equal(notice.payload.publication, undefined);
+      assert.equal(store.orchestration.getTask(notice.taskId).status, 'completed');
+      assert.equal(store.orchestration.results(notice.taskId).at(-1).summary, 'CI inspected');
+      const signal = taskReplySignal(store.orchestration, notice);
+      assert.ok(signal);
+      store.orchestration.enqueueRouterReply({ signal, sessionId: 'ci-router', requestId: `reply:${notice.uniqueKey}`,
+        messages: [{ id: 'ci-router-message', text: 'CI 已检查完成，相关证据已经保存。' }] });
+      return { status: 'accepted', messageId: `inbox:${notice.uniqueKey}` };
     },
     feishu: { send: async request => { sends++; assert.equal(request.source.messageId, 'ci-message'); assert.equal(request.text, 'CI 已检查完成，相关证据已经保存。'); return { status: 'accepted', messageId: 'reply' }; } } });
   for (let i = 0; i < 40; i++) { await runtime.tick(); if (sends || scenario === 'revoked') break; await new Promise(resolve => setTimeout(resolve, 5)); }
   assert.equal(executions, scenario === 'revoked' ? 0 : 1);
   assert.equal(sends, scenario.startsWith('revoked') ? 0 : 1);
-  if (scenario === 'revoked-during-run') assert.equal(store.orchestration.assignments(tickets[0].id)[0].state, 'uncertain');
-  assert.equal(store.orchestration.listTickets().length, 1);
+  if (scenario === 'auto') {
+    assert.deepEqual(store.orchestration.deliveries(tasks[0].id), []);
+    const [reply] = store.orchestration.directReplies();
+    assert.equal(reply.kind, 'router');
+    assert.equal(reply.state, 'sent');
+    assert.deepEqual(reply.gate.messages, [{ id: 'ci-router-message', text: 'CI 已检查完成，相关证据已经保存。' }]);
+    assert.equal(store.orchestration.results(tasks[0].id).at(-1).reply.receipt.messageId, 'reply');
+  }
+  if (scenario === 'revoked-during-run') assert.equal(store.orchestration.assignments(tasks[0].id)[0].state, 'uncertain');
+  assert.equal(store.orchestration.listTasks().length, 1);
 });

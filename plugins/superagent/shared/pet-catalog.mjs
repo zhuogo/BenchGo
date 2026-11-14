@@ -23,5 +23,4 @@ export function renderBuiltinPet({expression='standard',decorations=[],palette='
   return svg.replaceAll('#F3EBDF',colors.body).replaceAll('#D44A36',colors.corner).replaceAll('#222222',colors.ink);
 }
 export const composePetSvg = renderBuiltinPet;
-export const renderPetSvg = renderBuiltinPet;
 export function builtinPetDataUrl(options) { return `data:image/svg+xml,${encodeURIComponent(renderBuiltinPet(options))}`; }

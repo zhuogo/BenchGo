@@ -31,7 +31,7 @@ export async function openExecutionSession(ctx, execution) {
 
 /** Agent teardown removes the live catalog row, but its durable Session remains.
  * Reconcile through the official catalog, with one request and one merged batch
- * waiting at a time. Completed Tickets remain in the catalog. */
+ * waiting at a time. Completed Tasks remain in the catalog. */
 export function registerExecutionSessionDiscovery(ctx, loadSessions) {
   const controller = new AbortController(), removed = new Set();
   let pending;

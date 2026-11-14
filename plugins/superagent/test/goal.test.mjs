@@ -16,13 +16,13 @@ async function fixture(t) {
     restart() { database.close(); database = createAssistantRuntimeStore({ filename: join(directory, 'assistant.db') }); goals = createGoalChecklist({ database }); } };
 }
 
-test('checklist goals persist as one sentence and a done flag without projects or Tickets', async t => {
+test('checklist goals persist as one sentence and a done flag without projects or Tasks', async t => {
   const f = await fixture(t);
   const goal = f.goals.createGoal({ objective: '  长期整理知识库  ', requestId: 'checklist' });
   assert.equal(goal.objective, '长期整理知识库');
   assert.equal(goal.title, goal.objective);
   assert.equal(goal.status, 'active');
-  for (const key of ['executionKind', 'ticketIds', 'childGoalIds', 'projectId', 'budgetGoalId']) assert.equal(goal[key], undefined);
+  for (const key of ['executionKind', 'taskIds', 'childGoalIds', 'projectId', 'budgetGoalId']) assert.equal(goal[key], undefined);
   assert.equal(f.goals.createGoal({ objective: goal.objective, requestId: 'checklist', ownerSessionId: 'new-main' }).id, goal.id);
   assert.throws(() => f.goals.createGoal({ objective: 'different', requestId: 'checklist' }), { code: 'IDEMPOTENCY_CONFLICT' });
   f.restart();

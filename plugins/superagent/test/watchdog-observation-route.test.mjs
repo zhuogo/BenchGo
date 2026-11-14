@@ -58,7 +58,7 @@ async function officialServerFixture() {
         if (mode === 'facts-hung') return new Promise(() => {});
         if (mode === 'facts-large') return { text: 'x'.repeat(600_000) };
         signal.throwIfAborted();
-        return { cursor: 7, tickets: [], host: { status: 'available', schedulerHeartbeatAt: null }, maintenance };
+        return { cursor: 7, tasks: [], host: { status: 'available', schedulerHeartbeatAt: null }, maintenance };
       },
       async acceptSignal(value, { signal, principal }) {
         signal.throwIfAborted();
@@ -233,7 +233,7 @@ if (process.argv.includes('--watchdog-fixture')) {
       assert.throws(() => createWatchdogObservationClient({ origin, targetId, token }), { code: 'WATCHDOG_ORIGIN_INVALID' });
     }
     assert.throws(() => createWatchdogObservationClient({ origin: 'http://127.0.0.1', targetId, token: 'weak' }), { code: 'WATCHDOG_TOKEN_INVALID' });
-    const execution = { ticketId: 'ticket:opaque', assignmentId: 'assignment', runId: 'run', sessionId: 'session', fence: 4, instructionRevision: 2 };
+    const execution = { taskId: 'task:opaque', assignmentId: 'assignment', runId: 'run', sessionId: 'session', fence: 4, instructionRevision: 2 };
     const value = observation({ kind: 'execution', execution, reasonCode: 'EXECUTION_INACTIVE' });
     assert.deepEqual(validateWatchdogSignal(value, targetId), value);
     assert.throws(() => validateWatchdogSignal({ ...value, execution: { ...execution, owner: 'forged' } }, targetId), { code: 'WATCHDOG_SIGNAL_INVALID' });

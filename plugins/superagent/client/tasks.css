@@ -6,17 +6,13 @@
 .ba-studio-body :is(.ba-tasks,.ba-goals,.ba-task-list-container)>.ba-group-head h2{font-size:16px}
 .ba-studio-body :is(.ba-tasks,.ba-goals,.ba-task-list-container)>.ba-group-head p{margin:0;color:var(--ba-muted);font-size:13px;line-height:1.6}
 .ba-task-list-actions{min-height:36px}
-.ba-task-list-container>.ba-ticket-view-controls{margin:0}
-.ba-ticket-detail-tabs{display:flex;justify-content:flex-end;min-width:0}
-.ba-ticket-detail-tabs>.bg-segments-scroll{margin:0}
-.ba-ticket-detail-tabs .bg-segments.bg-segments button{gap:6px;padding:6px 10px;font-size:12px}
-.ba-ticket-detail-panel{display:flex;flex-direction:column;gap:20px;box-sizing:border-box;padding:8px 12px;outline:none}
-.ba-ticket-detail-panel[hidden]{display:none!important}
-.ba-ticket-detail-panel:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#315be8);outline-offset:-2px;border-radius:8px}
-.ba-ticket-evidence{list-style:none;display:grid;gap:12px;margin:0;padding:0}
-.ba-ticket-evidence li{display:flex;align-items:flex-start;gap:10px;min-width:0;padding:12px;border:1px solid var(--ba-line);border-radius:8px;background:var(--ba-surface)}
-.ba-ticket-evidence dl{display:grid;gap:6px;min-width:0;margin:0;font-size:12px;line-height:1.7}
-.ba-ticket-evidence dl>div{display:flex;gap:12px;min-width:0}.ba-ticket-evidence dt{flex:none;color:var(--ba-muted)}.ba-ticket-evidence dd{margin:0;overflow-wrap:anywhere}
+.ba-task-list-container>.ba-task-view-controls{margin:0}
+.ba-task-detail-tabs{display:flex;justify-content:flex-end;min-width:0}
+.ba-task-detail-tabs>.bg-segments-scroll{margin:0}
+.ba-task-detail-tabs .bg-segments.bg-segments button{gap:6px;padding:6px 10px;font-size:12px}
+.ba-task-detail-panel{display:flex;flex-direction:column;gap:20px;box-sizing:border-box;padding:8px 12px;outline:none}
+.ba-task-detail-panel[hidden]{display:none!important}
+.ba-task-detail-panel:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#315be8);outline-offset:-2px;border-radius:8px}
 .ba-task-actions .ba-task-icon{flex:none;color:var(--ba-muted)}
 @media(pointer:coarse){.ba-task-actions .ba-task-icon{width:44px;height:44px;min-height:44px}}
 .ba-studio-body :is(.ba-tasks,.ba-goals) .ba-task-list{display:grid;gap:8px}
@@ -35,7 +31,6 @@
 .ba-task-feedback{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px;margin:0 0 16px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-error-primary,#b84549) 22%,transparent);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#b84549) 5%,transparent);color:var(--dsw-alias-label-primary,#171717);font-size:13px}
 .ba-task-feedback>.cmd-ui-icon{color:var(--dsw-alias-state-error-primary,#b84549);flex:none}.ba-task-feedback>span{flex:1;min-width:0;overflow-wrap:anywhere}.ba-task-feedback>.bg-ui-button{margin-left:auto}
 .ba-tasks>.ba-task-feedback{align-items:flex-start}.ba-tasks>.ba-task-feedback>.cmd-ui-icon{margin-top:4px}.ba-tasks>.ba-task-feedback>span{max-height:7em;overflow:auto;line-height:1.65;scrollbar-width:thin}.ba-tasks>.ba-task-feedback>span:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#315be8);outline-offset:3px}
-.ba-task-refresh-status{display:flex;align-items:center;gap:8px;color:var(--ba-muted);font-size:12px}
 .ba-cleanup-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px}
 .ba-cleanup-manifest ul,.ba-cleanup-excluded ul{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:8px}
 .ba-cleanup-manifest li{border:1px solid var(--ba-line);border-radius:10px;background:var(--dsw-alias-bg-base,#fff)}

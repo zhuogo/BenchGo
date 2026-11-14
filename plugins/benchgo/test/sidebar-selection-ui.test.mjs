@@ -5,6 +5,8 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { createModuleSource } from '../client/modules.mjs';
 import * as helpers from '../client/sidebar-state.mjs';
+import * as resourceHelpers from '../../link/client/resource-state.mjs';
+const resourceNavigation={useResourceNavigation:()=>({scope:{mode:'current',deviceIds:[]},showLocal:true,remote:[],selected:[],devices:[],activeId:'local'}),remoteRecentRows:()=>[],installResourceReceiver:()=>()=>{}};
 
 const require = createRequire(import.meta.url);
 const { transformSync } = require('esbuild');
@@ -22,7 +24,7 @@ function render(activeSessionId, options = {}) {
   };
   const module = { exports: {} }, moduleSource = createModuleSource();
   moduleSource.update({base: true, harness: true, superagent: true, link: true, ...options.modules});
-  runInNewContext(code, { module, exports: module.exports, localStorage: { getItem: () => null }, document: { addEventListener: (name, handler) => events.set(name, handler), removeEventListener() {} }, window: { matchMedia: () => ({ matches: true }) }, require: id => id.endsWith('modules.mjs') ? { moduleSource } : id === 'react' ? react : id.endsWith('sidebar-state.mjs') ? helpers : id.includes('superagent/client') ? { AssistantSidebarEntry: 'AssistantSidebarEntry' } : id.includes('device-launcher') ? { DeviceLauncher: 'DeviceLauncher' } : id.includes('device-switch') ? { DeviceSwitch: 'DeviceSwitch' } : {} });
+  runInNewContext(code, { module, exports: module.exports, crypto: globalThis.crypto, localStorage: { getItem: () => null }, document: { addEventListener: (name, handler) => events.set(name, handler), removeEventListener() {} }, window: { matchMedia: () => ({ matches: true }) }, require: id => id.endsWith('resource-navigation.jsx') ? { ...resourceNavigation, ...(options.navigation ? { useResourceNavigation: () => options.navigation } : {}) } : id.endsWith('resource-creation.jsx') ? { ResourceCreationDialog: 'ResourceCreationDialog' } : id.endsWith('resource-state.mjs') ? resourceHelpers : id.endsWith('modules.mjs') ? { moduleSource } : id === 'react' ? react : id.endsWith('sidebar-state.mjs') ? helpers : id.includes('superagent/client') ? { AssistantSidebarEntry: 'AssistantSidebarEntry' } : id.includes('device-launcher') ? { DeviceLauncher: 'DeviceLauncher' } : id.includes('device-switch') ? { DeviceSwitch: 'DeviceSwitch' } : {} });
   const sessions = ['first', 'second', 'third'];
   module.exports.setSidebarSnapshot(options.commander ?? { loaded: true, projects: [{ id: 'recent', isDefault: true, sessionIds: sessions }], sessions: [] }, options.defaultId);
   const snapshot = options.sessionSnapshot ?? { ids: sessions, byId: Object.fromEntries(sessions.map(id => [id, { id, title: id, retainedBy: id === activeSessionId ? { mainView: 1 } : {}, blank: false, running: false }])) };
@@ -37,7 +39,7 @@ function render(activeSessionId, options = {}) {
   const renderSlot = (name, owner) => {
     assert.equal(name, 'benchgo.sidebar.session.row.trailing');
     options.onRenderSlot?.(name, owner);
-    return options.ticketSessionIds?.includes(owner.sessionId) ? react.createElement('span', { 'aria-label': '工单：真实任务' }, '工单') : null;
+    return options.taskSessionIds?.includes(owner.sessionId) ? react.createElement('span', { 'aria-label': '任务：真实任务' }, '任务') : null;
   };
   const props = { host, open() {}, newSession: options.newSession ?? (() => {}), wide: options.wide ?? true, expandSidebar() {}, renderSlot, panelNavigation: options.panelNavigation };
   let tree = module.exports.Projects(props);
@@ -53,8 +55,53 @@ function render(activeSessionId, options = {}) {
     while (options.resolveIcons && ['SessionIcon', 'Activity', 'Icon'].includes(resolved?.type?.name)) resolved = resolved.type(resolved.props);
     return resolved ? [resolved, ...resolved.children.flatMap(walk)] : [];
   };
+  const rerender = () => { cursor = 0; refCursor = 0; return walk(module.exports.Projects(props)); };
+  options.onRerender?.(rerender);
+  if (options.click) {
+    const entry = walk(tree).find(node => node.props['aria-label'] === options.click);
+    assert(entry, `Missing entry: ${options.click}`); entry.props.onClick();
+    return rerender();
+  }
   return walk(tree);
 }
+
+test('project and Recent creation enter the same dialog while direct project chats keep their target', () => {
+  const local = { id: 'local', name: '本机' }, remote = { id: 'opaque:remote/id', name: '远端' };
+  const base = { enabled: true, scope: { mode: 'all' }, showLocal: true, remote: [], selected: [local, remote], devices: [local, remote], activeId: local.id };
+  for (const scope of ['all', 'current', 'selected']) {
+    const navigation = { ...base, scope: { mode: scope }, selected: scope === 'selected' ? [remote] : base.selected };
+    for (const [entry, action] of [['添加项目目录', 'addProject'], ['最近新聊天', 'newSession'], ['创建新聊天', 'newSession']]) {
+      const calls = [], nodes = render(undefined, { navigation, click: entry, newSession: id => calls.push(id) });
+      const dialogs = nodes.filter(node => node.type === 'ResourceCreationDialog');
+      assert.equal(dialogs.length, 1, `${scope}: ${entry}`);
+      assert.equal(dialogs[0].props.action, action);
+      assert.equal(dialogs[0].props.navigation, navigation);
+      assert.equal(calls.length, 0, 'opening or choosing a target does not create a session');
+      assert.equal(nodes.some(node => node.props.title === '选择目标设备'), false);
+    }
+  }
+  const calls = [];
+  for (const entry of ['最近新聊天', '创建新聊天']) {
+    const nodes = render(undefined, { navigation: { ...base, scope: { mode: 'current' }, devices: [local], selected: [local] }, click: entry, newSession: id => calls.push(id) });
+    assert.equal(nodes.some(node => node.type === 'ResourceCreationDialog'), false);
+  }
+  assert.equal(calls.length, 2, 'a single current device retains one-click creation');
+});
+
+test('remote creation dispatches the exact device and project without creating a local substitute', async () => {
+  const local = { id: 'local', name: '本机' }, remote = { id: 'opaque:remote/id', name: '远端' }, calls = [];
+  const navigation = { enabled: true, scope: { mode: 'all' }, showLocal: true, remote: [], selected: [local, remote], devices: [local, remote], activeId: local.id };
+  let rerender;
+  const nodes = render(undefined, { navigation, click: '添加项目目录', newSession: id => calls.push(id), onRerender: value => { rerender = value; } });
+  const dialog = nodes.find(node => node.type === 'ResourceCreationDialog');
+  await dialog.props.onSelected({ id: 'opaque:project/id' }, remote);
+  const stage = rerender().find(node => node.props.target?.resource);
+  assert.equal(stage.props.target.device, remote);
+  assert.equal(stage.props.target.resource.resourceId, 'opaque:project/id');
+  assert.equal(stage.props.target.resource.intent, 'newSession');
+  assert.equal(rerender().some(node => node.type === 'ResourceCreationDialog'), false);
+  assert.deepEqual(calls, []);
+});
 
 test('collapsed sidebar removes the project and conversation content region', () => {
   const nodes = render(undefined, { wide: false });
@@ -176,19 +223,45 @@ test('ready empty official workspaces clear stale projects and rows', () => {
 const sessionRows = nodes => nodes.filter(node => node.props.className?.split(' ').includes('cmd-session'));
 const rowTitles = nodes => sessionRows(nodes).map(row => row.children.find(child => child.type === 'span')?.children[0]);
 
-test('Router surfaces stay private while Workers and official subagents remain in workspace lists', () => {
-  const ids = ['main', 'side', 'old-side', 'worker', 'child-worker', 'im', 'ordinary'];
+test('sidebar hides official subagents while preserving Workers and ordinary branches in every list', () => {
+  const ids = ['main', 'side', 'old-side', 'worker', 'child-worker', 'im', 'ordinary', 'subagent', 'nested-subagent', 'voice-subagent', 'branch'];
   const options = {
     commander: { loaded: true, sessions: [], privateSessionIds: ['main', 'side', 'old-side', 'im'] },
     workspaces: { phase: 'ready', items: [], archivedSessionIds: [] },
-    sessionSnapshot: { ids, byId: Object.fromEntries(ids.map(id => [id, { id, title: id, blank: false,
-      projectionValues: id === 'im' ? { benchgoChannelSource: { channel: 'feishu' } } : {} }])) },
+    sessionSnapshot: { ids, byId: Object.fromEntries(ids.map(id => [id, { id, title: id, blank: id === 'voice-subagent',
+      ...id.includes('subagent') ? { origin: 'subagent', parentId: id === 'nested-subagent' ? 'subagent' : 'ordinary' } : {},
+      ...id === 'branch' ? { parentId: 'ordinary' } : {},
+      projectionValues: id === 'im' ? { benchgoChannelSource: { channel: 'feishu' } } : id === 'voice-subagent' ? { benchgoVoice: { used: true } } : {} }])) },
   };
-  assert.deepEqual(rowTitles(render(undefined, options)), ['worker', 'child-worker', 'ordinary']);
+  const expected = ['worker', 'child-worker', 'ordinary', 'branch'];
+  assert.deepEqual(rowTitles(render('subagent', options)), expected);
+  options.workspaces.items = [{ workspaceId: 'recent', sessionIds: ids }];
+  options.defaultId = 'recent';
+  assert.deepEqual(rowTitles(render(undefined, options)), expected);
   options.workspaces.archivedSessionIds = ids;
-  assert.deepEqual(rowTitles(render(undefined, { ...options, showArchived: true })), ['worker', 'child-worker', 'ordinary']);
+  assert.deepEqual(rowTitles(render(undefined, { ...options, showArchived: true })), expected);
   options.workspaces.items = [{ workspaceId: 'project', title: 'Project', sessionIds: ids }];
-  assert.deepEqual(rowTitles(render(undefined, { ...options, showArchived: true })), ['worker', 'child-worker', 'ordinary']);
+  assert.deepEqual(rowTitles(render(undefined, { ...options, showArchived: true })), expected);
+});
+
+test('native fallback cannot expose an official subagent through its owner identity', () => {
+  for (const archived of [false, true]) {
+    const sessions = [
+      { id: 'child-native', title: 'Hidden child', ownerSessionId: 'subagent', parentId: 'native-parent', projectId: 'recent', archived },
+      { id: 'ordinary-native', title: 'Visible delegate', ownerSessionId: 'ordinary', parentId: 'native-parent', projectId: 'recent', archived },
+    ];
+    const nodes = render(undefined, {
+      showArchived: archived,
+      commander: { loaded: true, projects: [], sessions },
+      defaultId: 'recent',
+      workspaces: { phase: 'ready', items: [{ workspaceId: 'recent', sessionIds: ['subagent', 'ordinary'] }], archivedSessionIds: archived ? ['subagent', 'ordinary'] : [] },
+      sessionSnapshot: { ids: ['subagent', 'ordinary'], byId: {
+        subagent: { id: 'subagent', title: 'Subagent', blank: false, origin: 'subagent' },
+        ordinary: { id: 'ordinary', title: 'Ordinary', blank: false },
+      } },
+    });
+    assert.deepEqual(rowTitles(nodes), ['Visible delegate', 'Ordinary']);
+  }
 });
 
 test('ownership pending rows remain hidden until the current catalog identity was checked', () => {
@@ -270,11 +343,11 @@ test('an archived project never captures ungrouped rows through two absent cwd f
 });
 
 test('custom sidebar renders its own trailing slot for default and ungrouped sessions', () => {
-  const calls = [], nodes = render(undefined, { ticketSessionIds: ['second'], onRenderSlot: (name, owner) => calls.push([name, owner.sessionId]),
+  const calls = [], nodes = render(undefined, { taskSessionIds: ['second'], onRenderSlot: (name, owner) => calls.push([name, owner.sessionId]),
     defaultId: 'recent', workspaces: { phase: 'ready', items: [{ workspaceId: 'recent', sessionIds: ['first'] }], archivedSessionIds: [] },
   });
   assert.deepEqual(calls, ['first', 'second', 'third'].map(id => ['benchgo.sidebar.session.row.trailing', id]));
-  assert.equal(nodes.filter(node => node.props['aria-label'] === '工单：真实任务').length, 1);
+  assert.equal(nodes.filter(node => node.props['aria-label'] === '任务：真实任务').length, 1);
 });
 
 test('custom sidebar registers its own extension ownership without reading or replacing official components', () => {

@@ -80,7 +80,7 @@ test('published OPS integration attaches to actual official agent scopes and rem
   assert.equal(after.some(name => name.startsWith('ops_')), false, after.join(', '));
 });
 
-test('real host injection publishes tools and hot configuration releases and restores them', async t => {
+test('built-in host injection publishes real tools and releases them on disposal', async t => {
   const { root, agent } = await fixture(t);
   root.provide('connection', { fetch: { register() { return () => {}; } } });
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-real-efficiency-'));
@@ -95,14 +95,6 @@ test('real host injection publishes tools and hot configuration releases and res
     }
     assert.fail(JSON.stringify(service.snapshot()));
   };
-  await ready('ops'); await ready('compaction');
-  await root.parallel('agent/created', { agent });
-  assert.ok(root.tools.get('ops_read_files', agent));
-  assert.ok(root.tools.get('context_status', agent));
-  await service.update({ revision: 0, features: { ops: { enabled: false }, compaction: { enabled: false } } });
-  assert.equal(root.tools.get('ops_read_files', agent), undefined);
-  assert.equal(root.tools.get('context_status', agent), undefined);
-  await service.update({ revision: 1, features: { ops: { enabled: true }, compaction: { enabled: true } } });
   await ready('ops'); await ready('compaction');
   await root.parallel('agent/created', { agent });
   assert.ok(root.tools.get('ops_read_files', agent));

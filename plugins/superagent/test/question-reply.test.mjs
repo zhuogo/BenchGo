@@ -56,9 +56,9 @@ function bindingFixture(t, { owned = true } = {}) {
     source: { channel: 'desktop', sessionId, messageId: 'initial', threadId: 'main' },
     actor: { kind: 'human', id: 'desktop-owner' }, content: '调查当前范围', mode: 'direct',
     gate: { allowed: true, strength: 'explicit', reason: 'desktop-owner-message' } });
-  const ticket = database.createTicket({ threadId: `desktop:${sessionId}`, target: '调查当前范围', mandate: {
+  const task = database.createTask({ threadId: `desktop:${sessionId}`, target: '调查当前范围', mandate: {
     source: { channel: 'desktop', sessionId, threadId: 'main' }, actorId: 'desktop-owner' } });
-  database.createAssignment(ticket.id, {});
+  database.createAssignment(task.id, {});
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'worker-session', directory: process.cwd() });
@@ -72,15 +72,15 @@ function bindingFixture(t, { owned = true } = {}) {
   const execution = { name: 'ask_user_question', callId: 'call', agent, arguments: { questions: cardQuestions }, signal: new AbortController().signal };
   const message = () => ({ ...questionMessage(), content: [{ type: 'text', text: JSON.stringify({ kind: 'answer_to_pending_question',
     tool: 'ask_user_question', callId: 'call', questions: cardQuestions, answers: [{ id: attention.id, selected: ['当前范围'] }] }) }] });
-  return { binding, execution, listeners, received, ticket, attention, database, agent, message };
+  return { binding, execution, listeners, received, task, attention, database, agent, message };
 }
 
 test('trusted middleware binds owned Attention and handles immediate and late official answers without dispatch', async t => {
   const f = bindingFixture(t);
   await f.listeners['tools/pre-execute'](f.execution, async () => ({ kind: 'allow' }));
-  assert.equal(f.database.routerQuestionBinding(f.agent.id, 'call').entries[0].ticketId, f.ticket.id);
+  assert.equal(f.database.routerQuestionBinding(f.agent.id, 'call').entries[0].taskId, f.task.id);
   assert.equal(f.binding.read(f.message()).callId, 'call');
-  assert.equal(f.binding.accept(f.message())[0].ticketId, f.ticket.id);
+  assert.equal(f.binding.accept(f.message())[0].taskId, f.task.id);
   assert.equal(f.received[0].requestId, `official-answer:${f.attention.id}`);
   assert.equal(f.binding.accept(f.message())[0].duplicate, true);
   const immediate = bindingFixture(t);
@@ -88,10 +88,10 @@ test('trusted middleware binds owned Attention and handles immediate and late of
   await immediate.listeners['tools/post-execute'](immediate.execution, { isError: false, content: [{ type: 'text', text: JSON.stringify({
     answers: [{ id: immediate.attention.id, selected: ['当前范围'] }] }) }] }, async () => ({ kind: 'accept' }));
   assert.equal(immediate.received[0].requestId, `question:call:${immediate.attention.id}`);
-  assert.equal(immediate.database.listTickets({ limit: 100 }).length, 1);
+  assert.equal(immediate.database.listTasks({ limit: 100 }).length, 1);
 });
 
-test('foreign, denied, ordinary and altered cards never acquire Ticket answer authority', async t => {
+test('foreign, denied, ordinary and altered cards never acquire Task answer authority', async t => {
   const f = bindingFixture(t, { owned: false });
   await f.listeners['tools/pre-execute'](f.execution, async () => ({ kind: 'allow' }));
   assert.deepEqual(f.binding.accept(f.message()), []);
@@ -142,16 +142,16 @@ test('live question source, durable receipt and server projection produce one bu
   assert.doesNotMatch(JSON.stringify(rows), /answer_to_pending_question/);
 });
 
-test('continued card answer is durable and idempotent on the original Ticket across model session replacement', async t => {
+test('continued card answer is durable and idempotent on the original Task across model session replacement', async t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   database.ingest({ dedupeKey: 'initial', thread: { id: 'desktop:old-router', source: { type: 'desktop', id: 'old-router' } },
     source: { channel: 'desktop', sessionId: 'old-router', messageId: 'initial', threadId: 'main' },
     actor: { kind: 'human', id: 'desktop-owner' }, content: '调查当前范围', mode: 'direct',
     gate: { allowed: true, strength: 'explicit', reason: 'desktop-owner-message' } });
-  const ticket = database.createTicket({ threadId: 'desktop:old-router', target: '调查当前范围', mandate: {
+  const task = database.createTask({ threadId: 'desktop:old-router', target: '调查当前范围', mandate: {
     source: { channel: 'desktop', sessionId: 'old-router', threadId: 'main' }, actorId: 'desktop-owner' } });
-  database.createAssignment(ticket.id, {});
+  database.createAssignment(task.id, {});
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'worker-session', directory: process.cwd() });
@@ -172,5 +172,5 @@ test('continued card answer is durable and idempotent on the original Ticket acr
   const stored = database.getTrigger(first.answerTriggerId);
   assert.equal(stored.source.attentionId, attention.id);
   assert.equal(stored.source.answer.selected[0], '当前范围');
-  assert.equal(database.listTickets({ limit: 100 }).length, 1);
+  assert.equal(database.listTasks({ limit: 100 }).length, 1);
 });

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readAssessmentPolicy } from './assessment-policy.mjs';
-import { assertSpecificTicketDescription, normalizeTicketTitle } from './ticket-title.mjs';
+import { assertSpecificTaskDescription, normalizeTaskTitle } from './task-title.mjs';
 import { configuredWorkModel, rejectModelOverride } from './work-role-policy.mjs';
 import { readQuestionReply } from './question-reply.mjs';
 
@@ -30,21 +30,21 @@ const required = (value, name, max = 100000) => {
 
 /** Local owner entry point. Authority comes from the mounted root Agent, never tool arguments. */
 export function createDesktopDelegationService({ ctx, store, database = store.orchestration,
-  readPolicy = () => readAssessmentPolicy(store, ctx.workspaceRegistry) }) {
+  readPolicy = () => readAssessmentPolicy(store, ctx.workspaceRegistry), wake }) {
   const pending = new Map();
   async function admit(input, exec, { ownerAgent, threadId = 'main' } = {}) {
     rejectModelOverride(input);
     input = structuredClone(input);
-    if (!ownerAgent || exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可委派桌面工单');
+    if (!ownerAgent || exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可委派桌面任务');
     const sessionId = required(ownerAgent.id, '会话标识');
     const projectId = input.projectId == null ? undefined : required(input.projectId, '项目标识');
-    const duplicateOfTicketId = input.duplicateOfTicketId === undefined ? undefined : required(input.duplicateOfTicketId, '重复工单标识', 512);
+    const duplicateOfTaskId = input.duplicateOfTaskId === undefined ? undefined : required(input.duplicateOfTaskId, '重复任务标识', 512);
     const target = required(input.text, '任务内容');
-    const title = normalizeTicketTitle(input.title, target);
-    assertSpecificTicketDescription({ title: input.title ?? title, target });
+    const title = normalizeTaskTitle(input.title, target);
+    assertSpecificTaskDescription({ title: input.title ?? title, target });
     const acceptance = input.acceptance ?? '';
     if (typeof acceptance !== 'string' || acceptance.length > 100000) throw new Error('无效验收条件');
-    const fingerprint = digest([projectId, target, acceptance, ...(input.title !== undefined ? [title] : []), ...(duplicateOfTicketId ? [duplicateOfTicketId] : [])]);
+    const fingerprint = digest([projectId, target, acceptance, ...(input.title !== undefined ? [title] : []), ...(duplicateOfTaskId ? [duplicateOfTaskId] : [])]);
     const instruction = structuredClone(currentHumanInstruction(ctx, ownerAgent));
     const message = instruction?.message;
     const instructionFingerprint = digest(instruction);
@@ -58,7 +58,7 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       if (existing && existing.fingerprint !== fingerprint) throw new Error('请求标识已用于不同任务');
       if (existing && (existing.source?.sessionId !== sessionId || existing.source?.messageId !== source.messageId
         || (existing.source?.threadId || 'main') !== threadId)) throw Object.assign(new Error('请求标识已用于其他用户消息或会话'), { code: 'IDEMPOTENCY_CONFLICT' });
-      return existing?.ticket;
+      return existing?.task;
     };
     const existing = prior();
     if (existing) return existing;
@@ -89,14 +89,20 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       const current = await readPolicy();
       exec.signal?.throwIfAborted();
       const latest = currentHumanInstruction(ctx, ownerAgent);
-      if (!latest || digest(latest) !== instructionFingerprint) throw new Error('派工期间当前用户指令已变化，请重试');
-      if (current.desktopVersion !== policy.desktopVersion || (project && !current.projects.some(item => item.id === projectId && item.path === project.path))) throw new Error('派工期间项目或授权规则已变化，请重试');
-      if (digest(configuredWorkModel(current)) !== digest(selectedModel)) throw new Error('派工期间工作角色模型已变化，请重试');
-      return database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, duplicateOfTicketId, model: selectedModel, mandate: {
+      if (!latest || digest(latest) !== instructionFingerprint) throw new Error('安排任务期间当前用户指令已变化，请重试');
+      if (current.desktopVersion !== policy.desktopVersion || (project && !current.projects.some(item => item.id === projectId && item.path === project.path))) throw new Error('安排任务期间项目或授权规则已变化，请重试');
+      if (digest(configuredWorkModel(current)) !== digest(selectedModel)) throw new Error('安排任务期间工作角色模型已变化，请重试');
+      const task = database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, duplicateOfTaskId, model: selectedModel, mandate: {
         actorId: 'desktop-owner', source, instruction: original, policyVersion: policy.desktopVersion,
         target, acceptance: taskAcceptance,
         admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval', ...(project ? { project: { id: project.id, path: project.path } } : {}),
       } });
+      // Acceptance is durable before waking the existing scheduler. Do not
+      // wait for execution, or turn a wake failure into a failed admission.
+      if (wake) void Promise.resolve().then(wake).catch(() => {
+        ctx.logger?.warn?.('SuperAgent 任务已受理，调度唤醒待定时重试');
+      });
+      return task;
     })();
     pending.set(requestKey, { fingerprint, instructionFingerprint, promise: run });
     try { return await run; } finally { pending.delete(requestKey); }

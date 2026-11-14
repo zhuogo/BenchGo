@@ -2,7 +2,7 @@ import { createModelProviders } from '../../benchgo/src/model-providers.mjs';
 import { mountAssistant } from './service.mjs';
 
 export const name = 'superagent';
-export const inject = ['benchgo', 'benchgoSettings', 'commander', 'connection', 'typert', 'settings', 'credentials', 'llm', 'agents', 'subagents', 'sessions', 'sessionQuery', 'sessionProjections', 'workspaceRegistry', 'tokenMeter'];
+export const inject = ['benchgo', 'benchgoSettings', 'commander', 'connection', 'typert', 'settings', 'credentials', 'llm', 'agents', 'subagents', 'sessions', 'sessionQuery', 'sessionProjections', 'sessionTitle', 'sessionPersistence', 'sessionProjectionCache', 'workspaceRegistry', 'tokenMeter'];
 
 export async function apply(ctx) {
   // The assistant protocol and persistent workspace keep their existing IDs.

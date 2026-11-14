@@ -9,10 +9,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
+import { sharedUiStyles } from '../scripts/shared-ui.mjs';
 const require = createRequire(import.meta.url), XLSX = require('xlsx'), JSZip = require('jszip');
 const browser = process.argv[2] || process.env.BENCHGO_TEST_BROWSER || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
-const bundle = await build({ stdin: { contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import {ArtifactPreview} from './plugins/shared/client/artifact-preview.jsx'; window.show = name => createRoot(document.getElementById('root')).render(React.createElement(ArtifactPreview,{file:{name,url:'api/file?name='+name},onClose(){}}));`, resolveDir: root, loader: 'jsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic', loader: { '.css': 'text' }, nodePaths: [join(root, 'plugins/link/node_modules')], define: { 'process.env.NODE_ENV': '"production"' } });
+const bundle = await build({ stdin: { contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import {ArtifactPreview} from './plugins/shared/client/artifact-preview.jsx'; window.show = name => createRoot(document.getElementById('root')).render(React.createElement(ArtifactPreview,{file:{name,url:'api/file?name='+name},onClose(){}}));`, resolveDir: root, loader: 'jsx' }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-preview-smoke'), format: 'iife', jsx: 'automatic', loader: { '.css': 'text', '.module.css': 'local-css' }, nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')], plugins: [{ name: 'official-preview-primitives-source', setup(build) {
+  build.onResolve({ filter: /^@deepseek-ai\/dsh-client-ui-primitives$/ }, () => ({ path: 'preview-primitives', namespace: 'official-source' }));
+  build.onLoad({ filter: /.*/, namespace: 'official-source' }, () => ({ loader: 'ts', resolveDir: root, contents: `export { Tooltip } from './deepseek-harness/packages/client/ui-primitives/src/Tooltip.tsx'; export { IconDownloadOutlineRegular, IconCodeOutlineRegular, IconInspectOutlineRegular } from './deepseek-harness/packages/client/ui-primitives/src/icons/index.tsx';` }));
+} }, sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' } });
 const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['Name', 'Value'], ['BenchGo', 42], ['Other', 7]]), 'Data');
 const zip = new JSZip();
 zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
@@ -30,7 +34,7 @@ const requests = [], server = createServer(async (req, res) => {
     if (url.pathname === '/') { res.setHeader('content-type', 'text/html'); res.end('<div id="root"></div><script src="/app.js"></script>'); }
     else if (url.pathname === '/app.js') { res.setHeader('content-type', 'text/javascript'); res.end(bundle.outputFiles[0].contents); }
     else if (url.pathname.startsWith('/api/benchgo/preview-assets/')) { const name = url.pathname.slice('/api/benchgo/preview-assets/'.length); if (!/^[\w./-]+$/.test(name) || name.includes('..')) throw Error('bad path'); res.setHeader('content-type', name.endsWith('.js') ? 'text/javascript' : name.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream'); res.end(await readFile(new URL('../lib/preview/' + name, import.meta.url))); }
-    else if (url.pathname === '/api/file') { const name = url.searchParams.get('name'); if (name === 'sample.pptx') { res.statusCode = 503; res.setHeader('content-type', 'application/json'); res.end('{"error":"未安装 LibreOffice"}'); } else { res.end(fixtures[name]); } }
+    else if (url.pathname === '/api/file') { const name = url.searchParams.get('name'); if (name === 'sample.ppt') { res.statusCode = 503; res.setHeader('content-type', 'application/json'); res.end('{"error":"未安装 LibreOffice"}'); } else { res.end(fixtures[name]); } }
     else { res.statusCode = 404; res.end(); }
   } catch (error) { res.statusCode = 500; res.end(error.message); }
 });
@@ -59,9 +63,9 @@ try {
   await open('sample.docx'); await wait("document.querySelector('iframe')?.srcdoc.includes('DOCX smoke')");
   await open('sample.pdf'); await wait("document.querySelector('canvas')?.width > 300 && !document.querySelector('[role=status]')");
   assert.equal(await evaluate("Boolean(document.querySelector('[role=alert]'))"), false);
-  await open('sample.pptx'); await wait("document.querySelector('[role=alert]')?.textContent.includes('未安装 LibreOffice')");
+  await open('sample.ppt'); await wait("document.querySelector('[role=alert]')?.textContent.includes('未安装 LibreOffice')");
   assert.ok(requests.some(path => path.includes('preview=pdf')));
-  console.log('Preview browser smoke passed: MD, JSON, HTML isolation, XLSX, XLS, CSV, DOCX, PDF, optional PPT fallback, lazy loading.');
+  console.log('Preview browser smoke passed: MD, JSON, HTML isolation, XLSX, XLS, CSV, DOCX, PDF, optional legacy PPT fallback, lazy loading.');
   await command('Browser.close');
 } finally {
   socket?.close();

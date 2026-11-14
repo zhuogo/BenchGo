@@ -15,14 +15,14 @@ async function fixture(t, channel) {
   const source = { channel, sourceType: 'topic', connectionId: channel, conversationId: 'chat', accountId: 'account', connectionRevision: 3, chatId: 'chat', messageId: 'original', topicId: 'topic' };
   const entries = [];
   for (let index = 0; index < 2; index++) {
-    const ticket = db.createTicket({ threadId: 'origin', target: `work-${index}`, mandate: { actorId: 'owner', source } });
-    db.createAssignment(ticket.id, {});
+    const task = db.createTask({ threadId: 'origin', target: `work-${index}`, mandate: { actorId: 'owner', source } });
+    db.createAssignment(task.id, {});
     const assignment = db.claimAssignments('worker', { validateMandate: () => true })[0];
     const ownership = { owner: assignment.owner, fence: assignment.fence }, sessionId = `session-${index}`;
     const run = db.prepareRun(assignment.id, { ...ownership, sessionId, directory });
     db.updateRun(run.id, { ...ownership, state: 'submitted' });
     const [attention] = db.openAttention(assignment.id, { ...ownership, sessionId, callId: `call-${index}`, questions: [{ id: 'opaque-question', question: '选择？', options: [{ label: '继续' }] }] });
-    entries.push({ ticket, attention, assignment, run, ownership });
+    entries.push({ task, attention, assignment, run, ownership });
   }
   const policy = { version: 'p1', ownerIds: ['owner', 'other-owner'], threadIds: ['chat', 'other-chat'] };
   let sequence = 0;
@@ -42,13 +42,13 @@ for (const channel of ['telegram', 'discord', 'whatsapp', 'weixin']) test(`${cha
   const answer = h.receive({ text });
   assert.equal(answer.attention.id, second.attention.id);
   assert.equal(answer.requiresEval, false);
-  assert.equal(h.db.attentions(first.ticket.id)[0].state, 'waiting');
-  assert.equal(h.db.attentions(second.ticket.id)[0].answerTriggerId, answer.trigger.id);
+  assert.equal(h.db.attentions(first.task.id)[0].state, 'waiting');
+  assert.equal(h.db.attentions(second.task.id)[0].answerTriggerId, answer.trigger.id);
   assert.equal(attentionReplyText(second.attention.id, h.db.getTrigger(answer.trigger.id).content), '继续');
-  assert.equal(h.db.getTicket(second.ticket.id).instructionRevision, 1);
+  assert.equal(h.db.getTask(second.task.id).instructionRevision, 1);
 });
 
-test('reply to any confirmed message part resolves its original question without selecting the latest ticket', async t => {
+test('reply to any confirmed message part resolves its original question without selecting the latest task', async t => {
   const h = await fixture(t, 'telegram'), [first, second] = h.entries;
   const outboxes = h.db.claimOutbox('sender');
   for (const row of outboxes) h.db.finishOutbox(row.id, { owner: 'sender', sent: true, receipt: row.payload.attentionId === first.attention.id
@@ -57,7 +57,7 @@ test('reply to any confirmed message part resolves its original question without
   h.restart();
   const accepted = h.receive({ source: { ...h.source, messageId: 'reply', parentMessageId: 'chat:first' } });
   assert.equal(accepted.attention.id, first.attention.id);
-  assert.equal(h.db.attentions(second.ticket.id)[0].state, 'waiting');
+  assert.equal(h.db.attentions(second.task.id)[0].state, 'waiting');
 });
 
 test('old Telegram integer receipts match only the exact originating account and chat', async t => {
@@ -69,8 +69,8 @@ test('old Telegram integer receipts match only the exact originating account and
 
 test('numbered answers cannot revive a question after its new requirements apply or a terminal task', async t => {
   const h = await fixture(t, 'weixin'), [first, second] = h.entries;
-  h.db.updateTicket(first.ticket.id, { target: 'changed' }, { expectedInstructionRevision: 1 });
-  h.db.applyTicketRevision(first.assignment.id, { ...first.ownership, runId: first.run.id, boundaryId: 'next-tool-batch' });
-  h.db.cancelTicket(second.ticket.id);
+  h.db.updateTask(first.task.id, { target: 'changed' }, { expectedInstructionRevision: 1 });
+  h.db.applyTaskRevision(first.assignment.id, { ...first.ownership, runId: first.run.id, boundaryId: 'next-tool-batch' });
+  h.db.cancelTask(second.task.id);
   for (const entry of [first, second]) assert.equal(h.receive({ text: `/answer ${entry.attention.id} 继续` }).attention, undefined);
 });

@@ -12,6 +12,7 @@ import { createAssistantLedger } from './ledger.mjs';
 import { createAssistantConnections } from './connections.mjs';
 import { loadChannelModules } from './channel-catalog.mjs';
 import { createAssistantOrchestrationStore } from './orchestration-store.mjs';
+import { migrateTaskState, migrateTaskMemoryDocument } from './task-storage-migration.mjs';
 import { createAssistantIdentity, identityName, withIdentityName } from './identity.mjs';
 import { applySettingsOps, assertSettingsExpected, notifySettings, settingsSnapshot } from '../../benchgo/shared/settings-adapter-utils.mjs';
 import { ASSISTANT_BLOCKED_PATHS, ASSISTANT_CONFIG_SCHEMA } from './settings-schema.mjs';
@@ -161,11 +162,26 @@ export async function createAssistantStore({ dataDirectory } = {}) {
   }
   await serialize(directory, async () => {
     for (const [path, fallback, validate] of [[paths.config, defaults, validateConfig], [paths.state, initialState, validateState]]) {
-      const value = await readVersioned(path, fallback, validate);
+      let value = await readVersioned(path, fallback, validate);
+      if (path === paths.state) {
+        const migrated = migrateTaskState(value);
+        if (migrated.changed) {
+          value = { ...migrated.value, revision: value.revision + 1 };
+          validate(value);
+          await atomic(path, JSON.stringify(value, null, 2) + '\n');
+        }
+      }
       try { await writeFile(path, JSON.stringify(value, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
     }
   });
   const documents = await createAssistantDocuments({ directory });
+  try {
+    for (const document of await documents.list({ recursive: true })) {
+      const migrated = migrateTaskMemoryDocument(document.content);
+      if (migrated.changed) await documents.write(document.name, { content: migrated.content,
+        expectedHash: document.hash, source: { type: 'task-schema-migration' } });
+    }
+  } catch (error) { documents.close(); throw error; }
   const configListeners = new Set();
   const readConfig = () => readVersioned(paths.config, defaults, validateConfig);
   const identityService = createAssistantIdentity({ documents });

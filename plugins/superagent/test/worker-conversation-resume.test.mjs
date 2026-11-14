@@ -11,19 +11,19 @@ import { createAssignmentExecutor, workerExecutionBinding } from '../src/assignm
 import { createAssistantAssignmentWorker } from '../src/assignment-worker.mjs';
 import { installRoleHost, loadRolePackage } from './role-host-fixture.mjs';
 
-test('human conversation continuation atomically reclaims the original completed run and preserves its ticket', async t => {
+test('human conversation continuation atomically reclaims the original completed run and preserves its task', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-native-resume-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'desktop' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'Original work', mandate: {} });
-  database.createAssignment(ticket.id, { id: 'assignment' });
+  const task = database.createTask({ threadId: 'thread', target: 'Original work', mandate: {} });
+  database.createAssignment(task.id, { id: 'assignment' });
   const [initial] = database.claimAssignments('first', { now: 100, leaseMs: 100, validateMandate: () => true });
   const run = database.prepareRun(initial.id, { owner: initial.owner, fence: initial.fence, sessionId: 'original-session', directory: '/original', now: 100 });
   assert.throws(() => database.resumeWorkerConversation('original-session', { owner: 'second', now: 150, validateMandate: () => true }), /active execution owner/);
   const raw = new DatabaseSync(database.path);
   raw.prepare("UPDATE sa_assignments SET state='completed',owner=NULL,lease_until=NULL WHERE id=?").run(initial.id);
-  raw.prepare("UPDATE sa_tickets SET status='completed' WHERE id=?").run(ticket.id);
+  raw.prepare("UPDATE sa_tasks SET status='completed' WHERE id=?").run(task.id);
   assert.throws(() => database.resumeWorkerConversation('original-session', { owner: 'second', now: 201, validateMandate: () => true }), /verified effects/);
   raw.prepare("UPDATE sa_runs SET state='completed',payload=json_set(payload,'$.evidence',json(?)) WHERE id=?")
     .run(JSON.stringify({ transcript: { hash: 'saved-hash', lastSeq: 7 }, executionEffects: { effectsVerified: false } }), run.id);
@@ -31,10 +31,10 @@ test('human conversation continuation atomically reclaims the original completed
   assert.throws(() => database.resumeWorkerConversation('original-session', { owner: 'second', now: 201, validateMandate: () => false }), /authorization changed/);
   const resumed = database.resumeWorkerConversation('original-session', { owner: 'second', now: 201, validateMandate: () => true });
   assert.equal(resumed.id, initial.id);
-  assert.equal(resumed.ticketId, ticket.id);
+  assert.equal(resumed.taskId, task.id);
   assert.equal(resumed.fence, initial.fence + 1);
   assert.deepEqual(resumed.nativeContinuation, { runId: run.id });
-  assert.equal(database.getTicket(ticket.id).status, 'running');
+  assert.equal(database.getTask(task.id).status, 'running');
   const runs = database.runs(initial.id);
   assert.equal(runs.length, 1);
   assert.equal(runs[0].id, run.id);
@@ -45,7 +45,7 @@ test('human conversation continuation atomically reclaims the original completed
   assert.throws(() => database.resumeWorkerConversation('original-session', { owner: 'third', now: 202, validateMandate: () => true }), /active execution owner/);
 });
 
-test('two completed official Workers accept concurrent native prompts without crossing tickets or transcripts', { timeout: 45000 }, async t => {
+test('two completed official Workers accept concurrent native prompts without crossing tasks or transcripts', { timeout: 45000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-two-workers-'));
   const store = await createAssistantStore({ dataDirectory: directory });
   const load = name => loadRolePackage('core/agent-loop', name);
@@ -75,7 +75,7 @@ test('two completed official Workers accept concurrent native prompts without cr
       const body = request.messages.findLast(message => message.role === 'user')?.content?.find(block => block.type === 'text')?.text;
       let intake; try { intake = JSON.parse(body); } catch {}
       let answer = 'Verified original work';
-      if (intake?.candidates) answer = JSON.stringify({ decisions: [{ candidateId: intake.candidates[0].candidateId, outcome: 'attach', ticketId: intake.tickets[0].id, reason: 'Original Worker conversation input' }] });
+      if (intake?.candidates) answer = JSON.stringify({ decisions: [{ candidateId: intake.candidates[0].candidateId, outcome: 'attach', taskId: intake.tasks[0].id, reason: 'Original Worker conversation input' }] });
       const agent = ctx.agents.get(request.sessionId);
       if (agent && workerExecutionBinding(agent)) {
         const messageText = JSON.stringify(request.messages);
@@ -97,13 +97,13 @@ test('two completed official Workers accept concurrent native prompts without cr
   await store.updateConfig({ models, workerModels: models });
   const database = store.orchestration, policy = { model: models[0], workerModels: models };
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
-  const tickets = ['A', 'B'].map(label => database.createTicket({ threadId: 'thread', target: `TASK_ONLY_${label}`, mandate: {} }));
-  tickets.forEach(ticket => database.createAssignment(ticket.id, {}));
+  const tasks = ['A', 'B'].map(label => database.createTask({ threadId: 'thread', target: `TASK_ONLY_${label}`, mandate: {} }));
+  tasks.forEach(task => database.createAssignment(task.id, {}));
   const assignments = database.claimAssignments('initial', { limit: 2, validateMandate: () => true });
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => policy, authorizeAction: async () => ({ allowed: true }) });
   const initial = await Promise.all(assignments.map(async assignment => {
-    const result = await executor(assignment, { ticket: database.getTicket(assignment.ticketId), signal: AbortSignal.timeout(15000), renew: async () => {} });
-    database.commitResult(assignment.ticketId, { assignment, result, uniqueKey: `initial:${assignment.id}` });
+    const result = await executor(assignment, { task: database.getTask(assignment.taskId), signal: AbortSignal.timeout(15000), renew: async () => {} });
+    database.commitResult(assignment.taskId, { assignment, result, uniqueKey: `initial:${assignment.id}` });
     assert.equal(ctx.agents.get(result.sessionId), undefined);
     return result;
   }));
@@ -111,7 +111,7 @@ test('two completed official Workers accept concurrent native prompts without cr
   worker = createAssistantAssignmentWorker({ database, execute: executor, readPolicy: async () => policy, validateMandate: () => true,
     onResult: async (result, context) => {
       await context.beforeCommit();
-      database.commitResult(context.ticket.id, { assignment: context.assignment, result, uniqueKey: `continued:${context.assignment.id}:${context.assignment.fence}` });
+      database.commitResult(context.task.id, { assignment: context.assignment, result, uniqueKey: `continued:${context.assignment.id}:${context.assignment.fence}` });
       if (++commits === 2) completed.resolve();
     } });
   engine = await createAssistantEngine({ ctx, store, resumeExecutionSession: input => worker.resumeExecutionSession(input) });
@@ -130,12 +130,12 @@ test('two completed official Workers accept concurrent native prompts without cr
   release.resolve();
   await completed.promise;
   for (const [index, original] of initial.entries()) {
-    const ticketId = assignments[index].ticketId;
-    assert.equal(database.getTicket(ticketId).resultVersion, 2);
-    assert.equal(database.getTicket(ticketId).status, 'completed');
+    const taskId = assignments[index].taskId;
+    assert.equal(database.getTask(taskId).resultVersion, 2);
+    assert.equal(database.getTask(taskId).status, 'completed');
     const runs = database.runs(assignments[index].id);
     assert.equal(runs.length, 1); assert.equal(runs[0].id, original.runId); assert.equal(runs[0].sessionId, original.sessionId);
-    const inputs = database.ticketInputs(ticketId).map(input => database.getTrigger(input.triggerId).content);
+    const inputs = database.taskInputs(taskId).map(input => database.getTrigger(input.triggerId).content);
     assert.ok(inputs.includes(`FOLLOWUP_ONLY_${index}`));
     assert.ok(!inputs.includes(`FOLLOWUP_ONLY_${1 - index}`));
     const transcript = JSON.stringify((await ctx.sessionQuery.readSession(original.sessionId)).events);

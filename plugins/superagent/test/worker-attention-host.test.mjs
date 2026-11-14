@@ -28,10 +28,10 @@ test('Worker Attention precedes official Remote forwarding without an owner Clie
   await ctx.plugin(await load('@deepseek-ai/dsh-api-remotes'));
   assert.equal(ctx.typertGateway.hasLiveClient(), false);
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
-  const ticket = database.createTicket({ threadId: 'thread', target: 'Answer', mandate: {
+  const task = database.createTask({ threadId: 'thread', target: 'Answer', mandate: {
     instruction: '使用简体中文。展示格式由用户决定。', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' },
   } });
-  database.createAssignment(ticket.id, {});
+  database.createAssignment(task.id, {});
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'attention-host-worker', directory: process.cwd() });
@@ -53,12 +53,12 @@ test('Worker Attention precedes official Remote forwarding without an owner Clie
   const questions = [{ id: 'known', question: '交付语言？' }, { id: 'format', question: '列表还是短句？', options: [{ label: '列表' }, { label: '短句' }] }];
   const answer = ctx.userQuestions.ask({ agent: worker.agent, questions, wait: { callId: 'blocking-call' }, signal: controller.signal });
   answer.catch(() => {});
-  for (let i = 0; i < 1000 && !database.attentions(ticket.id).length && !ctx.typertGateway.getPendingRemoteEvents().length; i++) await nextTurn();
+  for (let i = 0; i < 1000 && !database.attentions(task.id).length && !ctx.typertGateway.getPendingRemoteEvents().length; i++) await nextTurn();
   assert.equal(triaged, 1);
   assert.deepEqual(ctx.typertGateway.getPendingRemoteEvents(), [], 'owned Worker questions never wait for a Remote Client');
-  const [attention] = database.attentions(ticket.id);
+  const [attention] = database.attentions(task.id);
   assert.equal(attention?.question.id, 'format');
-  database.answerDesktopAttention({ ticketId: ticket.id, attentionId: attention.id, instructionRevision: 1,
+  database.answerDesktopAttention({ taskId: task.id, attentionId: attention.id, instructionRevision: 1,
     requestId: 'real-user-answer', answer: { selected: ['列表'] } });
   assert.deepEqual(await answer, { answers: [{ id: 'known', selected: [], custom: '简体中文' }, { id: 'format', selected: ['列表'] }] });
 
@@ -71,7 +71,7 @@ test('Worker Attention precedes official Remote forwarding without an owner Clie
 
   await worker.dispose();
   installWorkerAttention(foreign.agent.ctx, foreign.agent, { assignment, signal: controller.signal,
-    database: { ...database, getTicket: () => ({ ...ticket, mandate: { ...ticket.mandate, source: { channel: 'unsupported' } } }) },
+    database: { ...database, getTask: () => ({ ...task, mandate: { ...task.mandate, source: { channel: 'unsupported' } } }) },
     llm: { async *stream() { assert.fail('unsupported channels must delegate'); } },
   });
   const foreignAbort = new AbortController();

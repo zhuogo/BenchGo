@@ -73,9 +73,9 @@ test('a reachable follow-up closes the unreachable alert with a recovery message
   assert.doesNotMatch(host.sent[0].summary, /暂不可达|执行状态未知/);
 });
 
-test('legal waiting retires an execution alert without claiming worker recovery or ticket completion', async t => {
+test('legal waiting retires an execution alert without claiming worker recovery or task completion', async t => {
   const host = fixture(t, at => facts(at, [{
-    ticket: { id: 'ticket', status: 'running', instructionRevision: 1 },
+    task: { id: 'task', status: 'running', instructionRevision: 1 },
     assignment: { id: 'assignment', state: 'claimed', fence: 1, leaseUntil: at + 60000 },
     run: { id: 'run', sessionId: 'worker-session', state: 'running', instructionRevision: 1 },
     executionAlive: { status: 'running', observedAt: iso(at), bootId: 'boot' },

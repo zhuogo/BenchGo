@@ -189,7 +189,7 @@ test('failed automatic persistence is reported and retries reuse the same durabl
 
 test('closed-learning slots survive changed model output and never revive corrected or forgotten sources', async t => {
   const { store, open } = await fixture(t);
-  const evidence = { role: 'user', sessionId: 's', messageId: 'closed-human', taskId: 'closed-ticket', ticketId: 'closed-ticket', resultVersion: 1 };
+  const evidence = { role: 'user', sessionId: 's', messageId: 'closed-human', taskId: 'closed-task', taskId: 'closed-task', resultVersion: 1 };
   const options = { verifiedSource: evidence, idempotencyKey: 'closed-learning:closed:0:1:memory:0' };
   const first = await store.memory.propose({ content: '第一次整理', source: evidence }, options);
   const restarted = await open();
@@ -224,7 +224,7 @@ test('closed learning cannot evade forgotten human evidence by dropping Router t
   const original = { role: 'user', sessionId: 'router', messageId: 'human-memory', callId: 'router-memory-call' };
   const entry = await store.saveMemory({ content: '用户要求忘记的事实', source: original });
   await store.memory.forget(entry.id);
-  const closed = { role: 'user', sessionId: 'router', messageId: 'human-memory', ticketId: 'closed-task', resultVersion: 1 };
+  const closed = { role: 'user', sessionId: 'router', messageId: 'human-memory', taskId: 'closed-task', resultVersion: 1 };
   const result = await (await open()).memory.propose({ content: '旧事实改写为全新措辞', source: closed },
     { verifiedSource: closed, idempotencyKey: 'closed-learning:forgotten:0' });
   assert.equal(result.status, 'excluded');

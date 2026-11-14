@@ -1,5 +1,5 @@
-const statuses = { online: '可连接', connected: '已连接', offline: '离线', connecting: '连接中', failed: '连接失败', disconnected: '未连接', unknown: '未检测' };
-export function deviceStatus(device) { return statuses[device?.status] || '未检测'; }
+const statuses = { online: '可连接', connected: '已连接', offline: '离线', connecting: '连接中', failed: '连接失败', disconnected: '未连接', unknown: '' };
+export function deviceStatus(device) { return statuses[device?.status] || ''; }
 export function deviceIcon(device) {
   const type = device?.deviceType || device?.kind;
   if (['mobile', 'phone', 'android', 'ios', 'tablet'].includes(type)) return 'mobile';

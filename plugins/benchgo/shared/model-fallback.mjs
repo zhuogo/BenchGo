@@ -19,7 +19,7 @@ export function dispatchedCallSignatures(events) {
 }
 
 // Exact Router tool contracts from service.mjs; no prefix or model annotations.
-const routerQueries = new Set(['assistant_context', 'assistant_tickets', 'assistant_projects', 'assistant_sessions', 'assistant_history',
+const routerQueries = new Set(['assistant_context', 'assistant_tasks', 'assistant_projects', 'assistant_sessions', 'assistant_history',
   'assistant_session_search', 'assistant_ledger_read', 'assistant_capabilities', 'assistant_models', 'assistant_memory_search',
   'assistant_summarize', 'assistant_analyze_image', 'assistant_device_status', 'schedule_list']);
 export function isRouterQuery(name, args) {

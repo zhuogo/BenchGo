@@ -28,6 +28,30 @@ test('history index appends metadata once and keeps pagination, image validation
   assert.deepEqual(historyPage(replacedAnswer, index, { before: 6, limit: 1 }).messages, [{ seq: 5 }]);
 });
 
+test('generated images keep their originating turn group across calls, pages and late results', () => {
+  const events = [{ seq: 0, type: 'turn/start', data: { turn: 1 } }, call(1, 'a'), result(2, 'a', 'first.png'),
+    call(3, 'b'), { seq: 4, type: 'turn/end', data: { reason: { kind: 'completed' } } }];
+  const index = updateHistoryIndex(events);
+  events.push({ seq: 5, type: 'turn/start', data: { turn: 2 } }, call(6, 'c'), result(7, 'b', 'second.png'), result(8, 'c', 'third.png'));
+  updateHistoryIndex(events, index);
+  assert.deepEqual(index.images.map(row => row.image.groupId), ['turn:0', 'turn:0', 'turn:5']);
+  const messages = [{ seq: 1 }, { seq: 6 }];
+  const latest = historyPage(messages, index, { limit: 1 });
+  const earlier = historyPage(messages, index, { before: latest.nextBefore, limit: 1 });
+  assert.equal(latest.images[0].groupId, earlier.images[0].groupId, 'a split group rejoins when earlier history is loaded');
+  assert.notEqual(latest.images[0].groupId, latest.images[1].groupId, 'distinct reply turns never share a group');
+  const rebuilt = updateHistoryIndex(events);
+  assert.deepEqual(rebuilt.images, index.images, 'reloading history preserves group identities');
+});
+
+test('incomplete transcripts group calls by assistant message instead of merging unrelated replies', () => {
+  const first = call(0, 'a'); first.data.message.id = 'reply-1';
+  first.data.message.content.push({ type: 'tool-call', name: 'assistant_generate_image', id: 'b' });
+  const events = [first, result(1, 'a', 'a.png'), result(2, 'b', 'b.png'), call(3, 'c'), result(4, 'c', 'c.png')];
+  const index = updateHistoryIndex(events);
+  assert.deepEqual(index.images.map(row => row.image.groupId), ['message:reply-1', 'message:reply-1', 'message:3']);
+});
+
 test('warm reads never revisit old tool traces and incremental indexing reads only appended events', t => {
   let accesses = 0;
   const trace = Array.from({ length: 100000 }, (_, seq) => ({ seq, type: 'tool/call', data: { name: 'opaque-tool' } }));

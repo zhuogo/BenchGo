@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fileUrl, pdfUrl, previewKind, decodeText, readPreview, checkOfficeArchive, visibleRows, frameDocument } from '../../shared/client/preview-model.mjs';
+import { PPTX_SCRIPT_LIMIT, fileUrl, pdfUrl, documentPdfUrl, pptxFrameDocument, previewKind, decodeText, readPreview, checkOfficeArchive, visibleRows, frameDocument } from '../../shared/client/preview-model.mjs';
 
 test('preview URLs preserve opaque file names and enforce the current origin', () => {
   const base = 'https://benchgo.test/workbench/';
@@ -19,11 +19,35 @@ test('preview URLs preserve opaque file names and enforce the current origin', (
 });
 
 test('formats are case insensitive and text decoding rejects binary and invalid UTF-8', () => {
-  for (const [name, kind] of [['说明.MD', 'markdown'], ['a.json', 'json'], ['a.XLSX', 'sheet'], ['a.tsv', 'sheet'], ['a.docx', 'docx'], ['a.PPTX', 'office'], ['a.html', 'html'], ['a.pdf', 'pdf']]) assert.equal(previewKind(name), kind);
+  for (const [name, kind] of [['说明.MD', 'markdown'], ['a.json', 'json'], ['a.XLSX', 'sheet'], ['a.tsv', 'sheet'], ['a.docx', 'docx'], ['a.PPTX', 'pptx'], ['a.ppt', 'office'], ['a.html', 'html'], ['a.pdf', 'pdf']]) assert.equal(previewKind(name), kind);
+  for (const ext of ['mp4', 'webm', 'mov', 'qt', 'm4v', 'mkv', 'avi', 'wmv', 'flv', 'ogv', 'mpeg', 'mpg', '3gp', '3g2', 'm2ts']) assert.equal(previewKind(`sample.${ext}`), 'video');
+  for (const ext of ['mp3', 'wav', 'wave', 'ogg', 'oga', 'opus', 'm4a', 'flac', 'aac', 'wma', 'aif', 'aiff', 'amr', 'ape', 'caf', 'mka']) assert.equal(previewKind(`sample.${ext}`), 'audio');
   assert.equal(decodeText(new TextEncoder().encode('中文 😀\n')), '中文 😀\n');
   assert.equal(decodeText(new Uint8Array()), '');
   assert.throws(() => decodeText(Uint8Array.of(65, 0, 66)));
   assert.throws(() => decodeText(Uint8Array.of(0xc3, 0x28)));
+});
+
+test('embedded document previews disable implicit conversion and isolate the local PPTX runner', () => {
+  const base = 'https://benchgo.test/proxy/';
+  assert.equal(documentPdfUrl({ url: 'api/file', pdfUrl: false }, base), null);
+  assert.equal(documentPdfUrl({ url: 'api/file', pdfUrl: 'api/converted' }, base), 'https://benchgo.test/proxy/api/converted');
+  assert.match(documentPdfUrl({ url: 'api/file' }, base), /preview=pdf/);
+  assert.throws(() => documentPdfUrl({ url: 'api/file', pdfUrl: 'https://other.test/pdf' }, base));
+  const nonce = 'random-nonce-value-1234567890', source = 'const text="</SCRIPT><script>bad()</script>";';
+  const html = pptxFrameDocument(source, 'session-123', nonce);
+  assert.match(html, /script-src 'nonce-random-nonce-value-1234567890'/);
+  assert.match(html, /connect-src 'none'/);
+  assert.match(html, /form-action 'none'/);
+  assert.match(html, /data-preview-id="session-123"/);
+  assert.match(html, /<script nonce="random-nonce-value-1234567890"/);
+  assert.equal((html.match(/<\/script>/g) || []).length, 1, 'source cannot end its enclosing script');
+  assert.match(html, /<\\\/SCRIPT>/);
+  assert.doesNotMatch(html, /<script src=/);
+  assert.doesNotMatch(html, /allow-same-origin|allow-top-navigation|allow-popups/);
+  assert.throws(() => pptxFrameDocument('code', '" onerror="', nonce));
+  assert.throws(() => pptxFrameDocument('code', 'session-123', '" onerror="'));
+  assert.throws(() => pptxFrameDocument('x'.repeat(PPTX_SCRIPT_LIMIT + 1), 'session-123', nonce), /大小限制/);
 });
 
 test('stream reader bounds declared and actual sizes and cancels oversized reads', async () => {
@@ -39,6 +63,11 @@ test('stream reader bounds declared and actual sizes and cancels oversized reads
   const controller = new AbortController(); controller.abort();
   await assert.rejects(readPreview(new Response('ok'), 8, controller.signal), { name: 'AbortError' });
   await assert.rejects(readPreview(new Response('{"error":"converter unavailable"}', { status: 503 }), 100), /converter unavailable/);
+  await assert.rejects(readPreview(new Response('{"ok":false,"error":{"code":"NOT_FOUND","message":"文件不存在"}}', { status: 404 }), 100), /文件不存在/);
+  await assert.rejects(readPreview(new Response('{"error":{"code":"UNKNOWN"}}', { status: 503 }), 100), /读取失败 \(503\)/);
+  await assert.rejects(readPreview(new Response('not available', { status: 503 }), 100), /not available/);
+  assert.deepEqual(await readPreview(new Response(''), 100), new Uint8Array());
+  assert.deepEqual(await readPreview(new Response(null, { status: 204 }), 100), new Uint8Array());
 });
 
 function archive(sizes, { encrypted = false, entries = sizes.length, offset = 4 } = {}) {

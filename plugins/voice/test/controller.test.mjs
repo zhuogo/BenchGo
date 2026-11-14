@@ -333,17 +333,17 @@ test('native public sentences deliver PCM before text settlement and upstream au
     const queue=new SpeechQueue(options);queues.push(queue);return queue;
   }});t.after(()=>h.api.dispose());await h.api.startCall({sessionId:'s'});
   h.publish('turn/start',{turn:1});h.publish('user/message',{id:'human',source:{kind:'user'},content:[]});
-  h.publish('assistant/live-chunk',{turn:1,step:1,attemptId:'a',chunk:{type:'text-delta',text:'我先核对这些工单。'}});
-  await flush();assert.deepEqual(requests,['我先核对这些工单。']);assert.deepEqual(audio,[[1,0]]);
+  h.publish('assistant/live-chunk',{turn:1,step:1,attemptId:'a',chunk:{type:'text-delta',text:'我先核对这些任务。'}});
+  await flush();assert.deepEqual(requests,['我先核对这些任务。']);assert.deepEqual(audio,[[1,0]]);
   assert.equal(queues[0].items[0].done,undefined);
-  h.publish('assistant/message',{turn:1,step:1,message:{source:{kind:'model'},content:[{type:'text',text:'我先核对这些工单。'}]}});
+  h.publish('assistant/message',{turn:1,step:1,message:{source:{kind:'model'},content:[{type:'text',text:'我先核对这些任务。'}]}});
   h.publish('assistant/live-chunk',{turn:1,step:2,attemptId:'b',chunk:{type:'text-delta',text:'接下来给你预览'}});
   h.publish('assistant/message',{turn:1,step:2,message:{source:{kind:'model'},content:[{type:'text',text:'接下来给你预览'}]}});
-  await flush();assert.deepEqual(requests,['我先核对这些工单。','接下来给你预览']);
+  await flush();assert.deepEqual(requests,['我先核对这些任务。','接下来给你预览']);
   h.publish('turn/end',{turn:1,reason:{kind:'completed'}});await flush();assert.equal(requests.length,2);
   for(const stream of streams)stream.close();await queues[0].finish();
   assert.deepEqual(audio,[[1,0],[1,0]]);
-  assert.deepEqual(h.api.state.getSnapshot().conversationMessages.filter(row=>row.role==='assistant').map(row=>[row.text,row.partial]),[['我先核对这些工单。',false],['接下来给你预览',false]]);
+  assert.deepEqual(h.api.state.getSnapshot().conversationMessages.filter(row=>row.role==='assistant').map(row=>[row.text,row.partial]),[['我先核对这些任务。',false],['接下来给你预览',false]]);
 });
 
 test('native startup retains a completed reply until microphone and playback are ready',async t=>{
@@ -369,8 +369,8 @@ test('native reconnect resumes only fresh text without replaying its baseline pr
 });
 
 function publishNotice(h,id,text,{replyKind}={}){
-  h.publish('user/message',{id,source:replyKind?{kind:'benchgo-ticket-reply',replyKind}:{kind:'user'},content:[]});
-  h.publish('plugin:benchgo-plugin/chat-publication',{kind:replyKind?'ticket-reply':'final',requestId:id,text},{ignorable:true});
+  h.publish('user/message',{id,source:replyKind?{kind:'benchgo-task-reply',replyKind}:{kind:'user'},content:[]});
+  h.publish('plugin:benchgo-plugin/chat-publication',{kind:replyKind?'task-reply':'final',requestId:id,text},{ignorable:true});
 }
 function publishDelivery(h,id,text){h.publish('plugin:benchgo-plugin/channel-message',{mirrorKey:id,direction:'delivery',text,source:{channel:'desktop',sourceType:'conversation'}},{ignorable:true});}
 
@@ -457,10 +457,10 @@ test('native retry replaces the failed live subtitle with the new attempt',async
 test('native call never speaks or records internal reply drafts and enhanced keeps its single speaking channel',async()=>{
   for(const conversationMode of ['native','enhanced']){
     const h=setup({conversationMode,createConversation:()=>({start:async()=>{},interrupt:async()=>{},dispose:async()=>{}})});await h.api.startCall({sessionId:'s'});
-    h.publish('turn/start',{turn:1});h.publish('user/message',{id:'internal',source:{kind:'benchgo-ticket-reply',replyKind:'result'},content:[{type:'text',text:'PRIVATE NOTICE'}]});
+    h.publish('turn/start',{turn:1});h.publish('user/message',{id:'internal',source:{kind:'benchgo-task-reply',replyKind:'result'},content:[{type:'text',text:'PRIVATE NOTICE'}]});
     h.publish('assistant/live-chunk',{attemptId:'private',turn:1,step:1,chunk:{type:'text-delta',text:'PRIVATE DRAFT'}});
     h.publish('assistant/message',{turn:1,step:1,message:{source:{kind:'model'},content:[{type:'text',text:'PRIVATE DRAFT'}]}});
-    h.publish('plugin:benchgo-plugin/chat-publication',{kind:'ticket-reply',requestId:'internal',text:'PRIVATE OUTBOX DRAFT'},{ignorable:true});h.publish('turn/end',{turn:1,reason:{kind:'completed'}});
+    h.publish('plugin:benchgo-plugin/chat-publication',{kind:'task-reply',requestId:'internal',text:'PRIVATE OUTBOX DRAFT'},{ignorable:true});h.publish('turn/end',{turn:1,reason:{kind:'completed'}});
     assert.ok(h.queues.every(queue=>!queue.text.length));assert.doesNotMatch(JSON.stringify(h.api.state.getSnapshot().conversationMessages),/PRIVATE/);
     if(conversationMode==='enhanced'){publishDelivery(h,'ready','正式交付结果');assert.ok(h.queues.every(queue=>!queue.text.length));}
     await h.api.dispose();

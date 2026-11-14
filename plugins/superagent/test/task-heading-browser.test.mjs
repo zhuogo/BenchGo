@@ -28,9 +28,10 @@ async function fixture() {
       window.renderScenario=(state='data',section='tasks')=>{
         window.calls=[];window.resourceState=state;
         const tasks=createTaskManagement({database:{meta:()=>undefined}});
-        const rows=tasks.project('ticket',[{id:'done',title:'检索并汇总 2026',target:'检索公开资料并整理结果',status:'completed',instructionRevision:1,resultVersion:1,
+        const rows=tasks.project('task',[{id:'done',title:'检索并汇总 2026',target:'检索公开资料并整理结果',status:'completed',instructionRevision:1,resultVersion:1,
           taskCanOrganize:true,createdAt:'2026-11-07T08:00:00Z',updatedAt:'2026-11-07T08:05:00Z',
           results:[{version:1,summary:'已完成检索。汇总事实，并附上来源与下一步。',evidenceRefs:[]}],
+          ...(state==='progress'?{status:'running',resultVersion:0,results:[],execution:{instructionRevision:1,observed:true,worker:{id:'main',label:'主 Worker',status:'running',activitySource:'report',activity:'核对邮箱验证限制，准备重新注册',updatedAt:'2026-11-13T08:00:00Z',history:[{seq:1,status:'running',activitySource:'report',activity:'读取 ~/MEMORY.md，确认之前的注册记录',time:'2026-11-13T07:59:00Z'},{seq:2,status:'running',activitySource:'report',activity:'核对邮箱验证限制，准备重新注册',time:'2026-11-13T08:00:00Z'}]}}}:{}),
           ...(state==='waiting'?{status:'waiting',resultVersion:0,results:[],executionControl:{stopRequested:true},execution:{instructionRevision:1,summary:{text:'已请求停止，等待执行端确认',history:[]},worker:{id:'main',status:'running',activity:'执行状态待核实'}}}:{}),
           ...(state==='markdown'?{instructionRevision:2,target:${JSON.stringify(longRequirements)},acceptance:'- 验证通过\\n- 保留证据',
             revisions:[{instructionRevision:1,operation:'original',target:'# 初始要求\\n\\n- 检查基础服务',createdAt:'2026-11-07T08:00:00Z'},
@@ -42,7 +43,7 @@ async function fixture() {
           if(window.resourceState==='loading')return new Promise(()=>{});
           if(window.resourceState==='error')throw Error('连接暂不可用');
           let value={};
-          if(input.action==='tickets')value={tickets:window.resourceState==='empty'||input.archived?[]:rows};
+          if(input.action==='tasks')value={tasks:window.resourceState==='empty'||input.archived?[]:rows};
           if(input.action==='goalList')value={goals};
           if(input.action==='state')value={config:{revision:1,workerConcurrency:2}};
           if(input.action==='catalog')value={projects:[{id:'project',title:'正式项目',available:true}]};
@@ -51,7 +52,7 @@ async function fixture() {
         configureAssistantActivity(api,{connect(sink){const snapshot=()=>{
           if(window.resourceState==='loading')return;
           if(window.resourceState==='error'){sink.failed(Error('连接暂不可用'));return;}
-          sink.replace({cursor:0,tickets:window.resourceState==='empty'?[]:rows});
+          sink.replace({cursor:0,tasks:window.resourceState==='empty'?[]:rows});
         };return {start(){queueMicrotask(snapshot);},restart:snapshot,dispose(){}};}});
         const info={activePanelId:'benchgo-assistant'};
         const ctx={layout:{selectPanel:id=>window.calls.push({panel:id}),panelInfo:{getSnapshot:()=>info,subscribe:()=>()=>{}}}};
@@ -61,6 +62,7 @@ async function fixture() {
     bundle: true, write: false, outdir: join(root, 'artifacts/unused-task-heading-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(webRequire.resolve('react/package.json')), 'react-dom': dirname(webRequire.resolve('react-dom/package.json')),
+      '@deepseek-ai/dsh-util-workspace-path': join(root, 'deepseek-harness/packages/util/workspace-path/src/index.ts'),
       '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts'),
       '@deepseek-ai/dsh-api-gateway/client': join(root, 'deepseek-harness/packages/api/gateway/lib/client.node.js') },
     plugins: [{ name: 'task-heading-fixture', setup(build) {
@@ -76,6 +78,36 @@ async function fixture() {
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>${theme}${css}body{margin:0;font:14px/1.6 Arial,sans-serif;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}#root,.ba-root{height:100dvh}</style></head><body><div id="root"></div><script>${js}</script></body></html>`;
 }
 
+test('task management opens the same action timeline without repeated executor or current-progress headings', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html = await fixture(), browser = await chromium.launch({ headless: true, executablePath });
+  const screenshots = process.env.BENCHGO_TASK_HEADING_SCREENSHOTS;
+  if (screenshots) await mkdir(screenshots, { recursive: true });
+  try {
+    const page = await browser.newPage({ reducedMotion: 'reduce' });
+    page.setDefaultTimeout(5000);
+    const errors = []; page.on('pageerror', error => errors.push(error.message));
+    await page.route('**/*', route => route.request().url() === 'http://localhost/' ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort());
+    for (const width of [1440, 390]) for (const dark of [false, true]) {
+      await page.setViewportSize({ width, height: 900 }); await page.goto('http://localhost/');
+      await page.evaluate(dark => { document.body.toggleAttribute('data-ds-dark-theme', dark); window.renderScenario('progress'); }, dark);
+      await page.getByText('核对邮箱验证限制，准备重新注册', { exact: true }).waitFor();
+      await page.locator('.ba-task-open').click();
+      const detail = page.getByRole('region', { name: '任务详情', exact: true });
+      await detail.getByText('读取 ~/MEMORY.md，确认之前的注册记录', { exact: true }).waitFor();
+      assert.equal(await detail.getByText('核对邮箱验证限制，准备重新注册', { exact: true }).count(), 1);
+      assert.equal(await detail.getByText(/主 Worker|子 Worker|当前进展|阶段进展/).count(), 0);
+      assert.equal(await detail.locator('.ba-execution-mark[data-active="true"]').count(), 1, 'the task page animates only its current action');
+      assert.equal(await detail.locator('[data-history-worker-id] .ba-execution-mark').getAttribute('data-status'), 'history');
+      assert.equal(await detail.locator('.ba-execution-mark').evaluateAll(nodes => nodes.some(node => node.getAnimations({ subtree: true }).length > 0)), false, 'reduced motion keeps both task-page marks still');
+      assert(await detail.evaluate(node => node.scrollWidth <= node.clientWidth));
+      if (screenshots) await page.screenshot({ path: join(screenshots, `actions-${width}-${dark ? 'dark' : 'light'}.png`), fullPage: true });
+      await detail.getByRole('button', { name: '返回列表', exact: true }).click();
+      await page.locator('.ba-task-open').waitFor();
+    }
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
 test('task heading aligns category tabs and icon tools remain usable in four resource states and narrow layouts', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
   const html = await fixture(), browser = await chromium.launch({ headless: true, executablePath });
   const screenshots = process.env.BENCHGO_TASK_HEADING_SCREENSHOTS;
@@ -88,7 +120,7 @@ test('task heading aligns category tabs and icon tools remain usable in four res
     const render = async (state, width, dark = false, section = 'tasks') => {
       await page.setViewportSize({ width, height: 900 }); await page.goto('http://localhost/');
       await page.evaluate(({ state, dark, section }) => { document.body.toggleAttribute('data-ds-dark-theme', dark); document.documentElement.style.colorScheme = dark ? 'dark' : 'light'; window.renderScenario(state, section); }, { state, dark, section });
-      await page.getByRole('heading', { name: section === 'goals' ? '目标' : '工单', exact: true }).waitFor();
+      await page.getByRole('heading', { name: section === 'goals' ? '目标' : '任务', exact: true }).waitFor();
     };
     const capture = async name => {
       if (!screenshots) return;
@@ -99,24 +131,24 @@ test('task heading aligns category tabs and icon tools remain usable in four res
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'page must not overflow horizontally');
       assert(await page.locator('.ba-studio-body').evaluate(node => node.scrollWidth <= node.clientWidth + 1), 'task body must not overflow horizontally');
     };
-    for (const width of [1440, 390]) for (const [state, title] of [['loading', '正在读取工单'], ['error', '工单暂时无法读取'], ['empty', '暂无工单'], ['data', '检索并汇总 2026']]) {
+    for (const width of [1440, 390]) for (const [state, title] of [['loading', '正在读取任务'], ['error', '任务暂时无法读取'], ['empty', '暂无任务'], ['data', '检索并汇总 2026']]) {
       await render(state, width); await page.getByText(title, { exact: true }).waitFor();
       assert(await page.getByRole('tablist', { name: '工作分类', exact: true }).isVisible());
-      for (const label of ['归档已结束工单', '定时任务', '设置']) {
+      for (const label of ['归档已结束任务', '定时任务', '设置']) {
         const button = page.getByRole('button', { name: label, exact: true });
         assert(await button.isVisible()); assert.equal((await button.textContent()).trim(), '', label + ' is an icon action');
       }
-      assert.equal(await page.getByRole('heading', { name: '工单', exact: true }).count(), 1, 'the page title follows the selected category');
+      assert.equal(await page.getByRole('heading', { name: '任务', exact: true }).count(), 1, 'the page title follows the selected category');
       assert.equal(await page.getByText('查看执行进展，确认结果与下一步。', { exact: true }).count(), 0);
-      assert.equal(await page.locator('.ba-ticket-count').count(), 0, 'ticket totals do not add a separate toolbar label');
-      const controls = page.locator('.ba-ticket-view-controls');
-      assert(await controls.getByRole('button', { name: '归档已结束工单', exact: true }).isVisible(), 'batch archive reuses the former count position');
+      assert.equal(await page.locator('.ba-task-count').count(), 0, 'task totals do not add a separate toolbar label');
+      const controls = page.locator('.ba-task-view-controls');
+      assert(await controls.getByRole('button', { name: '归档已结束任务', exact: true }).isVisible(), 'batch archive reuses the former count position');
       const actions = page.locator('.ba-task-list-actions');
-      assert.equal(await actions.getByRole('button', { name: '归档已结束工单', exact: true }).count(), 0);
+      assert.equal(await actions.getByRole('button', { name: '归档已结束任务', exact: true }).count(), 0);
       const tools = await actions.getByRole('button').allTextContents();
       assert.deepEqual(tools.map(text => text.trim()), ['', ''], 'the action row contains schedule and settings');
       assert.equal(await page.getByRole('button', { name: '添加目标', exact: true }).count(), 0);
-      for (const label of ['当前工单', '已归档', '列表', '看板']) {
+      for (const label of ['当前任务', '已归档', '列表', '看板']) {
         const tab = controls.getByRole('tab', { name: label, exact: true });
         assert(await tab.isVisible());
         assert.equal((await tab.innerText()).trim(), '', label + ' is an icon tab');
@@ -124,7 +156,7 @@ test('task heading aligns category tabs and icon tools remain usable in four res
         await page.getByRole('tooltip').getByText(new RegExp('^' + label)).waitFor();
         await tab.blur();
       }
-      const searchLayout = await page.getByRole('searchbox', { name: '搜索工单' }).evaluate(input => {
+      const searchLayout = await page.getByRole('searchbox', { name: '搜索任务' }).evaluate(input => {
         const icon = input.parentElement.querySelector('.cmd-ui-icon'), box = input.getBoundingClientRect(), glyph = icon.getBoundingClientRect();
         const padding = parseFloat(getComputedStyle(input).paddingLeft);
         return { padding, textStart: box.left + padding, iconEnd: glyph.right };
@@ -137,28 +169,28 @@ test('task heading aligns category tabs and icon tools remain usable in four res
       const tabs = page.getByRole('tablist', { name: '工作分类', exact: true });
       assert(await page.locator('.ba-studio-heading-row').getByRole('tablist', { name: '工作分类' }).isVisible());
       if (width >= 1120) {
-        const title = await page.getByRole('heading', { name: '工单', exact: true }).boundingBox(), box = await tabs.boundingBox();
+        const title = await page.getByRole('heading', { name: '任务', exact: true }).boundingBox(), box = await tabs.boundingBox();
         assert(Math.abs(title.y + title.height / 2 - box.y - box.height / 2) < 2, JSON.stringify({ width, title, box }));
-        const toolbar = await page.locator('.ba-ticket-view-controls').evaluate(node => [...node.children].filter(child => child.tagName !== 'STYLE').map(child => { const box = child.getBoundingClientRect(); return box.y + box.height / 2; }));
+        const toolbar = await page.locator('.ba-task-view-controls').evaluate(node => [...node.children].filter(child => child.tagName !== 'STYLE').map(child => { const box = child.getBoundingClientRect(); return box.y + box.height / 2; }));
         assert(Math.max(...toolbar) - Math.min(...toolbar) < 2, `desktop tools share one row: ${toolbar}`);
       }
       await page.locator('.ba-task-open').click();
       const detail = page.getByRole('region', { name: '任务详情', exact: true });
       await detail.waitFor();
       await page.locator('.ba-studio-heading').waitFor({ state: 'detached' });
-      assert.equal(await page.locator('.ba-studio-heading').count(), 0, 'ticket details replace the page navigation');
+      assert.equal(await page.locator('.ba-studio-heading').count(), 0, 'task details replace the page navigation');
       assert.equal(await page.getByRole('tablist', { name: '工作分类' }).count(), 0);
-      assert(await detail.locator('.ba-task-inline-head').getByRole('button', { name: '创建关联调整单', exact: true }).isVisible());
+      assert(await detail.locator('.ba-task-inline-head').getByRole('button', { name: '创建关联调整任务', exact: true }).isVisible());
       assert.equal(await detail.getByText(/桌面 ·|渠道已接收|执行尚未结束或已中断，已有记录保留/).count(), 0);
-      const contentTabs = detail.getByRole('tablist', { name: '工单详情内容', exact: true });
-      assert(await detail.locator('.ba-task-inline-head').getByRole('tablist', { name: '工单详情内容', exact: true }).isVisible(), 'content tabs live beside the ticket title');
+      const contentTabs = detail.getByRole('tablist', { name: '任务详情内容', exact: true });
+      assert(await detail.locator('.ba-task-inline-head').getByRole('tablist', { name: '任务详情内容', exact: true }).isVisible(), 'content tabs live beside the task title');
       for (const [name, label] of [['执行记录', '记录'], ['任务要求', '要求'], ['执行结果', '结果']]) {
         const tab = contentTabs.getByRole('tab', { name, exact: true });
         assert.equal((await tab.innerText()).trim(), label);
         assert(await tab.locator('svg').count() >= 1, 'each short tab retains its icon');
       }
       if (width >= 1120) {
-        const headingBox = await detail.getByRole('heading', { name: /检索并汇总 2026/ }).boundingBox(), tabsBox = await contentTabs.boundingBox(), actionBox = await detail.getByRole('button', { name: '创建关联调整单', exact: true }).boundingBox();
+        const headingBox = await detail.getByRole('heading', { name: /检索并汇总 2026/ }).boundingBox(), tabsBox = await contentTabs.boundingBox(), actionBox = await detail.getByRole('button', { name: '创建关联调整任务', exact: true }).boundingBox();
         assert(headingBox.x + headingBox.width <= tabsBox.x && tabsBox.x + tabsBox.width <= actionBox.x, 'desktop header places content tabs between title and action');
         assert(Math.abs(headingBox.y + headingBox.height / 2 - tabsBox.y - tabsBox.height / 2) < 2, 'title and content tabs share a row');
       }
@@ -173,9 +205,9 @@ test('task heading aligns category tabs and icon tools remain usable in four res
         await noOverflow(); await capture(`detail-${label}-${width}-${dark ? 'dark' : 'light'}`);
       }
       for (let repeat = 0; repeat < 2; repeat++) {
-        await detail.getByRole('button', { name: '创建关联调整单', exact: true }).click();
+        await detail.getByRole('button', { name: '创建关联调整任务', exact: true }).click();
         assert.equal(await contentTabs.getByRole('tab', { name: '任务要求', exact: true }).getAttribute('aria-selected'), 'true');
-        await detail.getByRole('heading', { name: /创建关联调整单 · 要求版本/ }).waitFor();
+        await detail.getByRole('heading', { name: /创建关联调整任务 · 要求版本/ }).waitFor();
         await detail.getByRole('button', { name: '取消', exact: true }).click();
       }
       await detail.getByRole('button', { name: '返回列表', exact: true }).click();
@@ -228,7 +260,7 @@ test('task heading aligns category tabs and icon tools remain usable in four res
       await detail.getByRole('tab', { name: '执行结果', exact: true }).click();
       const result = detail.getByRole('tabpanel', { name: '执行结果', exact: true });
       await result.getByRole('heading', { name: '交付结果', level: 1, exact: true }).waitFor();
-      assert.deepEqual(await result.locator('.ba-ticket-document').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))), ['结果'], 'the result page is one block: the Worker\'s last message');
+      assert.deepEqual(await result.locator('.ba-task-document').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))), ['结果'], 'the result page is one block: the Worker\'s last message');
       assert.equal(await result.getByText(/结果摘要|结果正文|自检|未完成说明|证据来源/).count(), 0);
       assert.equal(await result.getByRole('table').count(), 1);
       assert.equal(await result.getByRole('listitem').filter({ hasText: '环境检查完成' }).count(), 1);
@@ -242,10 +274,10 @@ test('task heading aligns category tabs and icon tools remain usable in four res
     for (const width of [1440, 390]) for (const dark of [false, true]) {
       await render('waiting', width, dark);
       await page.locator('.ba-task-open').click();
-      const waiting = page.getByRole('region', { name: '工单等待状态', exact: true });
+      const waiting = page.getByRole('region', { name: '任务等待状态', exact: true });
       await waiting.waitFor();
       const row = await waiting.evaluate(node => {
-        const reason = node.querySelector('.ba-ticket-waiting-reason'), icon = node.querySelector('[role=img]'), actions = node.querySelector('.ba-row-actions');
+        const reason = node.querySelector('.ba-task-waiting-reason'), icon = node.querySelector('[role=img]'), actions = node.querySelector('.ba-row-actions');
         const center = item => { const box = item.getBoundingClientRect(); return box.y + box.height / 2; };
         return { height: node.getBoundingClientRect().height, centers: [reason, icon, actions].map(center), whiteSpace: getComputedStyle(reason).whiteSpace };
       });
@@ -263,16 +295,16 @@ test('task heading aligns category tabs and icon tools remain usable in four res
     assert((await page.evaluate(() => window.calls)).some(input => input.action === 'state'));
     await page.keyboard.press('Escape');
     const categories = page.getByRole('tablist', { name: '工作分类', exact: true });
-    await categories.getByRole('tab', { name: '工单', exact: true }).focus(); await page.keyboard.press('ArrowRight');
+    await categories.getByRole('tab', { name: '任务', exact: true }).focus(); await page.keyboard.press('ArrowRight');
     assert.equal(await categories.getByRole('tab', { name: '审核', exact: true }).getAttribute('aria-selected'), 'true');
     await page.getByRole('heading', { name: '审核', level: 1, exact: true }).waitFor();
-    assert.equal(await page.getByText('跟进工单，在审核中集中处理待授权操作。', { exact: true }).count(), 0);
+    assert.equal(await page.getByText('跟进任务，在审核中集中处理待授权操作。', { exact: true }).count(), 0);
     assert.equal(await page.locator('.ba-review-heading h2,.ba-review-heading p').count(), 0);
     await page.keyboard.press('ArrowRight');
-    const tickets = categories.getByRole('tab', { name: '工单', exact: true });
-    assert.equal(await tickets.getAttribute('aria-selected'), 'true');
+    const tasks = categories.getByRole('tab', { name: '任务', exact: true });
+    assert.equal(await tasks.getAttribute('aria-selected'), 'true');
     assert.equal(await categories.getByRole('tab').count(), 2);
-    assert.equal(await page.locator(`[id="${await tickets.getAttribute('aria-controls')}"]`).getAttribute('aria-labelledby'), await tickets.getAttribute('id'));
+    assert.equal(await page.locator(`[id="${await tasks.getAttribute('aria-controls')}"]`).getAttribute('aria-labelledby'), await tasks.getAttribute('id'));
     const choose = async (label, width) => {
       if (width > 760) await page.getByRole('navigation', { name: '资源分区', exact: true }).getByRole('button', { name: new RegExp('^' + label + '(?:\\s|$)') }).click();
       else {
@@ -307,7 +339,7 @@ test('task heading aligns category tabs and icon tools remain usable in four res
       const form = page.getByRole('form', { name: '编辑目标' });
       await form.getByRole('textbox', { name: '目标内容', exact: true }).fill('保留跨页目标草稿');
       await choose('任务', width);
-      await page.getByRole('heading', { name: '工单', exact: true }).waitFor();
+      await page.getByRole('heading', { name: '任务', exact: true }).waitFor();
       await choose('目标', width);
       await capture(`goals-draft-return-${width}`);
       assert.equal(await page.locator('.ba-studio-body').getAttribute('data-section'), 'goals');

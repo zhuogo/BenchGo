@@ -35,9 +35,9 @@ async function fixture(t, { kind = 'answer', send, actorKind = 'human', availabl
   return { store, sender, calls, source, ingest, runner };
 }
 
-for (const kind of ['answer', 'ask']) test(`${kind} commits without a Ticket and delivers only to its original source once`, async t => {
+for (const kind of ['answer', 'ask']) test(`${kind} commits without a Task and delivers only to its original source once`, async t => {
   const h = await fixture(t, { kind });
-  assert.equal(h.store.orchestration.listTickets().length, 0);
+  assert.equal(h.store.orchestration.listTasks().length, 0);
   h.ingest(); await h.runner.tick();
   await Promise.all([h.sender.tick(), h.sender.tick()]);
   await h.sender.tick();

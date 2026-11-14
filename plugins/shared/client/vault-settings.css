@@ -49,8 +49,6 @@
 .bg-vault-status[data-available=true] { color: var(--vault-accent); background: color-mix(in srgb, var(--vault-accent) 8%, var(--vault-surface)); }
 .bg-vault-status > i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .bg-vault-entry-content > small { display: block; }
-.bg-vault-target { margin-bottom: 3px; }
-.bg-vault-target > span { margin-right: 7px; color: var(--vault-ink); font-weight: 500; }
 .bg-vault time { display: block; margin-top: 7px; font-variant-numeric: tabular-nums; }
 .bg-vault-list li > .bg-vault-actions { flex: none; gap: 4px; }
 .bg-vault-list li > .bg-vault-actions button { min-height: 34px; padding: 5px 10px; font-size: 12px; }

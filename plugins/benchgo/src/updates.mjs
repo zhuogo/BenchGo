@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_UPDATE_CONFIG, normalizeUpdateConfig, fetchVerifiedRelease, fetchUpdateArtifact, compareVersions, isNewerVersion, resolveUpdateUrl } from '../shared/update-feed.mjs';
-import { prepareRelease, activateRelease, getInstallState, rollbackRelease } from '../shared/plugin-install.mjs';
+import { prepareRelease, activateRelease, getInstallState } from '../shared/plugin-install.mjs';
 import { assertSameOrigin } from '../shared/http.mjs';
 import { readLimited } from '../shared/http.mjs';
 
@@ -23,7 +23,7 @@ export async function desktopApplicationVersion(executable = process.execPath, r
 
 /** Each immutable release is staged before one profile manifest switch; loaded code stays intact. */
 export async function createUpdates({ directory, profile, runtime, version, releaseVersion, engineVersion, appVersion, isBusy = () => false,
-  installation = 'desktop', fetcher = globalThis.fetch, publicKey, install = { prepareRelease, activateRelease, getInstallState, rollbackRelease } }) {
+  installation = 'desktop', fetcher = globalThis.fetch, publicKey, install = { prepareRelease, activateRelease, getInstallState } }) {
   const configFile = join(directory, 'updates.json');
   const lifetime = new AbortController();
   const updateFetch = (url, options = {}) => fetcher(url, { ...options, signal: AbortSignal.any([lifetime.signal, ...(options.signal ? [options.signal] : [])]) });
@@ -95,7 +95,6 @@ export async function createUpdates({ directory, profile, runtime, version, rele
       managed: !!state.managed, busy, restartRequired, checkedAt, error,
       decision,
       canInstall: decision.action === 'plugin' && decision.enabled,
-      canRollback: !!state.managed && !!state.previous && !busy && !restartRequired && !unavailable,
       release: release ? { ...release, plugin: { ...release.plugin, available: pluginAvailable, compatible, engineCompatible, appCompatible, reason: compatible ? undefined : reason },
         ...(release.app ? { app: { ...release.app, available: appAvailable, url: resolveUpdateUrl(release.app.url, config) } } : {}),
         ...(release.android ? { android: { ...release.android, url: resolveUpdateUrl(release.android.url, config) } } : {}) } : null,
@@ -168,13 +167,6 @@ export async function createUpdates({ directory, profile, runtime, version, rele
               phase = 'ready';
             } finally { await rm(archive, { force: true }); }
           });
-          break;
-        }
-        case 'rollback': {
-          const state = await guard();
-          if (!state.previous) throw conflict('暂无可回退版本');
-          phase = 'downloading';
-          start('rollback', async () => { if (await isBusy()) throw conflict('有任务正在运行'); await install.rollbackRelease({ profile, runtime }); phase = 'ready'; });
           break;
         }
         default: throw new Error('未知更新操作');

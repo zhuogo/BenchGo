@@ -21,7 +21,7 @@ export async function readAssessmentPolicy(store, workspaceRegistry, threadId) {
 }
 
 /** Admission records a trusted instruction; it does not preapprove controlled actions. */
-export function authorizeAssessment({ policy, candidate, trigger, decision, ticket }) {
+export function authorizeAssessment({ policy, candidate, trigger, decision, task }) {
   const channel = trigger.source?.channel || 'feishu';
   const config = channel === 'feishu' ? policy.connection : policy.connections?.[channel]?.config;
   if (!config && !isScheduledTrigger(trigger)) return { allowed: false, reason: 'unknown-channel' };
@@ -31,7 +31,7 @@ export function authorizeAssessment({ policy, candidate, trigger, decision, tick
     const project = decision.projectId === undefined ? undefined : policy.projects?.find(item => item.id === decision.projectId);
     if (decision.projectId !== undefined && !project) return { allowed: false, reason: 'unknown-project' };
     if (decision.outcome === 'answer') return { allowed: true, reason: 'scheduled-notification' };
-    if (decision.outcome !== 'accept') return { allowed: false, reason: 'schedule-requires-new-ticket' };
+    if (decision.outcome !== 'accept') return { allowed: false, reason: 'schedule-requires-new-task' };
     return { allowed: true, reason: 'owned-harness-schedule', mandate: {
       admission: 'desktop-schedule', actorId: 'harness-schedule', actorKind: 'machine', source: trigger.source,
       instruction: trigger.content, desktopPolicyVersion: policy.desktopVersion,
@@ -44,10 +44,10 @@ export function authorizeAssessment({ policy, candidate, trigger, decision, tick
   if (['answer', 'ask'].includes(decision.outcome)) return admission;
   const project = decision.projectId === undefined ? undefined : policy.projects?.find(item => item.id === decision.projectId);
   if (decision.projectId !== undefined && !project) return { allowed: false, reason: 'unknown-project' };
-  if (['attach', 'stop', 'revise', 'adjustment'].includes(decision.outcome) && !decision.ticketId) return { allowed: false, reason: 'missing-ticket' };
+  if (['attach', 'stop', 'revise', 'adjustment'].includes(decision.outcome) && !decision.taskId) return { allowed: false, reason: 'missing-task' };
   if (admission.routerAttention) return admission;
   if (['attach', 'stop', 'revise', 'adjustment'].includes(decision.outcome)
-    && (!ticket || ticket.mandate?.actorId !== trigger.actor.id || !['channel', 'connectionId', 'conversationId'].every(key => typeof trigger.source[key] === 'string' && !!trigger.source[key] && ticket.mandate.source?.[key] === trigger.source[key]))) return { allowed: false, reason: 'ticket-source-ownership-mismatch' };
+    && (!task || task.mandate?.actorId !== trigger.actor.id || !['channel', 'connectionId', 'conversationId'].every(key => typeof trigger.source[key] === 'string' && !!trigger.source[key] && task.mandate.source?.[key] === trigger.source[key]))) return { allowed: false, reason: 'task-source-ownership-mismatch' };
   return { allowed: true, reason: admission.reason, mandate: {
     ...admission.mandate,
     actorId: trigger.actor.id, source: trigger.source, instruction: trigger.content,
@@ -57,9 +57,16 @@ export function authorizeAssessment({ policy, candidate, trigger, decision, tick
 }
 
 /** Current disk rules may revoke an immutable admission; they never broaden it. */
-export function validateTicketMandate(mandate, { policy }) {
+export function validateTaskMandate(mandate, { policy }) {
   if (!mandate || !policy) return false;
   const desktop = mandate.source?.channel === 'desktop';
+  if (mandate.source?.channel === 'link') return mandate.admission === 'link-device-delegation'
+    && typeof mandate.source.deviceId === 'string' && !!mandate.source.deviceId
+    && mandate.actorId === `device:${mandate.source.deviceId}`
+    && ['sessionId', 'threadId', 'messageId'].every(key => typeof mandate.source[key] === 'string' && !!mandate.source[key])
+    && mandate.policyVersion === policy.desktopVersion
+    && mandate.controlledActions === 'require-current-policy-and-harness-approval'
+    && (!mandate.project || policy.projects?.some(project => project.id === mandate.project.id && project.path === mandate.project.path));
   if (mandate.admission === 'desktop-schedule') return isScheduledTrigger({ actor: { id: mandate.actorId, kind: mandate.actorKind }, source: mandate.source })
     && mandate.policyVersion === policy.version && mandate.desktopPolicyVersion === policy.desktopVersion
     && mandate.controlledActions === 'require-current-policy-and-harness-approval'

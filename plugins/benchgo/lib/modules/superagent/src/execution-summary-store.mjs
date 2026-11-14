@@ -6,8 +6,8 @@ const integer = value => Number.isSafeInteger(value) && value >= 0;
 const safeCode = value => typeof value === 'string' && /^[A-Z0-9_:-]{1,100}$/i.test(value) ? value : 'UNKNOWN';
 const decode = row => row ? JSON.parse(row.payload) : null;
 function binding(value) {
-  if (!id(value.ticketId) || !id(value.runId) || !integer(value.instructionRevision) || !integer(value.watermark)) throw new Error('Invalid execution summary binding');
-  return { ticketId: value.ticketId, runId: value.runId, instructionRevision: value.instructionRevision, watermark: value.watermark };
+  if (!id(value.taskId) || !id(value.runId) || !integer(value.instructionRevision) || !integer(value.watermark)) throw new Error('Invalid execution summary binding');
+  return { taskId: value.taskId, runId: value.runId, instructionRevision: value.instructionRevision, watermark: value.watermark };
 }
 function safeRouting(value) {
   if (!value) return undefined;
@@ -19,22 +19,22 @@ function safeRouting(value) {
 
 /** Additive derived projection/audit on the existing assistant.db connection. */
 export function installExecutionSummaryStore({ db, tx = callback => callback() }) {
-  db.exec(`CREATE TABLE IF NOT EXISTS sa_execution_summaries(ticket_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+  db.exec(`CREATE TABLE IF NOT EXISTS sa_execution_summaries(task_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sa_auxiliary_activity(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,kind TEXT NOT NULL,
-      ticket_id TEXT NOT NULL,run_id TEXT NOT NULL,instruction_revision INTEGER NOT NULL,payload TEXT NOT NULL);
-    CREATE INDEX IF NOT EXISTS sa_auxiliary_activity_binding ON sa_auxiliary_activity(kind,ticket_id,run_id,instruction_revision,seq);
+      task_id TEXT NOT NULL,run_id TEXT NOT NULL,instruction_revision INTEGER NOT NULL,payload TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS sa_auxiliary_activity_binding ON sa_auxiliary_activity(kind,task_id,run_id,instruction_revision,seq);
     CREATE TABLE IF NOT EXISTS sa_execution_summary_meta(key TEXT PRIMARY KEY,value INTEGER NOT NULL);`);
-  const get = ticketId => decode(db.prepare('SELECT payload FROM sa_execution_summaries WHERE ticket_id=?').get(ticketId));
-  const put = row => db.prepare('INSERT INTO sa_execution_summaries VALUES (?,?) ON CONFLICT(ticket_id) DO UPDATE SET payload=excluded.payload').run(row.ticketId, JSON.stringify(row));
+  const get = taskId => decode(db.prepare('SELECT payload FROM sa_execution_summaries WHERE task_id=?').get(taskId));
+  const put = row => db.prepare('INSERT INTO sa_execution_summaries VALUES (?,?) ON CONFLICT(task_id) DO UPDATE SET payload=excluded.payload').run(row.taskId, JSON.stringify(row));
   return {
     executionSummary: get,
     pendingExecutionSummaries: () => db.prepare("SELECT payload FROM sa_execution_summaries WHERE json_extract(payload,'$.pendingWatermark') IS NOT NULL").all().map(decode),
-    markExecutionSummaryPending(ticketId, watermark) {
-      const row = get(ticketId);
+    markExecutionSummaryPending(taskId, watermark) {
+      const row = get(taskId);
       if (row && integer(watermark)) put({ ...row, pendingWatermark: Math.max(row.pendingWatermark ?? 0, watermark) });
     },
-    clearExecutionSummaryPending(ticketId, watermark) {
-      const row = get(ticketId);
+    clearExecutionSummaryPending(taskId, watermark) {
+      const row = get(taskId);
       if (row && row.pendingWatermark <= watermark) put({ ...row, pendingWatermark: undefined });
     },
     executionSummaryCursor: () => db.prepare("SELECT value FROM sa_execution_summary_meta WHERE key='cursor'").get()?.value || 0,
@@ -45,7 +45,7 @@ export function installExecutionSummaryStore({ db, tx = callback => callback() }
     observeExecutionSummary(value) {
       const nextBinding = binding(value);
       return tx(() => {
-        const previous = get(value.ticketId);
+        const previous = get(value.taskId);
         if (previous && (previous.instructionRevision > value.instructionRevision || previous.watermark > value.watermark)) return previous;
         const sameRun = previous?.runId === value.runId && previous.instructionRevision === value.instructionRevision;
         const compatible = previous?.source === 'model' && sameRun && previous.phase === value.phase;
@@ -63,7 +63,7 @@ export function installExecutionSummaryStore({ db, tx = callback => callback() }
     publishExecutionSummary(value) {
       binding(value);
       return tx(() => {
-        const current = get(value.ticketId);
+        const current = get(value.taskId);
         if (!current || current.runId !== value.runId || current.instructionRevision !== value.instructionRevision || current.phase !== value.phase
           || value.watermark > current.watermark || current.source === 'model' && value.watermark < current.summaryWatermark) return { published: false, reason: 'STALE_BINDING' };
         const text = redactExecutionText(value.text, 80), evidenceRefs = (value.evidenceRefs || []).filter(id).slice(-24);
@@ -94,17 +94,17 @@ export function installExecutionSummaryStore({ db, tx = callback => callback() }
         status: safeCode(value.status), code: value.code ? safeCode(value.code) : undefined, startedAt: value.startedAt, completedAt: value.completedAt,
         inputCharacters: integer(value.inputCharacters) ? value.inputCharacters : undefined, published: value.published === true,
         result, tracking, routing: safeRouting(value.routing) };
-      db.prepare('INSERT INTO sa_auxiliary_activity(id,kind,ticket_id,run_id,instruction_revision,payload) VALUES (?,?,?,?,?,?)')
-        .run(record.id, record.kind, record.ticketId, record.runId, record.instructionRevision, JSON.stringify(record));
+      db.prepare('INSERT INTO sa_auxiliary_activity(id,kind,task_id,run_id,instruction_revision,payload) VALUES (?,?,?,?,?,?)')
+        .run(record.id, record.kind, record.taskId, record.runId, record.instructionRevision, JSON.stringify(record));
       return record;
     },
-    latestAuxiliaryActivity({ kind, ticketId, runId, instructionRevision }) {
-      return decode(db.prepare('SELECT payload FROM sa_auxiliary_activity WHERE kind=? AND ticket_id=? AND run_id=? AND instruction_revision=? ORDER BY seq DESC LIMIT 1')
-        .get(kind, ticketId, runId, instructionRevision));
+    latestAuxiliaryActivity({ kind, taskId, runId, instructionRevision }) {
+      return decode(db.prepare('SELECT payload FROM sa_auxiliary_activity WHERE kind=? AND task_id=? AND run_id=? AND instruction_revision=? ORDER BY seq DESC LIMIT 1')
+        .get(kind, taskId, runId, instructionRevision));
     },
-    auxiliaryActivities({ ticketId, after = 0, limit = 50 } = {}) {
-      const rows = db.prepare(`SELECT seq,payload FROM sa_auxiliary_activity WHERE seq>? ${ticketId ? 'AND ticket_id=?' : ''} ORDER BY seq LIMIT ?`)
-        .all(...[integer(after) ? after : 0, ...(ticketId ? [ticketId] : []), Math.max(1, Math.min(200, limit))]);
+    auxiliaryActivities({ taskId, after = 0, limit = 50 } = {}) {
+      const rows = db.prepare(`SELECT seq,payload FROM sa_auxiliary_activity WHERE seq>? ${taskId ? 'AND task_id=?' : ''} ORDER BY seq LIMIT ?`)
+        .all(...[integer(after) ? after : 0, ...(taskId ? [taskId] : []), Math.max(1, Math.min(200, limit))]);
       return { entries: rows.map(row => ({ seq: row.seq, ...decode(row) })), cursor: rows.at(-1)?.seq ?? after };
     },
   };

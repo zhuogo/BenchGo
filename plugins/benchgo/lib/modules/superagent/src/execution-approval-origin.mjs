@@ -1,7 +1,7 @@
-import { ticketExecutionBlocked } from './ticket-lifecycle.mjs';
-import { ownsDesktopTicket } from './desktop-ticket-owner.mjs';
-import { validateTicketMandate } from './assessment-policy.mjs';
-import { workerAppliedTicket } from './worker-permissions.mjs';
+import { taskExecutionBlocked } from './task-lifecycle.mjs';
+import { ownsDesktopTask } from './desktop-task-owner.mjs';
+import { validateTaskMandate } from './assessment-policy.mjs';
+import { workerAppliedTask } from './worker-permissions.mjs';
 import { channelSessionKey } from './channel-policy.mjs';
 
 // Historical or incomplete records are not an identity. Skip only that source;
@@ -23,33 +23,33 @@ export function executionApprovalOrigins({ database, ownerScope, ownerSessionId,
   if (channelSource && !channelKey) return [];
   const origins = [];
   for (let offset = 0; ; offset += 100) {
-    const tickets = database.listTickets({ ...(!channelSource ? { ownerSessionIds: ownerScope.sessionIds, ownerThreadId: ownerScope.threadId } : {}),
+    const tasks = database.listTasks({ ...(!channelSource ? { ownerSessionIds: ownerScope.sessionIds, ownerThreadId: ownerScope.threadId } : {}),
       archived: false, limit: 100, offset });
-    for (const ticket of tickets) {
-      if (!['running', 'waiting'].includes(ticket.status) || ticketExecutionBlocked(ticket) || !ticket.mandate) continue;
-      const owned = channelSource ? verifiedChannelKey(ticket.mandate.source) === channelKey : ownsDesktopTicket(ticket, ownerScope);
+    for (const task of tasks) {
+      if (!['running', 'waiting'].includes(task.status) || taskExecutionBlocked(task) || !task.mandate) continue;
+      const owned = channelSource ? verifiedChannelKey(task.mandate.source) === channelKey : ownsDesktopTask(task, ownerScope);
       if (!owned
-        || !validateTicketMandate(ticket.mandate, { policy })) continue;
-      for (const assignment of database.assignments(ticket.id)) {
+        || !validateTaskMandate(task.mandate, { policy })) continue;
+      for (const assignment of database.assignments(task.id)) {
         if (assignment.state !== 'claimed' || !assignment.owner || !Number.isFinite(assignment.leaseUntil) || assignment.leaseUntil <= now) continue;
         let applied;
         try {
           // Listing candidate sessions never grants a tool. At decision time the
           // actual PendingApproval tool name must pass the live capability gate.
-          applied = toolName === null ? { ...ticket, ...database.appliedTicketSnapshot(assignment.id) }
-            : workerAppliedTicket(database, assignment, { name: toolName });
+          applied = toolName === null ? { ...task, ...database.appliedTaskSnapshot(assignment.id) }
+            : workerAppliedTask(database, assignment, { name: toolName });
         }
         catch { continue; }
-        if (!validateTicketMandate(applied.mandate, { policy })) continue;
+        if (!validateTaskMandate(applied.mandate, { policy })) continue;
         for (const run of database.runs(assignment.id)) {
           if (!run.sessionId || !['submitted', 'running'].includes(run.state)
             || run.owner !== assignment.owner || run.fence !== assignment.fence) continue;
-          origins.push({ ticketId: ticket.id, title: ticket.title || ticket.target, assignmentId: assignment.id,
+          origins.push({ taskId: task.id, title: task.title || task.target, assignmentId: assignment.id,
             runId: run.id, sessionId: run.sessionId, ownerSessionId, ownerThreadId: ownerScope.threadId });
         }
       }
     }
-    if (tickets.length < 100) break;
+    if (tasks.length < 100) break;
   }
   return origins;
 }
@@ -72,7 +72,7 @@ export async function resolveApprovalOrigins({ store, engine, input = {}, peer, 
     const sourceTitle = source.title || '旁聊';
     if (!input.sessionId || input.sessionId === source.sessionId) origins.push({ kind: 'router', title: sourceTitle,
       sourceTitle, sessionId: source.sessionId, ownerSessionId: source.sessionId, ownerThreadId: source.id });
-    const ownerScope = await engine.ticketOwnerScope(source.id);
+    const ownerScope = await engine.taskOwnerScope(source.id);
     const workers = executionApprovalOrigins({ database: store.orchestration, ownerScope,
       ownerSessionId: source.sessionId, policy: await readPolicy(source.id), toolName: input.toolName ?? null,
       ...(source.sourceKey ? { channelSource: source.source } : {}) });

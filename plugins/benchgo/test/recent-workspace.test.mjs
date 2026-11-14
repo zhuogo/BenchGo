@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { recentWorkspaceActions } from '../src/recent-workspace.mjs';
+import { readRecentWorkspace, recentWorkspaceActions } from '../src/recent-workspace.mjs';
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'commander-recent-'));
@@ -63,4 +63,14 @@ test('filesystem failure is surfaced and a later retry recovers without adopting
   assert.equal(items.size, 0);
   await rm(path);
   assert.ok((await actions.ensure()).workspaceId);
+});
+
+test('reading Recent is read-only and preserves missing or invalid identity distinctions', async t => {
+  const { directory, items, actions } = await fixture(t);
+  assert.equal(await readRecentWorkspace(directory), undefined);
+  assert.equal(items.size, 0);
+  const recent = await actions.ensure();
+  assert.deepEqual(await readRecentWorkspace(directory), { id: recent.workspaceId, path: recent.path });
+  await writeFile(join(directory, 'recent-workspace.json'), JSON.stringify({ id: recent.workspaceId, path: 'relative' }));
+  await assert.rejects(readRecentWorkspace(directory), /Invalid recent workspace record/);
 });

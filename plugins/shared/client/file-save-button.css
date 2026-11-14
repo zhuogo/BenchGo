@@ -1,0 +1,10 @@
+.bg-file-save{position:relative;display:inline-flex;vertical-align:middle;flex-shrink:0;max-width:100%}
+.bg-file-save>button{transition:background-color 140ms ease,opacity 140ms ease,transform 140ms var(--ease-out,cubic-bezier(.23,1,.32,1))}
+.bg-file-save>button:active:not(:disabled){transform:scale(.97)}
+.bg-file-save>button[data-saving=true]>svg{opacity:.45}
+.bg-file-save-note{position:absolute;right:0;top:calc(100% + 6px);z-index:20;width:max-content;max-width:min(240px,calc(100vw - 48px));padding:8px 11px;border:1px solid var(--bg-ui-line,var(--dsw-alias-border-l3,var(--link-faint,#ddd)));border-radius:9px;background:var(--bg-ui-paper,var(--dsw-alias-bg-base,var(--link-paper,#fff)));color:var(--bg-ui-ink,var(--dsw-alias-label-primary,var(--link-ink,#222)));box-shadow:0 4px 14px #00000012;font-size:12px;font-weight:400;line-height:1.5;white-space:normal;overflow-wrap:anywhere;opacity:1;transform:none;transition:opacity 140ms var(--ease-out,cubic-bezier(.23,1,.32,1)),transform 140ms var(--ease-out,cubic-bezier(.23,1,.32,1))}
+@starting-style{.bg-file-save-note{opacity:0;transform:translateY(-2px)}}
+.bg-file-save-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+.bg-file-save[data-instant=true]>button,.bg-file-save[data-instant=true]>.bg-file-save-note{transition:none}
+.bg-file-save[data-instant=true]>button:active{transform:none}
+@media(prefers-reduced-motion:reduce){.bg-file-save>button,.bg-file-save-note{transition:none}.bg-file-save>button:active{transform:none}}

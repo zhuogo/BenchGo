@@ -5,6 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Commander } from '../src/runtime.mjs';
 
+function deferred() {
+  let resolve;
+  const promise = new Promise(yes => { resolve = yes; });
+  return { promise, resolve };
+}
+
 class ControlledProvider {
   static capabilities = { stream: true, resume: true, approvals: true };
   submitted = [];
@@ -207,6 +213,67 @@ test('duplicate callers both fail if the input cannot be durably accepted; nativ
   await assert.rejects(retry, /disk full/);
   assert.equal(provider.submitted.length, 0);
   commander.store.save = original;
+});
+
+test('concurrent native inputs wait for the coalesced snapshot containing both durable receipts', async t => {
+  const { commander, provider, directory } = await fixture(t);
+  const a = await commander.create({ provider: 'test' });
+  const b = await commander.create({ provider: 'test' });
+  const write = commander.store.writeSnapshot.bind(commander.store);
+  const started = [deferred(), deferred()], release = [deferred(), deferred()];
+  let writes = 0;
+  t.mock.method(commander.store, 'writeSnapshot', async sessions => {
+    const index = writes++;
+    if (!index) { await write(sessions); started[0].resolve(); await release[0].promise; return; }
+    if (index === 1) { started[1].resolve(); await release[1].promise; }
+    return write(sessions);
+  });
+  for (const [session, requestId] of [[a, 'receipt-a'], [b, 'receipt-b']]) {
+    commander.drivers.get(session.id).submit = async text => {
+      const saved = JSON.parse(await readFile(join(directory, 'sessions.json'), 'utf8'));
+      assert.equal(saved.sessions.find(row => row.id === session.id).receipts[requestId].text, text);
+      provider.submitted.push(text);
+    };
+  }
+  try {
+    const baseline = commander.persist(); await started[0].promise;
+    const first = commander.submit(a.id, 'one', { requestId: 'receipt-a' });
+    const duplicate = commander.submit(a.id, 'one', { requestId: 'receipt-a' });
+    const second = commander.submit(b.id, 'two', { requestId: 'receipt-b' });
+    assert.deepEqual(provider.submitted, []);
+    release[0].resolve(); await baseline; await started[1].promise;
+    assert.deepEqual(provider.submitted, []);
+    const before = JSON.parse(await readFile(join(directory, 'sessions.json'), 'utf8'));
+    assert.equal(before.sessions.find(row => row.id === a.id).receipts['receipt-a'], undefined);
+    assert.equal(before.sessions.find(row => row.id === b.id).receipts['receipt-b'], undefined);
+    release[1].resolve();
+    const [receipt, retry] = await Promise.all([first, duplicate, second]);
+    assert.deepEqual(receipt, retry);
+    assert.deepEqual(provider.submitted.sort(), ['one', 'two']);
+  } finally { for (const gate of release) gate.resolve(); }
+});
+
+test('a failed pending snapshot rejects duplicate input callers before native dispatch', async t => {
+  const { commander, provider } = await fixture(t);
+  const { id } = await commander.create({ provider: 'test' });
+  const write = commander.store.writeSnapshot.bind(commander.store);
+  const started = deferred(), release = deferred();
+  let writes = 0;
+  t.mock.method(commander.store, 'writeSnapshot', async sessions => {
+    const index = writes++;
+    if (!index) { await write(sessions); started.resolve(); await release.promise; return; }
+    if (index === 1) throw new Error('coalesced disk write failed');
+    return write(sessions);
+  });
+  try {
+    const baseline = commander.persist(); await started.promise;
+    const first = assert.rejects(commander.submit(id, 'one', { requestId: 'same' }), /coalesced disk write failed/);
+    const duplicate = assert.rejects(commander.submit(id, 'one', { requestId: 'same' }), /coalesced disk write failed/);
+    release.resolve(); await Promise.all([baseline, first, duplicate]);
+    assert.deepEqual(provider.submitted, []);
+    assert.match(commander.fault.message, /coalesced disk write failed/);
+    await assert.rejects(commander.submit(id, 'another'), /persistence failed/);
+  } finally { release.resolve(); }
 });
 
 test('remove releases an idle driver and persists record deletion while retaining native history, project files and children', async t => {
