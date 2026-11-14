@@ -63,8 +63,8 @@ try {
         boot.initProfile(profile, PROFILE_TEMPLATES.web.bundles);
       }
       const release = await helper.prepareRelease({ directory: incoming, root: join(profile, '.benchgo/releases'), version: manifest.pluginVersion, runtime });
-      const webPort = installed?.webPort ?? await freePort(), port = installed?.port ?? await freePort();
       const dataDir = installed?.dataDir ?? join(base, 'data');
+      const webPort = installed?.webPort ?? await freePort(), port = installed?.port ?? await initializeServerLink(join(dataDir, 'link'));
       if (!installed) await atomic(join(profile, 'cordis.patch.yml'), ['- id: commander', '  config:', '    dataDir: ' + JSON.stringify(dataDir), '- id: commander-link', '  config:', '    directory: ' + JSON.stringify(join(dataDir, 'link')), '- id: session-telemetry-otel', '  disabled: true', ''].join('\n'));
       if (installed) {
         const active = await authorize(installed, false);
@@ -94,6 +94,26 @@ try {
   const linger = await run('loginctl', ['show-user', String(process.getuid()), '--property=Linger', '--value']).catch(() => 'unknown');
   process.stdout.write(JSON.stringify({ ...result, version: installed.pluginVersion, persistent: linger.trim() === 'yes', ...(linger.trim() !== 'yes' ? { warning: '系统尚未启用用户常驻服务，退出所有 SSH 会话后服务可能停止；维护者可执行 loginctl enable-linger 用户名' } : {}) }) + '\n');
 } finally { await rm(lock, { recursive: true, force: true }); }
+/** Seed the persistent transport before its first start; never rewrite an existing device store. */
+async function initializeServerLink(directory) {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const file = join(directory, 'devices.json');
+  const existingPort = async () => {
+    let bytes;
+    try { bytes = await readFile(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    let value;
+    try { value = JSON.parse(bytes); } catch { throw new Error('已有服务器 Link 配置无效，原文件已保留，请由维护者检查'); }
+    if (!value || value.enabled !== true || value.host !== '127.0.0.1' || !Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65535)
+      throw new Error('已有服务器 Link 监听配置不符合 loopback 服务要求，原文件已保留，请由维护者检查');
+    return value.port;
+  };
+  const prior = await existingPort();
+  if (prior !== null) return prior;
+  const port = await freePort();
+  try { await writeFile(file, JSON.stringify({ enabled: true, host: '127.0.0.1', port, publicUrl: '', devices: [] }), { flag: 'wx', mode: 0o600 }); }
+  catch (error) { if (error.code === 'EEXIST') return existingPort(); throw error; }
+  return port;
+}
 async function ownerAdmin(state, input) {
   const owner = JSON.parse(await readFile(ownerFile, 'utf8')); const url = new URL(owner.url);
   if (url.hostname !== '127.0.0.1' || Number(url.port) !== state.webPort) throw new Error('服务器启动授权地址无效');
@@ -114,9 +134,8 @@ async function authorize(state, retry) {
   let failure;
   for (let i = 0; i < (retry ? 100 : 1); i++) {
     try {
-      let status = await ownerAdmin(state, { action: 'status' });
-      if (!status.enabled) status = await ownerAdmin(state, { action: 'configure', enabled: true, host: '127.0.0.1', port: state.port, publicUrl: '' });
-      if (status.host !== '127.0.0.1' || status.port !== state.port) throw new Error('服务器 Link 监听配置已改变，请由维护者检查');
+      const status = await ownerAdmin(state, { action: 'status' });
+      if (!status.enabled || status.host !== '127.0.0.1' || status.port !== state.port) throw new Error('服务器 Link 监听配置已改变或尚未就绪，请由维护者检查');
       const pair = await ownerAdmin(state, { action: 'pairing', mode: 'lan' });
       const pending = await linkJson(state, '/link/api/pair', { code: pair.code, name: 'SSH 设备-' + randomUUID().slice(0, 5) });
       await ownerAdmin(state, { action: 'confirm', id: pending.requestId });

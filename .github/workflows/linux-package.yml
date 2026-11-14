@@ -40,7 +40,7 @@ jobs:
       - name: Build and verify Linux server archive
         run: |
           npm run build:plus
-          node --test scripts/server/package-linux.test.mjs scripts/server/smoke-linux.test.mjs
+          node --test scripts/server/package-linux.test.mjs scripts/server/smoke-linux.test.mjs plugins/link/test/server-bootstrap.test.mjs
           npm run package:plus:linux
           npm run check
       - name: Install shipped archive in a fresh user with real systemd and authenticate Link after restart

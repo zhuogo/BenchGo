@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { bash, requiresBash } from './platform.mjs';
+import { openStore } from '../src/pairing/store.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 test('bootstrap rejects a modified payload before creating an installation or running commands', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-bootstrap-integrity-'));
@@ -20,6 +21,47 @@ test('installer fails closed for unsupported source and never accepts command-sh
   const source = (await readFile(join(root, 'scripts/server/bootstrap.sh'), 'utf8')).replace(/\r\n/g, '\n');
   const result = spawnSync(bash, ['-s', '--', 'mirror;touch /tmp/not-allowed', 'connect'], { input: source, encoding: 'utf8' });
   assert.notEqual(result.status, 0); assert.match(result.stderr, /无效下载源/);
+});
+
+async function serverLinkInitializer(allocatePort) {
+  const source = await readFile(join(root, 'scripts/server/bootstrap.mjs'), 'utf8');
+  const start = source.indexOf('async function initializeServerLink('), end = source.indexOf('\nasync function ownerAdmin(', start);
+  assert(start >= 0 && end > start);
+  return new Function('mkdir', 'readFile', 'writeFile', 'join', 'freePort', `return (${source.slice(start, end)});`)(mkdir, readFile, writeFile, join, allocatePort);
+}
+
+test('server first start seeds the real persistent Link store as enabled loopback on its assigned port', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-server-link-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const initialize = await serverLinkInitializer(async () => 52341);
+  assert.equal(await initialize(directory), 52341);
+  const value = JSON.parse(await readFile(join(directory, 'devices.json'), 'utf8'));
+  assert.deepEqual(value, { enabled: true, host: '127.0.0.1', port: 52341, publicUrl: '', devices: [] });
+  const store = await openStore(directory);
+  assert.equal(store.state.enabled, true); assert.equal(store.state.host, '127.0.0.1'); assert.equal(store.state.port, 52341);
+  const source = await readFile(join(root, 'scripts/server/bootstrap.mjs'), 'utf8');
+  assert(source.indexOf('await initializeServerLink(') < source.indexOf('await helper.activateRelease('));
+  assert(!source.includes("action: 'configure'"), 'authorization never silently reconfigures a persistent listener');
+});
+
+test('server bootstrap reuses a valid initial listener after interruption without rewriting device credentials', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-server-link-existing-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, 'devices.json');
+  const bytes = JSON.stringify({ enabled: true, host: '127.0.0.1', port: 52342, publicUrl: '', name: 'Existing server', devices: [{ id: 'kept', tokenHash: 'kept-hash' }], relayPool: [{ id: 'keep' }] }, null, 2) + '\n';
+  await writeFile(file, bytes);
+  const initialize = await serverLinkInitializer(async () => { throw new Error('Existing listener must retain its port'); });
+  assert.equal(await initialize(directory), 52342); assert.equal(await readFile(file, 'utf8'), bytes);
+});
+
+test('server bootstrap refuses incompatible or corrupt saved listeners while preserving their bytes', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-server-link-invalid-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, 'devices.json'), initialize = await serverLinkInitializer(async () => 52343);
+  for (const bytes of [JSON.stringify({ enabled: true, host: '0.0.0.0', port: 48721, devices: [{ id: 'kept' }] }),
+    JSON.stringify({ enabled: false, host: '127.0.0.1', port: 52344 }), JSON.stringify({ enabled: true, host: '127.0.0.1', port: 65536 }), '{invalid-json']) {
+    await writeFile(file, bytes); await assert.rejects(initialize(directory), /原文件已保留/); assert.equal(await readFile(file, 'utf8'), bytes);
+  }
 });
 test('generated launcher is valid JavaScript and redacts split token chunks before journald', async t => {
   const source = await readFile(join(root, 'scripts/server/bootstrap.mjs'), 'utf8');
