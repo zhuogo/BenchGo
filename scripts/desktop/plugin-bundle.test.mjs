@@ -445,6 +445,8 @@ test('a new plugin version migrates the profile when an official shared package 
   put('old-seed/release.json', { schemaVersion: 1, version: '0.1.0', platform: process.platform, arch: process.arch, shared: [oldCordis] });
 
   const previous = await initializePluginProfile({ ...options, seed: join(root, 'old-seed') });
+  const previousMetadataPath = join(previous.directory, 'release.json');
+  const previousMetadata = readFileSync(previousMetadataPath, 'utf8');
   const manifestPath = join(options.profile, 'package.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   manifest.dependencies['kept-plugin'] = '1.2.3';
@@ -464,9 +466,15 @@ test('a new plugin version migrates the profile when an official shared package 
   const current = await initializePluginProfile({ ...options, seed: join(root, 'next-seed'), runtime: join(root, 'runtime-next') });
   assert.equal(current.version, '0.1.1');
   assert.equal(current.enabled, false);
-  assert.equal(current.previous.version, '0.1.0');
-  assert.equal(JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies['kept-plugin'], '1.2.3');
-  assert.equal(existsSync(join(options.profile, '.benchgo/releases/0.1.0/release.json')), true);
+  const activated = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  assert.equal(activated.dependencies['kept-plugin'], '1.2.3');
+  assert.equal(activated.dsh.plusInstall.version, '0.1.1');
+  assert.equal(activated.dsh.plusInstall.directory, current.directory);
+  assert.equal(activated.dsh.plusInstall.bundleName, current.bundleName);
+  assert.equal(activated.dsh.profile.bundles.includes(previous.bundleName), false);
+  assert.equal(activated.dsh.profile.bundles.includes(current.bundleName), false);
+  assert.equal(readFileSync(previousMetadataPath, 'utf8'), previousMetadata);
+  assert.deepEqual(JSON.parse(readFileSync(join(current.directory, 'release.json'), 'utf8')).shared, [newCordis]);
   assert.equal(existsSync(join(current.directory, 'node_modules/@deepseek-ai/cordis')), false);
   assert.equal(current.runtime, join(root, 'runtime-next'));
   assert.equal(Object.hasOwn(JSON.parse(readFileSync(manifestPath)).dsh.plusInstall, 'runtime'), false);
