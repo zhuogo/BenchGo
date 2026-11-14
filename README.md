@@ -29,7 +29,7 @@ Linux 服务端使用发行版中的 `benchgo-<version>-linux-server.tar.gz`，�
 (umask 077; bash install.sh github connect > connection.json)
 ```
 
-`connection.json` 含设备授权凭据，请私密保管。也可在 BenchGo「设备 → 添加 → SSH 服务器」完成部署与连接。此包是无桌面窗口的服务端，不是 Linux Desktop，不支持 ARM64；内置离线插件，首次安装仍需联网获取固定版本官方 Harness 和必要时的 Node.js 24.9+。具体要求、更新与服务管理以包内 README 为准。
+`connection.json` 含设备授权凭据，请私密保管。也可在 BenchGo「设备中心 → 设备 → 添加设备 → 安装到服务器」完成部署与连接。此包是无桌面窗口的服务端，不是 Linux Desktop，不支持 ARM64；内置离线插件，首次安装仍需联网获取固定版本官方 Harness 和必要时的 Node.js 24.9+。具体要求、更新与服务管理以包内 README 为准。
 
 ## 安装中继
 

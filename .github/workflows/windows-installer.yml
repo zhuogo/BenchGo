@@ -59,7 +59,7 @@ jobs:
       - name: Build full Windows installer and verify runtime
         run: npm run package:plus:win
       - name: Verify plugin enrollment and legacy shadow migration
-        run: node --test scripts/desktop/plugin-bundle.test.mjs plugins/benchgo/test/plugin-install.test.mjs
+        run: node --test scripts/desktop/plugin-bundle.test.mjs plugins/benchgo/test/plugin-install.test.mjs scripts/server/package-seed.test.mjs
       - name: Download previous signed installer for in-place upgrade verification
         env:
           GH_TOKEN: ${{ github.token }}

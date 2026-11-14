@@ -47,6 +47,8 @@ jobs:
           npm run setup
           npm ci --prefix plugins/link
           npm ci --prefix plugins/benchgo
+      - name: Verify portable Linux server seed metadata
+        run: node --test scripts/server/package-seed.test.mjs
       - name: Build and verify signed Android release
         env:
           BENCHGO_ANDROID_KEYSTORE_BASE64: ${{ secrets.BENCHGO_ANDROID_KEYSTORE_BASE64 }}

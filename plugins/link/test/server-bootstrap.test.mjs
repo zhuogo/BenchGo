@@ -23,6 +23,18 @@ test('installer fails closed for unsupported source and never accepts command-sh
   assert.notEqual(result.status, 0); assert.match(result.stderr, /无效下载源/);
 });
 
+test('server installer rejects ARM64 and other unsupported CPUs before systemd or Node downloads', requiresBash, async () => {
+  const source = (await readFile(join(root, 'scripts/server/bootstrap.sh'), 'utf8')).replace(/\r\n/g, '\n');
+  for (const architecture of ['aarch64', 'arm64', 'riscv64']) {
+    const input = `uname() { if [ "$1" = -s ]; then printf 'Linux\\n'; else printf '${architecture}\\n'; fi; }\n`
+      + "curl() { echo unexpected-download >&2; return 99; }\nsystemctl() { echo unexpected-service >&2; return 99; }\n" + source;
+    const result = spawnSync(bash, ['-s', '--', 'github', 'connect'], { input, encoding: 'utf8' });
+    assert.notEqual(result.status, 0); assert.equal(result.stdout, '');
+    assert.match(result.stderr, /当前服务器包仅支持 Linux x64，暂不支持 ARM64/);
+    assert(!result.stderr.includes('unexpected-'));
+  }
+});
+
 async function serverLinkInitializer(allocatePort) {
   const source = await readFile(join(root, 'scripts/server/bootstrap.mjs'), 'utf8');
   const start = source.indexOf('async function initializeServerLink('), end = source.indexOf('\nasync function ownerAdmin(', start);

@@ -57,7 +57,7 @@ jobs:
           sudo sysctl -w kern.maxfilesperproc=65536
           ulimit -n 65536
           npm run build:plus
-          node --test scripts/desktop/package-macos.test.mjs
+          node --test scripts/desktop/package-macos.test.mjs scripts/server/package-seed.test.mjs
           node scripts/desktop/package-macos.mjs "$TARGET_ARCH"
       - name: Require clean official source after packaging
         run: npm run check

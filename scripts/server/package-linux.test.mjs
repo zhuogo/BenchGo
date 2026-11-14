@@ -20,7 +20,7 @@ async function fixture(t, extra = {}, entryTransform) {
   const upstream = JSON.parse(await readFile(join(root, 'upstream.json')));
   const worker = Buffer.alloc(64); worker.write('7f454c460201', 0, 'hex'); worker.writeUInt16LE(62, 18);
   const files = {
-    'release.json': JSON.stringify({ schemaVersion: 1, version: plugin.version, platform: 'linux' }),
+    'release.json': JSON.stringify({ schemaVersion: 1, version: plugin.version, platform: 'linux', arch: 'x64' }),
     'node_modules/benchgo-plugin/package.json': JSON.stringify({ name: 'benchgo-plugin', version: plugin.version }),
     'node_modules/benchgo-plugin/src/plugin.mjs': 'export default {};',
     'node_modules/benchgo-plugin/lib/client.js': 'export {};',

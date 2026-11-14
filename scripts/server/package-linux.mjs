@@ -51,7 +51,7 @@ export async function verifyLinuxSeed(archive, { pluginVersion } = {}) {
   for (const name of required) if (!seen.has(name)) throw new Error(`Missing server seed entry: ${name}`);
   const release = JSON.parse(captures.get('release.json'));
   const plugin = JSON.parse(captures.get('node_modules/benchgo-plugin/package.json'));
-  if (release.schemaVersion !== 1 || release.platform !== 'linux' || release.arch && release.arch !== 'x64'
+  if (release.schemaVersion !== 1 || release.platform !== 'linux' || release.arch !== 'x64'
     || release.version !== pluginVersion || plugin.name !== 'benchgo-plugin' || plugin.version !== pluginVersion) throw new Error('Server seed identity differs from release');
   const worker = captures.get(required.at(-1));
   if (worker.length < 20 || worker.subarray(0, 4).toString('hex') !== '7f454c46' || worker[4] !== 2 || worker[5] !== 1 || worker.readUInt16LE(18) !== 62) throw new Error('Linux x64 native worker is not an ELF x86-64 executable');
