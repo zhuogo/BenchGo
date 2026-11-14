@@ -51,6 +51,11 @@ jobs:
           npm ci --prefix plugins/benchgo
       - name: Build plugin and native BenchGo distribution
         run: |
+          # osx-sign scans the complete bundled runtime and offline plugin tree.
+          # Hosted macOS shells otherwise inherit a small descriptor limit.
+          sudo sysctl -w kern.maxfiles=262144
+          sudo sysctl -w kern.maxfilesperproc=65536
+          ulimit -n 65536
           npm run build:plus
           node --test scripts/desktop/package-macos.test.mjs
           node scripts/desktop/package-macos.mjs "$TARGET_ARCH"

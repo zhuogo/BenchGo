@@ -2,10 +2,35 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { prepareMacDmgTool } from './macos-dmg-tool.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
+
+export function validateMacFileLimit(value) {
+  const limit = String(value).trim();
+  if (limit !== 'unlimited' && (!/^\d+$/.test(limit) || Number(limit) < 65536)) {
+    throw new Error(`macOS packaging requires ulimit -n >= 65536 before starting Node.js (received ${JSON.stringify(limit)}). Raise the runner's kern.maxfiles/kern.maxfilesperproc and shell file limit before building.`);
+  }
+  return limit;
+}
+
+export function macSigningNodeOptions(existing = '') {
+  const preload = new URL('./macos-signing-fs.mjs', import.meta.url).href;
+  return `${existing} --import=${preload}`.trim();
+}
+
+function preflightMacPackaging() {
+  const softOpenFiles = validateMacFileLimit(execFileSync('/bin/sh', ['-c', 'ulimit -S -n'], { encoding: 'utf8' }));
+  const maxFilesPerProcess = execFileSync('/usr/sbin/sysctl', ['-n', 'kern.maxfilesperproc'], { encoding: 'utf8' }).trim();
+  const desktopRequire = createRequire(new URL('../../deepseek-harness/apps/desktop/package.json', import.meta.url));
+  const builderRequire = createRequire(desktopRequire.resolve('app-builder-lib'));
+  // Fail before the full runtime build if the locked retry-queue dependency is absent.
+  builderRequire.resolve('graceful-fs');
+  console.log(`[BenchGo packaging] descriptor preflight ${JSON.stringify({ softOpenFiles, maxFilesPerProcess })}`);
+}
 
 export async function recordMacArtifacts(directory, { version, arch, sourceSha }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha)) throw new Error('macOS artifact source must be an immutable Git SHA');
@@ -34,6 +59,8 @@ export function resolveMacPackageTarget(arch, platform = process.platform, hostA
 
 export async function packageMacOS(arch) {
   const target = resolveMacPackageTarget(arch);
+  preflightMacPackaging();
+  const dmgTool = await prepareMacDmgTool(arch);
   const engine = join(root, 'deepseek-harness');
   const desktop = join(engine, 'apps/desktop');
   const build = join(desktop, '.desktop-build/targets', target.name);
@@ -43,13 +70,13 @@ export async function packageMacOS(arch) {
     DSH_DESKTOP_UNSIGNED: '1', DSH_DESKTOP_TARGET_PLATFORM: target.platform, DSH_DESKTOP_TARGET_ARCH: target.arch,
     CSC_IDENTITY_AUTO_DISCOVERY: 'false' };
   for (const key of Object.keys(env)) if (/^(?:DSH_DESKTOP_WINDOWS_|DSH_DESKTOP_MACOS_|(?:WIN_)?CSC_(?!IDENTITY_AUTO_DISCOVERY)|APPLE_)/.test(key)) delete env[key];
-  const run = (args, cwd = engine) => new Promise((resolveRun, reject) => {
+  const run = (args, cwd = engine, overrides = {}) => new Promise((resolveRun, reject) => {
     console.log(`\n[BenchGo macOS packaging] ${args.join(' ')}`);
-    const child = spawn(process.execPath, args, { cwd, env, stdio: 'inherit' });
+    const child = spawn(process.execPath, args, { cwd, env: { ...env, ...overrides }, stdio: 'inherit' });
     child.once('error', reject);
     child.once('exit', (code, signal) => code === 0 ? resolveRun() : reject(new Error(`Packaging failed (${signal ?? code}): ${args.join(' ')}`)));
   });
-  const pm = (args, cwd = engine) => run([pnpm, ...args], cwd);
+  const pm = (args, cwd = engine, overrides) => run([pnpm, ...args], cwd, overrides);
   await pm(['run', 'build:official']);
   await run([join(root, 'scripts/desktop/prepare-tray.mjs')], root);
   for (const [family, directory] of [['dsh', 'dsh'], ['vendor', 'vendor']]) {
@@ -63,7 +90,10 @@ export async function packageMacOS(arch) {
   await rm(join(build, 'plus-seed'), { recursive: true, force: true });
   await run([join(root, 'scripts/desktop/plugin-bundle.mjs'), 'stage', '--runtime', join(build, 'dsh'), '--output', join(build, 'plus-seed')], root);
   await pm(['exec', 'tsx', join(root, 'scripts/desktop/seal-runtime.mjs'), join(build, 'dsh')], desktop);
-  await pm(['exec', 'electron-builder', '--config', join(root, 'scripts/desktop/electron-builder.macos.config.mjs'), '--mac', `--${arch}`, '--publish', 'never'], desktop);
+  // NODE_OPTIONS is inherited through pnpm exec's Node child; only this build
+  // subprocess gets the preload. It is never copied into the app or runtime.
+  await pm(['exec', 'electron-builder', '--config', join(root, 'scripts/desktop/electron-builder.macos.config.mjs'), '--mac', `--${arch}`, '--publish', 'never'], desktop,
+    { NODE_OPTIONS: macSigningNodeOptions(env.NODE_OPTIONS), CUSTOM_DMGBUILD_PATH: dmgTool });
   const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
   const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
   await recordMacArtifacts(join(root, `artifacts/macos-${arch}`), { version, arch, sourceSha });

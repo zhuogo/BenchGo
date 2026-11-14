@@ -40,9 +40,12 @@ jobs:
       - name: Build and verify Linux server archive
         run: |
           npm run build:plus
-          node --test scripts/server/package-linux.test.mjs
+          node --test scripts/server/package-linux.test.mjs scripts/server/smoke-linux.test.mjs
           npm run package:plus:linux
           npm run check
+      - name: Install shipped archive in a fresh user with real systemd and authenticate Link after restart
+        timeout-minutes: 15
+        run: node scripts/server/smoke-linux.mjs --directory artifacts/linux-server
       - uses: actions/upload-artifact@v4
         with:
           name: benchgo-linux-server

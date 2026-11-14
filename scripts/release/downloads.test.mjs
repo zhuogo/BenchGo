@@ -19,6 +19,15 @@ test('platform provenance rejects wrong source, architecture, notarization claim
   }
 });
 
+test('Linux publication requires the completed native fresh-install and service smoke', () => {
+  const receipt = { schemaVersion: 1, sourceSha: plan.sourceSha, version: '0.1.2', platform: 'linux', arch: 'x64',
+    verified: ['server-seed-sha256', 'server-seed-safe-paths', 'linux-x64-native-worker', 'current-bootstrap', 'distribution-inventory'],
+    files: [{ name: 'benchgo-0.1.2-linux-server.tar.gz', size: 4, sha256: sha256('test') }] };
+  assert.throws(() => validatePlatformReceipt(receipt, plan, 'linux-server'), /Incomplete/);
+  receipt.verified.push('server-install-and-start');
+  assert.equal(validatePlatformReceipt(receipt, plan, 'linux-server').expected.length, 1);
+});
+
 test('complete catalog binds every platform to checked bytes and verifies its signature', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-downloads-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -35,7 +44,7 @@ test('complete catalog binds every platform to checked bytes and verifies its si
   await mkdir(linux, { recursive: true });
   await writeFile(join(linux, name), 'test');
   await writeFile(join(linux, 'build-source.json'), JSON.stringify({ schemaVersion: 1, sourceSha: plan.sourceSha, version: '0.1.2', platform: 'linux', arch: 'x64',
-    verified: ['server-seed-sha256', 'server-seed-safe-paths', 'linux-x64-native-worker', 'current-bootstrap', 'distribution-inventory'], files: [{ name, size: 4, sha256: sha256('test') }] }));
+    verified: ['server-seed-sha256', 'server-seed-safe-paths', 'linux-x64-native-worker', 'current-bootstrap', 'distribution-inventory', 'server-install-and-start'], files: [{ name, size: 4, sha256: sha256('test') }] }));
   const manifest = {};
   for (const [key, suffix] of [['app', 'win-x64-setup.exe'], ['android', 'android.apk'], ['plugin', 'plugin.tar.gz']]) {
     const filename = `benchgo-0.1.2-${suffix}`;

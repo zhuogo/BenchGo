@@ -1,4 +1,5 @@
-import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { tmpdir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -14,7 +15,11 @@ const resources = join(app, 'resources');
 const executable = join(app, 'BenchGo.exe');
 const descriptor = JSON.parse(await readFile(join(root, 'deepseek-harness/apps/desktop/.desktop-build/targets/win-x64/dsh/desktop-runtime.json')));
 await smokePreparedRuntime(join(resources, 'app.asar', 'dsh'), executable, join(resources, 'runtime'), descriptor);
-const temporary = await mkdtemp(join(tmpdir(), 'benchgo-installed-'));
+// Native ESM imports expand Windows 8.3 names (GitHub's RUNNER~1 temp path).
+// Give the official profile resolver the same spelling as the loaded modules.
+const temporaryPath = await mkdtemp(join(tmpdir(), 'benchgo-installed-'));
+const temporary = realpathSync.native(temporaryPath);
+console.log('Packaged smoke profile paths:', JSON.stringify({ requested: temporaryPath, native: temporary }));
 const environment = { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_HOME: temporary, HOME: temporary, USERPROFILE: temporary, APPDATA: temporary, LOCALAPPDATA: temporary, DSH_TELEMETRY_DISABLED: '1' };
 let host;
 try {
@@ -30,7 +35,12 @@ try {
   const inventory = JSON.parse(await readFile(join(resources, 'app.asar.unpacked/dsh/desktop-runtime.json')));
   if (inventory.sharedPackages.some(item => item.name === 'benchgo' || item.name === '@dowork/benchgo-desktop')) throw new Error('Plugin is still locked inside the sealed engine');
   // Use the shipped default dataDir under the isolated user's home, as real installs do.
-  await writeFile(join(profile, 'cordis.patch.yml'), `- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n`);
+  const dataDir = join(temporary, '.benchgo');
+  await mkdir(join(dataDir, 'link'), { recursive: true });
+  await writeFile(join(dataDir, 'link/devices.json'), JSON.stringify({ host: '127.0.0.1', port: 0 }));
+  const probe = join(profile, 'packaging-probe.mjs');
+  await writeFile(probe, await readFile(new URL('./packaged-profile-probe.mjs', import.meta.url)));
+  await writeFile(join(profile, 'cordis.patch.yml'), `- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n- insert:\n    - id: benchgo-packaging-probe\n      name: ${JSON.stringify(probe)}\n`);
   const makeHost = () => new DesktopHostProcess(executable, join(resources, 'app.asar', 'dsh'), profile, undefined, environment, undefined, join(resources, 'runtime/primary-runtime'), { pnpm: join(resources, 'runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs'), nodeBin: join(resources, 'runtime/bin') });
   host = makeHost();
   let deadline;
@@ -39,15 +49,23 @@ try {
   finally { clearTimeout(deadline); }
   const login = await fetch(ready.url, { redirect: 'manual' });
   let cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
-  const response = await fetch(new URL('/api/commander-link', ready.url), { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }) });
-  const status = await response.json();
-  if (!response.ok || status.enabled !== false) throw new Error(`Packaged Plus management route failed: ${JSON.stringify(status)}`);
-  const sidebarCall = async input => {
-    const result = await fetch(new URL('/api/commander', ready.url), { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify(input) });
+  if (!cookie) throw new Error('Packaged owner login did not issue an authentication cookie');
+  const call = async (path, input) => {
+    const result = await fetch(new URL(path, ready.url), { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(15_000) });
     const body = await result.text();
-    if (!result.ok || !result.headers.get('content-type')?.includes('application/json')) throw new Error(`Packaged sidebar ${input.action} returned ${result.status}: ${body.slice(0, 500)}`);
+    if (!result.ok || !result.headers.get('content-type')?.includes('application/json')) throw new Error(`Packaged ${path} ${input.action ?? ''} returned HTTP ${result.status}: ${body.slice(0, 500)}`);
     return JSON.parse(body);
   };
+  const assertProfile = async () => {
+    const report = await call('/api/benchgo-packaging-probe', {});
+    if (report.modules.length !== 5 || report.modules.some(row => !row.available || row.state !== 2)) throw new Error(`Packaged module activation failed: ${JSON.stringify(report)}`);
+    const boot = ready.injections?.find(item => item.kind === 'global' && item.name === '__DSH_BOOT__')?.value;
+    if (!boot?.entries?.some(entry => entry.id === 'benchgo-plugin') || boot.entries.some(entry => entry.id === 'benchgo')) throw new Error('Packaged unified BenchGo client registration is missing or uses the retired id');
+  };
+  await assertProfile();
+  const status = await call('/api/commander-link', { action: 'status' });
+  if (status.enabled !== true || status.host !== '127.0.0.1' || !(status.port > 0) || status.error !== null) throw new Error(`Packaged Link listener failed: ${JSON.stringify(status)}`);
+  const sidebarCall = input => call('/api/commander', input);
   const sidebar = await sidebarCall({ action: 'state' });
   if (!Array.isArray(sidebar.projects) || !Array.isArray(sidebar.sessions)) throw new Error('Packaged sidebar state is incomplete');
   const recent = await sidebarCall({ action: 'ensureRecent' });
@@ -56,7 +74,6 @@ try {
   const font = await fetch(new URL('/api/commander-fonts/' + fontManifest[0].file, ready.url), { headers: { cookie } });
   if (!font.ok || Buffer.from(await font.arrayBuffer()).subarray(0, 4).toString() !== 'wOF2') throw new Error('Packaged sidebar font could not be loaded');
   console.log('Packaged authenticated sidebar state, recent workspace recovery and font asset passed.');
-  const dataDir = join(temporary, '.benchgo');
   const lockPath = join(dataDir, 'owner.lock');
   const owner = JSON.parse(await readFile(lockPath, 'utf8'));
   if (owner.host !== hostname() || !Number.isSafeInteger(owner.pid) || owner.pid < 1 || owner.pid === process.pid) throw new Error('Unexpected packaged Host owner record');
@@ -79,6 +96,8 @@ try {
   finally { clearTimeout(deadline); }
   const recoveredLogin = await fetch(ready.url, { redirect: 'manual' });
   cookie = recoveredLogin.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
+  if (!cookie) throw new Error('Recovered packaged owner login did not issue an authentication cookie');
+  await assertProfile();
   const recovered = await sidebarCall({ action: 'state' });
   if (!recovered.sessions.some(session => session.id === 'crash-recovery-check' && session.nativeId === 'preserved-native-handle')) throw new Error('Packaged Host lost sessions after crash recovery');
   if (await readFile(join(dataDir, 'sessions.json'), 'utf8') !== saved) throw new Error('Crash recovery rewrote saved sessions');

@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $installers = @(Get-ChildItem -Path (Join-Path $PSScriptRoot '../../artifacts/windows') -Filter 'benchgo-*-win-x64-setup.exe')
 if ($installers.Count -ne 1) { throw 'Expected exactly one BenchGo installer' }
 $installer = $installers[0]
+$expectedAppVersion = (Get-Content (Join-Path $PSScriptRoot '../../package.json') -Raw | ConvertFrom-Json).version
 $previousHome = $env:DSH_HOME
 $env:DSH_HOME = Join-Path $env:RUNNER_TEMP 'benchgo-installer-smoke'
 
@@ -109,6 +110,8 @@ function Assert-Plus([System.IO.FileInfo]$Installed) {
     Assert-PluginResolution $Installed $state.version $state.directory
     if (Test-Path (Join-Path $Installed.DirectoryName 'resources/app.asar.unpacked/dsh/node_modules/benchgo-plugin/package.json')) { throw 'BenchGo must be external to the sealed engine runtime' }
     if ($Installed.VersionInfo.ProductName -ne 'BenchGo') { throw 'Executable product name is not BenchGo' }
+    $actualAppVersion = ([Version]$Installed.VersionInfo.ProductVersion).ToString(3)
+    if ($actualAppVersion -ne $expectedAppVersion) { throw "Installed executable version $actualAppVersion does not match $expectedAppVersion" }
     $entries = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object { $_.InstallLocation -eq $Installed.DirectoryName })
     if ($entries.Count -ne 1 -or $entries[0].DisplayName -notlike 'BenchGo *') { throw 'Uninstall entry must display BenchGo' }
     $shortcut = Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/BenchGo.lnk'
@@ -203,6 +206,8 @@ try {
         if ($process.ExitCode -ne 0) { throw "Uninstaller exited $($process.ExitCode)" }
         Install-Silently (Resolve-Path $PreviousInstaller).Path
         $legacy = Get-Installed 'BenchGo.exe'
+        $legacyVersion = ([Version]$legacy.VersionInfo.ProductVersion).ToString(3)
+        if ([Version]$legacyVersion -ge [Version]$expectedAppVersion) { throw "Upgrade source $legacyVersion must be older than $expectedAppVersion" }
         $profileMarker = Join-Path $env:DSH_HOME 'benchgo-upgrade-marker.txt'
         $dataDirectory = Join-Path $env:APPDATA 'benchgo-desktop'
         New-Item $dataDirectory -ItemType Directory -Force | Out-Null
@@ -213,12 +218,19 @@ try {
         $upgraded = Get-Installed 'BenchGo.exe'
         Assert-Plus $upgraded
         if ($upgraded.DirectoryName -ne $legacy.DirectoryName) { throw 'Upgrade changed the registered installation directory' }
-        if (Test-Path $legacy.FullName) { throw 'The previous BenchGo.exe was left behind' }
+        # v0.0.1 already uses BenchGo.exe and BenchGo.lnk. Same-name upgrades
+        # replace those files; their presence is required, not a stale artifact.
+        if (-not [String]::Equals($upgraded.FullName, $legacy.FullName, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path $legacy.FullName)) { throw 'The previous differently named executable was left behind' }
         if ((Get-Content $profileMarker) -ne 'keep profile' -or (Get-Content $dataMarker) -ne 'keep desktop data') { throw 'Upgrade did not preserve user data' }
-        if (Test-Path (Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/BenchGo.lnk')) { throw 'The legacy Start Menu shortcut was left behind' }
         $desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
-        if (Test-Path (Join-Path $desktop 'BenchGo.lnk')) { throw 'The legacy Desktop shortcut was left behind' }
-        Write-Output "BenchGo in-place upgrade passed: $($upgraded.FullName)"
+        $desktopShortcut = Join-Path $desktop 'BenchGo.lnk'
+        if (Test-Path $desktopShortcut) {
+            $link = [BenchGoInstallerShortcut]::Read($desktopShortcut)
+            $target = [BenchGoInstallerShortcut]::ExistingLongPath($link.TargetPath)
+            $expected = [BenchGoInstallerShortcut]::ExistingLongPath($upgraded.FullName)
+            if (-not [String]::Equals($target, $expected, [StringComparison]::OrdinalIgnoreCase) -or $link.Arguments -ne '') { throw 'Upgraded Desktop shortcut does not launch the current BenchGo.exe without arguments' }
+        }
+        Write-Output "BenchGo in-place upgrade passed: $legacyVersion -> $expectedAppVersion ($($upgraded.FullName))"
     }
 } finally {
     $env:DSH_HOME = $previousHome

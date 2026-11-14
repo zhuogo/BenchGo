@@ -1,5 +1,5 @@
 <p>此包是浏览器工作台的服务端，不是 Linux 桌面安装器。当前仅支持 Ubuntu / Debian x64 与 systemd，不支持 ARM64。首次安装需联网准备固定版本的官方 Harness，必要时准备 Node.js 24.9+，插件依赖随包提供。</p>
-<h2>推荐：添加 SSH 服务器</h2><p>在已有 BenchGo 的「设备」中点击「添加」，选择 SSH 服务器，按引导完成连接。日常使用优先采用此入口；以下独立压缩包适用于维护者。</p>
+<h2>推荐：添加 SSH 服务器</h2><p>在已有 BenchGo 的「设备中心」打开「设备」页签，点击「我的设备」区域的「添加设备」，选择「安装到服务器」，填写 SSH 连接信息并按引导确认服务器身份、完成安装或连接。日常使用优先采用此入口；以下独立压缩包适用于维护者。</p>
 <h2>使用服务端压缩包</h2><p>从<a href="/download" target="_top">下载页</a>获取压缩包与同名 <code>.sha256</code>，核对校验值，解压并进入版本目录。将命令中的「版本」替换成实际版本号。</p>
 <pre><code>sha256sum -c benchgo-&lt;版本&gt;-linux-server.tar.gz.sha256
 tar -xzf benchgo-&lt;版本&gt;-linux-server.tar.gz

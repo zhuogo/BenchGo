@@ -13,7 +13,7 @@ const specs = {
   'mac-x64': { folder: 'benchgo-macos-x64', platform: 'darwin', arch: 'x64', suffixes: ['mac-x64.dmg', 'mac-x64.zip'],
     verified: ['packaged-runtime', 'external-plugin-seed', 'enrollment-source-match', 'startup-brand'] },
   'linux-server': { folder: 'benchgo-linux-server', platform: 'linux', arch: 'x64', suffixes: ['linux-server.tar.gz'],
-    verified: ['server-seed-sha256', 'server-seed-safe-paths', 'linux-x64-native-worker', 'current-bootstrap', 'distribution-inventory'] },
+    verified: ['server-seed-sha256', 'server-seed-safe-paths', 'linux-x64-native-worker', 'current-bootstrap', 'distribution-inventory', 'server-install-and-start'] },
 };
 
 export function validatePlatformReceipt(receipt, plan, target) {
