@@ -228,6 +228,7 @@ test('SSH optional build-machine addons never enter desktop plugin releases', t 
 const officialBoot = join(officialRoot, 'packages/boot/app-boot/lib/index.js');
 test('official profile loader resolves the preinstalled Plus bundle and respects later user disable', { skip: !existsSync(officialBoot) }, async t => {
   const { root, put } = fixture(t);
+  put('resources/app.asar/package.json', { name: 'benchgo-desktop', version: '0.1.3' });
   const modules = join(root, 'resources/app.asar/dsh/node_modules');
   mkdirSync(join(modules, '@deepseek-ai'), { recursive: true });
   for (const [name, source] of [
@@ -246,6 +247,7 @@ test('official profile loader resolves the preinstalled Plus bundle and respects
   const loaded = boot.loadProfileDirectory('dsh', profile, join(modules, '@deepseek-ai/dsh/package.json'));
   assert.deepEqual(loaded.skippedBundles, [], JSON.stringify(loaded.skippedBundles));
   const state = await getInstallState(profile);
+  assert.equal(state.appVersion, '0.1.3');
   const plus = loaded.layers.find(layer => layer.packageName === state.bundleName);
   assert.ok(plus, 'official loader selected the profile-local Plus bundle');
   assert.equal(plus.patches[0].insert[0].id, 'commander');
@@ -282,15 +284,59 @@ function seedFixture(put, prefix, version = '0.1.0', splitModules = true) {
 
 function enrollmentFixture(t) {
   const { root, put } = fixture(t);
+  put('resources/app.asar/package.json', { name: 'benchgo-desktop', version: '0.1.0' });
   const modules = join(root, 'runtime/node_modules/@deepseek-ai'); mkdirSync(modules, { recursive: true });
   symlinkSync(join(officialRoot, 'packages/boot/app-boot'), join(modules, 'dsh-app-boot'), 'junction');
   symlinkSync(join(officialRoot, 'packages/util/home-paths'), join(modules, 'dsh-home-paths'), 'junction');
   symlinkSync(join(officialRoot, 'packages/util/official-bundles'), join(modules, 'dsh-official-bundles'), 'junction');
   seedFixture(put, 'seed');
-  return { root, put, options: { runtime: join(root, 'runtime'), seed: join(root, 'seed'), profile: join(root, 'profile') } };
+  return { root, put, options: { resources: join(root, 'resources'), runtime: join(root, 'runtime'), seed: join(root, 'seed'), profile: join(root, 'profile') } };
 }
 
 const enrollmentOptions = { skip: !existsSync(officialBoot) };
+
+test('initial enrollment and same-version repair record the actual app version independently of the feature package', enrollmentOptions, async t => {
+  const { root, put, options } = enrollmentFixture(t);
+  put('resources/app.asar/package.json', { name: 'benchgo-desktop', version: '0.1.3' });
+  seedFixture(put, 'seed', '0.1.4');
+  put('profile/package.json', { private: true, dependencies: { 'kept-plugin': '1.0.0' }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } });
+  const patch = '# existing user config\n';
+  put('profile/cordis.patch.yml', patch);
+  const initial = await initializePluginProfile(options);
+  assert.equal(initial.version, '0.1.4');
+  assert.equal(initial.appVersion, '0.1.3');
+  const manifestPath = join(options.profile, 'package.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.dsh.plusInstall.appVersion = '0.1.4';
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  const repaired = await initializePluginProfile(options);
+  assert.equal(repaired.reason, 'already-enrolled');
+  assert.equal(repaired.version, '0.1.4');
+  assert.equal(repaired.appVersion, '0.1.3');
+  const activated = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  assert.equal(activated.dsh.plusInstall.appVersion, '0.1.3');
+  assert.equal(activated.dependencies['kept-plugin'], '1.0.0');
+  assert.equal(readFileSync(join(root, 'profile/cordis.patch.yml'), 'utf8'), patch);
+});
+
+test('unidentified desktop metadata never falls back to the feature package or mutates the profile', enrollmentOptions, async t => {
+  for (const manifest of [undefined, { name: 'benchgo-plugin', version: '0.1.4' }, { name: 'benchgo-desktop', version: 'invalid' }, { name: 'benchgo-desktop' }]) {
+    const { root, put, options } = enrollmentFixture(t);
+    const file = join(options.resources, 'app.asar/package.json');
+    if (manifest) writeFileSync(file, JSON.stringify(manifest));
+    else rmSync(file);
+    const original = JSON.stringify({ private: true, dependencies: { kept: '1.0.0' }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } });
+    put('profile/package.json', original);
+    put('profile/cordis.patch.yml', '# preserved\n');
+    await assert.rejects(initializePluginProfile(options));
+    assert.equal(readFileSync(join(options.profile, 'package.json'), 'utf8'), original);
+    assert.equal(readFileSync(join(options.profile, 'cordis.patch.yml'), 'utf8'), '# preserved\n');
+    assert.equal(existsSync(join(root, 'profile/.benchgo-enrolled.json')), false);
+    assert.equal(existsSync(join(root, 'profile/lock')), false);
+  }
+  const { options } = enrollmentFixture(t);
+  await assert.rejects(initializePluginProfile({ ...options, resources: undefined }), /application resources are required/u);
+});
 
 test('upgrading a two-entry bundle loads all five entries while retaining user module state and config', enrollmentOptions, async t => {
   const { root, put, options } = enrollmentFixture(t);
@@ -375,8 +421,10 @@ for (const scenario of [
 ]) test(`installer ${scenario.name} despite a physical legacy profile package`, enrollmentOptions, async t => {
   for (const enabled of [true, false]) {
     const { root, put, options } = enrollmentFixture(t);
+    put('resources/app.asar/package.json', { name: 'benchgo-desktop', version: '0.1.3' });
     seedFixture(put, 'seed', scenario.installed);
     const initial = await initializePluginProfile(options);
+    assert.equal(initial.appVersion, '0.1.3');
     const manifestPath = join(options.profile, 'package.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     manifest.dependencies['kept-plugin'] = '1.2.3';
@@ -396,8 +444,11 @@ for (const scenario of [
     seedFixture(put, 'installer-seed', scenario.seed);
     const result = await initializePluginProfile({ ...options, seed: join(root, 'installer-seed') });
     assert.equal(result.version, scenario.expected);
+    assert.equal(result.appVersion, '0.1.3');
     assert.equal(result.enabled, enabled);
-    assert.equal(JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies['kept-plugin'], '1.2.3');
+    const activated = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    assert.equal(activated.dependencies['kept-plugin'], '1.2.3');
+    assert.equal(activated.dsh.plusInstall.appVersion, '0.1.3');
     if (!enabled) continue;
     const actual = resolvedProfilePlugin(root, options.profile);
     assert.equal(actual.tableVersion, scenario.expected, 'official bundle closure names the selected release');
@@ -489,21 +540,29 @@ test('reinstall refreshes app version and moved shared-runtime links without dow
   const manifestPath = join(options.profile, 'package.json');
   const manifest = JSON.parse(readFileSync(manifestPath));
   manifest.dsh.plusInstall.appVersion = '0.0.9';
+  manifest.dependencies['kept-plugin'] = '1.2.3';
   manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(name => name !== manifest.dsh.plusInstall.bundleName);
   writeFileSync(manifestPath, JSON.stringify(manifest));
-  const moved = join(root, 'moved-runtime/node_modules/@deepseek-ai');
+  put('profile/cordis.patch.yml', '# preserved after moving the application\n');
+  const resources = join(root, 'moved-app/resources'), runtime = join(resources, 'app.asar.unpacked/dsh');
+  put('moved-app/resources/app.asar/package.json', { name: 'benchgo-desktop', version: '0.1.3' });
+  const moved = join(runtime, 'node_modules/@deepseek-ai');
   mkdirSync(moved, { recursive: true });
   symlinkSync(join(officialRoot, 'packages/boot/app-boot'), join(moved, 'dsh-app-boot'), 'junction');
   symlinkSync(join(officialRoot, 'packages/util/home-paths'), join(moved, 'dsh-home-paths'), 'junction');
   symlinkSync(join(officialRoot, 'packages/util/official-bundles'), join(moved, 'dsh-official-bundles'), 'junction');
-  put('moved-runtime/node_modules/@deepseek-ai/dsh-llm/package.json', service);
+  put('moved-app/resources/app.asar.unpacked/dsh/node_modules/@deepseek-ai/dsh-llm/package.json', service);
   rmSync(join(root, 'runtime/node_modules/@deepseek-ai/dsh-llm'), { recursive: true });
-  const result = await initializePluginProfile({ ...options, runtime: join(root, 'moved-runtime') });
+  const result = await initializePluginProfile({ ...options, resources, runtime });
   assert.equal(result.version, '0.1.0');
-  assert.equal(result.appVersion, '0.1.0');
+  assert.equal(result.appVersion, '0.1.3');
   assert.equal(result.enabled, false);
   assert.equal(existsSync(join(result.directory, 'node_modules/@deepseek-ai/dsh-llm')), false);
-  assert.equal(result.runtime, join(root, 'moved-runtime'));
+  assert.equal(result.runtime, runtime);
+  const activated = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  assert.equal(activated.dsh.plusInstall.appVersion, '0.1.3');
+  assert.equal(activated.dependencies['kept-plugin'], '1.2.3');
+  assert.equal(readFileSync(join(options.profile, 'cordis.patch.yml'), 'utf8'), '# preserved after moving the application\n');
 });
 
 test('an active profile lock blocks installation before configuration changes', enrollmentOptions, async t => {

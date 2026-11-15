@@ -16,6 +16,7 @@ const resources = join(app, 'resources');
 const executable = join(app, 'BenchGo.exe');
 const descriptor = JSON.parse(await readFile(join(root, 'deepseek-harness/apps/desktop/.desktop-build/targets/win-x64/dsh/desktop-runtime.json')));
 const compatibleEngine = JSON.parse(await readFile(join(root, 'upstream.json'))).version;
+const applicationVersion = JSON.parse(await readFile(join(root, 'package.json'))).version;
 await smokePreparedRuntime(join(resources, 'app.asar', 'dsh'), executable, join(resources, 'runtime'), descriptor);
 // Native ESM imports expand Windows 8.3 names (GitHub's RUNNER~1 temp path).
 // Give the official profile resolver the same spelling as the loaded modules.
@@ -65,6 +66,7 @@ try {
     if (!boot?.entries?.some(entry => entry.id === 'benchgo-plugin') || boot.entries.some(entry => entry.id === 'benchgo')) throw new Error('Packaged unified BenchGo client registration is missing or uses the retired id');
     const updates = await call('/api/commander/updates', { action: 'status' });
     assertPackagedUpdateEngine(updates, inventory.release.version, compatibleEngine);
+    if ((await getInstallState(profile)).appVersion !== applicationVersion) throw new Error('Packaged profile application version differs from the installed application');
   };
   await assertProfile();
   const status = await call('/api/commander-link', { action: 'status' });

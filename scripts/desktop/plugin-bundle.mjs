@@ -217,6 +217,11 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
 
 /** Enroll or upgrade Plus offline; preserve user settings and later disable/recovery choices. */
 export async function initializePluginProfile({ runtime, resources, profile, seed }) {
+  if (typeof resources !== 'string' || !resources) throw new Error('BenchGo: desktop application resources are required');
+  const application = readJson(join(resources, 'app.asar', 'package.json'));
+  if (application.name !== 'benchgo-desktop') throw new Error('BenchGo: invalid desktop application metadata');
+  compareVersions(application.version, application.version);
+  const appVersion = application.version;
   runtime = resolve(runtime ?? [join(resources, 'app.asar.unpacked', 'dsh'), join(resources, 'app.asar', 'dsh')].find(path => existsSync(join(path, 'node_modules/@deepseek-ai/dsh-app-boot/package.json'))) ?? join(resources, 'app.asar.unpacked', 'dsh'));
   if (existsSync(join(runtime, 'node_modules', 'benchgo-plugin', 'package.json'))) throw new Error('BenchGo: 此应用仍内置锁定插件，请安装新版桌面应用以迁移');
   seed = resolve(seed ?? join(resources, 'benchgo', 'seed'));
@@ -251,7 +256,7 @@ export async function initializePluginProfile({ runtime, resources, profile, see
     const now = await getInstallState(profile);
     if (now.managed && compareVersions(now.version, seedMetadata.version) >= 0) {
       const refreshed = await prepareRelease({ directory: seed, root: now.root, version: now.version, runtime });
-      const state = await activateRelease({ profile, runtime, release: refreshed, appVersion: seedMetadata.version, migrateLegacy: true });
+      const state = await activateRelease({ profile, runtime, release: refreshed, appVersion, migrateLegacy: true });
       return { profile, runtime, enrolled: false, reason: 'already-enrolled', ...state };
     }
     if (!existsSync(manifestPath)) {
@@ -264,7 +269,7 @@ export async function initializePluginProfile({ runtime, resources, profile, see
     const previouslyEnabled = bundles.some(name => [PLUS, ...LEGACY_NAMES, COMPOSITION].includes(name) || name.startsWith('@benchgo/desktop-'));
     const enabled = now.managed ? now.enabled : enrolled ? previouslyEnabled : true;
     const release = await prepareRelease({ directory: seed, root: join(profile, '.benchgo', 'releases'), version: seedMetadata.version, runtime });
-    const state = await activateRelease({ profile, runtime, release, enabled, appVersion: seedMetadata.version, migrateLegacy: true });
+    const state = await activateRelease({ profile, runtime, release, enabled, appVersion, migrateLegacy: true });
     writeJson(marker, { schemaVersion: 2, package: PLUS, bundle: state.bundleName, version: state.version });
     return { profile, runtime, enrolled: !enrolled, reason: enrolled ? 'migrated' : 'enabled', ...state };
   } finally {
@@ -275,7 +280,7 @@ export async function initializePluginProfile({ runtime, resources, profile, see
 
 async function main() {
   const { values, positionals } = parseArgs({ options: { output: { type: 'string' }, seed: { type: 'string' }, runtime: { type: 'string' }, platform: { type: 'string' }, arch: { type: 'string' }, resources: { type: 'string' }, plugin: { type: 'string' }, profile: { type: 'string' } }, allowPositionals: true });
-  if (positionals.length !== 1 || !['stage', 'init-profile'].includes(positionals[0]) || (positionals[0] === 'init-profile' && !values.runtime && !values.resources)) throw new Error('Usage: plugin-bundle.mjs stage --output <seed> [--runtime <prepared-dsh>] [--plugin <plugin>] | init-profile --resources <resources> [--runtime <dsh>] [--profile <directory>]');
+  if (positionals.length !== 1 || !['stage', 'init-profile'].includes(positionals[0]) || (positionals[0] === 'init-profile' && !values.resources)) throw new Error('Usage: plugin-bundle.mjs stage --output <seed> [--runtime <prepared-dsh>] [--plugin <plugin>] | init-profile --resources <resources> [--runtime <dsh>] [--profile <directory>]');
   const result = positionals[0] === 'stage' ? stagePluginBundle(values) : await initializePluginProfile(values);
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

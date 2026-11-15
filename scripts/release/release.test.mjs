@@ -69,6 +69,12 @@ test('Windows-only version increase preserves the independent Android artifact a
   assert.equal(value.versions.androidVersionCode, 10);
 });
 
+test('desktop seed enrollment changes rebuild the feature archive and installer without an unrelated APK', () => {
+  const value = plan({ versions: versions({ plugin: '1.1.0', windows: '1.1.0' }), paths: ['scripts/desktop/plugin-bundle.mjs'] });
+  assert.deepEqual(value.builds, { plugin: true, windows: true, android: false });
+  assert.equal(value.versions.androidVersionCode, 10);
+});
+
 test('Android-only version increase preserves the independent Windows artifact', () => {
   const value = plan({ versions: versions({ android: '1.1.0', androidVersionCode: 11 }), paths: ['plugins/link/mobile/android/app/build.gradle'] });
   assert.deepEqual(value.builds, { plugin: false, windows: false, android: true });

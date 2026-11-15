@@ -20,7 +20,7 @@ export function classifyChanges(paths) {
     if (path === 'deepseek-harness' || path === 'upstream.json' || path.startsWith('assets/brand/')) mark(['plugin', 'windows', 'android'], path);
     else if (path.startsWith('plugins/link/mobile/')) mark(['android'], path);
     else if (path.startsWith('plugins/link/') || path.startsWith('plugins/shared/client/') || path.startsWith('scripts/server/')) mark(['plugin', 'android'], path);
-    else if (path === 'scripts/desktop/plugin-bundle.mjs') mark(['plugin', 'windows', 'android'], path);
+    else if (path === 'scripts/desktop/plugin-bundle.mjs') mark(['plugin', 'windows'], path);
     else if (path === 'scripts/desktop/package-plugin-update.mjs') mark(['plugin'], path);
     else if (path.startsWith('scripts/desktop/') && !/(?:create-(?:app-update-feed|update-manifest)|sync-(?:browser-artifacts|dev-plugin)|prepare-dev)\.mjs$/.test(path)) mark(['windows'], path);
     else if (path === 'scripts/build-link-android.mjs' || path === 'scripts/verify-android-release.mjs') mark(['android'], path);
