@@ -13,6 +13,22 @@ const activePhases = new Set(['checking', 'downloading']);
 const sourceNames = { mirror: '国内加速', github: 'GitHub 直连', custom: '自定义镜像' };
 const httpsUrl = value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : null; } catch { return null; } };
 const nativeActivePhases = new Set(['checking', 'downloading', 'verifying', 'installing']);
+const nativeFailureMessages = {
+  configuration: '安装器更新配置暂不可用，请重试并查看原生更新提示。',
+  check: '检查安装器更新失败，请重试。',
+  'check-network': '无法连接安装器更新服务，请检查网络后重试。',
+  download: '应用安装包下载失败，请重试。',
+  'download-network': '应用安装包下载中断，请检查网络后重试。',
+  'download-space': '磁盘空间不足，请清理空间后重试下载。',
+  'download-permission': '没有权限保存应用安装包，请检查目录权限后重试。',
+  'download-busy': '应用安装包文件正被占用，请关闭占用程序后重试。',
+  install: '应用安装未完成，请重试。',
+  'install-network': '应用安装准备时网络中断，请检查网络后重试。',
+  'stop-failed': '运行任务未能正常结束，请检查任务后重试安装。',
+  'tasks-changed': '安装前有新任务开始，请结束任务后重试。',
+  'tasks-unavailable': '暂时无法确认运行任务，请稍后重试安装。',
+  'fullscreen-timeout': '暂时无法退出全屏，请退出全屏后重试安装。',
+};
 
 /** A deliberate press; the CSS fill and the command share the same duration. */
 function HoldToUpdate({ disabled, onComplete, label = '长按 2 秒更新' }) {
@@ -95,7 +111,7 @@ export function UpdateLauncher({ host, wide = true }) {
   const [open, setOpen] = useState(false), [data, setData] = useState(null), [error, setError] = useState(''), [pending, setPending] = useState('');
   const [nativeState, setNativeState] = useState(null), [nativeError, setNativeError] = useState('');
   const [source, setSource] = useState('mirror'), [mirrorUrl, setMirrorUrl] = useState('');
-  const mounted = useRef(false), flight = useRef(null), controllers = useRef(new Set()), retryAction = useRef({ action: 'check' }), id = useId();
+  const mounted = useRef(false), flight = useRef(null), controllers = useRef(new Set()), retryAction = useRef({ action: 'check' }), nativeRevision = useRef(0), id = useId();
   // Only the Desktop-owned local document can update this machine. A bridge
   // carried into a remote page must never be used to update a different host.
   const localDesktop = globalThis.location?.protocol === 'dsh-app:' && globalThis.location?.hostname === 'app';
@@ -140,18 +156,26 @@ export function UpdateLauncher({ host, wide = true }) {
     return () => { mounted.current = false; for (const controller of controllers.current) controller.abort(); flight.current = null; document.removeEventListener('commander:updates', show); };
   }, [run]);
   useEffect(() => { if (open) void run('status'); }, [open, run]);
+  const refreshNativeState = useCallback(async () => {
+    const revision = ++nativeRevision.current;
+    try {
+      const value = await desktopUpdates.status?.();
+      if (mounted.current && value && revision === nativeRevision.current) { setNativeState(value); setNativeError(''); }
+    } catch {
+      if (mounted.current && revision === nativeRevision.current) setNativeError('应用更新状态暂时不可用，请重新检查。');
+    }
+  }, [desktopUpdates]);
   useEffect(() => {
     if (!canOpenAppUpdates) return;
-    let active = true, revision = 0;
-    const apply = value => { if (active) { revision++; setNativeState(value); setNativeError(''); } };
+    let active = true;
+    const apply = value => { if (active) { nativeRevision.current++; setNativeState(value); setNativeError(''); } };
     let unsubscribe;
     try {
       unsubscribe = desktopUpdates.subscribe?.(apply);
-      const start = revision;
-      Promise.resolve(desktopUpdates.status?.()).then(value => { if (active && value && revision === start) apply(value); }).catch(() => { if (active) setNativeError('应用更新状态暂时不可用，请重新检查。'); });
+      void refreshNativeState();
     } catch { setNativeError('应用更新状态暂时不可用，请重新检查。'); }
-    return () => { active = false; unsubscribe?.(); };
-  }, [desktopUpdates, canOpenAppUpdates]);
+    return () => { active = false; nativeRevision.current++; unsubscribe?.(); };
+  }, [desktopUpdates, canOpenAppUpdates, refreshNativeState]);
   useEffect(() => {
     const awaitingInstall = open && data?.release?.plugin?.compatible && data.release.plugin.available === true && data?.managed && !data?.canInstall && !data?.restartRequired;
     if ((!activePhases.has(data?.phase) && !awaitingInstall) || error) return;
@@ -188,7 +212,7 @@ export function UpdateLauncher({ host, wide = true }) {
     if (!canOpenAppUpdates || data?.installation === 'server' || (flight.current && flight.current.action !== 'status') || data?.busy || restart) return;
     flight.current?.abort();
     const operation = { action: 'app' }; flight.current = operation; setPending('app'); setError(''); setNativeError('');
-    try { await desktopUpdates.open(); if (mounted.current && desktopUpdates.status) setNativeState(await desktopUpdates.status()); }
+    try { await desktopUpdates.open(); if (mounted.current) await refreshNativeState(); }
     catch (failure) { if (mounted.current) { retryAction.current = { action: 'app' }; setError(failure?.message || '无法打开应用更新，请重试。'); } }
     finally { if (flight.current === operation) { flight.current = null; if (mounted.current) setPending(''); } }
   };
@@ -233,7 +257,7 @@ export function UpdateLauncher({ host, wide = true }) {
             <div className="cmd-update-actions"><BubbleTooltip label={actionable && (!enabled || appOnHost) ? installBlockReason || '当前暂不能更新' : undefined} portal><span className="cmd-update-action" tabIndex={actionable && (!enabled || appOnHost) ? 0 : undefined}>{actionable ? <HoldToUpdate key={holdKey} disabled={!open || working || !enabled || appOnHost} onComplete={primary} /> : <button type="button" className="cmd-update-button cmd-update-check" disabled={working} onClick={() => void primary()}>{pending === 'install' || data?.phase === 'downloading' ? '下载中…' : pending === 'app' ? '更新中…' : working ? '检查中…' : '检查更新'}</button>}</span></BubbleTooltip>{updateAvailable && <button type="button" className="cmd-update-icon-button" aria-label="重新检查" disabled={working} onClick={() => void check()}><UIIcon name="refresh" size={16} /></button>}</div>
           </>}
         </section>
-        {!serverDeployment && (nativeError || nativeState?.phase === 'error') && <div className="cmd-update-error" role="alert"><span>{nativeError || '应用更新未完成，请重新检查。'}</span><button type="button" className="cmd-update-text-button" disabled={working || !!data?.busy || restart} onClick={() => void openAppUpdates()}>重试应用更新</button></div>}
+        {!serverDeployment && (nativeError || nativeState?.phase === 'error') && <div className="cmd-update-error" role="alert"><span>{nativeError || nativeFailureMessages[nativeState?.failure] || '应用更新未完成，请重新检查。'}</span><button type="button" className="cmd-update-text-button" disabled={working || !!data?.busy || restart} onClick={() => void openAppUpdates()}>重试应用更新</button></div>}
         {(error || (!unpublished && data?.error)) && <div className="cmd-update-error" role="alert"><span>{error || data.error}</span>{retryInstall ? <HoldToUpdate key={`retry:${holdKey}`} label="长按 2 秒重试" disabled={!open || working || !!data?.busy} onComplete={retry} /> : <button type="button" className="cmd-update-text-button" disabled={!!pending || (working && retryAction.current.action !== 'status')} onClick={() => void retry()}>重试</button>}</div>}
         <section className="cmd-update-source" aria-labelledby={`${id}-source`}>
           <div className="cmd-update-source-row"><label htmlFor={`${id}-source-select`} id={`${id}-source`}><LinkIconMedium kind="url" href="https://github.com" size={16} />更新来源</label><Select id={`${id}-source-select`} value={source} disabled={working || restart} onChange={event => { const value = event.target.value; setSource(value); setError(''); if (value !== 'custom') void configure(value); }}>{Object.entries(sourceNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></div>

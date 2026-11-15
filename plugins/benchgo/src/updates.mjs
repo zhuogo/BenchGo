@@ -182,7 +182,15 @@ export async function mountUpdates(ctx, commander, options = {}) {
   const runtime = context?.installAnchor && dirname(context.installAnchor);
   const pkg = await json(new URL('../package.json', import.meta.url));
   let engineVersion;
-  try { engineVersion = (await json(join(runtime, 'node_modules/@deepseek-ai/dsh-app-boot/package.json'))).version; } catch {}
+  // The official launcher anchors the running dsh manifest, not the runtime root.
+  // Its directory also anchors the installer's ancestor-based shared-service lookup.
+  try {
+    const engine = await json(context?.installAnchor);
+    if (engine.name === '@deepseek-ai/dsh') {
+      compareVersions(engine.version, engine.version);
+      engineVersion = engine.version;
+    }
+  } catch {}
   const appVersion = context?.name === 'desktop' ? await desktopApplicationVersion() : undefined;
   const service = await createUpdates({ directory: options.directory ?? commander?.store.directory, profile: context?.dir, runtime, installation: context?.name === 'desktop' ? 'desktop' : 'server', version: pkg.version, releaseVersion: pkg.benchgo?.releaseVersion, engineVersion, appVersion,
     isBusy: () => (commander ?? ctx.get('commander'))?.list().some(session => ['running', 'connecting', 'waiting'].includes(session.status)) ||

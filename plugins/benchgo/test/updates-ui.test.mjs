@@ -430,6 +430,42 @@ test('native status subscription survives a late initial status and cleans up on
   assert.equal(disposed, 1);
 });
 
+test('a newer native event supersedes the status snapshot requested after an app retry', async () => {
+  for (const rejects of [false, true]) {
+    let receive, finishStatus, reads = 0, opens = 0;
+    const failed = { phase: 'error', failure: 'check-network' };
+    const native = {
+      subscribe(listener) { receive = listener; return () => {}; },
+      status() { return ++reads === 1 ? Promise.resolve(failed) : new Promise((resolve, reject) => { finishStatus = rejects ? reject : resolve; }); },
+      async open() { opens++; },
+    };
+    const state = { ...update(), decision: { action: 'blocked', available: true, enabled: false, reason: '引擎版本暂不可识别' } };
+    const view = await mount(() => state, {}, { dshDesktop: { updates: native } });
+    try {
+      await view.click('更新，有更新');
+      assert.match(view.document.querySelector('[role="alert"]').textContent, /无法连接安装器更新服务/);
+      await view.click('重试应用更新');
+      assert.equal(opens, 1, 'native recovery remains available while plugin installation is blocked');
+      await view.flush(() => receive({ phase: 'idle' }));
+      assert.equal(view.document.querySelector('[role="alert"]'), null);
+      await view.flush(() => finishStatus(rejects ? Error('obsolete status request') : failed));
+      assert.equal(view.document.querySelector('[role="alert"]'), null, 'an obsolete response or rejection cannot restore an old failure');
+      assert.equal(view.calls.some(call => call.action === 'install'), false);
+    } finally { await view.dispose(); }
+  }
+});
+
+test('native failure classifications distinguish checking, downloading and installing without raw diagnostics', async () => {
+  for (const [failure, expected] of [['check', /检查安装器更新失败/], ['download-space', /磁盘空间不足/], ['install', /应用安装未完成/], ['tasks-changed', /有新任务开始/]]) {
+    const view = await mount(initial, {}, { dshDesktop: { updates: { status: async () => ({ phase: 'error', failure }), open() {} } } });
+    try {
+      await view.click('更新');
+      assert.match(view.document.querySelector('[role="alert"]').textContent, expected);
+      assert(view.button('重试应用更新'));
+    } finally { await view.dispose(); }
+  }
+});
+
 test('a remote page cannot operate a desktop updater even if a bridge object is present', async () => {
   let nativeCalls = 0;
   const state = { ...initial(), release: { app: { version: '0.2.0', available: true } } };

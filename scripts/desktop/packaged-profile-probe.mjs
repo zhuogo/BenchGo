@@ -10,6 +10,15 @@ export const packagedModules = Object.freeze({
 
 const redact = value => String(value).replace(/([?&]token=)[^\s&]+/g, '$1[redacted]').replace(/Bearer\s+[A-Za-z0-9._-]+/g, 'Bearer [redacted]');
 
+/** Assert the mounted updater reads the same engine used by the packaged Host and release manifest. */
+export function assertPackagedUpdateEngine(status, installedEngineVersion, compatibleEngineVersion) {
+  if (typeof installedEngineVersion !== 'string' || !installedEngineVersion ||
+    status?.current?.engine !== installedEngineVersion) throw new Error('Packaged updater did not identify the installed runtime engine');
+  // Release generation currently pins engine.min/max to upstream.version.
+  if (status.current.engine !== compatibleEngineVersion) throw new Error('Packaged updater engine does not match the release-compatible engine');
+  return status.current.engine;
+}
+
 export async function inspectPackagedProfile(ctx) {
   const entries = [...ctx.loader.entries()];
   const modules = await Promise.all(Object.entries(packagedModules).map(async ([id, service]) => {

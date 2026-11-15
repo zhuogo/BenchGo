@@ -35,8 +35,14 @@ async function fixture() {
       const initial=()=>({config:{source:'mirror',mirrorUrl:''},current:{app:'0.1.0',plugin:'0.1.1',engine:'0.2.2-rc.1'},
         installation:'desktop',phase:'idle',release:{plugin:{version:'0.1.1',available:false,compatible:true},app:{version:'0.1.0',available:false}},
         managed:true,canInstall:false,restartRequired:false,busy:false});
-      let mode='current',state=initial();window.updateCalls=[];window.desktopOpens=0;window.nativeStatusReads=0;
-      window.dshDesktop={updates:{open:async()=>{window.desktopOpens++;},status:async()=>{window.nativeStatusReads++;return {phase:'idle'};},subscribe:()=>()=>{}}};
+      let mode='current',state=initial(),nativeState={phase:'idle'},nativeListener,finishNativeStatus;window.updateCalls=[];window.desktopOpens=0;window.nativeStatusReads=0;
+      window.publishNativeState=value=>{nativeState=value;nativeListener?.(value);};
+      window.finishNativeStatus=()=>{finishNativeStatus?.();};
+      window.dshDesktop={updates:{open:async()=>{window.desktopOpens++;},status:async()=>{
+        window.nativeStatusReads++;const snapshot=nativeState;
+        if(mode==='native-race'&&window.desktopOpens>0){window.nativeStatusPending=true;return new Promise(resolve=>{finishNativeStatus=()=>{window.nativeStatusPending=false;resolve(snapshot);};});}
+        return snapshot;
+      },subscribe:listener=>{nativeListener=listener;return ()=>{if(nativeListener===listener)nativeListener=undefined;};}}};
       window.fetch=async(url,options)=>{
         if(!String(url).endsWith('/api/commander/updates'))throw Error('Unexpected fixture request: '+url);
         const body=JSON.parse(options.body);window.updateCalls.push(body);
@@ -47,11 +53,12 @@ async function fixture() {
         return new Response(JSON.stringify(state),{status:200,headers:{'content-type':'application/json'}});
       };
       window.renderScenario=next=>{
-        mode=next;state=initial();window.updateCalls=[];window.desktopOpens=0;window.nativeStatusReads=0;
+        mode=next;state=initial();nativeState={phase:'idle'};finishNativeStatus=undefined;window.nativeStatusPending=false;window.updateCalls=[];window.desktopOpens=0;window.nativeStatusReads=0;
         if(mode==='empty')state={...state,current:{},release:null,phase:'unpublished',notice:'更新通道尚未发布'};
         if(mode==='available'||mode==='restart')state={...state,canInstall:true,release:{notes:'改善任务看板、语音与更新体验。',plugin:{version:'0.1.2',available:true,compatible:true},app:{version:'0.1.0',available:false}}};
         if(mode==='restart')state={...state,phase:'ready',restartRequired:true,canInstall:false};
         if(mode==='app')state={...state,release:{plugin:{version:'0.1.1',available:false,compatible:true},app:{version:'0.2.0',available:true,url:'https://example.test/benchgo-setup.exe'}}};
+        if(mode==='native-race'){state={...state,decision:{action:'blocked',available:true,enabled:false,reason:'引擎版本暂不可识别'}};nativeState={phase:'error',failure:'check-network'};}
         root.render(<React.Fragment key={++serial}><style>{tokens}{themeBase}{hostCss}</style>
           <aside className="cmd-shell-sidebar fixture-sidebar"><div className="fixture-brand">BenchGo</div><nav aria-label="工作区"><button type="button">最近对话</button><button type="button">项目</button></nav>
             <div className="fixture-sidebar-bottom"><UpdateLauncher host={{}} wide={false}/></div></aside>
@@ -230,6 +237,34 @@ test('a remote host update cannot invoke a local Desktop bridge carried into the
     assert.equal(await dialog.getByRole('button', { name: '检查安装器更新', exact: true }).count(), 0);
     assert.deepEqual(await page.evaluate(() => ({ opens: window.desktopOpens, statusReads: window.nativeStatusReads })), { opens: 0, statusReads: 0 });
     await page.screenshot({ path: join(screenshots, 'light-390-remote-application.png') });
+  } finally { await browser.close(); }
+});
+
+test('native retry remains usable with a blocked plugin and cannot restore an obsolete error snapshot', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    for (const dark of [false, true]) for (const width of [1280, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+      page.setDefaultTimeout(6000);
+      try {
+        const { dialog } = await mount(page, 'native-race', dark, true);
+        await dialog.getByText('引擎版本暂不可识别', { exact: true }).waitFor();
+        await dialog.getByRole('alert').getByText('无法连接安装器更新服务，请检查网络后重试。', { exact: true }).waitFor();
+        await fits(page, dialog);
+        await page.screenshot({ path: join(screenshots, `${dark ? 'dark' : 'light'}-${width}-native-error.png`) });
+        await dialog.getByRole('button', { name: '重试应用更新', exact: true }).click();
+        await page.waitForFunction(() => window.nativeStatusPending);
+        assert.equal(await page.evaluate(() => window.desktopOpens), 1);
+        await page.evaluate(() => window.publishNativeState({ phase: 'idle' }));
+        await dialog.getByRole('alert').waitFor({ state: 'detached' });
+        await page.evaluate(async () => { window.finishNativeStatus(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
+        assert.equal(await dialog.getByRole('alert').count(), 0, 'a stale error snapshot cannot overwrite the newer healthy event');
+        await dialog.getByText('引擎版本暂不可识别', { exact: true }).waitFor();
+        assert.equal(await page.evaluate(() => window.updateCalls.filter(call => call.action === 'install').length), 0);
+        await fits(page, dialog);
+        await page.screenshot({ path: join(screenshots, `${dark ? 'dark' : 'light'}-${width}-native-recovered.png`) });
+      } finally { await page.close(); }
+    }
   } finally { await browser.close(); }
 });
 

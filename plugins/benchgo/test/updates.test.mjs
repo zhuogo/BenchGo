@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, mkdir, writeFile, symlink, lstat } from 'node:fs/promises';
+import { createRequire, registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import * as tar from 'tar';
 import { createUpdates, mountUpdates, desktopApplicationVersion } from '../src/updates.mjs';
+import { prepareRelease, activateRelease, getInstallState, releaseBundleName } from '../shared/plugin-install.mjs';
 
 async function fixture(t, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-update-test-'));
@@ -104,6 +107,92 @@ test('desktop application version uses only the installed BenchGo application me
   assert.equal(await desktopApplicationVersion('/installed/node', async () => ({ name: 'node', version: '22.0.0' })), undefined);
   assert.equal(await desktopApplicationVersion('/installed/BenchGo.exe', async () => ({ name: 'benchgo-desktop', version: 'invalid' })), undefined);
   assert.equal(await desktopApplicationVersion('/installed/BenchGo.exe', async () => { throw Error('missing'); }), undefined);
+});
+
+test('mounted updates identify only the official running engine manifest across desktop, server and source layouts', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'benchgo-update-engine-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cases = [
+    { label: 'desktop', path: 'resources/app.asar/dsh/node_modules/@deepseek-ai/dsh', name: 'desktop', manifest: { name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }, expected: '0.2.2-rc.1' },
+    { label: 'server', path: 'runtime/node_modules/@deepseek-ai/dsh', name: 'web', manifest: { name: '@deepseek-ai/dsh', version: '1.2.3' }, expected: '1.2.3' },
+    { label: 'source', path: 'source/apps/cli', name: 'desktop', manifest: { name: '@deepseek-ai/dsh', version: '2.3.4-beta.1' }, expected: '2.3.4-beta.1' },
+    { label: 'wrong-package', manifest: { name: 'benchgo-desktop', version: '9.9.9' } },
+    { label: 'invalid-version', manifest: { name: '@deepseek-ai/dsh', version: 'invalid' } },
+    { label: 'missing-version', manifest: { name: '@deepseek-ai/dsh' } },
+    { label: 'missing-manifest' },
+  ];
+  for (const item of cases) await t.test(item.label, async () => {
+    const directory = join(root, item.label), installAnchor = join(directory, item.path ?? 'runtime', 'package.json');
+    if (item.manifest) {
+      await mkdir(dirname(installAnchor), { recursive: true });
+      await writeFile(installAnchor, JSON.stringify(item.manifest));
+    }
+    const ctx = {
+      get: name => name === 'profileContext' ? { name: item.name ?? 'desktop', dir: directory, installAnchor } : undefined,
+      effect: fn => fn(), connection: { fetch: { register: () => () => {} } },
+    };
+    const service = await mountUpdates(ctx, { store: { directory }, list: () => [] });
+    try { assert.equal((await service.status()).current.engine, item.expected); }
+    finally { await service.close(); }
+  });
+});
+
+test('packaged mount checks a signed release and installs through the official anchor without nested boot packages', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'benchgo-update-packaged-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const put = async (file, value) => {
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, typeof value === 'string' ? value : JSON.stringify(value));
+  };
+  const runtime = join(root, 'resources/app.asar/dsh');
+  const installAnchor = join(runtime, 'node_modules/@deepseek-ai/dsh/package.json');
+  const engineVersion = '1.2.3', version = '0.1.3', profile = join(root, 'profile'), releases = join(profile, '.benchgo/releases');
+  await put(installAnchor, { name: '@deepseek-ai/dsh', version: engineVersion });
+  await put(join(runtime, 'node_modules/@deepseek-ai/dsh-app-boot/package.json'), { name: '@deepseek-ai/dsh-app-boot', version: engineVersion });
+  await put(join(runtime, 'node_modules/@deepseek-ai/dsh-llm/package.json'), { name: '@deepseek-ai/dsh-llm', version: engineVersion });
+  const atomic = createRequire(import.meta.url).resolve('@deepseek-ai/dsh-atomic-write/package.json');
+  await symlink(dirname(atomic), join(runtime, 'node_modules/@deepseek-ai/dsh-atomic-write'), process.platform === 'win32' ? 'junction' : 'dir');
+  await put(join(profile, 'package.json'), { private: true, dependencies: { kept: '1.0.0' }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] }, plusInstall: { schemaVersion: 1, version: '0.1.2', root: releases, appVersion: '0.1.2' } } });
+  await put(join(profile, 'cordis.patch.yml'), '# keep user settings\n');
+  const seed = join(root, 'seed'), bundleName = releaseBundleName(version);
+  await put(join(seed, 'release.json'), { schemaVersion: 1, version, platform: process.platform, arch: process.arch, shared: [{ name: '@deepseek-ai/dsh-llm', version: engineVersion }] });
+  await put(join(seed, 'node_modules/benchgo-plugin/package.json'), { name: 'benchgo-plugin', version, exports: { '.': './src/plugin.mjs' } });
+  for (const file of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'cordis.patch.yml']) await put(join(seed, 'node_modules/benchgo-plugin', file), 'fixture');
+  await put(join(seed, 'node_modules', bundleName, 'package.json'), { name: bundleName, version, dependencies: { 'benchgo-plugin': version } });
+  const archive = join(root, 'plugin.tar.gz');
+  await tar.c({ cwd: seed, file: archive, gzip: true }, ['release.json', 'node_modules']);
+  const artifact = await readFile(archive), { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const bytes = Buffer.from(JSON.stringify({ schemaVersion: 1, version, engine: { min: engineVersion, max: engineVersion }, plugin: { version, url: 'https://github.com/zhuogo/BenchGo/releases/download/plugin-v0.1.3/benchgo-0.1.3-plugin.tar.gz', size: artifact.length, sha256: createHash('sha256').update(artifact).digest('hex') } }));
+  const signature = sign(null, bytes, privateKey).toString('base64');
+  const ctx = {
+    get: name => name === 'profileContext' ? { name: 'desktop', dir: profile, installAnchor } : undefined,
+    effect: fn => fn(), connection: { fetch: { register: () => () => {} } },
+  };
+  const service = await mountUpdates(ctx, { store: { directory: profile }, list: () => [] }, {
+    version: '0.1.2', publicKey: publicKey.export({ type: 'spki', format: 'pem' }),
+    fetcher: async url => new Response(url.endsWith('.sig') ? signature : url.endsWith('.json') ? bytes : artifact),
+    install: {
+      getInstallState,
+      prepareRelease: input => { assert.equal(input.runtime, dirname(installAnchor)); return prepareRelease(input); },
+      activateRelease: input => { assert.equal(input.runtime, dirname(installAnchor)); return activateRelease(input); },
+    },
+  });
+  t.after(() => service.close());
+  await service.dispatch({ action: 'check' }); await service.settled();
+  assert.equal((await service.status()).current.engine, engineVersion);
+  assert.equal((await service.status()).canInstall, true);
+  const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
+    if (specifier === '@deepseek-ai/dsh-atomic-write') throw Object.assign(new Error('no packaged bare dependency'), { code: 'ERR_MODULE_NOT_FOUND' });
+    return nextResolve(specifier, context);
+  } });
+  try { await service.dispatch({ action: 'install' }); await service.settled(); }
+  finally { hooks.deregister(); }
+  const status = await service.status(), state = await getInstallState(profile);
+  assert.equal(status.error, ''); assert.equal(status.restartRequired, true);
+  assert.equal(state.version, version);
+  assert.equal(JSON.parse(await readFile(join(profile, 'package.json'), 'utf8')).dependencies.kept, '1.0.0');
+  assert.equal(await readFile(join(profile, 'cordis.patch.yml'), 'utf8'), '# keep user settings\n');
+  await assert.rejects(lstat(join(state.directory, 'node_modules/@deepseek-ai/dsh-llm')), { code: 'ENOENT' });
 });
 
 test('unmanaged installations and running tasks cannot mutate plugin versions', async t => {

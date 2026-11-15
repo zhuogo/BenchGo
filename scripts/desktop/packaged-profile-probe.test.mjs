@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { apply, inspectPackagedProfile, packagedModules } from './packaged-profile-probe.mjs';
+import { apply, assertPackagedUpdateEngine, inspectPackagedProfile, packagedModules } from './packaged-profile-probe.mjs';
+
+test('packaged mounted updater must identify the installed engine pinned by release compatibility', () => {
+  const engine = '0.2.2-rc.1';
+  assert.equal(assertPackagedUpdateEngine({ current: { engine } }, engine, engine), engine);
+  assert.throws(() => assertPackagedUpdateEngine({ current: {} }, engine, engine), /installed runtime engine/);
+  assert.throws(() => assertPackagedUpdateEngine({ current: { engine: '0.2.1' } }, engine, engine), /installed runtime engine/);
+  assert.throws(() => assertPackagedUpdateEngine({ current: { engine } }, engine, '0.2.3'), /release-compatible engine/);
+});
 
 function fixture() {
   const services = new Map(Object.values(packagedModules).map(name => [name, {}]));

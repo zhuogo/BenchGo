@@ -8,12 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { smokePreparedRuntime } from '../../deepseek-harness/apps/desktop/scripts/smoke-prepared-runtime.ts';
 import { DesktopHostProcess } from '../../deepseek-harness/apps/desktop/src/host-process.ts';
 import { getInstallState } from '../../plugins/benchgo/shared/plugin-install.mjs';
+import { assertPackagedUpdateEngine } from './packaged-profile-probe.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const app = join(root, 'artifacts/windows/win-unpacked');
 const resources = join(app, 'resources');
 const executable = join(app, 'BenchGo.exe');
 const descriptor = JSON.parse(await readFile(join(root, 'deepseek-harness/apps/desktop/.desktop-build/targets/win-x64/dsh/desktop-runtime.json')));
+const compatibleEngine = JSON.parse(await readFile(join(root, 'upstream.json'))).version;
 await smokePreparedRuntime(join(resources, 'app.asar', 'dsh'), executable, join(resources, 'runtime'), descriptor);
 // Native ESM imports expand Windows 8.3 names (GitHub's RUNNER~1 temp path).
 // Give the official profile resolver the same spelling as the loaded modules.
@@ -61,6 +63,8 @@ try {
     if (report.modules.length !== 5 || report.modules.some(row => !row.available || row.state !== 2)) throw new Error(`Packaged module activation failed: ${JSON.stringify(report)}`);
     const boot = ready.injections?.find(item => item.kind === 'global' && item.name === '__DSH_BOOT__')?.value;
     if (!boot?.entries?.some(entry => entry.id === 'benchgo-plugin') || boot.entries.some(entry => entry.id === 'benchgo')) throw new Error('Packaged unified BenchGo client registration is missing or uses the retired id');
+    const updates = await call('/api/commander/updates', { action: 'status' });
+    assertPackagedUpdateEngine(updates, inventory.release.version, compatibleEngine);
   };
   await assertProfile();
   const status = await call('/api/commander-link', { action: 'status' });
