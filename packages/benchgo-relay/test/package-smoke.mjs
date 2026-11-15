@@ -1,6 +1,6 @@
 /** Install the real tarball outside the repo, then exercise its actual TLS/HTTP2/WebSocket runtime. */
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
@@ -11,12 +11,21 @@ const temporary = await mkdtemp(join(tmpdir(), 'benchgo-relay-package-'));
 try {
   const npm = process.env.npm_execpath && /npm-cli\.js$/.test(process.env.npm_execpath) ? process.env.npm_execpath
     : join(dirname(process.execPath), process.platform === 'win32' ? 'node_modules/npm/bin/npm-cli.js' : '../lib/node_modules/npm/bin/npm-cli.js');
-  const installed = spawnSync(process.execPath, [npm, 'install', '--prefix', temporary, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', resolve(process.argv[2])],
+  const installed = spawnSync(process.execPath, [npm, 'install', '--global', '--prefix', temporary, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', resolve(process.argv[2])],
     { cwd: temporary, encoding: 'utf8', windowsHide: true, timeout: 120_000 });
   assert.equal(installed.status, 0, installed.stderr || installed.error?.message);
-  const packageRoot = join(temporary, 'node_modules/benchgo-relay');
+  const packageRoot = join(temporary, process.platform === 'win32' ? 'node_modules/benchgo-relay' : 'lib/node_modules/benchgo-relay');
   const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
   assert.equal(manifest.version, '0.1.1'); assert.equal(manifest.dependencies.ws, '8.22.2');
+  const command = join(temporary, process.platform === 'win32' ? 'benchgo-relay.cmd' : 'bin/benchgo-relay');
+  if (process.platform === 'win32') {
+    for (const suffix of ['', '.cmd', '.ps1']) assert.ok((await lstat(join(temporary, `benchgo-relay${suffix}`))).isFile());
+  } else assert.ok((await lstat(command)).isSymbolicLink());
+  const commandResult = process.platform === 'win32'
+    ? spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `& '${command.replace(/'/g, "''")}' --version`], { cwd: temporary, encoding: 'utf8', windowsHide: true, timeout: 15_000 })
+    : spawnSync(command, ['--version'], { cwd: temporary, encoding: 'utf8', timeout: 15_000 });
+  assert.equal(commandResult.status, 0, commandResult.stderr || commandResult.error?.message);
+  assert.equal(commandResult.stdout.trim(), manifest.version);
   const cli = args => {
     const result = spawnSync(process.execPath, [join(packageRoot, 'bin/benchgo-relay.mjs'), ...args], { cwd: temporary, encoding: 'utf8', windowsHide: true, timeout: 15_000 });
     assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
@@ -69,5 +78,6 @@ try {
 } finally {socket?.terminate();session?.destroy();await relay.close();}
 `);
   const result = spawnSync(process.execPath, [probe, packageRoot, identity], { cwd: temporary, encoding: 'utf8', windowsHide: true, timeout: 30_000 });
-  assert.equal(result.status, 0, result.stderr || result.error?.message); process.stdout.write(result.stdout);
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  process.stdout.write(`${JSON.stringify({ ...JSON.parse(result.stdout), globalPrefix: true, commandShim: true })}\n`);
 } finally { await rm(temporary, { recursive: true, force: true }); }

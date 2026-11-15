@@ -24,7 +24,7 @@ SOFTWARE.
 
 ====================
 
-node-forge@1.4.0 ((BSD-3-Clause OR GPL-2.0))
+node-forge@1.4.3 ((BSD-3-Clause OR GPL-2.0))
 LICENSE
 You may use the Forge project under the terms of either the BSD License or the
 GNU General Public License (GPL) Version 2.
@@ -1173,7 +1173,7 @@ For more information, please refer to <http://unlicense.org>
 
 ====================
 
-ws@8.19.0 (MIT)
+ws@8.22.2 (MIT)
 LICENSE
 Copyright (c) 2011 Einar Otto Stangvik <einaros@gmail.com>
 Copyright (c) 2013 Arnout Kazemier and contributors
