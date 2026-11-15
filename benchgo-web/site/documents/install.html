@@ -6,4 +6,23 @@
 <p>当前 macOS 包未通过 Apple 公证，首次打开可能出现系统提示。请核对官方来源与校验值，按系统针对该应用提供的提示处理；不要关闭系统的全局安全保护。DMG / ZIP 是否已经提供，以下载页显示为准。</p>
 <h2>Linux 服务端</h2><p>当前面向 Ubuntu / Debian x64 与 systemd，提供浏览器工作台，不是 Linux 桌面安装器，也不支持 ARM64。请阅读<a href="/docs/linux-server" target="_blank" rel="noopener noreferrer">Linux 服务端安装</a>。</p>
 <h2>Android 与 iPhone</h2><p>Android 从下载页获取正式 APK，按系统提示允许本次来源安装。手机端需要已有工作台保持运行。iPhone / iPad 使用工作台提供的 HTTPS 手机网页，当前没有 iOS 原生包。</p>
+<h2>命令行安装与复用（v0.1.5）</h2>
+<p>命令行入口使用 <code>benchgo</code> 包，独立安装需要 Node.js 24.9+。Windows x64 已完成隔离安装、复用和启停验证；macOS arm64 / x64 与 Linux x64 需要匹配的原生发行资源，命令行路径尚未完成真机验证，暂请优先采用上面的桌面包或服务端安装方式。不支持的系统或架构会明确报错。</p>
+<pre><code>npx --yes benchgo@0.1.1 install</code></pre>
+<p>本机交互终端默认打开浏览器。SSH、CI、无图形会话默认只在后台运行并返回本机连接指引；需要显式禁止打开浏览器时：</p>
+<pre><code>npx --yes benchgo@0.1.1 install --no-open</code></pre>
+<p>用同一个入口查看状态、停止或再次启动工作台：</p>
+<pre><code>npx --yes benchgo@0.1.1 status
+npx --yes benchgo@0.1.1 stop
+npx --yes benchgo@0.1.1 start</code></pre>
+<p>命令行与新版桌面客户端会先检查兼容的现有工作台和运行资源，再准备缺失部分。重复执行会优先复用可识别的安装与运行实例。已有官方 DeepSeek Harness 需通过精确版本与身份检查后才能复用；不兼容时会明确提示，不会静默另装一套。未知旧工作区不会被直接接管或自动搬迁，原有配置与会话会保留。</p>
+<p>复用不免除首次完整下载：下载桌面客户端仍需取得桌面安装器，CLI 首次也需取得当前平台的完整资源；macOS 资源准备仍使用匹配架构的完整 Desktop ZIP。已准备资源通过校验后才会复用。桌面客户端保留原生窗口入口；CLI 使用浏览器工作台。</p>
+<p>工作台不会隐式安装 Relay。独立中继入口与 Linux/systemd 要求见<a href="/docs/linux-server" target="_blank" rel="noopener noreferrer">服务端指南</a>。</p>
+<h3>曾全局安装旧插件时的命令占用</h3>
+<p>优先使用上面固定版本的 <code>npx</code> 入口。只有曾全局安装旧版 <code>benchgo-plugin</code>，并在全局安装 <code>benchgo</code> 时遇到 <code>EEXIST</code> 或同名命令仍指向旧插件的用户，才需要处理此问题；其他用户不需要先安装插件。</p>
+<p>如需全局 <code>benchgo</code> 命令，请先把旧全局插件升级到移除同名入口的版本，再安装 CLI：</p>
+<pre><code>npm install -g benchgo-plugin@0.1.5
+npm install -g benchgo@0.1.1</code></pre>
+<p>若此前用 <code>--force</code> 让 CLI 覆盖了旧插件的同名命令，随后升级旧插件时，npm 可能删除 <code>benchgo</code> 命令入口。仍按上面的顺序先升级插件、再重新安装 CLI，可恢复该入口；不要假定任意安装顺序都安全，也不要继续用 <code>--force</code> 处理占用。</p>
+<p>如果确认不再使用旧全局插件，也可先卸载该旧包，再安装 CLI。不要直接删除全局命令文件；BenchGo 不会自动修改或清理你的全局命令入口。</p>
 <p>安装后继续阅读<a href="/docs/first-run" target="_blank" rel="noopener noreferrer">首次使用</a>或<a href="/docs/mobile-link" target="_blank" rel="noopener noreferrer">手机连接</a>。</p>
