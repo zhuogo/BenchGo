@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile, access, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile, access, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { cleanupRetiredInstalls, queueRetiredInstall } from './install-cleanup.mjs';
@@ -10,7 +10,7 @@ const exists = path => access(path).then(() => true, error => { if (error.code =
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
 async function fixture(t) {
-  const parent = await mkdtemp(join(tmpdir(), 'benchgo-cleanup-'));
+  const parent = await realpath(await mkdtemp(join(tmpdir(), 'benchgo-cleanup-')));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const installRoot = join(parent, 'BenchGo');
   const resources = join(installRoot, 'resources');
