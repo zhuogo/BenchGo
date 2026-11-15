@@ -44,3 +44,5 @@ benchgo server update
 ## 旧全局命令占用
 
 推荐使用固定版本 `npx --yes benchgo@0.1.1 install`。若曾全局安装旧 `benchgo-plugin`，全局安装新 `benchgo` 时可能遇到同名命令占用；先将旧插件升级为 `benchgo-plugin@0.1.5`，再安装 `benchgo@0.1.1`。确认不再使用旧插件时也可先卸载它。新插件只注册 `commander`；无需为使用工作台而额外安装插件包，也不自动删除用户已有命令。
+
+若此前用 `--force` 让 CLI 覆盖了旧插件的同名命令，npm 在随后升级旧插件时可能删除 `benchgo` 入口；升级插件后重新执行 `npm install -g benchgo@0.1.1` 即可恢复。已在隔离 Windows/npm 环境验证此恢复顺序；固定版本 `npx` 调用仍可用。
