@@ -1,8 +1,14 @@
 /** Retire installer trees without putting recursive deletion on the launch path. */
 import { randomUUID } from 'node:crypto';
-import { lstat, open, readFile, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
+import * as nodeFs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+
+// Electron's patched fs treats ASAR files as directories. Retire physical
+// installation entries without changing archive access for the rest of the app.
+const { lstat, open, readFile, readdir, realpath, rename, rmdir, unlink } = process.versions.electron
+  ? createRequire(import.meta.url)('original-fs').promises : nodeFs;
 
 const SUFFIX = '.benchgo-cleanup.json';
 const GUID = '\\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\}';
