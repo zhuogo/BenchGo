@@ -26,9 +26,9 @@ test('exposes relay help and version', async () => {
   assert.ok(script.includes('version=${BENCHGO_VERSION:-' + version + '}'));
 });
 
-test('requires a prepared relay config for local installation', async () => {
+test('enforces local installation prerequisites', async () => {
   const expected = process.platform === 'linux'
-    ? /ENOENT|不存在|no such file/i
+    ? (typeof process.getuid === 'function' && process.getuid() !== 0 ? /root 权限/ : /ENOENT|不存在|no such file/i)
     : /中继服务安装当前仅支持 Linux/;
   await assert.rejects(() => run(['install', '--config', '/tmp/benchgo-missing-relay.json']), expected);
 });
