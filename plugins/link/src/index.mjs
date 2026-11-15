@@ -1,11 +1,12 @@
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { openStore, text } from './pairing/store.mjs';
+import { openStore, text, PAIRED_DEVICE_CAPABILITIES } from './pairing/store.mjs';
 import { loadIdentity } from './transport/tls.mjs';
 import { listen, connectionAddresses, authority, validateConfig } from './transport/server.mjs';
 import { createSessionAdapter } from './session/adapter.mjs';
 import { createNativeAdapter } from './session/native.mjs';
+import { createSessionActions } from './session/actions.mjs';
 import { projectResources, resourcePage } from './devices/resources.mjs';
 import { createDeviceCenter } from './devices/center.mjs';
 import { createWorkbench } from './transport/workbench.mjs';
@@ -45,20 +46,27 @@ async function mountLinkHost(ctx, config) {
     .filter(node => node.enabled !== false && node.runtime?.instance.status().connected)
     .sort((a, b) => a.priority - b.priority)[0];
   validateConfig({}, store.state);
-  const sessions = createSessionAdapter(ctx);
+  const sessions = createSessionAdapter(ctx, { deletedIds: async () => {
+    try { return JSON.parse(await readFile(join(config.directory ? join(directory, '..') : ctx.get('benchgo').directory, 'dismissed-harness.json'), 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  } });
   const native = createNativeAdapter(ctx);
+  const authorizePairedDevice = device => {
+    if (closed || !device || device.id !== 'local' && !store.state.devices.some(current => current.id === device.id && current.tokenHash === device.tokenHash)) throw Object.assign(new Error('设备授权已失效，请重新配对'), { status: 403, code: 'UNAUTHORIZED' });
+  };
+  const sessionActions = createSessionActions({ store, official: sessions, native, authorize: authorizePairedDevice });
   const cloudAccess = await createCloudAccess(directory, { env: config.env ?? process.env, probe: config.cloudProbe });
   const dispatch = async (input, device) => {
+    authorizePairedDevice(device);
+    if (input?.action === 'sessionAction') return sessionActions.dispatch(input, device);
     if (input?.action === 'collaboration') {
-      if (!device?.capabilities?.includes('collaboration')) throw Object.assign(new Error('此设备未获协作执行授权'), { status: 403, code: 'UNAUTHORIZED' });
       if (!['delegate','get','lookup','control','change'].includes(input.operation)) throw Object.assign(new Error('不支持的协作操作'), { status: 422, code: 'UNSUPPORTED' });
       const assistant = ctx.get?.('assistant');
       if (typeof assistant?.collaboration !== 'function') throw Object.assign(new Error('目标协作执行尚不可用'), { status: 422, code: 'UNSUPPORTED' });
       const { principal, ...safe } = input;
-      return assistant.collaboration(safe, { principal: { kind: 'device', deviceId: device.id, capabilities: [...device.capabilities] } });
+      return assistant.collaboration(safe, { principal: { kind: 'device', deviceId: device.id, capabilities: [...PAIRED_DEVICE_CAPABILITIES] } });
     }
     if (input?.action === 'management') {
-      if (!device?.capabilities?.includes('management')) throw Object.assign(new Error('此设备未获管理授权'), { status: 403, code: 'UNAUTHORIZED' });
       if (input.operation === 'status') { const value = status(); return { enabled: value.enabled, hostName: value.hostName, error: value.error, relay: value.relay }; }
       if (input.operation === 'relay-test') return admin({ action: 'relay-test', id: input.id });
       if (input.operation === 'settings-read' && [LINK_TRANSPORT_NAMESPACE, LINK_RELAY_NAMESPACE].includes(input.namespace)) return configurationSnapshot(input.namespace);
@@ -92,8 +100,9 @@ async function mountLinkHost(ctx, config) {
       const page = resourcePage(input);
       const capabilities = [
         { id: 'resources', available: true, operations: ['projects','sessions','recent','models','capabilities'] },
-        { id: 'collaboration', available: Boolean(device?.capabilities?.includes('collaboration') && typeof ctx.get?.('assistant')?.collaboration === 'function'), reason: device?.capabilities?.includes('collaboration') ? null : '未授予协作执行', operations: ['delegate','get','lookup','control','change'] },
-        { id: 'management', available: Boolean(device?.capabilities?.includes('management')), reason: device?.capabilities?.includes('management') ? null : '未授予连接管理', operations: ['status','relay-test','settings-read','settings-prepare','operation'] },
+        ...sessionActions.capabilities(device),
+        { id: 'collaboration', available: typeof ctx.get?.('assistant')?.collaboration === 'function', reason: typeof ctx.get?.('assistant')?.collaboration === 'function' ? null : '目标协作执行服务尚不可用', operations: ['delegate','get','lookup','control','change'] },
+        { id: 'management', available: true, reason: null, operations: ['status','relay-test','settings-read','settings-prepare','operation'] },
         { id: 'reverse', available: false, reason: '反向协作需要另一设备明确配对并建立回程目录', operations: [] },
       ];
       let state, recent;
@@ -106,7 +115,7 @@ async function mountLinkHost(ctx, config) {
       else {
         if (page.kind === 'tasks') throw Object.assign(new Error('请使用协作执行引用查询任务'), { status: 422, code: 'UNSUPPORTED' });
         const availableProjects = ctx.workspaceRegistry.list();
-        state = { sessions: [...await sessions.list(device, availableProjects), ...native.list(availableProjects)] };
+        state = { sessions: [...await sessions.list(device, availableProjects), ...native.list(availableProjects, { includeArchived: true })] };
         if (page.kind === 'recent') {
           if (!recent) throw Object.assign(new Error('目标最近工作区尚未初始化'), { status: 422, code: 'UNSUPPORTED' });
           state.sessions = state.sessions.filter(row => row.projectId === recent.id);
@@ -148,7 +157,7 @@ async function mountLinkHost(ctx, config) {
     identity ??= await loadIdentity(directory);
     workbench = createWorkbench(ctx, store, { webRoot, workbenchRoot: config.workbenchRoot });
     listener = await listen({ identity, config: { ...store.state }, webRoot, store, dispatch, workbench, runRequest: operation => hostScope(ctx)(operation), routes: () => [
-      ...connectionAddresses(store.state.host).slice(0, 15).map(address => ({ url: `https://${authority(address, listener?.port ?? store.state.port)}`, pin: identity.pin, kind: 'direct' })),
+      ...connectionAddresses(store.state.host).filter(address => !['localhost', '::1'].includes(address) && !/^127\./.test(address)).slice(0, 15).map(address => ({ url: `https://${authority(address, listener?.port ?? store.state.port)}`, pin: identity.pin, kind: 'direct' })),
       ...relayPool.filter(node => node.enabled !== false && node.url && node.token).map((node, index) => ({ url: node.url, kind: 'relay', relayId: node.id || `relay-${index + 1}`, priority: Number.isInteger(node.priority) ? node.priority : index })),
     ], onError: e => { error = e.message; } });
     error = '';
@@ -161,7 +170,7 @@ async function mountLinkHost(ctx, config) {
     enabled: Boolean(listener), host: store.state.host, port: listener?.port ?? store.state.port, publicUrl: store.state.publicUrl,
     hostName: store.state.name, error: error || null,
     addresses: connectionAddresses(store.state.host).map(a => `https://${authority(a, listener?.port ?? store.state.port)}`),
-    devices: store.state.devices.map(({ tokenHash, alias, ...device }) => ({ ...device, name: alias || device.name, ...(alias ? { originalName: device.name } : {}) })), pending: store.pending(), pendingManagement: managementOperations.filter(row => row.state === 'pending' && row.expiresAt > Date.now()).map(managementView),
+    devices: store.state.devices.map(({ tokenHash, alias, ...device }) => ({ ...device, capabilities: [...PAIRED_DEVICE_CAPABILITIES], name: alias || device.name, ...(alias ? { originalName: device.name } : {}) })), pending: store.pending(), pendingManagement: managementOperations.filter(row => row.state === 'pending' && row.expiresAt > Date.now()).map(managementView),
     relay: { configured: Boolean(relayPool.length || relayUrl), enabled: relayEnabled, url: selectedRelay?.url ?? relayUrl, nodes: relayPool.map((node, index) => { const runtime = relayNodes.get(node.id || `relay-${index + 1}`); const { token, instance, ...publicNode } = node; return { ...publicNode, id: node.id || `relay-${index + 1}`, ...(runtime?.instance?.status() ?? { connected: false, lastError: relayError || null }) }; }), ...(selectedRelay?.runtime.instance.status() ?? { connected: false, lastError: relayNodes.values().next().value?.instance.status().lastError || relayError || null }) },
     };
   };
@@ -236,7 +245,7 @@ async function mountLinkHost(ctx, config) {
       if (!operation) throw Object.assign(new Error('管理操作不存在'), { status: 404, code: 'NOT_FOUND' });
       if (operation.state !== 'pending') return { operation, apply: false };
       if (operation.expiresAt < Date.now()) { operation.state = 'expired'; await store.persist(); return { operation, apply: false }; }
-      if (!store.state.devices.find(row => row.id === operation.deviceId)?.capabilities?.includes('management')) { operation.state = 'revoked'; await store.persist(); return { operation, apply: false }; }
+      if (!store.state.devices.some(row => row.id === operation.deviceId)) { operation.state = 'revoked'; await store.persist(); return { operation, apply: false }; }
       if (!input.allow) { operation.state = 'rejected'; await store.persist(); return { operation, apply: false }; }
       // The serialized owner decision claims the exact persisted diff once.
       operation.state = 'applying'; await store.persist();
@@ -246,7 +255,7 @@ async function mountLinkHost(ctx, config) {
       if (!decision.apply) return managementView(operation);
       try {
         operation.result = await configureRelayPool(undefined, { expected: operation.expected, ops: operation.ops, authorize() {
-          if (!store.state.devices.find(row => row.id === operation.deviceId)?.capabilities?.includes('management')) throw Object.assign(new Error('设备管理授权已撤销'), { code: 'UNAUTHORIZED', status: 403 });
+          if (!store.state.devices.some(row => row.id === operation.deviceId)) throw Object.assign(new Error('设备授权已撤销'), { code: 'UNAUTHORIZED', status: 403 });
         } });
         operation.state = 'applied'; await store.persist();
       } catch (error) { operation.state = 'failed'; operation.error = { code: error.code || 'APPLY_FAILED', message: error.message }; await store.persist(); }
@@ -307,18 +316,17 @@ async function mountLinkHost(ctx, config) {
         url = input.address;
       }
       if (!url) throw new Error('未找到可用的连接地址，请检查网络或在高级设置中指定监听地址');
-      const pair = store.begin(input);
+      const pair = store.begin();
       const query = new URLSearchParams({ url, pin: mode === 'lan' ? identity.pin : '', code: pair.code, name: store.state.name });
       return { ...pair, mode, uri: `benchgo://pair?${query}`, ...(mode !== 'lan' ? { webUrl: `${url}/link/#code=${encodeURIComponent(pair.code)}` } : {}), url };
     }
     if (action === 'confirm' || action === 'reject') { await store.decide(text(input.id, '设备 ID'), action === 'confirm'); return status(); }
-    if (action === 'grant-device') { await store.grantDevice(text(input.id, '设备 ID'), input); return status(); }
     if (action === 'rename-device') { await store.renameDevice(text(input.id, '设备 ID'), input.name); return status(); }
-    if (action === 'revoke') { const id = text(input.id, '设备 ID'); await store.revoke(id); await Promise.all([sessions.revoke(id), workbench?.revoke(id)]); return status(); }
+    if (action === 'revoke') { const id = text(input.id, '设备 ID'); await store.revoke(id); await Promise.all([sessions.revoke(id), workbench?.revoke(id), sessionActions.revoke(id)]); return status(); }
     throw new Error('不支持的管理操作');
   };
   let deviceCenter, cloudCenter, cloudGateway;
-  const getCenter = () => deviceCenter ??= createDeviceCenter({ directory: join(directory, 'outgoing'), webRoot, hostAdmin: admin, localDispatch: input => dispatch(input, { id: 'local', capabilities: ['collaboration','management'] }), localName: () => store.state.name }).catch(error => { deviceCenter = undefined; throw error; });
+  const getCenter = () => deviceCenter ??= createDeviceCenter({ directory: join(directory, 'outgoing'), webRoot, hostAdmin: admin, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name }).catch(error => { deviceCenter = undefined; throw error; });
   const deviceAction = async input => {
     input = { ...input, action: input.action || ({ diagnose: 'hostStatus' }[input.operation] || input.operation) };
     if (input.action === 'connect' && input.deviceId && input.deviceId !== 'local') return (await getCenter()).resources({ deviceId: input.deviceId, kind: 'capabilities' });
@@ -327,7 +335,7 @@ async function mountLinkHost(ctx, config) {
     if (!['list','devices','rename','remove','reconnect','job','relayProbe','hostStatus'].includes(input?.action)) return { available: false, code: 'SECURE_INPUT_REQUIRED', reason: '请在侧栏设备中心完成连接、授权或受控管理', handoff: { kind: 'device-center' } };
     return (await getCenter()).api(input);
   };
-  const getCloudCenter = () => cloudCenter ??= createDeviceCenter({ directory: join(directory, 'cloud-outgoing'), webRoot, hostAdmin: admin, localDispatch: input => dispatch(input, { id: 'local', capabilities: ['collaboration','management'] }), localName: () => store.state.name, publicOrigin: cloudAccess.origin, workbenchOrigin: env.DSH_LINK_WORKBENCH_ORIGIN, registerProxy: () => cloudGateway.registerProxy() }).catch(error => { cloudCenter = undefined; throw error; });
+  const getCloudCenter = () => cloudCenter ??= createDeviceCenter({ directory: join(directory, 'cloud-outgoing'), webRoot, hostAdmin: admin, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name, publicOrigin: cloudAccess.origin, workbenchOrigin: env.DSH_LINK_WORKBENCH_ORIGIN, registerProxy: () => cloudGateway.registerProxy() }).catch(error => { cloudCenter = undefined; throw error; });
   if (env.DSH_LINK_DEVICE_GATEWAY_PORT && cloudAccess.origin && env.DSH_LINK_WORKBENCH_ORIGIN) {
     cloudGateway = await createCloudDeviceGateway({ ownerOrigin: cloudAccess.origin, workbenchOrigin: env.DSH_LINK_WORKBENCH_ORIGIN, port: Number(env.DSH_LINK_DEVICE_GATEWAY_PORT), getCenter: getCloudCenter });
   }
@@ -338,7 +346,7 @@ async function mountLinkHost(ctx, config) {
       try {
         if (closed) throw new Error('Link 已关闭');
         const input = await request.json();
-        if (!['launch', 'devices', 'select', 'resources', 'resourceScope', 'setResourceScope'].includes(input.action)) throw new Error('不支持的设备操作');
+        if (!['launch', 'devices', 'select', 'resources', 'resourceScope', 'setResourceScope', 'sessionAction'].includes(input.action)) throw new Error('不支持的设备操作');
         const requestedParent = input.parentOrigin;
         // The official HTTP bridge uses dsh.internal in request.url; browser
         // Origin and the carrier Host retain the actual admitted page address.
@@ -353,17 +361,17 @@ async function mountLinkHost(ctx, config) {
           if (input.action === 'select') throw new Error('请在本机切换已保存的设备');
           if (!cloudGateway || page.origin !== cloudAccess.origin) return Response.json({ error: '请配置云端设备网关后重试；本机 BenchGo 可继续管理设备。', code: 'CLOUD_DEVICE_GATEWAY_REQUIRED' }, { status: 409, headers: { 'cache-control': 'no-store' } });
           const center = await getCloudCenter();
-          const value = input.action === 'devices' ? center.devices() : ['resources','resourceScope','setResourceScope'].includes(input.action) ? await center.api({ ...input, signal: request.signal }) : center.launch(page.origin);
+          const value = input.action === 'devices' ? center.devices() : ['resources','resourceScope','setResourceScope','sessionAction'].includes(input.action) ? await center.api({ ...input, signal: request.signal }) : center.launch(page.origin);
           return Response.json(value, { headers: { 'cache-control': 'no-store' } });
         }
-        deviceCenter ??= createDeviceCenter({ directory: join(directory, 'outgoing'), webRoot, hostAdmin: admin, localDispatch: input => dispatch(input, { id: 'local', capabilities: ['collaboration','management'] }), localName: () => store.state.name }).catch(error => { deviceCenter = undefined; throw error; });
+        deviceCenter ??= createDeviceCenter({ directory: join(directory, 'outgoing'), webRoot, hostAdmin: admin, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name }).catch(error => { deviceCenter = undefined; throw error; });
         const center = await deviceCenter;
         if (closed) throw new Error('Link 已关闭');
         if (input.action === 'select' && (typeof input.deviceId !== 'string' || !input.deviceId)) throw new Error('请选择已保存的设备');
-        const value = input.action === 'devices' ? center.devices() : ['resources','resourceScope','setResourceScope'].includes(input.action) ? await center.api({ ...input, signal: request.signal }) : input.action === 'select'
+        const value = input.action === 'devices' ? center.devices() : ['resources','resourceScope','setResourceScope','sessionAction'].includes(input.action) ? await center.api({ ...input, signal: request.signal }) : input.action === 'select'
           ? await center.select(input.deviceId, parent, input.resource) : center.launch(parent);
         return Response.json(value, { headers: { 'cache-control': 'no-store' } });
-      } catch (error) { return Response.json({ error: error.message }, { status: 400, headers: { 'cache-control': 'no-store' } }); }
+      } catch (error) { return Response.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status ?? error.statusCode ?? 400, headers: { 'cache-control': 'no-store' } }); }
     },
   }));
   const close = () => {
@@ -375,7 +383,7 @@ async function mountLinkHost(ctx, config) {
       await cloudGateway?.close();
       await (await cloudCenter?.catch(() => undefined))?.close();
       await cloudClosing;
-      await changes; await stopRelay(); await listener?.close(); listener = undefined; await sessions.close(); store.clearPairings(); await store.flush();
+      await changes; await stopRelay(); await listener?.close(); listener = undefined; await sessionActions.close(); await sessions.close(); store.clearPairings(); await store.flush();
     })();
     return closing;
   };

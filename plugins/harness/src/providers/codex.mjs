@@ -1,17 +1,22 @@
 import { LineProcess } from '../line-process.mjs';
 import { createHash } from 'node:crypto';
 import { commandCatalog, compactCommand } from '../commands.mjs';
+import { fullNativePermission, nativePermission } from '../permissions.mjs';
 
 export class CodexProvider {
-  static capabilities = { stream: true, resume: true, steer: true, approvals: true, discover: true };
+  static capabilities = { stream: true, resume: true, steer: true, approvals: true, discover: true, permissions: true };
   constructor(config = {}) { this.config = config; }
 
   async connect(session, host) {
+    let permission = session.permission ? nativePermission(session.permission) : !session.nativeId ? fullNativePermission : undefined;
+    const threadPermission = () => permission ? { approvalPolicy: permission.approval === 'ask' ? 'on-request' : 'never', sandbox: permission.sandbox } : {};
+    const turnPermission = () => permission ? { approvalPolicy: permission.approval === 'ask' ? 'on-request' : 'never', sandboxPolicy: permission.sandbox === 'danger-full-access' ? { type: 'dangerFullAccess' } : permission.sandbox === 'read-only' ? { type: 'readOnly' } : { type: 'workspaceWrite', writableRoots: [session.cwd, ...(permission.additionalWritableRoots ?? [])] } } : {};
     const wire = new LineProcess(this.config.command ?? 'codex', [...(this.config.commandArgs ?? []), 'app-server', '--listen', 'stdio://'], { cwd: session.cwd, env: this.config.env });
     let previousUsage, previousUsageKey;
     const driver = {
       nativeId: session.nativeId,
       async setModel(model) { session.model = model || undefined; },
+      async setPermission(value) { permission = nativePermission(value); },
       turnId: undefined,
       compacting: false,
       async commands() {
@@ -32,12 +37,12 @@ export class CodexProvider {
         }
         const skill = driver.skills?.find(entry => entry.name === name);
         if (!skill?.path) throw new Error(`Unsupported native Codex command: /${name}`);
-        const response = await wire.request('turn/start', { threadId: driver.nativeId, ...(session.model ? { model: session.model } : {}), input: [{ type: 'skill', name: skill.name, path: skill.path }, { type: 'text', text: `$${name}${args ? ` ${args}` : ''}` }] });
+        const response = await wire.request('turn/start', { threadId: driver.nativeId, ...turnPermission(), ...(session.model ? { model: session.model } : {}), input: [{ type: 'skill', name: skill.name, path: skill.path }, { type: 'text', text: `$${name}${args ? ` ${args}` : ''}` }] });
         driver.turnId = response.turn.id;
       },
       async submit(text) {
         const response = await wire.request('turn/start', {
-          threadId: driver.nativeId, ...(session.model ? { model: session.model } : {}), input: [{ type: 'text', text }],
+          threadId: driver.nativeId, ...turnPermission(), ...(session.model ? { model: session.model } : {}), input: [{ type: 'text', text }],
         });
         driver.turnId = response.turn.id;
       },
@@ -120,10 +125,10 @@ export class CodexProvider {
         const { account } = await wire.request('account/read', { refreshToken: false });
         if (account?.type !== 'chatgpt') throw new Error('请先在本机 Codex 中完成 ChatGPT 登录，不能用 API 密钥替代订阅。');
       }
-      const params = { cwd: session.cwd, approvalPolicy: 'on-request', sandbox: 'workspace-write', ...(session.model ? { model: session.model } : {}) };
+      const params = { cwd: session.cwd, ...threadPermission(), ...(session.model ? { model: session.model } : {}) };
       const result = await wire.request(session.nativeId ? 'thread/resume' : 'thread/start', {
         ...params, ...(session.nativeId ? { threadId: session.nativeId } : {}),
-        ...(!session.nativeId && host.delegation ? { dynamicTools: [{ name: 'commander_delegate', description: 'Delegate in the same project using provider and text, optionally model. Human approval required. Returns child result; if pending, call again with operation=result and sessionId. Do not create another child for the same task.', inputSchema: host.delegation.schema }] } : {}),
+        ...(!session.nativeId && host.delegation ? { dynamicTools: [{ name: 'commander_delegate', description: 'Delegate in the same project using provider and text, optionally model. Follows the owning conversation permissions; requires human approval unless Full access is explicit. Returns child result; if pending, call again with operation=result and sessionId. Do not create another child for the same task.', inputSchema: host.delegation.schema }] } : {}),
       });
       if (!result?.thread?.id) throw new Error('Codex returned no native thread identity');
       if (session.nativeId && result.thread.id !== session.nativeId) throw new Error('Codex resumed a different thread');

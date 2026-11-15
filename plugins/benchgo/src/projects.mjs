@@ -1,8 +1,9 @@
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { lstat, mkdir, opendir, readdir, realpath, rm, stat } from 'node:fs/promises';
+import { lstat, mkdir, opendir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 export function githubRepository(value) {
   if (typeof value !== 'string' || value.length > 500 || !/^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+\/?$/.test(value)) throw new Error('Use an HTTPS GitHub repository URL: https://github.com/owner/repo');
@@ -58,12 +59,38 @@ async function cloneGit(url, destination, { timeout = 5 * 60_000 } = {}) {
   });
 }
 
-export function projectActions(ctx, { runClone = cloneGit } = {}) {
+export function projectActions(ctx, { directory, runClone = cloneGit } = {}) {
   let cloning = false;
-  return {
-    async browse({ path = homedir(), name = '' } = {}) {
-      if (typeof path !== 'string' || !isAbsolute(path) || path.length > 4096) throw new Error('Directory path must be absolute');
+  const pickerFile = directory && join(directory, 'project-picker.json');
+  let writes = Promise.resolve();
+  const registerProject = async path => {
+    const p = await ctx.workspaceRegistry.create(await realpath(path));
+    if (pickerFile) {
+      const task = writes.then(async () => {
+        const temp = `${pickerFile}.${randomUUID()}.tmp`;
+        try { await writeFile(temp, JSON.stringify({ path: p.path }), { mode: 0o600 }); await rename(temp, pickerFile); }
+        finally { await rm(temp, { force: true }); }
+      });
+      writes = task.catch(error => ctx.logger?.warn?.(`BenchGo project folder could not be remembered: ${error.message}`));
+      // A preference write failure must not turn an already registered project into a failed add.
+      await writes;
+    }
+    return { project: { id: p.id, path: p.path, title: p.title } };
+  };
+  const actions = {
+    async browse({ path, name = '' } = {}) {
       if (typeof name !== 'string' || name.length > 200) throw new Error('Invalid directory name filter');
+      if (path === undefined) {
+        if (pickerFile) {
+          try {
+            await writes;
+            const saved = JSON.parse(await readFile(pickerFile, 'utf8'));
+            if (typeof saved?.path === 'string') return await actions.browse({ path: saved.path, name });
+          } catch { /* A stale or unreadable preference falls back to the usual home directory. */ }
+        }
+        path = homedir();
+      }
+      if (typeof path !== 'string' || !isAbsolute(path) || path.length > 4096) throw new Error('Directory path must be absolute');
       const current = await realpath(path);
       if (!(await stat(current)).isDirectory()) throw new Error('Path is not a directory');
       const dirents = await readdir(current, { withFileTypes: true });
@@ -78,6 +105,11 @@ export function projectActions(ctx, { runClone = cloneGit } = {}) {
       }
       entries.sort((a, b) => a.name.localeCompare(b.name));
       return { path: current, parent: dirname(current) === current ? null : dirname(current), home: homedir(), roots: await directoryRoots(), entries };
+    },
+    async project({ path } = {}) {
+      if (typeof path !== 'string' || !path.trim() || path.length > 4096) throw new Error('Invalid path');
+      if (!isAbsolute(path)) throw new Error('Project path must be absolute');
+      return registerProject(path);
     },
     async clone({ url } = {}) {
       const repo = githubRepository(url);
@@ -97,8 +129,7 @@ export function projectActions(ctx, { runClone = cloneGit } = {}) {
         // Git accepts an empty reserved directory; no platform-dependent
         // directory replacement or second checkout is needed.
         await runClone(repo.url, destination);
-        const p = await ctx.workspaceRegistry.create(await realpath(destination));
-        return { project: { id: p.id, path: p.path, title: p.title } };
+        return await registerProject(destination);
       } catch (error) {
         if (reserved) await rm(destination, { recursive: true, force: true });
         throw error;
@@ -107,4 +138,5 @@ export function projectActions(ctx, { runClone = cloneGit } = {}) {
       }
     },
   };
+  return actions;
 }

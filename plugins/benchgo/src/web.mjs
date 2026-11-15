@@ -1,6 +1,6 @@
-import { realpath, readFile, writeFile, rename, rm } from 'node:fs/promises';
+import { readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { projectActions } from './projects.mjs';
 import { recentWorkspaceActions } from './recent-workspace.mjs';
 import { mountFonts } from './fonts.mjs';
@@ -37,7 +37,7 @@ export async function mountWeb(ctx, options = {}) {
 }
 
 async function initializeWeb(ctx, { directory, getCommander = () => ctx.get('commander'), getHarness = () => ctx.get('benchgoHarnessWeb'), mountFonts: fonts = mountFonts } = {}) {
-  const projects = projectActions(ctx);
+  const projects = projectActions(ctx, { directory });
   const recent = recentWorkspaceActions(ctx, directory);
   const dismissedPath = join(directory, 'dismissed-harness.json');
   let deletedHarnessIds = [];
@@ -86,12 +86,7 @@ async function initializeWeb(ctx, { directory, getCommander = () => ctx.get('com
       dismissWrites = task.catch(() => {});
       return task;
     }
-    if (action === 'project') {
-      const path = text(input.path, 'path', 4096);
-      if (!isAbsolute(path)) throw new Error('Project path must be absolute');
-      const p = await ctx.workspaceRegistry.create(await realpath(path));
-      return { project: { id: p.id, path: p.path, title: p.title } };
-    }
+    if (action === 'project') return projects.project(input);
     const harness = getHarness();
     if (!harness) throw Object.assign(new Error('Harness 聚合未启用或尚未就绪'), { status: 503, code: 'HARNESS_UNAVAILABLE' });
     return harness.dispatch(input);

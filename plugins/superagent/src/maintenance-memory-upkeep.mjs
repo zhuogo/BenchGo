@@ -108,22 +108,51 @@ export function createMemoryUpkeepProcessor({ ctx, store, readSources, now = () 
     digest.push(...storedMemories.map(row => ({ kind: 'memory', memoryId: row.id, content: clipped(row.content, 1500), category: row.category || 'world' })));
     if (!sources.length && !storedMemories.length) return { status: 'completed', reason: '没有新的可学习闭单材料，等待后续调度', modelUsed: false,
       ...complete() };
+    const checkPolicy = async () => {
+      signal?.throwIfAborted();
+      const latest = await store.memory.learning();
+      await store.memory.list?.(); // Observe authoritative Markdown edits before comparing its revision.
+      if (!latest.enabled || latest.hash !== settings.hash) throw new Error('学习规则已变更，请重新整理');
+      if (JSON.stringify(await store.memory.contextRevision?.()) !== JSON.stringify(revision)) throw new Error('学习来源已变更，请重新整理');
+    };
     const { parsed, routing } = await runMaintenanceReview({ ctx, store, task: 'memory-upkeep', material: digest, signal,
       validate: result => { if (!Array.isArray(result?.memories) || (result.skills !== undefined && !Array.isArray(result.skills))) throw new Error('Invalid learning response'); } });
     if (!Array.isArray(parsed.memories) || parsed.memories.length > 5) throw new Error('学习记忆数量无效');
     const evidence = source => ({ ...source.source, role: 'user', taskId: source.taskId, resultVersion: source.resultVersion,
       closedAt: source.closedAt, reviewId, excerpt: source.text, excerptTruncated: source.truncated });
-    const memories = parsed.memories.map((memory, index) => {
-      const source = memory && sources.find(row => row.messageId === memory.sourceMessageId);
+    const memoryInput = (memory, index, { isolated = false, availableSources = sources } = {}) => {
+      const source = memory && availableSources.find(row => row.messageId === memory.sourceMessageId);
       if (!source || typeof memory.content !== 'string' || !memory.content.trim() || memory.content.length > 4000) throw new Error('学习结果缺少原文证据');
       const category = memory.category || 'world';
       if (!categories.has(category) || category === 'experience' && source.failed) throw new Error('学习分类或结果证据无效');
+      if (isolated && (!['world', 'opinions'].includes(category) || typeof memory.sourceQuote !== 'string' || !memory.sourceQuote.trim()
+        || memory.sourceQuote.length > 2000 || !source.text.slice(0, 2000).includes(memory.sourceQuote))) throw new Error('用户事实缺少精确原文证据');
       const content = memory.content;
       if (category === 'reflections' && content.length > 600 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]|<!--\s*\/?benchgo-memory/u.test(content)
         || JSON.stringify(evidence(source)).length > 16000) throw new Error('学习内容或来源超出有效范围');
       if (excluded(content)) throw new Error('学习结果包含排除内容');
-      return { content, category, source: evidence(source), key: slot(reviewId, 'memory', index) };
-    });
+      return { content, category, source: { ...evidence(source), ...(isolated ? { sourceQuote: memory.sourceQuote } : {}) },
+        sourceMessageId: memory.sourceMessageId, key: slot(reviewId, isolated ? 'user-memory' : 'memory', index) };
+    };
+    let memories = parsed.memories.map((memory, index) => memoryInput(memory, index));
+    let userFactRouting;
+    const factSourceIds = new Set(memories.filter(row => ['world', 'opinions'].includes(row.category)).map(row => row.sourceMessageId));
+    if (factSourceIds.size) {
+      await checkPolicy();
+      // Extract again from human statements alone. Neither the proposed claim,
+      // a Worker's answer nor old memories can supply facts on the user's behalf.
+      const factSources = sources.filter(row => factSourceIds.has(row.messageId));
+      const isolated = await runMaintenanceReview({ ctx, store, task: 'memory-upkeep', signal,
+        material: factSources.map(({ messageId, text, truncated }) => ({ messageId, role: 'user', text: text.slice(0, 2000), truncated: truncated || text.length > 2000 })),
+        context: { evidenceScope: 'user-statements-only' },
+        validate: result => { if (!Array.isArray(result?.memories) || result.memories.length > 5
+          || result.skills !== undefined && (!Array.isArray(result.skills) || result.skills.length)
+          || result.curateIds !== undefined && (!Array.isArray(result.curateIds) || result.curateIds.length)) throw new Error('用户事实独立抽取结果无效'); } });
+      const facts = isolated.parsed.memories.map((memory, index) => memoryInput(memory, index, { isolated: true, availableSources: factSources }));
+      memories = [...memories.filter(row => !['world', 'opinions'].includes(row.category)), ...facts];
+      if (memories.length > 5) throw new Error('学习记忆数量无效');
+      userFactRouting = isolated.routing;
+    }
     const proposedSkills = parsed.skills ?? [];
     const curateIds = parsed.curateIds ?? [];
     if (!Array.isArray(curateIds) || curateIds.length > 20 || new Set(curateIds).size !== curateIds.length
@@ -149,13 +178,6 @@ export function createMemoryUpkeepProcessor({ ctx, store, readSources, now = () 
       content: `# 助手反思\n\n${reflections.map(row => `- ${row.content}\n  来源：${row.source.messageId || row.source.eventId}`).join('\n\n')}\n`, memoryIds: [],
       source: { role: 'assistant', type: 'maintenance', task: 'memory-upkeep', reviewId, references: reflections.map(row => reference(row.source)) } } }) : null;
     if (reflectionWrite && (reflectionWrite.content.length > 16000 || JSON.stringify(reflectionWrite.source).length > 16000)) throw new Error('反思内容或来源超过预算');
-    const checkPolicy = async () => {
-      signal?.throwIfAborted();
-      const latest = await store.memory.learning();
-      await store.memory.list?.(); // Observe authoritative Markdown edits before comparing its revision.
-      if (!latest.enabled || latest.hash !== settings.hash) throw new Error('学习规则已变更，请重新整理');
-      if (JSON.stringify(await store.memory.contextRevision?.()) !== JSON.stringify(revision)) throw new Error('学习来源已变更，请重新整理');
-    };
     await checkPolicy();
     const candidates = [], skills = [];
     for (const memory of memories.filter(row => row.category !== 'reflections')) {
@@ -184,7 +206,8 @@ export function createMemoryUpkeepProcessor({ ctx, store, readSources, now = () 
       await checkPolicy();
       await store.learning.setTaskFingerprint('memory-upkeep', fingerprint(current));
     }
-    return { candidates, skills, ...(overview ? { overview } : {}), routing, modelUsed: true, taskIds: digest.map(row => row.taskId).filter(Boolean),
+    return { candidates, skills, ...(overview ? { overview } : {}), routing, ...(userFactRouting ? { userFactRouting } : {}),
+      modelRequests: routing.attempts.length + (userFactRouting?.attempts.length || 0), modelUsed: true, taskIds: digest.map(row => row.taskId).filter(Boolean),
       sourceMessageIds: sources.map(row => row.messageId), ...complete() };
   };
 }

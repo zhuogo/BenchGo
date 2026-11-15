@@ -8,16 +8,15 @@ import { Commander } from '../src/runtime.mjs';
 
 const fixture = { command: process.execPath, commandArgs: [fileURLToPath(new URL('./opencode-fixture.mjs', import.meta.url))] };
 
-test('OpenCode v1: authenticated loopback server, SSE ready before prompt, approval reply and resume', async t => {
+test('OpenCode v1: authenticated loopback server, SSE ready before prompt, Full permission reply and resume', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'commander-opencode-'));
   const runtime = await new Commander({ dataDir: directory, providers: { opencode: fixture } }).open();
   t.after(async () => { await runtime.close(); await rm(directory, { recursive: true, force: true }); });
   const { id } = await runtime.create({ provider: 'opencode' });
   await runtime.submit(id, 'hello'); await runtime.wait(id);
   assert.ok(runtime.events(id).events.some(e => e.type === 'text.delta' && e.data.text === 'fixture-opencode'));
-  const pending = new Promise(resolve => runtime.on('event', event => { if (event.type === 'approval.requested') resolve(event.data); }));
-  await runtime.submit(id, 'approval'); const approval = await pending;
-  runtime.approve(id, approval.id, { allow: true }); await runtime.wait(id);
+  await runtime.submit(id, 'approval'); await runtime.wait(id);
+  assert.equal(runtime.events(id).events.some(event => event.type === 'approval.requested'), false);
   assert.ok(runtime.events(id).events.some(e => e.type === 'text.delta' && e.data.text === 'once'));
   await runtime.disconnect(id); await runtime.connect(id);
   assert.equal(runtime.snapshot(id).nativeId, 'native-opencode');

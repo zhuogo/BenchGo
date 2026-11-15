@@ -29,8 +29,9 @@ function mountSidebar({ windows, collapsed = false }) {
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
   const module = { exports: {} };
-  runInNewContext(code, { module, exports: module.exports, document: dom.window.document, window: dom.window, process, require(id) {
+  runInNewContext(code, { module, exports: module.exports, document: dom.window.document, window: dom.window, Event: dom.window.Event, process, require(id) {
     if (id === './SidebarRoot.module.css') return { __esModule: true, default: new Proxy({}, { get: (_, name) => 'SidebarRoot_' + String(name) }) };
+    if (id === 'react-dom') return rendererRequire(id);
     if (id === '@deepseek-ai/dsh-client-ui-primitives') return {
       Tooltip: ({ children }) => children,
       isDarwinDesktop: () => false,

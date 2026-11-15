@@ -12,6 +12,7 @@ import { OpenCodeProvider } from './providers/opencode.mjs';
 import { normalizeCommand } from './commands.mjs';
 import { acpProviderClasses, ACP_TOOL_DEFAULTS } from './providers/acp.mjs';
 import { prepareDefaultDataDirectory } from '../../benchgo/src/data-directory.mjs';
+import { fullNativePermission, isFullNativePermission, nativePermission, nativePermissionError } from './permissions.mjs';
 
 const copy = value => JSON.parse(JSON.stringify(value));
 const terminal = new Set(['idle', 'failed', 'disconnected', 'closed']);
@@ -31,6 +32,7 @@ export class Commander extends EventEmitter {
     this.submissions = new Map(); this.activeSubmissions = new Set();
     this.removals = new Map();
     this.archiving = new Set();
+    this.interruptedTurns = new Map();
   }
 
   async open() {
@@ -77,6 +79,24 @@ export class Commander extends EventEmitter {
       ...(ACP_TOOL_DEFAULTS[name] ? { args: base.args ?? installed?.args ?? base.commandArgs ?? [] } : {}),
       ...launch, commandArgs: [...(base.commandArgs ?? (name === 'claude' ? [] : installed?.args) ?? []), ...(launch.commandArgs ?? [])],
       env: { ...(!base.command ? installed?.env : {}), ...base.env, ...launch.env }, ...(profile?.configured ? { managedProfile: profile } : {}) };
+  }
+  async permissionFor(session) {
+    const selected = await this.resolvePermission?.(copy(session));
+    let permission = selected !== undefined ? nativePermission(selected) : session.permission ? nativePermission(session.permission) : undefined;
+    if (!permission && session.parentId) permission = await this.permissionFor(this.get(session.parentId));
+    if (!permission && !session.parentId && !session.nativeId && !session.nativeEstablished) permission = { ...fullNativePermission };
+    if (permission && !isFullNativePermission(permission) && !this.providers.get(session.provider)?.constructor.capabilities?.permissions) throw nativePermissionError(`${session.provider} 原生适配器无法精确同步 ${permission.sandbox} + ${permission.approval} 权限，请使用支持此限制的 Codex 或官方 API 会话。`);
+    return permission;
+  }
+  async syncPermission(id) {
+    const session = this.get(id), permission = await this.permissionFor(session);
+    if (!permission) return;
+    if (JSON.stringify(permission) === JSON.stringify(session.permission)) return;
+    const driver = this.drivers.get(id);
+    if (typeof driver?.setPermission === 'function') await driver.setPermission(permission);
+    else if (!isFullNativePermission(permission) || this.providers.get(session.provider)?.constructor.capabilities?.permissions) throw nativePermissionError(`${session.provider} 当前连接不支持同步会话权限，请重新连接。`);
+    session.permission = permission;
+    await this.persist();
   }
   async doctor() {
     const run = promisify(execFile);
@@ -181,18 +201,30 @@ export class Commander extends EventEmitter {
       event: (type, data) => { if (current()) this.event(id, type, data); },
       nativeId: value => { if (current()) { session.nativeId = value; this.event(id, 'session.native', { nativeId: value }); if (ACP_TOOL_DEFAULTS[session.provider]) return this.persist(); } },
       failure: error => {
-        failed = session.route ? new Error('隔离工具连接失败，请检查工具运行状态。') : error;
+        failed = session.route && error.code !== 'NATIVE_PERMISSION' ? new Error('隔离工具连接失败，请检查工具运行状态。') : error;
         if (current()) {
           session.status = 'failed'; this.denyPending(id); this.event(id, 'session.error', { message: failed.message });
         }
       },
-      approval: (request, signal) => current() ? this.ask(id, request, signal) : Promise.resolve({ allow: false }),
+      approval: async (request, signal) => {
+        const turnId = session.turnId;
+        const live = () => current() && !signal?.aborted && turnId && session.turnId === turnId && this.interruptedTurns.get(id) !== turnId && ['running', 'waiting'].includes(session.status);
+        if (!live()) return { allow: false };
+        if (request.kind === 'permission') {
+          const permission = await this.permissionFor(session);
+          if (!live()) return { allow: false };
+          if (isFullNativePermission(permission)) return { allow: true };
+        }
+        return this.ask(id, request, signal);
+      },
     };
     let driver;
     try {
       const original = this.providers.get(session.provider), config = await this.providerConfig(session.provider, session);
       const provider = Object.assign(Object.create(Object.getPrototypeOf(original)), original, { config });
       const nativeSession = copy(session), managed = config.managedProfile;
+      const permission = await this.permissionFor(session);
+      if (permission) nativeSession.permission = session.permission = permission;
       if (managed?.configured && !nativeSession.model && !ACP_TOOL_DEFAULTS[session.provider]) nativeSession.model = managed.provider ? managed.provider + '/' + managed.model : managed.model;
       driver = await provider.connect(nativeSession, host);
       if (failed) throw failed;
@@ -205,7 +237,7 @@ export class Commander extends EventEmitter {
     } catch (error) {
       await driver?.close();
       this.delegationBridge?.revoke(id);
-      const safe = session.route ? Object.assign(new Error(error.code === 'SESSION_ROUTE' ? error.message : '隔离工具启动失败，请检查安装、协议和供应商配置。'), { code: error.code }) : error;
+      const safe = session.route ? Object.assign(new Error(['SESSION_ROUTE', 'NATIVE_PERMISSION'].includes(error.code) ? error.message : '隔离工具启动失败，请检查安装、协议和供应商配置。'), { code: error.code }) : error;
       session.status = 'failed'; this.event(id, 'session.error', { message: safe.message });
       throw safe;
     }
@@ -269,7 +301,7 @@ export class Commander extends EventEmitter {
     try {
       try { await this.persist(); }
       catch (error) { this.fault = error; session.status = 'failed'; throw error; }
-      try { await dispatch(); }
+      try { await this.syncPermission(id); await dispatch(); }
       catch (error) {
         receipt.status = 'uncertain'; session.status = 'failed';
         this.denyPending(id);
@@ -291,6 +323,7 @@ export class Commander extends EventEmitter {
   async interrupt(id) {
     this.healthy(); const session = this.get(id);
     if (!['running', 'waiting'].includes(session.status)) throw new Error('No active turn to interrupt');
+    this.interruptedTurns.set(id, session.turnId);
     this.denyPending(id);
     await this.drivers.get(id).interrupt();
     this.event(id, 'turn.interrupt-requested', {});
@@ -407,6 +440,7 @@ export class Commander extends EventEmitter {
         throw error;
       }
       this.generations.delete(id);
+      this.interruptedTurns.delete(id);
       return { id, removed: true };
     })();
     this.removals.set(id, task);

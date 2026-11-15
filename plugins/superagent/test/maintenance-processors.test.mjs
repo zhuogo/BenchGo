@@ -151,8 +151,10 @@ test('real assistant feedback is reflection evidence only, never a user fact sou
 });
 
 test('real user observations produce classified facts while assistant reflections remain derived', async () => {
-  const f = fixture({ memories: [{ content: '用户希望先给结论。', category: 'opinions', sourceMessageId: 'message:1' },
-    { content: '我应核对完成证据，避免误报。', category: 'reflections', sourceMessageId: 'message:1' }] }, { memories: [] });
+  let calls = 0;
+  const fact = { content: '用户希望先给结论。', category: 'opinions', sourceMessageId: 'message:1', sourceQuote: '我希望先给结论' };
+  const f = fixture(() => ({ memories: ++calls === 1 ? [fact,
+    { content: '我应核对完成证据，避免误报。', category: 'reflections', sourceMessageId: 'message:1' }] : [fact] }), { memories: [] });
   await run(f, 'memory-upkeep');
   assert.equal(f.candidates.length, 1);
   assert.equal(f.candidates[0].category, 'opinions');

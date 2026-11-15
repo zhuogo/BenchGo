@@ -1,5 +1,7 @@
 export const VIEWPORT_BREAKPOINT = 1024;
+export const DRAWER_BREAKPOINT = 768;
 export const VIEWPORT_SETTLE_MS = 90;
+const region = width => width < DRAWER_BREAKPOINT ? 0 : width < VIEWPORT_BREAKPOINT ? 1 : 2;
 
 export function createResponsiveLayoutActions(actions, schedule = setTimeout, cancel = clearTimeout) {
   let committed, pending = 0, timer;
@@ -12,14 +14,18 @@ export function createResponsiveLayoutActions(actions, schedule = setTimeout, ca
     ...actions,
     setViewportWidth(rawWidth) {
       const width = Math.round(rawWidth);
-      if (!Number.isFinite(width) || width <= 0 || width === pending || width === committed) return;
-      if (committed === undefined || (committed < VIEWPORT_BREAKPOINT) !== (width < VIEWPORT_BREAKPOINT)) {
+      if (!Number.isFinite(width) || width <= 0 || width === pending) return;
+      if (width === committed) {
+        if (timer) cancel(timer);
+        timer = undefined; pending = 0;
+        return;
+      }
+      if (committed === undefined || region(committed) !== region(width)) {
         if (timer) cancel(timer);
         timer = undefined;
         commit(width);
         return;
       }
-      if (width < VIEWPORT_BREAKPOINT) return;
       pending = width;
       if (timer) cancel(timer);
       timer = schedule(() => {

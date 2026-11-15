@@ -20,8 +20,9 @@ test('project inventory distinguishes Recent and covers outgoing devices without
   const description = source.match(/register\('assistant_projects', '([^']+)'/)?.[1] ?? '';
   assert.match(description, /isDefault=true identifies Recent \(ungrouped sessions\).*not part of the project count/);
   assert.match(description, /only by isDefault=true, never by a default-workspace name or path/);
-  assert.match(description, /general project inventory, also read assistant_devices and query its saved outgoing device IDs/);
-  assert.match(description, /explicit local questions need only the local catalog and an explicitly named device needs only that device/);
+  assert.match(description, /By default aggregate the local catalog and ALL saved outgoing devices, independent of sidebar scope/);
+  assert.match(description, /scope=local explicitly reads only local projects/);
+  assert.match(description, /local folder or remembered server note cannot establish or disprove a remote device or project/);
   assert.match(description, /Follow remaining pages; failures are unknown coverage, not empty catalogs/);
   assert.match(description, /name coverage gaps.*never present the local list.*as all projects/);
   const prompt = await readFile(new URL('../prompts/builtin-layer.md', import.meta.url), 'utf8');
@@ -42,4 +43,23 @@ test('builtin layer speaks as the long-term assistant with concrete conversation
   assert.match(body, /要问就问一个自然的问题/);
   assert.match(body, /不凑一句“暂无变化”/);
   assert.doesNotMatch(body, /你是 BenchGo 的 Router/);
+});
+
+test('delegation instructions preserve the target device from the first investigation', async () => {
+  const prompt = await readFile(new URL('../prompts/builtin-layer.md', import.meta.url), 'utf8');
+  assert.match(prompt, /本机用 assistant_delegate；指定远端设备或远端项目用 assistant_remote_task/);
+  assert.match(prompt, /不先建本机任务代查或中转/);
+  assert.match(prompt, /远端不可用时如实说明，不回退本机执行/);
+  assert.match(prompt, /只说项目名.*本机与全部出站设备.*唯一匹配直接沿所属设备/s);
+  assert.match(prompt, /发个 hi.*默认在该项目的对话中发送 hi/s);
+  assert.match(prompt, /确认配对已包含.*不再次要求逐项授权/s);
+  assert.match(prompt, /本机入站设备名单不能说明某个出站服务器是否授权/);
+  assert.doesNotMatch(prompt, /从第一次探查起通过 assistant_delegate/);
+  const source = await readFile(new URL('../src/router-tools.mjs', import.meta.url), 'utf8');
+  const local = source.match(/register\('assistant_delegate', routerAdmissionLanguagePolicy \+ '([^']+)'/)?.[1] ?? '';
+  const remote = source.match(/register\('assistant_remote_task', '([^']+)'/)?.[1] ?? '';
+  assert.match(local, /LOCAL.*local Worker session only/);
+  assert.match(local, /remote project, use assistant_remote_task/);
+  assert.match(remote, /Use this instead of assistant_delegate whenever the user targets a remote device or its project/);
+  assert.match(remote, /exact deviceId\/projectId using assistant_devices and assistant_projects/);
 });

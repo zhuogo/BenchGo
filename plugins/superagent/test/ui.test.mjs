@@ -29,7 +29,7 @@ function harness(options = {}) {
   const module = { exports: {} };
   const assistantConfigSync = createConfigSync();
   const assistantModelCatalog = createModelCatalogLoader(async () => { calls.push({ action: 'catalog' }); return typeof options.response === 'function' ? options.response(calls.at(-1)) : options.response || { providers: [], models: [] }; });
-  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, localStorage: options.storage, queueMicrotask, setTimeout: options.setTimeout || (fn => fn()), clearTimeout: () => {}, setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { const call = JSON.parse(options.body); calls.push(call); return { benchgoCall: call }; }, require: id => id.endsWith('model-catalog.mjs') ? { assistantModelCatalog } : id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('execution-session-navigation.mjs') ? { executionSessionNavigation } : id.endsWith('session-retain.mjs') ? { retainAssistantSession, assistantBackgroundSessions } : id === 'react' ? react : id.endsWith('sidebar-lists.mjs') ? sidebarLists : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('structural-share.mjs') ? { structuralShare } : id.endsWith('perf-trace.mjs') ? { perfTrace: { time: () => () => {} } } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async response => typeof options.response === 'function' ? options.response(response.benchgoCall) : options.response || ({ providers: [], models: [] }) } : id.endsWith('image-gallery-model.mjs') ? { groupReplyImages } : id.endsWith('image-gallery.jsx') ? { ImageGallery: 'ImageGallery' } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
+  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, AbortSignal: options.AbortSignal || AbortSignal, localStorage: options.storage, queueMicrotask, setTimeout: options.setTimeout || (fn => fn()), clearTimeout: () => {}, setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { const call = JSON.parse(options.body); calls.push(call); return options.fetch ? options.fetch(url, options) : { benchgoCall: call }; }, require: id => id.endsWith('model-catalog.mjs') ? { assistantModelCatalog } : id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('execution-session-navigation.mjs') ? { executionSessionNavigation } : id.endsWith('session-retain.mjs') ? { retainAssistantSession, assistantBackgroundSessions } : id === 'react' ? react : id.endsWith('sidebar-lists.mjs') ? sidebarLists : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('structural-share.mjs') ? { structuralShare } : id.endsWith('perf-trace.mjs') ? { perfTrace: { time: () => () => {} } } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async response => typeof options.response === 'function' ? options.response(response.benchgoCall) : options.response || ({ providers: [], models: [] }) } : id.endsWith('image-gallery-model.mjs') ? { groupReplyImages } : id.endsWith('image-gallery.jsx') ? { ImageGallery: 'ImageGallery' } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
   return { listeners, documentListeners, intervals, exports: module.exports, render(name, props) { cursor = 0; refCursor = 0; effects.length = 0; return module.exports[name](props); }, calls, effects };
 }
 const walk = node => node && typeof node === 'object' ? [node, ...node.children.flatMap(walk)] : [];
@@ -551,6 +551,138 @@ test('opening a chat reads its history while unrelated state resources are still
   const nodes = walk(h.render('AssistantPage', { ctx }));
   assert(nodes.some(node => node.props.sessionId === 'main-session'));
   dispose(); finishState(snapshot); await new Promise(setImmediate);
+});
+function controlledReadTimeouts() {
+  const pending = [];
+  return { pending, AbortSignal: { any: signals => AbortSignal.any(signals), timeout(ms) {
+    const controller = new AbortController();
+    pending.push({ ms, signal: controller.signal, expire: () => controller.abort(new DOMException('Read deadline expired', 'TimeoutError')) });
+    return controller.signal;
+  } } };
+}
+test('finite assistant reads time out during fetch or body parsing and release shared state for retry', async () => {
+  for (const action of ['state', 'ensure', 'history']) for (const phase of ['fetch', 'body']) {
+    const deadlines = controlledReadTimeouts();
+    const options = { AbortSignal: deadlines.AbortSignal, response: () => new Promise(() => {}),
+      ...(phase === 'fetch' ? { fetch: () => new Promise(() => {}) } : {}) };
+    const h = harness(options), first = h.exports.api(action), shared = action === 'state' ? h.exports.api(action) : null;
+    await new Promise(setImmediate);
+    assert.equal(deadlines.pending.length, 1, `${action}/${phase} has one bounded read`);
+    assert.equal(deadlines.pending[0].ms, 20000);
+    const rejected = assert.rejects(first, /连接超时/), sharedRejected = shared && assert.rejects(shared, /连接超时/);
+    deadlines.pending[0].expire();
+    await rejected; await sharedRejected;
+    delete options.fetch;
+    options.response = action === 'state' ? { config: { revision: 1 }, state: { threads: [] } } : { sessionId: 'main-session' };
+    assert.ok(await h.exports.api(action), `${action}/${phase} can be retried after timeout`);
+    assert.equal(h.calls.length, 2, 'retry starts a fresh request');
+  }
+});
+test('assistant read deadlines do not change config mutation timeouts', async () => {
+  const deadlines = controlledReadTimeouts();
+  const h = harness({ AbortSignal: deadlines.AbortSignal, response: { config: { revision: 1 } } });
+  await h.exports.api('config', { revision: 0, patch: { name: 'A' } });
+  assert.equal(deadlines.pending.length, 0);
+});
+test('chat opening reports failure while state is pending and retries chat without waiting for state', async () => {
+  let finishState, broken = true;
+  const snapshot = { config: { models: [] }, state: { threads: [] } };
+  const h = harness({ state: [snapshot, '', 'chat', 'main', { messages: [] }], setTimeout: () => 0,
+    response: ({ action }) => {
+      if (action === 'state') return new Promise(resolve => { finishState = resolve; });
+      if (action === 'ensure' && broken) throw new Error('设备连接中断');
+      return { threadId: 'main', sessionId: 'main-session', messages: [] };
+    },
+  });
+  const ctx = {};
+  h.render('AssistantPage', { ctx });
+  const dispose = h.effects.find(item => item.deps?.length === 3 && item.deps[2] === ctx).effect();
+  await new Promise(setImmediate);
+  let nodes = walk(h.render('AssistantPage', { ctx }));
+  const failure = nodes.find(node => node.props.title === '聊天暂未连接');
+  assert.ok(failure, 'ensure failure is visible before state settles');
+  assert.equal(failure.props.description, '设备连接中断');
+  broken = false;
+  const retry = failure.props.onAction();
+  await new Promise(setImmediate);
+  nodes = walk(h.render('AssistantPage', { ctx }));
+  assert(nodes.some(node => node.props.sessionId === 'main-session'), 'retry opens history independently of state');
+  assert(!nodes.some(node => node.children.includes('设备连接中断')), 'recovered chat clears its old error');
+  assert.deepEqual(h.calls.map(call => call.action), ['state', 'ensure', 'ensure', 'history']);
+  finishState(snapshot); await retry; dispose(); await new Promise(setImmediate);
+});
+test('history timeout releases the shared read so reconnect can restore chat while state remains pending', async () => {
+  const deadlines = controlledReadTimeouts();
+  const stateReads = []; let stalled = true;
+  const snapshot = { config: { models: [] }, state: { threads: [] } };
+  const h = harness({ AbortSignal: deadlines.AbortSignal, state: [snapshot, '', 'chat', 'main', { messages: [] }], setTimeout: () => 0,
+    response: ({ action }) => action === 'state' ? new Promise(resolve => { stateReads.push(resolve); })
+      : action === 'history' && stalled ? new Promise(() => {}) : { threadId: 'main', sessionId: 'main-session', messages: [] },
+  });
+  const ctx = {};
+  h.render('AssistantPage', { ctx });
+  const dispose = h.effects.find(item => item.deps?.length === 3 && item.deps[2] === ctx).effect();
+  await new Promise(setImmediate);
+  assert.deepEqual(h.calls.map(call => call.action), ['state', 'ensure', 'history']);
+  deadlines.pending[2].expire(); await new Promise(setImmediate);
+  const failure = walk(h.render('AssistantPage', { ctx })).find(node => node.props.title === '聊天暂未连接');
+  assert.match(failure?.props.description || '', /连接超时/);
+  stalled = false;
+  const retry = failure.props.onAction(); await new Promise(setImmediate);
+  const nodes = walk(h.render('AssistantPage', { ctx }));
+  assert(nodes.some(node => node.props.sessionId === 'main-session'));
+  assert(!nodes.some(node => node.props.role === 'alert'), 'successful chat recovery removes its timeout error');
+  assert.deepEqual(h.calls.map(call => call.action), ['state', 'ensure', 'history', 'state', 'ensure', 'history']);
+  stateReads.forEach(resolve => resolve(snapshot)); await retry; dispose(); await new Promise(setImmediate);
+});
+test('each loading branch reports immediately and recovery preserves the other branch error', async () => {
+  let finishEnsure, broken = true;
+  const snapshot = { config: { revision: 1, models: [] }, state: { threads: [] } };
+  const h = harness({ state: [snapshot, '', 'chat', 'main', { messages: [] }], setTimeout: () => 0,
+    response: ({ action }) => {
+      if (action === 'state') { if (broken) throw new Error('配置暂时不可用'); return snapshot; }
+      if (action === 'ensure' && broken) return new Promise(resolve => { finishEnsure = resolve; });
+      return { threadId: 'main', sessionId: 'main-session', messages: [] };
+    },
+  });
+  const ctx = {};
+  h.render('AssistantPage', { ctx });
+  const dispose = h.effects.find(item => item.deps?.length === 3 && item.deps[2] === ctx).effect();
+  await new Promise(setImmediate);
+  let nodes = walk(h.render('AssistantPage', { ctx }));
+  assert.equal(nodes.find(node => node.props.title === '聊天暂未连接')?.props.description, '配置暂时不可用');
+  finishEnsure({ sessionId: 'main-session' }); await new Promise(setImmediate);
+  nodes = walk(h.render('AssistantPage', { ctx }));
+  assert(nodes.some(node => node.props.sessionId === 'main-session'));
+  assert(nodes.some(node => node.children.includes('配置暂时不可用')), 'chat success does not hide state failure');
+  broken = false;
+  await nodes.find(node => node.type === 'button' && node.children.includes('重试加载')).props.onClick();
+  nodes = walk(h.render('AssistantPage', { ctx }));
+  assert(!nodes.some(node => node.props.role === 'alert'), 'successful reload clears the recovered state error');
+  dispose(); await new Promise(setImmediate);
+});
+test('a successful background retry clears the recovered chat error', async () => {
+  const timers = []; let broken = true;
+  const snapshot = { config: { revision: 1, models: [] }, state: { threads: [] } };
+  const h = harness({ state: [snapshot, '', 'chat', 'main', { messages: [] }],
+    setTimeout: (run, delay) => { timers.push({ run, delay }); return timers.length; },
+    response: ({ action }) => {
+      if (action === 'state') return snapshot;
+      if (action === 'ensure' && broken) throw new Error('设备连接中断');
+      return { threadId: 'main', sessionId: 'main-session', messages: [] };
+    },
+  });
+  const ctx = {};
+  h.render('AssistantPage', { ctx });
+  const dispose = h.effects.find(item => item.deps?.length === 3 && item.deps[2] === ctx).effect();
+  await new Promise(setImmediate);
+  assert(walk(h.render('AssistantPage', { ctx })).some(node => node.props.description === '设备连接中断'));
+  broken = false;
+  await timers.findLast(timer => timer.delay === 30000).run();
+  const nodes = walk(h.render('AssistantPage', { ctx }));
+  assert(nodes.some(node => node.props.sessionId === 'main-session'));
+  assert(!nodes.some(node => node.props.role === 'alert'), 'background recovery clears the stale opening error');
+  dispose(); await new Promise(setImmediate);
 });
 test('state reads are shared until an invalidation and ensure announces only a new session', async () => {
   const pending = []; let sessionId = 'side-1', announced = 0;

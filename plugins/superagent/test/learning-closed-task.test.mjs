@@ -29,8 +29,8 @@ test('confirmed close feeds background queue once; crash after saving resumes th
   assert.equal(store.orchestration.getTask(task.id).status, 'completed', 'execution completion does not wait for delivery');
   const ctx = { sessionQuery: { readSession() { throw new Error('Router read forbidden'); } }, llm: { async *stream(request) {
     requests.push(request);
-    const material = JSON.parse(request.messages[1].content[0].text);
-    yield { type: 'text-delta', text: JSON.stringify({ memories: [{ content, sourceMessageId: material[0].instructions[0].messageId }] }) };
+    const material = JSON.parse(request.messages.at(-1).content[0].text);
+    yield { type: 'text-delta', text: JSON.stringify({ memories: [{ content, sourceMessageId: material[0].messageId || material[0].instructions[0].messageId, sourceQuote: '以后解释使用简洁中文' }] }) };
     yield { type: 'finish', reason: { kind: 'stop' } };
   } } };
   const worker = () => { const next = createAssistantReviewWorker({ review: store.review, process: createMaintenanceProcessor({ ctx, store, readSources: async () => [] }) }); workers.push(next); return next; };
@@ -65,9 +65,9 @@ test('confirmed close feeds background queue once; crash after saving resumes th
   const receipts = store.review.list().filter(row => row.status === 'completed').map(row => row.result);
   assert.equal(JSON.stringify(receipts).includes('偏好简洁中文'), false);
   assert.equal(JSON.stringify(receipts).includes('任务：以后解释'), false);
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 4);
   assert.deepEqual(store.orchestration.learningSources().items, []);
   store.learning.request({ scope: 'router-new-session', eventId: 'no-new-task' });
   await worker().runOnce();
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 4);
 });

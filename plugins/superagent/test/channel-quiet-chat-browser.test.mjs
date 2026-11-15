@@ -27,18 +27,19 @@ async function fixture() {
     const messages=nodes.map(node=>({id:'channel:'+node.source.mirrorKey,kind:'channel-message',mirrorKey:node.source.mirrorKey,direction:node.source.direction,
       role:node.source.direction==='inbound'?'user':'assistant',source:node.source,text:node.content[0].text,content:node.content,seq:node.seq,time:node.time}));
     window.renderScenario=(mode='data')=>{
-      const inputMode=/^(steering|queue)-/.test(mode),stage=mode.split('-')[1],queued=mode.startsWith('queue-');
-      const placement=queued?'queued':'steering';
-      const human={id:'human',source:{kind:'user',rpcId:'human-rpc'},content:[{type:'text',text:'这是运行中补充的真实要求'}]};
-      const ordering=['mixed','reordered'].includes(stage),second={...human,id:'second',source:{kind:'user',rpcId:'second-rpc'},content:[{type:'text',text:'这是第二条排队要求'}]};
+      const inputMode=/^(steering|queue|idle)-/.test(mode),idleMode=mode.startsWith('idle-'),stage=mode.split('-')[1],queued=mode.startsWith('queue-');
+      const placement=idleMode?'transcript':queued?'queued':'steering';
+      const human={id:'human',source:{kind:'user',rpcId:'human-rpc'},content:[{type:'text',text:idleMode?'这是已发送的真实要求':'这是运行中补充的真实要求'}]};
+      const ordering=!idleMode&&['mixed','reordered'].includes(stage),second={...human,id:'second',source:{kind:'user',rpcId:'second-rpc'},content:[{type:'text',text:'这是第二条排队要求'}]};
       const inbox=ordering?{'next-turn':stage==='reordered'?[second,human]:[human,second]}:inputMode&&stage==='inbox'?{[queued?'next-turn':'next-step']:[human,{...human,id:'private',source:{kind:'benchgo-task-reply'},content:[{type:'text',text:'PRIVATE_NOTICE'}]}]}:{};
       let Official, retains=0;
       const ctx={effect:fn=>fn(),slots:{inject:(_name,fn)=>fn(),register:(_meta,Component)=>{Official=Component;return()=>{}}},
         uiConversation:{binding:()=>({activate:()=>{}})},sessions:{retain:()=>{retains++;if(mode==='error')throw Error('offline');return {binding:{session:{getSnapshot:()=>({openState:mode==='settled-error'&&retains===1?'error':'open'})}},ready:mode==='loading'?new Promise(()=>{}):Promise.resolve(),release(){}}}}};
       mountAssistantConversation(ctx);
-      const session={openState:'open',running:inputMode||mode.startsWith('activity-')||mode==='segments-live',blank:!inputMode,awaitingFirstTurn:!inputMode,pendingSubmissions:inputMode&&stage!=='inbox'?[{requestId:'human-rpc',placement,text:human.content[0].text,time:1794218400100,attachments:[]}]:[]};
+      const session={sessionId:'feishu-session',openState:'open',running:inputMode&&!idleMode||mode.startsWith('activity-')||mode==='segments-live',blank:!inputMode,awaitingFirstTurn:!inputMode,pendingSubmissions:inputMode&&stage!=='inbox'?[{requestId:'human-rpc',placement,text:human.content[0].text,time:1794218400100,attachments:[]}]:[]};
       if(ordering)session.pendingSubmissions=[{requestId:'second-rpc',placement:'queued',text:second.content[0].text,time:1,attachments:[]}];
-      const chat={legacy:{nodes:inputMode?(stage==='admitted'?[{...human,kind:'steering',messageId:'human',seq:7,time:1794218400100}]:[]):mode==='empty'?[]:[...nodes,{kind:'context',seq:6,source:{kind:'system'},content:[{type:'text',text:'PRIVATE_CONTEXT'}]}]}};
+      if(idleMode&&stage==='mixed')session.pendingSubmissions.push({requestId:'second-rpc',placement:'transcript',text:second.content[0].text,time:1794218400200,attachments:[]});
+      const chat={legacy:{nodes:inputMode?(stage==='admitted'||idleMode&&stage==='mixed'?[{...human,kind:idleMode?'user':'steering',messageId:'human',seq:7,time:1794218400100}]:[]):mode==='empty'?[]:[...nodes,{kind:'context',seq:6,source:{kind:'system'},content:[{type:'text',text:'PRIVATE_CONTEXT'}]}]}};
       if(mode==='activity-thinking')chat.legacy.partial={blocks:[{kind:'reasoning',text:'PRIVATE_REASONING'}]};
       if(mode==='activity-search')chat.legacy.runningCalls=[{name:'assistant_memory_search'}];
       if(mode==='segments-live')Object.assign(chat.legacy,{nodes:[{kind:'user',messageId:'human',seq:1,source:{kind:'user'}},{kind:'assistant',messageId:'model-one',seq:2,turn:1,step:1,blocks:[{kind:'text',text:'我先检查服务器的状态。'}]}],partial:{turn:1,step:2,blocks:[{kind:'text',text:'检查完成，服务运行正常。'}]}});
@@ -126,6 +127,38 @@ test('running main chat input survives echo, durable inbox, admission and histor
         assert.deepEqual(texts,stage==='mixed'?['这是运行中补充的真实要求','这是第二条排队要求']:['这是第二条排队要求','这是运行中补充的真实要求']);
         assert.equal(await page.locator('[data-chat-key]').count(),3);
         assert.equal(await page.locator('[data-chat-key]').first().getAttribute('data-role'),'assistant');
+        assert.equal(await page.getByText(/PRIVATE/).count(),0);
+        assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+        if(screenshots)await page.screenshot({path:join(screenshots,mode+'-'+theme+'-'+width+'.png'),fullPage:true,animations:'disabled'});
+      }
+    }
+    assert.deepEqual(errors,[]);
+  }finally{await browser.close()}
+});
+
+test('idle accepted echoes show waiting only until their own public admission or history handoff', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html=await fixture(),browser=await chromium.launch({headless:true,executablePath});
+  const screenshots=process.env.BENCHGO_CHANNEL_QUIET_SCREENSHOTS;
+  if(screenshots)await mkdir(screenshots,{recursive:true});
+  try {
+    const page=await browser.newPage(),errors=[];page.setDefaultTimeout(6000);page.on('pageerror',error=>errors.push(error.message));
+    await page.route('**/*',route=>route.request().url()==='http://localhost/'?route.fulfill({contentType:'text/html',body:html}):route.abort());await page.goto('http://localhost/');
+    for(const width of [1440,390])for(const theme of ['light','dark']){
+      await page.setViewportSize({width,height:800});await page.evaluate(theme=>document.body.toggleAttribute('data-ds-dark-theme',theme==='dark'),theme);
+      for(const stage of ['echo','admitted','history','mixed']){
+        const mode='idle-'+stage,id=await page.evaluate(mode=>window.renderScenario(mode),mode);
+        await page.locator('[data-render="'+id+'"]').waitFor();
+        await page.getByText('这是已发送的真实要求',{exact:true}).waitFor();
+        assert.equal(await page.getByText('这是已发送的真实要求',{exact:true}).count(),1);
+        const waiting=stage==='echo'||stage==='mixed';
+        assert.equal(await page.locator('.ba-chat-heading [data-activity="waiting"]').count(),Number(waiting));
+        assert.equal(await page.locator('.ba-quiet-chat [data-activity="waiting"]').count(),Number(waiting));
+        assert.equal(await page.locator('.ba-chat-heading .ba-conversation-ready').count(),Number(!waiting));
+        assert.equal(await page.getByText('等待处理',{exact:true}).count(),waiting?2:0);
+        assert.equal(await page.getByText('等待会话接收',{exact:true}).count(),0);
+        assert.equal(await page.locator('[data-chat-key]').count(),stage==='history'||stage==='mixed'?2:1);
+        if(stage==='history')await page.getByText('正式回复保持可见',{exact:true}).waitFor();
+        if(stage==='mixed')await page.getByText('这是第二条排队要求',{exact:true}).waitFor();
         assert.equal(await page.getByText(/PRIVATE/).count(),0);
         assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
         if(screenshots)await page.screenshot({path:join(screenshots,mode+'-'+theme+'-'+width+'.png'),fullPage:true,animations:'disabled'});

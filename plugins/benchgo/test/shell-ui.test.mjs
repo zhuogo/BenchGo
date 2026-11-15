@@ -6,17 +6,27 @@ import {transform} from 'esbuild';
 import {shellUi} from '../scripts/shell-ui.mjs';
 import {createResponsiveLayoutActions} from '../client/responsive-layout.mjs';
 const handlers=[];shellUi().setup({onLoad:(meta,callback)=>handlers.push({...meta,callback})});
-test('viewport commits only at breakpoints on narrow frames and coalesces desktop resizing',()=>{
+test('viewport commits at both shell breakpoints and coalesces continuous resizing',()=>{
   const commits=[], scheduled=new Map();let next=0;
   const actions=createResponsiveLayoutActions({setViewportWidth:width=>commits.push(width)},(fn,delay)=>{const id=++next;scheduled.set(id,{fn,delay});return id},id=>scheduled.delete(id));
   actions.setViewportWidth(800);assert.deepEqual(commits,[800]);
-  actions.setViewportWidth(760);actions.setViewportWidth(540);assert.deepEqual(commits,[800]);
-  actions.setViewportWidth(1030);assert.deepEqual(commits,[800,1030]);
-  actions.setViewportWidth(1100);actions.setViewportWidth(1180);assert.deepEqual(commits,[800,1030]);
+  actions.setViewportWidth(760);actions.setViewportWidth(540);assert.deepEqual(commits,[800,760]);
+  actions.setViewportWidth(1030);assert.deepEqual(commits,[800,760,1030]);
+  actions.setViewportWidth(1100);actions.setViewportWidth(1180);assert.deepEqual(commits,[800,760,1030]);
   assert.equal(scheduled.size,1);assert.equal([...scheduled.values()][0].delay,90);
-  [...scheduled.values()][0].fn();assert.deepEqual(commits,[800,1030,1180]);
-  actions.setViewportWidth(760);assert.deepEqual(commits,[800,1030,1180,760]);
+  [...scheduled.values()][0].fn();assert.deepEqual(commits,[800,760,1030,1180]);
+  actions.setViewportWidth(760);assert.deepEqual(commits,[800,760,1030,1180,760]);
   actions.dispose();
+});
+test('narrow viewport changes settle to their actual width and returning cancels stale work',()=>{
+  const commits=[],scheduled=new Map();let next=0;
+  const actions=createResponsiveLayoutActions({setViewportWidth:width=>commits.push(width)},fn=>{const id=++next;scheduled.set(id,fn);return id},id=>scheduled.delete(id));
+  actions.setViewportWidth(740);actions.setViewportWidth(710);actions.setViewportWidth(700);
+  assert.deepEqual(commits,[740]);assert.equal(scheduled.size,1);
+  const [id,commit]=[...scheduled][0];scheduled.delete(id);commit();assert.deepEqual(commits,[740,700]);
+  actions.setViewportWidth(720);actions.setViewportWidth(700);assert.equal(scheduled.size,0);
+  actions.setViewportWidth(800);assert.deepEqual(commits,[740,700,800]);
+  actions.setViewportWidth(810);actions.dispose();assert.deepEqual(commits,[740,700,800,810]);
 });
 for(const [pkg,file]of [['ui-settings-general','SettingsRoot.tsx'],['ui-sidebar','SidebarRoot.tsx'],['ui-layout','AppFrame.tsx']])test('build-only '+file+' adapter compiles without modifying upstream',async()=>{const path=fileURLToPath(new URL('../../../deepseek-harness/packages/client/'+pkg+'/src/client/'+file,import.meta.url)),before=await readFile(path,'utf8'),handler=handlers.find(h=>h.filter.test(path)),result=await handler.callback({path});assert.equal(result.loader,'tsx');await transform(result.contents,{loader:'tsx'});assert.equal(await readFile(path,'utf8'),before);if(file==='SettingsRoot.tsx'){assert.match(result.contents,/css.overlay \+ ' cmd-settings-overlay'/);assert.match(result.contents,/id === "harness-tools"/);assert.match(result.contents,/id === "voice"/);}if(file==='SidebarRoot.tsx'){assert.match(result.contents,/const wide = drawer \|\| !collapsed/);assert.doesNotMatch(result.contents,/css\.railIn,/);}});
 test('locale adapter preserves existing bound translators and forwards all other keys',async()=>{

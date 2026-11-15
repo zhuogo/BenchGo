@@ -3,14 +3,22 @@
 export async function askNativeQuestion(provider, request, ask) {
   const details = request.details;
   if (provider === 'pi') {
+    const confirm = details.method === 'confirm';
     const result = await ask({ questions: [{
       id: 'value', question: details.title ?? 'Pi question',
       ...(details.message ? { detail: details.message } : {}),
-      ...(details.options ? { options: details.options.map(label => ({ label })) } : {}),
+      ...(confirm ? { options: ['Yes', 'No'].map(label => ({ label })) } : details.options ? { options: details.options.map(label => ({ label })) } : {}),
     }] });
     const answer = result.answers.find(a => a.id === 'value');
+    if (confirm) return { allow: false, confirmed: answer?.selected?.length === 1 && answer.selected[0] === 'Yes' && !answer.custom };
     const value = answer?.custom ?? answer?.selected?.[0];
     return { allow: false, ...(value === undefined ? {} : { value }) };
+  }
+  if (Array.isArray(details.acpOptions)) {
+    const result = await ask({ questions: [{ id: '0', ...details.questions[0] }] });
+    const answer = result.answers.find(item => item.id === '0');
+    const selected = answer?.selected?.length === 1 && !answer.custom && details.acpOptions.find(option => option.label === answer.selected[0]);
+    return { allow: false, ...(selected ? { selectedOptionId: selected.optionId } : {}) };
   }
   const native = details.questions;
   if (!Array.isArray(native) || !native.length) throw new Error('Native question list is empty or unsupported');

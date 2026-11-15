@@ -24,7 +24,7 @@ async function setup(t, dependencies) {
   const projects = new Map([['shared', { id: 'shared', path: dir, title: 'Shared', sessionIds: ['harness-session'] }]]);
   const ctx = { effect(fn) { const dispose = fn(); effects.push(dispose); }, logger: { warn: message => warnings.push(message) }, workspaceRegistry: { list: () => [...projects.values()], get: id => projects.get(id), create: async path => { const p = { id: 'new', path, title: 'New', sessionIds: [] }; projects.set(p.id,p); return p; } }, connection: { fetch: { register(r) { routes.set(r.path, r); return async () => {}; } } } };
   const api = await mountWeb(ctx, c, {}, dependencies);
-  const provider = { config: {}, constructor: { capabilities: {} }, async connect(s,h) { return { nativeId: s.id, async submit(text) { h.event('turn.started'); h.event('text.delta',{text:`Result: ${text}`}); h.event('turn.completed',{status:'completed'}); }, async close() {} }; } };
+  const provider = { config: {}, constructor: { capabilities: { permissions: true } }, async connect(s,h) { return { nativeId: s.id, async setPermission() {}, async submit(text) { h.event('turn.started'); h.event('text.delta',{text:`Result: ${text}`}); h.event('turn.completed',{status:'completed'}); }, async close() {} }; } };
   c.providers.set('codex',provider); c.providers.set('pi',provider);
   t.after(async () => { await c.close(); for (const dispose of effects.reverse()) await dispose?.(); await rm(dir,{recursive:true,force:true}); });
   return { c, api, dir, route: routes.get('/api/commander'), routes, ctx, warnings };
@@ -39,8 +39,8 @@ test('sidebar reads private Router identities through the optional assistant ser
   assert.deepEqual((await api({ action: 'state' })).privateSessionIds, ['main-router', 'old-side-router']);
 });
 
-test('project API registers a real host absolute path and exposes its canonical path in state', async t => {
-  const { route, dir, api } = await setup(t);
+test('project API registers a real host absolute path and remembers it across sidebar reloads', async t => {
+  const { route, dir, api, ctx } = await setup(t);
   const path = `${dir}/../${dir.split(/[\\/]/).at(-1)}`;
   const response = await route.fetch(new Request('http://localhost/api/commander', {
     method: 'POST', body: JSON.stringify({ action: 'project', path }),
@@ -51,6 +51,9 @@ test('project API registers a real host absolute path and exposes its canonical 
   assert.deepEqual((await api({ action: 'state' })).projects.find(p => p.id === project.id), {
     ...project, sessionIds: [],
   });
+  assert.equal((await api({ action: 'browse' })).path, project.path);
+  const reloaded = await mountBaseWeb(ctx, { directory: dir, mountFonts: async () => {} });
+  assert.equal((await reloaded({ action: 'browse' })).path, project.path);
 });
 
 test('project API rejects relative paths before registering a workspace', async t => {
@@ -214,8 +217,10 @@ test('binding lookup returns the owning native session identity for the model lo
 
 test('native delegation requires human approval, inherits project and returns child results; unrelated results are rejected', async t => {
   const { c,api,dir }=await setup(t);
+  c.resolvePermission = () => ({ sandbox: 'workspace-write', approval: 'ask' });
   const parent=(await api({action:'create',provider:'codex',projectId:'shared'})).session;
   const pending=c.delegate(parent.id,{provider:'pi',text:'child task',cwd:'/ignored'});
+  await new Promise(resolve => setImmediate(resolve));
   const approval=c.snapshot(parent.id).pendingApprovals[0];
   assert.equal(c.list().length,1);
   await api({action:'approve',id:parent.id,approvalId:approval.id,answer:{allow:true}});
@@ -226,6 +231,7 @@ test('native delegation requires human approval, inherits project and returns ch
   assert.equal((await c.delegate(parent.id,{operation:'result',sessionId:result.session.id})).session.id,result.session.id);
   await assert.rejects(c.delegate(result.session.id,{operation:'result',sessionId:parent.id}),/direct delegated/);
   const denied=c.delegate(parent.id,{provider:'pi',text:'denied'});
+  await new Promise(resolve => setImmediate(resolve));
   c.approve(parent.id,c.snapshot(parent.id).pendingApprovals[0].id,{allow:false});
   await assert.rejects(denied,/denied/);
   assert.equal(c.list().length,2);
@@ -233,9 +239,11 @@ test('native delegation requires human approval, inherits project and returns ch
 
 test('concurrent approved delegations respect the default five-child limit', async t => {
   const { c, dir } = await setup(t);
+  c.resolvePermission = () => ({ sandbox: 'workspace-write', approval: 'ask' });
   const parent = await c.create({ provider: 'codex', cwd: dir, projectId: 'shared', ownerSessionId: 'commander-web:shared' });
   const pending = Array.from({ length: 6 }, (_, index) => c.delegate(parent.id, { provider: 'pi', text: `child ${index}` }));
   const settled = Promise.allSettled(pending);
+  await new Promise(resolve => setImmediate(resolve));
   for (const approval of c.snapshot(parent.id).pendingApprovals) c.approve(parent.id, approval.id, { allow: true });
   const outcomes = await settled;
   assert.equal(outcomes.filter(item => item.status === 'fulfilled').length, 5);
@@ -244,9 +252,21 @@ test('concurrent approved delegations respect the default five-child limit', asy
   assert.equal(children.length, 5);
   await c.archive(children[0].id);
   const next = c.delegate(parent.id, { provider: 'pi', text: 'replacement' });
+  await new Promise(resolve => setImmediate(resolve));
   c.approve(parent.id, c.snapshot(parent.id).pendingApprovals[0].id, { allow: true });
   await next;
   assert.equal(c.list().filter(item => item.parentId === parent.id && !item.archived).length, 5);
+});
+
+test('Full native delegation reuses the parent policy without a redundant approval and still enforces project and child ownership', async t => {
+  const { c, api, dir } = await setup(t);
+  const parent = (await api({ action: 'create', provider: 'codex', projectId: 'shared' })).session;
+  const result = await c.delegate(parent.id, { provider: 'pi', text: 'child task', cwd: '/ignored' });
+  assert.equal(result.session.parentId, parent.id); assert.equal(result.session.cwd, dir);
+  assert.deepEqual(result.session.permission, { sandbox: 'danger-full-access', approval: 'never' });
+  assert.equal(result.text, 'Result: child task');
+  assert.equal(c.events(parent.id).events.some(event => event.type === 'approval.requested'), false);
+  await assert.rejects(c.delegate(result.session.id, { operation: 'result', sessionId: parent.id }), /direct delegated/);
 });
 
 test('delegation bridge rejects missing/wrong capabilities and revokes session capability on disconnect', async t => {

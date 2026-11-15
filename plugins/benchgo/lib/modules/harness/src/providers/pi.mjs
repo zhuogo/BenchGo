@@ -79,8 +79,16 @@ export class PiProvider {
           case 'tool_execution_start': case 'tool_execution_update': case 'tool_execution_end': host.event('item', message); break;
           case 'extension_ui_request': {
             if (['confirm', 'select', 'input', 'editor'].includes(message.method)) {
-              const answer = await host.approval({ kind: message.method === 'confirm' ? 'permission' : 'question', method: message.method, nativeRequestId: message.id, details: message });
-              wire.send({ type: 'extension_ui_response', id: message.id, ...(message.method === 'confirm' ? { confirmed: answer.allow === true } : { value: answer.value, cancelled: answer.value === undefined }) });
+              let toolPermission = false;
+              if (message.method === 'confirm' && message.title === 'BenchGo tool permission') {
+                try {
+                  const gate = JSON.parse(message.message);
+                  toolPermission = gate?.benchgoToolPermission === true && typeof gate.toolName === 'string' && !!gate.toolName && typeof gate.toolCallId === 'string' && !!gate.toolCallId;
+                } catch {}
+              }
+              const details = message.method === 'confirm' && !toolPermission ? { ...message, options: ['Yes', 'No'] } : message;
+              const answer = await host.approval({ kind: toolPermission ? 'permission' : 'question', method: message.method, nativeRequestId: message.id, details });
+              wire.send({ type: 'extension_ui_response', id: message.id, ...(message.method === 'confirm' ? { confirmed: toolPermission ? answer.allow === true : answer.confirmed === true } : { value: answer.value, cancelled: answer.value === undefined }) });
             } else host.event('ui.notice', message);
             break;
           }

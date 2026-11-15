@@ -80,7 +80,7 @@
         "plugins/superagent/src/router-permissions.mjs",
         "plugins/superagent/src/router-language-policy.mjs"
       ],
-      "note": "Router 也是官方 Agent Session，没有另一套推理循环；角色工具门只保留专属产品管理、协调与上下文能力，不验收 Worker 内容。assistant_projects 省略设备选择时只查本机，设备参数查询已授权目标；assistant_devices 是出站目录，assistant_device_status 是本机入站授权，均不冒充实时在线。有限设备管理和远端任务协调已接线，首次配对、秘密及目标确认仍走原设备中心；真实双机待验。",
+      "note": "Router 也是官方 Agent Session，没有另一套推理循环；角色工具门只保留专属产品管理、协调与上下文能力，不验收 Worker 内容。assistant_projects 默认汇总本机和全部出站设备，显式 scope=local 只查本机，设备参数查询已授权目标，失败保留覆盖缺口；assistant_devices 是出站目录，assistant_device_status 是本机入站授权，均不冒充实时在线。有限设备管理和远端任务协调已接线，首次配对、秘密及目标确认仍走原设备中心；真实双机待验。",
       "state": "implemented",
       "x": 820,
       "y": 160

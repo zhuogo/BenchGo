@@ -1,11 +1,20 @@
 import { commandCatalog } from '../commands.mjs';
 import { isolatedClaudeHistory } from '../isolated-launch.mjs';
+import { fullNativePermission, isFullNativePermission, nativePermission, nativePermissionError } from '../permissions.mjs';
+
+function permissionOptions(permission) {
+  if (!permission) return { permissionMode: 'default' };
+  if (!isFullNativePermission(permission)) throw nativePermissionError(`Claude Code 无法精确同步 ${permission.sandbox} + ${permission.approval} 权限；请使用支持此限制的 Codex 或官方 API 会话。`);
+  return { permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true };
+}
 
 export class ClaudeProvider {
-  static capabilities = { stream: true, resume: true, steer: false, approvals: true, discover: true };
+  static capabilities = { stream: true, resume: true, steer: false, approvals: true, discover: true, permissions: true };
   constructor(config = {}) { this.config = config; }
 
   async connect(session, host) {
+    let permission = session.permission ? nativePermission(session.permission) : !session.nativeId ? fullNativePermission : undefined;
+    const initialPermission = permissionOptions(permission);
     let sdk;
     try { sdk = await import('@anthropic-ai/claude-agent-sdk'); }
     catch { throw new Error('Claude Agent SDK is not installed; run npm install in plugins/benchgo'); }
@@ -33,6 +42,13 @@ export class ClaudeProvider {
         await query.setModel(model || undefined);
         session.model = model || undefined;
       },
+      async setPermission(value) {
+        const next = nativePermission(value), options = permissionOptions(next);
+        if (JSON.stringify(next) === JSON.stringify(permission)) return;
+        if (typeof query.setPermissionMode !== 'function') throw new Error('Claude Agent SDK 不支持同步当前会话的权限。');
+        await query.setPermissionMode(options.permissionMode);
+        permission = next;
+      },
       async submit(text) {
         hasAssistantText = false;
         queue.push({ type: 'user', session_id: driver.nativeId ?? '', message: { role: 'user', content: text }, parent_tool_use_id: null });
@@ -53,7 +69,7 @@ export class ClaudeProvider {
       ...(session.model ? { model: session.model } : {}),
       pathToClaudeCodeExecutable: this.config.command ?? 'claude',
       env: { ...process.env, ...this.config.env },
-      permissionMode: 'default',
+      ...initialPermission,
       includePartialMessages: true,
       settingSources: this.config.settingSources ?? ['user', 'project', 'local'],
       ...(this.config.settings ? { settings: this.config.settings } : {}),

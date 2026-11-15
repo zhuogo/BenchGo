@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeviceResources, projectResources, deviceConnectionFailure } from '../src/devices/resources.mjs';
-import { openStore } from '../src/pairing/store.mjs';
+import { hash, openStore } from '../src/pairing/store.mjs';
 import { loadIdentity } from '../src/transport/tls.mjs';
 import { createServer } from 'node:https';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +18,31 @@ function mutableRegistry() {
   };
 }
 const resourceResult = () => ({ value: { available: true, hostId: 'host', items: [{ resourceId: 'project' }] } });
+test('session writes require the displayed identity and reject re-pairing before probing or sending', async t => {
+  const saved = mutableRegistry(), calls = [];
+  const service = createDeviceResources({ registry: saved, route: async value => { calls.push('route'); return value; }, request: async (_target, _path, input) => { calls.push(input); return { value: { accepted: true } }; } });
+  t.after(() => service.clear());
+  const input = { action: 'sessionAction', id: 'session', native: false, operation: 'pin', requestId: `sa:${Date.now()}:request` };
+  const call = extra => service.callDevice({ deviceId: 'a', input, ...extra });
+  await assert.rejects(call({}), { code: 'INVALID_SESSION_ACTION' });
+  await assert.rejects(call({ expectedHostId: null, expectedAuthorizationId: null }), { code: 'IDENTITY_CHANGED' });
+  const expected = { expectedHostId: 'host', expectedAuthorizationId: 'grant' };
+  saved.device.authorizationId = 'new-grant';
+  await assert.rejects(call(expected), { code: 'IDENTITY_CHANGED' }); assert.deepEqual(calls, []);
+  assert.equal((await call({ ...expected, expectedAuthorizationId: 'new-grant' })).accepted, true);
+  assert.deepEqual(calls, ['route', input]); assert.equal(calls[1].expectedHostId, undefined);
+  saved.device.hostId = 'other-host';
+  await assert.rejects(call({ ...expected, expectedAuthorizationId: 'new-grant' }), { code: 'IDENTITY_CHANGED' });
+  assert.equal(calls.length, 2);
+});
+
+test('identity changes while selecting a route stop a session write before transmission', async t => {
+  const saved = mutableRegistry(), calls = [];
+  const service = createDeviceResources({ registry: saved, route: async value => { saved.device.authorizationId = 'replaced-during-route'; return value; }, request: async () => { calls.push('sent'); return { value: {} }; } });
+  t.after(() => service.clear());
+  await assert.rejects(service.callDevice({ deviceId: 'a', expectedHostId: 'host', expectedAuthorizationId: 'grant', input: { action: 'sessionAction', id: 'session', native: false, operation: 'pin', requestId: `sa:${Date.now()}:request` } }), { code: 'IDENTITY_CHANGED' });
+  assert.deepEqual(calls, []);
+});
 test('resource pages preserve opaque identities, ownership and bounded filtered coverage', () => {
   const result = projectResources({ sessions: [{ id: 'same', projectId: 'p', title: 'x', token: 'secret' }, { id: 'same', projectId: 'q' }] }, { kind: 'sessions', projectId: 'p', limit: 1 }, 'a');
   assert.equal(result.items[0].resourceId, 'same'); assert.equal(result.items[0].deviceId, 'a');
@@ -32,6 +57,65 @@ test('recent pages rank all native and official candidates by source activity be
   assert.equal(first.hasMore, true);
   assert.deepEqual(projectResources({ sessions }, { kind: 'recent', offset: 2, limit: 2 }, 'a').items.map(row => row.id), ['official-old', 'invalid']);
   assert.equal(sessions[0].id, 'official-old');
+});
+test('session and recent pages filter archives and sort pins across the full candidate set before slicing', () => {
+  const sessions = [
+    ...Array.from({ length: 35 }, (_, i) => ({ id: `archived-${i}`, projectId: 'p', archived: true, updatedAt: 100 + i })),
+    { id: 'old', projectId: 'p', updatedAt: 10 },
+    { id: 'new', projectId: 'p', updatedAt: 30, provider: 'opaque/Provider', model: 'Opaque:model@1', status: 'waiting', token: 'secret' },
+    { id: 'other', projectId: 'q', pinned: true, updatedAt: 1000 },
+    { id: 'pin', projectId: 'p', native: true, pinned: true, updatedAt: 1 },
+    { id: 'middle', projectId: 'p', updatedAt: 20 },
+  ];
+  for (const kind of ['sessions', 'recent']) {
+    const input = { kind, projectId: 'p', archived: false, limit: 2 };
+    const first = projectResources({ sessions }, input, 'a'), second = projectResources({ sessions }, { ...input, offset: 2 }, 'a');
+    assert.deepEqual(first.items.map(row => row.id), ['pin', 'new']);
+    assert.deepEqual(second.items.map(row => row.id), ['middle', 'old']);
+    assert.equal(first.total, 4); assert.equal(first.hasMore, true); assert.equal(second.hasMore, false);
+    assert.equal(first.items[1].provider, 'opaque/Provider'); assert.equal(first.items[1].model, 'Opaque:model@1');
+    assert.equal(first.items[1].status, 'waiting'); assert.equal(first.items[1].token, undefined);
+    const archived = projectResources({ sessions }, { ...input, archived: true, limit: 30 }, 'a');
+    assert.equal(archived.total, 35); assert.equal(archived.items.length, 30); assert.equal(archived.hasMore, true);
+  }
+  assert.equal(sessions[0].id, 'archived-0', 'sorting does not mutate the source');
+  assert.throws(() => projectResources({ sessions }, { kind: 'sessions', archived: 'false' }, 'a'), { code: 'INVALID_RESOURCE_QUERY' });
+});
+test('resource RPC forwards archive selection and isolates stale pages by archive filter', async t => {
+  const saved = mutableRegistry(), calls = [];
+  const sessions = [{ id: 'visible', projectId: 'p', provider: 'tool/Exact', model: 'M@1', status: 'failed', updatedAt: 2 }, { id: 'hidden', projectId: 'p', archived: true, updatedAt: 1 }];
+  let offline = false;
+  const service = createDeviceResources({ registry: saved, route: async value => value, request: async (_target, _path, input) => {
+    calls.push(input);
+    if (offline) throw Object.assign(new Error('offline'), { code: 'ECONNREFUSED' });
+    return { value: projectResources({ sessions }, input, 'local') };
+  } });
+  t.after(() => service.clear());
+  const query = { deviceId: 'a', kind: 'sessions', projectId: 'p', limit: 1 };
+  const visible = (await service.resources({ ...query, archived: false })).devices[0];
+  const hidden = (await service.resources({ ...query, archived: true })).devices[0];
+  assert.deepEqual(calls.map(row => row.archived), [false, true]);
+  assert.equal(calls[0].projectId, 'p');
+  assert.equal(visible.items[0].provider, 'tool/Exact'); assert.equal(visible.items[0].model, 'M@1'); assert.equal(visible.items[0].status, 'failed');
+  assert.equal(hidden.items[0].id, 'hidden');
+  offline = true;
+  const staleVisible = (await service.resources({ ...query, archived: false })).devices[0];
+  const staleHidden = (await service.resources({ ...query, archived: true })).devices[0];
+  assert.equal(staleVisible.freshness, 'stale'); assert.equal(staleHidden.freshness, 'stale');
+  assert.deepEqual(staleVisible.items.map(row => row.id), ['visible']); assert.deepEqual(staleHidden.items.map(row => row.id), ['hidden']);
+});
+test('legacy state fallback applies project and archive filters before pagination', async t => {
+  const calls = [], saved = mutableRegistry();
+  const sessions = [{ id: 'old', projectId: 'p', updatedAt: 1 }, { id: 'archive', projectId: 'p', archived: true, updatedAt: 100 }, { id: 'new', projectId: 'p', updatedAt: 2 }, { id: 'other', projectId: 'q' }];
+  const service = createDeviceResources({ registry: saved, route: async value => value, request: async (_target, _path, input) => {
+    calls.push(input);
+    if (input.action === 'resources') throw Object.assign(new Error('Unsupported Link action'), { statusCode: 400 });
+    return { value: { sessions } };
+  } });
+  t.after(() => service.clear());
+  const page = (await service.resources({ deviceId: 'a', kind: 'sessions', projectId: 'p', archived: false, limit: 1, offset: 1 })).devices[0];
+  assert.deepEqual(calls.map(row => row.action), ['resources', 'state']);
+  assert.equal(page.total, 2); assert.equal(page.hasMore, false); assert.deepEqual(page.items.map(row => row.id), ['old']);
 });
 test('queries isolate unavailable devices and retain stale bounded summaries', async () => {
   let offline = false;
@@ -72,6 +156,7 @@ test('resource success restores online while business errors and authorization f
   failure = Object.assign(new Error('private'), { statusCode: 403 });
   const unauthorized = (await service.resources({ deviceId: 'a' })).devices[0];
   assert.equal(unauthorized.code, 'UNAUTHORIZED'); assert.deepEqual(unauthorized.items, []); assert.equal(saved.device.status, 'failed');
+  assert.deepEqual(deviceConnectionFailure({ code: 'ROUTES_COOLDOWN', status: 503 }), { code: 'ROUTES_COOLDOWN', status: 'connecting', reason: '中继连接正在恢复，请稍后重试或在设备中心检查连接' });
   assert.equal(deviceConnectionFailure({ code: 'ERR_LINK_CERTIFICATE' }).status, 'failed');
   assert.equal(deviceConnectionFailure(new Error('query failed')).status, null);
 });
@@ -148,20 +233,42 @@ test('clear cancels late results and real TLS queries reuse a socket until expli
   const marks = saved.marks.length; waiting.clear(); release(resourceResult());
   await assert.rejects(late, { name: 'AbortError' }); assert.equal(saved.marks.length, marks);
 });
-test('pairing grants are explicit, visible at approval, durable and independently revocable', async t => {
+test('pairing approval uniformly enables collaboration and management while token revocation denies access', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'link-grants-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = await openStore(directory);
-  const legacyPair = store.begin(); const legacy = store.request(legacyPair.code, 'old');
-  await store.decide(legacy.requestId, true);
-  assert.deepEqual(store.poll(legacy.requestId, legacy.pollToken).capabilities, []);
-  const pair = store.begin({ collaboration: true, management: true });
+  const pair = store.begin();
   const pending = store.request(pair.code, 'new');
   assert.deepEqual(store.pending()[0].capabilities, ['collaboration','management']);
+  assert.equal(store.state.devices.length, 0, 'generating and requesting pairing does not authorize the new device');
+  assert.equal(store.authenticate('unpaired-token'),undefined);
   await store.decide(pending.requestId, true);
   const approved = store.poll(pending.requestId, pending.pollToken);
   assert.deepEqual(store.authenticate(approved.token).capabilities, ['collaboration','management']);
-  await store.grantDevice(approved.deviceId, { management: false });
   const restored = await openStore(directory);
-  assert.deepEqual(restored.authenticate(approved.token).capabilities, ['collaboration']);
+  assert.deepEqual(restored.authenticate(approved.token).capabilities, ['collaboration','management']);
+  assert.equal(Object.hasOwn(restored.state.devices[0],'capabilities'),false,'capabilities are protocol projection, not a second persisted permission switch');
+  await restored.revoke(approved.deviceId);
+  assert.equal(restored.authenticate(approved.token),undefined);
+  assert.equal((await openStore(directory)).authenticate(approved.token),undefined);
+});
+
+test('old approved devices converge to the paired permission boundary and obsolete grant fields are retired', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'link-legacy-grants-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const devices = [{ id: 'empty', tokenHash: hash('legacy-empty'), capabilities: [] }, { id: 'missing', tokenHash: hash('legacy-missing') }, { id: 'limited', tokenHash: hash('legacy-limited'), capabilities: ['collaboration'] }];
+  const expected=devices.map(({capabilities,...device})=>device);
+  await writeFile(join(directory, 'devices.json'), JSON.stringify({ devices }));
+  const store = await openStore(directory);
+  assert.deepEqual(store.state.devices, expected);
+  assert.deepEqual((await openStore(directory)).state.devices, expected,'retired permission fields are removed by the ordinary durable store');
+  for (const id of ['empty', 'missing', 'limited']) {
+    assert.deepEqual(store.authenticate(`legacy-${id}`).capabilities, ['collaboration', 'management']);
+  }
+  assert.equal(store.authenticate('legacy-wrong'), undefined);
+  await store.revoke('empty');
+  assert.equal(store.authenticate('legacy-empty'), undefined);
+  const restored = await openStore(directory);
+  assert.equal(restored.authenticate('legacy-empty'), undefined);
+  assert.deepEqual(restored.authenticate('legacy-missing').capabilities, ['collaboration', 'management']);
 });

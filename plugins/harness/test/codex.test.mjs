@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,9 +9,48 @@ import { CodexProvider } from '../src/providers/codex.mjs';
 
 const fixture = { command: process.execPath, commandArgs: [fileURLToPath(new URL('./codex-fixture.mjs', import.meta.url))] };
 
+test('Codex new standalone sessions default to Full while each turn and reconnect follow authoritative lower settings', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'commander-codex-permission-')), log = join(directory, 'protocol.jsonl');
+  const commander = await new Commander({ dataDir: directory, providers: { codex: { ...fixture, env: { COMMANDER_TEST_PROTOCOL_LOG: log } } } }).open();
+  t.after(async () => { await commander.close(); await rm(directory, { recursive: true, force: true }); });
+  const { id } = await commander.create({ provider: 'codex', cwd: directory });
+  await commander.submit(id, 'full'); await commander.wait(id);
+  let permission = { sandbox: 'workspace-write', approval: 'ask', additionalWritableRoots: [join(directory, 'extra')] };
+  commander.resolvePermission = () => permission;
+  await commander.submit(id, 'limited'); await commander.wait(id);
+  permission = { sandbox: 'read-only', approval: 'never' };
+  await commander.disconnect(id); await commander.connect(id);
+  await commander.submit(id, 'read'); await commander.wait(id);
+  const protocol = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  const start = protocol.find(message => message.method === 'thread/start').params;
+  assert.equal(start.approvalPolicy, 'never'); assert.equal(start.sandbox, 'danger-full-access');
+  const turns = protocol.filter(message => message.method === 'turn/start').map(message => message.params);
+  assert.deepEqual(turns[0].sandboxPolicy, { type: 'dangerFullAccess' }); assert.equal(turns[0].approvalPolicy, 'never');
+  assert.deepEqual(turns[1].sandboxPolicy, { type: 'workspaceWrite', writableRoots: [directory, join(directory, 'extra')] }); assert.equal(turns[1].approvalPolicy, 'on-request');
+  assert.deepEqual(turns[2].sandboxPolicy, { type: 'readOnly' }); assert.equal(turns[2].approvalPolicy, 'never');
+  const resume = protocol.find(message => message.method === 'thread/resume').params;
+  assert.equal(resume.sandbox, 'read-only'); assert.equal(resume.approvalPolicy, 'never');
+  assert.deepEqual(commander.snapshot(id).permission, permission);
+});
+
+test('Codex imported native threads with unknown prior permissions are resumed without raising or replacing them', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'commander-codex-import-')), log = join(directory, 'protocol.jsonl');
+  const commander = await new Commander({ dataDir: directory, providers: { codex: { ...fixture, env: { COMMANDER_TEST_PROTOCOL_LOG: log } } } }).open();
+  t.after(async () => { await commander.close(); await rm(directory, { recursive: true, force: true }); });
+  const { id } = await commander.create({ provider: 'codex', cwd: directory, nativeId: 'thread-fixture' });
+  await commander.submit(id, 'resume'); await commander.wait(id);
+  const protocol = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  const resume = protocol.find(message => message.method === 'thread/resume').params;
+  assert.equal(Object.hasOwn(resume, 'approvalPolicy'), false); assert.equal(Object.hasOwn(resume, 'sandbox'), false);
+  const turn = protocol.find(message => message.method === 'turn/start').params;
+  assert.equal(Object.hasOwn(turn, 'approvalPolicy'), false); assert.equal(Object.hasOwn(turn, 'sandboxPolicy'), false);
+  assert.equal(commander.snapshot(id).permission, undefined);
+});
+
 test('Codex duplex protocol: approvals, multiple turns, steer, interrupt and resume', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'commander-codex-'));
   const commander = await new Commander({ dataDir: directory, providers: { codex: fixture } }).open();
+  commander.resolvePermission = () => ({ sandbox: 'workspace-write', approval: 'ask' });
   t.after(async () => { await commander.close(); await rm(directory, { recursive: true, force: true }); });
   const { id } = await commander.create({ provider: 'codex' });
   const approvalReceived = new Promise(resolve => commander.on('event', event => { if (event.type === 'approval.requested') resolve(event.data); }));

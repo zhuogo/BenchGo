@@ -37,7 +37,7 @@
           "resources": { "$ref": "#/components/schemas/ResourceAggregate" },
           "resourceScope": { "type": "object", "required": ["scope"], "properties": { "scope": { "$ref": "#/components/schemas/ResourceScope" } } },
           "setResourceScope": { "type": "object", "required": ["scope"], "properties": { "scope": { "$ref": "#/components/schemas/ResourceScope" } } },
-          "hostGrantDevice": { "type": "object", "properties": { "devices": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "capabilities": { "type": "array", "items": { "enum": ["collaboration", "management"] } } } } }, "pendingManagement": { "type": "array", "items": { "$ref": "#/components/schemas/ManagementOperation" } } } },
+          "sessionAction": { "$ref": "#/components/schemas/SessionActionReceipt" },
           "hostManagementDecide": { "$ref": "#/components/schemas/ManagementOperation" }
         },
         "x-device-naming": "rename 的 deviceId=local 修改本机持久名称并用于配对身份；其他设备 rename 仅保存本机管理备注，不修改被控端。hostRenameDevice 的 id/name 对已授权访问本机的设备保存本地备注，对应 owner rename-device；hostStatus.devices 的 name 显示备注，originalName 保留设备原始身份名。list 本机行返回真实名称。已批准配对返回 hostName 和 name（均为被控主机名称）；缺少名称生成稳定随机名。设备连接持久开启，hostConfigure.enabled 仅为旧客户端兼容字段，不再关闭连接。",
@@ -87,12 +87,19 @@
                 ],
                 "properties": {
                   "action": {
-                    "enum": ["launch", "devices", "select", "resources", "resourceScope", "setResourceScope"]
+                    "enum": ["launch", "devices", "select", "resources", "resourceScope", "setResourceScope", "sessionAction"]
                   },
                   "parentOrigin": {
                     "type": "string"
                   },
                   "deviceId": { "type": "string" },
+                  "expectedHostId": { "type": ["string", "null"] },
+                  "expectedAuthorizationId": { "type": ["string", "null"] },
+                  "id": { "type": "string", "maxLength": 256 },
+                  "native": { "type": "boolean" },
+                  "operation": { "enum": ["pin", "unpin", "archive", "unarchive", "rename", "delete", "fork"] },
+                  "requestId": { "type": "string", "maxLength": 200 },
+                  "title": { "type": "string", "maxLength": 200 },
                   "deviceIds": { "type": "array", "maxItems": 33, "items": { "type": "string" } },
                   "kind": { "$ref": "#/components/schemas/ResourceKind" },
                   "projectId": { "type": "string" },
@@ -109,7 +116,7 @@
         "responses": {
           "200": {
             "description": "launch返回一次性入口{url}；devices返回{activeId,devices}；resources返回{devices:[ResourcePage],partial}；resourceScope/setResourceScope返回{scope}；select返回{device,url,resource?}。",
-            "content": { "application/json": { "schema": { "anyOf": [ { "$ref": "#/components/schemas/DeviceDirectory" }, { "$ref": "#/components/schemas/ResourceAggregate" }, { "type": "object", "properties": { "scope": { "$ref": "#/components/schemas/ResourceScope" }, "url": { "type": ["string", "null"] }, "device": { "$ref": "#/components/schemas/Device" }, "resource": { "$ref": "#/components/schemas/OpenResource" } } } ] } } }
+            "content": { "application/json": { "schema": { "anyOf": [ { "$ref": "#/components/schemas/DeviceDirectory" }, { "$ref": "#/components/schemas/ResourceAggregate" }, { "$ref": "#/components/schemas/SessionActionReceipt" }, { "type": "object", "properties": { "scope": { "$ref": "#/components/schemas/ResourceScope" }, "url": { "type": ["string", "null"] }, "device": { "$ref": "#/components/schemas/Device" }, "resource": { "$ref": "#/components/schemas/OpenResource" } } } ] } } }
           },
           "400": {
             "description": "输入错误或操作失败"
@@ -156,7 +163,7 @@
                           "rename-device",
                           "relay-configure",
                           "relay-test",
-                          "relay-pool-configure", "grant-device", "management-decide"
+                          "relay-pool-configure", "management-decide"
                         ]
                       },
                       "url": {
@@ -199,8 +206,6 @@
                       "id": {
                         "type": "string"
                       },
-                      "collaboration": { "type": "boolean" },
-                      "management": { "type": "boolean" },
                       "operationId": { "type": "string" },
                       "allow": { "type": "boolean" },
                       "nodes": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
@@ -303,11 +308,16 @@
         "properties": { "op": { "const": "set" }, "path": { "type": "array", "minItems": 3, "maxItems": 3, "prefixItems": [ { "const": "nodes" }, { "type": "string", "pattern": "^[0-9]+$" }, { "enum": ["priority", "enabled"] } ], "items": false }, "value": { "oneOf": [ { "type": "boolean" }, { "type": "integer", "minimum": 0, "maximum": 1000000 } ] } },
         "description": "仅已有中继节点；priority值为整数，enabled值为boolean；不得增删节点、地址或秘密。"
       },
+      "SessionActionReceipt": {
+        "type": "object", "required": ["accepted", "id", "operation", "requestId", "refreshRequired"],
+        "properties": { "accepted": { "const": true }, "id": { "type": "string" }, "operation": { "enum": ["pin", "unpin", "archive", "unarchive", "rename", "delete", "fork"] }, "requestId": { "type": "string" }, "refreshRequired": { "const": true }, "deleted": { "type": "boolean" }, "title": { "type": "string" } },
+        "description": "有限会话管理确认。入口请求必须绑定deviceId与所显示的expectedHostId/expectedAuthorizationId，未知身份显式null；expected字段不发往目标。native按真实来源明示，官方不透明ID不按前缀猜测。requestId使用sa:<毫秒时间戳>:<UUID>，按配对设备绑定完整意图；七天/最多2000条有界持久回执，过期重投拒绝，部分成功或回执不明返回待核实且不重放。收到匹配确认后入口刷新权威摘要。"
+      },
       "DirectedDeviceInput": {
         "type": "object", "required": ["action"],
-        "properties": { "action": { "enum": ["state", "models", "create", "history", "send", "cancel", "respond", "resources", "collaboration", "management"] }, "operation": { "type": "string" }, "requestId": { "type": "string", "maxLength": 200 }, "operationId": { "type": "string" }, "kind": { "$ref": "#/components/schemas/ResourceKind" }, "namespace": { "enum": ["benchgo-link-relay", "benchgo-link-transport"] }, "expected": { "type": "object", "properties": { "fingerprint": { "type": "string" } } }, "ops": { "type": "array", "maxItems": 20, "items": { "$ref": "#/components/schemas/RelayManagementOp" } } },
+        "properties": { "action": { "enum": ["state", "models", "create", "history", "send", "cancel", "respond", "resources", "collaboration", "management", "sessionAction"] }, "id": { "type": "string", "maxLength": 256 }, "native": { "type": "boolean" }, "title": { "type": "string", "maxLength": 200 }, "operation": { "type": "string" }, "requestId": { "type": "string", "maxLength": 200 }, "operationId": { "type": "string" }, "kind": { "$ref": "#/components/schemas/ResourceKind" }, "namespace": { "enum": ["benchgo-link-relay", "benchgo-link-transport"] }, "expected": { "type": "object", "properties": { "fingerprint": { "type": "string" } } }, "ops": { "type": "array", "maxItems": 20, "items": { "$ref": "#/components/schemas/RelayManagementOp" } } },
         "additionalProperties": true,
-        "description": "有限定向协议，不接受任意HTTP/SSH或owner action。collaboration只允许delegate/get/lookup/control/change且需显式collaboration grant；management只允许status/relay-test/settings-read/settings-prepare/operation且需独立management grant。settings-read支持transport/relay命名空间；settings-prepare仅relay既有节点priority/enabled，返回ManagementOperation等待目标真实主人审批；operation按operationId查同设备原申请。资源与原会话动作沿既有访问授权。目标从TLS认证绑定principal，JSON principal不能扩大权限。"
+        "description": "有限定向协议，不接受任意HTTP/SSH或owner action。确认配对即统一允许目标实际支持的BenchGo能力，不再配置二次grant；未配对或撤销token仍拒绝。collaboration只允许delegate/get/lookup/control/change；management只允许status/relay-test/settings-read/settings-prepare/operation。settings-read支持transport/relay命名空间；settings-prepare仅relay既有节点priority/enabled，返回ManagementOperation等待目标真实主人审批；operation按operationId查同设备原申请。sessionAction按显式native和原始id选择真实适配器，只支持能力声明的有限操作，requestId绑定完整意图并持久保存有界回执。目标从TLS认证绑定principal，JSON principal不能扩大权限。"
       },
       "DeviceRequest": {
         "type": "object",
@@ -341,7 +351,7 @@
               "hostRelayConfigure",
               "hostRelayTest",
               "hostRelayPoolConfigure",
-              "devices", "resources", "resourceScope", "setResourceScope", "callDevice", "hostGrantDevice", "hostManagementDecide"
+              "devices", "resources", "resourceScope", "setResourceScope", "callDevice", "sessionAction", "hostManagementDecide"
             ]
           },
           "deviceId": {
@@ -354,8 +364,10 @@
           "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
           "scope": { "$ref": "#/components/schemas/ResourceScope" },
           "resource": { "$ref": "#/components/schemas/OpenResource" },
-          "collaboration": { "type": "boolean", "description": "hostPairing显式申请协作授权；hostGrantDevice按id升级或撤销既有入站授权，默认不授权。" },
-          "management": { "type": "boolean", "description": "独立有限管理授权，不是owner权限。" },
+          "expectedHostId": { "type": ["string", "null"] },
+          "expectedAuthorizationId": { "type": ["string", "null"] },
+          "native": { "type": "boolean" },
+          "title": { "type": "string", "maxLength": 200 },
           "operationId": { "type": "string" },
           "allow": { "type": "boolean", "description": "hostManagementDecide真实主人单次批准或拒绝精确配置差异。" },
           "input": { "$ref": "#/components/schemas/DirectedDeviceInput" },
@@ -411,6 +423,7 @@
           },
           "operation": {
             "enum": [
+              "pin", "unpin", "archive", "unarchive", "rename", "delete", "fork",
               "status",
               "start",
               "stop",

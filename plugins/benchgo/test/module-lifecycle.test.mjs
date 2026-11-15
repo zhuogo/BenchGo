@@ -46,14 +46,39 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
     return () => { if (registry.get(route.path) === route) registry.delete(route.path); };
   };
   const workspace = { id: 'project', path: projectPath, title: 'Project', sessionIds: ['official-session'] };
+  const owner = { session: { id: 'official-session' } };
   ctx.provide('path', { baseDir: directory });
   ctx.provide('systemPrompt', { tools() {}, section() {} });
-  ctx.provide('agents', { list: () => [], get: () => undefined,
+  ctx.provide('agents', { list: () => [], get: id => id === owner.session.id ? owner : undefined,
     create: async () => { throw new Error('Lifecycle fixture must not execute agents'); } });
+  ctx.provide('sandboxPolicy', { resolve({ session }) {
+    assert.equal(session, owner.session, 'native sessions must inherit the exact parent permission');
+    return { mode: 'danger-full-access' };
+  } });
+  ctx.provide('approval', { config: { policy: 'never' }, overrideOf(session) {
+    assert.equal(session, owner.session, 'native approval must follow the exact parent session');
+    return undefined;
+  } });
   ctx.provide('sessions', { get: () => undefined,
     flush: async () => { throw new Error('Lifecycle fixture must not write sessions'); } });
   ctx.provide('sessionQuery', { listSessions: async () => [], readSession: async () => ({ events: [] }),
-    observeSession: async () => assert.fail('Lifecycle fixture has no execution sessions to observe') });
+    observeSession: async () => assert.fail('Lifecycle fixture has no execution sessions to observe'),
+    searchSessions: async () => assert.fail('Lifecycle fixture must not search sessions'),
+    searchEvents: async () => assert.fail('Lifecycle fixture must not search events'),
+    readEvent: async () => assert.fail('Lifecycle fixture must not read persisted events') });
+  // These official services are required by SuperAgent's current plugin seam.
+  // This fixture exercises ownership only; it must never execute or write a session.
+  ctx.provide('subagents', {
+    startActivation: async () => assert.fail('Lifecycle fixture must not start subagents'),
+    drainDescendants: async () => assert.fail('Lifecycle fixture has no subagents to drain'),
+  });
+  ctx.provide('sessionTitle', { get: () => undefined,
+    rename: () => assert.fail('Lifecycle fixture must not rename sessions') });
+  ctx.provide('sessionPersistence', { list: async () => [], stat: async () => undefined,
+    open: async () => assert.fail('Lifecycle fixture must not open persisted sessions'),
+    create: async () => assert.fail('Lifecycle fixture must not persist sessions') });
+  ctx.provide('sessionProjectionCache', { cachedSnapshot: () => undefined,
+    write: async () => assert.fail('Lifecycle fixture must not write session projections') });
   const projectionRegistrations = new Map();
   // Preserve the official caller-scoped registration lifetime and handle shape.
   class FixtureSessionProjections extends Service {

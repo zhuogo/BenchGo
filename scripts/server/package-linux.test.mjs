@@ -54,6 +54,8 @@ test('Linux server package carries verified current seed, real x64 identity, inv
   assert.match(await readFile(join(packageRoot, 'README.md'), 'utf8'), /首次安装仍需联网/);
   assert.match(await readFile(join(packageRoot, 'README.md'), 'utf8'), /设备中心 → 设备 → 添加设备 → 安装到服务器/);
   assert.match(await readFile(join(packageRoot, 'install.sh'), 'utf8'), /uname -m.*x86_64/);
+  const bootstrap = await readFile(join(packageRoot, 'bootstrap.mjs'), 'utf8');
+  assert.match(bootstrap, /'Type=simple', 'KillMode=mixed'/, 'launcher alone receives graceful systemd signals');
   const checksums = (await readFile(join(packageRoot, 'SHA256SUMS.txt'), 'utf8')).trim().split('\n');
   for (const line of checksums) { const [expected, name] = line.split('  '); assert.equal(sha256(await readFile(join(packageRoot, name))), expected); }
   assert(checksums.some(row => row.endsWith('  DEEPSEEK-LICENSE')));

@@ -55,7 +55,8 @@ test('actual Cordis loads/unloads the service and tools; conversations cannot ac
     const exec = { signal: new AbortController().signal, agent: { session: { id: 'owner' } } };
     await assert.rejects(tools.get('commander_create').execute({ provider: 'codex', cwd: directory }, exec), /approval service/);
     ctx.commander.providers.set('test', { async connect() { return { nativeId: 'native', close: async () => {} }; } });
-    const { id } = await ctx.commander.create({ provider: 'test', ownerSessionId: 'someone-else' });
+    const { id } = await ctx.commander.create({ provider: 'test' });
+    ctx.commander.get(id).ownerSessionId = 'someone-else';
     await assert.rejects(tools.get('commander_events').execute({ id }, exec), /different Harness session/);
     assert.deepEqual(await tools.get('commander_sessions').execute({}, exec), { sessions: [] });
     const catalog = await tools.get('commander_providers').execute({}, exec);
@@ -88,11 +89,15 @@ test('native permissions and questions go to human services associated with the 
   const directory = await mkdtemp(join(tmpdir(), 'commander-human-'));
   const ctx = new Context(); const tools = new Map(); const grants = []; const questions = [];
   ctx.provide('tools', { register(definition) { tools.set(definition.name, definition); } });
-  ctx.provide('approval', { async request(request) { grants.push(request); return 'allowed-once'; } });
+  ctx.provide('approval', { config: { policy: 'ask' }, overrideOf() {}, async request(request) { grants.push(request); return 'allowed-once'; } });
+  ctx.provide('sandboxPolicy', { resolve: () => ({ mode: 'workspace-write' }) });
   ctx.provide('userQuestions', { async ask(request) { questions.push(request); return { answers: [{ id: 'q1', selected: ['B'] }] }; } });
   try {
     await loadHarness(ctx, directory);
-    ctx.commander.providers.set('codex', { async connect() { return { nativeId: 'native', close: async () => {} }; } });
+    ctx.commander.providers.set('codex', new class {
+      static capabilities = { permissions: true };
+      async connect() { return { nativeId: 'native', async setPermission() {}, close: async () => {} }; }
+    }());
     const agent = { session: { id: 'owner' } };
     const exec = { agent, callId: 'human-test', signal: new AbortController().signal };
     const session = await tools.get('commander_create').execute({ provider: 'codex', cwd: directory }, exec);
@@ -101,6 +106,33 @@ test('native permissions and questions go to human services associated with the 
     assert.deepEqual(reply, { allow: false, answers: { q1: { answers: ['B'] } } });
     assert.equal(grants.length, 2); assert.equal(questions.length, 1);
     assert.equal(grants[1].agent, agent); assert.equal(questions[0].agent, agent);
+  } finally { await ctx.fiber.dispose(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('official Full launches native agents without a redundant never-policy approval; explicit lower settings and missing owners remain authoritative', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'commander-full-owner-'));
+  const ctx = new Context(), tools = new Map(), grants = [], connects = [], sent = [];
+  const agent = { session: { id: 'owner', header: { cwd: directory } } }, agents = new Map([['owner', agent]]);
+  let permission = { sandbox: 'danger-full-access', approval: 'never' };
+  ctx.provide('tools', { register(definition) { tools.set(definition.name, definition); } });
+  ctx.provide('agents', { get: id => agents.get(id) });
+  ctx.provide('sandboxPolicy', { resolve: () => ({ mode: permission.sandbox }) });
+  ctx.provide('approval', { config: { policy: 'ask' }, overrideOf: () => permission.approval, async request(request) { grants.push(request); return 'allowed-once'; } });
+  try {
+    await loadHarness(ctx, directory);
+    ctx.commander.providers.set('codex', new class {
+      static capabilities = { permissions: true };
+      async connect(session) { connects.push(session); return { nativeId: session.id, async setPermission() {}, async submit(text) { sent.push(text); }, async close() {} }; }
+    }());
+    const exec = { agent, signal: new AbortController().signal, callId: 'launch' };
+    const first = await tools.get('commander_create').execute({ provider: 'codex', cwd: directory }, exec);
+    assert.equal(grants.length, 0); assert.deepEqual(connects[0].permission, permission);
+    permission = { sandbox: 'workspace-write', approval: 'ask' };
+    await tools.get('commander_create').execute({ provider: 'codex', cwd: directory }, exec);
+    assert.equal(grants.length, 1); assert.deepEqual(connects[1].permission, permission);
+    agents.delete('owner');
+    await assert.rejects(ctx.commander.submit(first.id, 'must not run'), /找不到.*父会话/);
+    assert.deepEqual(sent, []);
   } finally { await ctx.fiber.dispose(); await rm(directory, { recursive: true, force: true }); }
 });
 

@@ -6,7 +6,7 @@ import { writeArtifact } from '../../plugins/benchgo/scripts/write-artifact.mjs'
 
 const directories = ['lib/preview', 'lib/link-web', 'assets/channel-brands', 'assets/fonts'];
 const runtimeDirectories = ['shared', 'lib/modules', 'src'];
-const runtimeFiles = ['lib/link.mjs'];
+const runtimeFiles = ['lib/link.mjs', 'cordis.patch.yml'];
 const files = ['lib/UI-LICENSES.txt', 'lib/LINK-THIRD-PARTY-LICENSES.txt', 'assets/icon.svg'];
 const inside = (root, path) => { const child = relative(root, path); return child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child); };
 const info = path => lstat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
@@ -78,6 +78,7 @@ export async function syncDesktopArtifacts({ root, profile = desktopProfile(), w
   for (const name of [...(runtime ? [...runtimeDirectories, ...runtimeFiles] : []), ...directories, ...files, 'locale']) await visit(name);
   // The plugin manager names the enrolled wrapper, not its implementation package.
   await visit('locale', wrapper);
+  if (runtime) await visit('cordis.patch.yml', wrapper);
   await visit('lib/client.js');
   const inspectRuntime = async name => {
     const path = join(target, name), entry = await checked(profile, path);

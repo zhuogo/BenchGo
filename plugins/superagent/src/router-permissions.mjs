@@ -6,7 +6,7 @@ const contextDescriptions = {
   context_status: 'Read estimated current context usage and window capacity when needed to decide whether to compact. The estimate adjusts the latest provider usage for tracked history changes, or uses history alone before the first usage sample. Routine checks after every step are unnecessary.',
   compact_now: 'Compact older conversation history when remaining capacity may not comfortably fit upcoming work, preferably at a safe task boundary. Compaction may call a model, take time, and lose details; avoid unnecessary or speculative calls. It may do nothing if there is not enough compactable history.',
 };
-const denied = name => Object.assign(new Error(`Router 不直接执行 ${name}；调查、文件和执行操作请自动使用 assistant_delegate 交给 Worker，不需要额外询问是否创建任务。提问选项（ask_user_question）与定时任务可直接使用。`), { code: 'ROUTER_TASK_REQUIRED' });
+const denied = name => Object.assign(new Error(`Router 不直接执行 ${name}；调查、文件和执行操作请按资源所属设备委派：本机用 assistant_delegate，远端设备或项目用 assistant_remote_task，不先建本机任务代查或中转，不需要额外询问是否创建任务。提问选项（ask_user_question）与定时任务可直接使用。`), { code: 'ROUTER_TASK_REQUIRED' });
 
 /** Capture definitions so a later same-name registration cannot inherit trust. */
 export function captureRouterTools(tools, agent) {

@@ -31,6 +31,8 @@ async function fixture(t) {
   }
   for (const file of ['lib/server/seed.zip', 'lib/modules/superagent/src/service.mjs', 'lib/link.mjs', 'src/plugin.mjs', 'cordis.patch.yml']) await put(join(target, file), 'preserve:'+file);
   await put(join(source, 'lib/link.mjs'), 'new:lib/link.mjs');
+  await put(join(source, 'cordis.patch.yml'), '- id: permission\n  config:\n    defaultPreset: danger-full-access\n');
+  await put(join(wrapper, 'cordis.patch.yml'), '# previous bundle defaults\n');
   return { root, profile, source, target, directory, wrapper, state, manifest, save, put };
 }
 
@@ -73,7 +75,8 @@ test('reload sync publishes runtime modules and shared imports while preserving 
   assert.equal(result.reloadRequested, true);
   assert.equal(await readFile(patch, 'utf8'), settings + '\n');
   for (const file of runtime) assert.equal(await readFile(join(f.target, file), 'utf8'), 'new:' + file);
-  for (const file of ['lib/server/seed.zip', 'cordis.patch.yml']) assert.equal(await readFile(join(f.target, file), 'utf8'), 'preserve:' + file);
+  assert.equal(await readFile(join(f.target, 'lib/server/seed.zip'), 'utf8'), 'preserve:lib/server/seed.zip');
+  for (const base of [f.target, f.wrapper]) assert.equal(await readFile(join(base, 'cordis.patch.yml'), 'utf8'), await readFile(join(f.source, 'cordis.patch.yml'), 'utf8'));
   assert.equal(await readFile(join(f.profile, 'package.json'), 'utf8'), before);
   assert.equal(JSON.parse(await readFile(join(f.target, 'package.json'), 'utf8')).version, '0.1.1');
 });

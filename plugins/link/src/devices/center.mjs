@@ -62,14 +62,18 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
     const id = idOf(input);
     if (input.action === 'resources') return resources.resources(input);
     if (input.action === 'callDevice') return resources.callDevice(input);
+    if (input.action === 'sessionAction') {
+      if (typeof input.deviceId !== 'string' || !input.deviceId) throw fail('请选择会话所属设备');
+      return resources.callDevice({ deviceId: input.deviceId, expectedHostId: input.expectedHostId, expectedAuthorizationId: input.expectedAuthorizationId, input: { action: 'sessionAction', id: input.id, native: input.native, operation: input.operation, requestId: input.requestId, ...(input.title === undefined ? {} : { title: input.title }) }, signal: input.signal });
+    }
     if (input.action === 'devices') return resources.devices();
     if (input.action === 'resourceScope') return { scope: registry.scope() };
     if (input.action === 'setResourceScope') return { scope: await registry.setScope(input.scope) };
     if (input.action === 'list') return { ...registry.list(), relayJob: manager?.activeRelayJob?.() ?? null, capabilities: { ssh: Boolean(manager), relayDeploy: Boolean(manager?.deployRelay) && typeof hostAdmin === 'function', hostAdmin: typeof hostAdmin === 'function' } };
-    const hostActions = { hostRelayTest: 'relay-test', hostRelayConfigure: 'relay-configure', hostRelayPoolConfigure: 'relay-pool-configure', hostStatus: 'status', hostConfigure: 'configure', hostPairing: 'pairing', hostConfirm: 'confirm', hostReject: 'reject', hostRevoke: 'revoke', hostRenameDevice: 'rename-device', hostGrantDevice: 'grant-device', hostManagementDecide: 'management-decide' };
+    const hostActions = { hostRelayTest: 'relay-test', hostRelayConfigure: 'relay-configure', hostRelayPoolConfigure: 'relay-pool-configure', hostStatus: 'status', hostConfigure: 'configure', hostPairing: 'pairing', hostConfirm: 'confirm', hostReject: 'reject', hostRevoke: 'revoke', hostRenameDevice: 'rename-device', hostManagementDecide: 'management-decide' };
     if (Object.hasOwn(hostActions, input.action)) {
       if (typeof hostAdmin !== 'function') throw fail('此客户端不支持本机连接管理，请更新应用');
-      const fields = { hostRelayTest: ['id', 'url', 'token'], hostRelayConfigure: ['url', 'token', 'enabled'], hostRelayPoolConfigure: ['nodes'], hostStatus: [], hostConfigure: ['enabled', 'host', 'port', 'publicUrl', 'name'], hostPairing: ['mode', 'address', 'collaboration', 'management'], hostConfirm: ['id'], hostReject: ['id'], hostRevoke: ['id'], hostRenameDevice: ['id', 'name'], hostGrantDevice: ['id','collaboration','management'], hostManagementDecide: ['operationId','allow'] }[input.action];
+      const fields = { hostRelayTest: ['id', 'url', 'token'], hostRelayConfigure: ['url', 'token', 'enabled'], hostRelayPoolConfigure: ['nodes'], hostStatus: [], hostConfigure: ['enabled', 'host', 'port', 'publicUrl', 'name'], hostPairing: ['mode', 'address'], hostConfirm: ['id'], hostReject: ['id'], hostRevoke: ['id'], hostRenameDevice: ['id', 'name'], hostManagementDecide: ['operationId','allow'] }[input.action];
       return hostAdmin({ action: hostActions[input.action], ...Object.fromEntries(fields.filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]])) });
     }
     if (input.action === 'pair') {
@@ -108,7 +112,14 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
           } catch (error) { published?.remove(); throw error; }
         }
         const url = await proxy.enter(); registry.markRoute(id, target.routes?.find(route => route.url === target.url && (route.pin || '') === (target.pin || ''))?.kind || 'direct'); registry.mark(id, 'online'); return { device: await registry.select(id), url, ...(input.resource ? { resource: { deviceId: id, kind: input.resource.kind, resourceId: input.resource.resourceId } } : {}) };
-      } catch (error) { markFailure(id, savedTarget, error); throw error; }
+      } catch (error) {
+        markFailure(id, savedTarget, error);
+        const failure = deviceConnectionFailure(error);
+        if (['OFFLINE', 'UNAUTHORIZED', 'IDENTITY_CHANGED'].includes(failure.code) && error.code !== 'ROUTES_COOLDOWN') {
+          throw Object.assign(new Error(failure.reason), { code: failure.code, status: error.status || 503, cause: error });
+        }
+        throw error;
+      }
     }
     if (input.action === 'rename') {
       if (id !== 'local') return { device: await registry.rename(id, input.name) };

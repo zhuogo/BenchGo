@@ -119,14 +119,17 @@ test('transient availability failures retain styles, slots and drafts without re
 
 test('the actual client entry defers base UI requests and releases its sidebar polling when base disappears', async () => {
   const ctx = new Context(), source = createModuleSource(), requests = [], styles = new Set();
-  let refresh, enabled = [], moduleReads = 0, sidebarStarts = 0, sidebarStops = 0, failure;
-  ctx.provide('slots', { inject() {} });
-  ctx.provide('workspaces', { initializeDefault: async () => ({workspaceId: 'recent'}) });
+  let refresh, enabled = [], moduleReads = 0, sidebarStarts = 0, sidebarStops = 0, failure, sidebar, initialize;
+  const firstWorkspace = new Promise(resolve => { initialize = resolve; });
+  let workspaceInitializations = 0;
+  ctx.provide('slots', { inject(name, setup) { if (name === 'sidebar.workspaces') setup(); }, register(options) { sidebar = options.inject(); return () => {}; } });
+  ctx.provide('sessions', { list: { getSnapshot: () => ({ids: []}), subscribe: () => () => {} } });
+  ctx.provide('workspaces', { initializeDefault: async () => ++workspaceInitializations === 1 ? firstWorkspace : ({workspaceId: 'recent'}) });
   const code = transformSync(readFileSync(new URL('../client/index.jsx', import.meta.url), 'utf8'), {loader: 'jsx', format: 'cjs'}).code;
   const module = {exports: {}}, noopExports = new Proxy({}, {get: () => () => {}});
   runInNewContext(code, {
     module, exports: module.exports, URL, AbortController, AbortSignal,
-    document: {baseURI: 'https://benchgo.test/', createElement: () => {const style = {remove() {styles.delete(style);}}; return style;}, head: {append: style => styles.add(style)}},
+    document: {baseURI: 'https://benchgo.test/', addEventListener() {}, removeEventListener() {}, createElement: () => {const style = {remove() {styles.delete(style);}}; return style;}, head: {append: style => styles.add(style)}},
     fetch: async (_url, options) => {const body = JSON.parse(options.body); requests.push(body.action); return Response.json({workspaceId: 'recent', projects: [], sessions: []});},
     require: id => id.endsWith('modules.mjs') ? {
       moduleSource: source,
@@ -140,13 +143,18 @@ test('the actual client entry defers base UI requests and releases its sidebar p
       : id.endsWith('perf-trace.mjs') ? {perfTrace}
       : noopExports,
   });
-  const fiber = ctx.plugin({inject: ['slots', 'workspaces'], apply: module.exports.apply});
+  const fiber = ctx.plugin({inject: ['slots', 'workspaces', 'sessions'], apply: module.exports.apply});
   try {
     await fiber;
     assert.deepEqual(requests, []); assert.equal(sidebarStarts, 0);
     await refresh();
     assert.equal(moduleReads, 1); assert.deepEqual(requests, []); assert.equal(styles.size, 0);
     enabled = ['base']; await refresh(); await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(requests, []);
+    const waitingDefault = sidebar.ensureRecent();
+    assert.equal(sidebar.ensureRecent(), waitingDefault, 'embedded deletion joins the ongoing default initialization');
+    assert.equal(workspaceInitializations, 1);
+    initialize({workspaceId: 'recent'}); await waitingDefault;
     assert.deepEqual(requests, ['ensureRecent']); assert.equal(sidebarStarts, 1); assert.equal(styles.size, 1);
     failure = Object.assign(new Error('base endpoint disappeared'), {status: 404});
     await assert.rejects(refresh(), failure);

@@ -34,7 +34,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var localView: WebView
     private lateinit var layout: android.widget.LinearLayout
     private lateinit var content: android.widget.FrameLayout
-    private lateinit var loadingView: android.widget.LinearLayout
+    private lateinit var loadingView: NativeLoadingView
     private val workbenches = ConcurrentHashMap<String, WebView>()
     private lateinit var bridge: LinkBridge
     private var pendingBootstrap: String? = null
@@ -79,16 +79,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(devicesButton, android.widget.LinearLayout.LayoutParams(-1, (44 * density).toInt()))
         content = android.widget.FrameLayout(this)
         content.addView(webView, android.widget.FrameLayout.LayoutParams(-1, -1))
-        loadingView = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER
-            setBackgroundColor(android.graphics.Color.rgb(248, 249, 250)); visibility = android.view.View.GONE
-            isClickable = true
-            addView(android.widget.ProgressBar(this@MainActivity), android.widget.LinearLayout.LayoutParams((32 * density).toInt(), (32 * density).toInt()))
-            addView(android.widget.TextView(this@MainActivity).apply {
-                text = "正在连接设备…"; textSize = 14f; setTextColor(android.graphics.Color.rgb(92, 97, 104))
-                setPadding(0, (16 * density).toInt(), 0, 0)
-            })
-        }
+        loadingView = NativeLoadingView(this)
         content.addView(loadingView, android.widget.FrameLayout.LayoutParams(-1, -1))
         layout.addView(content, android.widget.LinearLayout.LayoutParams(-1, 0, 1f))
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(layout) { view, insets ->
@@ -101,7 +92,7 @@ class MainActivity : AppCompatActivity() {
         }
         setContentView(layout)
         androidx.core.view.ViewCompat.requestApplyInsets(layout)
-        appearance = NativeAppearance(this, layout, devicesButton) { webView }
+        appearance = NativeAppearance(this, layout, devicesButton, loadingView) { webView }
         deviceNavigation = NativeDeviceNavigation(devicesButton, { webView }, ::returnToDevices)
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
@@ -133,9 +124,11 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (::appearance.isInitialized) appearance.resume()
+        if (::loadingView.isInitialized) loadingView.setResumed(true)
     }
 
     override fun onPause() {
+        if (::loadingView.isInitialized) loadingView.setResumed(false)
         if (::appearance.isInitialized) appearance.pause()
         super.onPause()
     }
@@ -143,6 +136,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         microphoneRequest?.deny(); uploadCallback?.onReceiveValue(null)
         bridge.close()
+        loadingView.close()
         appearance.close()
         deviceNavigation.close()
         localView.removeJavascriptInterface("LinkNative")
@@ -219,7 +213,7 @@ class MainActivity : AppCompatActivity() {
         deviceNavigation.show(view, deviceName)
     }
     fun canOpenDevice(id: String): Boolean = workbenches.containsKey(id) || workbenches.size < 4
-    fun workbenchLoading(loading: Boolean) { runOnUiThread { loadingView.visibility = if (loading) android.view.View.VISIBLE else android.view.View.GONE } }
+    fun workbenchLoading(loading: Boolean) { runOnUiThread { loadingView.setLoading(loading) } }
     fun forgetDevice(id: String) {
         runOnUiThread { workbenches.remove(id)?.let { view -> if (view === webView) returnToDevices(); appearance.detach(view); deviceNavigation.detach(view); view.destroy() } }
     }

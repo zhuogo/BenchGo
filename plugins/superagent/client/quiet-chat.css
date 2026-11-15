@@ -54,7 +54,8 @@
 /* A fixed side column reserves horizontal space; hover never changes layout. */
 .ba-message-actions{display:contents}
 .ba-message-toolbar{grid-column:var(--ba-tools-column);grid-row:1;align-self:center;position:relative;z-index:6;display:flex;align-items:center;gap:2px;box-sizing:border-box;width:max-content;padding:2px 4px;border:1px solid var(--dsw-alias-border-l3,#ddd);border-radius:999px;background:var(--dsw-alias-button-floating-fill,#fff);color:var(--dsw-alias-label-secondary,#666);box-shadow:0 3px 10px #0001;opacity:0;pointer-events:none;transition:opacity .15s ease}
-.ba-chat-message:hover .ba-message-toolbar,.ba-chat-message:focus-within .ba-message-toolbar,.ba-message-actions[data-open=true] .ba-message-toolbar{opacity:1;pointer-events:auto}
+.ba-chat-message:focus-within .ba-message-toolbar,.ba-message-actions[data-open=true] .ba-message-toolbar{opacity:1;pointer-events:auto}
+@media(hover:hover) and (pointer:fine){.ba-chat-message:hover .ba-message-toolbar{opacity:1;pointer-events:auto}}
 /* Keep the settled action geometry throughout streaming; hidden controls cannot receive focus. */
 .ba-chat-message[data-streaming=true] .ba-message-actions{visibility:hidden}
 .ba-chat-message[data-streaming=true] .ba-message-toolbar{opacity:0;pointer-events:none}
@@ -89,6 +90,25 @@
 @keyframes ba-reaction-in{from{transform:scale(.8)}to{transform:scale(1)}}
 @keyframes ba-chat-reveal{from{opacity:.3}to{opacity:1}}
 @container ba-chat (max-width:700px){.ba-quiet-chat{padding-left:16px;padding-right:16px}.ba-chat-message,.ba-chat-message[data-role=user]{--ba-body-column:1;--ba-tools-column:1;grid-template-columns:minmax(0,1fr);column-gap:0}.ba-message-toolbar{grid-row:3;justify-self:start;margin-top:6px}.ba-chat-message[data-role=user] .ba-message-toolbar{justify-self:end}.ba-action-error{grid-row:4}.ba-message-time-label{display:none}.ba-message-toolbar .ba-message-time-icon{display:block}.ba-message-toolbar time{width:32px;padding:0;margin-left:2px}}
-@media(hover:none),(pointer:coarse){.ba-message-toolbar{opacity:1;pointer-events:auto}.ba-message-toolbar button,.ba-message-toolbar time,.ba-action-popover button,.ba-reaction-chip,.ba-chat-bottom-button{min-width:44px;min-height:44px}}
+/* Touch actions float outside the feed; opening never resizes or reflows a bubble. */
+.ba-message-mobile-menu .ba-message-toolbar{display:flex;position:relative;grid-area:auto;justify-self:auto;margin:0;opacity:1;pointer-events:auto;max-width:calc(100vw - 24px)}
+.ba-message-mobile-menu [data-action-panel]{opacity:1;transform:scale(1);transform-origin:top left;transition:opacity 160ms var(--ease-out,cubic-bezier(.23,1,.32,1)),transform 160ms var(--ease-out,cubic-bezier(.23,1,.32,1))}
+.ba-message-mobile-menu[data-anchor-side=top] [data-action-panel]{transform-origin:bottom left}
+.ba-message-mobile-menu[data-anchor-align=end] [data-action-panel]{transform-origin:top right}
+.ba-message-mobile-menu[data-anchor-side=top][data-anchor-align=end] [data-action-panel]{transform-origin:bottom right}
+.ba-message-mobile-menu [data-action-panel][data-closing=true]{opacity:0;transform:scale(.97);transition-duration:120ms;pointer-events:none}
+.ba-message-mobile-menu [data-action-panel][data-instant=true]{transition:none}
+@starting-style{.ba-message-mobile-menu [data-action-panel]:not([data-instant=true]){opacity:0;transform:scale(.97)}}
+@media(hover:none),(pointer:coarse){
+  .ba-chat-message,.ba-chat-message[data-role=user]{--ba-body-column:1;--ba-tools-column:1;grid-template-columns:minmax(0,1fr);column-gap:0}
+  .ba-message-actions>.ba-message-toolbar{display:none}
+  .ba-chat-message[data-touch-actions=true]:not([data-text-selection=true]) .ba-chat-body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  .ba-chat-message[data-touch-actions=true] .ba-chat-body :is(pre,code,a,input,textarea,[contenteditable=true]){-webkit-user-select:text;user-select:text;-webkit-touch-callout:default}
+  .ba-chat-message[data-text-selection=true] .ba-chat-content{-webkit-user-select:text;user-select:text;-webkit-touch-callout:default}
+  .ba-message-toolbar button,.ba-message-toolbar time,.ba-action-popover button,.ba-reaction-chip,.ba-chat-bottom-button{min-width:44px;min-height:44px}
+  .ba-message-mobile-menu .ba-message-time-label{display:none}.ba-message-mobile-menu .ba-message-time-icon{display:block}.ba-message-mobile-menu time{width:44px;padding:0;margin-left:2px}
+  .ba-action-popover button:hover span{transform:none}
+}
+@media(prefers-reduced-motion:reduce){.ba-message-mobile-menu [data-action-panel]{transform:none;transition-property:opacity;transition-duration:100ms}.ba-message-mobile-menu [data-action-panel][data-instant=true]{transition:none}@starting-style{.ba-message-mobile-menu [data-action-panel]:not([data-instant=true]){transform:none}}}
 @media(prefers-reduced-motion:reduce){.ba-reaction-chip,.ba-chat-content[data-stream-revealing=true]>[class*="_markdown"]>*{animation:none}.ba-message-toolbar,.ba-message-toolbar button,.ba-action-popover button,.ba-action-popover button span,.ba-chat-bottom,.ba-chat-bottom-button{transition:none;transform:none}.ba-action-popover button:hover span,.ba-chat-bottom-button:active{transform:none}}
 

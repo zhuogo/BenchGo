@@ -154,8 +154,10 @@ test('connection requests overlay the QR dialog and keep keyboard focus in the a
 
 test('approval uses existing confirm and reject actions and prevents closing while busy', () => {
   const view = fixture(), calls = []; let closed = 0;
-  const props = { pairing: { mode: 'lan', code: 'CODE', uri: 'dshlink://pair' }, pending: [{ id: 'phone', name: '我的手机' }], onClose() { closed++; }, onConfirm: (id, action) => calls.push({ id, action }), busy: '' };
+  const props = { pairing: { mode: 'lan', code: 'CODE', uri: 'dshlink://pair' }, pending: [{ id: 'phone', name: '我的手机', capabilities: ['collaboration', 'management'] }], onClose() { closed++; }, onConfirm: (id, action) => calls.push({ id, action }), busy: '' };
   const tree = view.render(view.exports.PairingDialog, props);
+  assert.match(textOf(tree), /连接工作台 · 任务协作 · 连接与中继管理（修改需确认）/);
+  assert.deepEqual(calls, [], 'displaying the default scope still requires approval');
   view.find(tree, '允许').props.onClick(); view.find(tree, '拒绝').props.onClick();
   assert.deepEqual(calls, [{ id: 'phone', action: 'confirm' }, { id: 'phone', action: 'reject' }]);
   view.effects[0]();
@@ -367,20 +369,23 @@ test('relay pairing is automatic and falls back to LAN when the relay disconnect
   assert.equal(view.calls.at(-1).input.mode, 'lan');
 });
 
-test('pairing grants are opt-in and checked choices are sent explicitly', async()=>{
+test('pairing uses shared default grants without separate permission controls', async()=>{
  const view=fixture({origin:'http://localhost:3000'});view.render();const stop=view.effects[1]();await new Promise(setImmediate);
+ assert.equal(nodes(view.render()).some(node=>node.type==='input'&&node.props.type==='checkbox'),false);
+ assert.equal(nodes(view.render()).some(node=>node.props.title==='协作权限'),false);
  await view.find(view.render(),'生成连接信息').props.onClick();assert.deepEqual(JSON.parse(JSON.stringify(view.calls.at(-1))),{action:'pairing',input:{mode:'lan'}});
  const pair=nodes(view.render()).find(node=>node.type===view.exports.PairingDialog);pair.props.onClose();
- let tree=view.render();const grant=label=>nodes(tree).find(node=>node.type==='label'&&textOf(node)===label).children.find(node=>node.type==='input');
- grant('允许委派和跟进本机任务').props.onChange({target:{checked:true}});tree=view.render();grant('允许查询连接及申请修改中继').props.onChange({target:{checked:true}});
- await view.find(view.render(),'生成连接信息').props.onClick();assert.deepEqual(JSON.parse(JSON.stringify(view.calls.at(-1).input)),{mode:'lan',collaboration:true,management:true});stop();
+ await view.find(view.render(),'生成连接信息').props.onClick();assert.deepEqual(JSON.parse(JSON.stringify(view.calls.at(-1).input)),{mode:'lan'});stop();
 });
-test('failed single-field grant keeps authoritative capabilities and other fields unchanged',async()=>{
- let fail=true;const view=fixture({respond:async(action,input,status)=>{if(action==='grant-device'){if(fail)throw Error('授权保存失败');status.devices[0].capabilities=['management','collaboration'];}return {...status};}});
- view.status.devices=[{id:'legacy',name:'旧设备',capabilities:['management']}];view.render();const stop=view.effects[1]();await new Promise(setImmediate);
- const box=label=>nodes(view.render()).find(node=>node.type==='input'&&node.props['aria-label']===label);
- await box('旧设备：任务协作').props.onChange({target:{checked:true}});assert.equal(box('旧设备：任务协作').props.checked,false);assert.equal(box('旧设备：连接与中继管理').props.checked,true);assert.match(textOf(view.render()),/授权保存失败/);assert.deepEqual(JSON.parse(JSON.stringify(view.calls.at(-1))),{action:'grant-device',input:{id:'legacy',collaboration:true}});
- fail=false;await box('旧设备：任务协作').props.onChange({target:{checked:true}});assert.equal(box('旧设备：任务协作').props.checked,true);assert.equal(box('旧设备：连接与中继管理').props.checked,true);stop();
+test('authorized devices retain names and revoke actions without switches or implicit grant writes',async()=>{
+ const view=fixture();
+ view.status.devices=[{id:'legacy',name:'旧手机',deviceType:'mobile',capabilities:[]},{id:'limited',name:'受限电脑',capabilities:['management']}];view.render();const stop=view.effects[1]();await new Promise(setImmediate);
+ const tree=view.render();assert.match(textOf(tree),/已授权访问此设备.*旧手机.*受限电脑/);
+ assert.equal(nodes(tree).filter(node=>node.props['aria-label']==='编辑设备备注').length,2);
+ assert.equal(nodes(tree).filter(node=>node.type===view.exports.Button&&textOf(node)==='撤销').length,2);
+ assert.equal(nodes(tree).some(node=>node.type==='input'&&node.props.type==='checkbox'),false);
+ assert.equal(view.calls.some(call=>call.action==='grant-device'),false);
+ assert.deepEqual(view.status.devices[0].capabilities,[]);assert.deepEqual(view.status.devices[1].capabilities,['management']);stop();
 });
 test('specific relay approval refreshes status after operation receipt without replacing device catalog',async()=>{
  const view=fixture({respond:async(action,input,status)=>{if(action==='management-decide'){status.pendingManagement=[];return {id:input.operationId,state:'applied'};}return {...status};}});

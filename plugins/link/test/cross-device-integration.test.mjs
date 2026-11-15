@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mountLink } from '../src/index.mjs';
+import { mountWeb } from '../../benchgo/src/web.mjs';
 
 async function host(t, name, projects, assistant, stored = {}) {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-cross-device-')), directory = join(root, 'link');
@@ -36,16 +37,107 @@ async function host(t, name, projects, assistant, stored = {}) {
   return { link, ctx, directory, routes, deviceApi };
 }
 
-async function pair(source, target, grants = {}) {
-  const invitation = await target.link.admin({ action: 'pairing', mode: 'lan', ...grants });
+async function pair(source, target) {
+  const invitation = await target.link.admin({ action: 'pairing', mode: 'lan' });
   const pending = await source.deviceApi({ action: 'pair', uri: invitation.uri });
   const requests = target.link.status().pending;
   assert.equal(requests.length, 1);
   await target.link.admin({ action: 'confirm', id: requests[0].id });
   const result = await source.deviceApi({ action: 'pairStatus', requestId: pending.requestId });
   assert.equal(result.status, 'approved');
+  const saved = JSON.parse(await readFile(join(source.directory, 'outgoing', 'connections.json'), 'utf8')).devices.find(row => row.id === result.device.id);
+  assert.equal(saved.routes.some(route => route.kind === 'direct' && ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(route.url).hostname)), false, 'remote route advertisements must not include the host loopback');
+  assert.equal(new URL(saved.url).hostname, '127.0.0.1', 'explicit local pairing endpoint remains usable independently of advertised routes');
   return result.device;
 }
+
+async function sessionHost(t, name) {
+  const project = { id: 'same-project', title: `${name} project`, path: `/${name}/work`, sessionIds: ['same-session'] };
+  const hidden = new Set(), hostValue = await host(t, name, [project], { sidebarPrivateSessionIds: async () => [...hidden] });
+  const calls = [], rows = [{ sessionId: 'same-session', updatedAt: 10, projections: { values: { title: `${name} session` } } }];
+  const nativeRows = new Map([['same-native', { id: 'same-native', projectId: project.id, cwd: project.path, ownerSessionId: 'commander-web:owner', provider: 'codex', status: 'idle' }]]);
+  const commander = {
+    list: () => [...nativeRows.values()],
+    async archive(id, archived) { calls.push(['native', archived ? 'archive' : 'unarchive', id]); nativeRows.get(id).archived = archived; },
+    async remove(id) { calls.push(['native', 'delete', id]); nativeRows.delete(id); },
+  };
+  const services = { commander, benchgo: { directory: join(hostValue.directory, '..') }, sessionTitle: {}, sessionController: { rename() {} }, workspaceController: Object.fromEntries(['pinSession', 'unpinSession', 'archiveSession', 'unarchiveSession'].map(method => [method, () => {}])) };
+  const get = hostValue.ctx.get;
+  hostValue.ctx.get = name => services[name] ?? get(name);
+  hostValue.ctx.connection.createPeer = () => ({ dispose() {} });
+  hostValue.ctx.connection.createSharedFetchHandler = () => ({ fetch: request => hostValue.routes.find(route => route.path === new URL(request.url).pathname).fetch(request) });
+  hostValue.ctx.typertGateway = {
+    async invoke({ namespace, method, args }) {
+      if (method === 'list') return { items: rows };
+      calls.push([namespace, method, args.request]);
+      if (method === 'rename') { rows[0].projections.values.title = args.request.title; return { title: args.request.title }; }
+      const key = ['pinSession', 'unpinSession'].includes(method) ? 'pinnedSessionIds' : 'archivedSessionIds';
+      const ids = hostValue.ctx.workspaceRegistry[key] ?? [];
+      hostValue.ctx.workspaceRegistry[key] = ['pinSession', 'archiveSession'].includes(method) ? [...new Set([...ids, args.request.sessionId])] : ids.filter(id => id !== args.request.sessionId);
+      return {};
+    },
+    wireStream: { open: async (_endpoint, _payload, _uplink, _peer, signal) => (async function* () {
+      yield { type: 'ready', clientId: 'client' };
+      await new Promise(resolve => { if (signal.aborted) resolve(); else signal.addEventListener('abort', resolve, { once: true }); });
+    })() },
+  };
+  await mountWeb(hostValue.ctx, { directory: services.benchgo.directory, mountFonts: async () => {} });
+  const ownerApi = async input => {
+    const route = hostValue.routes.find(route => route.path === '/api/commander-devices');
+    const response = await route.fetch(new Request('http://127.0.0.1' + route.path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }));
+    return { status: response.status, value: await response.json() };
+  };
+  return { ...hostValue, calls, rows, hidden, nativeRows, ownerApi };
+}
+
+test('owner session actions cross real TLS to only the resource device with durable intent and live authorization', async t => {
+  const a = await sessionHost(t, 'A'), b = await sessionHost(t, 'B');
+  const device = await pair(a, b);
+  let displayedDevice = (await a.link.devices()).devices.find(row => row.id === device.id);
+  const issuedAt = Date.now(), call = input => a.ownerApi({ action: 'sessionAction', deviceId: device.id, expectedHostId: displayedDevice.hostId ?? null, expectedAuthorizationId: displayedDevice.authorizationId ?? null, native: false, id: 'same-session', ...input, requestId: `sa:${issuedAt}:${input.requestId}` });
+  const capabilities = (await a.link.resources({ deviceId: device.id, kind: 'capabilities' })).devices[0].items;
+  assert.deepEqual(capabilities.find(row => row.id === 'sessionActions').operations, ['pin', 'unpin', 'archive', 'unarchive', 'rename', 'delete']);
+  assert.deepEqual(capabilities.find(row => row.id === 'nativeSessionActions').operations, ['archive', 'unarchive', 'delete']);
+  assert.equal(capabilities.find(row => row.id === 'management').available, true, 'pairing approval uniformly grants supported BenchGo management');
+  const pin = { operation: 'pin', requestId: 'same-pin' };
+  assert.equal((await call(pin)).status, 200); assert.equal((await call(pin)).status, 200);
+  assert.deepEqual(b.ctx.workspaceRegistry.pinnedSessionIds, ['same-session']); assert.equal(b.calls.length, 1); assert.deepEqual(a.calls, []);
+  assert.equal((await call({ ...pin, operation: 'unpin' })).status, 409);
+  for (const operation of ['pin', 'unpin', 'archive', 'unarchive']) assert.equal((await call({ operation, requestId: operation + '-next' })).status, 200);
+  assert.deepEqual(b.ctx.workspaceRegistry.pinnedSessionIds, []); assert.deepEqual(b.ctx.workspaceRegistry.archivedSessionIds, []);
+  const rename = { operation: 'rename', requestId: 'rename-once', title: 'B 新名称', method: 'arbitraryRPC', principal: { kind: 'owner' } };
+  assert.equal((await call(rename)).value.title, 'B 新名称'); assert.equal((await call(rename)).status, 200);
+  assert.equal(b.rows[0].projections.values.title, 'B 新名称'); assert.equal(a.rows[0].projections.values.title, 'A session');
+  assert.equal(b.calls.filter(row => row[1] === 'rename').length, 1);
+  let count = b.calls.length;
+  b.hidden.add('same-session'); assert.equal((await call(rename)).status, 404); b.hidden.clear();
+  for (const input of [{ operation: 'fork' }, { operation: 'arbitraryRPC' }, { id: 'native:same-native', native: true, operation: 'rename', title: 'No' }]) {
+    const response = await call({ requestId: 'unsupported-' + input.operation + (input.id ?? ''), ...input });
+    assert.equal(response.status, 422); assert.equal(response.value.code, 'UNSUPPORTED');
+  }
+  assert.equal(b.calls.length, count);
+  assert.equal((await a.ownerApi({ action: 'sessionAction', id: 'same-session', operation: 'pin', requestId: 'missing-device' })).status, 400);
+  assert.equal((await a.ownerApi({ action: 'sessionAction', deviceId: device.id, id: 'same-session', native: false, operation: 'pin', requestId: `sa:${issuedAt}:missing-identity` })).status, 400);
+  assert.equal((await call({ id: 'native:same-native', native: true, operation: 'archive', requestId: 'archive-native' })).status, 200);
+  const archived = (await a.link.resources({ deviceId: device.id, kind: 'sessions', archived: true })).devices[0].items;
+  assert.deepEqual(archived.map(row => row.id), ['native:same-native']);
+  const deleted = { operation: 'delete', requestId: 'delete-once' };
+  assert.equal((await call(deleted)).value.deleted, true); assert.equal((await call(deleted)).status, 200);
+  assert.equal(b.rows.length, 1, 'official history is retained');
+  assert.deepEqual(JSON.parse(await readFile(join(b.directory, '..', 'dismissed-harness.json'), 'utf8')), ['same-session']);
+  for (const archived of [false, true]) assert.equal((await a.link.resources({ deviceId: device.id, kind: 'sessions', archived })).devices[0].items.some(row => row.id === 'same-session'), false);
+  count = b.calls.length;
+  const pairedAgain = await pair(a, b);
+  assert.equal(pairedAgain.id, device.id, 're-pairing retains the directory identity while replacing its authorization');
+  assert.equal((await call({ id: 'native:same-native', native: true, operation: 'unarchive', requestId: 'stale-ui-grant' })).status, 409);
+  assert.equal(b.calls.length, count);
+  displayedDevice = (await a.link.devices()).devices.find(row => row.id === device.id);
+  assert.equal((await call({ id: 'native:same-native', native: true, operation: 'unarchive', requestId: 'refreshed-ui-grant' })).status, 200);
+  count = b.calls.length;
+  await b.link.admin({ action: 'revoke', id: displayedDevice.authorizationId });
+  const revoked = await call({ id: 'native:same-native', native: true, operation: 'unarchive', requestId: 'after-revoke' });
+  assert.equal(revoked.status, 401); assert.match(revoked.value.error, /授权|配对|Unauthorized/i); assert.equal(b.calls.length, count); assert.deepEqual(a.calls, []);
+});
 
 test('project summaries mark only the durable default workspace for Recent across devices', async t => {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-default-resource-')), directory = join(root, 'link');
@@ -72,6 +164,8 @@ test('two actual Link hosts discover their own resources over TLS and preserve d
   ]);
   const bOnA = await pair(a, b);
   const aOnB = await pair(b, a);
+  assert.deepEqual(a.link.status().devices[0].capabilities, ['collaboration', 'management']);
+  assert.deepEqual(b.link.status().devices[0].capabilities, ['collaboration', 'management']);
   const aggregate = await a.link.resources({ deviceIds: ['local', bOnA.id], kind: 'projects', limit: 1 });
   assert.equal(aggregate.partial, false);
   assert.equal(aggregate.devices[0].items[0].name, 'A project');
@@ -111,7 +205,7 @@ test('session resources share one project snapshot and remain readable over TLS 
     invoke: async call => {
       calls.push(call.method);
       if (call.method === 'list') return { items: [
-        { sessionId: 'first', updatedAt: 10 },
+        { sessionId: 'first', updatedAt: 10, projections: { values: { modelSelection: { next: { provider: 'Opaque/LLM', model: 'Model@1' } } } } },
         { sessionId: 'second', updatedAt: 20 },
         { sessionId: 'private', updatedAt: 100 },
         { sessionId: 'child', parentSessionId: 'first', updatedAt: 100 },
@@ -129,7 +223,7 @@ test('session resources share one project snapshot and remain readable over TLS 
   };
   const device = await pair(a, b);
   for (const [kind, expected] of [
-    ['sessions', ['first', 'second', 'native:native-default', 'native:native-other']],
+    ['sessions', ['native:native-other', 'native:native-default', 'second', 'first']],
     ['recent', ['native:native-default', 'first']],
   ]) {
     calls.length = 0; projectReads = 0;
@@ -139,6 +233,16 @@ test('session resources share one project snapshot and remain readable over TLS 
     assert.equal(projectReads, 1, `${kind} shares its project snapshot with native sessions`);
     assert.deepEqual(calls, ['list']);
   }
+  b.ctx.workspaceRegistry.archivedSessionIds = ['first'];
+  b.ctx.workspaceRegistry.pinnedSessionIds = ['second'];
+  const firstPage = (await a.link.resources({ deviceId: device.id, kind: 'sessions', archived: false, limit: 2 })).devices[0];
+  const secondPage = (await a.link.resources({ deviceId: device.id, kind: 'sessions', archived: false, limit: 2, offset: 2 })).devices[0];
+  assert.deepEqual(firstPage.items.map(row => row.id), ['second', 'native:native-other']);
+  assert.deepEqual(secondPage.items.map(row => row.id), ['native:native-default']);
+  assert.equal(firstPage.items[0].pinned, true); assert.equal(firstPage.total, 3); assert.equal(firstPage.hasMore, true); assert.equal(secondPage.hasMore, false);
+  const archive = (await a.link.resources({ deviceId: device.id, kind: 'sessions', archived: true, limit: 1 })).devices[0];
+  assert.deepEqual(archive.items.map(row => row.id), ['first']); assert.equal(archive.total, 1); assert.equal(archive.hasMore, false);
+  assert.equal(archive.items[0].provider, 'deepseek'); assert.equal(archive.items[0].modelProvider, 'Opaque/LLM'); assert.equal(archive.items[0].model, 'Model@1');
   await assert.rejects(a.link.callDevice({ deviceId: device.id, input: { action: 'state' } }), /Catalog unavailable/);
   catalogAvailable = true;
   calls.length = 0; projectReads = 0;
@@ -168,24 +272,24 @@ test('revocation removes cached remote resources without clearing healthy local 
   assert.equal(result.devices[1].freshness, 'unknown');
 });
 
-test('collaboration uses an explicit device grant and the TLS-bound principal, not JSON identity', async t => {
+test('approved pairing enables collaboration and management with the TLS-bound principal, not JSON identity', async t => {
   const calls = [];
   const b = await host(t, 'B', [], { async collaboration(input, access) { calls.push({ input, access }); return { accepted: true, requestId: input.requestId }; } });
   const a = await host(t, 'A', []);
   const device = await pair(a, b);
   const input = { action: 'collaboration', operation: 'delegate', requestId: 'stable-request', text: 'Read the project', principal: { kind: 'owner' } };
-  await assert.rejects(a.link.callDevice({ deviceId: device.id, input }), error => error.statusCode === 403 || error.status === 403);
-  assert.equal(calls.length, 0);
   const inboundId = b.link.status().devices[0].id;
-  await b.link.admin({ action: 'grant-device', id: inboundId, collaboration: true });
   const reply = await a.link.callDevice({ deviceId: device.id, input });
   assert.equal(reply.accepted, true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].input.principal, undefined);
   assert.equal(calls[0].access.principal.kind, 'device');
   assert.equal(calls[0].access.principal.deviceId, inboundId);
-  assert.deepEqual(calls[0].access.principal.capabilities, ['collaboration']);
-  await assert.rejects(a.link.callDevice({ deviceId: device.id, input: { action: 'management', operation: 'status' } }), error => error.statusCode === 403 || error.status === 403);
+  assert.deepEqual(calls[0].access.principal.capabilities, ['collaboration','management']);
+  assert.equal((await a.link.callDevice({ deviceId: device.id, input: { action: 'management', operation: 'status' } })).enabled,true);
+  await b.link.admin({action:'revoke',id:inboundId});
+  await assert.rejects(a.link.callDevice({ deviceId: device.id, input }),error=>error.statusCode===401);
+  assert.equal(calls.length,1,'revoked pairing cannot invoke collaboration again');
 });
 
 test('remote relay changes require one exact local decision and preserve unrelated configuration', async t => {
@@ -194,7 +298,7 @@ test('remote relay changes require one exact local decision and preserve unrelat
     { id: 'first', url: 'https://relay-one.example', token: 'test-first-secret', priority: 0, enabled: false },
     { id: 'second', url: 'https://relay-two.example', token: 'test-second-secret', priority: 1, enabled: false },
   ] });
-  const device = await pair(a, b, { management: true });
+  const device = await pair(a, b);
   const call = input => a.link.callDevice({ deviceId: device.id, input: { action: 'management', ...input } });
   const snapshot = await call({ operation: 'settings-read', namespace: 'benchgo-link-relay' });
   assert.ok(!JSON.stringify(snapshot).includes('test-first-secret'));
@@ -217,7 +321,7 @@ test('remote relay changes require one exact local decision and preserve unrelat
 test('remote management rejects changed intent, owner refusal, stale CAS and revoked grants without applying', async t => {
   const a = await host(t, 'A', []), b = await host(t, 'B', []);
   await b.link.admin({ action: 'relay-pool-configure', nodes: [{ id: 'only', url: 'https://relay.example', token: 'private-relay-secret', priority: 0, enabled: false }] });
-  const device = await pair(a, b, { management: true });
+  const device = await pair(a, b);
   const call = input => a.link.callDevice({ deviceId: device.id, input: { action: 'management', ...input } });
   const prepare = async (requestId, value = 4) => {
     const snapshot = await call({ operation: 'settings-read', namespace: 'benchgo-link-relay' });
@@ -238,9 +342,9 @@ test('remote management rejects changed intent, owner refusal, stale CAS and rev
   assert.equal(failed.state, 'failed'); assert.equal(failed.error.code, 'REVISION_CONFLICT');
   assert.equal(b.link.status().relay.nodes[0].priority, 2);
   const revoked = await call(await prepare('revoked'));
-  await b.link.admin({ action: 'grant-device', id: b.link.status().devices[0].id, management: false });
+  await b.link.admin({ action: 'revoke', id: b.link.status().devices[0].id });
   assert.equal((await b.deviceApi({ action: 'hostManagementDecide', operationId: revoked.id, allow: true })).state, 'revoked');
-  await assert.rejects(call({ operation: 'operation', operationId: revoked.id }), { code: 'UNAUTHORIZED' });
+  await assert.rejects(call({ operation: 'operation', operationId: revoked.id }), error=>error.statusCode===401);
   await assert.rejects(a.link.callDevice({ deviceId: device.id, input: { action: 'admin', operation: 'relay-pool-configure' } }), { code: 'UNSUPPORTED' });
   assert.equal(b.link.status().relay.nodes[0].priority, 2);
 });
@@ -249,7 +353,7 @@ test('completed management receipts do not permanently exhaust the bounded opera
   const completed = Array.from({ length: 128 }, (_, i) => ({ id: `old-${i}`, requestId: `old-request-${i}`, deviceId: 'retired-device', state: 'applied', createdAt: i, expiresAt: Date.now() + 60000 }));
   const a = await host(t, 'A', []), b = await host(t, 'B', [], undefined, { managementOperations: completed });
   await b.link.admin({ action: 'relay-pool-configure', nodes: [{ id: 'only', url: 'https://relay.example', token: 'private-relay-secret', priority: 0, enabled: false }] });
-  const device = await pair(a, b, { management: true });
+  const device = await pair(a, b);
   const call = input => a.link.callDevice({ deviceId: device.id, input: { action: 'management', ...input } });
   const snapshot = await call({ operation: 'settings-read', namespace: 'benchgo-link-relay' });
   const request = { operation: 'settings-prepare', requestId: 'next-change', namespace: 'benchgo-link-relay', expected: { fingerprint: snapshot.fingerprint }, ops: [{ op: 'set', path: ['nodes', '0', 'priority'], value: 3 }] };

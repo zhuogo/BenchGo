@@ -6,7 +6,7 @@ import os from 'node:os';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { mountLink } from '../src/index.mjs';
-import { createServer as createHttpsServer } from 'node:https';
+import { createSecureServer as createHttp2Server } from 'node:http2';
 import { once } from 'node:events';
 import { loadIdentity } from '../src/transport/tls.mjs';
 
@@ -237,18 +237,20 @@ test('relay test reuses saved secrets without changing configuration', async t =
   const directory = await temporaryProfile('link-relay-test-');
   const identity = await loadIdentity(directory), token = 'private-saved-relay-secret';
   let validProtocol = true;
-  const server = createHttpsServer({ key: identity.key, cert: identity.cert }, (req, res) => {
+  const sockets = new Set();
+  const server = createHttp2Server({ key: identity.key, cert: identity.cert, allowHTTP1: true }, (req, res) => {
     assert.equal(req.url, '/__link/relay/probe'); assert.equal(req.headers.authorization, 'Bearer ' + token);
     res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(validProtocol ? { protocol: 'benchgo-link-relay', version: 1, authenticated: true } : { ok: true }));
   });
+  server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const ctx = { get: () => undefined, workspaceRegistry: { list: () => [] }, connection: { fetch: { register: () => () => {} } }, effect: fn => fn() };
   const link = await mountLink(ctx, { directory, env: {}, relayTestOptions: { ca: identity.cert } });
-  t.after(async () => { await link.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { await link.close(); for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); });
   await link.admin({ action: 'relay-pool-configure', nodes: [{ id: 'saved', url: `https://localhost:${server.address().port}`, token, enabled: false }] });
   const before = await readFile(join(directory, 'devices.json'), 'utf8');
   const tested = await link.admin({ action: 'relay-test', id: 'saved', token: '' });
-  assert.equal(tested.ok, true); assert.equal(JSON.stringify(tested).includes(token), false);
+  assert.equal(tested.ok, true); assert.match(tested.message, /HTTP\/2/); assert.equal(JSON.stringify(tested).includes(token), false);
   validProtocol = false;
   const ordinaryHttp = await link.admin({ action: 'relay-test', id: 'saved', token: '' });
   assert.equal(ordinaryHttp.ok, false); assert.match(ordinaryHttp.message, /协议/);

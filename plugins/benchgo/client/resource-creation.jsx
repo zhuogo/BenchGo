@@ -7,11 +7,32 @@ import { deviceIcon, deviceStatus } from '../../link/client/device-state.mjs';
 import { ProjectDialog, ProjectPicker } from './project-picker.jsx';
 import { UIIcon } from './iconsax.jsx';
 
-function RemoteProjectPicker({ device, ...props }) {
+function useProjectBridge(device) {
   const frame = useRef(null), [url, setUrl] = useState('');
-  const bridge = useMemo(() => createProjectBridge({ deviceId: device.id, onEntry: setUrl, getFrame: () => frame.current }), [device.id]);
+  const identity = JSON.stringify([device.id, device.hostId, device.authorizationId]);
+  const bridge = useMemo(() => createProjectBridge({ deviceId: device.id, expectedDevice: device, onEntry: setUrl, getFrame: () => frame.current }), [identity]);
   useEffect(() => () => bridge.dispose(), [bridge]);
+  return { frame, url, bridge };
+}
+function RemoteProjectPicker({ device, ...props }) {
+  const { frame, url, bridge } = useProjectBridge(device);
   return <><ProjectPicker {...props} api={bridge.api} allowDesktop={false} />{url && <iframe hidden ref={frame} src={url} title={device.name + '的项目连接'} onLoad={() => bridge.probe()} referrerPolicy="no-referrer" />}</>;
+}
+
+/** The existing confirmation dialog owns consent; this frame discovers and runs target APIs. */
+export function RemoteProjectConnection({ device, onReady, onError }) {
+  const { frame, url, bridge } = useProjectBridge(device);
+  const callbacks = useRef({ onReady, onError }); callbacks.current = { onReady, onError };
+  useEffect(() => {
+    let current = true;
+    void bridge.supports('deleteProject').then(available => {
+      if (!current) return;
+      if (available) callbacks.current.onReady(bridge);
+      else callbacks.current.onError(Error('目标设备尚不支持删除项目，请升级该设备的 BenchGo 后重试'));
+    }).catch(error => { if (current) callbacks.current.onError(error); });
+    return () => { current = false; };
+  }, [bridge]);
+  return url && <iframe hidden ref={frame} src={url} title={device.name + '的项目连接'} onLoad={() => bridge.probe()} referrerPolicy="no-referrer" />;
 }
 
 /** Creation belongs to the chosen device; display scope only supplies the initial choice. */

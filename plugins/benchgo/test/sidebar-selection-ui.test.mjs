@@ -52,7 +52,7 @@ function render(activeSessionId, options = {}) {
   const walk = node => {
     if (!node || typeof node !== 'object') return [];
     let resolved = node;
-    while (options.resolveIcons && ['SessionIcon', 'Activity', 'Icon'].includes(resolved?.type?.name)) resolved = resolved.type(resolved.props);
+    while (resolved?.type?.name === 'ProjectHeader' || options.resolveIcons && ['SessionIcon', 'Activity', 'Icon'].includes(resolved?.type?.name)) resolved = resolved.type(resolved.props);
     return resolved ? [resolved, ...resolved.children.flatMap(walk)] : [];
   };
   const rerender = () => { cursor = 0; refCursor = 0; return walk(module.exports.Projects(props)); };
@@ -353,19 +353,20 @@ test('custom sidebar renders its own trailing slot for default and ungrouped ses
 test('custom sidebar registers its own extension ownership without reading or replacing official components', () => {
   const module = { exports: {} };
   runInNewContext(code, { module, exports: module.exports, require: id => id === 'react' ? { createElement: (type, props) => ({ type, props }) } : {} });
-  const open = () => {}, newSession = () => {};
+  const open = () => {}, newSession = () => {}, ensureRecent = () => {};
   let registration, component, removed = false;
   const host = { slots: {
     entries: () => assert.fail('must not inspect or mutate official components'),
     inject: (name, setup) => { assert.equal(name, 'sidebar.workspaces'); return setup(); },
     register: (options, view) => { registration = options; component = view; return () => { removed = true; }; },
   } };
-  const dispose = module.exports.mountSidebarProjects(host, open, newSession);
+  const dispose = module.exports.mountSidebarProjects(host, open, newSession, ensureRecent);
   assert.equal(component, module.exports.Projects); assert.equal(registration.priority, -10);
   assert.deepEqual(Object.keys(registration.children), ['benchgo.sidebar.session.row.trailing']);
   assert.deepEqual({ ...registration.children['benchgo.sidebar.session.row.trailing'] }, { kind: 'list', scope: 'root', inline: true });
   const injected = registration.inject();
   assert.equal(injected.host, host); assert.equal(injected.open, open); assert.equal(injected.newSession, newSession);
+  assert.equal(injected.ensureRecent, ensureRecent);
   dispose(); assert.equal(removed, true);
 });
 

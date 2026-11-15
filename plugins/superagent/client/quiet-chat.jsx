@@ -82,7 +82,7 @@ export function QuietChat({ home, session, chat, inbox, onOpenFile }) {
   const statuses = useSyncExternalStore(listener => statusSource?.subscribe(listener) || (() => {}), () => statusSource?.getSnapshot() || NO_STATUSES);
   const pendingInteraction = statuses.get(home.sessionId)?.pendingInteraction;
   const awaitingChoice = pendingInteraction?.kind === 'question';
-  const activity = conversationActivity(session, chat, pendingInteraction);
+  const activity = conversationActivity(session, chat, pendingInteraction, history);
   // Durable official events and reconnects reconcile business receipts. Token deltas
   // render directly from the official projection and never issue history requests.
   const connected = session.openState !== 'error' && session.openState !== 'loading';

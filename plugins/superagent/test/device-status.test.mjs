@@ -21,10 +21,12 @@ test('projects only authorized device facts and never invents live connections',
     relay: { token: 'PRIVATE TOKEN' }, pending: [{ id: 'PRIVATE PENDING', token: 'PRIVATE TOKEN' }],
     devices: [{ id: 'phone', name: '我的手机', deviceType: 'mobile', lastSeenAt: 123, tokenHash: 'PRIVATE HASH', pairedAt: 1, private: 'PRIVATE STATE' }] }) });
   assert.deepEqual(await f.read(), { available: true, enabled: true,
+    direction: 'inbound', purpose: '允许哪些设备访问本机；不表示出站服务器或它们对本机的授权。查询服务器与项目请用 assistant_devices / assistant_projects。',
     devices: [{ id: 'phone', name: '我的手机', type: 'mobile', lastSeenAt: 123 }], pendingCount: 1,
     observedAt: '1970-01-01T00:00:01.000Z', liveConnections: 'unknown' });
   f.setLink({ status: () => ({ enabled: false, devices: [], pending: [] }) });
   assert.deepEqual(await f.read(), { available: true, enabled: false, devices: [], pendingCount: 0,
+    direction: 'inbound', purpose: '允许哪些设备访问本机；不表示出站服务器或它们对本机的授权。查询服务器与项目请用 assistant_devices / assistant_projects。',
     observedAt: '1970-01-01T00:00:01.000Z', liveConnections: 'unknown' });
 });
 

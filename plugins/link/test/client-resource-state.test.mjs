@@ -1,6 +1,39 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeScope,scopeDevices,resourceKey,sortResourceRecents,resourceTime,readResourcePages,mergeResourcePage} from '../client/resource-state.mjs';
+import {normalizeScope,scopeDevices,resourceKey,sortResourceRecents,resourceTime,readResourcePages,mergeResourcePage,sessionActionAccess,canRetryResource,resourceRetryDelay,resourceQueryFailure} from '../client/resource-state.mjs';
+
+test('resource reconnects back off, retain transport failures and stop on stable rejections',()=>{
+ assert.deepEqual(Array.from({length:8},(_,i)=>resourceRetryDelay(i+1)),[1000,2000,4000,8000,16000,30000,30000,30000]);
+ for(const code of ['QUERY_FAILED','OFFLINE','ECONNRESET'])assert.equal(canRetryResource({available:false,code}),true);
+ for(const code of ['UNAUTHORIZED','IDENTITY_CHANGED','NOT_FOUND','UNSUPPORTED'])assert.equal(canRetryResource({available:false,code}),false);
+ for(const status of [400,401,403,404,409,422])assert.equal(canRetryResource(resourceQueryFailure(Object.assign(Error('rejected'),{status}))),false);
+ for(const status of [408,425,429,500,503])assert.equal(canRetryResource(resourceQueryFailure(Object.assign(Error('temporary'),{status}))),true);
+ const previous={items:[{id:'private'}],observedAt:100,hasMore:true};
+ for(const status of [401,403,404]){
+  const failure=resourceQueryFailure(Object.assign(Error('rejected'),{status}));
+  const page=mergeResourcePage(previous,{...failure,items:previous.items});
+  assert.deepEqual(page.items,[]);assert.equal(page.hasMore,false);
+ }
+ assert.equal(canRetryResource({available:true}),false);
+});
+test('session actions require current target identity and separately advertised native capabilities',()=>{
+ const device={id:'remote',hostId:'host',authorizationId:'pair'},row={deviceId:'remote',device};
+ const navigation={remote:[device],pages:{}};
+ assert.match(sessionActionAccess(navigation,row,'pin').reason,/正在读取/);
+ navigation.pages['remote\0capabilities']={available:true,items:[]};
+ assert.match(sessionActionAccess(navigation,row,'pin').reason,/升级目标/);
+ navigation.pages['remote\0capabilities'].items=[{id:'sessionActions',available:true,operations:['pin','unpin','rename','archive','unarchive','delete']},{id:'nativeSessionActions',available:true,operations:['archive']}];
+ assert.equal(sessionActionAccess(navigation,row,'pin').available,true);
+ assert.equal(sessionActionAccess(navigation,{...row,native:true},'pin').available,false);
+ assert.equal(sessionActionAccess(navigation,{...row,native:true},'archive').available,true);
+ assert.equal(sessionActionAccess(navigation,row,'fork').available,false);
+ navigation.pages['remote\0capabilities'].available=false;
+ assert.equal(sessionActionAccess(navigation,row,'pin').available,false,'cached capabilities cannot authorize writes after a failed read');
+ navigation.remote=[{...device,authorizationId:'new-pair'}];
+ assert.match(sessionActionAccess(navigation,row,'pin').reason,/授权已变化/);
+ navigation.remote=[];
+ assert.equal(sessionActionAccess(navigation,row,'delete').available,false);
+});
 test('resource identity always retains device and opaque resource ID',()=>{
  assert.notEqual(resourceKey({deviceId:'a',kind:'sessions',resourceId:'same'}),resourceKey({deviceId:'b',kind:'sessions',resourceId:'same'}));
  assert.notEqual(resourceKey({deviceId:'a',kind:'projects',resourceId:'same'}),resourceKey({deviceId:'a',kind:'sessions',resourceId:'same'}));

@@ -21,6 +21,7 @@ test('conversation menu follows its actual trigger across scrolling, layout chan
     import hostCss from './plugins/benchgo/client/style.css';
     import tokens from './deepseek-harness/packages/client/ui-theme/src/styles/design-platform.css';
     import themeBase from './deepseek-harness/packages/client/ui-theme/src/styles/base.css';
+    import surfaces from './deepseek-harness/packages/client/ui-theme/src/styles/gradient-shadow-text.css';
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
     installIconSprite({effect:effect=>effect(),on(){}},undefined);
     moduleSource.update({base:true,harness:true,superagent:false,link:false});
@@ -33,7 +34,7 @@ test('conversation menu follows its actual trigger across scrolling, layout chan
     const host={layout:{panelInfo:source({activePanelId:null})},sessions:{list:source(sessions)},workspaces:{list:source(workspaces)},uiSession:{sessionStatus:source(statuses)},remoteAccess:{source:()=>source(true)},uiWorkspace:{openSession(){}}};
     window.scenario=mode=>{sessions.ids=mode==='data'?[...ids,...childIds]:mode==='empty'?childIds:[];sessions.byId=records();workspaces.phase=mode==='loading'?'loading':'ready';setFixtureState({projects:[],sessions:[],loaded:mode!=='loading',error:mode==='error'?'连接失败，请重试':''});};
     window.scenario('data');
-    createRoot(document.getElementById('root')).render(<><style>{tokens}{themeBase}{hostCss}</style><aside className="cmd-shell-sidebar" style={{display:'flex',flexDirection:'column',width:280,height:'100vh'}}><Projects host={host} open={()=>{}} newSession={()=>{}} renderSlot={()=>null}/></aside><main>工作台内容</main></>);
+    createRoot(document.getElementById('root')).render(<><style>{tokens}{themeBase}{surfaces}{hostCss}</style><aside className="cmd-shell-sidebar" style={{display:'flex',flexDirection:'column',width:280,height:'100vh'}}><Projects host={host} open={()=>{}} newSession={()=>{}} renderSlot={()=>null}/></aside><main>工作台内容</main></>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-sidebar-menu'), format: 'iife', jsx: 'automatic',
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
@@ -41,7 +42,7 @@ test('conversation menu follows its actual trigger across scrolling, layout chan
     plugins: [{ name: 'sidebar-fixture', setup(build) {
       build.onLoad({ filter: /benchgo[\\/]client[\\/]index\.jsx$/ }, async ({ path }) => {
         // Mount the real sidebar without loading unrelated application entry points.
-        const keep = ['shared/client/ui/index', 'sidebar-state.mjs', 'resource-navigation.jsx', 'resource-state.mjs', "from 'react'", 'icons.json', 'dsh-client-ui-primitives', 'iconsax.jsx', 'modules.mjs', 'session-info.mjs'];
+        const keep = ['shared/client/ui/index', 'shared/client/ui/tooltip', 'sidebar-state.mjs', 'resource-navigation.jsx', 'resource-state.mjs', "from 'react'", 'icons.json', 'dsh-client-ui-primitives', 'iconsax.jsx', 'modules.mjs', 'session-info.mjs'];
         const source = (await readFile(path, 'utf8')).split('\n').filter(line => !line.startsWith('import ') || keep.some(value => line.includes(value))).join('\n');
         return { loader: 'jsx', resolveDir: dirname(path), contents: source + '\nexport {Projects}; export function setFixtureState(value){update(value);}' };
       });
@@ -105,8 +106,27 @@ test('conversation menu follows its actual trigger across scrolling, layout chan
     await page.setViewportSize({ width: 500, height: 600 });
     await trigger(6).click();
     await page.waitForFunction(() => { const r = document.querySelector('.cmd-actions-popover')?.getBoundingClientRect(); return r && r.left >= 11 && r.right <= innerWidth - 11 && r.top >= 11 && r.bottom <= innerHeight - 11; });
+    const edgePosition=await page.evaluate(()=>{
+      const trigger=document.querySelector('button[aria-label="对话操作：测试对话 6"]').getBoundingClientRect(),menu=document.querySelector('.cmd-actions-popover').getBoundingClientRect();
+      return {trigger:{left:trigger.left,top:trigger.top,bottom:trigger.bottom},menu:{right:menu.right,top:menu.top,bottom:menu.bottom}};
+    });
+    assert(Math.abs(edgePosition.menu.right-edgePosition.trigger.left+4)<1&&Math.abs(edgePosition.menu.bottom-edgePosition.trigger.bottom)<1,'edge menus stay beside and bottom-aligned with their trigger: '+JSON.stringify(edgePosition));
     await page.screenshot({ path: join(screenshots, 'conversation-narrow.png') });
+    await page.evaluate(()=>document.body.setAttribute('data-ds-dark-theme',''));
+    await page.screenshot({ path: join(screenshots, 'conversation-narrow-dark.png') });
+    await page.evaluate(()=>document.body.removeAttribute('data-ds-dark-theme'));
     await page.setViewportSize({ width: 1200, height: 900 });
+    await page.keyboard.press('Escape');
+    await page.locator('.cmd-sidebar-content').evaluate(element=>{
+      const row=element.querySelector('button[aria-label="对话操作：测试对话 18"]');
+      element.scrollTop+=row.getBoundingClientRect().bottom-element.getBoundingClientRect().bottom+20;
+    });
+    await trigger(18).click();
+    await page.waitForFunction(()=>{
+      const a=document.querySelector('button[aria-label="对话操作：测试对话 18"]').getBoundingClientRect(),b=document.querySelector('.cmd-actions-popover')?.getBoundingClientRect();
+      return b&&Math.abs(b.left-a.right-4)<1&&Math.abs(b.bottom-a.bottom)<1&&b.top>=12;
+    });
+    await page.screenshot({ path: join(screenshots, 'conversation-bottom-row.png') });
     await page.keyboard.press('Escape');
     await trigger(5).click(); await aligned(5);
     await page.locator('#cmd-recent-section').evaluate(element => element.setAttribute('inert', ''));

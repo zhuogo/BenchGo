@@ -46,6 +46,14 @@ test('native sessions follow Harness module enable, disable and replacement with
   assert.deepEqual(calls, ['first', 'replacement'], 'unloading during connection never submits through a stale runtime');
 });
 
+test('native summaries preserve exact provider, model and status with registry pin identity', () => {
+  const session = { id: 'direct', ownerSessionId: 'commander-web:project', projectId: 'project', cwd: '/project', provider: 'Opaque/Provider', model: 'Model@1', status: 'waiting' };
+  const adapter = createNativeAdapter({ get: () => ({ list: () => [session] }), workspaceRegistry: { list: () => [{ id: 'project', path: '/project' }], pinnedSessionIds: ['direct'] } });
+  const row = adapter.list()[0];
+  assert.equal(row.id, 'native:direct'); assert.equal(row.provider, 'Opaque/Provider'); assert.equal(row.model, 'Model@1');
+  assert.equal(row.status, 'waiting'); assert.equal(row.running, true); assert.equal(row.pinned, true);
+});
+
 test('native listing reads one project snapshot and preserves exact ownership, paths and source order', () => {
   const session = (id, projectId = 'project', cwd = '/project', extra = {}) => ({ id, projectId, cwd, ownerSessionId: 'commander-web:project', provider: 'codex', status: 'running', ...extra });
   const sessions = [

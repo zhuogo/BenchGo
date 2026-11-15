@@ -85,6 +85,27 @@ test('route selection prioritizes fixed-pin direct and only falls back for unrea
   }
 });
 
+test('remote pairing never interprets the host loopback as a client-side direct route', async () => {
+  for (const url of ['https://127.0.0.1:46117', 'https://127.12.0.1:46117', 'https://localhost:46117', 'https://[::1]:46117']) {
+    const calls = [];
+    const selected = await selectRoute({ ...target, routes: [{ kind: 'direct', url, pin }, relay] }, { probe: async candidate => calls.push(candidate.url) });
+    assert.equal(selected.url, relay.url);
+    assert.deepEqual(calls, [relay.url]);
+  }
+});
+
+test('only the explicitly admitted local endpoint is allowed for local and SSH pairing', async () => {
+  const url = 'https://127.0.0.1:46117', other = 'https://127.0.0.1:46118', calls = [];
+  const selected = await selectRoute({ ...target, url, pin, routes: [{ kind: 'direct', url: other, pin }, { kind: 'direct', url, pin }, relay] }, { probe: async candidate => calls.push(candidate.url) });
+  assert.equal(selected.url, url); assert.deepEqual(calls, [url]);
+});
+
+test('cooling remote relay reports recovery without probing or blaming another host loopback', async () => {
+  const cooldownUntil = Date.now() + 60_000;
+  await assert.rejects(selectRoute({ ...target, routes: [{ kind: 'direct', url: 'https://127.0.0.1:46117', pin }, { ...relay, cooldownUntil }] }, { probe: async () => assert.fail('must not probe a remote loopback or cooling relay') }), error => error.code === 'ROUTES_COOLDOWN' && error.retryAt === cooldownUntil && /连接正在恢复/.test(error.message));
+  await assert.rejects(selectRoute({ ...target, routes: [{ kind: 'direct', url: 'https://127.0.0.1:46117', pin }] }, { probe: async () => assert.fail('must not probe a remote loopback') }), { code: 'OFFLINE' });
+});
+
 test('route selection fails over relays in configured priority order and stops after success', async () => {
   const relayOne = { kind: 'relay', url: 'https://relay-one.test' };
   const relayTwo = { kind: 'relay', url: 'https://relay-two.test' };
@@ -101,6 +122,45 @@ test('route selection fails over relays in configured priority order and stops a
 
 test('route selection reports cooldown when every relay is cooling down', async () => {
   await assert.rejects(selectRoute({ ...target, routes: [{ ...relay, relayId: 'primary', cooldownUntil: Date.now() + 60_000 }] }, { probe: async () => assert.fail('cooling route must not be probed') }), error => error.code === 'ROUTES_COOLDOWN' && error.retryAt > Date.now());
+});
+
+test('one transient relay TLS failure gets one bounded retry after other routes', async () => {
+  for (const code of ['ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN']) {
+    const calls = [], health = [];
+    const selected = await selectRoute({ ...target, routes: [relay] }, {
+      probe: async candidate => { calls.push(candidate); if (calls.length === 1) throw Object.assign(new Error('transient'), { code }); },
+      onHealth: async (_route, state, details) => health.push({ state, cooldownUntil: details.cooldownUntil }),
+    });
+    assert.equal(selected.url, relay.url);
+    assert.deepEqual(calls, [{ url: relay.url, pin: '' }, { url: relay.url, pin: '' }], 'TLS retry never receives bearer credentials');
+    assert.deepEqual(health.map(row => row.state), ['healthy'], 'one transient preflight does not put concurrent connections into cooldown');
+    assert.equal(health.at(-1).cooldownUntil, 0);
+  }
+  let calls = 0;
+  await assert.rejects(selectRoute({ ...target, routes: [relay] }, { probe: async () => { calls++; throw Object.assign(new Error('still unavailable'), { code: 'ETIMEDOUT' }); } }), { code: 'ETIMEDOUT' });
+  assert.equal(calls, 2, 'a selection never loops indefinitely');
+  calls = 0;
+  await assert.rejects(selectRoute({ ...target, routes: [relay] }, { probe: async () => { calls++; throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }); } }), { code: 'ECONNREFUSED' });
+  assert.equal(calls, 1, 'a refused endpoint is not retried');
+});
+
+test('a failed admitted SSH tunnel cannot mask a cooling relay as an offline device', async () => {
+  const url = 'https://127.0.0.1:46117', cooldownUntil = Date.now() + 60_000, calls = [];
+  await assert.rejects(selectRoute({ ...target, url, pin, routes: [{ kind: 'direct', url, pin }, { ...relay, cooldownUntil }] }, {
+    probe: async candidate => { calls.push(candidate.url); throw Object.assign(new Error('old tunnel closed'), { code: 'ECONNREFUSED' }); },
+  }), error => error.code === 'ROUTES_COOLDOWN' && error.status === 503 && error.retryAt === cooldownUntil);
+  assert.deepEqual(calls, [url]);
+});
+
+test('relay probe retries stop immediately for cancellation and trust failures', async () => {
+  const controller = new AbortController(); let calls = 0;
+  await assert.rejects(selectRoute({ ...target, routes: [relay] }, { signal: controller.signal, probe: async () => { calls++; controller.abort(); throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); } }), { name: 'AbortError' });
+  assert.equal(calls, 1);
+  for (const error of [Object.assign(new Error('untrusted'), { code: 'ERR_LINK_CERTIFICATE' }), Object.assign(new Error('denied'), { code: 'ECONNRESET', status: 403 })]) {
+    calls = 0;
+    await assert.rejects(selectRoute({ ...target, routes: [relay] }, { probe: async () => { calls++; throw error; } }), value => value === error);
+    assert.equal(calls, 1);
+  }
 });
 
 test('route selection reports relay health transitions for runtime cooldowns', async () => {
@@ -160,9 +220,9 @@ test('TLS-only selection verifies pins, rejects an untrusted relay and never sen
   const url = 'https://127.0.0.1:' + server.address().port;
   await probeRemote({ url, pin: identity.pin });
   assert.equal(requests, 0);
-  const selected = await selectRoute({ ...target, routes: [{ kind: 'direct', url, pin: identity.pin }, relay] });
+  const selected = await selectRoute({ ...target, url, pin: identity.pin, routes: [{ kind: 'direct', url, pin: identity.pin }, relay] });
   assert.equal(selected.url, url); assert.equal(requests, 0);
-  await assert.rejects(selectRoute({ ...target, routes: [{ kind: 'direct', url, pin }, relay] }), { code: 'ERR_LINK_CERTIFICATE' });
+  await assert.rejects(selectRoute({ ...target, url, routes: [{ kind: 'direct', url, pin }, relay] }), { code: 'ERR_LINK_CERTIFICATE' });
   await assert.rejects(selectRoute({ ...target, routes: [{ kind: 'relay', url }] }), { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
   assert.equal(requests, 0);
   await assert.rejects(remoteJson(selected, '/link/api/rpc', { action: 'write' }), { statusCode: 403 });

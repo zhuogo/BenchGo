@@ -1,12 +1,13 @@
 import { selectRoute } from './routes.mjs';
 import { remoteAgent, remoteJson } from './remote.mjs';
 const kinds = new Set(['projects', 'sessions', 'recent', 'models', 'capabilities', 'tasks']);
-const actions = new Set(['state', 'models', 'create', 'history', 'send', 'cancel', 'respond', 'resources', 'collaboration', 'management']);
+const actions = new Set(['state', 'models', 'create', 'history', 'send', 'cancel', 'respond', 'resources', 'collaboration', 'management', 'sessionAction']);
 const fail = (message, code, status = 400) => Object.assign(new Error(message), { code, status });
 const networkErrors = new Set(['OFFLINE', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE', 'ERR_SOCKET_CLOSED', 'ERR_STREAM_PREMATURE_CLOSE', 'ROUTES_COOLDOWN']);
 /** Reachability is separate from authorization and resource/business failures. */
 export function deviceConnectionFailure(error) {
   const status = error.statusCode ?? error.status;
+  if (error.code === 'ROUTES_COOLDOWN') return { code: 'ROUTES_COOLDOWN', status: 'connecting', reason: '中继连接正在恢复，请稍后重试或在设备中心检查连接' };
   if (error.code === 'IDENTITY_CHANGED' || error.code === 'ERR_LINK_CERTIFICATE' || /CERT|TLS/.test(error.code || '')) return { code: 'IDENTITY_CHANGED', status: 'failed', reason: '主机身份或证书变化，请在设备中心重新核验' };
   if ([401, 403].includes(status) || error.code === 'UNAUTHORIZED') return { code: 'UNAUTHORIZED', status: 'failed', reason: '授权失效，请在设备中心重新核验' };
   if (networkErrors.has(error.code) || error.name === 'TimeoutError') return { code: 'OFFLINE', status: 'offline', reason: '设备暂不可达，请检查连接后重试' };
@@ -15,7 +16,7 @@ export function deviceConnectionFailure(error) {
 }
 export function resourcePage(input = {}) {
   const kind = input.kind || 'projects', offset = input.offset ?? 0, limit = input.limit ?? 30;
-  if (!kinds.has(kind) || !Number.isSafeInteger(offset) || offset < 0 || offset > 100000 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw fail('资源查询范围无效', 'INVALID_RESOURCE_QUERY');
+  if (!kinds.has(kind) || !Number.isSafeInteger(offset) || offset < 0 || offset > 100000 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || input.archived !== undefined && typeof input.archived !== 'boolean') throw fail('资源查询范围无效', 'INVALID_RESOURCE_QUERY');
   return { kind, offset, limit };
 }
 /** Allowlisted summaries; remote payloads never become configuration or authority. */
@@ -24,12 +25,13 @@ export function projectResources(state, input, deviceId) {
   let source = kind === 'recent' ? state.sessions : state[kind];
   if (!Array.isArray(source)) throw fail('目标尚不支持该资源', 'UNSUPPORTED', 422);
   if (input.projectId !== undefined) source = source?.filter(row => row.projectId === input.projectId);
-  if (kind === 'recent') {
+  if (kind === 'sessions' || kind === 'recent') {
+    if (input.archived !== undefined) source = source.filter(row => !!row.archived === input.archived);
     const now = Date.now() + 86400000;
     source = source.map((row, index) => { const time = Number(row.updatedAt) || Date.parse(row.updatedAt); return { row, index, time: Number.isFinite(time) && time > 0 && time < now ? time : 0 }; })
       .sort((a, b) => Number(!!b.row.pinned) - Number(!!a.row.pinned) || b.time - a.time || a.index - b.index).map(({ row }) => row);
   }
-  const fields = kind === 'projects' ? ['id','name','title','path','sessionIds','isDefault'] : kind === 'sessions' || kind === 'recent' ? ['id','projectId','title','running','updatedAt','archived','pinned','native','ungrouped','engine','status'] : kind === 'models' ? ['id','provider','model','label','available'] : kind === 'capabilities' ? ['id','available','reason','operations'] : ['id','title','status','projectId','updatedAt','executionRef'];
+  const fields = kind === 'projects' ? ['id','name','title','path','sessionIds','isDefault'] : kind === 'sessions' || kind === 'recent' ? ['id','projectId','title','running','updatedAt','archived','pinned','native','ungrouped','engine','provider','model','modelProvider','status'] : kind === 'models' ? ['id','provider','model','label','available'] : kind === 'capabilities' ? ['id','available','reason','operations'] : ['id','title','status','projectId','updatedAt','executionRef'];
   const items = source.slice(offset, offset + limit).map(row => ({ ...Object.fromEntries(fields.filter(key => row[key] !== undefined).map(key => [key, row[key]])), deviceId, kind, resourceId: row.id ?? row.model }));
   return { deviceId, available: true, code: 'OK', reason: null, observedAt: Date.now(), freshness: 'fresh', items, offset, limit, total: source.length, hasMore: offset + limit < source.length };
 }
@@ -57,11 +59,17 @@ export function createDeviceResources({ registry, local, request = remoteJson, r
   const observe = (deviceId, connection, order, status, reason = null) => {
     if (status && order >= connection.observed) { current(deviceId, connection); connection.observed = order; registry.mark(deviceId, status, reason); }
   };
-  const callDevice = async ({ deviceId, input, signal }) => {
+  const callDevice = async ({ deviceId, input, signal, expectedHostId, expectedAuthorizationId }) => {
     if (!actions.has(input?.action)) throw fail('不支持的定向操作', 'UNSUPPORTED', 422);
     signal?.throwIfAborted();
-    if (deviceId === 'local') return local(input, signal);
+    const assertExpected = saved => {
+      if (input.action !== 'sessionAction') return;
+      if ([expectedHostId, expectedAuthorizationId].some(value => value !== null && (typeof value !== 'string' || !value || value.length > 256))) throw fail('缺少会话所属设备的身份快照，请刷新设备目录', 'INVALID_SESSION_ACTION');
+      if (expectedHostId !== (saved?.hostId ?? null) || expectedAuthorizationId !== (saved?.authorizationId ?? null)) throw Object.assign(fail('会话所属设备的身份或授权已变化，请刷新后重试', 'IDENTITY_CHANGED', 409), { stale: true });
+    };
+    if (deviceId === 'local') { assertExpected(null); return local(input, signal); }
     const saved = registry.get(deviceId);
+    assertExpected(saved);
     let connection = connections.get(deviceId);
     if (!connection || connection.identity !== identity(saved)) {
       invalidate(deviceId);
@@ -118,16 +126,16 @@ export function createDeviceResources({ registry, local, request = remoteJson, r
     const results = new Array(ids.length); let cursor = 0;
     await Promise.all(Array.from({ length: Math.min(4, ids.length) }, async () => {
       while (cursor < ids.length) {
-        const index = cursor++, deviceId = ids[index], key = JSON.stringify([deviceId,page,input.projectId]);
+        const index = cursor++, deviceId = ids[index], key = JSON.stringify([deviceId,page,input.projectId,input.archived]);
         try {
           const queriedIdentity = deviceId === 'local' ? null : identity(registry.get(deviceId));
           let value;
-          try { value = await callDevice({ deviceId, input: { action: 'resources', ...page, ...(input.projectId === undefined ? {} : { projectId: input.projectId }) }, signal: input.signal }); }
+          try { value = await callDevice({ deviceId, input: { action: 'resources', ...page, ...(input.projectId === undefined ? {} : { projectId: input.projectId }), ...(input.archived === undefined ? {} : { archived: input.archived }) }, signal: input.signal }); }
           catch (error) {
             // Older targets expose the same read-authorized facts through state.
             if (error.statusCode !== 400 || !/Unsupported Link action|不支持/.test(error.message)) throw error;
             if (page.kind === 'recent') throw fail('旧目标不支持最近候选语义', 'UNSUPPORTED', 422);
-            value = projectResources(await callDevice({ deviceId, input: { action: 'state' }, signal: input.signal }), { ...page, projectId: input.projectId }, deviceId);
+            value = projectResources(await callDevice({ deviceId, input: { action: 'state' }, signal: input.signal }), { ...page, projectId: input.projectId, archived: input.archived }, deviceId);
           }
           input.signal?.throwIfAborted();
           if (started !== epoch) throw new DOMException('资源服务已清理', 'AbortError');

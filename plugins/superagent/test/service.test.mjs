@@ -237,13 +237,19 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   for (const name of ['assistant_projects', 'assistant_settings', 'assistant_task_manage', 'assistant_task_cleanup', 'assistant_generate_image', 'assistant_summarize', 'assistant_analyze_image']) assert.ok(ctx.tools.get(name, agent), name);
   assert.equal(ctx.tools.get('assistant_config', agent), undefined);
   const projectsTool = ctx.tools.get('assistant_projects', agent);
-  const projectsResult = await projectsTool.execute({}, { signal: new AbortController().signal, agent });
+  const projectsResult = await projectsTool.execute({ scope: 'local' }, { signal: new AbortController().signal, agent });
   assert.equal(projectsResult.scope, 'local');
   assert.deepEqual(projectsResult.projects[0], {
     id: 'project', path: projectRoot, title: 'Project', isDefault: false,
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z', sessionIds: ['session-1'],
   });
   assert.equal(Object.getPrototypeOf(projectsResult.projects[0]), Object.prototype);
+  const allProjects = await projectsTool.execute({}, { signal: new AbortController().signal, agent });
+  assert.equal(allProjects.scope, 'all');
+  assert.equal(allProjects.devices[0].deviceId, 'local');
+  assert.equal(allProjects.devices[0].items[0].resourceId, 'project');
+  assert.equal(allProjects.directory.available, false, 'unmounted Link is unknown coverage, not an empty remote inventory');
+  assert.equal(allProjects.partial, true);
   const summary = await call({ action: 'summarize', text: 'Original source text' });
   assert.equal(summary.status, 200);
   const summarized = await summary.json();
@@ -774,7 +780,8 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
       if (request.purpose === 'superagent-memory-upkeep') {
         const source = material.find(row => row.messageId && row.text?.includes('SERVICE_MAINTENANCE_PREF'));
         assert.ok(source, 'the real official-history source reader supplies the Router user text');
-        return JSON.stringify({ memories: [{ content: preference, category: 'opinions', sourceMessageId: source.messageId }], skills: [] });
+        return JSON.stringify({ memories: [{ content: preference, category: 'opinions', sourceMessageId: source.messageId,
+          sourceQuote: '我长期偏好使用中文先给结论，并附实际核验结果。' }], skills: [] });
       }
       const source = material.find(row => row.kind === 'user' && row.text.includes('SERVICE_MAINTENANCE_PREF'));
       assert.ok(source, 'dreaming receives the same trusted conversation references');
@@ -797,6 +804,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
       const memoryRun = await reviewTicks[0]();
       assert.equal(memoryRun.completed, 1, JSON.stringify(memoryRun));
       assert.equal(app.store.review.get(queued.id).status, 'completed');
+      assert.equal(app.store.review.get(queued.id).result.modelRequests, 2);
       const [learned] = await app.store.memory.search({ query: 'SERVICE_MAINTENANCE_PREF' });
       assert.equal(learned?.content, preference);
       assert.equal(learned.source.role, 'user');
@@ -813,7 +821,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
       assert.deepEqual(chatIdentity(await app.store.getState()), before.chats, 'maintenance creates no chat, side chat or Router request');
       assert.deepEqual(app.store.orchestration.listTasks().map(row => row.id).sort(), before.tasks, 'maintenance creates no Task');
       assert.equal(agent.session.snapshotEvents().length, before.transcript, 'background execution never takes a Router turn');
-      assert.equal(maintenanceRequests.length, 2);
+      assert.equal(maintenanceRequests.length, 3);
       assert.ok(maintenanceRequests.every(request => request.tools.length === 0));
       const next = await call({ action: 'send', text: '请按我的长期中文回复偏好，说明一次核验结论。', requestId: 'service-maintenance-next-context' });
       assert.equal(next.status, 200, await next.clone().text());

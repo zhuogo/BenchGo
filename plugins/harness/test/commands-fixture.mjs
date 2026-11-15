@@ -34,6 +34,10 @@ if (process.argv.includes('serve')) {
     const method = pi ? message.type : message.method;
     const reply = result => send(pi ? { id: message.id, type: 'response', success: true, data: result } : { id: message.id, result });
     const fail = error => send(pi ? { id: message.id, type: 'response', success: false, error } : { id: message.id, error: { message: error } });
+    if (method === 'extension_ui_response') {
+      send({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: JSON.stringify(message) } });
+      return send({ type: 'agent_end' });
+    }
     if (method === 'initialize') return reply({});
     if (method === 'initialized') return;
     if (method === 'thread/start') return reply({ thread: { id: 'commands-codex' } });
@@ -51,6 +55,10 @@ if (process.argv.includes('serve')) {
       return reply({ summary: 'compacted' });
     }
     if (method === 'prompt') {
+      if (message.message === 'ui-fixture') {
+        send({ type: 'agent_start' }); reply({});
+        return send({ type: 'extension_ui_request', id: 'opaque:ui/1', ...JSON.parse(process.env.PI_UI_REQUEST) });
+      }
       if (message.message.includes('contradiction')) {
         send({ type: 'agent_start' });
         reply({ agentInvoked: false });

@@ -33,12 +33,14 @@ test('remote resources announce late readiness, reuse a live device document and
     window.operations=[];window.received=[];window.replies=[];window.probes=0;
     const run=(kind,id)=>{operations.push({kind,id});document.querySelector('p').textContent='远端会话内容 '+id;};
     addEventListener('message',event=>{if(event.data?.type==='benchgo:resource:probe')probes++;if(event.data?.type==='benchgo:resource:open')received.push(event.data);});
-    const listeners=new Set();let snapshot={phase:'ready',items:[{workspaceId:'project',sessionIds:['project-session']}]};
-    window.setProjects=ready=>{snapshot={...snapshot,phase:ready?'ready':'pending',items:ready?[{workspaceId:'project',sessionIds:['project-session']}]:[]};listeners.forEach(fn=>fn());};
-    let sessionSnapshot={phase:'ready',ids:['session','project-session','last-session']};const sessionListeners=new Set();
-    window.setSessions=ready=>{sessionSnapshot={...sessionSnapshot,phase:ready?'ready':'pending',ids:ready?['session','project-session','last-session']:[]};sessionListeners.forEach(fn=>fn());};
+    const projectItems=[{workspaceId:'project',sessionIds:['project-session']},{workspaceId:'empty-project',sessionIds:[]}];
+    const listeners=new Set();let snapshot={phase:'ready',items:projectItems};
+    window.setProjects=ready=>{snapshot={...snapshot,phase:ready?'ready':'pending',items:ready?projectItems:[]};listeners.forEach(fn=>fn());};
+    const sessionIds=['session','project-session','last-session','native:official'];
+    let sessionSnapshot={phase:'ready',ids:sessionIds};const sessionListeners=new Set();
+    window.setSessions=ready=>{sessionSnapshot={...sessionSnapshot,phase:ready?'ready':'pending',ids:ready?sessionIds:[]};sessionListeners.forEach(fn=>fn());};
     const host={sessions:{list:{getSnapshot:()=>sessionSnapshot,subscribe:fn=>{sessionListeners.add(fn);return()=>sessionListeners.delete(fn);}}},uiWorkspace:{openSession:id=>run('session',id)},workspaces:{list:{getSnapshot:()=>snapshot,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn);}}}};
-    addEventListener('load',()=>setTimeout(()=>{window.installedAfterLoad=document.readyState==='complete';window.stopReceiver=installResourceReceiver(host,{open:async id=>run('native',id),newSession:async id=>{window.creating=true;await new Promise(resolve=>setTimeout(resolve,100));window.creating=false;if(id==='fail')throw Error('创建失败，请重试');run('newSession',id);},addProject:()=>run('addProject')});},150));
+    addEventListener('load',()=>setTimeout(()=>{window.installedAfterLoad=document.readyState==='complete';window.stopReceiver=installResourceReceiver(host,{open:async id=>{if(!['runtime-session','native:opaque/runtime'].includes(id))throw Error('会话不存在');run('native',id);},newSession:async id=>{window.creating=true;await new Promise(resolve=>setTimeout(resolve,100));window.creating=false;if(id==='fail')throw Error('创建失败，请重试');run('newSession',id);},addProject:()=>run('addProject')});},150));
   ` }, ...options });
   const script = built.outputFiles.find(file => file.path.endsWith('.js')).text;
   const receiverScript = receiver.outputFiles.find(file => file.path.endsWith('.js')).text;
@@ -108,6 +110,16 @@ test('remote resources announce late readiness, reuse a live device document and
     await page.locator('.cmd-resource-stage-status').waitFor({ state: 'hidden' });
     assert.equal(selections.length, selected, 'same device must not consume another entry ticket');
     assert.equal(await frameElement.evaluate(node => node === document.querySelector('iframe')), true);
+    const beforeEmptyOpen = await remote.evaluate(() => operations.length);
+    await page.evaluate(() => window.resourceScenario('data', { deviceId: 'reuse', requestId: 'empty-project', resource: { kind: 'projects', resourceId: 'empty-project' } }));
+    await page.getByRole('alert').filter({ hasText: '项目暂无对话，请通过新聊天创建' }).waitFor();
+    assert.equal(await remote.evaluate(() => operations.length), beforeEmptyOpen, 'ordinary project open cannot implicitly create a session');
+    assert.equal(await remote.evaluate(() => window.creating), undefined);
+    for (const [resourceId, native, expected] of [['native:runtime-session',true,'runtime-session'],['native:native:opaque/runtime',true,'native:opaque/runtime'],['native:official',false,'native:official']]) {
+      await page.evaluate(({resourceId,native}) => window.resourceScenario('data', { deviceId: 'reuse', requestId: resourceId, resource: { kind: 'sessions', resourceId, native } }), {resourceId,native});
+      await page.locator('.cmd-resource-stage-status').waitFor({state:'hidden'});
+      assert.deepEqual(await remote.evaluate(() => operations.at(-1)), {kind:native?'native':'session',id:expected}, 'decode the native wire namespace exactly once; official IDs stay opaque');
+    }
     // Duplicate requests during an async creation resend the result, without running twice.
     await page.evaluate(() => {
       window.resourceScenario('data', { deviceId: 'reuse', requestId: 'new', resource: { kind: 'projects', resourceId: 'project', intent: 'newSession' } });

@@ -75,6 +75,14 @@ export function shellUi(){return {name:'commander-shell-ui',setup(build){
   build.onLoad({filter:/ui-layout[\\/]src[\\/]client[\\/]AppFrame\.tsx$/},async({path})=>{
     let source=(await readFile(path,'utf8')).replaceAll('\r\n','\n');source=once(source,'className={css.frame}', "className={css.frame + ' cmd-shell-frame'}");
     source=once(source,'data-animating={animateTracks || undefined}', 'data-animating={animateTracks || undefined}\n      data-plus-shell');
+    // Embedded resources hide only the duplicate navigation. Solve the real
+    // three tracks with no left column so the official workspace stays usable.
+    source=once(source,"  & PropsRuntime<'root'>", "  & PropsRuntime<'root'>\n  & { resourceEmbedded?: boolean }");
+    source=once(source,'export function AppFrame({\n  useStore,', 'export function AppFrame({\n  resourceEmbedded = false,\n  useStore,');
+    source=once(source,'const drawer = viewport < SIDEBAR_DRAWER_BREAKPOINT && !windowsTitlebar', 'const drawer = !resourceEmbedded && viewport < SIDEBAR_DRAWER_BREAKPOINT && !windowsTitlebar');
+    source=once(source,'const centeredSidebar = foldedLandscape && viewport >= SIDEBAR_DRAWER_BREAKPOINT', 'const centeredSidebar = !resourceEmbedded && foldedLandscape && viewport >= SIDEBAR_DRAWER_BREAKPOINT');
+    source=once(source,'const sidebarCollapsed = narrow ? !layoutInfo.narrowExpanded : layoutInfo.sidebar === 0', 'const sidebarCollapsed = resourceEmbedded || (narrow ? !layoutInfo.narrowExpanded : layoutInfo.sidebar === 0)');
+    source=once(source,'const collapsedWidth = drawer || darwin || windowsTitlebar ? 0 : SIDEBAR_COLLAPSED', 'const collapsedWidth = resourceEmbedded || drawer || darwin || windowsTitlebar ? 0 : SIDEBAR_COLLAPSED');
     // Only the fullscreen right panel consumes this axis. Updating an inherited
     // variable on the frame invalidates styles throughout the conversation on
     // every pointer move, even though that content does not use the variable.

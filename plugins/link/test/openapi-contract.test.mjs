@@ -15,11 +15,12 @@ test('cross-device OpenAPI references resolve and owner/device contracts stay se
   };
   visit(spec);
   const owner = spec.paths['/api/commander-devices'].post.requestBody.content['application/json'].schema.properties.action.enum;
-  assert.deepEqual(owner, ['launch','devices','select','resources','resourceScope','setResourceScope']);
+  assert.deepEqual(owner, ['launch','devices','select','resources','resourceScope','setResourceScope','sessionAction']);
   const center = schemas.DeviceRequest.properties.action.enum;
-  for (const action of ['devices','resources','resourceScope','setResourceScope','hostGrantDevice','hostManagementDecide']) assert.ok(center.includes(action));
+  for (const action of ['devices','resources','resourceScope','setResourceScope','sessionAction','hostManagementDecide']) assert.ok(center.includes(action));
+  assert.equal(center.includes('hostGrantDevice'),false);
   const directed = schemas.DirectedDeviceInput.properties.action.enum;
-  assert.deepEqual(directed, ['state','models','create','history','send','cancel','respond','resources','collaboration','management']);
+  assert.deepEqual(directed, ['state','models','create','history','send','cancel','respond','resources','collaboration','management','sessionAction']);
   for (const action of ['hostGrantDevice','hostManagementDecide','admin','configure','relay-pool-configure']) assert.equal(directed.includes(action), false);
   assert.equal(schemas.ResourcePage.properties.items.maxItems, 100);
   assert.equal(schemas.ResourceScope.additionalProperties, false);

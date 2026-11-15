@@ -85,6 +85,41 @@ test('internal session summaries skip model catalog and accept a request-local p
   await assert.rejects(f.adapter.dispatch({ action: 'sessions' }, f.device), /Unsupported Link action/);
 });
 
+test('official summaries preserve recorded model selection, native owner state, archive and pin metadata', async t => {
+  const f = fixture(); t.after(() => f.adapter.close());
+  f.project.sessionIds.push('archived', 'native', 'no-model', 'private');
+  f.ctx.workspaceRegistry.archivedSessionIds = ['archived'];
+  f.ctx.workspaceRegistry.pinnedSessionIds = ['native'];
+  const items = [
+    { sessionId: 'session', projections: { values: { modelSelection: { lastUsed: { provider: 'old', model: 'old' }, next: { provider: 'Opaque/Provider', model: 'Model@1' } } } }, running: true },
+    { sessionId: 'archived', running: false },
+    { sessionId: 'native', projections: { values: { modelSelection: { next: { provider: 'commander-native', model: 'native-default' } } } }, running: false },
+    { sessionId: 'no-model', projections: { values: { modelSelection: { next: { provider: 'wrong', model: 'wrong-model' } } } }, running: false },
+    { sessionId: 'private', provider: 'private-provider', status: 'waiting' },
+  ];
+  f.ctx.get = name => name === 'assistant' ? { sidebarPrivateSessionIds: async () => ['private'] } : name === 'commander' ? { list: () => [
+    { id: 'old', ownerSessionId: 'native', provider: 'old', model: 'old', status: 'failed', updatedAt: 1 },
+    { id: 'new', ownerSessionId: 'native', provider: 'Exact/Native', model: 'Model:Native', status: 'waiting', updatedAt: 2 },
+    { id: 'child', ownerSessionId: 'native', provider: 'child', parentId: 'parent', status: 'failed', updatedAt: 3 },
+    { id: 'without-model', ownerSessionId: 'no-model', provider: 'Exact/Native', status: 'completed' },
+  ] } : undefined;
+  const invoke = f.ctx.typertGateway.invoke;
+  f.ctx.typertGateway.invoke = call => call.method === 'list' ? { items } : invoke(call);
+  const rows = await f.adapter.list(f.device);
+  assert.deepEqual(rows.map(row => row.id), ['session', 'archived', 'native', 'no-model']);
+  assert.equal(rows[0].provider, 'deepseek'); assert.equal(rows[0].modelProvider, 'Opaque/Provider'); assert.equal(rows[0].model, 'Model@1'); assert.equal(rows[0].status, 'running');
+  assert.equal(rows[1].archived, true);
+  assert.equal(rows[2].provider, 'Exact/Native'); assert.equal(rows[2].model, 'Model:Native'); assert.equal(rows[2].status, 'waiting'); assert.equal(rows[2].pinned, true);
+  assert.equal(rows[3].model, undefined, 'a model from another provider is never mixed into the native route');
+  assert.equal(rows[3].status, 'idle', 'settled native work is not an unread completion notification');
+});
+
+test('session summaries never fall back to unfiltered rows when private visibility lookup fails', async t => {
+  const f = fixture(); t.after(() => f.adapter.close());
+  f.ctx.get = name => name === 'assistant' ? { sidebarPrivateSessionIds: async () => { throw new Error('Privacy lookup failed'); } } : undefined;
+  await assert.rejects(f.adapter.list(f.device), /Privacy lookup failed/);
+});
+
 test('session summary requests hold their peer until completion and release it after failure', async t => {
   const f = fixture(); t.after(() => f.adapter.close());
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -117,7 +152,7 @@ test('state maps 5000 sessions across 20 projects with one registry read', async
   const state = await f.adapter.dispatch({ action: 'state' }, f.device);
   assert.equal(projectReads, 1);
   assert.deepEqual(state.projects, projects.map(project => ({ id: project.id, name: project.id, path: project.path })));
-  assert.deepEqual(state.sessions, items.map((row, index) => ({ id: row.sessionId, projectId: `project-${index % projects.length}`, title: `Session ${index}`, running: row.running, updatedAt: row.updatedAt })));
+  assert.deepEqual(state.sessions, items.map((row, index) => ({ id: row.sessionId, projectId: `project-${index % projects.length}`, title: `Session ${index}`, provider: 'deepseek', running: row.running, updatedAt: row.updatedAt, ...(row.running ? { status: 'running' } : {}) })));
 });
 
 test('state preserves first project ownership, visibility, titles and source order without caching', async t => {
@@ -143,9 +178,9 @@ test('state preserves first project ownership, visibility, titles and source ord
   const state = await f.adapter.dispatch({ action: 'state' }, f.device);
   assert.equal(projectReads, 1);
   assert.deepEqual(state.sessions, [
-    { id: 'nested', projectId: 'first', title: 'Nested title', running: true, updatedAt: 10 },
-    { id: 'plain', projectId: 'first', title: 'Plain title', running: false, updatedAt: 30 },
-    { id: 'empty', projectId: 'first', title: '新会话', running: undefined, updatedAt: 20 },
+    { id: 'nested', projectId: 'first', title: 'Nested title', provider: 'deepseek', running: true, updatedAt: 10, status: 'running' },
+    { id: 'plain', projectId: 'first', title: 'Plain title', provider: 'deepseek', running: false, updatedAt: 30 },
+    { id: 'empty', projectId: 'first', title: '新会话', provider: 'deepseek', running: undefined, updatedAt: 20 },
   ]);
   assert.deepEqual(await f.adapter.list(f.device, projects), state.sessions);
   assert.equal(projectReads, 1, 'summaries reuse the supplied project snapshot');

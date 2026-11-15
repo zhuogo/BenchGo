@@ -11,9 +11,9 @@ export function createNativeAdapter(ctx) {
   };
   const candidate = session => session?.ownerSessionId?.startsWith('commander-web:') && !session.archived;
   const visible = session => candidate(session) && ctx.workspaceRegistry.list().some(p => p.id === session.projectId && p.path === session.cwd);
-  const wire = s => ({ id: `native:${s.id}`, native: true, projectId: s.projectId, title: s.title || s.provider, running: ['running', 'waiting', 'connecting'].includes(s.status), updatedAt: s.updatedAt, engine: s.provider });
-  const list = availableProjects => {
-    const sessions = ctx.get('commander')?.list().filter(candidate) ?? [];
+  const wire = (s, pinned) => ({ id: `native:${s.id}`, native: true, projectId: s.projectId, title: s.title || s.provider, running: ['running', 'waiting', 'connecting'].includes(s.status), updatedAt: s.updatedAt, engine: s.provider, provider: s.provider, ...(s.model === undefined ? {} : { model: s.model }), status: s.status, ...(s.archived ? { archived: true } : {}), ...(pinned?.has(s.id) ? { pinned: true } : {}) });
+  const list = (availableProjects, { includeArchived = false } = {}) => {
+    const sessions = ctx.get('commander')?.list().filter(session => includeArchived ? session?.ownerSessionId?.startsWith('commander-web:') : candidate(session)) ?? [];
     if (!sessions.length) return [];
     const pathsByProject = new Map();
     for (const project of availableProjects ?? ctx.workspaceRegistry.list()) {
@@ -21,7 +21,8 @@ export function createNativeAdapter(ctx) {
       if (!paths) pathsByProject.set(project.id, paths = new Set());
       paths.add(project.path);
     }
-    return sessions.filter(session => pathsByProject.get(session.projectId)?.has(session.cwd)).map(wire);
+    const pinned = new Set(ctx.workspaceRegistry.pinnedSessionIds ?? []);
+    return sessions.filter(session => pathsByProject.get(session.projectId)?.has(session.cwd)).map(session => wire(session, pinned));
   };
   const dispatch = async input => {
     if (!input.id?.startsWith('native:')) throw new Error('会话不存在');
@@ -62,5 +63,26 @@ export function createNativeAdapter(ctx) {
     const interactions = session.pendingApprovals.map(p => ({ id: p.id, kind: p.kind, title: p.details?.title || p.method || '等待确认', details: p.details, ...(p.kind === 'question' ? { questions: questionsOf(p) } : {}) }));
     return { messages, running: wire(session).running, interactions, hasMore: false, cursor: records[0]?.seq ?? 0, truncated: records[0]?.seq > 1 };
   };
-  return { list, dispatch };
+  const managementOperations = () => {
+    const commander = ctx.get('commander');
+    return [...(typeof commander?.archive === 'function' ? ['archive', 'unarchive'] : []), ...(typeof commander?.remove === 'function' ? ['delete'] : [])];
+  };
+  const managementScope = async (id, _device, prior, allowDeleted = false) => {
+    if (typeof id !== 'string' || !id.startsWith('native:')) throw new Error('会话 ID 无效');
+    const raw = id.slice('native:'.length);
+    const hidden = new Set(await ctx.get?.('assistant')?.sidebarPrivateSessionIds?.() || []);
+    const session = requireCommander().list().find(row => row.id === raw), scope = session ?? (allowDeleted ? prior : undefined);
+    if (!scope || hidden.has(raw) || hidden.has(id) || hidden.has(scope.ownerSessionId) || !scope.ownerSessionId?.startsWith('commander-web:') || !ctx.workspaceRegistry.list().some(project => project.id === scope.projectId && project.path === (scope.cwd ?? scope.path))) throw Object.assign(new Error('会话不属于可用的直接工作区'), { status: 404, code: 'NOT_FOUND' });
+    if (prior && (scope.projectId !== prior.projectId || (scope.cwd ?? scope.path) !== prior.path || scope.ownerSessionId !== prior.ownerSessionId)) throw Object.assign(new Error('会话归属已变化'), { status: 409, code: 'SESSION_SCOPE_CHANGED' });
+    return { projectId: scope.projectId, path: scope.cwd ?? scope.path, ownerSessionId: scope.ownerSessionId };
+  };
+  const manage = async (input, _device, guard) => {
+    await guard();
+    guard.authorize();
+    const id = input.id.slice('native:'.length), commander = requireCommander();
+    if (input.operation === 'delete') { guard.mutation(); await commander.remove(id); return { deleted: true }; }
+    if (['archive', 'unarchive'].includes(input.operation)) { guard.mutation(); await commander.archive(id, input.operation === 'archive'); return {}; }
+    throw Object.assign(new Error('此原生会话不支持此操作'), { status: 422, code: 'UNSUPPORTED' });
+  };
+  return { list, dispatch, managementOperations, managementScope, manage };
 }

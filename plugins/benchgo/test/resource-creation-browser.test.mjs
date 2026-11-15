@@ -56,7 +56,7 @@ test('one creation dialog switches devices, reuses the project form and renders 
     page.on('pageerror', error => errors.push(error.message));
     const handleRoute = async route => {
       const request = route.request(), url = new URL(request.url()), remote = url.port === '17974';
-      if (url.pathname === '/api/commander-devices') { const input = request.postDataJSON();selections.push(input);return route.fulfill({ json: { url: 'http://127.0.0.1:17974/remote/?ticket=' + selections.length } }); }
+      if (url.pathname === '/api/commander-devices') { const input = request.postDataJSON();selections.push(input);return route.fulfill({ json: { device: {id:'opaque:remote/01',hostId:'host:exact/1',authorizationId:'auth:exact/1'}, url: 'http://127.0.0.1:17974/remote/?ticket=' + selections.length } }); }
       if (url.pathname === '/project-api') {
         const { action, args } = request.postDataJSON();calls.push({ remote, action, args });
         if (action === 'browse') {

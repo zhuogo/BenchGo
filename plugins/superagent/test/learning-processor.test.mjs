@@ -25,8 +25,8 @@ function fixture(output, ownedSkills, original = '我偏好中文回复') {
 const item = { id: 'review-1', payload: { scope: 'session', trigger: 'prompt', eventIds: ['visible', 'hidden'] }, source: { sessionId: 'session' } };
 const options = { signal: new AbortController().signal };
 test('learning filters excluded sources before inference and preserves verified evidence', async () => {
-  const f = fixture(() => ({ memories: [{ content: '偏好中文回复', sourceMessageId: 'task:visible' }] }));
-  await f.process(item, options);
+  const f = fixture(() => ({ memories: [{ content: '偏好中文回复', sourceMessageId: 'task:visible', sourceQuote: '我偏好中文回复' }] }));
+  const result = await f.process(item, options);
   assert.equal(JSON.stringify(f.requests).includes('私密资料'), false);
   assert.equal(f.requests[0].model, 'Exact:ID');
   // The material is the trusted instruction plus the Worker's last message, nothing else.
@@ -36,14 +36,18 @@ test('learning filters excluded sources before inference and preserves verified 
   assert.equal(f.candidates[0].options.verifiedSource.excerpt, '我偏好中文回复');
   assert.equal(f.candidates[0].options.verifiedSource.excerptTruncated, false);
   assert.equal(f.candidates[0].options.verifiedSource.taskId, 'task');
-  assert.equal(f.candidates[0].options.idempotencyKey, 'closed-learning:closed:0:2:memory:0');
+  assert.equal(f.candidates[0].options.idempotencyKey, 'closed-learning:closed:0:2:user-memory:0');
+  assert.equal(f.candidates[0].input.source.sourceQuote, '我偏好中文回复');
+  assert.equal(f.requests.length, 2);
+  assert.equal(result.modelRequests, 2);
+  assert.deepEqual(JSON.parse(f.requests[1].messages.at(-1).content[0].text), [{ messageId: 'task:visible', role: 'user', text: '我偏好中文回复', truncated: false }]);
   assert.deepEqual(f.completed, ['closed:0:2']);
   assert.equal('autoSave' in f.candidates[0].options, false);
 });
 
 test('learning excerpts retain bounded host text rather than the model summary', async () => {
   const original = '用户原文'.repeat(1600);
-  const f = fixture(() => ({ memories: [{ content: '模型总结', sourceMessageId: 'task:visible' }] }), undefined, original);
+  const f = fixture(() => ({ memories: [{ content: '模型总结', sourceMessageId: 'task:visible', sourceQuote: '用户原文' }] }), undefined, original);
   await f.process(item, options);
   assert.equal(f.candidates[0].input.source.excerpt, original.slice(0, 6000));
   assert.equal(f.candidates[0].input.source.excerptTruncated, true);
@@ -52,7 +56,7 @@ test('fabricated source or policy revocation cannot write learning candidates', 
   const invalid = fixture(() => ({ memories: [{ content: 'valid', sourceMessageId: 'task:visible' }, { content: 'forged', sourceMessageId: 'other' }] }));
   await assert.rejects(invalid.process(item, options), /证据/);
   assert.equal(invalid.candidates.length, 0);
-  const revoked = fixture(() => { revoked.revoke(); return { memories: [{ content: '偏好中文回复', sourceMessageId: 'task:visible' }] }; });
+  const revoked = fixture(() => { revoked.revoke(); return { memories: [{ content: '偏好中文回复', sourceMessageId: 'task:visible', sourceQuote: '我偏好中文回复' }] }; });
   await assert.rejects(revoked.process(item, options), /规则已变更/);
   assert.equal(revoked.candidates.length, 0);
 });
@@ -103,7 +107,9 @@ test('rejected learning candidates remain rejected across retries', async t => {
 test('all skill evidence and fields are validated before any memory or skill is written', async t => {
   const store = skillStore(t);
   for (const invalid of [{ ...skill, name: 'Invalid Name' }, { ...skill, sourceMessageId: 'hidden' }, { ...skill, verification: '' }, { ...skill, procedure: '私密资料' }, null]) {
-    const f = fixture(() => ({ memories: [{ content: '中文', sourceMessageId: 'task:visible' }], skills: [skill, invalid] }), store);
+    let calls = 0;
+    const f = fixture(() => ({ memories: [{ content: '中文', sourceMessageId: 'task:visible', sourceQuote: '我偏好中文回复' }],
+      skills: ++calls === 1 ? [skill, invalid] : [] }), store);
     await assert.rejects(f.process(item, options), /学习技能/);
     assert.equal(f.candidates.length, 0);
     assert.equal(store.list().length, 0);
@@ -162,11 +168,46 @@ test('running, waiting or undelivered material is rejected even if supplied by a
 });
 
 test('storage failure preserves the global batch for retry and auxiliary routes use exact configured IDs', async () => {
-  const f = fixture(() => ({ memories: [{ content: '中文', sourceMessageId: 'task:visible' }] }));
+  const f = fixture(() => ({ memories: [{ content: '中文', sourceMessageId: 'task:visible', sourceQuote: '我偏好中文回复' }] }));
   f.store.getConfig = async () => ({ models: [{ providerId: 'router', modelId: 'Router:ID' }],
     auxiliary: { models: [{ providerId: 'aux', modelId: 'Aux:Exact/ID' }], capabilities: ['review'] } });
   f.store.memory.propose = async () => { throw new Error('disk unavailable'); };
   await assert.rejects(f.process(item, options), /disk unavailable/);
   assert.equal(f.requests[0].model, 'Aux:Exact/ID');
   assert.equal(f.completed.length, 0);
+});
+
+test('a user question cannot inherit a Worker answer through automatic world memory', async () => {
+  let calls = 0;
+  const f = fixture(() => ++calls === 1 ? { memories: [{ content: '用户认为服务器只是本机管理目录，并未独立注册。', category: 'world', sourceMessageId: 'task:visible' }] }
+    : { memories: [], skills: [], curateIds: [] }, undefined, '你能看到服务器的项目吗？');
+  f.task.result.summary = '查找完成：服务器只是本机管理目录，并未独立注册。';
+  f.store.memory.list = async () => [{ id: 'old', content: '旧记忆重复了助手的目录推断。', category: 'world' }];
+  const result = await f.process(item, options);
+  assert.equal(result.candidates.length, 0);
+  assert.equal(f.candidates.length, 0);
+  assert.equal(f.requests.length, 2);
+  const isolated = JSON.stringify(f.requests[1].messages);
+  assert.match(isolated, /你能看到服务器的项目吗/);
+  for (const contamination of ['服务器只是本机管理目录', '旧记忆重复', '用户认为']) assert.equal(isolated.includes(contamination), false);
+  assert.match(isolated, /user-statements-only/);
+});
+
+test('independent user facts require a literal quote and cannot introduce outcome or skill claims', async () => {
+  for (const invalid of [{ sourceQuote: '' }, { sourceQuote: '助手声称用户只要英文' }, { category: 'experience', sourceQuote: '我偏好中文回复' }]) {
+    let calls = 0;
+    const f = fixture(() => ({ memories: [{ content: '偏好中文回复', sourceMessageId: 'task:visible',
+      ...(++calls > 1 ? invalid : {}) }] }));
+    await assert.rejects(f.process(item, options), /精确原文证据/);
+    assert.equal(f.candidates.length, 0);
+    assert.equal(f.completed.length, 0);
+  }
+});
+
+test('a question containing an explicit durable preference retains only its supported statement', async () => {
+  const original = '我长期偏好中文回复。你能检查服务器项目吗？';
+  const f = fixture(() => ({ memories: [{ content: '用户长期偏好中文回复。', category: 'opinions', sourceMessageId: 'task:visible', sourceQuote: '我长期偏好中文回复。' }] }), undefined, original);
+  await f.process(item, options);
+  assert.equal(f.candidates.length, 1);
+  assert.equal(f.candidates[0].input.source.sourceQuote, '我长期偏好中文回复。');
 });

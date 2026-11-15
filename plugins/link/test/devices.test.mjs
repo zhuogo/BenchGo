@@ -164,6 +164,19 @@ test('successful resource reads recover proxy failures and device lifecycle clos
   await center.close(); center = null;
   await bClosed;
 });
+
+test('unreachable workbench selection preserves device identity and returns an actionable connection error', async t => {
+  const directory = await temp(t), registry = await openDeviceRegistry(directory);
+  const listener = createServer(); await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
+  const url = 'https://127.0.0.1:' + listener.address().port;
+  await new Promise(resolve => listener.close(resolve));
+  const device = await registry.upsert({ name: '襄阳服务器', url, token: 'private-token' });
+  const center = await createDeviceCenter({ directory, webRoot: new URL('../dist/web/', import.meta.url), managerFactory: () => null });
+  t.after(() => center.close());
+  await assert.rejects(center.select(device.id, 'http://127.0.0.1:8080'), error => error.code === 'OFFLINE' && /设备暂不可达.*重试/.test(error.message) && !error.message.includes('127.0.0.1'));
+  const saved = center.devices().devices.find(row => row.id === device.id);
+  assert.equal(saved.name, '襄阳服务器'); assert.equal(saved.status, 'offline');
+});
 test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persistent streams', async t => {
   const directory = await temp(t), identity = await loadIdentity(directory); let authenticated = 0;
   const server = createServer({ key: identity.key, cert: identity.cert }, async (req, res) => {

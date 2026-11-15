@@ -1,6 +1,7 @@
 package cn.draftgo.benchgo.link
 
 import android.graphics.Color
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -19,6 +20,7 @@ internal class NativeAppearance(
     private val activity: AppCompatActivity,
     private val root: View,
     private val deviceButton: TextView,
+    private val loadingView: NativeLoadingView,
     private val currentView: () -> WebView,
 ) {
     private data class Page(val origin: String, var appearance: PageAppearance? = null, val messages: Boolean)
@@ -26,6 +28,7 @@ internal class NativeAppearance(
     private val script = activity.assets.open("native-appearance.js").bufferedReader().use { it.readText() }
     private val handler = Handler(Looper.getMainLooper())
     private var resumed = false
+    init { applySystemAppearance() }
     private val poll = object : Runnable {
         override fun run() {
             if (!resumed) return
@@ -83,6 +86,7 @@ internal class NativeAppearance(
         deviceButton.setBackgroundColor(appearance.background)
         deviceButton.setTextColor(appearance.foreground)
         currentView().setBackgroundColor(appearance.background)
+        loadingView.setAppearance(appearance)
         activity.window.apply {
             statusBarColor = Color.TRANSPARENT
             navigationBarColor = Color.TRANSPARENT
@@ -93,6 +97,11 @@ internal class NativeAppearance(
             isAppearanceLightStatusBars = appearance.darkSystemIcons
             isAppearanceLightNavigationBars = appearance.darkSystemIcons
         }
+    }
+
+    private fun applySystemAppearance() {
+        val dark = activity.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+        apply(PageAppearance.parse(if (dark) "#19191b" else "#ffffff", if (dark) "#ededee" else "#202124")!!)
     }
 
     fun resume() { resumed = true; show(currentView()) }

@@ -26,7 +26,7 @@ export function createAssistantDeviceStatus({ ctx, store, now = Date.now }) {
           ...(['mobile', 'computer', 'tablet', 'unknown'].includes(device.deviceType) ? { type: device.deviceType } : {}),
           lastSeenAt: device.lastSeenAt };
       });
-      return { available: true, enabled: status.enabled, devices, pendingCount: status.pending.length, observedAt, liveConnections: 'unknown' };
+      return { available: true, direction: 'inbound', purpose: '允许哪些设备访问本机；不表示出站服务器或它们对本机的授权。查询服务器与项目请用 assistant_devices / assistant_projects。', enabled: status.enabled, devices, pendingCount: status.pending.length, observedAt, liveConnections: 'unknown' };
     } catch {
       return unavailable('DEVICE_STATUS_UNAVAILABLE', 'Link 设备状态查询暂不可用，无法确认已授权设备。');
     }

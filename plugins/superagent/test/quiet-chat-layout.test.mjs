@@ -549,6 +549,8 @@ async function fixture() {
       import { QuietChat } from './plugins/superagent/client/quiet-chat.jsx';
       import { AssistantHome } from './plugins/superagent/client/home.jsx';
       import { PartialArguments } from '@deepseek-ai/dsh-util-values';
+      import { installIconSprite } from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
+      installIconSprite({effect:fn=>fn(),on(){}},undefined);
       const root = createRoot(document.getElementById('root'));
       const performanceSession={running:true};
       window.preparePerformance=count=>{
@@ -860,13 +862,86 @@ test('quiet chat theme, hover geometry, keyboard and touch controls in a real br
       if(state==='question') { assert.equal(await page.locator('.ba-loading-dots').count(),0,'an open question card replaces the busy dots'); assert(await page.getByText('在下方选项卡中作答后继续',{exact:true}).isVisible()); }
     }
     const touch=await browser.newPage({viewport:{width:390,height:1000},hasTouch:true,isMobile:true,reducedMotion:'reduce'});
+    touch.on('pageerror',error=>errors.push(error.message));
     await touch.setContent(html);
-    await touch.locator('.ba-message-toolbar').first().waitFor();
-    const targets=await touch.locator('.ba-message-toolbar button').evaluateAll(nodes=>nodes.map(node=>({width:node.getBoundingClientRect().width,height:node.getBoundingClientRect().height,opacity:getComputedStyle(node.parentElement).opacity})));
-    assert(targets.every(node=>node.width>=44&&node.height>=44&&node.opacity==='1'),'touch targets are visible and 44px');
-    const touchSides=await touch.locator('.ba-chat-message').evaluateAll(nodes=>nodes.map(node=>{const body=node.querySelector('.ba-chat-body').getBoundingClientRect(),tools=node.querySelector('.ba-message-toolbar').getBoundingClientRect();return {below:tools.top>=body.bottom,inside:tools.left>=0&&tools.right<=innerWidth}}));
-    assert(touchSides.every(row=>row.below&&row.inside),'touch tools remain below readable bubbles without overflow');
-    await shot(touch,'touch-390');
+    const mobileMessage=touch.locator('[data-chat-key="message:short"]'), mobileReply=touch.locator('[data-chat-key="message:reply"]');
+    await touch.waitForFunction(()=>document.querySelector('[data-chat-key="message:short"]')?.dataset.touchActions==='true');
+    assert.equal(await touch.locator('.ba-message-toolbar:visible').count(),0,'touch toolbars are hidden until a deliberate hold');
+    await mobileMessage.locator('.ba-chat-body').tap();
+    assert.equal(await touch.locator('[data-action-panel]').count(),0,'a regular tap does not open message controls');
+    const cdp=await touch.context().newCDPSession(touch);
+    const hold=async locator=>{
+      const bounds=await locator.boundingBox(), x=bounds.x+Math.min(30,bounds.width/2), y=bounds.y+Math.min(20,bounds.height/2);
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+      await touch.locator('[data-action-panel=actions]').waitFor();
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    };
+    const mobileLayout=()=>touch.evaluate(()=>({height:document.querySelector('.ba-chat-feed').scrollHeight,rows:[...document.querySelectorAll('.ba-chat-message')].map(node=>{const box=node.getBoundingClientRect();return [node.dataset.chatKey,box.x,box.y,box.width,box.height]})}));
+    for(const dark of [false,true]){
+      await touch.evaluate(dark=>document.body.toggleAttribute('data-ds-dark-theme',dark),dark);
+      const before=await mobileLayout();
+      await hold(mobileMessage.locator('.ba-chat-body'));
+      assert.deepEqual(await mobileLayout(),before,'opening a portaled toolbar leaves message positions and scroll height unchanged');
+      const mobileMenu=touch.locator('[data-action-panel=actions]');
+      await touch.waitForFunction(()=>{const menu=document.querySelector('[data-action-panel=actions]');return menu&&getComputedStyle(menu).transform==='none'});
+      const targets=await mobileMenu.locator('button,time').evaluateAll(nodes=>nodes.map(node=>({width:node.getBoundingClientRect().width,height:node.getBoundingClientRect().height})));
+      assert(targets.every(node=>node.width>=43.99&&node.height>=43.99),`mobile controls keep 44px touch targets: ${JSON.stringify(targets)}`);
+      const bounds=await mobileMenu.boundingBox();
+      assert(bounds.x>=0&&bounds.x+bounds.width<=390&&bounds.y>=0&&bounds.y+bounds.height<=1000,'long-press controls stay in the viewport');
+      assert.equal(await mobileMenu.evaluate(node=>getComputedStyle(node).transform),'none','reduced motion removes popover scaling');
+      await shot(touch,`touch-${dark?'dark':'light'}-long-press-390`);
+      await mobileMenu.getByRole('button',{name:'表情回应',exact:true}).tap();
+      await touch.locator('[data-action-panel=reactions]').waitFor();
+      const emoji=dark?'🎉':'❤️';
+      await touch.getByRole('button',{name:`回应 ${emoji}`,exact:true}).tap();
+      await touch.locator('[data-action-panel]').waitFor({state:'detached'});
+      assert(await mobileMessage.getByRole('button',{name:`取消回应 ${emoji}`,exact:true}).isVisible(),'saved reactions remain visible with the toolbar closed');
+      await hold(mobileReply.locator('.ba-chat-body'));
+      await touch.getByRole('button',{name:'本条回复用量',exact:true}).tap();
+      await touch.locator('[data-action-panel=usage] dd').first().waitFor();
+      assert.deepEqual(await touch.locator('[data-action-panel=usage] dd').allTextContents(),['120','32']);
+      await shot(touch,`touch-${dark?'dark':'light'}-usage-390`);
+      await touch.keyboard.press('Escape');
+      await touch.locator('[data-action-panel]').waitFor({state:'detached'});
+      await hold(mobileMessage.locator('.ba-chat-body'));
+      await touch.getByRole('button',{name:'选择消息文字',exact:true}).tap();
+      await touch.locator('[data-action-panel]').waitFor({state:'detached'});
+      assert.equal(await touch.evaluate(()=>window.getSelection().toString()),'好的','native text selection remains available from the actions');
+      await mobileReply.locator('.ba-chat-body').tap();
+      await touch.evaluate(()=>window.getSelection().removeAllRanges());
+      assert.equal(await mobileMessage.getAttribute('data-text-selection'),null,'leaving the message restores its hold gesture');
+      await hold(mobileMessage.locator('.ba-chat-body'));
+      await mobileReply.locator('.ba-chat-body').tap();
+      await touch.locator('[data-action-panel]').waitFor({state:'detached'});
+      assert.equal(await touch.locator('.ba-message-toolbar:visible').count(),0,'outside tap dismisses the toolbar');
+    }
+    // Movement, scrolling, cancellation and additional fingers must never turn a read gesture into an action.
+    const body=mobileMessage.locator('.ba-chat-body');
+    for(const cancel of ['pointermove','pointercancel','scroll','secondary']){
+      await body.dispatchEvent('pointerdown',{pointerType:'touch',pointerId:7,isPrimary:true,clientX:40,clientY:30});
+      if(cancel==='scroll')await touch.locator('.ba-chat-feed').dispatchEvent('scroll');
+      else if(cancel==='secondary')await body.dispatchEvent('pointerdown',{pointerType:'touch',pointerId:8,isPrimary:false});
+      else await body.dispatchEvent(cancel,{pointerType:'touch',pointerId:7,isPrimary:true,clientX:60,clientY:30});
+      await touch.waitForTimeout(500);
+      assert.equal(await touch.locator('[data-action-panel]').count(),0,`${cancel} cancels the hold`);
+      await body.dispatchEvent('pointerup',{pointerType:'touch',pointerId:7,isPrimary:true});
+    }
+    await mobileMessage.focus(); await touch.keyboard.press('Shift+F10');
+    await touch.locator('[data-action-panel=actions]').waitFor();
+    assert.equal(await touch.locator('[data-action-panel=actions]').getAttribute('data-instant'),'true','keyboard opens the controls instantly');
+    await touch.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='复制消息');
+    await touch.keyboard.press('ArrowDown');
+    assert.equal(await touch.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'表情回应','the shared menu keeps keyboard navigation');
+    await touch.keyboard.press('Escape'); await touch.locator('[data-action-panel]').waitFor({state:'detached'});
+    assert(await mobileMessage.evaluate(node=>node===document.activeElement),'Escape returns focus to the held message');
+    await touch.emulateMedia({reducedMotion:'no-preference'});
+    await hold(body);
+    const animation=await touch.locator('[data-action-panel=actions]').evaluate(node=>({properties:getComputedStyle(node).transitionProperty,duration:getComputedStyle(node).transitionDuration,origin:getComputedStyle(node).transformOrigin}));
+    assert.equal(animation.properties,'opacity, transform'); assert.equal(animation.duration,'0.16s, 0.16s');
+    await shot(touch,'touch-animated-long-press-390');
+    await touch.locator('.ba-chat-feed').dispatchEvent('scroll');
+    await touch.locator('[data-action-panel]').waitFor({state:'detached'});
+    await shot(touch,'touch-closed-390');
     assert.deepEqual(errors,[],'no browser runtime errors');
   } finally { await browser.close(); }
 });

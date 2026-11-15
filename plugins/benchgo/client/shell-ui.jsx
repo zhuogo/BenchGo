@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { mountToolsPage } from './tools-page.jsx';
 import { AppFrame } from '../../../deepseek-harness/packages/client/ui-layout/src/client/AppFrame.tsx';
 import { createResponsiveLayoutActions } from './responsive-layout.mjs';
@@ -9,8 +9,17 @@ export function recentTranslation(locale,original){return function(namespace,key
 
 function ResponsiveAppFrame(props) {
   const actions = useMemo(() => createResponsiveLayoutActions(props.actions), [props.actions]);
+  const [resourceEmbedded, setResourceEmbedded] = useState(() => document.documentElement.hasAttribute('data-resource-embedded'));
+  useEffect(() => {
+    const root = document.documentElement;
+    const sync = () => setResourceEmbedded(root.hasAttribute('data-resource-embedded'));
+    const observer = new MutationObserver(sync);
+    observer.observe(root, { attributes: true, attributeFilter: ['data-resource-embedded'] });
+    sync();
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => () => actions.dispose(), [actions]);
-  return <AppFrame {...props} actions={actions} />;
+  return <AppFrame {...props} actions={actions} resourceEmbedded={resourceEmbedded} />;
 }
 
 function HiddenNativeUpdateBadge() { return null; }

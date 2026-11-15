@@ -30,7 +30,6 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
   const [busy, setBusy] = useState(''), [lanAddress, setLanAddress] = useState('');
   const [statusError, setStatusError] = useState(''), [loading, setLoading] = useState(true), [diagnostic, setDiagnostic] = useState('');
   const [editingDevice, setEditingDevice] = useState(null);
-  const [pairGrants, setPairGrants] = useState({ collaboration: false, management: false });
   const [managementResult, setManagementResult] = useState(null);
   const managementFlight = useRef(false);
   const renamingDevice = useRef(false), composingDeviceName = useRef(false);
@@ -75,7 +74,7 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
       const { mode, publicUrl } = pairingConnection(status, defaults);
       const current = !status.enabled || (mode === 'public' && status.publicUrl !== publicUrl) ? await saveConfig({ enabled: true, ...(mode === 'public' && publicUrl ? { publicUrl } : {}) }) : status;
       const address = mode === 'lan' && current.addresses?.includes(lanAddress) ? lanAddress : '';
-      setPairing(await management('pairing', { mode, ...(address ? { address } : {}), ...Object.fromEntries(Object.entries(pairGrants).filter(([, enabled]) => enabled)) }));
+      setPairing(await management('pairing', { mode, ...(address ? { address } : {}) }));
     } catch (e) { setError(e.message); } finally { setBusy(''); }
   };
   const confirm = async (id, action) => { setBusy(action); setError(''); try { const value = await management(action, { id }); ++request.current; applyStatus(value); } catch (e) { setError(e.message); } finally { setBusy(''); } };
@@ -109,11 +108,6 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
   if (loading && !status && !statusError) return <section className="link-settings"><DeviceLoading label="正在读取连接状态…" /></section>;
   const pairButton = <Button kind="primary" icon="scan" onClick={beginPairing} disabled={unavailable}>{busy === 'pairing' ? '正在准备…' : '生成连接信息'}</Button>;
   const details = <>
-    <Disclosure className="link-access" title="协作权限">
-      <p className="link-empty">生成新的连接信息时，可一并授权以下能力。访问工作台不自动获得这些权限；双向协作需两台主机分别授权。</p>
-      <div className="link-access-options">{[['collaboration', '允许委派和跟进本机任务'], ['management', '允许查询连接及申请修改中继']].map(([key, label]) => <label key={key}><input type="checkbox" checked={pairGrants[key]} disabled={unavailable || !!pairing} onChange={event => setPairGrants(value => ({ ...value, [key]: event.target.checked }))} /><span>{label}</span></label>)}</div>
-      <p className="link-empty">中继变更仍需在本机确认这次具体修改，凭据不会共享。</p>
-    </Disclosure>
     <Disclosure className="link-advanced" title="高级设置">
       <form className="link-form" onSubmit={configure}>
         <label className="link-field"><span>监听地址</span><input value={form.host} onChange={e => setForm(v => ({ ...v, host: e.target.value }))} placeholder="0.0.0.0" disabled={unavailable} /></label>
@@ -124,7 +118,7 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
       {pairingConnection(status, defaults).mode === 'lan' && status?.addresses?.length > 1 && <div className="link-advanced-controls"><label className="link-field"><span>手动指定连接地址 <small>通常保持自动即可；连接失败时再尝试其他地址。</small></span><Select aria-label="局域网地址" value={lanAddress} disabled={unavailable} onChange={e => { setLanAddress(e.target.value); setPairing(null); }}><option value="">自动选择地址</option>{status.addresses.map(address => <option key={address} value={address}>{address}</option>)}</Select></label></div>}
       <div className="link-diagnostics"><div className="link-panel-head"><h4>连接诊断</h4><Button icon="refresh" onClick={refreshStatus} disabled={!!busy}>{busy === 'refresh' ? '正在刷新…' : '刷新状态'}</Button></div><p>Link 运行在哪台电脑，就连接哪台电脑。云服务器不属于手机本地局域网，请使用受信任的 HTTPS 地址；本地连接失败时，检查同一 Wi-Fi、网络隔离和电脑防火墙。</p>{status?.relay?.configured && <p role="status">自有中继：{status.relay.connected ? '主机通道已连接（需从访问端验证可达性）' : status.relay.lastError || '正在连接…'}</p>}<div className="link-addresses">{(status?.addresses || []).map(address => <code key={address}>{address}</code>)}{status?.publicUrl && <code>{status.publicUrl}</code>}{status && !status.addresses?.length && <span>未发现可用连接地址，请检查网络或指定监听地址。</span>}</div></div>
     </Disclosure>
-    {!!status?.pending?.length && !pairing && <div className="link-pending-list">{status.pending.map(device => <div className="link-device" key={device.id}><div><strong>{device.name || '新设备'}</strong><small>{deviceAccessLabel(device)}</small></div><Button kind="primary" icon="check" className="link-button-success" onClick={() => confirm(device.id, 'confirm')} disabled={unavailable}>允许</Button><Button icon="close" className="link-button-danger" onClick={() => confirm(device.id, 'reject')} disabled={unavailable}>拒绝</Button></div>)}</div>}
+    {!!status?.pending?.length && !pairing && <div className="link-pending-list">{status.pending.map(device => <div className="link-device" key={device.id}><div><strong>{device.name || '新设备'}</strong><small>{deviceAccessLabel()}</small></div><Button kind="primary" icon="check" className="link-button-success" onClick={() => confirm(device.id, 'confirm')} disabled={unavailable}>允许</Button><Button icon="close" className="link-button-danger" onClick={() => confirm(device.id, 'reject')} disabled={unavailable}>拒绝</Button></div>)}</div>}
     {!!status?.pendingManagement?.length && <div className="link-management-requests" aria-label="远端配置请求"><h3>远端配置请求</h3>{status.pendingManagement.map(operation => <div className="link-management-request" key={operation.id}>
       <strong>{operation.deviceName || '已授权设备'} 请求修改本机中继</strong>
       <ul>{(operation.ops || []).map((op, index) => { const node = status.relay?.nodes?.[Number(op.path?.[1])]; return <li key={index}>{node?.url || node?.id || `节点 ${Number(op.path?.[1]) + 1}`}：{op.path?.[2] === 'priority' ? `优先级改为 ${op.value}` : op.value ? '启用' : '停用'}</li>; })}</ul>
@@ -139,7 +133,6 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
         <Tooltip label="保存备注"><button type="submit" className="link-name-action link-name-confirm" aria-label="保存设备备注" disabled={unavailable || !editingDevice.name.trim()}><UIIcon name="check" size={15} /></button></Tooltip>
       </form> : <div className="link-device-name"><strong>{device.name || '未命名设备'}</strong><Tooltip label="编辑备注"><button type="button" className="link-name-action" aria-label="编辑设备备注" onClick={() => { composingDeviceName.current = false; setEditingDevice({ id: device.id, name: device.name || '' }); setError(''); }} disabled={unavailable}><UIIcon name="edit" size={14} /></button></Tooltip></div>}
       <small>最近连接 {formatTime(device.lastSeenAt)}</small>
-      <div className="link-access-options">{[['collaboration', '任务协作'], ['management', '连接与中继管理']].map(([key, label]) => <label key={key}><input type="checkbox" aria-label={`${device.name || '设备'}：${label}`} checked={device.capabilities?.includes(key) || false} disabled={unavailable} onChange={event => changeAccess('grant-device', { id: device.id, [key]: event.target.checked })} /><span>{label}</span></label>)}</div>
     </div><Button icon="trash" className="link-button-danger" onClick={() => confirm(device.id, 'revoke')} disabled={unavailable}>撤销</Button></div>) : <p className="link-empty">{loading ? '正在连接…' : statusError ? '暂不可用' : '还没有配对设备'}</p>}</div>
   </>;
   return <section className={`link-settings${embedded ? ' link-settings-embedded' : ''}`} aria-label="Link 远程连接">
@@ -152,8 +145,8 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
     {pairing && <PairingDialog pairing={pairing} pending={status?.pending || []} onClose={() => setPairing(null)} onConfirm={confirm} busy={busy} error={error} />}
   </section>;
 }
-function deviceAccessLabel(device) {
-  return ['连接工作台', ...(device.capabilities?.includes('collaboration') ? ['任务协作'] : []), ...(device.capabilities?.includes('management') ? ['连接与中继管理（修改需确认）'] : [])].join(' · ');
+function deviceAccessLabel() {
+  return '连接工作台 · 任务协作 · 连接与中继管理（修改需确认）';
 }
 
 export function PairingDialog({ pairing, pending = [], onClose, onConfirm, busy, error }) {
@@ -222,7 +215,7 @@ export function PairingDialog({ pairing, pending = [], onClose, onConfirm, busy,
       <h3 id={approvalTitleId}>允许设备连接？</h3>
       <p id={approvalDescriptionId}>仅允许你认识并信任的设备访问此工作台。</p>
       <div className="link-pending-list">{pending.map(device => <div className="link-device" key={device.id}>
-        <UIIcon name={deviceIcon(device)} size={20} /><div className="link-device-info"><strong>{device.name || '新设备'}</strong><small>{deviceAccessLabel(device)}</small></div>
+        <UIIcon name={deviceIcon(device)} size={20} /><div className="link-device-info"><strong>{device.name || '新设备'}</strong><small>{deviceAccessLabel()}</small></div>
         <div className="link-device-actions"><Button icon="close" className="link-button-danger" onClick={() => onConfirm(device.id, 'reject')} disabled={!!busy}>{busy === 'reject' ? '正在拒绝…' : '拒绝'}</Button><Button kind="primary" icon="check" className="link-button-success" onClick={() => onConfirm(device.id, 'confirm')} disabled={!!busy}>{busy === 'confirm' ? '正在允许…' : '允许'}</Button></div>
       </div>)}</div>
       <ErrorText>{error}</ErrorText>

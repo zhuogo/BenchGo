@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 let turn = 0;
 let approvalId;
 createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line);
+  if (process.env.COMMANDER_TEST_PROTOCOL_LOG && m.method) appendFileSync(process.env.COMMANDER_TEST_PROTOCOL_LOG, JSON.stringify(m) + '\n');
   const result = value => send({ id: m.id, result: value });
   const done = status => send({ method: 'turn/completed', params: { threadId: 'thread-fixture', turn: { id: `turn-${turn}`, status } } });
   if (!m.method) {

@@ -208,3 +208,17 @@ test('definite remote rejection stops observation and unresolved acceptance has 
   assert.equal(calls, before + 1);
   assert.equal(f.database.listTasks().length, 0);
 });
+
+test('old target permission rejection identifies outgoing ownership and requests target upgrade rather than local inbound grants', async t => {
+  const f=fixture(t),events=[{type:'turn/start'},{type:'user/message',data:{id:'send-hi',source:{kind:'user'},content:[{type:'text',text:'在 aitcm 发个 hi'}]}}];
+  const agent={id:'entry-session',status:'running',session:{header:{},snapshotEvents:()=>events}};
+  const link={devices:async()=>({devices:[{id:'outbound-B',name:'襄阳服务器'}]}),callDevice:async()=>{throw Object.assign(new Error('此设备未获协作执行授权'),{status:403,code:'UNAUTHORIZED'});}};
+  const ctx={get:()=>link,agents:{get:()=>agent,currentInitiator:()=>agent,turnBoundaryOf:()=>({openTurnStartSeq:0})}};
+  const entry=createDeviceCollaboration({ctx,store:{orchestration:f.database},runtimeStore:f.runtimeStore});
+  await assert.rejects(entry.call({operation:'delegate',deviceId:'outbound-B',text:'在 aitcm 项目对话发送 hi'},{agent},{ownerAgent:agent,threadId:'main'}),error=>{
+    assert.equal(error.direction,'outbound');assert.equal(error.targetDeviceId,'outbound-B');assert.equal(error.targetDeviceName,'襄阳服务器');
+    assert.equal(error.code,'TARGET_PERMISSION_VERSION_REQUIRED');assert.match(error.message,/目标仍使用旧的分级授权机制/);assert.match(error.message,/无需配置额外协作权限/);return true;
+  });
+  assert.equal(f.runtimeStore.meta('remote-executions')[0].state,'rejected');
+  assert.equal(f.database.listTasks().length,0);
+});

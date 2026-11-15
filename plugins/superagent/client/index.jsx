@@ -59,6 +59,7 @@ let selectedAssistantThread = 'main';
 let selectedAssistantTab = 'chat';
 let selectedAssistantTask = null;
 let initialPanelSelected = false;
+let pendingAssistantPanel = null;
 function dispatchAssistantEvent(name, detail) {
   const event = () => document.dispatchEvent(new CustomEvent(name, { detail }));
   event();
@@ -352,7 +353,9 @@ function retainSession(ctx, sessionId, threadId = 'main') {
   const ready = (async () => {
     // Retaining a cold official session also resumes its writer. Let the
     // assistant finish installing its session before the client can retain it.
-    const ensured = await api('ensure', { threadId }, controller.signal);
+    let ensured;
+    try { ensured = await api('ensure', { threadId }, controller.signal); }
+    catch (cause) { if (controller.signal.aborted) return; throw cause; }
     if (controller.signal.aborted || ensured.sessionId !== sessionId) return;
     reference = await retainAssistantSession(ctx.sessions, sessionId, controller.signal);
     if (controller.signal.aborted) { reference.release(); return; }
@@ -388,7 +391,18 @@ function UIIcon({ name, ...props }) {
 }
 async function request(action, args, signal) {
   const url = new URL('api/commander/assistant', document.baseURI), done = perfTrace.time('assistant:' + action);
-  try { return await readJsonResponse(await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...args }), signal }), url); }
+  // These finite reads must release shared state/history promises even when a
+  // mobile connection stalls after headers. Mutations keep their own semantics.
+  const deadline = ['state', 'ensure', 'history'].includes(action) ? AbortSignal.timeout(20000) : null;
+  if (deadline) signal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  try {
+    if (deadline) signal.throwIfAborted();
+    const response = (async () => readJsonResponse(await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...args }), signal }), url))();
+    return await (deadline ? abortable(response, signal) : response);
+  } catch (cause) {
+    if (deadline?.aborted && cause === deadline.reason) throw new Error('连接超时，请检查网络后重试');
+    throw cause;
+  }
   finally { done(); }
 }
 // Frequent reads leave the state snapshot valid; every other action may change it.
@@ -624,7 +638,28 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
   const stateRequest = useRef(0);
   const refresh = async (signal) => { const request = ++stateRequest.current; const value = await api('state', {}, signal); if (request === stateRequest.current) setSnapshot(previous => structuralShare(previous, { ...value, config: assistantConfigSync.getSnapshot() || value.config })); return value; };
   const execute = async (operation) => { try { setError(''); await operation(); return true; } catch (cause) { setError(cause.message || String(cause)); return false; } };
-  const retryLoad = async () => { try { setError(''); await refresh(); if (tab === 'chat') { await api('ensure', { threadId }); await refreshHistory(threadId); } } catch (cause) { setError(cause.message || String(cause)); } };
+  const loadErrors = useRef(new Map()), loadAttempts = useRef(new Map());
+  const readResource = async (source, operation, signal) => {
+    const attempt = (loadAttempts.current.get(source) || 0) + 1, requestEpoch = epoch.current;
+    loadAttempts.current.set(source, attempt);
+    const report = message => {
+      if (signal?.aborted || epoch.current !== requestEpoch || loadAttempts.current.get(source) !== attempt) return;
+      const previous = [...new Set(loadErrors.current.values())].join('；');
+      if (message) loadErrors.current.set(source, message); else loadErrors.current.delete(source);
+      const next = [...new Set(loadErrors.current.values())].join('；');
+      // A recovered read only clears its own error, preserving unrelated failures.
+      setError(value => (message || value === previous) ? next : value);
+    };
+    try { const value = await operation(); report(''); return value; }
+    catch (cause) { report(cause.message || String(cause)); throw cause; }
+  };
+  const retryLoad = async () => {
+    setError(''); loadErrors.current.clear();
+    await Promise.allSettled([
+      readResource('state', () => refresh()),
+      ...(tab === 'chat' ? [readResource('chat', async () => { await api('ensure', { threadId }); await refreshHistory(threadId); })] : []),
+    ]);
+  };
   const clearingMain = useRef(false), clearCommand = useRef(null);
   const clearMain = async () => {
     if (clearingMain.current || current.current !== 'main') return;
@@ -666,16 +701,14 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
       if (disposed || inFlight || !visible()) return;
       const controller = new AbortController(); inFlight = controller;
       try {
-        const results = await Promise.allSettled([
-          refresh(controller.signal),
-          ...(tab === 'chat' ? [(async () => {
+        await Promise.allSettled([
+          readResource('state', () => refresh(controller.signal), controller.signal),
+          ...(tab === 'chat' ? [readResource('chat', async () => {
             if (!opened) { await api('ensure', { threadId }, controller.signal); opened = true; }
             if (!disposed) await refreshHistory(threadId, controller.signal);
-          })()] : []),
+          }, controller.signal)] : []),
         ]);
-        const failure = results.find(result => result.status === 'rejected');
-        if (failure) throw failure.reason;
-      } catch (cause) { if (!disposed && !controller.signal.aborted) setError(cause.message); }
+      }
       finally {
         inFlight = null;
         if (!disposed && visible()) timer = setTimeout(tick, controller.signal.aborted ? 0 : 30000);
@@ -717,17 +750,28 @@ export function mountAssistant(ctx) {
   registerExecutionSessionDiscovery(ctx, loadExecutionSessions);
 
   registerChannelMessages(ctx);
-  ctx.effect(() => () => {
-    if (ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL) ctx.layout.selectPanel(null);
-  });
   ctx.effect(() => { const style = document.createElement('style'); style.textContent = css + '\n' + documentsCss; document.head.append(style); return () => style.remove(); });
   ctx.slots.inject('main', () => {
     const dispose = ctx.slots.register({ name: 'main', key: PANEL, children: { ...assistantConversationChildren, ...reviewApprovalChildren }, inject: () => ({ ctx }) }, AssistantPage);
+    const pending = pendingAssistantPanel;
+    pendingAssistantPanel = null;
     if (!initialPanelSelected) {
       initialPanelSelected = true;
       openAssistantThread(ctx, 'main');
+    } else if (pending?.layout === ctx.layout && pending.signal && !pending.signal.aborted
+      && ctx.layout.panelInfo.getSnapshot().activePanelId === null) {
+      // Restore only an interrupted panel mount, without resetting its thread/tab.
+      // Any subsequent user navigation, even to the native session, cancels this.
+      ctx.layout.selectPanel(PANEL);
     }
-    return dispose;
+    return () => {
+      pendingAssistantPanel = null;
+      if (ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL) {
+        ctx.layout.selectPanel(null);
+        pendingAssistantPanel = { layout: ctx.layout, signal: ctx.layout.beginNavigation?.() };
+      }
+      dispose();
+    };
   });
 }
 

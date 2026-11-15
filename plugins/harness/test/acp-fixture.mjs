@@ -30,8 +30,13 @@ io.on('line', line => {
     case 'session/prompt': {
       promptId = request.id; const prompt = params.prompt[0].text;
       if (prompt === 'hang') return;
+      if (prompt === 'chooser' || prompt === 'unknown-kind' || prompt === 'wrong-session' || prompt === 'duplicate-options') {
+        nativeRequestId = 'choice-request';
+        const duplicate = prompt === 'duplicate-options';
+        send({ jsonrpc: '2.0', id: nativeRequestId, method: 'session/request_permission', params: { sessionId: prompt === 'wrong-session' ? 'other-session' : sessionId, toolCall: { toolCallId: 'opaque/tool', kind: prompt === 'unknown-kind' ? 'other' : 'execute', title: 'Choose an approach' }, options: [{ kind: 'allow_once', optionId: 'opaque/first@1', name: 'Same label' }, ...(prompt === 'unknown-kind' ? [] : [{ kind: 'allow_once', optionId: duplicate ? 'opaque/first@1' : 'opaque:second/2', name: 'Same label' }]), { kind: 'reject_once', optionId: 'opaque:cancel', name: 'Cancel' }] } }); return;
+      }
       if (prompt === 'permission' || prompt === 'always' || prompt === 'fs') {
-        nativeRequestId = 'agent-request'; send({ jsonrpc: '2.0', id: nativeRequestId, method: prompt === 'fs' ? 'fs/read_text_file' : 'session/request_permission', params: { sessionId, toolCall: { kind: 'execute', title: 'fixture' }, options: [{ kind: 'allow_always', optionId: 'always' }, ...(prompt === 'always' ? [] : [{ kind: 'allow_once', optionId: 'once' }])] } }); return;
+        nativeRequestId = 'agent-request'; send({ jsonrpc: '2.0', id: nativeRequestId, method: prompt === 'fs' ? 'fs/read_text_file' : 'session/request_permission', params: { sessionId, toolCall: { kind: process.env.ACP_PERMISSION_KIND || 'execute', title: 'fixture' }, options: [{ kind: 'allow_always', optionId: 'always' }, ...(prompt === 'always' ? [] : [{ kind: 'allow_once', optionId: 'once' }])] } }); return;
       }
       update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thought' } });
       update({ sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'Read', status: 'in_progress' });

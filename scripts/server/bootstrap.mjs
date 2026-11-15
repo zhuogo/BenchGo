@@ -79,7 +79,8 @@ try {
       await atomic(join(base, 'start.mjs'), launcher);
       const units = join(homedir(), '.config/systemd/user'); await mkdir(units, { recursive: true, mode: 0o700 });
       const quote = value => JSON.stringify(String(value)).replaceAll('%', '%%');
-      const unit = ['[Unit]', 'Description=BenchGo server', 'After=network-online.target', '', '[Service]', 'Type=simple', 'UMask=0077', 'WorkingDirectory=' + base, 'ExecStart=' + quote(process.execPath) + ' ' + quote(join(base, 'start.mjs')), 'Environment=' + quote('PATH=' + process.env.PATH), 'Restart=on-failure', 'RestartSec=3', '', '[Install]', 'WantedBy=default.target', ''].join('\n');
+      // The launcher forwards graceful signals; mixed avoids also signalling its child directly.
+      const unit = ['[Unit]', 'Description=BenchGo server', 'After=network-online.target', '', '[Service]', 'Type=simple', 'KillMode=mixed', 'UMask=0077', 'WorkingDirectory=' + base, 'ExecStart=' + quote(process.execPath) + ' ' + quote(join(base, 'start.mjs')), 'Environment=' + quote('PATH=' + process.env.PATH), 'Restart=on-failure', 'RestartSec=3', '', '[Install]', 'WantedBy=default.target', ''].join('\n');
       await atomic(join(units, 'benchgo.service'), unit);
       await run('systemctl', ['--user', 'daemon-reload']); await run('systemctl', ['--user', 'enable', 'benchgo.service']);
       await rm(ownerFile, { force: true }); await run('systemctl', ['--user', 'restart', 'benchgo.service']);

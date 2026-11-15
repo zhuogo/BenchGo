@@ -7,6 +7,7 @@
 - `/`：原有官网首页，下载入口连接 `/download`。
 - `/download`：实时查询官方 GitHub 正式发布，按真实文件展示 Windows x64、macOS arm64/x64、Android APK 和 Linux x64 服务端。
 - `/docs`：复用平台文档中心，提供安装、首次使用、手机连接、Linux 服务端及更新校验五篇指南。
+- 首页、下载页、共享导航及文档正文中进入完整 `/docs` 路由的链接使用普通新标签页链接，避免在 iframe 内嵌套官网；文档中心自身的目录、搜索及上一篇/下一篇继续复用原有文章切换。
 - 三个页面共用 `benchgo-site-nav` 导航。`docs.html` 是现有文档页的兼容修订，保留原布局与文档运行时，搜索框和文章链接使用原生元素。
 
 下载页仅接受 `github.com/zhuogo/BenchGo/releases/download/` 下的 HTTPS 文件，不推测安装文件 URL。若正式发布提供 `downloads.json` 与签名，页面从同仓 `release-metadata` 分支的 `releases/vX.Y.Z/` 读取自动同步的原始文件，避免 GitHub Release 资产重定向的浏览器跨域限制。固定使用 `raw.githubusercontent.com/zhuogo/BenchGo/`，不接受可配置代理地址。使用 BenchGo 公钥验证 Ed25519 签名，并核对版本与发布的完整 `target_commitish` 后，合并清单中的不可变文件引用；清单读取或验证失败时保留当次发布真实资产与 GitHub 手动入口。无清单的历史发布同样可用。公钥轮换须同步产品更新契约与页面公钥。

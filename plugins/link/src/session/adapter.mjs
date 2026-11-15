@@ -10,7 +10,7 @@ const plainText = message => (message?.content ?? []).filter(block => block.type
 const liveText = stream => (stream ?? []).map(record => record.type === 'text-chunks' ? record.texts.join('') : record.type === 'chunk' && record.chunk.type === 'text-delta' ? record.chunk.text : '').join('');
 
 /** Adapt the paired human's narrow Link API to the official Harness gateway. */
-export function createSessionAdapter(ctx, _options = {}) {
+export function createSessionAdapter(ctx, { deletedIds = async () => [] } = {}) {
   const peers = new Map();
   const creates = new Map();
   const notify = (input, principal) => {
@@ -119,15 +119,32 @@ export function createSessionAdapter(ctx, _options = {}) {
   const rows = async (record, availableProjects = projects()) => {
     const result = await invoke(record, 'session', 'list', { _request: {} });
     const privateIds = new Set(await ctx.get?.('assistant')?.sidebarPrivateSessionIds?.() || []);
+    const dismissed = new Set(await deletedIds());
+    const archived = new Set(ctx.workspaceRegistry.archivedSessionIds ?? []), pinned = new Set(ctx.workspaceRegistry.pinnedSessionIds ?? []);
+    const waiting = new Set([...record.pending.values()].map(frame => frame.agentId));
+    const nativeOwners = new Map();
+    for (const session of ctx.get?.('commander')?.list() ?? []) {
+      if (!session.ownerSessionId || session.parentId && !session.harnessAdopted) continue;
+      const previous = nativeOwners.get(session.ownerSessionId);
+      if (!previous || Number(session.updatedAt) > Number(previous.updatedAt)) nativeOwners.set(session.ownerSessionId, session);
+    }
     const projectBySession = new Map();
     for (const project of availableProjects) {
       for (const id of project.sessionIds) if (!projectBySession.has(id)) projectBySession.set(id, project);
     }
     const sessions = [];
     for (const row of result.items) {
-      if (privateIds.has(row.sessionId) || row.parentSessionId || row.origin === 'subagent') continue;
+      if (privateIds.has(row.sessionId) || dismissed.has(row.sessionId) || row.parentSessionId || row.origin === 'subagent') continue;
       const project = projectBySession.get(row.sessionId);
-      if (project) sessions.push({ id: row.sessionId, projectId: project.id, title: row.projections?.values?.title?.title || row.projections?.values?.title || '新会话', running: row.running, updatedAt: row.updatedAt });
+      if (project) {
+        const native = nativeOwners.get(row.sessionId), selection = row.projections?.values?.modelSelection?.next;
+        const provider = native?.provider ?? 'deepseek', model = native ? native.model : selection?.model;
+        const modelProvider = native ? undefined : selection?.provider;
+        const status = waiting.has(row.sessionId) || native?.status === 'waiting' ? 'waiting' : row.running || native?.status === 'running' ? 'running' : native?.status === 'completed' ? 'idle' : native?.status ?? row.status;
+        sessions.push({ id: row.sessionId, projectId: project.id, title: row.projections?.values?.title?.title || row.projections?.values?.title || '新会话', running: row.running, updatedAt: row.updatedAt,
+          provider, ...(model === undefined ? {} : { model }), ...(modelProvider === undefined ? {} : { modelProvider }), ...(status === undefined ? {} : { status }),
+          ...(archived.has(row.sessionId) ? { archived: true } : {}), ...(pinned.has(row.sessionId) ? { pinned: true } : {}) });
+      }
     }
     return sessions;
   };
@@ -248,7 +265,52 @@ export function createSessionAdapter(ctx, _options = {}) {
   };
   const dispatch = (input, device) => withPeer(device, record => handle(record, input, device));
   const list = (device, availableProjects) => withPeer(device, record => rows(record, availableProjects));
-  return { dispatch, list, revoke: drop, close: async () => { await Promise.all([...peers.keys()].map(drop)); creates.clear(); } };
+  const managementOperations = () => {
+    const workspace = ctx.get?.('workspaceController'), session = ctx.get?.('sessionController');
+    const allowed = Object.entries({ pin: 'pinSession', unpin: 'unpinSession', archive: 'archiveSession', unarchive: 'unarchiveSession' }).filter(([, method]) => typeof workspace?.[method] === 'function').map(([operation]) => operation);
+    if (typeof session?.rename === 'function' && ctx.get?.('sessionTitle')) allowed.push('rename');
+    if (allowed.includes('archive') && typeof ctx.connection.createSharedFetchHandler === 'function' && ctx.get?.('benchgo')) allowed.push('delete');
+    return allowed;
+  };
+  const managementScope = (id, device, prior, allowDeleted = false) => withPeer(device, async record => {
+    string(id, 'session id', 256);
+    const project = projectOf(id) ?? (allowDeleted && prior && projects().find(row => row.id === prior.projectId && row.path === prior.path));
+    if (!project || prior && (project.id !== prior.projectId || project.path !== prior.path)) throw Object.assign(new Error('会话所属项目已不可用'), { code: 'NOT_FOUND', status: 404 });
+    const scope = { projectId: project.id, path: project.path };
+    const result = await invoke(record, 'session', 'list', { _request: {} });
+    const row = result.items.find(row => row.sessionId === id);
+    const dismissed = !allowDeleted && (await deletedIds()).includes(id);
+    const hidden = new Set(await ctx.get?.('assistant')?.sidebarPrivateSessionIds?.() || []);
+    if ((!row && !allowDeleted) || row?.parentSessionId || row?.origin === 'subagent' || dismissed || hidden.has(id)) throw Object.assign(new Error('会话不可用'), { code: 'NOT_FOUND', status: 404 });
+    if (!projects().some(current => current.id === scope.projectId && current.path === scope.path && (allowDeleted || current.sessionIds.includes(id)))) throw Object.assign(new Error('会话所属项目已变化'), { code: 'NOT_FOUND', status: 404 });
+    return scope;
+  });
+  const manage = (input, device, guard) => withPeer(device, async record => {
+    const method = { pin: 'pinSession', unpin: 'unpinSession', archive: 'archiveSession', unarchive: 'unarchiveSession' }[input.operation];
+    await guard();
+    guard.authorize();
+    if (method) {
+      guard.mutation();
+      await invoke(record, 'workspace', method, { request: { sessionId: input.id } });
+      const owner = ctx.get?.('commander')?.list().filter(row => row.ownerSessionId === input.id && (!row.parentId || row.harnessAdopted)).sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt))[0];
+      if (owner && ['archive', 'unarchive'].includes(input.operation)) { await guard(); guard.authorize(); await ctx.get('commander').archive(owner.id, input.operation === 'archive'); }
+      return {};
+    }
+    if (input.operation === 'rename') { guard.mutation(); return { title: (await invoke(record, 'session', 'rename', { request: { sessionId: input.id, title: input.title } })).title }; }
+    if (input.operation !== 'delete') throw Object.assign(new Error('目标尚不支持此会话操作'), { status: 422, code: 'UNSUPPORTED' });
+    guard.mutation();
+    await invoke(record, 'workspace', 'archiveSession', { request: { sessionId: input.id } });
+    await guard();
+    guard.authorize();
+    const handler = ctx.connection.createSharedFetchHandler('/api');
+    const response = await handler.fetch(new Request('http://localhost/api/commander', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'dismiss', harnessSessionId: input.id }) }), record.peer);
+    const result = await response.json();
+    if (!response.ok || result.error) throw Object.assign(new Error(result.error?.message || result.error || '会话隐藏失败'), { status: response.status });
+    const owners = (ctx.get?.('commander')?.list().filter(row => row.ownerSessionId === input.id && (!row.parentId || row.harnessAdopted)) ?? []).sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt)).slice(0, 1);
+    for (const owner of owners) { await guard(); guard.authorize(); await ctx.get('commander').remove(owner.id); }
+    return { deleted: true };
+  });
+  return { dispatch, list, managementOperations, managementScope, manage, revoke: drop, close: async () => { await Promise.all([...peers.keys()].map(drop)); creates.clear(); } };
 }
 
 export function validateAnswer(answer, questions) {

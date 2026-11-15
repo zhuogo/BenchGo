@@ -71,7 +71,7 @@ function PetConversationStatus({ home, session, chat }) {
   }, [expressionEvent?.eventId, config.revision]);
   useEffect(() => { setExpression(null); }, [config.revision]);
   const action = petActionForSession({ ...session, pendingInteraction });
-  const activity = conversationActivity(session, chat, pendingInteraction);
+  const activity = conversationActivity(session, chat, pendingInteraction, home.history);
   const face = expression || petExpressionForAction(config.pet, action);
   const pet = face && config.pet?.kind !== 'custom' ? { ...(config.pet || { kind: 'builtin', assetId: 'builtin', decorations: [], palette: 'default' }), expression: face } : config.pet;
   const draft = catalog?.draft;

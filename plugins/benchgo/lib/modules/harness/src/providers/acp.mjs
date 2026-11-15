@@ -11,6 +11,7 @@ export const ACP_TOOL_DEFAULTS = Object.freeze({
   mcode: Object.freeze({ command: 'mcode', args: Object.freeze(['acp']) }),
 });
 const safeModels = state => Array.isArray(state?.availableModels) ? state.availableModels.filter(item => typeof item?.modelId === 'string').map(item => ({ id: item.modelId, name: item.name || item.modelId, ...(item.description ? { description: item.description } : {}) })) : [];
+const permissionKinds = new Set(['read', 'edit', 'delete', 'move', 'search', 'execute', 'fetch']);
 export class ACPProvider {
   static capabilities = { stream: true, resume: true, steer: false, approvals: true, discover: true };
   constructor(config = {}, toolId = 'gemini') { this.config = config; this.toolId = toolId; }
@@ -89,15 +90,21 @@ export class ACPProvider {
     wire.on('request', request => {
       void (async () => {
         if (request.method !== 'session/request_permission') { wire.reject(request.id, 'Client filesystem and terminal methods are unsupported'); return; }
-        const params = request.params ?? {}, once = params.options?.find(option => option.kind === 'allow_once' && typeof option.optionId === 'string');
+        const params = request.params ?? {};
+        const options = Array.isArray(params.options) ? params.options.filter(option => ['allow_once', 'allow_always', 'reject_once', 'reject_always'].includes(option?.kind) && typeof option.optionId === 'string' && !!option.optionId) : [];
+        const once = options.filter(option => option.kind === 'allow_once');
+        const toolPermission = permissionKinds.has(params.toolCall?.kind) && once.length === 1;
         const denied = () => ({ outcome: { outcome: 'cancelled' } });
-        if (!connected || closing || !busy || params.sessionId !== driver.nativeId || !once || !host.approval) { wire.respond(request.id, denied()); return; }
+        if (!connected || closing || !busy || params.sessionId !== driver.nativeId || !options.length || options.length !== params.options.length || new Set(options.map(option => option.optionId)).size !== options.length || !host.approval) { wire.respond(request.id, denied()); return; }
         const controller = new AbortController(); pendingPermissions.add(controller);
         const abort = () => controller.abort(); life.signal.addEventListener('abort', abort, { once: true });
         const timer = setTimeout(abort, this.config.approvalTimeout ?? 120_000); timer.unref();
         try {
-          const answer = await Promise.race([Promise.resolve().then(() => host.approval({ kind: 'permission', method: params.toolCall?.kind ?? 'tool', nativeRequestId: request.id, details: params.toolCall ?? {} }, controller.signal)), new Promise(resolve => controller.signal.addEventListener('abort', () => resolve({ allow: false }), { once: true }))]);
-          if (!closing && !wire.closed) wire.respond(request.id, answer?.allow === true && !controller.signal.aborted ? { outcome: { outcome: 'selected', optionId: once.optionId } } : denied());
+          const choices = options.map((option, index) => ({ ...option, label: `${index + 1}. ${option.name || option.optionId}` }));
+          const details = toolPermission ? params.toolCall : { ...params.toolCall, acpOptions: choices, questions: [{ question: params.toolCall?.title || 'Choose an option', options: choices.map(option => ({ label: option.label })) }] };
+          const answer = await Promise.race([Promise.resolve().then(() => host.approval({ kind: toolPermission ? 'permission' : 'question', method: params.toolCall?.kind ?? 'tool', nativeRequestId: request.id, details }, controller.signal)), new Promise(resolve => controller.signal.addEventListener('abort', () => resolve({ allow: false }), { once: true }))]);
+          const selected = toolPermission ? answer?.allow === true && once[0] : options.find(option => option.optionId === answer?.selectedOptionId);
+          if (!closing && !wire.closed) wire.respond(request.id, selected && !controller.signal.aborted ? { outcome: { outcome: 'selected', optionId: selected.optionId } } : denied());
         } catch { if (!closing && !wire.closed) wire.respond(request.id, denied()); }
         finally { clearTimeout(timer); pendingPermissions.delete(controller); life.signal.removeEventListener('abort', abort); }
       })().catch(error => { if (!closing) host.failure(error); });

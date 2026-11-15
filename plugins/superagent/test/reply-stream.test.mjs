@@ -340,3 +340,51 @@ test('activity uses public labels, subtle model waits and actual interaction or 
   assert.equal(conversationActivity({ openState: 'loading' }, {}).kind, 'connecting');
   assert.equal(conversationActivity({ running: false }, {}), null);
 });
+
+test('idle activity retires accepted echo hints only for the same admitted public request', () => {
+  const pending = requestId => ({ requestId, placement: 'transcript', text: '同样的文字', time: 1 });
+  const session = { sessionId: 'session', running: false, pendingSubmissions: [pending('rpc')] };
+  const waiting = { kind: 'waiting', label: '等待处理' };
+  assert.deepEqual(conversationActivity(session), waiting);
+  for (const kind of ['user', 'steering']) {
+    for (const identity of [{ rpcId: 'rpc' }, { requestId: 'rpc' }]) {
+      const chat = { legacy: { nodes: [{ kind, seq: 8, source: { kind: 'user', ...identity } }] } };
+      assert.equal(conversationActivity(session, chat), null);
+      assert.deepEqual(conversationActivity({ ...session, pendingSubmissions: [...session.pendingSubmissions, pending('other')] }, chat), waiting);
+    }
+  }
+  for (const identity of [{ rpcId: 'rpc' }, { requestId: 'rpc' }, { source: { kind: 'user', rpcId: 'rpc' } }, { source: { kind: 'user', requestId: 'rpc' } }]) {
+    const saved = { sessionId: 'session', messages: [{ id: 'human', role: 'user', ...identity }] };
+    assert.equal(conversationActivity(session, undefined, undefined, saved), null);
+    assert.deepEqual(conversationActivity(session, undefined, undefined, { ...saved, sessionId: 'other' }), waiting);
+    assert.deepEqual(conversationActivity({ ...session, pendingSubmissions: [...session.pendingSubmissions, pending('other')] }, undefined, undefined, saved), waiting);
+  }
+});
+
+test('private, malformed and unrelated records cannot clear another accepted echo hint', () => {
+  const session = { running: false, pendingSubmissions: [{ requestId: 'rpc', placement: 'transcript', text: '相同文字', time: 1 }] };
+  const waiting = { kind: 'waiting', label: '等待处理' };
+  const user = { kind: 'user', seq: 8, source: { kind: 'user', rpcId: 'rpc' } };
+  for (const node of [
+    { ...user, kind: 'context' }, { ...user, kind: 'assistant' }, { ...user, kind: 'tool-result' }, { ...user, seq: undefined },
+    { ...user, parentCallId: 'private-worker' }, { ...user, source: { kind: 'benchgo-task-reply', rpcId: 'rpc' } },
+    { ...user, source: { kind: 'user-question-reply', outcome: 'answered', callId: 'question', rpcId: 'rpc' } },
+    { ...user, source: { kind: 'user', rpcId: 'another-rpc' }, text: '相同文字', time: 1 },
+    { ...user, messageId: 'rpc', source: { kind: 'user' } },
+  ]) assert.deepEqual(conversationActivity(session, { legacy: { nodes: [node] } }), waiting);
+  for (const message of [
+    { role: 'assistant', rpcId: 'rpc' }, { role: 'user', rpcId: 'rpc', source: { kind: 'benchgo-channel' } },
+    { role: 'user', rpcId: 'rpc', parentCallId: 'private-worker' },
+    { role: 'user', id: 'rpc', text: '相同文字', time: 1 },
+  ]) assert.deepEqual(conversationActivity(session, undefined, undefined, { messages: [message] }), waiting);
+});
+
+test('accepted echo reconciliation preserves connection, interaction and running activity priorities', () => {
+  const session = { running: false, pendingSubmissions: [{ requestId: 'rpc' }] };
+  const chat = { legacy: { nodes: [{ kind: 'user', source: { kind: 'user', rpcId: 'rpc' } }] } };
+  assert.equal(conversationActivity({ ...session, openState: 'loading' }, chat, { kind: 'question' }).kind, 'connecting');
+  assert.equal(conversationActivity({ ...session, openState: 'error' }, chat, { kind: 'question' }).kind, 'error');
+  assert.equal(conversationActivity(session, chat, { kind: 'question' }).label, '等待你的回答');
+  assert.equal(conversationActivity(session, chat, { kind: 'approval' }).label, '等待你的确认');
+  assert.deepEqual(conversationActivity({ ...session, running: true }, chat), { kind: 'waiting', label: '正在处理', subtle: true });
+});

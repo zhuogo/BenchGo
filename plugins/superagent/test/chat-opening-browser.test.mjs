@@ -16,10 +16,13 @@ const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executa
 async function fixture() {
   const bundle = await build({ stdin: { resolveDir: root, loader: 'jsx', contents: `
     import React from 'react';import {createRoot} from 'react-dom/client';
-    import {AssistantPage,openAssistantThread} from './plugins/superagent/client/index.jsx';
+    import {AssistantPage,mountAssistant,openAssistantThread,openAssistantTab} from './plugins/superagent/client/index.jsx';
     import {AssistantConversation} from './plugins/superagent/client/conversation.jsx';
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
     import css from './plugins/superagent/client/style.css';
+    import hostCss from './plugins/benchgo/client/style.css';
+    import tokens from './deepseek-harness/packages/client/ui-theme/src/styles/design-platform.css';
+    import themeBase from './deepseek-harness/packages/client/ui-theme/src/styles/base.css';
     installIconSprite({effect:fn=>fn(),on(){}},undefined);
     const root=createRoot(document.getElementById('root'));let serial=0;
     const pending=new Promise(()=>{}),info={activePanelId:'benchgo-assistant'};
@@ -37,12 +40,29 @@ async function fixture() {
       const renderSlot=()=> <div className='host-content'><div className='fixture-feed' aria-label='聊天记录'>{mode==='empty'?<div className='fixture-empty' role='status'><strong>开始对话</strong><p>在下方输入消息。</p></div>:Array.from({length:40},(_,i)=><p key={i}>消息 {i+1}：聊天内容可以正常滚动。</p>)}</div><div className='fixture-composer'>输入消息</div></div>;
       root.render(<React.Fragment key={++serial}><style>{css}</style><div className='ba-root'><main className='ba-main'><AssistantConversation ctx={current} sessionId='session' SessionProvider={SessionProvider} renderSlot={renderSlot}/></main></div></React.Fragment>);
     };
+    let mountCleanups=[],Mounted,mainKey=0,panel={activePanelId:null},navigation=new AbortController();
+    const listeners=new Set(),once=callback=>{let done=false;return()=>{if(!done){done=true;callback?.();}}};
+    const paint=()=>root.render(Mounted&&panel.activePanelId==='benchgo-assistant'?<Mounted key={mainKey} ctx={mountedCtx} SessionProvider={SessionProvider} renderSlot={()=>null}/>:<div data-native-workspace>Harness 原生会话</div>);
+    const mountedCtx={inject:()=>({dispose(){}}),remote:{$on(){}},effect:fn=>{const dispose=once(fn());mountCleanups.push(dispose);return dispose;},
+      layout:{panelInfo:{getSnapshot:()=>panel,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn);}},
+        selectPanel:id=>{navigation.abort();panel={activePanelId:id};for(const listener of listeners)listener();paint();},
+        beginNavigation:()=>{navigation.abort();navigation=new AbortController();return navigation.signal;}},
+      slots:{inject:(_name,fn)=>{const dispose=once(fn());mountCleanups.push(dispose);return dispose;},register:(options,Component)=>{
+        if(options.name!=='main')return()=>{};
+        Mounted=Component;mainKey++;paint();return()=>{Mounted=null;paint();};
+      }}};
+    window.mountAssistantFixture=()=>{if(!document.getElementById('host-styles')){const style=document.createElement('style');style.id='host-styles';style.textContent=tokens+themeBase+hostCss;document.head.append(style);}mountAssistant(mountedCtx);};
+    window.unmountAssistantFixture=()=>{for(const dispose of mountCleanups.splice(0).reverse())dispose();};
+    window.chooseAssistantThread=id=>openAssistantThread(mountedCtx,id);
+    window.chooseAssistantTab=tab=>openAssistantTab(mountedCtx,tab);
+    window.leaveAssistant=id=>mountedCtx.layout.selectPanel(id);
   ` }, bundle: true, write: false, format: 'iife', jsx: 'automatic', outdir: join(root, 'artifacts/unused-chat-opening-test'),
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts'), '@deepseek-ai/dsh-util-workspace-path': join(root, 'deepseek-harness/packages/util/workspace-path/src/index.ts'), '@deepseek-ai/dsh-api-gateway/client': join(root,'deepseek-harness/packages/api/gateway/lib/client.node.js') },
     plugins: [{ name: 'opening-fixture', setup(build) {
-      build.onLoad({filter:/superagent[\\/]client[\\/]index\.jsx$/},async({path})=>({contents:await readFile(path,'utf8')+'\nexport {openAssistantThread};',loader:'jsx'}));
+      build.onLoad({filter:/superagent[\\/]client[\\/]index\.jsx$/},async({path})=>({contents:await readFile(path,'utf8')+'\nexport {openAssistantThread,openAssistantTab};',loader:'jsx'}));
       build.onLoad({filter:/superagent[\\/]client[\\/]activity-panel\.jsx$/},()=>({contents:'import React from "react";export const ActivityProvider=({children})=><>{children}</>;export const ActivityPanel=()=>null;export const ActivityTrigger=()=>null;',loader:'jsx'}));
+      build.onLoad({filter:/superagent[\\/]client[\\/](?:notification-sound-runtime\.mjs|activity-remote\.jsx|session-role-controls\.jsx|channel-session\.jsx)$/},({path})=>({contents:'export function '+({ 'notification-sound-runtime.mjs':'mountReplySound','activity-remote.jsx':'mountAssistantActivity','session-role-controls.jsx':'mountSessionRoleControls','channel-session.jsx':'registerChannelMessages' }[path.split(/[\\/]/).at(-1)])+'(){}',loader:'jsx'}));
     } },sharedUiStyles()], loader: {'.css':'text','.module.css':'local-css','.svg':'text','.woff2':'dataurl','.woff':'dataurl','.ttf':'dataurl'}, define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent' });
   const script=bundle.outputFiles.find(file=>file.path.endsWith('.js')).text;
   const styles=bundle.outputFiles.filter(file=>file.path.endsWith('.css')).map(file=>file.text).join('\n');
@@ -75,6 +95,45 @@ test('main and side chat opening states center in remaining panel height and rel
       const composer=await page.locator('.fixture-composer').boundingBox();assert(composer.y+composer.height<=801);await capture('data');
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight));
     }
+    assert.deepEqual(errors,[]);
+  }finally{await browser.close();}
+});
+
+test('mounted assistant restores its side chat and resource tab after scope reload without stealing later navigation', { skip: !executablePath && 'Chromium/Edge required' }, async()=>{
+  const browser=await chromium.launch({headless:true,executablePath});
+  try{
+    const page=await browser.newPage(),errors=[];page.setDefaultTimeout(5000);page.on('pageerror',error=>errors.push(error.message));
+    await page.setContent(await fixture());
+    await page.evaluate(()=>window.mountAssistantFixture());
+    await page.getByRole('status',{name:'正在打开主聊天',exact:true}).waitFor();
+    await page.evaluate(()=>window.chooseAssistantThread('server-side'));
+    await page.getByRole('status',{name:'正在打开旁聊',exact:true}).waitFor();
+    await page.evaluate(()=>window.unmountAssistantFixture());
+    await page.getByText('Harness 原生会话',{exact:true}).waitFor();
+    await page.evaluate(()=>window.mountAssistantFixture());
+    await page.getByRole('status',{name:'正在打开旁聊',exact:true}).waitFor();
+    const screenshots=process.env.BENCHGO_CHAT_OPENING_SCREENSHOTS;
+    if(screenshots){await mkdir(screenshots,{recursive:true});await page.screenshot({path:join(screenshots,'restored-side-chat.png')});}
+    await page.evaluate(()=>window.chooseAssistantTab('goals'));
+    await page.getByRole('region',{name:'目标清单',exact:true}).waitFor();
+    await page.evaluate(()=>window.unmountAssistantFixture());
+    await page.getByText('Harness 原生会话',{exact:true}).waitFor();
+    await page.evaluate(()=>window.mountAssistantFixture());
+    await page.getByRole('region',{name:'目标清单',exact:true}).waitFor();
+    if(screenshots)await page.screenshot({path:join(screenshots,'restored-goals.png')});
+    for(const destination of [null,'schedules']){
+      await page.evaluate(()=>window.unmountAssistantFixture());
+      await page.evaluate(id=>window.leaveAssistant(id),destination);
+      await page.evaluate(()=>window.mountAssistantFixture());
+      await page.getByText('Harness 原生会话',{exact:true}).waitFor();
+      assert.equal(await page.locator('.ba-root').count(),0);
+      await page.evaluate(()=>window.chooseAssistantTab('goals'));
+      await page.getByRole('region',{name:'目标清单',exact:true}).waitFor();
+    }
+    await page.evaluate(()=>window.leaveAssistant(null));
+    await page.evaluate(()=>{window.unmountAssistantFixture();window.mountAssistantFixture();});
+    await page.getByText('Harness 原生会话',{exact:true}).waitFor();
+    await page.evaluate(()=>window.unmountAssistantFixture());
     assert.deepEqual(errors,[]);
   }finally{await browser.close();}
 });

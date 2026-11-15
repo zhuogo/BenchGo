@@ -24,10 +24,6 @@ body[data-ds-dark-theme] :is(.link-settings, .link-dialog-backdrop) .link-button
 .link-heading h2 em { color: var(--link-accent); font-style: normal; }
 .link-heading p { max-width: 48ch; margin: 0; color: var(--link-muted); line-height: 1.65; }
 .link-form { display: grid; grid-template-columns: 1fr 145px; gap: 18px; margin-top: 24px; border: 0; background: transparent; }
-.link-access { margin:16px 0; }
-.link-access-options { display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:8px; font-size:12px; }
-.link-access-options label { display:flex; align-items:center; gap:6px; cursor:pointer; }
-.link-access-options input { accent-color:var(--link-accent); margin:0; }
 .link-management-requests { margin:20px 0; }
 .link-management-requests h3 { font-size:14px; }
 .link-management-request { padding:14px 0; border-top:1px solid var(--link-faint); font-size:13px; overflow-wrap:anywhere; }

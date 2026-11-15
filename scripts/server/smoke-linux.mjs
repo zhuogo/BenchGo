@@ -136,6 +136,7 @@ export async function smokeLinuxServer({ directory = join(root, 'artifacts/linux
     if ((await stat(responseFile)).mode & 0o077) throw new Error('Private connection response permissions are too broad');
     const connection = validateSmokeConnection(parseSmokePrivateJson(await readFile(responseFile, 'utf8')), receipt.pluginVersion);
     if ((await asUser('Verify installed service is active', ['systemctl', '--user', 'is-active', 'benchgo.service'])).trim() !== 'active') throw new Error('Installed systemd service is inactive');
+    if ((await asUser('Verify launcher signal routing', ['systemctl', '--user', 'show', 'benchgo.service', '--property=KillMode', '--value'])).trim() !== 'mixed') throw new Error('Installed service must route graceful signals through its launcher');
     const base = join(home, '.local/share/benchgo/server');
     const installation = await userJson(join(base, 'installation.json'), ['schemaVersion', 'harnessVersion', 'pluginVersion', 'runtime', 'dataDir', 'port', 'webPort']);
     if (installation.schemaVersion !== 1 || installation.harnessVersion !== upstream.version || installation.pluginVersion !== receipt.pluginVersion

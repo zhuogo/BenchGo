@@ -1936,12 +1936,23 @@ function watchArticleFrameHeight() {
 function enhanceArticle(article) {
   const body = getArticleFrameDoc()?.body;
   body?.querySelectorAll('a[href]').forEach(link => {
+    const url = new URL(link.href, window.parent.location.href);
+    const isDocumentLink = !link.getAttribute('href')?.startsWith('#')
+      && url.origin === window.parent.location.origin && /^\/docs(?:\/|$)/.test(url.pathname);
+    if (isDocumentLink) { link.target = '_blank'; link.rel = 'noopener noreferrer'; }
     link.addEventListener('click', event => {
       const href = link.getAttribute('href');
       if (href?.startsWith('#')) {
         event.preventDefault();
         try { scrollToHeading(decodeURIComponent(href.slice(1))); } catch {}
-      } else { link.target = '_blank'; link.rel = 'noopener noreferrer'; }
+      } else {
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        if (isDocumentLink) {
+          event.preventDefault();
+          window.top.open(url.href, '_blank', 'noopener,noreferrer');
+        }
+      }
     });
   });
   syncArticleFrameTheme();

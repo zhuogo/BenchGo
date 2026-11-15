@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { harnessSelection } from './selection.mjs';
 import { discoverModels } from './models.mjs';
 import { DelegationBridge } from './delegation.mjs';
+import { isFullNativePermission } from './permissions.mjs';
 
 const webOwner = id => `commander-web:${id}`;
 const text = (value, name, max = 20000) => {
@@ -57,8 +58,10 @@ export async function mountHarnessWeb(ctx, commander, config = {}, dependencies 
     while (ancestor.parentId) { ancestor = commander.snapshot(ancestor.parentId); depth++; }
     if (depth >= maxDepth) throw new Error('Delegation depth limit reached');
     if (commander.list().filter(s => s.parentId === parentId && !s.archived).length >= maxChildren) throw new Error('Delegation child limit reached');
-    const answer = await commander.ask(parentId, { kind: 'permission', method: 'commander_delegate', details: { provider, model: args.model, text: prompt, cwd: parent.cwd } });
-    if (!answer.allow) throw new Error('Delegation denied by user');
+    if (!isFullNativePermission(await commander.permissionFor(parent))) {
+      const answer = await commander.ask(parentId, { kind: 'permission', method: 'commander_delegate', details: { provider, model: args.model, text: prompt, cwd: parent.cwd } });
+      if (!answer.allow) throw new Error('Delegation denied by user');
+    }
     // Serialize only child creation per parent; approval and execution stay concurrent.
     const creation = (childCreations.get(parentId) ?? Promise.resolve()).catch(() => {}).then(async () => {
       if (!commander.drivers.has(parentId)) throw new Error('Parent session was disconnected');

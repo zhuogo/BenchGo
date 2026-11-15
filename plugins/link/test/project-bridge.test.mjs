@@ -4,7 +4,7 @@ import { createProjectBridge } from '../client/project-bridge.mjs';
 
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const settle = async () => { await new Promise(resolve => setImmediate(resolve)); };
-function fixture(request) {
+function fixture(request, options = {}) {
   const listeners = new Set(), timers = new Map(), requests = [], entries = [], sent = [];
   let frame = { contentWindow: { postMessage: (data, origin) => sent.push({ data, origin }) } };
   const host = {
@@ -13,7 +13,7 @@ function fixture(request) {
     setTimeout(callback, delay) { const timer = {}; timers.set(timer, { callback, delay }); return timer; },
     clearTimeout(timer) { timers.delete(timer); },
   };
-  const bridge = createProjectBridge({ deviceId: 'server/opaque-id', origin: 'http://127.0.0.1:8000', window: host, getFrame: () => frame, onEntry: url => entries.push(url), request: async (...args) => { requests.push(args); return request ? request(...args) : { url: 'http://127.0.0.1:9000/enter?ticket=one' }; } });
+  const bridge = createProjectBridge({ deviceId: 'server/opaque-id', origin: 'http://127.0.0.1:8000', window: host, getFrame: () => frame, onEntry: url => entries.push(url), request: async (...args) => { requests.push(args); return request ? request(...args) : { url: 'http://127.0.0.1:9000/enter?ticket=one' }; }, ...options });
   const receive = (data, overrides = {}) => listeners.forEach(listener => listener({ source: frame.contentWindow, origin: 'http://127.0.0.1:9000', data, ...overrides }));
   return { bridge, requests, entries, sent, timers, listeners, receive, replaceFrame: () => { frame = { contentWindow: { postMessage: (data, origin) => sent.push({ data, origin }) } }; }, ready: () => receive({ type: 'benchgo:resource:ready', projectActions: ['browse', 'project', 'clone'] }), reply: (call, value, error) => receive({ type: 'benchgo:project:result', requestId: call.requestId, value, error }), expire(delay) { for (const [id, timer] of [...timers]) if (timer.delay === delay) { timers.delete(id); timer.callback(); } } };
 }
@@ -40,6 +40,28 @@ test('project bridge is lazy, reuses concurrent connection and preserves opaque 
     assert.deepEqual(await second, { project: { id: 'opaque/project' } });
     assert.equal(view.timers.size, 0);
   } finally { view.bridge.dispose(); }
+});
+
+test('delete capability is additive, bound to the selected device and never retried after an uncertain timeout',async()=>{
+ const device={id:'server/opaque-id',hostId:'host/exact',authorizationId:'pair/exact'};
+ const request=async()=>({url:'http://127.0.0.1:9000/enter?ticket=one',device});
+ const legacy=fixture(request,{expectedDevice:device});
+ try{
+  const supported=legacy.bridge.supports('deleteProject');await settle();legacy.ready();assert.equal(await supported,false);
+  await assert.rejects(legacy.bridge.api('deleteProject',{id:'id',path:'/srv/project'}),/升级/);
+  const browse=legacy.bridge.api('browse');await settle();legacy.reply(legacy.sent.at(-1).data,{entries:[]});await browse;
+ }finally{legacy.bridge.dispose();}
+ const modern=fixture(request,{expectedDevice:device});
+ try{
+  const supported=modern.bridge.supports('deleteProject');await settle();modern.receive({type:'benchgo:resource:ready',projectActions:['browse','project','clone','deleteProject']});assert.equal(await supported,true);
+  const operation=assert.rejects(modern.bridge.api('deleteProject',{id:'opaque/project',path:'/srv/原样'}),/尚未确认.*核验/);await settle();
+  const calls=modern.sent.filter(item=>item.data.type==='benchgo:project:call');assert.equal(calls.length,1);assert.deepEqual(calls[0].data.args,{id:'opaque/project',path:'/srv/原样'});
+  modern.expire(15000);await operation;await settle();assert.equal(modern.sent.filter(item=>item.data.type==='benchgo:project:call').length,1);
+ }finally{modern.bridge.dispose();}
+ for(const changed of [{...device,hostId:'new-host'},{...device,authorizationId:'new-pair'},undefined]){
+  const view=fixture(async()=>({url:'http://127.0.0.1:9000/enter',device:changed}),{expectedDevice:device});
+  try{await assert.rejects(view.bridge.supports('deleteProject'),/身份或授权已变化/);assert.equal(view.sent.length,0);}finally{view.bridge.dispose();}
+ }
 });
 
 test('forged window, origin, unknown replies and unsupported operations never execute', async () => {

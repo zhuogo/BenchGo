@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { request as httpsRequest } from 'node:https';
+import { request as httpsRequest, createServer as createHttpsServer } from 'node:https';
+import { createSecureContext } from 'node:tls';
 import { connect as connectHttp2 } from 'node:http2';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -84,7 +85,7 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
 
   const probeOptions = { ca: relayIdentity.cert };
   const tested = await testRelayConnection({ url: relayOrigin, token }, probeOptions);
-  assert.equal(tested.ok, true); assert(tested.latencyMs >= 0);
+  assert.equal(tested.ok, true); assert.match(tested.message, /HTTP\/2/); assert(tested.latencyMs >= 0);
   assert.match((await testRelayConnection({ url: relayOrigin, token })).message, /TLS/);
   assert.equal((await testRelayConnection({ url: relayOrigin, token: 'wrong-secret' }, probeOptions)).ok, false);
   assert.equal(host.status().connected, true, 'testing credentials must not replace the active host');
@@ -319,6 +320,48 @@ test('connecting relay timeout reports once, retries and closes without uncaught
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(errors, ['中继连接超时'], 'closing a connecting retry must not publish another failure');
   assert.equal(host.status().connected, false);
+});
+
+test('read-only relay probe rejects authenticated H1-only public entrances and keeps authentication errors distinct', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'link-relay-h1-probe-'));
+  const identity = await loadIdentity(directory), token = 'private-h1-probe-secret';
+  const requests = [], sockets = new Set();
+  const server = createHttpsServer({ key: identity.key, cert: identity.cert, ALPNProtocols: ['http/1.1'] }, (req, res) => {
+    requests.push(req.url);
+    const accepted = req.headers.authorization === 'Bearer ' + token;
+    res.writeHead(accepted ? 200 : 401, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(accepted ? { protocol: 'benchgo-link-relay', version: 1, authenticated: true } : { error: 'unauthorized' }));
+  });
+  server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); });
+  const url = `https://localhost:${server.address().port}`;
+  const value = await testRelayConnection({ url, token }, { ca: identity.cert });
+  assert.equal(value.ok, false); assert.match(value.message, /公网入口未启用 HTTP\/2.*反向代理/);
+  assert.equal(JSON.stringify(value).includes(token), false);
+  const rejected = await testRelayConnection({ url, token: 'wrong-secret' }, { ca: identity.cert });
+  assert.equal(rejected.ok, false); assert.match(rejected.message, /拒绝认证/);
+  assert.deepEqual(requests, ['/__link/relay/probe', '/__link/relay/probe'], 'ALPN sends no HTTP requests and never registers a host');
+});
+
+test('public ALPN handshake shares the bounded relay probe timeout', { timeout: 5000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'link-relay-alpn-timeout-'));
+  const identity = await loadIdentity(directory), token = 'private-alpn-timeout-secret';
+  const secureContext = createSecureContext({ key: identity.key, cert: identity.cert });
+  const sockets = new Set(); let handshakes = 0;
+  const server = createHttpsServer({ key: identity.key, cert: identity.cert,
+    SNICallback(_name, done) { if (++handshakes === 1) done(null, secureContext); },
+  }, (_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ protocol: 'benchgo-link-relay', version: 1, authenticated: true }));
+  });
+  server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); });
+  const value = await testRelayConnection({ url: `https://localhost:${server.address().port}`, token }, { ca: identity.cert, timeout: 250 });
+  assert.equal(handshakes, 2, 'authentication finished before the stalled public ALPN handshake');
+  assert.equal(value.ok, false); assert.match(value.message, /超时/);
+  assert.equal(JSON.stringify(value).includes(token), false);
 });
 
 test('read-only relay probe times out on a stalled TLS peer and sanitizes failures', async t => {

@@ -2,11 +2,28 @@ import { isChatUserMessage, readAdmittedQuestionReply } from '../src/question-re
 import { isTaskResultReplyRequest } from '../../benchgo/shared/public-chat-record.mjs';
 
 /** Display only facts in the official projection; never inspect private tool arguments. */
-export function conversationActivity(session = {}, chat, pendingInteraction) {
+export function conversationActivity(session = {}, chat, pendingInteraction, history) {
   if (session.openState === 'error') return { kind: 'error', label: '会话连接失败' };
   if (session.openState === 'loading') return { kind: 'connecting', label: '正在连接', subtle: true };
   if (pendingInteraction) return { kind: 'waiting', label: pendingInteraction.kind === 'question' ? '等待你的回答' : '等待你的确认' };
-  if (!session.running) return session.pendingSubmissions?.length ? { kind: 'waiting', label: '等待会话接收' } : null;
+  if (!session.running) {
+    // These are Host-accepted local echoes. A durable public user message can
+    // already be visible while the official echo awaits its display handoff.
+    const admitted = new Set();
+    for (const node of chat?.legacy?.nodes || []) {
+      if (!['user', 'steering'].includes(node.kind) || !Number.isFinite(node.seq) || node.parentCallId || !isChatUserMessage(node)
+        || node.source.kind === 'user-question-reply' && !readAdmittedQuestionReply(node)) continue;
+      admitted.add(node.source.rpcId || node.source.requestId);
+    }
+    if (!session.sessionId || !history?.sessionId || session.sessionId === history.sessionId) {
+      for (const message of history?.messages || []) {
+        if (message.role !== 'user' || message.parentCallId || message.source && !isChatUserMessage(message)) continue;
+        admitted.add(message.rpcId || message.requestId || message.source?.rpcId || message.source?.requestId);
+      }
+    }
+    return session.pendingSubmissions?.some(pending => typeof pending.requestId === 'string' && pending.requestId && !admitted.has(pending.requestId))
+      ? { kind: 'waiting', label: '等待处理' } : null;
+  }
   const rows = chat?.legacy;
   const call = rows?.runningCalls?.findLast(item => !item.parentCallId);
   if (call) {

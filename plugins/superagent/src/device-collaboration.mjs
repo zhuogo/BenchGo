@@ -45,6 +45,16 @@ export function createDeviceCollaboration({ ctx, store, runtimeStore, signal: li
     if (!service) throw Object.assign(new Error('Link 服务不可用'), { code: 'LINK_UNAVAILABLE' });
     return service;
   };
+  async function targetRejection(error, deviceId) {
+    if (![401,403].includes(error.statusCode ?? error.status)) return error;
+    let name=deviceId;
+    try { name=(await link().devices()).devices?.find(device=>device.id===deviceId)?.name || deviceId; } catch {}
+    const legacy=/此设备未获协作执行授权|设备未获协作授权/.test(error.message);
+    return Object.assign(new Error(`出站目标「${name}」拒绝请求：${legacy ? '目标仍使用旧的分级授权机制，需要更新目标设备至同版 BenchGo；无需配置额外协作权限。本机入站手机名单与本次目标授权无关。' : error.message}`), {
+      status:error.statusCode ?? error.status, code:legacy?'TARGET_PERMISSION_VERSION_REQUIRED':error.code||'REMOTE_REJECTED',
+      direction:'outbound',targetDeviceId:deviceId,targetDeviceName:name,
+    });
+  }
   function origin(input, principal) {
     const value = input.origin || {};
     return { channel: 'link', deviceId: principal.deviceId,
@@ -244,6 +254,7 @@ export function createDeviceCollaboration({ ctx, store, runtimeStore, signal: li
       let result;
       try { result = await link().callDevice({ deviceId, input: { ...input, action: 'collaboration', origin: source, requestId }, signal: exec.signal }); }
       catch (error) {
+        error=await targetRejection(error,deviceId);
         if (input.operation !== 'delegate') throw error;
         if ([401, 403, 404, 409, 422].includes(error.statusCode || error.status)) {
           saveReference({ deviceId, requestId, origin: source, state: 'rejected', code: error.code || 'REMOTE_REJECTED' });

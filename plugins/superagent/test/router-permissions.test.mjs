@@ -35,7 +35,8 @@ test('Router gates exact definitions, operations, nested calls and unknown tools
   let guard, executions = 0;
   installRouterPermissionGate({ tools, on: (name, callback) => { if (name === 'tools/execute') guard = callback; } }, { agent, inherited, controlled: captureRouterTools(tools, agent) });
   const invoke = (name, args = {}, extra = {}) => guard({ agent, name, arguments: args, signal: new AbortController().signal, ...extra }, async () => ++executions);
-  await assert.rejects(invoke('read'), { code: 'ROUTER_TASK_REQUIRED' });
+  await assert.rejects(invoke('read'), error => error.code === 'ROUTER_TASK_REQUIRED'
+    && /本机用 assistant_delegate/.test(error.message) && /远端设备或项目用 assistant_remote_task/.test(error.message));
   await assert.rejects(invoke('str_replace_editor', { command: 'view' }), { code: 'ROUTER_TASK_REQUIRED' });
   await invoke('assistant_config');
   for (const name of ['bash', 'mcp__read_fake', 'run_code', 'assistant_unregistered']) await assert.rejects(invoke(name), { code: 'ROUTER_TASK_REQUIRED' });

@@ -12,13 +12,14 @@ function deferred() {
 }
 
 class ControlledProvider {
-  static capabilities = { stream: true, resume: true, approvals: true };
+  static capabilities = { stream: true, resume: true, approvals: true, permissions: true };
   submitted = [];
   hosts = [];
   async connect(session, host) {
     this.hosts.push(host);
     return {
       nativeId: session.nativeId ?? `native-${session.id}`,
+      async setPermission() {},
       submit: async text => { this.submitted.push(text); },
       interrupt: async () => { host.event('turn.completed', { status: 'interrupted' }); },
       close: async () => {},
@@ -29,6 +30,7 @@ async function fixture(t, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'commander-runtime-'));
   const commander = await new Commander({ dataDir: directory, ...options }).open();
   const provider = new ControlledProvider(); commander.providers.set('test', provider);
+  commander.resolvePermission = session => commander.providers.get(session.provider)?.constructor.capabilities?.permissions ? { sandbox: 'workspace-write', approval: 'ask' } : undefined;
   t.after(async () => { await commander.close(); await rm(directory, { recursive: true, force: true }); });
   return { commander, provider, directory };
 }
@@ -74,6 +76,7 @@ test('human approval is scoped, single use and expires to denial', async t => {
   const session = await commander.create({ provider: 'test' });
   await commander.submit(session.id, 'run');
   const answer = provider.hosts[0].approval({ kind: 'permission', method: 'bash', details: {} });
+  await new Promise(resolve => setImmediate(resolve));
   const approval = commander.snapshot(session.id).pendingApprovals[0];
   assert.equal(commander.snapshot(session.id).status, 'waiting');
   assert.throws(() => commander.approve('another-session', approval.id, { allow: true }), /belongs/);
@@ -83,6 +86,101 @@ test('human approval is scoped, single use and expires to denial', async t => {
   assert.throws(() => commander.approve(session.id, approval.id, { allow: true }), /expired/);
   assert.deepEqual(await provider.hosts[0].approval({ kind: 'permission', method: 'edit', details: {} }), { allow: false });
   assert.equal(commander.snapshot(session.id).status, 'running');
+});
+
+test('native Full policy permits new tool permission calls without prompts but never answers questions or resets old pending approvals', async t => {
+  const { commander, provider } = await fixture(t);
+  let permission = { sandbox: 'workspace-write', approval: 'ask' };
+  commander.resolvePermission = () => permission;
+  const { id } = await commander.create({ provider: 'test' });
+  await commander.submit(id, 'run');
+  const host = provider.hosts[0];
+  const old = host.approval({ kind: 'permission', method: 'old-tool' });
+  await new Promise(resolve => setImmediate(resolve));
+  const previous = commander.snapshot(id).pendingApprovals[0];
+  assert.ok(previous);
+  permission = { sandbox: 'danger-full-access', approval: 'never' };
+  const cursor = commander.snapshot(id).cursor;
+  assert.deepEqual(await host.approval({ kind: 'permission', method: 'new-tool' }), { allow: true });
+  assert.deepEqual(commander.snapshot(id).pendingApprovals.map(value => value.id), [previous.id]);
+  assert.equal(commander.events(id, cursor).events.some(event => event.type === 'approval.requested'), false);
+  const question = host.approval({ kind: 'question', method: 'choose' });
+  const pendingQuestion = commander.snapshot(id).pendingApprovals.find(value => value.kind === 'question');
+  assert.ok(pendingQuestion);
+  commander.approve(id, pendingQuestion.id, { allow: false, answers: { selection: 'B' } });
+  assert.deepEqual(await question, { allow: false, answers: { selection: 'B' } });
+  commander.approve(id, previous.id, { allow: false });
+  assert.deepEqual(await old, { allow: false });
+});
+
+test('native Full cannot bypass a missing owner, an aborted request or a released connection', async t => {
+  const { commander, provider } = await fixture(t);
+  commander.resolvePermission = () => ({ sandbox: 'danger-full-access', approval: 'never' });
+  const { id } = await commander.create({ provider: 'test' }), host = provider.hosts[0];
+  await commander.submit(id, 'run');
+  const abort = new AbortController(); abort.abort();
+  assert.deepEqual(await host.approval({ kind: 'permission' }, abort.signal), { allow: false });
+  commander.resolvePermission = () => { throw new Error('owner unavailable'); };
+  await assert.rejects(host.approval({ kind: 'permission' }), /owner unavailable/);
+  const permission = deferred();
+  commander.resolvePermission = () => permission.promise;
+  const raced = host.approval({ kind: 'permission' });
+  await commander.disconnect(id);
+  permission.resolve({ sandbox: 'danger-full-access', approval: 'never' });
+  assert.deepEqual(await raced, { allow: false });
+  assert.equal(commander.snapshot(id).pendingApprovals.length, 0);
+});
+
+test('native Full permission resolution cannot grant a late request after completion, failure or interrupt', async t => {
+  const { commander, provider } = await fixture(t);
+  for (const end of ['completed', 'failed', 'interrupt']) {
+    commander.resolvePermission = () => ({ sandbox: 'danger-full-access', approval: 'never' });
+    const { id } = await commander.create({ provider: 'test' });
+    await commander.submit(id, end);
+    const host = provider.hosts.at(-1), permission = deferred();
+    commander.resolvePermission = () => permission.promise;
+    const result = host.approval({ kind: 'permission', method: 'late-tool' });
+    if (end === 'interrupt') await commander.interrupt(id);
+    else host.event('turn.completed', { status: end });
+    permission.resolve({ sandbox: 'danger-full-access', approval: 'never' });
+    assert.deepEqual(await result, { allow: false }, end);
+    assert.deepEqual(await host.approval({ kind: 'permission' }), { allow: false }, end);
+    assert.equal(commander.snapshot(id).pendingApprovals.length, 0);
+  }
+});
+
+test('requesting interrupt invalidates Full permissions before native acknowledgement or completion arrives', async t => {
+  const { commander, provider } = await fixture(t);
+  commander.resolvePermission = () => ({ sandbox: 'danger-full-access', approval: 'never' });
+  const { id } = await commander.create({ provider: 'test' });
+  await commander.submit(id, 'run');
+  const permission = deferred(), acknowledgement = deferred(), host = provider.hosts[0];
+  commander.resolvePermission = () => permission.promise;
+  commander.drivers.get(id).interrupt = () => acknowledgement.promise;
+  const result = host.approval({ kind: 'permission', method: 'racing-tool' });
+  const interrupt = commander.interrupt(id);
+  assert.equal(commander.snapshot(id).status, 'running');
+  permission.resolve({ sandbox: 'danger-full-access', approval: 'never' });
+  assert.deepEqual(await result, { allow: false });
+  assert.deepEqual(await host.approval({ kind: 'permission', method: 'late-tool' }), { allow: false });
+  assert.equal(commander.snapshot(id).pendingApprovals.length, 0);
+  acknowledgement.resolve(); await interrupt;
+  assert.equal(commander.snapshot(id).status, 'running');
+  host.event('turn.completed', { status: 'interrupted' });
+  assert.equal(commander.snapshot(id).status, 'idle');
+});
+
+test('Full works through the shared native approval seam without provider permission controls, while unsupported lower modes fail before launch', async t => {
+  const { commander } = await fixture(t);
+  let connected = 0, host;
+  commander.providers.set('plain', { async connect(session, value) { connected++; host = value; return { nativeId: session.id, async submit() {}, async close() {} }; } });
+  const { id } = await commander.create({ provider: 'plain' });
+  await commander.submit(id, 'run');
+  assert.deepEqual(await host.approval({ kind: 'permission', method: 'tool' }), { allow: true });
+  assert.equal(commander.snapshot(id).pendingApprovals.length, 0);
+  commander.resolvePermission = () => ({ sandbox: 'workspace-write', approval: 'ask' });
+  await assert.rejects(commander.create({ provider: 'plain' }), /无法精确同步/);
+  assert.equal(connected, 1);
 });
 
 test('interrupt denies pending permissions, and cancelling a wait does not cancel the native task', async t => {
@@ -106,6 +204,7 @@ test('permissions and questions keep waiting until every pending interaction is 
   await commander.submit(id, 'run');
   const host = provider.hosts[0];
   const permission = host.approval({ kind: 'permission', method: 'bash', details: {} });
+  await new Promise(resolve => setImmediate(resolve));
   const question = host.approval({ kind: 'question', method: 'input', details: {} });
   const [first, second] = commander.snapshot(id).pendingApprovals;
   host.event('turn.started');
