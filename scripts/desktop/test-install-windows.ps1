@@ -6,6 +6,8 @@ $installer = $installers[0]
 $expectedAppVersion = (Get-Content (Join-Path $PSScriptRoot '../../package.json') -Raw | ConvertFrom-Json).version
 $previousHome = $env:DSH_HOME
 $env:DSH_HOME = Join-Path $env:RUNNER_TEMP 'benchgo-installer-smoke'
+$script:installerPhase = 'initial'
+$script:installerPhaseResults = @()
 
 # WScript.Shell can expose the ANSI shell-link target on non-Chinese Windows.
 # Read IShellLinkW explicitly so the Unicode executable name remains intact.
@@ -93,8 +95,86 @@ function Install-Silently([string]$Path) {
 }
 function Get-Installed([string]$Name) {
     $items = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter $Name -Recurse)
-    if ($items.Count -ne 1) { throw "Expected one installed $Name, got $($items.Count)" }
+    if ($items.Count -ne 1) { throw "Expected one installed $Name, got $($items.Count):`n$($items.FullName -join "`n")" }
     return $items[0]
+}
+function Save-InstallerDiagnostics([string]$ErrorMessage = '') {
+    $programs = Join-Path $env:LOCALAPPDATA 'Programs'
+    $executables = @(Get-ChildItem -LiteralPath $programs -Filter 'BenchGo.exe' -Recurse -File -ErrorAction SilentlyContinue)
+    $parents = @($programs) + @($executables | ForEach-Object { Split-Path $_.DirectoryName -Parent })
+    $receipts = @(foreach ($parent in @($parents | Sort-Object -Unique)) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $parent -Filter '*.benchgo-cleanup.json' -File -ErrorAction SilentlyContinue)) {
+            try {
+                $value = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+                [ordered]@{ path=$file.FullName; schemaVersion=$value.schemaVersion; installRoot=$value.installRoot; retiredDirectory=$value.retiredDirectory }
+            } catch { [ordered]@{ path=$file.FullName; invalid=$true } }
+        }
+    })
+    $registry = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -match '^BenchGo(?:\s|$)' } |
+        ForEach-Object { [ordered]@{ key=$_.PSChildName; name=$_.DisplayName; version=$_.DisplayVersion; installLocation=$_.InstallLocation; uninstall=$_.UninstallString } })
+    $report = [ordered]@{ schemaVersion=1; phase=$script:installerPhase; error=$ErrorMessage; home=$env:DSH_HOME;
+        stages=$script:installerPhaseResults; executables=@($executables | ForEach-Object { [ordered]@{ path=$_.FullName; version=$_.VersionInfo.ProductVersion } });
+        receipts=$receipts; registry=$registry }
+    $path = Join-Path $PSScriptRoot '../../artifacts/windows/installer-diagnostics.json'
+    [IO.Directory]::CreateDirectory((Split-Path $path -Parent)) | Out-Null
+    [IO.File]::WriteAllText($path, ($report | ConvertTo-Json -Depth 10 -Compress) + "`n", (New-Object Text.UTF8Encoding $false))
+}
+function Complete-RetiredInstallCleanup([System.IO.FileInfo]$Installed, [string]$Phase) {
+    $script:installerPhase = $Phase
+    $code = @'
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { closeSync, lstatSync, openSync, readlinkSync, readSync, readdirSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const [resources, profile, executable] = process.argv.slice(1);
+function fileHash(path) {
+  const hash = createHash('sha256'), buffer = Buffer.allocUnsafe(1024 * 1024), handle = openSync(path, 'r');
+  try { for (;;) { const count = readSync(handle, buffer, 0, buffer.length, null); if (!count) break; hash.update(buffer.subarray(0, count)); } }
+  finally { closeSync(handle); }
+  return hash.digest('hex');
+}
+function profileIdentity() {
+  const hash = createHash('sha256'); let files = 0, links = 0;
+  const visit = (path, relative) => {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) { links++; hash.update(JSON.stringify([relative, 'link', readlinkSync(path)])); }
+    else if (stat.isDirectory()) {
+      hash.update(JSON.stringify([relative, 'directory', stat.mode]));
+      for (const name of readdirSync(path).sort()) visit(join(path, name), `${relative}/${name}`);
+    } else { assert.ok(stat.isFile(), 'profile contains a special file'); files++; hash.update(JSON.stringify([relative, 'file', stat.mode, stat.size, fileHash(path)])); }
+  };
+  visit(profile, '.'); return { sha256: hash.digest('hex'), files, links };
+}
+const present = path => { try { lstatSync(path); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
+const before = { executableSha256: fileHash(executable), profile: profileIdentity() };
+const { cleanupRetiredInstalls } = await import(pathToFileURL(join(resources, 'benchgo/install-cleanup.mjs')).href);
+const results = await cleanupRetiredInstalls({ resources });
+const after = { executableSha256: fileHash(executable), profile: profileIdentity() };
+assert.deepEqual(after, before, 'retired cleanup changed the current executable or profile');
+assert.ok(results.every(row => ['removed', 'missing'].includes(row.status)), `retired cleanup failed: ${JSON.stringify(results)}`);
+for (const row of results) {
+  assert.equal(present(row.receipt), false, `cleanup receipt remains: ${row.receipt}`);
+  assert.equal(present(row.retiredDirectory), false, `retired tree remains: ${row.retiredDirectory}`);
+}
+const root = dirname(resources), escaped = basename(root).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const guid = '\\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\}';
+const pending = new RegExp(`^${escaped}\\.(?:old|new)-${guid}(?:\\.benchgo-cleanup\\.json(?:\\.tmp-[0-9a-f-]+)?)?$`, 'i');
+const remaining = readdirSync(dirname(root)).filter(name => pending.test(name));
+assert.deepEqual(remaining, [], 'installer transaction trees or cleanup receipts remain');
+console.log(JSON.stringify({ results, currentAndProfilePreserved: true, identity: after, remaining }));
+'@
+    $previousNode = $env:ELECTRON_RUN_AS_NODE
+    try {
+        $env:ELECTRON_RUN_AS_NODE = '1'
+        $output = @()
+        & $Installed.FullName --expose-internals --input-type=module --eval $code (Join-Path $Installed.DirectoryName 'resources') (Join-Path $env:DSH_HOME 'profiles/desktop') $Installed.FullName |
+            Tee-Object -Variable output | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Installed retired-tree cleanup failed: $LASTEXITCODE" }
+        $details = ($output -join "`n") | ConvertFrom-Json
+        $script:installerPhaseResults += [ordered]@{ phase=$Phase; result='passed'; cleanup=$details }
+    } finally { $env:ELECTRON_RUN_AS_NODE = $previousNode }
 }
 function Assert-Plus([System.IO.FileInfo]$Installed) {
     $manifest = Get-Content (Join-Path $env:DSH_HOME 'profiles/desktop/package.json') -Raw | ConvertFrom-Json
@@ -177,6 +257,7 @@ function Add-LegacyPluginShadow {
     [System.IO.File]::WriteAllText((Join-Path $directory 'lib/client.js'), "export default true;`n", $utf8)
 }
 try {
+    $script:installerPhase = 'fresh-install'
     if ($env:BENCHGO_SKIP_FRESH_INSTALL -eq '1') {
         $installed = Get-Installed 'BenchGo.exe'
         Write-Output "Reusing existing installation: $($installed.FullName)"
@@ -187,6 +268,8 @@ try {
         Assert-Plus $installed
         Write-Output "Fresh silent installation passed: $($installed.FullName)"
     }
+    $script:installerPhaseResults += [ordered]@{ phase='fresh-install'; result='passed' }
+    $script:installerPhase = 'same-version-repair'
     Add-LegacyPluginShadow
     $shadowed = Get-Content (Join-Path $env:DSH_HOME 'profiles/desktop/package.json') -Raw | ConvertFrom-Json
     Assert-PluginResolution $installed $shadowed.dsh.plusInstall.version $shadowed.dsh.plusInstall.directory
@@ -194,8 +277,14 @@ try {
     Assert-Plus $installed
     if (Test-Path (Join-Path $env:DSH_HOME 'profiles/desktop/node_modules/benchgo')) { throw 'Reinstall left a legacy physical plugin shadow' }
     Write-Output 'Same-version reinstall repaired the legacy physical plugin and resolved the current version.'
+    $script:installerPhaseResults += [ordered]@{ phase='same-version-repair'; result='passed' }
+    # Silent fixtures do not enter workspace-visible. Exercise the shipped
+    # maintenance entry explicitly before uninstalling its owning resources.
+    Complete-RetiredInstallCleanup $installed 'same-version-retired-cleanup'
+    $installed = Get-Installed 'BenchGo.exe'
 
     if ($PreviousInstaller) {
+        $script:installerPhase = 'legacy-fixture-uninstall'
         if (-not (Test-Path $PreviousInstaller)) { throw 'Previous installer is missing' }
         $uninstallers = @(Get-ChildItem $installed.DirectoryName -Filter 'Uninstall*.exe')
         if ($uninstallers.Count -ne 1) { throw 'Expected one uninstaller' }
@@ -204,23 +293,33 @@ try {
         Copy-Item $uninstallers[0].FullName $uninstaller -Force
         $process = Start-Process -FilePath $uninstaller -ArgumentList @('/S', "_?=$($installed.DirectoryName)") -Wait -PassThru
         if ($process.ExitCode -ne 0) { throw "Uninstaller exited $($process.ExitCode)" }
+        $leftovers = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'BenchGo.exe' -Recurse)
+        if ($leftovers.Count -ne 0) { throw "Uninstall left BenchGo executables:`n$($leftovers.FullName -join "`n")" }
+        $script:installerPhaseResults += [ordered]@{ phase='legacy-fixture-uninstall'; result='passed' }
         # The legacy installer must initialize its own old-format profile,
         # rather than attempt to downgrade the earlier reinstall fixture.
         Write-Output "Keeping reinstall profile diagnostics: $($env:DSH_HOME)"
         $env:DSH_HOME = Join-Path $env:RUNNER_TEMP ('benchgo-installer-upgrade-' + [Guid]::NewGuid().ToString('N'))
         New-Item -Path $env:DSH_HOME -ItemType Directory | Out-Null
         Write-Output "Legacy upgrade profile: $($env:DSH_HOME)"
+        $script:installerPhase = 'legacy-install'
         Install-Silently (Resolve-Path $PreviousInstaller).Path
         $legacy = Get-Installed 'BenchGo.exe'
         $legacyVersion = ([Version]$legacy.VersionInfo.ProductVersion).ToString(3)
         if ([Version]$legacyVersion -ge [Version]$expectedAppVersion) { throw "Upgrade source $legacyVersion must be older than $expectedAppVersion" }
+        $script:installerPhaseResults += [ordered]@{ phase='legacy-install'; result='passed'; version=$legacyVersion }
         $profileMarker = Join-Path $env:DSH_HOME 'benchgo-upgrade-marker.txt'
         $dataDirectory = Join-Path $env:APPDATA 'benchgo-desktop'
         New-Item $dataDirectory -ItemType Directory -Force | Out-Null
         $dataMarker = Join-Path $dataDirectory 'benchgo-upgrade-marker.txt'
         Set-Content $profileMarker 'keep profile'
         Set-Content $dataMarker 'keep desktop data'
+        $script:installerPhase = 'legacy-upgrade'
         Install-Silently $installer.FullName
+        # The registered directory must stay the same; legacy.FullName now
+        # executes the newly installed binary before the strict global lookup.
+        Complete-RetiredInstallCleanup $legacy 'upgrade-retired-cleanup'
+        $script:installerPhase = 'legacy-upgrade'
         $upgraded = Get-Installed 'BenchGo.exe'
         Assert-Plus $upgraded
         if ($upgraded.DirectoryName -ne $legacy.DirectoryName) { throw 'Upgrade changed the registered installation directory' }
@@ -237,7 +336,15 @@ try {
             if (-not [String]::Equals($target, $expected, [StringComparison]::OrdinalIgnoreCase) -or $link.Arguments -ne '') { throw 'Upgraded Desktop shortcut does not launch the current BenchGo.exe without arguments' }
         }
         Write-Output "BenchGo in-place upgrade passed: $legacyVersion -> $expectedAppVersion ($($upgraded.FullName))"
+        $script:installerPhaseResults += [ordered]@{ phase='legacy-upgrade'; result='passed' }
     }
+    $script:installerPhase = 'complete'
+    Save-InstallerDiagnostics
+} catch {
+    $failure = $_
+    $script:installerPhaseResults += [ordered]@{ phase=$script:installerPhase; result='failed'; message=$failure.Exception.Message }
+    try { Save-InstallerDiagnostics $failure.Exception.Message } catch { Write-Warning "Installer diagnostics could not be saved: $($_.Exception.Message)" }
+    throw $failure
 } finally {
     $env:DSH_HOME = $previousHome
 }

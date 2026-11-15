@@ -119,4 +119,5 @@ jobs:
           path: |
             deepseek-harness/apps/desktop/.desktop-build/packaging-runs/
             artifacts/windows/builder-debug.yml
+            artifacts/windows/installer-diagnostics.json
           if-no-files-found: warn
