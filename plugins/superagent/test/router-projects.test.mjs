@@ -24,7 +24,7 @@ async function fixture(t) {
   const ctx = { get: name => name === 'benchgo' ? { directory } : undefined, workspaceRegistry: { list: () => projects } };
   createRouterTools({ ctx, commander: { list: () => [] }, store: { getState: async () => state },
     shutdown: new AbortController(), engine: { catalog: async () => { metrics.catalogReads++; return []; } },
-    collaboration: { resources: async input => { calls.push(input); if (failures.resources) throw failures.resources; return remote; }, devices: async () => {
+    deviceTools: { resources: async input => { calls.push(input); if (failures.resources) throw failures.resources; return remote; }, devices: async () => {
       failures.onDirectory?.();
       if (failures.directory) throw failures.directory;
       return { activeId: 'server', scope: { mode: 'current' }, devices };

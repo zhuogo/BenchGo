@@ -20,11 +20,9 @@ export function installDesktopTaskStore({ db, tx, api, insertTask }) {
           return prior.task;
         }
         const trigger = api.getTrigger(triggerId);
-        const device = trigger?.source.channel === 'link' && trigger.source.deviceId
-          && trigger.actor.id === `device:${trigger.source.deviceId}` && mandate.admission === 'link-device-delegation';
-        if (!trigger || !(trigger.source.channel === 'desktop' || device) || trigger.actor.kind !== 'human' || !trigger.actor.id
+        if (!trigger || trigger.source.channel !== 'desktop' || trigger.actor.kind !== 'human' || !trigger.actor.id
           || mandate.actorId !== trigger.actor.id || JSON.stringify(mandate.source) !== JSON.stringify(trigger.source)
-          || mandate.instruction !== trigger.content || !(mandate.admission === 'desktop-approved-delegation' || device)) throw new Error('任务缺少可信原始指令');
+          || mandate.instruction !== trigger.content || mandate.admission !== 'desktop-approved-delegation') throw new Error('任务缺少可信原始指令');
         const linked = db.prepare('SELECT task_id FROM sa_task_triggers WHERE trigger_id=?').all(triggerId);
         if (duplicateOfTaskId) {
           const existing = api.getTask(duplicateOfTaskId), source = existing?.mandate.source;
@@ -32,6 +30,7 @@ export function installDesktopTaskStore({ db, tx, api, insertTask }) {
             || source?.channel !== 'desktop' || source.sessionId !== trigger.source.sessionId || (source.threadId || 'main') !== (trigger.source.threadId || 'main')
             || existing.mandate.actorId !== mandate.actorId || existing.mandate.policyVersion !== mandate.policyVersion
             || JSON.stringify(existing.mandate.project) !== JSON.stringify(mandate.project)
+            || JSON.stringify(existing.mandate.execution) !== JSON.stringify(mandate.execution)
             || existing.target !== target || existing.acceptance !== acceptance) {
             throw Object.assign(new Error('重复任务合并未通过来源、范围或当前授权复核；已结束任务请新建关联的调整任务'), { code: 'TASK_MERGE_REJECTED' });
           }
@@ -49,6 +48,7 @@ export function installDesktopTaskStore({ db, tx, api, insertTask }) {
           const existing = api.getTask(row.task_id);
           const priorModel = api.assignments(existing.id).at(-1)?.model;
           if (existing.target !== target || existing.acceptance !== acceptance || JSON.stringify(existing.mandate.project) !== JSON.stringify(mandate.project)
+            || JSON.stringify(existing.mandate.execution) !== JSON.stringify(mandate.execution)
             || JSON.stringify(priorModel) !== JSON.stringify(model)) continue;
           db.prepare('INSERT INTO sa_desktop_requests(request_key,fingerprint,task_id,trigger_id) VALUES (?,?,?,?)').run(requestKey, fingerprint, existing.id, triggerId);
           return existing;
@@ -59,7 +59,9 @@ export function installDesktopTaskStore({ db, tx, api, insertTask }) {
         db.prepare('INSERT INTO sa_decisions VALUES (?,?,?,?,?,?,?,?)').run(decisionId, candidateId, trigger.threadId, 'accept', JSON.stringify({ reason: 'approved-desktop-instruction', target, acceptance }), mandate.policyVersion, taskId, now);
         const task = insertTask({ id: taskId, threadId: trigger.threadId, target, title, acceptance, mandate, sourceTriggerIds: [triggerId], allowSharedDesktopSource: true }, decisionId);
         const assignmentId = `desktop:${createHash('sha256').update(requestKey).digest('hex')}`;
-        const payload = { executor: 'harness', ...(model ? { model } : {}), text: target, acceptance, instructionRevision: task.instructionRevision };
+        const payload = { executor: mandate.execution ? 'remote' : 'harness',
+          ...(mandate.execution ? { execution: structuredClone(mandate.execution) } : {}),
+          ...(model ? { model } : {}), text: target, acceptance, instructionRevision: task.instructionRevision };
         db.prepare("INSERT INTO sa_assignments(id,task_id,payload,state,priority,created_at,updated_at) VALUES (?,?,?,'queued',0,?,?)").run(assignmentId, task.id, JSON.stringify(payload), now, now);
         db.prepare('INSERT INTO sa_desktop_requests(request_key,fingerprint,task_id,trigger_id) VALUES (?,?,?,?)').run(requestKey, fingerprint, task.id, triggerId);
         return task;

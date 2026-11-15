@@ -4,8 +4,9 @@ import { TaskExecution } from './task-execution.jsx';
 import { taskWaiting } from './task-state.mjs';
 import taskCss from './task-list.css';
 import { Button } from '../../shared/client/ui/button.jsx';
-import React, { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Tooltip, IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
+import React, { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
+import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives';
 import { UIIcon } from '../../benchgo/client/iconsax.jsx';
 import { PetAvatar } from '../../shared/client/pet-avatar.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
@@ -18,6 +19,8 @@ import { activityLabels as labels, boardTaskRows } from './activity-data.mjs';
 import { useAssistantActivity } from './use-activity.jsx';
 import { normalizeTaskTitle } from '../src/task-title.mjs';
 import { ApprovalReview } from './approval-review.jsx';
+import { Artifacts } from './artifacts.jsx';
+import { createReplyFileOpener } from './reply-file-navigation.mjs';
 
 const taskTitle = row => row?.kind === 'task' ? normalizeTaskTitle(row.taskMeta?.title || row.title, row.target) : row?.taskMeta?.title || row?.title || '任务详情';
 
@@ -33,6 +36,7 @@ const TabIcon = ({ path, size = 17 }) => <svg width={size} height={size} viewBox
 const tabIcons = {
   tasks: <TabIcon path={<><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01" /></>} />,
   approvals: <TabIcon path={<><path d="m12 3 8 4v6c0 4-8 8-8 8s-8-4-8-8V7Z" /><path d="m8 12 3 3 5-6" /></>} />,
+  artifacts: <TabIcon path={<><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" /><path d="M14 3v6h6M8 14h8M8 17h5" /></>} />,
   identity: <TabIcon path={<><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" /><circle cx="12" cy="12" r="3.2" /></>} />,
 };
 function BoardPet({ identity, size = 56 }) {
@@ -92,21 +96,33 @@ const BoardRow = React.memo(function BoardRow({ row, onOpen }) {
   </article>;
 });
 const ActivityContext = createContext(null);
+const boardOverlay = () => window.matchMedia('(max-width: 1000px)').matches;
+const subscribeBoardOverlay = listener => {
+  const media = window.matchMedia('(max-width: 1000px)');
+  media.addEventListener('change', listener);
+  return () => media.removeEventListener('change', listener);
+};
 export function ActivityProvider({ children }) {
   const [open, setOpen] = useState(false);
+  const [overlayTarget, setOverlayTarget] = useState(null);
   const trigger = useRef(null), id = useId();
   const close = () => { setOpen(false); requestAnimationFrame(() => trigger.current?.focus()); };
-  return <ActivityContext.Provider value={{ open, setOpen, trigger, id, close }}><style>{css}</style>{children}</ActivityContext.Provider>;
+  return <ActivityContext.Provider value={{ open, setOpen, trigger, id, close, overlayTarget, setOverlayTarget }}><style>{css}</style>{children}</ActivityContext.Provider>;
 }
 export function ActivityTrigger({ api }) {
-  const { open, setOpen, trigger, id } = useContext(ActivityContext);
+  const { open, setOpen, trigger, id, close, overlayTarget } = useContext(ActivityContext);
+  const overlay = useSyncExternalStore(subscribeBoardOverlay, boardOverlay);
   const { rows } = useAssistantActivity(api);
   const count = boardTaskRows(rows || []).length;
   const label = open ? '收起看板' : '展开看板';
-  return <Tooltip label={label} side="bottom" delayMs={450} portal><Button variant="ghost" ref={trigger} type="button" className="ba-activity-trigger" aria-label={label} aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}><IconPanelLeftOutlineRegular className="ba-activity-panel-icon" size={15} />{count > 0 && <span className="ba-activity-count" aria-hidden="true">{count}</span>}</Button></Tooltip>;
+  const button = <Tooltip label={label} side="bottom" delayMs={450} portal><Button variant="ghost" ref={trigger} type="button" className="ba-activity-trigger" aria-label={label} aria-expanded={open} aria-controls={id} onClick={() => open ? close() : setOpen(true)}><UIIcon name={open ? 'chevronLeft' : 'category'} className={open ? 'ba-board-arrow' : ''} size={16} />{count > 0 && <span className="ba-activity-count" aria-hidden="true">{count}</span>}</Button></Tooltip>;
+  // Keep the single toggle reachable when the narrow overlay makes the chat inert.
+  return open && overlay && overlayTarget ? createPortal(button, overlayTarget) : button;
 }
 export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId, ctx, SessionProvider, renderSlot, onOpenExecution, onOpenReminder }) {
-  const { open, id, close } = useContext(ActivityContext);
+  const { open, id, close, overlayTarget, setOverlayTarget } = useContext(ActivityContext);
+  const openFile = useMemo(() => createReplyFileOpener(ctx, sessionId), [ctx, sessionId]);
+  const openArtifact = openFile ? async path => { await openFile(path); close(); } : undefined;
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const [openingExecution, setOpeningExecution] = useState(false), [actionError, setActionError] = useState(null), [selectedKey, setSelectedKey] = useState(null);
   const [tab, setTab] = useState('tasks'), [fetchedIdentity, setIdentity] = useState(null), [activeOpen, setActiveOpen] = useState(true);
@@ -220,12 +236,18 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
   };
-  const tabs = [['tasks', '任务', sorted.length], ['approvals', '审核', approvalCount], ['identity', '身份', 0]].map(([value, label, count]) => ({ value, icon: tabIcons[value], label: <>{label}{(count > 0 || value === 'approvals') && <span className="ba-board-tab-count">{count ?? '—'}</span>}</> }));
+  useEffect(() => {
+    if (!open || !overlayTarget) return;
+    // Portal events follow the chat's React ancestry, so handle the toggle at its DOM host.
+    overlayTarget.addEventListener('keydown', onKeyDown);
+    return () => overlayTarget.removeEventListener('keydown', onKeyDown);
+  }, [open, overlayTarget, onKeyDown]);
+  const tabs = [['tasks', '任务', sorted.length], ['approvals', '审核', approvalCount], ['artifacts', '产物', 0], ['identity', '身份', 0]].map(([value, label, count]) => ({ value, icon: tabIcons[value], label: <>{label}{(count > 0 || value === 'approvals') && <span className="ba-board-tab-count">{count ?? '—'}</span>}</> }));
   const loadingState = <ResourceState kind="loading" title="正在读取任务" description="正在同步进度与结果，请稍候。" />;
   const closing = present && !open ? 'closing' : undefined;
   return <><div ref={backdrop} className="ba-activity-backdrop" hidden={!present} data-state={closing} onClick={close} aria-hidden="true" />
     <aside id={id} ref={panel} hidden={!present} data-state={closing} tabIndex={-1} className="ba-activity-panel ba-board" aria-label="助手看板" onKeyDown={onKeyDown}>
-      <header className="ba-board-head"><div className="ba-board-heading"><span>助手看板</span><Tooltip label="收起看板" side="bottom" delayMs={450} portal><Button variant="ghost" className="ba-icon" aria-label="收起看板" onClick={close}><UIIcon name="close" size={16} /></Button></Tooltip></div>
+      <header className="ba-board-head"><div className="ba-board-heading"><span>助手看板</span><span ref={setOverlayTarget} /></div>
         <div className="ba-board-companion"><BoardPet identity={identity} /><div className="ba-board-identity"><strong title={name}>{name}</strong><span className="ba-board-sync" data-state={syncState}><i aria-hidden="true" />{syncLabel}</span></div></div>
       </header>
       <nav hidden={!!selected} className="ba-board-tabs" aria-label="看板分页"><SegmentedControl options={tabs} value={tab} onChange={setTab} label="看板分页" panelId={`${id}-content`} tabIdPrefix={`${id}-tab`} /></nav>
@@ -239,6 +261,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
           {completed.length > 0 && <section className="ba-board-section"><h3 className="ba-board-day">已完成<span>{completed.length}</span></h3>{completed.map(renderRow)}</section>}
           {rows !== null && !sorted.length && !error && <BoardEmpty identity={identity} onReturn={close} />}</>}
         {ctx && SessionProvider && renderSlot ? (reviewStarted || (open && tab === 'approvals')) && <div hidden={tab !== 'approvals'}><ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} compact active={open && tab === 'approvals'} onCountChange={setApprovalCount} onOpenReminder={id => { close(); onOpenReminder?.(id); }} /></div> : tab === 'approvals' && <ResourceState kind="error" title="审核会话暂不可用" description="请前往任务管理连接原审批会话。" actionLabel="前往审核" onAction={() => openResource('approvals')} />}
+        {open && tab === 'artifacts' && <Artifacts api={api} compact onOpenFile={openArtifact} />}
         {tab === 'identity' && <section className="ba-board-section" aria-label="身份卡片">
           {identityError && <ResourceState kind="error" title="暂时无法更新身份" description={identity ? '当前显示上次的身份信息，请重试。' : '身份信息暂时无法读取，请检查连接后重试。'} onAction={refreshIdentity} />}
           {!identity && !identityError && <ResourceState kind="loading" title="正在读取身份" description="正在同步助手形象与配置。" />}
@@ -252,7 +275,7 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
       <TaskIconButton icon="refresh" label="刷新记录" spinning={manualRefreshing} aria-disabled={manualRefreshing} onClick={() => refreshWithFeedback(() => refreshTasks([selected.id]))} />
       <TaskIconButton icon="category" label="前往任务管理" onClick={() => openResource('tasks', { taskId: selected.id })} /></div>}>{selected && <>
       {actionError?.row.key === selected.key && <ResourceState kind="error" title="操作未能完成" description={actionError.message} actionLabel="重新读取" onAction={async () => { setActionError(null); await refreshTasks([selected.id]); }} />}
-      {selected.kind === 'task' && <TaskExecution key={selected.key} execution={selected.execution} taskStatus={selected.status} executionControl={selected.executionControl} stale={!!error} sessionAvailable={selected.executionSession?.available} outcome={selected.status === 'completed' ? selected.detail : undefined} />}
+      {selected.kind === 'task' && <TaskExecution key={selected.key} execution={selected.execution} executionSession={selected.executionSession} taskStatus={selected.status} executionControl={selected.executionControl} stale={!!error} sessionAvailable={selected.executionSession?.available} outcome={selected.status === 'completed' ? selected.detail : undefined} />}
       {selected.kind === 'task' && selectedWaiting && !selectedInterrupted && <TaskWaiting compact hideRefresh key={`${selected.id}:${selected.instructionRevision}:${selected.resultVersion}`} api={api} task={selected} onRefresh={() => refreshTasks([selected.id])} onOpenResources={openResource} />}
     </>}</TaskDetail></aside></>;
 }

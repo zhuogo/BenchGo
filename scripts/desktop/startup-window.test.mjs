@@ -123,6 +123,7 @@ test('startup executes the packaged enrollment entry and propagates failures bef
     const resources = join(root, name);
     await mkdir(join(resources, 'benchgo'), { recursive: true });
     await writeFile(join(resources, 'benchgo/plugin-bundle.mjs'), body);
+    await writeFile(join(resources, 'benchgo/workbench-desktop.mjs'), 'export async function beginDesktopWorkbench({ resources, initialize }) { return initialize({ resources }); }');
     if (name === 'valid') assert.deepEqual(await run(join, pathToFileURL, resources, console), { resources, owner: 'packaged-entry' });
     else {
       const errors = [];
@@ -166,4 +167,45 @@ test('startup timing records bounded phases and total elapsed time without slowi
   const unwritable = createStartupTiming(join(directory, 'benchgo-startup.json', 'invalid'));
   unwritable.finish();
   await unwritable.flush();
+});
+
+test('retired install cleanup starts once after the workspace is visible and never holds startup', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'benchgo-cleanup-startup-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const resources = join(root, 'resources');
+  await mkdir(join(resources, 'benchgo'), { recursive: true });
+  let entered, finish;
+  const began = new Promise(resolve => { entered = resolve; });
+  const pending = new Promise(resolve => { finish = resolve; });
+  const key = `benchgo-cleanup-${Date.now()}`;
+  globalThis[key] = { entered, pending };
+  t.after(() => { finish(); delete globalThis[key]; });
+  await writeFile(join(resources, 'benchgo/install-cleanup.mjs'), `export async function cleanupRetiredInstalls({ resources }) {
+    globalThis[${JSON.stringify(key)}].entered(resources);
+    await globalThis[${JSON.stringify(key)}].pending;
+    return [];
+  }`);
+  const source = await readFile(new URL('../../deepseek-harness/apps/desktop/lib/types/main.js', import.meta.url), 'utf8');
+  const code = startupWindowPlugin('/main.js').transform(source, '/main.js').code;
+  const support = code.slice(code.indexOf('let closeBenchgoStartup;'), code.indexOf(source.slice(0, 60)));
+  const timers = [], errors = [];
+  const stage = new Function('join', 'benchgoPathToFileURL', 'process', 'setTimeout', 'console', `${support}; return benchgoStartupStage;`)(
+    join, pathToFileURL, { resourcesPath: resources, platform: 'win32' }, (callback, ms) => {
+      const timer = { callback, ms, unref() { this.unreferenced = true; } };
+      timers.push(timer); return timer;
+    }, { warn: (...args) => errors.push(args) },
+  );
+  for (const phase of ['splash-visible', 'enrollment-ready', 'host-ready', 'workspace-ready']) stage(phase);
+  assert.equal(timers.length, 0, 'no cleanup before a usable workspace');
+  assert.equal(stage('workspace-visible'), undefined, 'startup does not return or await the cleanup promise');
+  stage('workspace-visible');
+  assert.equal(timers.length, 1, 'later workspace navigation cannot schedule duplicate cleaners');
+  assert.equal(timers[0].unreferenced, true);
+  assert.equal(timers[0].ms, 1500, 'initial workspace painting precedes cleanup I/O');
+  assert.equal(timers[0].callback(), undefined);
+  assert.equal(await began, resources);
+  // Even while deletion remains pending, the startup caller has already returned.
+  finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(errors, []);
 });

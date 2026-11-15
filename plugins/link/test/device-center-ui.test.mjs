@@ -80,6 +80,99 @@ test('server authentication starts after fingerprint confirmation', async () => 
   await view.tick(); assert(textOf(view.tree).includes('打开工作台'));
 });
 
+test('server resource prefetch preserves the form and returns to installation without opening a device', async () => {
+  const added = [], calls = [];
+  const view = fixture('AddServer', { onAdded: device => added.push(device), runtime: { async call(action, input) {
+    calls.push({ action, input });
+    if (action === 'serverPrefetch') return { jobId: 'prefetch' };
+    if (action === 'job') return { id: 'prefetch', kind: 'server-prefetch', state: 'done', resources: { cached: true, version: '0.1.4', origin: 'cache' }, steps: [{ name: '验证资源', state: 'done' }] };
+    throw new Error('unexpected ' + action);
+  } } });
+  await view.settle();
+  view.nodes().filter(node => node.type === 'input')[0].props.onChange({ target: { value: '保留的服务器名称' } }); await view.settle();
+  await view.click('准备离线部署资源');
+  assert.equal(calls[0].action, 'serverPrefetch');
+  assert.equal(calls[0].input.source, 'mirror');
+  await view.tick();
+  assert.match(textOf(view.tree), /部署资源已准备好（0\.1\.4）/);
+  assert.doesNotMatch(textOf(view.tree), /打开工作台/);
+  await view.click('继续安装');
+  assert.equal(added.length, 0);
+  assert.equal(view.nodes().filter(node => node.type === 'input')[0].props.value, '保留的服务器名称');
+});
+
+test('resource cancellation waits for the final job state and remains a neutral finished state', async () => {
+  let cancelled = false, cancellations = 0;
+  const view = fixture('AddServer', { onAdded() { assert.fail('prefetch must not open a device'); }, runtime: { async call(action) {
+    if (action === 'serverPrefetch') return { jobId: 'prefetch' };
+    if (action === 'jobCancel') { cancellations++; cancelled = true; return { ok: true }; }
+    if (action === 'job') return { id: 'prefetch', kind: 'server-prefetch', state: cancelled ? 'cancelled' : 'running', cancellable: !cancelled, error: cancelled ? '部署资源获取已取消，可重新尝试' : undefined, steps: [] };
+    throw new Error('unexpected ' + action);
+  } } });
+  await view.settle(); await view.click('准备离线部署资源');
+  await view.click('取消准备');
+  assert.equal(cancellations, 1);
+  assert.equal(jobFinished({ state: 'cancelled' }), true);
+  await view.tick();
+  assert.match(textOf(view.tree), /返回安装/);
+  assert.doesNotMatch(textOf(view.tree), /打开工作台|重新检查进度/);
+  await view.click('返回安装');
+  assert.match(textOf(view.tree), /检查服务器/);
+});
+
+test('failed resource preparation retries with the selected source and never connects SSH', async () => {
+  let attempts = 0;
+  const calls = [];
+  const view = fixture('AddServer', { onAdded() {}, runtime: { async call(action, input) {
+    calls.push({ action, input });
+    if (action === 'serverPrefetch') return { jobId: 'prefetch-' + (++attempts) };
+    if (action === 'job') return { id: input.jobId, kind: 'server-prefetch', state: 'error', error: '资源校验失败，请重试', steps: [] };
+    throw new Error('unexpected ' + action);
+  } } });
+  await view.settle(); await view.click('准备离线部署资源'); await view.tick();
+  assert.match(textOf(view.tree), /重试准备/);
+  await view.click('重试准备');
+  assert.equal(attempts, 2);
+  assert.equal(calls.some(call => call.action.startsWith('ssh')), false);
+});
+
+test('server upload and install stages do not offer resource cancellation', async () => {
+  const view = fixture('AddServer', { onAdded() {}, runtime: { async call(action) {
+    if (action === 'sshProbe') return { fingerprint: 'SHA256:valid' };
+    if (action === 'sshConnect') return { jobId: 'server-install' };
+    if (action === 'job') return { id: 'server-install', kind: 'server', state: 'running', cancellable: false, steps: [{ name: '安装启动', state: 'running' }] };
+    throw new Error('unexpected ' + action);
+  } } });
+  await view.settle();
+  const fields = view.nodes().filter(node => node.type === 'input');
+  fields[1].props.onChange({ target: { value: 'server.example.com' } }); fields[3].props.onChange({ target: { value: 'ubuntu' } }); await view.settle();
+  const submit = () => view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  submit(); await view.settle(); submit(); await view.settle(); await view.tick();
+  assert.doesNotMatch(textOf(view.tree), /取消准备/);
+});
+
+test('server management cancellation waits for the backend and never opens a cancelled update', async () => {
+  let cancelled = false, changes = 0;
+  const calls = [];
+  const view = fixture('ManageDevice', { device: { id: 'server', kind: 'ssh', name: '云端', status: 'online' }, onChanged() { changes++; }, onOpenWorkbench() { throw new Error('cancelled update must not open'); }, runtime: { async call(action, input) {
+    calls.push({ action, input });
+    if (action === 'serverAction') return { jobId: 'update-resources' };
+    if (action === 'jobCancel') return { ok: true };
+    if (action === 'job') return { id: 'update-resources', kind: 'server', state: cancelled ? 'cancelled' : 'running', cancellable: !cancelled, steps: [] };
+    throw new Error('unexpected ' + action);
+  } } });
+  await view.settle(); await view.click('更新插件'); await view.click('确认更新'); await view.tick();
+  await view.click('取消准备');
+  assert.equal(calls.at(-1).action, 'jobCancel');
+  assert.equal(calls.at(-1).input.jobId, 'update-resources');
+  assert.equal(changes, 0);
+  assert.equal(view.nodes().find(node => node.props.job)?.props.job.state, 'running');
+  cancelled = true; await view.tick();
+  assert.equal(view.nodes().find(node => node.props.job)?.props.job.state, 'cancelled');
+  assert.equal(changes, 0);
+  assert.doesNotMatch(textOf(view.tree), /重新打开工作台/);
+});
+
 test('opening another device leaves the device list immediately', async () => {
   let release;
   const pending = new Promise(resolve => { release = resolve; });

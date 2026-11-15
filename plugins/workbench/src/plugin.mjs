@@ -13,7 +13,7 @@ async function readBody(req) {
   return body;
 }
 
-export async function mountWorkbench(ctx, { directory, loadSidebar = () => import('dsh-better-sidebar'), loadSsh = () => import('../lib/ssh-host.mjs'), probe = probeFingerprint } = {}) {
+export async function mountWorkbench(ctx, { directory, loadSidebar = () => import('../lib/sidebar-host.mjs'), loadSsh = () => import('../lib/ssh-host.mjs'), probe = probeFingerprint } = {}) {
   const preferences = await openPreferences(directory), trust = await openSshTrust(directory);
   const state = { sidebar: { available: false, status: 'loading' }, ssh: { available: false, status: 'loading' } };
   const challenges = new Map();

@@ -28,10 +28,13 @@ import { DeviceLauncher } from '../../link/client/device-launcher.jsx';
 import { DeviceSwitch } from '../../link/client/device-switch.jsx';
 import { useResourceNavigation, ResourceScope, RemoteProjects, ResourceDeviceState, ResourceStage, remoteRecentRows, installResourceReceiver } from '../../link/client/resource-navigation.jsx';
 import { resourceKey, sortResourceRecents, sessionActionAccess } from '../../link/client/resource-state.mjs';
+import { installResourceOpener } from '../../link/client/resource-navigation-store.mjs';
 import { mountDiagnosticsSettings } from './diagnostics-settings.jsx';
 import { perfTrace } from '../../shared/client/perf-trace.mjs';
 import { mountInteractiveClient } from '../../interactive/client/official.jsx';
 import { mountWorkbenchClient } from '../../workbench/client/index.jsx';
+import { mountWorkbenchRightbarLifecycle } from '../../workbench/client/rightbar-lifecycle.jsx';
+import { mountWorkbenchSessionSurface } from '../../workbench/client/session-surface.jsx';
 import { mountSessionMascot } from './session-mascot.jsx';
 
 const names = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi', opencode: 'OpenCode', gemini: 'Gemini CLI', hermes: 'Hermes', grok: 'Grok Build', mcode: 'MiniMax Code', deepseek: 'DeepSeek' };
@@ -90,8 +93,10 @@ function ErrorLine({ message }) { return message ? <div className="cmd-error" ro
 
 export const inject = ['slots', 'layout', 'uiWorkspace', 'uiSession', 'uiConversation', 'sidebarRight', 'sessions', 'locale', 'remote', 'remote.session', 'workspaces', 'modelDirectories', 'conversation', 'theme', 'connection'];
 export function apply(ctx) {
+  mountWorkbenchRightbarLifecycle(ctx);
+  mountWorkbenchSessionSurface(ctx);
+  mountBaseUi(ctx);
   ctx.effect(() => startModuleLifecycle(ctx, {
-    base: mountBaseUi,
     superagent: mountAssistant,
     voice: applyVoice,
     harness: child => {
@@ -230,6 +235,8 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
   const [filter, setFilter] = useState(''), [searching, setSearching] = useState(false), [showArchived, setShowArchived] = useState(false), [archivedThreadCount, setArchivedThreadCount] = useState(0);
   const [expanded, setExpanded] = useState({});
   const navigation = useResourceNavigation(modules.link, showArchived);
+  // The open workspace outlives navigation rows: disclosure, filtering and
+  // background list reads must never dispose its document, draft or connection.
   const [remoteTarget, setRemoteTarget] = useState(null), [targetAction, setTargetAction] = useState(null);
   const projectDeleteKey = confirmProjectDelete?.remote ? JSON.stringify([confirmProjectDelete.deviceId, confirmProjectDelete.device.hostId, confirmProjectDelete.device.authorizationId, confirmProjectDelete.resourceId ?? confirmProjectDelete.id]) : '';
   const projectDeleteDevice = confirmProjectDelete?.remote && navigation.devices.find(device => device.id === confirmProjectDelete.deviceId && device.hostId === confirmProjectDelete.device.hostId && device.authorizationId === confirmProjectDelete.device.authorizationId);
@@ -242,6 +249,7 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
     return host.layout.panelInfo.subscribe(() => { if (host.layout.panelInfo.getSnapshot().activePanelId !== selectedPanel) setRemoteTarget(null); });
   }, [host, remoteTarget]);
   const openRemote = (device, resource) => setRemoteTarget({ device, resource, requestId: crypto.randomUUID() });
+  useEffect(() => modules.link ? installResourceOpener((device, resource, onReturn) => setRemoteTarget({ device, resource, onReturn, requestId: crypto.randomUUID() })) : undefined, [modules.link]);
   const newLocalSession = (projectId, propagateError = false) => { setRemoteTarget(null); return newSession(projectId, propagateError); };
   const begin = (action) => {
     if (action === 'newSession' && (!modules.link || navigation.enabled === false || (navigation.scope.mode === 'current' && navigation.devices.length <= 1))) { newLocalSession(); return; }
@@ -419,10 +427,10 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
     {navigation.showLocal && !projectsLoaded && <p className="cmd-sidebar-empty">正在读取项目…</p>}
     {(navigation.showLocal ? projects : []).filter(p => !showArchived || rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))).map(p => {
       const activity = workspaceActivity(p, live);
-      return <div className="cmd-project" key={p.id}><ProjectHeader title={p.title} expanded={!!expanded[p.id]} activity={activity} onToggle={() => { setRemoteTarget(null); setExpanded(v => ({ ...v, [p.id]: !v[p.id] })); }} onNew={!showArchived ? () => newLocalSession(p.id) : undefined} newLabel={`在 ${p.title} 新聊天`} onDelete={!showArchived && !p.isDefault ? () => setConfirmProjectDelete(p) : undefined} deleteLabel={`删除项目 ${p.title}`}/>{(showArchived || expanded[p.id]) && <div className="cmd-project-children">{rows.filter(s => s.projectId === p.id || (p.path && s.cwd === p.path)).map(row)}{!rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path)) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档对话' : '还没有对话'}</p>}</div>}</div>;
+      return <div className="cmd-project" key={p.id}><ProjectHeader title={p.title} expanded={!!expanded[p.id]} activity={activity} onToggle={() => { setExpanded(v => ({ ...v, [p.id]: !v[p.id] })); }} onNew={!showArchived ? () => newLocalSession(p.id) : undefined} newLabel={`在 ${p.title} 新聊天`} onDelete={!showArchived && !p.isDefault ? () => setConfirmProjectDelete(p) : undefined} deleteLabel={`删除项目 ${p.title}`}/>{(showArchived || expanded[p.id]) && <div className="cmd-project-children">{rows.filter(s => s.projectId === p.id || (p.path && s.cwd === p.path)).map(row)}{!rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path)) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档对话' : '还没有对话'}</p>}</div>}</div>;
     })}
     {navigation.showLocal && projectsLoaded && !(showArchived ? projects.some(p => rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))) : projects.length) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档项目' : '暂无项目'}</p>}
-    <RemoteProjects navigation={navigation} filter={filter} onOpen={openRemote} onDelete={project => { setError(''); setProjectDeleteAccess(null); setConfirmProjectDelete(project); }} archived={showArchived} onToggle={() => { setRemoteTarget(null); setActionSession(null); }} renderSession={row} renderHeader={props => <ProjectHeader {...props}/>}/>
+    <RemoteProjects navigation={navigation} filter={filter} onOpen={openRemote} onDelete={project => { setError(''); setProjectDeleteAccess(null); setConfirmProjectDelete(project); }} archived={showArchived} onToggle={() => setActionSession(null)} renderSession={row} renderHeader={props => <ProjectHeader {...props}/>}/>
     </div></div>
     <div className="cmd-section-title cmd-recent-title"><button type="button" className="cmd-section-toggle" aria-expanded={sections.recent} aria-controls="cmd-recent-section" onClick={() => toggleSection('recent')}><span className="cmd-section-label">{showArchived ? '已归档最近' : '最近'}{!showArchived && recentActivity && <Activity status={recentActivity} />}</span><UIIcon name="chevronDown" size={12} /></button>{!showArchived && <Hint label="新聊天"><button type="button" aria-label="最近新聊天" onClick={() => begin('newSession')}><UIIcon name="plus" size={16} /></button></Hint>}</div>
     <div id="cmd-recent-section" className="cmd-section-body" data-open={sections.recent} inert={!sections.recent ? '' : undefined}><div className="cmd-section-inner"><div className="cmd-recents" data-transition={archivePhase}>{recents.map(row)}{navigation.remote.map(device=><ResourceDeviceState key={device.id} navigation={navigation} device={device} kind="recent" hideEmpty/>)}{recentLoaded && !recents.length && <p className="cmd-sidebar-empty">{filter ? '没有找到对话' : showArchived ? '暂无归档对话' : '暂无最近对话'}</p>}</div></div></div>

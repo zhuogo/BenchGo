@@ -13,8 +13,8 @@
   "id": "00",
   "title": "一个工作台，六个能力板块",
   "eyebrow": "SYSTEM / OVERVIEW",
-  "subtitle": "入口可聚合，执行跟着项目所属设备走；现有模块保持原职责，跨设备资源与操作复用 Link 和目标主机服务。",
-  "boundary": "当前图依据本地工作区源码（含未提交改动）与 upstream.json：官方 DeepSeek Harness 0.2.2-rc.1，pin fcc0ad462172。BenchGo 只安装 benchgo-plugin；六个文档板块是职责划分，与五个 Cordis 服务入口并非一一对应。各板块详情区单独标注实现和规划的差距。 跨设备查询、目标执行、结果回传与聚合导航已接线；AI管理限已有设备及中继优先级/启停申请，首次配对与秘密仍走设备中心。双向需双方授权；本地TLS和浏览器测试不等于襄阳服务器真机验收。",
+  "subtitle": "业务工单留在发起宿主，执行跟着项目所属设备走；A 统一管理，B 只执行，无需启用 B 的 SuperAgent。",
+  "boundary": "当前图依据本地工作区源码（含未提交改动）与 upstream.json：官方 DeepSeek Harness 0.2.2-rc.1，pin fcc0ad462172。BenchGo 只安装 benchgo-plugin；六个文档板块是职责划分，与五个 Cordis 服务入口并非一一对应。各板块详情区单独标注实现和规划的差距。 2026-11-15 已接通 A 唯一业务 Task → Link v1 execution → B 独立 benchgoExecution → A 事实/结果回流。A coordinator 与无 SuperAgent 的 B 独立服务及官方 Agent fixture 五项通过，Link execution catalog 真实 TLS/身份测试通过；UI 39 项及四态、明暗、390px 组件验证通过。这些不等于真物理双机、安装版或实际供应商验收。旧数据离线迁移 CLI 六项测试通过，未操作真实权威库；B v1 仅 official 单模型、无二级子代理委派，执行会话只读，跨设备产物传输不支持。 设备 AI 管理仍限既有设备和中继有限修改申请，首次配对与秘密继续走设备中心。  统一安装、共同实例登记与所有权、生产闭包和部署资源服务已有源码；未知旧 Harness profile 保守拒绝，只显式复用精确兼容 runtime。三平台原生安装、GUI 交接、真实模型推理和公开发行不由源码状态推断，细节见更新与发布图。",
   "zones": [
     {
       "x": 40,
@@ -56,7 +56,7 @@
       "y": 1350,
       "w": 1440,
       "h": 245,
-      "label": "跨设备协作 · 已接线 / 有限管理 · 文件与执行留在所属设备"
+      "label": "跨设备协作 · A 工单 / B 独立执行已接线 · 不依赖 B SuperAgent"
     }
   ],
   "nodes": [
@@ -78,7 +78,7 @@
         "plugins/link/src/index.mjs"
       ],
       "state": "implemented",
-      "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。 跨设备资源/有限操作服务已接线，沿用配对、路线与服务生命周期，不增加插件入口。",
+      "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。 跨设备资源/有限操作服务已接线，沿用配对、路线与服务生命周期，不增加插件入口。 工作台 benchgo 与中继 benchgo-relay 保持独立入口；三平台工作台安装、现有实例接入与部署资源交付的唯一契约在更新与发布板块，中继仍限 Linux/systemd。",
       "page": "docs/01-设备与远程连接/架构.html",
       "doc": "docs/01-设备与远程连接/设计.md"
     },
@@ -114,7 +114,7 @@
       "sub": "持续对话 · 任务管理 · Worker 执行",
       "symbol": "assistant / mountAssistant()",
       "plain": "用户持续与 Router 对话；Router 处理专属产品管理与协调，环境操作交给独立 Worker。",
-      "role": "SuperAgent 由 Router 对话与协调、Worker 委派执行、结果保存和原来源投递组成。Router 仅保留专属产品管理、任务协调与已装配的上下文工具；文件、命令、网页、技能、插件、MCP 与官方 subagents 等环境执行能力统一交给 Worker。装配和调度细则见 SuperAgent 模型与上下文、任务与执行。Router 同步主动记忆，唯一自我迭代后台执行器维护四组 11 项职责，Watchdog 只监督；后台不建工作台聊天、任务或过程 UI。分层上下文含稳定档案、短总纲、简短协作对齐和按需事实；详细机制只在 SuperAgent 正文维护。 任务页和 Router 共用任务服务，支持有界检索与原逻辑会话跟进；明确停止后归档保存精确持久待办，由既有编排确认退出后续办，具体授权、取消和版本规则只在 SuperAgent 任务与执行维护。",
+      "role": "SuperAgent 由 Router 对话与协调、Worker 委派执行、结果保存和原来源投递组成。Router 仅保留专属产品管理、任务协调与已装配的上下文工具；文件、命令、网页、技能、插件、MCP 与官方 subagents 等环境执行能力统一交给 Worker。装配和调度细则见 SuperAgent 模型与上下文、任务与执行。Router 同步主动记忆，唯一自我迭代后台执行器维护四组 11 项职责，Watchdog 只监督；后台不建工作台聊天、任务或过程 UI。分层上下文含稳定档案、短总纲、简短协作对齐和按需事实；详细机制只在 SuperAgent 正文维护。 任务页和 Router 共用任务服务，支持有界检索与原逻辑会话跟进；明确停止后归档保存精确持久待办，由既有编排确认退出后续办，具体授权、取消和版本规则只在 SuperAgent 任务与执行维护。 跨设备执行边界：由受理宿主 A 持有唯一完整 Task、要求、授权、输入账、Assignment/Run 协调及结果交付，本机与远端执行共用同一任务接口；B 不进入自身的工单、Router 或任务调度。切换客户端和 Router session 不转移工单。",
       "input": "用户对话、Trigger、授权与任务",
       "output": "Router 协调与回复、可恢复的任务整理、Worker 任务与交付记录",
       "sources": [
@@ -122,10 +122,13 @@
         "plugins/superagent/src/service.mjs",
         "plugins/superagent/src/conversation-management.mjs",
         "plugins/superagent/src/execution-session.mjs",
-        "plugins/superagent/src/task-cleanup-continuation.mjs"
+        "plugins/superagent/src/task-cleanup-continuation.mjs",
+        "plugins/superagent/src/remote-assignment-executor.mjs",
+        "plugins/superagent/src/remote-execution-store.mjs",
+        "plugins/superagent/test/owned-remote-execution-integration.test.mjs"
       ],
-      "state": "implemented",
-      "note": "使用者权限只在对应渠道适配器区分，核心不设主人/其他用户权限角色；Router/Worker 是职责与模型上下文分工，宿主权限统一为官方 Full，装配与业务动作许可见 SuperAgent 模型与上下文、任务与执行。渠道专用共享策略已集中，适配器入口准入与按需研判尚有迁移缺口，不能写成全部已下沉；详见 SuperAgent 入口与研判。来源真实性和任务归属仍须准确处理。目标只是清单，不委派；基于目标的主动性机制待实施。自我迭代源码已接线并有定向覆盖，真实付费模型效果及安装版运行未验，详见记忆与技能。 跨设备查询、委派与有限设备管理已接线；对话模型属于入口主机，执行模型属于项目所在主机。",
+      "state": "partial",
+      "note": "使用者权限只在对应渠道适配器区分，核心不设主人/其他用户权限角色；Router/Worker 是职责与模型上下文分工，宿主权限统一为官方 Full，装配与业务动作许可见 SuperAgent 模型与上下文、任务与执行。渠道专用共享策略已集中，适配器入口准入与按需研判尚有迁移缺口，不能写成全部已下沉；详见 SuperAgent 入口与研判。来源真实性和任务归属仍须准确处理。目标只是清单，不委派；基于目标的主动性机制待实施。自我迭代源码已接线并有定向覆盖，真实付费模型效果及安装版运行未验，详见记忆与技能。 跨设备 A 唯一工单、统一管理与 B 纯执行已有源码及定向 fixture；旧目标 Task 链、专用工具与引用旁账已删除。A 按 B 真实 Harness/模型目录选择冻结执行配置，B 用本机凭据校验，不读取 B SuperAgent 工作模型。",
       "page": "docs/06-superagent/架构.html",
       "doc": "docs/06-superagent/设计.md"
     },
@@ -185,16 +188,18 @@
       "sub": "外部原生会话、委派、适配与 MCP",
       "symbol": "commander / Commander",
       "plain": "把不同原生编码 Agent 接进同一套会话接口。",
-      "role": "管理原生运行时、会话句柄、事件、委派与权限转接；官方 Agent 服务与这个原生聚合服务各有职责。SuperAgent 注入 commander，Router 与 Worker 均使用官方 Agent。",
+      "role": "管理原生运行时、会话句柄、事件、委派与权限转接；官方 Agent 服务与这个原生聚合服务各有职责。SuperAgent 注入 commander，Router 与 Worker 均使用官方 Agent。 跨设备执行接收器随现有 Harness 能力装配：仅接受认证委托并驱动既有官方 Worker/会话，不创建目标业务 Task，不经过目标 SuperAgent，不新增 Cordis 入口。",
       "input": "原生 provider、工作目录、模型与消息",
       "output": "原生会话、工具事件与运行结果",
       "sources": [
         "plugins/harness/src/plugin.mjs",
         "plugins/harness/src/runtime.mjs",
-        "plugins/harness/src/delegation.mjs"
+        "plugins/harness/src/delegation.mjs",
+        "plugins/harness/src/remote-execution.mjs",
+        "plugins/harness/test/remote-execution.test.mjs"
       ],
       "state": "implemented",
-      "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。",
+      "note": "原生聚合与独立 benchgoExecution 已接线；B 仅需 Link 与可用 Harness 执行服务，停用 B SuperAgent 不阻断 A 委托。当前远端 v1 仅 official 单模型，无二级子代理委派，真实供应商、安装版和物理双机待验。",
       "page": "docs/02-工作台与Agent/架构.html"
     },
     {
@@ -248,19 +253,25 @@
       "kind": "finish",
       "x": 60,
       "y": 745,
-      "sub": "桌面、插件、工作台与中继独立交付",
+      "sub": "统一安装复用 · 签名更新 · 轻量生产闭包",
       "symbol": "mountUpdates() / signed release",
       "plain": "把源码变成可安装、可验证的交付物。",
-      "role": "桌面品牌与打包留在根目录；插件更新经签名校验和受管激活；工作台与中继各有服务端交付路径。构建成功不等于真实安装验收。",
+      "role": "桌面品牌与打包留在根目录；插件更新经签名校验和受管激活；工作台与中继各有服务端交付路径。构建成功不等于真实安装验收。 统一发行/更新保留独立组件版本、单一入口与按需构建。统一安装已接 Windows x64、macOS arm64/x64、Linux x64：先发现已登记兼容服务与 canonical profile，再取得缺失资源；本机交互默认浏览器，SSH/无头保留后台协议。Desktop 与 CLI 通过共同租约和官方锁避免并发写入。",
       "input": "源码、官方 pin、发布配置与签名包",
       "output": "桌面或插件版本、服务端种子与更新状态",
       "sources": [
         "plugins/benchgo/src/updates.mjs",
         "scripts/desktop/package-windows.mjs",
-        "scripts/desktop/package-plugin-update.mjs"
+        "scripts/desktop/package-plugin-update.mjs",
+        "docs/05-更新与发布/设计.md",
+        "packages/benchgo-cli/src/cli.mjs",
+        "plugins/benchgo/shared/workbench-installation.mjs",
+        "scripts/desktop/workbench-desktop.mjs",
+        "scripts/desktop/payload-policy.mjs",
+        "plugins/benchgo/shared/server-resources.mjs"
       ],
-      "state": "implemented",
-      "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。",
+      "state": "partial",
+      "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。 安装发现、三平台 CLI、生产闭包及资源服务已有源码；三平台原生安装、GUI 交接、真实模型推理与公开发行仍须分别验收。包体、运行实例和资源缓存的复用分开核实，不以代码完成冒称已经发布。",
       "page": "docs/05-更新与发布/架构.html",
       "doc": "docs/05-更新与发布/设计.md"
     },
@@ -326,10 +337,12 @@
         "plugins/benchgo/package.json",
         "plugins/benchgo/cordis.patch.yml",
         "plugins/benchgo/scripts/build-modules.mjs",
-        "plugins/benchgo/scripts/build-client.mjs"
+        "plugins/benchgo/scripts/build-client.mjs",
+        "plugins/workbench/scripts/sidebar-runtime.mjs",
+        "scripts/desktop/payload-policy.mjs"
       ],
       "state": "implemented",
-      "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。"
+      "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。 轻量生产闭包已接线，保留五入口、侧栏主机与动态资源、共享服务身份及许可；整包侧栏生产依赖已由部署产物替代。Office/Python/Node/dsh-ops 保留，默认 full 含离线 seed，显式 online 使用签名缓存与预取；真实发行收益另验。"
     },
     {
       "id": "ctx-soul",
@@ -550,13 +563,14 @@
       "sub": "当前任务要求与输入账 · 执行时注入",
       "symbol": "",
       "plain": "一个官方执行会话接收当前任务上下文。",
-      "role": "自动注入当前 target、acceptance、原始 Mandate、要求版本、执行范围、任务/分派 ID、目录与请求时间；任务输入账提供当前任务已经应用的补充与答复，每步更新当前任务切片。当前执行器不直接注入 Router 的四份档案和全量记忆。 当前接线仅飞书可补取原来源历史，最近最多 20 条、每条最多 4000 字符、总计默认 12000 字符；无服务或读取失败则标明不可用。它是参考资料，不是新增授权。 Worker 自行使用官方 subagent 工具，BenchGo 只用提示词鼓励适当拆分；子会话上下文、模型、工具与结果回送均复用官方能力，不另开子任务。任务包要求结束时用几句话写清做成了什么、产出在哪、还剩什么问题。",
+      "role": "自动注入当前 target、acceptance、原始 Mandate、要求版本、执行范围、任务/分派 ID、目录与请求时间；任务输入账提供当前任务已经应用的补充与答复，每步更新当前任务切片。当前执行器不直接注入 Router 的四份档案和全量记忆。 当前接线仅飞书可补取原来源历史，最近最多 20 条、每条最多 4000 字符、总计默认 12000 字符；无服务或读取失败则标明不可用。它是参考资料，不是新增授权。 Worker 自行使用官方 subagent 工具，BenchGo 只用提示词鼓励适当拆分；子会话上下文、模型、工具与结果回送均复用官方能力，不另开子任务。任务包要求结束时用几句话写清做成了什么、产出在哪、还剩什么问题。 跨设备由 A 冻结任务包，经 v1 execution 交给 B；当前远端只支持 official 单模型，不提供二级子代理委派，通用子代理说明仅适用于本机执行。",
       "input": "当前消息、当前任务要求或按需检索参数",
       "output": "当前任务 Worker 上下文与官方委派指导",
       "sources": [
-        "plugins/superagent/src/assignment-executor.mjs"
+        "plugins/superagent/src/assignment-executor.mjs",
+        "plugins/harness/src/remote-execution.mjs"
       ],
-      "note": "Worker 保留工作台侧栏入口，官方子代理从父会话入口访问并按生命周期接收消息；输入复用原会话与同一任务记录，冷会话原 Run 续接仍需实际验收。",
+      "note": "Worker 保留工作台侧栏入口，官方子代理从父会话入口访问并按生命周期接收消息；输入复用原会话与同一任务记录，冷会话原 Run 续接仍需实际验收。 无 B SuperAgent 的装配与应用边界已有定向覆盖；B 执行会话只读，业务插话使用 A 原任务入口。",
       "state": "implemented",
       "compact": true,
       "x": 1000,
@@ -589,18 +603,18 @@
       "title": "共享跨设备服务",
       "kicker": "CROSS DEVICE / IMPLEMENTED",
       "kind": "orchestration",
-      "sub": "发现 · 查询 · 定向操作",
+      "sub": "资源发现 · 能力协商 · 认证传输",
       "symbol": "Link 领域服务扩展",
       "plain": "侧边栏和助手共用同一份设备事实。",
-      "role": "复用 Link 设备目录、授权与选路，聚合资源摘要；按设备与能力路由查询、执行和管理请求。Link 不承载模型推理。",
-      "input": "工作台或 SuperAgent 的可信请求",
-      "output": "资源摘要、操作回执与不可用原因",
+      "role": "复用 Link 设备目录、配对与选路，聚合资源摘要，绑定真实发起宿主和目标身份；只传有限执行命令、事件和管理请求。业务工单资源属于受理宿主，执行会话资源属于执行设备；Link 不创建工单、不承担推理。",
+      "input": "资源查询 / A 的持久执行命令 / 原执行事实补读",
+      "output": "B 的真实能力、认证执行通道及明确不可用原因",
       "sources": [
         "docs/01-设备与远程连接/跨设备协作.md",
         "plugins/link/src/devices/resources.mjs",
         "plugins/link/src/session/adapter.mjs"
       ],
-      "note": "已接目录、有界资源查询、目标执行及有限管理；目录状态不代表实时在线，能力以目标调用为准。真实襄阳服务器未验。",
+      "note": "资源目录、有限查询及 Link v1 execution 协议已接线；execution catalog 真实 TLS/身份测试通过。目标目录不冒充实时可用性，只认同版协议和真实身份，不回退旧目标 Task 链。一次配对反向通道及真实物理双机仍待验。",
       "state": "implemented",
       "x": 60,
       "y": 1400,
@@ -609,43 +623,50 @@
     },
     {
       "id": "cross-owner",
-      "title": "项目所属设备执行",
-      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "title": "A 的业务工单与委托",
+      "kicker": "TASK OWNERSHIP / IMPLEMENTED",
       "kind": "orchestration",
-      "sub": "目标主机的文件 · 模型 · Harness",
-      "symbol": "deviceId + resourceId",
-      "plain": "A 的项目就在 A 开发，不随访问入口迁移。",
-      "role": "B 访问 A 的项目时使用 A 的工作模型、Harness、工具、Git 和依赖。入口 Router 使用入口主机模型；不复制项目、不静默改到其他主机执行。",
-      "input": "已授权任务和稳定资源引用",
-      "output": "目标主机的唯一执行记录",
+      "sub": "唯一 Task · 统一管理 · 持久派发",
+      "symbol": "ownerHostId + taskId",
+      "plain": "谁接受用户委托，谁保留工单并负责跟进交付。",
+      "role": "A 的 SuperAgent 先保存完整 Task、要求、Mandate、输入账与 Assignment/Run，再持久派发到项目所属设备 B。Router、任务页和控制工具始终使用 A Task ID；执行引用挂在正式 Assignment/Run 上，无引用旁账。A 按 B 目录选择冻结执行配置，补充和修订先入 A 输入账。B 的事实经同一任务投影、结果保存和原 Router inbox 回流，A 离线不转移归属。",
+      "input": "真实用户指令、B 项目与能力、原任务和版本",
+      "output": "A 唯一工单、发往 B 的执行委托及原来源交付",
       "sources": [
-        "docs/01-设备与远程连接/跨设备协作.md",
-        "plugins/superagent/src/device-collaboration.mjs",
-        "plugins/superagent/src/orchestration-runtime.mjs"
+        "docs/06-superagent/任务与执行.md",
+        "docs/06-superagent/服务契约.md",
+        "plugins/superagent/src/remote-assignment-executor.mjs",
+        "plugins/superagent/src/remote-execution-store.mjs",
+        "plugins/superagent/test/owned-remote-execution-integration.test.mjs",
+        "plugins/superagent/src/legacy-ownership-transfer.mjs",
+        "scripts/migrate-remote-task-ownership.mjs",
+        "plugins/superagent/test/legacy-ownership-transfer.test.mjs"
       ],
-      "note": "已接目标既有任务与Worker链，使用目标模型和项目目录；入口只保留执行引用，既有tick跟进问题/结果。正常拒绝停止观察，未知接收有限核实，不重派。真实双机与供应商请求待验。",
+      "note": "A 正式 Task、统一工具、持久派工、输入/控制回执和结果回流已接线；A→无 SuperAgent 的 B 独立服务 fixture 覆盖完成、问题/context、同 session 暂停恢复、连续修订和取消 cleanup 五项。旧业务接收链、assistant_remote_task 与活跃引用旁账已删除，无兼容执行路径。离线迁移 CLI 六项测试通过，真实 A/B 权威库尚未操作；旧在途或效果未知执行不自动接管。",
       "state": "implemented",
       "x": 440,
       "y": 1400,
-      "doc": "docs/01-设备与远程连接/跨设备协作.md"
+      "doc": "docs/06-superagent/任务与执行.md"
     },
     {
       "id": "cross-receipt",
-      "title": "原来源进度与回执",
-      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "title": "B 的执行与事实回传",
+      "kicker": "REMOTE EXECUTION / IMPLEMENTED",
       "kind": "orchestration",
-      "sub": "关联投影 · 断线恢复 · 去重",
-      "symbol": "executionRef / operationId",
-      "plain": "入口统一看进度，实际执行状态由目标主机负责。",
-      "role": "查询与侧栏保留带时间的缓存；任务只维护目标执行引用，保存/接收/生效/完成分开表达。断线后按原操作 ID 查状态，不盲目重派。",
-      "input": "目标设备状态与结果引用",
-      "output": "入口原对话的问题与结果通知",
+      "sub": "执行实例 · 官方会话 · 有序回执",
+      "symbol": "executionId / Run / fence / cursor",
+      "plain": "B 运行 Worker、保存执行事实，无需 B 的 SuperAgent。",
+      "role": "B 的 Harness 接收器校验 Link 身份、目标项目和 A 冻结的执行配置，持久受理执行实例后驱动原官方会话；仅保存会话、日志、产物、已应用版本及操作回执，不创建业务 Task、目标清单、Router 回合或任务调度。执行事件与问题按代际和水位回 A；本机紧急停止只产生执行事实，不接管 A 工单。",
+      "input": "A Task/Assignment/Run、执行代际、要求快照与稳定命令",
+      "output": "B 的执行实例、应用/停止确认、事件与产物引用",
       "sources": [
-        "docs/01-设备与远程连接/跨设备协作.md",
-        "plugins/superagent/src/device-collaboration.mjs",
-        "plugins/superagent/src/orchestration-runtime.mjs"
+        "docs/06-superagent/任务与执行.md",
+        "docs/06-superagent/服务契约.md",
+        "plugins/harness/src/remote-execution.mjs",
+        "plugins/harness/src/remote-execution-store.mjs",
+        "plugins/harness/test/remote-execution.test.mjs"
       ],
-      "note": "已接目标既有任务与Worker链，使用目标模型和项目目录；入口只保留执行引用，既有tick跟进问题/结果。正常拒绝停止观察，未知接收有限核实，不重派。真实双机与供应商请求待验。",
+      "note": "B 独立 benchgoExecution 已接线，不需要 SuperAgent；受理、输入应用、原 session 暂停恢复、控制、事件回流及重启不重放有定向覆盖。当前 v1 仅 official 单模型，不开放二级子代理委派和调度类工具；执行会话只读，业务输入回 A。uncertain 中断只核实；跨设备产物传输未实现，真实双机/安装版/供应商请求待验。",
       "state": "implemented",
       "x": 820,
       "y": 1400,
@@ -817,7 +838,7 @@
     {
       "a": "superagent",
       "b": "cross-resources",
-      "label": "查询 / 委派",
+      "label": "资源 / 执行协议",
       "from": "t",
       "to": "t",
       "kind": "support"
@@ -825,7 +846,7 @@
     {
       "a": "cross-resources",
       "b": "cross-owner",
-      "label": "目标本地执行",
+      "label": "B 能力与项目事实",
       "from": "r",
       "to": "l",
       "kind": "support"
@@ -833,10 +854,10 @@
     {
       "a": "cross-owner",
       "b": "cross-receipt",
-      "label": "进度 / 结果",
+      "label": "A 持久执行委托",
       "from": "r",
       "to": "l",
-      "kind": "feedback"
+      "kind": "support"
     },
     {
       "a": "cross-resources",
@@ -853,6 +874,14 @@
       "from": "t",
       "to": "l",
       "kind": "support"
+    },
+    {
+      "a": "cross-receipt",
+      "b": "cross-owner",
+      "label": "事件 / 问题 / 控制回执",
+      "from": "b",
+      "to": "b",
+      "kind": "feedback"
     }
   ],
   "steps": [
@@ -904,8 +933,8 @@
     },
     {
       "node": "link",
-      "title": "换一台设备，任务仍留在目标主机",
-      "text": "Link 通过可信配对和有效路线转发到同一个工作台；网络断开不意味着主机上的任务终止。",
+      "title": "切换浏览设备不迁移业务工单",
+      "text": "Link 通过可信配对和有效路线访问工作台。A 受理的工单始终归 A；B 只有执行实例和原会话，页面、资源显示范围或网络断开均不转移工单，也不等于执行停止。",
       "edge": 0
     },
     {
@@ -916,12 +945,17 @@
     {
       "node": "cross-resources",
       "title": "已接线：一个入口发现各设备资源",
-      "text": "侧边栏选择当前设备、所有已连接设备或指定设备；助手共享查询服务。显示范围只控制界面，离线与空结果分别呈现。"
+      "text": "侧边栏和助手共用设备资源服务；Link v1 execution 单独声明目录、冻结配置和执行能力，真实 TLS/身份测试通过。仅支持旧目标 Task 链的设备明确要求升级，不兼容回退。"
     },
     {
       "node": "cross-owner",
-      "title": "已接线：项目决定执行地点",
-      "text": "从 A 查询并开发 B 的项目，入口仍在 A；实际 Worker、模型与文件环境都属于 B。B 的执行记录是唯一真源，结果回到 A。"
+      "title": "已接线：A 工单，B 执行",
+      "text": "A 先保存正式工单与稳定执行委托，按 B catalog 冻结 official 单模型配置，再经 Link 派发。B 无需 SuperAgent，不创建业务 Task。列表、修订与控制始终用 A taskId；五项 A/B 服务 fixture 验证新链，真物理双机与供应商待验。"
+    },
+    {
+      "node": "cross-receipt",
+      "title": "已接线：事实回 A，控制按回执确认",
+      "text": "B 在独立执行库保存实例与事件，A 连续消费回执，将问题、应用版本和结果写回原 Task/inbox；暂停恢复保留原 session。B 会话只读，无远端产物传输。旧运行路径已删除；离线迁移 CLI 已测试但未操作真实库，未知旧执行不自动接管。"
     },
     {
       "node": "cross-manage",
@@ -955,7 +989,7 @@
       "path": "docs/02-工作台与Agent/跨设备资源导航.md"
     }
   ],
-  "version": "2026-11-13-cross-device-2",
+  "version": "2026-11-16-installation-implementation-1",
   "context": {
     "intro": "上下文按固定层、会话层与按需层装配。Router 使用四份稳定档案、短 MEMORY 总纲、小量对象 INDEX 和每次启动的简短协作对齐，详细事实、对象页与复盘按需；Worker 按需读取技能正文。当前回合后续可在安全边界刷新纠正，源码已接线，真实付费模型效果未验，边界见记忆与技能；全量 token 预算仍待实施。",
     "groups": [
@@ -1001,7 +1035,7 @@
           ],
           [
             "官方 subagents",
-            "Worker 可按需使用官方 subagents；Router 通过既有任务工具委派，不直接调用官方子代理。Worker 的任务包与 Router 档案各守归属，子会话的上下文、工具与模型遵循官方服务，不另建平行的子任务机制。"
+            "本机 Worker 可按需使用官方 subagents；远端 v1 不提供二级子代理委派。Router 通过既有任务工具委派，不直接调用官方子代理。Worker 的任务包与 Router 档案各守归属，子会话的上下文、工具与模型遵循官方服务，不另建平行的子任务机制。"
           ],
           [
             "渠道研判",

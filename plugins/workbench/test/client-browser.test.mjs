@@ -26,7 +26,8 @@ async function fixture() {
   const runtime = await build({ stdin: { resolveDir: root, loader: 'jsx', contents: `import * as React from 'react';import * as DOM from 'react-dom';import * as Client from 'react-dom/client';import * as JSX from 'react/jsx-runtime';import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives';const modules={'react':React,'react-dom':DOM,'react-dom/client':Client,'react/jsx-runtime':JSX,'@deepseek-ai/dsh-client-ui-primitives':Primitives};globalThis.require=name=>{if(!modules[name])throw Error('Unknown fixture module '+name);return modules[name];};` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-workbench-runtime'), format: 'iife', jsx: 'automatic', nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')], alias: { react: dirname(webRequire.resolve('react/package.json')), 'react-dom': dirname(webRequire.resolve('react-dom/package.json')) }, loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text' }, plugins: [primitivesSource], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   const result = await build({ stdin: { resolveDir: root, loader: 'jsx', contents: `
     import React,{useEffect,useState} from 'react';import {createRoot} from 'react-dom/client';
-    import {WorkbenchPage} from './plugins/workbench/client/index.jsx';
+    import {WorkbenchPage,mountWorkbenchClient} from './plugins/workbench/client/index.jsx';
+    import {createWebConnectionRpc} from './deepseek-harness/packages/client/connection/src/client/rpc.ts';
     import {mountWorkbenchPreviews} from './plugins/workbench/client/previews.jsx';
     import {Loading} from './plugins/shared/client/ui/loading.jsx';
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
@@ -55,6 +56,9 @@ async function fixture() {
       const Component=descriptor.component;return <Component scope={{sessionId:'project'}} path={path} title={path.split('/').at(-1)} customData={data}/>;}
     function Shell({children}){return <div className="fixture-shell"><aside><strong>BenchGo</strong><p>项目工作台</p><p>文件 · Git · 终端</p></aside><main><nav aria-label="工作台导航">项目 / 本地文件</nav>{children}<footer>项目资料保留在本机 · 文件预览</footer></main></div>;}
     window.renderWorkbench=()=>app.render(<Shell key={++serial}><WorkbenchPage host={host} runtime={runtime}/></Shell>);
+    window.mountWorkbenchClient=mountWorkbenchClient;
+    window.renderWorkbenchEntry=entry=>{const Component=entry.component;app.render(<Shell key={++serial}><Component {...entry.options.inject()}/></Shell>);};
+    window.readWorkspaceFiles=()=>createWebConnectionRpc(globalThis.__DSH_TRANSPORT__.fetch).call('/api','workspaceFiles/list',{args:{workspaceFileScopeId:'project',path:'.'}});
     window.renderViewer=(id,path)=>app.render(<Shell key={++serial}><section className="fixture-preview" aria-label="项目文件预览"><Viewer id={id} path={path}/></section></Shell>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-workbench-browser'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
@@ -102,6 +106,66 @@ test('audio build adapter adds bounded retries and non-overlapping time labels',
   const source = await readFile(require.resolve('@huanlin/dsh-plugin-better-sidebar-plugin-audio/client'), 'utf8');
   const adapted = unwrapClient(source, '@huanlin/dsh-plugin-better-sidebar-plugin-audio');
   assert.match(adapted, /function BenchGoAudioViewer/); assert.match(adapted, /loadAudioSource\(props\.path, props\.scope, controller\.signal\)/); assert.match(adapted, /request\.current\?\.abort/); assert.match(adapted, /labelX >= benchgoLabelEnd \+ 8/); assert.match(adapted, /g\.measureText\(label\)/);
+});
+
+test('remote loopback workbench keeps native files and excludes local vendor services', { skip: !executablePath && 'Chromium/Edge is required', timeout: 60000 }, async () => {
+  const browser = await chromium.launch({ headless: true, executablePath });
+  let server;
+  try {
+    const html = await fixture(), requests = [], errors = [];
+    const prefix = '/s/remote-fixture/link/workbench/';
+    server = createServer(async (req, res) => {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const request = { path: url.pathname, method: req.method }; requests.push(request);
+      if (url.pathname === prefix) { res.setHeader('content-type', 'text/html'); res.end(html); return; }
+      if (url.pathname === prefix + 'api/workspaceFiles/list' && req.method === 'POST') {
+        const chunks = []; for await (const chunk of req) chunks.push(chunk);
+        const message = JSON.parse(Buffer.concat(chunks).toString());
+        request.message = message;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ type: 'server-response', rpcId: message.rpcId, result: { ok: true, value: { entries: [{ name: 'remote.txt', type: 'file' }] } } })); return;
+      }
+      res.writeHead(405, { 'content-type': 'application/json' }); res.end('{"error":"unexpected local workbench request"}');
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const page = await browser.newPage({ locale: 'zh-CN' }); page.setDefaultTimeout(5000);
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}${prefix}`);
+    await page.addScriptTag({ path: join(root, 'plugins/link/client/workbench-bridge.mjs') });
+    const mounted = await page.evaluate(() => {
+      const nativeFiles = { id: 'official-files', kind: 'files' }, files = new Map([['files', nativeFiles]]), injections = [], entries = [];
+      const host = {
+        connection: { isLoopback: true },
+        slots: {
+          inject(_name, setup) { return setup(); },
+          register(options, component) { entries.push({ options, component }); return () => {}; },
+        },
+        // Admission is the boundary under test: vendor dependencies must never be requested.
+        inject(services) { injections.push([...services]); return () => {}; },
+        sidebarRightTabs: { register(definition) { files.set(definition.kind, definition); return () => {}; } },
+      };
+      window.mountWorkbenchClient(host);
+      const entry = entries.find(item => item.options.name === 'main' && item.options.key === 'benchgo-workbench');
+      if (!entry) throw new Error('the workbench entry must remain reachable on a remote page');
+      window.renderWorkbenchEntry(entry);
+      return { remoteWorkbench: globalThis.__DSH_LINK_WORKBENCH__, injections, nativeFilesPreserved: files.get('files') === nativeFiles };
+    });
+    assert.equal(mounted.remoteWorkbench, true, 'the real Link bridge identifies the remote page');
+    assert.deepEqual(mounted.injections, [], 'a remote proxy must not request local sidebar or SSH services');
+    assert.equal(mounted.nativeFilesPreserved, true, 'the native files registration stays owned by the official client');
+    await page.getByRole('heading', { name: '从本机打开运维工作台', exact: true }).waitFor();
+    assert.equal(requests.some(request => request.path.endsWith('/api/benchgo/workbench') || request.path.includes('/sidebar/')), false, 'the remote page must not call local-only workbench routes');
+    // Exact carrier contract only: a real official unary caller and real Link bridge,
+    // with the server response stubbed here; no remote host/filesystem E2E claim.
+    assert.deepEqual(await page.evaluate(() => window.readWorkspaceFiles()), { ok: true, value: { entries: [{ name: 'remote.txt', type: 'file' }] } });
+    const fileRequests = requests.filter(request => request.path.endsWith('/api/workspaceFiles/list'));
+    assert.equal(fileRequests.length, 1);
+    assert.equal(fileRequests[0].path, prefix + 'api/workspaceFiles/list');
+    assert.equal(fileRequests[0].method, 'POST');
+    assert.equal(fileRequests[0].message.method, 'workspaceFiles/list');
+    assert.deepEqual(fileRequests[0].message.payload, { args: { workspaceFileScopeId: 'project', path: '.' } });
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } }
 });
 
 test('built-in workbench renders four states and real audio/video/Office previews', { skip: !executablePath && 'Chromium/Edge is required', timeout: 120000 }, async () => {

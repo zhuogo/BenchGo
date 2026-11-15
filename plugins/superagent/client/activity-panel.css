@@ -4,7 +4,6 @@
 .ba-root .ba-activity-trigger{display:inline-flex;align-items:center;justify-content:center;gap:4px;flex:none;min-width:32px;min-height:32px;padding:4px;border:0;border-radius:8px;background:transparent;color:var(--ba-muted);cursor:pointer}
 .ba-root .ba-activity-trigger:hover,.ba-root .ba-activity-trigger[aria-expanded=true]{background:var(--ba-hover)}
 .ba-activity-count{font-size:11px;font-variant-numeric:tabular-nums}
-.ba-activity-panel-icon{transform:scaleX(-1)}
 .ba-activity-panel[hidden],.ba-activity-backdrop[hidden]{display:none!important}
 .ba-activity-backdrop{display:none}
 .ba-activity-panel[data-state=closing],.ba-activity-backdrop[data-state=closing]{pointer-events:none}
@@ -24,7 +23,6 @@
 }
 .ba-board .ba-board-head{flex:none;padding:12px 16px 14px}
 .ba-board-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--ba-muted);font-size:12px;font-weight:500}
-.ba-board .ba-icon{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;min-height:32px;padding:0;border:0;border-radius:8px;color:var(--ba-muted)}
 .ba-board-companion{display:flex;align-items:center;gap:12px;margin-top:6px;min-height:64px}
 .ba-board-identity{display:grid;gap:7px;min-width:0;flex:1}
 .ba-board-identity strong{font-size:18px;font-weight:600;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -36,7 +34,8 @@
 .ba-board-tabs{flex:none;padding:0 16px 12px}
 .ba-board-tabs .bg-segments-scroll{margin:0;padding:0;overflow:visible}
 .ba-board-tabs .bg-segments{width:100%;padding:4px;border:1px solid var(--board-line);border-radius:12px;background:color-mix(in srgb,var(--board-ink) 4%,transparent)}
-.ba-board-tabs .bg-segments.bg-segments button{flex:1;min-width:0;min-height:36px;padding:6px 8px;gap:6px;border:0;border-radius:8px;font-size:13px}
+.ba-board-tabs .bg-segments.bg-segments button{flex:1;min-width:0;min-height:36px;padding:6px 4px;gap:4px;border:0;border-radius:8px;font-size:13px}
+.ba-board-tabs .bg-segments button>svg{display:none}
 .ba-board-tabs .bg-segments button>span{display:inline-flex;align-items:center;gap:5px}
 .ba-board-tabs .bg-segments-fill{border-radius:8px;background:var(--board-base);box-shadow:0 1px 3px #0000000d}
 .ba-board-tab-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:6px;background:color-mix(in srgb,var(--board-running) 12%,transparent);color:var(--board-running);font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}
@@ -120,13 +119,13 @@
 }
 @media(max-width:520px){
   .ba-board{width:100%;border-left:0}
-  .ba-board .ba-icon,.ba-root .ba-activity-trigger{min-width:44px;min-height:44px}
+  .ba-root .ba-activity-trigger{min-width:44px;min-height:44px}
   .ba-board-tabs .bg-segments.bg-segments button{min-height:44px}
   .ba-board .ba-task-icon,.ba-board-empty .bg-ui-button{min-width:44px!important;min-height:44px!important}
   .ba-board-footer{padding-bottom:max(10px,env(safe-area-inset-bottom))}
 }
 @media(pointer:coarse){
-  .ba-board .ba-icon{min-width:44px;min-height:44px}
+  .ba-root .ba-activity-trigger{min-width:44px;min-height:44px}
   .ba-board .ba-task-icon,.ba-board .ba-board-section-head,.ba-board-empty .bg-ui-button{min-height:44px}
 }
 @media(prefers-reduced-motion:reduce){.ba-board *{transition:none!important}}

@@ -24,19 +24,22 @@ async function fixture() {
       import { AssistantCard } from './plugins/superagent/client/card.jsx';
       import { assistantConfigSync } from './plugins/superagent/client/config-sync.mjs';
       import { configureAssistantActivity, assistantActivityStore } from './plugins/superagent/client/use-activity.jsx';
+      import { installIconSprite } from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
       import css from './plugins/superagent/client/style.css';
+      installIconSprite({effect:effect=>effect(),on(){}},undefined);
       const root = createRoot(document.getElementById('root'));
       let serial = 0;
       function App({ api, initialConfig }) {
         const [config,setConfig] = useState(initialConfig);
+        const fileContext=React.useMemo(()=>({sessions:{list:{getSnapshot:()=>({byId:{'router-main':{cwd:'E:/assistant'}}})},binding:()=>({session:{projections:{faceOf:()=>({getSnapshot:()=> 'E:/assistant/other-cwd'})}}})},sidebarRight:{openResource(address){window.openedFiles.push(address);if(window.scenarioControl.openFail)throw Error('文件工作区暂不可用');}}}),[api]);
         window.updateConfig = config => { assistantConfigSync.accept({...config,revision:++serial},assistantConfigSync.begin());setConfig(config); };
         return <ActivityProvider><style>{css}</style><div className="ba-root">
           <main className="ba-main fixture-chat"><header><h1>主聊天</h1><ActivityTrigger api={api}/></header><p>BenchGo · 看板组件验收</p><div className="ba-assistant-section" style={{width:200}}><div className="ba-assistant-heading"><AssistantCard name="BenchGo" status="running" action="focus" onOpen={()=>{}}/></div></div><div data-composer-seat style={{position:'absolute',bottom:0,left:0,right:0,zIndex:7,background:'white',padding:12}}><textarea aria-label="发送内容" defaultValue="保留草稿"/><button type="button" aria-label="发送消息" onClick={()=>window.sentMessages=(window.sentMessages||0)+1}>发送</button></div></main>
-          <ActivityPanel api={api} sessionId={window.scenarioControl.state==='stream'?'router-main':undefined} assistantConfig={config} onOpenResources={(tab,selection)=>{window.resourceCalls.push(tab);window.resourceSelections.push(selection);}} onOpenExecution={session=>window.executionCalls.push(session)}/>
+          <ActivityPanel api={api} ctx={window.scenarioControl.state==='files'?fileContext:undefined} sessionId={['stream','files'].includes(window.scenarioControl.state)?'router-main':undefined} assistantConfig={config} onOpenResources={(tab,selection)=>{window.resourceCalls.push(tab);window.resourceSelections.push(selection);}} onOpenExecution={session=>window.executionCalls.push(session)}/>
         </div></ActivityProvider>;
       }
       window.renderScenario = (state='data', supplied=true) => {
-        window.apiCalls=[];window.resourceCalls=[];window.resourceSelections=[];window.executionCalls=[];
+        window.apiCalls=[];window.resourceCalls=[];window.resourceSelections=[];window.executionCalls=[];window.openedFiles=[];
         const control=window.scenarioControl={state,fail:false};
         const now=new Date(), at=minutes=>new Date(+now-minutes*60000).toISOString();
         const tasks=[
@@ -109,6 +112,13 @@ async function fixture() {
         const config=state==='empty'?{}:{name:'',models:[{modelId:'provider/opaque-model@2026-11'}],cardMotion:false};
         const api=async(name,args)=>{
           window.apiCalls.push([name,args]);
+          if(name==='artifacts'){
+            const state=control.artifactState||'data';
+            if(state==='loading')await new Promise(resolve=>{window.finishArtifactRead=resolve;});
+            if(state==='error')throw Error('产物读取失败，请重试');
+            const names=args.category==='document'?['说明 文档.md','非常长的产物名称-'.repeat(8)+'.txt']:args.category==='image'?['图片.png']:[];
+            return {artifacts:state==='empty'?[]:names.map(name=>({id:name,name,path:'E:/assistant/artifacts/'+name,url:'api/commander/assistant/artifact?file='+encodeURIComponent(name),hash:'verified',bytes:1024,updatedAt:'2026-11-15T10:00:00Z'})),total:state==='empty'?0:names.length};
+          }
           if(control.state==='loading') return new Promise(()=>{});
           if(control.state==='error'||control.fail) throw new TypeError('Failed to fetch');
           if(name==='tasks'&&control.holdRefresh) await new Promise(resolve=>{window.finishRefresh=()=>{control.holdRefresh=false;resolve();};});
@@ -136,7 +146,8 @@ async function fixture() {
     bundle:true, write:false, outdir:join(root,'artifacts','unused-activity-test-output'), format:'iife', jsx:'automatic',
     nodePaths:[join(root,'plugins/benchgo/node_modules'),join(root,'deepseek-harness/apps/web/node_modules')],
     alias:{react:dirname(webRequire.resolve('react/package.json')),'react-dom':dirname(webRequire.resolve('react-dom/package.json')),
-      '@deepseek-ai/dsh-client-ui-primitives':join(root,'deepseek-harness/packages/client/ui-primitives/src/index.ts')},
+      '@deepseek-ai/dsh-client-ui-primitives':join(root,'deepseek-harness/packages/client/ui-primitives/src/index.ts'),
+      '@deepseek-ai/dsh-util-workspace-path':join(root,'deepseek-harness/packages/util/workspace-path/src/index.ts')},
     loader:{'.css':'text','.module.css':'local-css','.svg':'text','.woff2':'dataurl','.woff':'dataurl','.ttf':'dataurl'},
     plugins:[sharedUiStyles()],define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent',
   });
@@ -154,6 +165,54 @@ async function fixture() {
     #root{height:100vh}.fixture-chat{min-width:0;flex:1;padding:24px}.fixture-chat>header{display:flex;align-items:center;justify-content:space-between;gap:12px}.fixture-chat h1{font-size:18px;margin:0}.fixture-chat>p{color:var(--dsw-alias-label-secondary);font-size:13px}
   </style></head><body><div id="root"></div><script>${js}</script></body></html>`;
 }
+
+test('board artifacts load only on selection, render compact states and open verified files through the session workspace', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
+  const browser=await chromium.launch({headless:true,executablePath});
+  try{
+    const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'});page.setDefaultTimeout(5000);
+    const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    await page.setContent(await fixture());await page.evaluate(()=>window.renderScenario('files'));
+    const panel=page.locator('.ba-activity-panel'),tabs=panel.locator('.ba-board-tabs');
+    const artifacts=()=>tabs.getByRole('tab',{name:'产物',exact:true});
+    const reads=()=>page.evaluate(()=>window.apiCalls.filter(([name])=>name==='artifacts').length);
+    assert.equal(await reads(),0,'closed boards do not request files');
+    await page.locator('.ba-activity-trigger').click();await panel.locator('[data-task-key]').first().waitFor();
+    assert.equal(await reads(),0,'opening the task tab does not request files');
+    await tabs.getByRole('tab',{name:'身份',exact:true}).click();assert.equal(await reads(),0,'identity does not request files');
+    await tabs.getByRole('tab',{name:/^审核/}).focus();await page.keyboard.press('ArrowRight');
+    await panel.getByRole('button',{name:'说明 文档.md',exact:true}).waitFor();
+    assert.equal(await reads(),1);assert.equal(await artifacts().getAttribute('aria-selected'),'true');
+    assert(await panel.getByText('当前工作台的助手产物库，不限于当前聊天。',{exact:true}).isVisible());
+    assert.equal(await panel.getByRole('checkbox').count(),0,'compact files omit resource-page bulk controls');
+    await page.evaluate(()=>window.scenarioControl.openFail=true);
+    await panel.getByRole('button',{name:'说明 文档.md',exact:true}).click();
+    await panel.getByRole('alert').filter({hasText:'文件工作区暂不可用'}).waitFor();
+    assert(await panel.isVisible(),'a failed file open preserves the board and its error');
+    await page.evaluate(()=>window.scenarioControl.openFail=false);
+    await panel.getByRole('button',{name:'重试打开',exact:true}).click();await panel.waitFor({state:'hidden'});
+    assert.deepEqual(await page.evaluate(()=>window.openedFiles),Array(2).fill('dsh-resource://file/session/router-main/artifacts/'+encodeURIComponent('说明 文档.md')),'absolute verified paths do not resolve against the later session cwd');
+    const successfulReads=await reads();await page.clock.install();await page.clock.runFor(60_001);
+    assert.equal(await reads(),successfulReads,'closed boards do not poll artifacts');
+    await page.clock.resume();
+    for(const dark of [false,true])for(const width of [1440,390])for(const state of ['empty','loading','error','data']){
+      await page.setViewportSize({width,height:900});await page.evaluate(({dark,state})=>{document.body.toggleAttribute('data-ds-dark-theme',dark);window.renderScenario('files');window.scenarioControl.artifactState=state;},{dark,state});
+      await page.locator('.ba-activity-trigger').click();await artifacts().click();
+      if(state==='empty')await panel.getByText('暂无文档产物',{exact:true}).waitFor();
+      else if(state==='loading')await panel.locator('.ba-artifact-loading').waitFor();
+      else if(state==='error')await panel.getByRole('alert').filter({hasText:'产物读取失败'}).waitFor();
+      else await panel.getByRole('button',{name:'说明 文档.md',exact:true}).waitFor();
+      const geometry=await panel.evaluate(node=>({fits:node.scrollWidth<=node.clientWidth&&document.documentElement.scrollWidth<=innerWidth,tabs:[...node.querySelectorAll('.ba-board-tabs [role="tab"]')].map(tab=>({width:tab.getBoundingClientRect().width,clipped:tab.scrollWidth>tab.clientWidth})),files:node.querySelector('.ba-artifacts').scrollWidth<=node.querySelector('.ba-artifacts').clientWidth}));
+      assert(geometry.fits&&geometry.files,`${dark}/${width}/${state}: board and file list fit their containers`);
+      assert.equal(geometry.tabs.length,4);assert(geometry.tabs.every(tab=>tab.width>=72&&!tab.clipped),'four board tabs stay readable and usable');
+      if(captureDir){await mkdir(captureDir,{recursive:true});await page.screenshot({path:join(captureDir,`artifacts-${dark?'dark':'light'}-${width}-${state}.png`)});}
+      if(state==='loading'){await tabs.getByRole('tab',{name:'身份',exact:true}).click();await page.evaluate(()=>window.finishArtifactRead());assert.equal(await panel.locator('.ba-artifacts').count(),0,'late file results cannot mount in another tab');}
+      if(state==='error'){await page.evaluate(()=>window.scenarioControl.artifactState='data');await panel.getByRole('button',{name:'重试',exact:true}).click();await panel.getByRole('button',{name:'说明 文档.md',exact:true}).waitFor();}
+    }
+    await artifacts().focus();await page.keyboard.press('ArrowRight');assert.equal(await tabs.getByRole('tab',{name:'身份',exact:true}).getAttribute('aria-selected'),'true');
+    assert.equal(await tabs.getByRole('tab').evaluateAll(nodes=>nodes.filter(node=>node.tabIndex===0).length),1);
+    assert.deepEqual(errors,[]);
+  }finally{await browser.close();}
+});
 
 test('interrupted board details keep continuation in the bottom footer without repeating interruption guidance', {skip:!executablePath&&'Chromium/Edge is required'}, async()=>{
   const browser=await chromium.launch({headless:true,executablePath});
@@ -215,8 +274,9 @@ test('activity count matches current task rows and narrow overlays cover the com
       assert.equal(covered,true,'the complete composer surface is below the board or its backdrop');
       await page.locator('[aria-label="发送消息"]').evaluate(node=>node.focus());
       assert.equal(await page.locator('[aria-label="发送消息"]').evaluate(node=>node===document.activeElement),false,'covered send controls cannot receive keyboard focus');
+      assert.equal(await page.getByRole('button',{name:'收起看板',exact:true}).count(),1,'overlay keeps exactly one accessible toggle');
       if(captureDir){await mkdir(captureDir,{recursive:true});await page.screenshot({path:join(captureDir,`overlay-composer-${width}.png`)});}
-      await page.keyboard.press('Escape');await panel.waitFor({state:'hidden'});
+      await trigger.click();await panel.waitFor({state:'hidden'});
       await page.waitForFunction(()=>!document.querySelector('.ba-main').inert&&document.activeElement===document.querySelector('.ba-activity-trigger'));
       assert.equal(await page.getByRole('textbox',{name:'发送内容'}).inputValue(),'保留草稿');
       await page.getByRole('button',{name:'发送消息',exact:true}).click();
@@ -310,7 +370,8 @@ test('activity board renders honest states, keyboard navigation and responsive t
     assert.deepEqual(await panel.locator('.ba-board-card').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-label'))),['形象','SO','目标','记忆','Identity']);
     assert.equal(await panel.getByText(/身份与概览|你的助手，你的工作方式|首选模型|持续目标|待处理|条 · 进行中/).count(),0,'identity cards replace repeated profile facts and task statistics');
     await tab('审核').focus();await page.keyboard.press('ArrowRight');
-    assert.equal(await tab('身份').getAttribute('aria-selected'),'true','arrow key changes the active tab');
+    assert.equal(await tab('产物').getAttribute('aria-selected'),'true','arrow key reaches the artifact tab');
+    await page.keyboard.press('ArrowRight');assert.equal(await tab('身份').getAttribute('aria-selected'),'true','arrow key continues to identity');
     await page.keyboard.press('End');assert.equal(await tab('身份').getAttribute('aria-selected'),'true');
     await page.keyboard.press('Home');assert.equal(await tab('任务').getAttribute('aria-selected'),'true');
     assert.equal(await panel.getByRole('tab').evaluateAll(nodes=>nodes.filter(node=>node.tabIndex===0).length),1,'only active tab is in the tab order');

@@ -13,9 +13,10 @@ import { executionSessionProjection, findExecutionSessionOwner } from './executi
 import { taskExecutionBlocked, taskPaused } from './task-lifecycle.mjs';
 import { executionUncertainty, executionStopConfirmation } from './execution-uncertainty.mjs';
 import { requestInterruptedContinuation } from './interrupted-continuation.mjs';
+import { createRemoteAssignmentExecutor } from './remote-assignment-executor.mjs';
 
 /** One local control plane for Task and Goal execution. */
-export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, notifyTaskResult, notifyExecutionInput, onDelivered, observeRemote, maintainTasks, execute, intervalMs = 1000, now = Date.now }) {
+export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, notifyTaskResult, notifyExecutionInput, onDelivered, maintainTasks, execute, intervalMs = 1000, now = Date.now }) {
   const database = store.orchestration, owner = `delivery:${randomUUID()}`, shutdown = new AbortController();
   const finishDelivery = (id, options) => database.finishOutbox(id, { now: now(), ...options });
   const mirrored = new Set(), mirrorRetry = new Map(), mirrorPending = new Map();
@@ -84,10 +85,12 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     readContext: sessionId => store.getSessionContext(sessionId), memory: store.memory,
     readSourceContext: input => input.source?.channel === 'feishu' ? feishu?.readContext?.(input) : undefined,
   });
+  const remoteExecutor = createRemoteAssignmentExecutor({ ctx, database, readPolicy, commitResult, signal: shutdown.signal, now });
   const worker = createAssistantAssignmentWorker({
     database, readPolicy, validateMandate: validateTaskMandate, logger: ctx.logger,
     getConcurrency: async () => (await store.getConfig()).workerConcurrency ?? 2,
-    execute: executeTask,
+    execute: (assignment, context) => assignment.executor === 'remote' || context.task.mandate?.execution
+      ? remoteExecutor.execute(assignment, context) : executeTask(assignment, context),
     onResult: async (result, context) => {
       pendingDrafts.set(context.assignment.id, { result, context });
       if (result.waitingPause) {
@@ -148,6 +151,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     if (!database.hasPendingResultRecovery({ now: now() })) return;
     for (const task of database.listTasks({ limit: 1000 })) {
       for (const assignment of database.assignments(task.id)) {
+        if (assignment.executor === 'remote' || task.mandate?.execution) continue;
         if (pendingDrafts.has(assignment.id) || assignment.state === 'claimed' && assignment.leaseUntil > now()) continue;
         const run = database.runs(assignment.id).find(row => row.fence === assignment.fence);
         if (!run?.evidence?.summary) continue;
@@ -183,13 +187,15 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       if (taskExecutionBlocked(task) || task.continuationWait && task.continuationWait.stage !== 'scheduling' || task.resultVersion > 0) continue;
       if (database.assignments(task.id).length) continue;
       await currentPolicy();
-      const schedulingBlocker = !validateTaskMandate(task.mandate, { policy }) ? 'MANDATE_REVOKED' : !policy.workerModels?.length ? 'WORKER_MODEL_ROUTE' : null;
+      const remote = task.mandate?.execution;
+      const schedulingBlocker = !validateTaskMandate(task.mandate, { policy }) ? 'MANDATE_REVOKED'
+        : !(remote ? remote.config?.models?.length : policy.workerModels?.length) ? 'WORKER_MODEL_ROUTE' : null;
       database.setSchedulingBlocker(task.id, { code: schedulingBlocker, now: now() });
       if (schedulingBlocker) continue;
       // The Router's persisted acceptance carries the task package. Scheduling
       // only materializes that decision; it does not make another model decision.
       database.createAssignment(task.id, {
-        id: `initial:${task.id}`, executor: 'harness',
+        id: `initial:${task.id}`, executor: remote ? 'remote' : 'harness', ...(remote ? { execution: remote } : {}),
         text: task.target, acceptance: task.acceptance,
       });
     }
@@ -205,12 +211,6 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       if (suppressed) {
         finishDelivery(delivery.id, { owner, sent: true, receipt: { status: 'suppressed', reason: suppressed } });
         continue;
-      }
-      if (payload.source?.channel === 'link') {
-          // The source device reads this immutable result through its executionRef.
-          // Never create a target-local owner conversation for an incoming device.
-          finishDelivery(delivery.id, { owner, sent: true, receipt: { status: 'available', transport: 'link-reference', messageId: delivery.id } });
-          continue;
       }
       if (payload.type === 'task.result') {
         // State notices use the same durable inbox boundary as saved results.
@@ -259,10 +259,6 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   async function notifyResults() {
     for (const notice of database.pendingResultNotifications({ now: now(), limit: 20 })) {
       if (shutdown.signal.aborted) return;
-      if (notice.payload.source?.channel === 'link') {
-        database.finishResultNotification(notice.taskId, notice.uniqueKey, { status: 'accepted', messageId: notice.uniqueKey, now: now() });
-        continue;
-      }
       const receipt = await enqueueResultNotice(notice);
       database.finishResultNotification(notice.taskId, notice.uniqueKey, { now: now(),
         status: receipt?.status === 'enqueued' ? 'accepted' : receipt?.status,
@@ -279,7 +275,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         if (!shutdown.signal.aborted) ctx.logger?.warn?.('SuperAgent delivery mirror recovery pending');
       }).finally(() => { replaying = undefined; });
     const replay = replaying;
-    remoteRunning ||= Promise.resolve().then(() => observeRemote?.()).catch(() => { if (!shutdown.signal.aborted) ctx.logger?.warn?.('跨设备任务状态待核实'); }).finally(() => { remoteRunning = undefined; });
+    remoteRunning ||= Promise.resolve().then(() => remoteExecutor.tick()).catch(() => { if (!shutdown.signal.aborted) ctx.logger?.warn?.('跨设备执行状态待核实'); }).finally(() => { remoteRunning = undefined; });
     const remote = remoteRunning;
     notifying ||= notifyResults().catch(() => { if (!shutdown.signal.aborted) ctx.logger?.warn?.('SuperAgent result notification persistence pending'); }).finally(() => { notifying = undefined; });
     const notifications = notifying;
@@ -292,12 +288,42 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     return Promise.all([running, replies, remote, mirrors, replay, notifications]);
   }
   const stopResultNotifications = database.onResultNotification(() => { setImmediate(() => { if (!shutdown.signal.aborted) void tick(); }); });
+  function remoteProgress(task, assignments) {
+    const assignment = assignments.at(-1);
+    if (!assignment) return null;
+    const remote = database.remoteExecution(assignment.id);
+    const run = database.runs(assignment.id).find(row => row.id === remote?.runId || !remote && row.fence === assignment.fence);
+    const phase = remote?.phase || 'prepared';
+    const unavailable = remote?.available === false || phase === 'uncertain';
+    const terminal = ['completed', 'failed', 'cancelled'].includes(phase);
+    const status = unavailable ? 'unknown' : phase === 'prepared' ? 'waiting' : phase === 'submitted' ? 'running'
+      : phase === 'paused' ? 'waiting' : phase;
+    const activities = { prepared: '正在准备远端执行', submitted: '远端已受理执行', running: '正在远端执行', waiting: '等待补充信息',
+      paused: '远端执行已暂停', completed: '远端执行已结束', failed: '远端执行失败', cancelled: '远端执行已停止', uncertain: '远端执行状态待核实' };
+    const uncertainty = unavailable ? { reasonCode: 'remote-observation-unavailable',
+      reason: '远端执行状态待核实，系统将核对原执行，不会重复派发。', hasCompletedResult: !!run?.evidence?.completion,
+      assignmentId: assignment.id, runId: run?.id || null, sessionId: run?.sessionId || null, fence: assignment.fence,
+      instructionRevision: task.instructionRevision } : null;
+    return { taskId: task.id, assignmentId: assignment.id, runId: run?.id || null, sessionId: run?.sessionId || null,
+      fence: assignment.fence, instructionRevision: task.instructionRevision,
+      appliedInstructionRevision: remote?.appliedInstructionRevision ?? remote?.observed?.appliedInstructionRevision ?? run?.instructionRevision ?? assignment.instructionRevision,
+      phase: unavailable ? 'unknown' : terminal ? 'finished' : phase === 'prepared' ? 'preparing' : ['waiting', 'paused'].includes(phase) ? 'waiting' : 'executing',
+      observed: !!remote?.observedAt, updatedAt: remote?.observedAt || run?.updatedAt || assignment.updatedAt,
+      worker: { id: run?.sessionId || assignment.id, label: '远端 Worker', status,
+        activity: unavailable ? activities.uncertain : activities[phase], activitySource: 'runtime',
+        updatedAt: remote?.observedAt || null, history: [], historyTruncated: false },
+      children: [], childCounts: { total: 0, running: 0, completed: 0, failed: 0 }, milestones: [],
+      watermark: { projectionSeq: database.executionFactCursor(), sessionSeq: remote?.cursor ?? null },
+      completeness: remote?.available === true && remote?.hasMore !== true ? 'complete' : 'partial',
+      remote: { ...task.mandate.execution, ...remote }, uncertainty };
+  }
   const runtime = {
     tick,
     async manageExecution({ taskId, assignmentId, fence, instructionRevision, operation }) {
       const task = database.getTask(taskId);
       if (!task || task.instructionRevision !== instructionRevision)
         throw Object.assign(new Error('恢复处置的授权或要求已变化'), { code: 'MANDATE_REVOKED' });
+      if (task.mandate?.execution) return remoteExecutor.manageExecution({ taskId, assignmentId, fence, instructionRevision, operation });
       const fact = executionUncertainty(database, task, { now: now() });
       if (!fact || fact.assignmentId !== assignmentId || fact.fence !== fence)
         return { status: 'blocked', reason: '执行身份或核查状态已变化，请重新读取事实' };
@@ -325,8 +351,8 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         const inputDiagnostics = database.taskInputs(task.id).filter(input => input.snapshot?.executionInput?.outcome === 'failed')
           .map(input => ({ id: input.id, triggerId: input.triggerId, state: input.state, receivedAt: input.receivedAt,
             code: input.snapshot.executionInput.code, reason: input.snapshot.executionInput.reason }));
-        const uncertainty = executionUncertainty(database, task, { now: now() });
-        const execution = progress(task, assignments);
+        const execution = task.mandate?.execution ? remoteProgress(task, assignments) : progress(task, assignments);
+        const uncertainty = task.mandate?.execution ? execution?.uncertainty || null : executionUncertainty(database, task, { now: now() });
         const stopping = executionStopConfirmation(database, task, { now: now() });
         const stoppedAssignment = stopping.stopRequestedAt && assignments.find(row => row.stopRequest?.at === stopping.stopRequestedAt);
         const projected = execution || (uncertainty || stoppedAssignment ? { assignmentId: uncertainty?.assignmentId || stoppedAssignment.id,
@@ -339,10 +365,11 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     async start() { await executionProgress.ready; if (timer || shutdown.signal.aborted) return; timer = setInterval(tick, intervalMs); timer.unref?.(); void tick(); },
     async stop() {
       shutdown.abort(); clearInterval(timer); stopMirrors?.(); stopResultNotifications();
-      const observations = executionProgress.dispose();
-      const stopped = worker.stop();
+      // Observe cleanup failures immediately: the scheduling cycle can still be
+      // draining, and an unhandled rejection would make the Host exit early.
+      const stopping = Promise.allSettled([executionProgress.dispose(), worker.stop(), remoteExecutor.stop()]);
       await running;
-      await Promise.allSettled([notifying, stopped, observations, executionProgress.ready, directReplies.stop(), remoteRunning, mirroring, replaying, ...mirrorPending.values()]);
+      await Promise.allSettled([notifying, stopping, executionProgress.ready, directReplies.stop(), remoteRunning, mirroring, replaying, ...mirrorPending.values()]);
     },
   };
   const timestamp = value => value != null && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : null;
@@ -352,6 +379,33 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     const run = assignment && (requestedRunId ? database.runs(assignment.id).find(row => row.id === requestedRunId)
       : database.runs(assignment.id).filter(row => row.fence === assignment.fence).at(-1));
     if (requestedRunId && !run) throw Object.assign(new Error('Execution does not belong to this Task'), { code: 'EXECUTION_FACT_BINDING' });
+    if (task.mandate?.execution) {
+      const remote = assignment && database.remoteExecution(assignment.id);
+      const stopping = executionStopConfirmation(database, task, { now: now() });
+      const attention = database.attentions(task.id).find(row => row.state === 'waiting');
+      const verified = !!remote?.observedAt && remote.available !== false && remote.phase !== 'uncertain';
+      const remoteRun = remote?.runId === run?.id;
+      return {
+        evidenceCursor: database.executionTaskCursor(task.id),
+        task: { id: task.id, status: task.status, executionControl: task.executionControl, instructionRevision: task.instructionRevision ?? 1 },
+        assignment: assignment ? { id: assignment.id, state: assignment.state, owner: assignment.owner ?? null, fence: assignment.fence,
+          leaseUntil: assignment.leaseUntil ?? null, updatedAt: assignment.updatedAt } : null,
+        run: run ? { id: run.id, state: run.state, sessionId: run.sessionId, instructionRevision: run.instructionRevision ?? assignment.instructionRevision ?? 1, updatedAt: run.updatedAt } : null,
+        remote: remoteRun ? { ...task.mandate.execution, ...remote } : task.mandate.execution,
+        executionAlive: { status: !remoteRun || !verified ? 'unknown' : remote.phase === 'running' ? 'running'
+          : ['waiting', 'paused'].includes(remote.phase) ? 'idle' : ['completed', 'failed', 'cancelled'].includes(remote.phase) ? 'absent' : 'unknown',
+          observedAt: remoteRun ? remote.observedAt || null : null, bootId: null },
+        request: verified && remoteRun && remote.observed?.request || { state: 'unknown', startedAt: null, settledAt: null, deadline: null },
+        wait: { kind: !verified ? 'unknown' : remote.phase === 'paused' ? 'paused' : attention ? 'user' : 'none',
+          since: timestamp(attention?.createdAt || remote?.observedAt), expectedUntil: null },
+        stop: { requestedAt: stopping.stopRequestedAt || assignment?.stopRequest?.at || null,
+          confirmedAt: assignment?.executionStopped?.fence === assignment?.fence ? assignment?.executionStopped?.at || null : null,
+          confirmationOverdue: stopping.stopConfirmationOverdue },
+        recovery: !verified && run ? { reasonCode: 'remote-observation-unavailable', hasCompletedResult: !!run.evidence?.completion } : null,
+        watermarks: remoteRun ? [{ sessionId: remote.sessionId, sourceSeq: remote.cursor, flushedSeq: remote.cursor,
+          sourceDurability: 'persisted', complete: verified && remote.hasMore !== true, missingReason: verified ? null : remote.code || 'REMOTE_OBSERVATION_UNAVAILABLE' }] : [],
+      };
+    }
     const projections = database.executionProjections({ taskId: task.id, ...(run ? { runId: run.id } : {}) });
     const source = projections.find(row => row.sessionId === run?.sessionId);
     const agent = run && ctx.agents?.get?.(run.sessionId);
@@ -431,6 +485,8 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     },
   };
   runtime.resumeExecutionSession = input => {
+    if (database.remoteExecutionBySession(input.sessionId))
+      throw Object.assign(new Error('远端执行会话请通过所属设备查看，并在原工单继续输入。'), { code: 'REMOTE_EXECUTION_SESSION' });
     const agent = ctx.agents?.get(input.sessionId);
     if (agent) {
       const execution = findExecutionSessionOwner(database, input.sessionId);

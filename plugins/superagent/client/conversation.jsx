@@ -1,5 +1,5 @@
 import { Button } from '../../shared/client/ui/button.jsx';
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AssistantHome } from './home.jsx';
 import { quietChatRows } from './quiet-chat.mjs';
 import { QuietChat } from './quiet-chat.jsx';
@@ -15,6 +15,7 @@ import { retainAssistantSession } from './session-retain.mjs';
 import { ConversationWidth } from './conversation-width.jsx';
 import { ResourceState } from './resource-state.jsx';
 import { createReplyFileOpener } from './reply-file-navigation.mjs';
+import { activateWorkbenchSessionSurface, workbenchSessionSurfaceChildren, WORKBENCH_SESSION_CORNER } from '../../workbench/client/session-surface.jsx';
 
 export const SuperAgentSurfaceContext = createContext(false);
 const HomeContext = createContext(null);
@@ -27,7 +28,7 @@ export const assistantConversationChildren = {
 
 function FixedChatView({ renderSlot, useSession, useConversation, useInput, useProjection, inputActions }) {
   const home = useContext(HomeContext);
-  const openFile = useMemo(() => createReplyFileOpener(home?.ctx, home?.sessionId), [home?.ctx, home?.sessionId]);
+  const openFile = useMemo(() => createReplyFileOpener(home?.ctx, home?.sessionId, { api: home?.api, threadId: home?.threadId }), [home?.ctx, home?.sessionId, home?.api, home?.threadId]);
   const session = useSession(value => value);
   const conversation = useConversation(value => value);
   const input = useInput(value => value);
@@ -45,7 +46,7 @@ function FixedChatView({ renderSlot, useSession, useConversation, useInput, useP
   return <div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll="" tabIndex={0} aria-label="聊天记录">{designIntent && home && designIntent.threadId === home.threadId && <div className="ba-note" role="status">{designIntent.kind === 'refine' ? '请在输入框说明希望继续调整的地方。' : '请在输入框描述你希望的形象。'}<Button variant="ghost" type="button" className="ba-quiet" onClick={() => petDesignIntent.clear()}>关闭提示</Button></div>}{showHome && <AssistantHome {...home} input={input} inputActions={inputActions} />}{home && <QuietChat home={home} session={session} chat={conversation.views?.get('chat')} inbox={inbox} onOpenFile={openFile} />}</div></div>;
 }
 
-function PetConversationStatus({ home, session, chat }) {
+function PetConversationStatus({ home, session, chat, renderSlot }) {
   const source = home.sessionStatus;
   const statuses = useSyncExternalStore(listener => source?.subscribe(listener) || (() => {}), () => source?.getSnapshot() || EMPTY_PET_STATUSES);
   const pendingInteraction = statuses.get(home.sessionId)?.pendingInteraction;
@@ -85,10 +86,10 @@ function PetConversationStatus({ home, session, chat }) {
     try { await home.api('petDiscard', { draftId: draft.draftId }); setCatalog(value => ({ ...value, draft: null })); }
     catch (cause) { setError(cause.message); } finally { setBusy(false); }
   }
-  return <div className="ba-pet-chat"><style>{css}{activityCss}</style><div className="ba-chat-heading"><div className="ba-chat-identity"><Button variant="ghost" type="button" className="ba-chat-identity-link" aria-label={`查看${name}的身份`} onClick={() => { if (document.dispatchEvent(new Event('benchgo:assistant-open-identity', { cancelable: true }))) home.onOpenResources('resources'); }}><PetAvatar pet={pet} src={petImageUrl(pet, document.baseURI, face)} size={36} motion={config.cardMotion !== false} action={action} expression={face} /><span>{name}</span></Button><ConversationActivity activity={activity} compact /></div><ActivityTrigger api={home.api} /></div>{draft && <div className="ba-pet-chat-draft"><PetAvatar pet={draft.pet} src={draft.src} size={72} motion={false} /><div><strong>新形象预览</strong><p>应用后仍是同一个助手，记忆与会话保留。</p><div className="ba-pet-editor-actions"><Button variant="default" type="button" className="ba-primary" disabled={busy || session.running} onClick={apply}>{busy ? '应用中…' : '应用形象'}</Button><Button variant="ghost" type="button" className="ba-quiet" onClick={() => { petDesignIntent.request(home.threadId, 'refine'); }}>继续修改</Button><Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={discard}>取消预览</Button></div></div></div>}{error && <p className="ba-note" role="alert">形象信息：{error}</p>}</div>;
+  return <div className="ba-pet-chat"><style>{css}{activityCss}</style><div className="ba-chat-heading"><div className="ba-chat-identity"><Button variant="ghost" type="button" className="ba-chat-identity-link" aria-label={`查看${name}的身份`} onClick={() => { if (document.dispatchEvent(new Event('benchgo:assistant-open-identity', { cancelable: true }))) home.onOpenResources('resources'); }}><PetAvatar pet={pet} src={petImageUrl(pet, document.baseURI, face)} size={36} motion={config.cardMotion !== false} action={action} expression={face} /><span>{name}</span></Button><ConversationActivity activity={activity} compact /></div><div className="ba-chat-heading-actions">{renderSlot?.(WORKBENCH_SESSION_CORNER, {})}<ActivityTrigger api={home.api} /></div></div>{draft && <div className="ba-pet-chat-draft"><PetAvatar pet={draft.pet} src={draft.src} size={72} motion={false} /><div><strong>新形象预览</strong><p>应用后仍是同一个助手，记忆与会话保留。</p><div className="ba-pet-editor-actions"><Button variant="default" type="button" className="ba-primary" disabled={busy || session.running} onClick={apply}>{busy ? '应用中…' : '应用形象'}</Button><Button variant="ghost" type="button" className="ba-quiet" onClick={() => { petDesignIntent.request(home.threadId, 'refine'); }}>继续修改</Button><Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={discard}>取消预览</Button></div></div></div>}{error && <p className="ba-note" role="alert">形象信息：{error}</p>}</div>;
 }
 
-function OfficialConversation({ useSession, useConversation, renderFactorySlot }) {
+function OfficialConversation({ useSession, useConversation, renderFactorySlot, renderSlot }) {
   const home = useContext(HomeContext);
   const session = useSession(value => value);
   const conversation = useConversation(value => value);
@@ -97,13 +98,13 @@ function OfficialConversation({ useSession, useConversation, renderFactorySlot }
   if (session.openState === 'error') return <div className="ba-resource-initial"><ResourceState kind="error" title="聊天暂未连接" description="会话连接失败，请重新连接。" actionLabel="重新连接" onAction={home?.reconnect} /></div>;
   const hero = false;
   const phase = !active && session.openState === 'loading' ? 'settling' : 'active';
-  return <>{home && <PetConversationStatus home={home} session={session} chat={conversation.views?.get('chat')} />}{renderFactorySlot('conversation.content', { variant: 'main', phase, hero }, {
+  return <>{home && <PetConversationStatus home={home} session={session} chat={conversation.views?.get('chat')} renderSlot={renderSlot} />}{renderFactorySlot('conversation.content', { variant: 'main', phase, hero }, {
     slots: home ? { views: FixedChatView, widthControls: ConversationWidth } : { widthControls: ConversationWidth },
   })}</>;
 }
 
 /** The official renderer supplies both props through the host's session child declaration. */
-export function AssistantConversation({ ctx, sessionId, SessionProvider, renderSlot, api, assistantName, assistantConfig, petExpression, onOpenResources, onOpenExecution, threadId, history, onLoadEarlier, onRefresh, execution = false }) {
+export function AssistantConversation({ ctx, sessionId, SessionProvider, renderSlot, api, assistantName, assistantConfig, petExpression, onOpenResources, onOpenExecution, threadId, history, onLoadEarlier, onRefresh, execution = false, active = true }) {
   const [retained, setRetained] = useState(null);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
@@ -123,6 +124,9 @@ export function AssistantConversation({ ctx, sessionId, SessionProvider, renderS
     })().catch(cause => { if (!controller.signal.aborted) { console.warn('[BenchGo] conversation connection failed', cause); setError(execution ? '执行会话暂未连接，重试即可继续。' : '聊天暂未连接，重试即可继续。'); } });
     return () => { controller.abort(); reference?.release(); };
   }, [ctx, sessionId, retry, execution]);
+  useLayoutEffect(() => {
+    if (active && retained?.sessionId === sessionId) return activateWorkbenchSessionSurface(ctx, sessionId);
+  }, [ctx, sessionId, retained, active]);
   const reconnect = useCallback(() => setRetry(value => value + 1), []);
   const sessionStatus = ctx.uiSession?.sessionStatus;
   // Every consumer of this context re-renders when its value changes identity.
@@ -140,5 +144,6 @@ export function AssistantConversation({ ctx, sessionId, SessionProvider, renderS
 export function mountAssistantConversation(ctx) {
   ctx.effect(() => ctx.slots.inject(ASSISTANT_CONVERSATION_SLOT, () => ctx.slots.register({
     name: ASSISTANT_CONVERSATION_SLOT,
+    children: workbenchSessionSurfaceChildren,
   }, OfficialConversation)));
 }

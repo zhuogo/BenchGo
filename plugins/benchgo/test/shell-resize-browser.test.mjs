@@ -13,18 +13,21 @@ const require = createRequire(new URL('../../../deepseek-harness/apps/web/packag
 const { chromium } = require('playwright');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
-test('real shell resizes both columns directly and scopes the Windows fullscreen axis to its consumer', { skip: !executablePath }, async () => {
+test('real shell resizes both columns directly and scopes the Windows fullscreen axis to its consumer', { skip: !executablePath }, async t => {
   const bundle = await build({
     stdin: { resolveDir: root, loader: 'jsx', contents: `
       import React, {useSyncExternalStore} from 'react'; import {createRoot} from 'react-dom/client';
       import {AppFrame} from './deepseek-harness/packages/client/ui-layout/src/client/AppFrame.tsx';
       import {SidebarRoot} from './deepseek-harness/packages/client/ui-sidebar/src/client/SidebarRoot.tsx';
       import css from './plugins/benchgo/client/style.css';
+      let frameRenders=0,settleTimers=0;const schedule=window.setTimeout.bind(window);
+      window.setTimeout=(callback,delay,...args)=>{if(delay===600)settleTimers++;return schedule(callback,delay,...args)};
+      window.shellPerf=()=>({frameRenders,settleTimers});
       const listeners=new Set(); let state={layoutInfo:{sidebar:280,viewportWidth:1440,narrowExpanded:false,rightbar:400,rightbarShown:true,rightbarTrack:true,rightbarFullscreen:false,rightbarInstant:false}};
       const subscribe=fn=>{listeners.add(fn);return()=>listeners.delete(fn)};
       const update=patch=>{state={layoutInfo:{...state.layoutInfo,...patch}};for(const fn of listeners)fn()};
       const actions={setViewportWidth:viewportWidth=>{if(viewportWidth!==state.layoutInfo.viewportWidth)update({viewportWidth})},setSidebar:px=>update({sidebar:Math.min(400,Math.max(200,px))}),setRightbar:px=>update({rightbar:Math.min(900,Math.max(300,px))}),toggleSidebar:()=>update({sidebar:state.layoutInfo.sidebar===0?280:0})}; window.actions=actions;
-      const useStore=select=>select(useSyncExternalStore(subscribe,()=>state)),usePanelInfo=select=>select({activePanelId:null}),useSessions=select=>select({byId:{}});
+      const useStore=select=>{frameRenders++;return select(useSyncExternalStore(subscribe,()=>state))},usePanelInfo=select=>select({activePanelId:null}),useSessions=select=>select({byId:{}});
       const panels=[{id:'plugins',label:'工具'},{id:'schedules',label:'定时任务'}];
       function sidebarSlot(name,p={}){if(name==='sidebar.settings')return <button>设置</button>;if(name!=='sidebar.workspaces')return null;return <section className={'cmd-projects '+(p.wide?'':'cmd-narrow')}><nav className='cmd-sidebar-nav'><button>连接</button><button>搜索</button></nav>{p.panelNavigation}{p.wide&&<div className='cmd-sidebar-content'>{Array.from({length:100},(_,i)=><div key={i} className='cmd-session-row'><button className='cmd-session'><span>会话 {i+1}：继续讨论产品与实现</span></button></div>)}</div>}</section>}
       const main=<div className='fixture-conversation'><h2>工作会话</h2>{Array.from({length:60},(_,i)=><article key={i}><p>第 {i+1} 条消息。拖动两侧边界时正文随实际宽度排版，滚动、选择和输入仍由原来的容器负责。</p><pre>const result = await readState();</pre></article>)}</div>;
@@ -81,10 +84,18 @@ test('real shell resizes both columns directly and scopes the Windows fullscreen
     await page.evaluate(() => { document.documentElement.setAttribute('data-windows-titlebar', ''); window.actions.setSidebar(340); });
     await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-rightbar-col]')).getPropertyValue('--dsh-windows-sidebar-width') === '340px');
     await page.evaluate(() => document.querySelector('.fixture-rightbar').removeAttribute('data-fullscreen'));
+    await page.waitForFunction(() => !document.querySelector('.cmd-shell-frame').hasAttribute('data-animating'));
+    const beforeToggles=await page.evaluate(()=>window.shellPerf());
     for (let count = 0; count < 6; count++) {
       await page.evaluate(() => window.actions.toggleSidebar());
-      await page.waitForFunction(() => getComputedStyle(document.querySelector('.cmd-shell-frame')).transitionDuration === '0s');
+      await page.waitForFunction(() => document.querySelector('.cmd-shell-frame').hasAttribute('data-animating'));
+      assert.equal(await frame.evaluate(node => getComputedStyle(node).transitionProperty), 'grid-template-columns');
+      await page.waitForFunction(() => !document.querySelector('.cmd-shell-frame').hasAttribute('data-animating'));
     }
+    const afterToggles=await page.evaluate(()=>window.shellPerf());
+    assert.equal(afterToggles.settleTimers-beforeToggles.settleTimers,6,'each official transition has one cancellation-safe settle fallback');
+    assert(afterToggles.frameRenders-beforeToggles.frameRenders<=24,'CSS motion must not rerender React at frame cadence: '+JSON.stringify({beforeToggles,afterToggles}));
+    t.diagnostic('six toggles: '+JSON.stringify({frameRenders:afterToggles.frameRenders-beforeToggles.frameRenders,settleTimers:afterToggles.settleTimers-beforeToggles.settleTimers}));
     assert.equal(await page.locator('.cmd-session').count(), 100);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.evaluate(() => document.documentElement.setAttribute('data-dark', ''));

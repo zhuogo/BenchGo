@@ -73,3 +73,10 @@ test('unloading during a pending execution lookup prevents a late catalog refres
   f.dispose(); release(); await pending;
   assert.equal(f.refreshes(), 0);
 });
+
+test('remote execution sessions never refresh or claim the local same-name catalog row', async () => {
+  const f = discovery(async () => [{ sessionId: 'active', remote: true, hostId: 'other-host' }]);
+  await f.remove('active');
+  assert.equal(f.refreshes(), 0);
+  f.dispose();
+});

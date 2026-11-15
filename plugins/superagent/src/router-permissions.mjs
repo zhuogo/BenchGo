@@ -6,7 +6,7 @@ const contextDescriptions = {
   context_status: 'Read estimated current context usage and window capacity when needed to decide whether to compact. The estimate adjusts the latest provider usage for tracked history changes, or uses history alone before the first usage sample. Routine checks after every step are unnecessary.',
   compact_now: 'Compact older conversation history when remaining capacity may not comfortably fit upcoming work, preferably at a safe task boundary. Compaction may call a model, take time, and lose details; avoid unnecessary or speculative calls. It may do nothing if there is not enough compactable history.',
 };
-const denied = name => Object.assign(new Error(`Router 不直接执行 ${name}；调查、文件和执行操作请按资源所属设备委派：本机用 assistant_delegate，远端设备或项目用 assistant_remote_task，不先建本机任务代查或中转，不需要额外询问是否创建任务。提问选项（ask_user_question）与定时任务可直接使用。`), { code: 'ROUTER_TASK_REQUIRED' });
+const denied = name => Object.assign(new Error(`Router 不直接执行 ${name}；调查、文件和执行操作统一使用 assistant_delegate；远端资源通过 deviceId 选择执行设备，业务工单始终由本机持有，不需要额外询问是否创建任务。提问选项（ask_user_question）与定时任务可直接使用。`), { code: 'ROUTER_TASK_REQUIRED' });
 
 /** Capture definitions so a later same-name registration cannot inherit trust. */
 export function captureRouterTools(tools, agent) {
@@ -59,21 +59,34 @@ export function installRouterPermissionGate(scope, { agent, inherited, controlle
     };
   });
   const restrictionOwner = scope.root ?? scope;
-  let restriction;
+  let restriction, disposed = false;
+  // Cordis clears uid before unloading effects; state 5 also covers restart
+  // teardown. Sibling cleanup can emit tools/change before our listener leaves.
+  const active = () => !disposed && scope.fiber?.uid !== null && scope.fiber?.state !== 5;
   const restrict = () => {
     // Mask changes emit tools/change too. Other Routers update on the original
     // event rather than recursively refreshing each other's restrictions.
-    if (refreshingRestrictions.has(restrictionOwner)) return;
+    if (!active() || refreshingRestrictions.has(restrictionOwner)) return;
     refreshingRestrictions.add(restrictionOwner);
     try {
-      restriction?.(); restriction = undefined;
+      const previous = restriction; restriction = undefined;
+      previous?.();
+      if (!active()) return;
       const allow = [...new Set([...inherited.keys()].filter(name => coordination.has(name) && scope.tools.get(name, agent))
         .concat(contextTools().filter(row => scope.tools.get(row.name, agent) === row.definition).map(row => row.name)))];
       restriction = scope.tools.restrict?.({ allow });
     } finally { refreshingRestrictions.delete(restrictionOwner); }
   };
   restrict();
-  if (typeof scope.get === 'function') { scope.on('tools/change', restrict); scope.effect?.(() => () => restriction?.()); }
+  if (typeof scope.get === 'function') {
+    const stopWatching = scope.on('tools/change', restrict);
+    scope.effect?.(() => () => {
+      disposed = true;
+      stopWatching?.();
+      const previous = restriction; restriction = undefined;
+      previous?.();
+    });
+  }
   return scope.on('tools/execute', async (execution, next) => {
     execution.signal.throwIfAborted();
     // Shared dispatch can deliver another agent's call here. Its own scope

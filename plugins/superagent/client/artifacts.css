@@ -36,3 +36,25 @@
 }
 @media(max-width:380px){.ba-artifact-cards{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){.ba-artifact-file{transition:none}}
+/* The board shares this file list; only its density and optional bulk controls differ. */
+.ba-artifacts-compact .ba-artifacts-head{align-items:flex-start;flex-wrap:nowrap;gap:8px;margin-bottom:14px}
+.ba-artifacts-compact .ba-artifacts-head p{font-size:12px;line-height:1.65}
+.ba-artifacts-compact .ba-artifact-header-actions{width:auto;flex:none;gap:0}
+.ba-artifacts-compact .ba-artifact-toolbar{gap:10px;margin-bottom:10px}
+.ba-artifacts-compact .ba-artifact-toolbar .bg-segments-scroll{flex:1 1 100%;overflow:auto}
+.ba-artifacts-compact .ba-artifact-toolbar .bg-segments{width:100%}
+.ba-artifacts-compact .ba-artifact-toolbar .bg-segments button{flex:1;min-width:0;gap:0;padding:7px 6px;font-size:12px}
+.ba-artifacts-compact .ba-artifact-toolbar .bg-segments button>svg,.ba-artifacts-compact .ba-artifact-toolbar .bg-segments button>.cmd-ui-icon{display:none}
+.ba-artifacts-compact .ba-artifact-search{flex:1 1 100%}
+.ba-root .ba-artifacts-compact .ba-artifact-search input[type="search"]{box-sizing:border-box;padding-inline-start:34px}
+.ba-artifacts-compact .ba-artifact-list{padding:0;border:0;border-radius:0;background:transparent}
+.ba-artifacts-compact .ba-artifact-file{grid-template-columns:36px minmax(0,1fr) auto;gap:8px;padding:12px 0}
+.ba-root .ba-artifacts-compact button.ba-artifact-preview{width:36px;height:42px;border:0;background:transparent}
+.ba-root .ba-artifacts-compact button.ba-artifact-name{font-size:13px}
+.ba-artifacts-compact .ba-artifact-meta{gap:4px 6px;margin-top:4px;font-size:11px}
+.ba-artifacts-compact .ba-artifact-meta time{flex-basis:100%}
+.ba-artifacts-compact .ba-artifact-actions{grid-column:3;grid-row:1;margin:0;gap:0}
+.ba-artifacts-compact .ba-artifact-file audio{grid-column:1 / -1;width:100%}
+.ba-artifacts-compact .ba-artifact-empty,.ba-artifacts-compact .ba-artifact-loading{min-height:220px;padding:24px 12px;border:0;background:transparent}
+.ba-artifacts-compact .ba-artifact-error{align-items:flex-start;flex-wrap:wrap;padding:12px;gap:8px}
+@media(max-width:1000px){.ba-artifacts-compact .ba-artifact-file{grid-template-columns:44px minmax(0,1fr) auto}.ba-root .ba-artifacts-compact button.ba-artifact-preview{width:44px;height:44px}}

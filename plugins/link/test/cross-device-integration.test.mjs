@@ -272,24 +272,33 @@ test('revocation removes cached remote resources without clearing healthy local 
   assert.equal(result.devices[1].freshness, 'unknown');
 });
 
-test('approved pairing enables collaboration and management with the TLS-bound principal, not JSON identity', async t => {
+test('execution works without SuperAgent and binds the real paired principal and target identity', async t => {
   const calls = [];
-  const b = await host(t, 'B', [], { async collaboration(input, access) { calls.push({ input, access }); return { accepted: true, requestId: input.requestId }; } });
+  const b = await host(t, 'B', []);
+  b.ctx.get = name => name === 'benchgoExecution' ? { async dispatch(input, access) { calls.push({ input, access }); return { version: 1, available: true }; } } : undefined;
   const a = await host(t, 'A', []);
   const device = await pair(a, b);
-  const input = { action: 'collaboration', operation: 'delegate', requestId: 'stable-request', text: 'Read the project', principal: { kind: 'owner' } };
+  const input = { action: 'execution', version: 1, operation: 'catalog', principal: { kind: 'owner' } };
+  const target = (await a.link.devices()).devices.find(row => row.id === device.id);
+  const call = value => a.link.callDevice({ deviceId: device.id, expectedHostId: target.hostId, expectedAuthorizationId: target.authorizationId, input: value });
   const inboundId = b.link.status().devices[0].id;
-  const reply = await a.link.callDevice({ deviceId: device.id, input });
-  assert.equal(reply.accepted, true);
+  await assert.rejects(a.link.callDevice({ deviceId: device.id, input }), { code: 'INVALID_EXECUTION_IDENTITY' });
+  const reply = await call(input);
+  assert.equal(reply.available, true);
+  assert.equal(reply.hostId, target.hostId); assert.equal(reply.authorizationId, target.authorizationId);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].input.principal, undefined);
   assert.equal(calls[0].access.principal.kind, 'device');
   assert.equal(calls[0].access.principal.deviceId, inboundId);
   assert.deepEqual(calls[0].access.principal.capabilities, ['collaboration','management']);
+  const capabilities = (await a.link.resources({ deviceId: device.id, kind: 'capabilities' })).devices[0].items;
+  assert.equal(capabilities.find(item => item.id === 'execution').version, 1);
+  assert.equal(capabilities.some(item => item.id === 'collaboration'), false);
+  await assert.rejects(call({ action: 'collaboration', operation: 'delegate' }), { code: 'UNSUPPORTED' });
   assert.equal((await a.link.callDevice({ deviceId: device.id, input: { action: 'management', operation: 'status' } })).enabled,true);
   await b.link.admin({action:'revoke',id:inboundId});
-  await assert.rejects(a.link.callDevice({ deviceId: device.id, input }),error=>error.statusCode===401);
-  assert.equal(calls.length,1,'revoked pairing cannot invoke collaboration again');
+  await assert.rejects(call(input),error=>error.statusCode===401);
+  assert.equal(calls.length,1,'revoked pairing cannot invoke execution again');
 });
 
 test('remote relay changes require one exact local decision and preserve unrelated configuration', async t => {

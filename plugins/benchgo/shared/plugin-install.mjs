@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { cp, lstat, mkdir, readFile, rename, rm, symlink, realpath, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import { compareVersions } from './update-feed.mjs';
 
 export const PLUS_PACKAGE = 'benchgo-plugin';
@@ -48,6 +49,9 @@ async function describeRelease(directory, version) {
 
 async function findOfficialPackage(runtime, name) {
   if (!runtime) return null;
+  try {
+    return dirname(createRequire(join(resolve(runtime), 'node_modules/@deepseek-ai/dsh/package.json')).resolve(`${name}/package.json`));
+  } catch (error) { if (!['MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED'].includes(error.code)) throw error; }
   for (let current = await realpath(runtime); ; current = dirname(current)) {
     const candidate = join(current, 'node_modules', name);
     if (await present(join(candidate, 'package.json'))) return candidate;

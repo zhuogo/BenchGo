@@ -38,7 +38,7 @@ async function fixture() {
       const reference={ready:mode==='loading'?pending:mode==='error'?Promise.reject(Error('offline')):Promise.resolve(),release(){}};
       const current={...ctx,sessions:{retain:()=>reference},uiConversation:{binding:()=>({activate(){}})}};
       const renderSlot=()=> <div className='host-content'><div className='fixture-feed' aria-label='聊天记录'>{mode==='empty'?<div className='fixture-empty' role='status'><strong>开始对话</strong><p>在下方输入消息。</p></div>:Array.from({length:40},(_,i)=><p key={i}>消息 {i+1}：聊天内容可以正常滚动。</p>)}</div><div className='fixture-composer'>输入消息</div></div>;
-      root.render(<React.Fragment key={++serial}><style>{css}</style><div className='ba-root'><main className='ba-main'><AssistantConversation ctx={current} sessionId='session' SessionProvider={SessionProvider} renderSlot={renderSlot}/></main></div></React.Fragment>);
+      root.render(<React.Fragment key={++serial}><style>{css}</style><div className='ba-root'><main className='ba-main'><AssistantConversation active={false} ctx={current} sessionId='session' SessionProvider={SessionProvider} renderSlot={renderSlot}/></main></div></React.Fragment>);
     };
     let mountCleanups=[],Mounted,mainKey=0,panel={activePanelId:null},navigation=new AbortController();
     const listeners=new Set(),once=callback=>{let done=false;return()=>{if(!done){done=true;callback?.();}}};

@@ -6,8 +6,10 @@
 
 - `package-windows.mjs`：调用官方构建、运行时准备与 NSIS；不改官方源码。
 - `plugin-bundle.mjs`：以 npm 发布白名单复制插件与依赖，复用官方服务，安装时离线登记或升级组合 bundle；清理已确认身份的顶层旧插件遮蔽，保留更高版本与用户禁用选择。
+- `payload-policy.mjs`：校验侧栏生产闭包、嵌套服务器资源的版本与来源指纹、依赖构成及体积预算；仅排除已验证的可选原生后备程序，保留实际功能依赖和许可。
+- `workbench-desktop.mjs`：与统一 CLI 共用安装记录和运行租约；仅在受管 Web 工作台安全关闭后接管，同一 profile 不允许两个 Host 并发写入。
 - `seal-runtime.mjs`：注入后通过官方 writer 重建完整文件哈希与共享包清单。
-- `electron-builder.config.mjs`：扩展官方配置，独立 appId / 产品名，应用更新使用 BenchGo 的 `app-updates` / `latest` 通道；移除官方强制升级策略，不引用官方更新服务。未签名构建不等于禁用应用更新。
+- `electron-builder.config.mjs`：扩展官方配置，独立 appId / 产品名，应用更新使用 BenchGo 的 `app-updates` / `stable` 运行通道；发布时同时保留同字节的 `latest.yml` 元数据。移除官方强制升级策略，不引用官方更新服务。未签名构建不等于禁用应用更新。
 - `prepare-brand.mjs`：统一从 `assets/brand/benchgo-app.svg` 生成 BenchGo Windows、托盘、安装/卸载图标，并为启动页注入同一母版；官方源码保持不变。
 - `prepare-tray.mjs`：官方完整构建后复用官方 tsdown 主进程配置，仅在编译输入中将 Windows 托盘菜单改为“主窗口”“退出”（英文 Main Window / Quit），并接入启动卡片。编译结果写到 `.local/desktop/main/`。electron-builder 会丢弃应用目录外的 from/to 映射，因此只在收集 asar 文件时临时换入 `apps/desktop/lib/main.js`，收集后立即恢复官方产物。不修改子模块源码，不运行时拦截。官方模块、配置或文案锚点变化立即中止打包。
 - `renderer/`：打包时通过官方文件映射替换初始化页面，只展示 BenchGo 和工作台准备状态，通过已有 `dshWelcome.skip()` 进入工作台；失败可重试，不写入虚假凭据或登录状态。模型凭据在工作台内配置。
@@ -34,6 +36,8 @@ npm run package:plus:win
 ```
 
 完整构建会下载 Electron、Node/Python/Git 等官方 runtime 资源与生产包。不使用签名或上传凭据；产物为未签名预览安装包，Windows 可能显示 SmartScreen 提示。
+
+默认安装包保留完整服务器离线部署资源。显式追加 `-- --server-resources online` 可生成按需下载部署资源的变体，保留签名来源、固定版本描述与离线预取入口；这不省略本机运行能力。macOS 和插件更新包支持同一选项。资源损坏不会静默切换为联网下载。权威契约见[更新与发布设计](../../docs/05-更新与发布/设计.md)。
 
 托盘改字定向验证：使用 Node 24 执行 `node --test scripts/desktop/prepare-tray.test.mjs scripts/desktop/packaging-config.test.mjs`。测试实际编译主进程、验证菜单文字及原显示/退出行为，打入临时 ASAR 后读取校验并自动清理；不启动 GUI 或构建完整 EXE。正式打包的 `afterPack` 同样读取实际 `app.asar/lib/main.js`，防止资源映射漏装。2026-10-20 已通过这 8 项测试；Windows GUI 与完整新安装包尚未验证。
 

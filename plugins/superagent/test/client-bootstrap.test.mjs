@@ -8,14 +8,15 @@ import { Context } from '@deepseek-ai/cordis';
 import { webcrypto } from 'node:crypto';
 
 const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
-function load(path, overrides = {}) {
+function load(path, overrides = {}, { suffix = '', globals = {} } = {}) {
   const module = { exports: {} };
   const empty = new Proxy({}, { get: () => () => {} });
-  runInNewContext(transformSync(readFileSync(new URL(path, import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code, {
+  runInNewContext(transformSync(readFileSync(new URL(path, import.meta.url), 'utf8') + suffix, { loader: 'jsx', format: 'cjs' }).code, {
     module, exports: module.exports, AbortController, crypto: webcrypto, queueMicrotask: fn => fn(), setTimeout: fn => fn(),
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
-    document: { dispatchEvent() {}, addEventListener() {}, removeEventListener() {}, createElement: () => ({ remove() {} }), head: { append() {} } },
+    document: { baseURI: 'https://benchgo.test/', dispatchEvent() {}, addEventListener() {}, removeEventListener() {}, createElement: () => ({ remove() {} }), head: { append() {} } },
     require: id => id.endsWith('session-retain.mjs') ? { retainAssistantSession } : overrides[id] || empty,
+    ...globals,
   });
   return module.exports;
 }
@@ -25,6 +26,7 @@ test('declared client dependencies authorize native conversation and delivery se
   const effects = [], errors = [], activated = [];
   const conversation = load('../client/conversation.jsx', { react: {
     createContext: () => ({}), createElement: () => null, useEffect: effect => effects.push(effect), useCallback: callback => callback, useMemo: read => read(),
+    useLayoutEffect() {},
     useState: initial => [initial, value => { if (typeof value === 'string' && value) errors.push(value); }],
   } });
   const ctx = new Context();
@@ -45,6 +47,30 @@ test('declared client dependencies authorize native conversation and delivery se
     assert.deepEqual(errors, []);
     assert.deepEqual(activated, [['main-session', 'chat']]);
   } finally { cleanup?.(); await ctx.fiber.dispose(); }
+});
+
+test('opening artifacts and resolving reply files preserve shared state reads while mutations invalidate them', async () => {
+  const calls = [], stateReads = [], module = load('../client/index.jsx', {
+    '../../shared/client/perf-trace.mjs': { perfTrace: { time: () => () => {} } },
+    '../../benchgo/client/http-response.mjs': { readJsonResponse: response => response.json() },
+    './config-sync.mjs': { assistantConfigSync: { begin: () => 0, accept: value => value } },
+  }, { suffix: '\nexport { api };', globals: { URL, AbortSignal, fetch: async (_url, options) => {
+    const { action } = JSON.parse(options.body); calls.push(action);
+    if (action === 'state') return new Promise(resolve => stateReads.push(() => resolve({ json: async () => ({ config: {} }) })));
+    return { json: async () => action === 'replyFileSource' ? { remote: false } : action === 'artifacts' ? { artifacts: [] } : { config: {} } };
+  } } });
+  const first = module.api('state');
+  await module.api('replyFileSource', { threadId: 'main', sessionId: 'router', requestId: 'reply' });
+  await module.api('artifacts');
+  const joined = module.api('state');
+  assert.deepEqual(calls, ['state', 'replyFileSource', 'artifacts']);
+  stateReads.shift()(); await Promise.all([first, joined]);
+  const beforeMutation = module.api('state');
+  await module.api('config', {});
+  const afterMutation = module.api('state');
+  assert.deepEqual(calls.slice(-3), ['state', 'config', 'state']);
+  stateReads.splice(0).forEach(release => release());
+  await Promise.all([beforeMutation, afterMutation]);
 });
 
 test('assistant conversation retains the official composer without a replacement slot', () => {

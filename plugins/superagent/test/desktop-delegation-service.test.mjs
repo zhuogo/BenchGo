@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createDesktopDelegationService } from '../src/desktop-delegation-service.mjs';
 import { createAssistantAssignmentWorker } from '../src/assignment-worker.mjs';
+import { validateTaskMandate } from '../src/assessment-policy.mjs';
+import { createTaskRevisionService } from '../src/task-revision-service.mjs';
 
 async function fixture(t, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-desktop-delegate-'));
@@ -26,6 +28,76 @@ async function fixture(t, options = {}) {
   const input = { requestId: 'request', projectId: 'project', text: '修复任务', acceptance: '测试通过' };
   return { database, service, ownerAgent, policy, ctx, input, events, modelRequests, approvals: () => approvals, exec: { agent: ownerAgent }, options: { ownerAgent, threadId: 'side-chat' } };
 }
+
+function remoteFixture(f) {
+  const model = { providerId: 'B/Opaque Provider', modelId: 'B:Model/v7', params: { temperature: 0.25 } };
+  const device = { id: 'device-b', hostId: 'sha256:B', authorizationId: 'authorized-A', name: 'B' };
+  const catalog = { version: 1, hostId: device.hostId, available: true, models: [model], projects: [{ id: 'project-b', path: '/workspace/b', title: 'B project' }] };
+  const calls = [];
+  let reads = 0;
+  f.ctx.get = name => name === 'benchgoLink' ? {
+    devices: async () => { reads++; return { devices: [structuredClone(device)] }; },
+    callDevice: async request => { calls.push(request); return structuredClone(catalog); },
+  } : undefined;
+  f.ctx.llm.resolveModelInfo = async () => { throw Error('remote model must not resolve against A'); };
+  const input = { ...f.input, deviceId: device.id, projectId: 'project-b', executionConfig: { harness: 'official', models: [model] } };
+  return { input, model, device, catalog, calls, reads: () => reads };
+}
+
+test('remote delegation creates only an A-owned Task and freezes exact B execution resources', async t => {
+  const f = await fixture(t), b = remoteFixture(f);
+  const task = await f.service.delegate(b.input, f.exec, f.options);
+  assert.equal(f.database.listTasks().length, 1);
+  assert.equal(task.mandate.source.channel, 'desktop');
+  assert.equal(task.mandate.source.sessionId, f.ownerAgent.id);
+  assert.deepEqual(task.mandate.execution, { deviceId: b.device.id, hostId: b.device.hostId, authorizationId: b.device.authorizationId, config: b.input.executionConfig });
+  assert.deepEqual(task.mandate.project, { deviceId: b.device.id, hostId: b.device.hostId, id: 'project-b', path: '/workspace/b' });
+  assert.deepEqual(f.database.assignments(task.id)[0].model, b.model);
+  assert.equal(f.database.assignments(task.id)[0].executor, 'remote');
+  assert.deepEqual(b.calls.map(row => row.input.operation), ['catalog']);
+  assert.equal(validateTaskMandate(task.mandate, { policy: f.policy }), true);
+  assert.equal(validateTaskMandate({ ...task.mandate, project: { ...task.mandate.project, hostId: 'other' } }, { policy: f.policy }), false);
+  assert.equal((await f.service.delegate(b.input, f.exec, f.options)).id, task.id);
+  await assert.rejects(f.service.delegate({ ...b.input, deviceId: 'other' }, f.exec, f.options), /不同任务/);
+});
+
+test('remote admission rejects unavailable catalogs, guessed models and changed device identities without a Task', async t => {
+  const f = await fixture(t), b = remoteFixture(f);
+  await assert.rejects(f.service.delegate({ ...b.input, executionConfig: undefined }, f.exec, f.options), { code: 'EXECUTION_CONFIG_REQUIRED' });
+  await assert.rejects(f.service.delegate({ ...b.input, executionConfig: { harness: 'official', models: [{ ...b.model, modelId: 'alias' }] } }, f.exec, f.options), { code: 'EXECUTION_MODEL_UNAVAILABLE' });
+  await assert.rejects(f.service.delegate({ ...b.input, executionConfig: { harness: 'official', models: [{ ...b.model, params: { temperature: 1 } }] } }, f.exec, f.options), { code: 'EXECUTION_MODEL_UNAVAILABLE' });
+  b.catalog.available = false;
+  await assert.rejects(f.service.delegate(b.input, f.exec, f.options), { code: 'EXECUTION_CATALOG_UNAVAILABLE' });
+  b.catalog.available = true;
+  const get = f.ctx.get;
+  f.ctx.get = name => {
+    const link = get(name);
+    return link && { ...link, callDevice: async request => { const value = await link.callDevice(request); b.device.authorizationId = 'changed'; return value; } };
+  };
+  await assert.rejects(f.service.delegate(b.input, f.exec, f.options), /目标设备或连接授权已变化/);
+  assert.equal(f.database.listTasks().length, 0);
+});
+
+test('remote revisions and linked adjustments preserve B binding and never use the A work role', async t => {
+  const f = await fixture(t), b = remoteFixture(f);
+  const original = await f.service.delegate(b.input, f.exec, f.options);
+  f.events.push({ type: 'user/message', data: { id: 'revision-human', source: { kind: 'user' }, content: [{ type: 'text', text: '补充兼容性检查，其他要求保留' }] } });
+  const changes = createTaskRevisionService({ ctx: f.ctx, database: f.database, readPolicy: async () => f.policy });
+  const changed = await changes.change({ id: original.id, operation: 'revise', reason: '补充检查', target: '修复任务并检查兼容性' }, f.exec, f.options);
+  assert.equal(changed.instructionRevision, 2);
+  assert.deepEqual(changed.mandate.execution, original.mandate.execution);
+  await assert.rejects(changes.change({ id: original.id, operation: 'revise', reason: '切换设备', deviceId: 'other' }, f.exec, f.options), { code: 'EXECUTION_BINDING_IMMUTABLE' });
+  await assert.rejects(changes.change({ id: original.id, operation: 'revise', reason: '切换项目', projectId: 'other' }, f.exec, f.options), { code: 'EXECUTION_BINDING_IMMUTABLE' });
+  f.database.updateTask(original.id, { status: 'completed' });
+  f.policy.workerModels = [];
+  f.events.push({ type: 'user/message', data: { id: 'adjustment-human', source: { kind: 'user' }, content: [{ type: 'text', text: '基于已有修复再做兼容性调整' }] } });
+  const adjustment = await changes.change({ id: original.id, operation: 'adjustment', reason: '关联调整', target: '增加兼容性调整' }, f.exec, f.options);
+  assert.notEqual(adjustment.id, original.id);
+  assert.deepEqual(adjustment.mandate.execution, original.mandate.execution);
+  assert.deepEqual(f.database.assignments(adjustment.id)[0].model, b.model);
+  assert.equal(f.database.assignments(adjustment.id)[0].executor, 'remote');
+  assert.deepEqual(f.database.assignments(adjustment.id)[0].execution, original.mandate.execution);
+});
 
 test('desktop instruction atomically admits one Task without redundant approval and preserves opaque model', async t => {
   const f = await fixture(t);

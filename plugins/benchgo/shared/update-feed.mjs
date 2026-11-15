@@ -193,15 +193,29 @@ async function consumeUpdate(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = gl
   } finally { clearTimeout(timer); clearTimeout(idleTimer); requestSignal.removeEventListener('abort', onAbort); }
 }
 
-export async function fetchUpdateBytes(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, maxBytes = 256 * 1024, timeoutMs = 20_000 } = {}) {
+export async function fetchUpdateBytes(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, maxBytes = 256 * 1024, timeoutMs = 20_000, signal } = {}) {
   const chunks = [];
-  const size = await consumeUpdate(url, { config, fetcher, maxBytes, timeoutMs, consume: value => { chunks.push(Buffer.from(value)); } });
+  const size = await consumeUpdate(url, { config, fetcher, maxBytes, timeoutMs, signal, consume: value => { chunks.push(Buffer.from(value)); } });
   return Buffer.concat(chunks, size);
 }
 
 /** Large signed artifacts go straight to an exclusive temporary file, never a whole-package RAM buffer. */
 export async function fetchUpdateArtifact(artifact, { file, config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, timeoutMs = 60 * 60_000, idleTimeoutMs = 60_000, signal, onProgress } = {}) {
   validateArtifact(artifact, { plugin: true });
+  return streamReleaseArtifact(artifact, { file, config, fetcher, timeoutMs, idleTimeoutMs, signal, onProgress });
+}
+
+/** Platform distributions use the same bounded transport; plugin update limits remain unchanged. */
+export async function fetchReleaseArtifact(artifact, { file, config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, timeoutMs = 60 * 60_000, idleTimeoutMs = 60_000, signal, onProgress, maxBytes = 1024 * 1024 * 1024 } = {}) {
+  validateArtifact(artifact);
+  const tag = artifact.url.slice(releaseBase.length).split('/')[1];
+  parseVersion(tag?.startsWith('v') ? tag.slice(1) : '');
+  if (!/^[a-f0-9]{64}$/.test(artifact.sha256) || !Number.isSafeInteger(maxBytes) || maxBytes < 1
+    || !Number.isSafeInteger(artifact.size) || artifact.size < 1 || artifact.size > maxBytes) fail('UPDATE_SIZE', '发行资源大小或校验信息无效');
+  return streamReleaseArtifact(artifact, { file, config, fetcher, timeoutMs, idleTimeoutMs, signal, onProgress });
+}
+
+async function streamReleaseArtifact(artifact, { file, config, fetcher, timeoutMs, idleTimeoutMs, signal, onProgress }) {
   const handle = await open(file, 'wx', 0o600), hash = createHash('sha256');
   const startedAt = performance.now();
   let success = false, transferred = 0, reportedAt;
@@ -231,26 +245,59 @@ export async function fetchUpdateArtifact(artifact, { file, config = DEFAULT_UPD
   }
 }
 
-export async function fetchVerifiedRelease({ config = DEFAULT_UPDATE_CONFIG, publicKey, fetcher = globalThis.fetch, timeoutMs = 20_000 } = {}) {
-  const downloaded = await Promise.allSettled([
-    fetchUpdateBytes(metadataUrl, { config, fetcher, timeoutMs }).catch(error => {
-      if (error.httpStatus === 404) throw new UpdateFeedError('UPDATE_UNPUBLISHED', '更新通道尚未就绪');
-      throw error;
-    }),
-    fetchUpdateBytes(`${metadataUrl}.sig`, { config, fetcher, timeoutMs, maxBytes: 4096 }),
-    publicKey || readFile(new URL('./update-public-key.pem', import.meta.url)),
-  ]);
-  for (const result of downloaded) if (result.status === 'rejected') throw result.reason;
-  const [bytes, signatureBytes, trustedKey] = downloaded.map(result => result.value);
+/** Verify the original signed bytes before parsing any release metadata. */
+export function verifySignedJson(bytes, signatureBytes, publicKey) {
   const encoded = signatureBytes.toString('utf8').trim();
   if (!/^[A-Za-z0-9+/]{86}==$/.test(encoded)) fail('UPDATE_SIGNATURE', '更新清单签名格式无效');
   let valid = false;
   try {
-    const key = createPublicKey(trustedKey);
+    const key = createPublicKey(publicKey);
     valid = key.asymmetricKeyType === 'ed25519' && verify(null, bytes, key, Buffer.from(encoded, 'base64'));
   } catch { fail('UPDATE_SIGNATURE', '更新公钥或签名无效'); }
   if (!valid) fail('UPDATE_SIGNATURE', '更新清单签名校验失败');
-  let manifest;
-  try { manifest = JSON.parse(bytes.toString('utf8')); } catch { fail('UPDATE_MANIFEST', '更新清单不是有效 JSON'); }
-  return validateReleaseManifest(manifest);
+  try { return JSON.parse(bytes.toString('utf8')); } catch { fail('UPDATE_MANIFEST', '更新清单不是有效 JSON'); }
+}
+
+async function fetchSignedJson(url, { config = DEFAULT_UPDATE_CONFIG, publicKey, fetcher = globalThis.fetch, timeoutMs = 20_000, signal, missingMetadataMessage } = {}) {
+  const downloaded = await Promise.allSettled([
+    fetchUpdateBytes(url, { config, fetcher, timeoutMs, signal }).catch(error => {
+      if (error.httpStatus === 404 && missingMetadataMessage) throw new UpdateFeedError('UPDATE_UNPUBLISHED', missingMetadataMessage);
+      throw error;
+    }),
+    fetchUpdateBytes(`${url}.sig`, { config, fetcher, timeoutMs, signal, maxBytes: 4096 }),
+    publicKey || readFile(new URL('./update-public-key.pem', import.meta.url)),
+  ]);
+  for (const result of downloaded) if (result.status === 'rejected') throw result.reason;
+  const [bytes, signatureBytes, trustedKey] = downloaded.map(result => result.value);
+  return { value: verifySignedJson(bytes, signatureBytes, trustedKey), bytes, signatureBytes };
+}
+
+export async function fetchVerifiedRelease(options = {}) {
+  return validateReleaseManifest((await fetchSignedJson(metadataUrl, { ...options, missingMetadataMessage: '更新通道尚未就绪' })).value);
+}
+
+export function validateDownloadCatalog(catalog, releaseVersion) {
+  parseVersion(releaseVersion);
+  if (!catalog || catalog.schemaVersion !== 1 || catalog.releaseVersion !== releaseVersion
+    || !/^[a-f0-9]{40}$/.test(catalog.sourceSha) || !Array.isArray(catalog.files) || !catalog.files.length || catalog.files.length > 32)
+    fail('UPDATE_MANIFEST', '发行资源目录版本或来源无效');
+  const urls = new Set();
+  for (const artifact of catalog.files) {
+    validateArtifact(artifact);
+    const tag = artifact.url.slice(releaseBase.length).split('/')[1];
+    parseVersion(tag?.startsWith('v') ? tag.slice(1) : '');
+    if (typeof artifact.target !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(artifact.target)
+      || !/^[a-f0-9]{64}$/.test(artifact.sha256) || !Number.isSafeInteger(artifact.size) || artifact.size < 1
+      || artifact.size > 1024 * 1024 * 1024 || urls.has(artifact.url)) fail('UPDATE_MANIFEST', '发行资源目录包含无效或重复资源');
+    urls.add(artifact.url);
+  }
+  return catalog;
+}
+
+/** Fixed-version catalogs share the existing Ed25519 key and immutable release URL policy. */
+export async function fetchVerifiedDownloadCatalog({ releaseVersion, ...options } = {}) {
+  parseVersion(releaseVersion);
+  const signed = await fetchSignedJson(releaseDownloadUrl('downloads.json', `v${releaseVersion}`), { ...options,
+    missingMetadataMessage: `BenchGo ${releaseVersion} 的部署资源尚未发布，请使用完整离线包或等待匹配发行` });
+  return { catalog: validateDownloadCatalog(signed.value, releaseVersion), bytes: signed.bytes, signatureBytes: signed.signatureBytes };
 }

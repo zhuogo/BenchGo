@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire, registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { mkdtemp, mkdir, writeFile, rm, symlink, open } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, symlink, open, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -70,6 +70,7 @@ test('artifacts list real nested files by category with stable pagination', asyn
   const names = ['报告/说明 文档.md', 'report.pdf', 'table.xlsx', 'picture.png', 'clip.mp4', 'podcast.mp3', 'index.html', 'app.tsx', 'ignore.exe'];
   for (const name of names) await writeFile(join(workspace, 'artifacts', name), name);
   const all = await files.list(); assert.equal(all.total, 8);
+  for (const row of all.artifacts) assert.equal(row.path, await realpath(join(workspace, 'artifacts', row.name)), 'native file opens receive the same verified absolute file, independent of Router cwd');
   assert.deepEqual(new Set(all.artifacts.map(row => row.category)), new Set(['document', 'image', 'video', 'audio', 'web']));
   const documents = await files.list({ category: 'document', limit: 2 });
   assert.equal(documents.total, 3); assert.equal(documents.artifacts.length, 2); assert.ok(documents.nextCursor);

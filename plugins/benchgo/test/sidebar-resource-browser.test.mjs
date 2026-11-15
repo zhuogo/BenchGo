@@ -40,13 +40,14 @@ test('cross-device sidebar persists scope and renders device states while retain
     const panels=<nav className="cmd-sidebar-panels">{['工具','定时任务'].map(label=><button type="button" key={label}>{label}</button>)}</nav>;
     createRoot(document.getElementById('root')).render(<><style>{tokens}{themeBase}{surfaces}{hostCss}</style><aside className="cmd-shell-sidebar" style={{display:'flex',flexDirection:'column',width:280,height:'100vh'}}><Projects host={host} open={async id=>window.navigationCalls.push({kind:'native',id})} newSession={async id=>window.navigationCalls.push({kind:'new',id})} renderSlot={()=>null} panelNavigation={panels}/></aside><main><p>工作台内容</p><textarea aria-label="本机草稿" defaultValue="保留的草稿"/></main></>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-sidebar-menu'), format: 'iife', jsx: 'automatic',
-    alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
+    alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')),
+      '@deepseek-ai/dsh-util-workspace-path': join(root, 'deepseek-harness/packages/util/workspace-path/src/index.ts') },
     nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text' },
     plugins: [{ name: 'sidebar-fixture', setup(build) {
       build.onLoad({ filter: /benchgo[\\/]client[\\/]index\.jsx$/ }, async ({ path }) => {
         // Mount the real sidebar without loading unrelated application entry points.
-        const keep = ['shared/client/ui/index', 'shared/client/ui/tooltip', 'sidebar-state.mjs', 'resource-navigation.jsx', 'resource-state.mjs', 'resource-creation.jsx', 'device-launcher.jsx', 'device-switch.jsx', "from 'react'", 'icons.json', 'dsh-client-ui-primitives', 'iconsax.jsx', 'modules.mjs', 'session-info.mjs'];
+        const keep = ['shared/client/ui/index', 'shared/client/ui/tooltip', 'sidebar-state.mjs', 'resource-navigation.jsx', 'resource-navigation-store.mjs', 'resource-state.mjs', 'resource-creation.jsx', 'device-launcher.jsx', 'device-switch.jsx', "from 'react'", 'icons.json', 'dsh-client-ui-primitives', 'iconsax.jsx', 'modules.mjs', 'session-info.mjs'];
         const source = (await readFile(path, 'utf8')).split('\n').filter(line => !line.startsWith('import ') || keep.some(value => line.includes(value))).join('\n');
         return { loader: 'jsx', resolveDir: dirname(path), contents: source + '\nexport {Projects}; export function setFixtureState(value){update(value);}' };
       });
@@ -360,8 +361,35 @@ test('cross-device sidebar persists scope and renders device states while retain
     assert.equal(await page.locator('.cmd-resource-stage header').count(),0);
     await page.locator('#cmd-recent-section .cmd-session').filter({hasText:'测试对话 0'}).click();await assertLocalRestored();
     assert.deepEqual(await page.evaluate(()=>window.navigationCalls.at(-1)),{kind:'session',id:'session-0'});
+    const captureRemote=async()=>{
+      const element=await page.locator('.cmd-resource-stage iframe').elementHandle(),remote=await element.contentFrame(),selected=selectCalls;
+      const operations=await remote.evaluate(()=>{
+        const draft=document.createElement('textarea');draft.setAttribute('aria-label','远端草稿');draft.value='未发送的远端草稿';document.body.append(draft);
+        const history=document.createElement('div');history.id='remote-history';history.style.cssText='height:80px;overflow:auto';
+        const content=document.createElement('div');content.style.height='600px';content.textContent='远端历史消息';history.append(content);document.body.append(history);history.scrollTop=145;
+        return window.calls.length;
+      });
+      return async reason=>{
+        assert.equal(await element.evaluate(node=>node.isConnected&&node===document.querySelector('.cmd-resource-stage iframe')),true,reason+': same iframe remains mounted');
+        assert.deepEqual(await remote.evaluate(()=>({draft:document.querySelector('[aria-label="远端草稿"]').value,scroll:document.getElementById('remote-history').scrollTop,operations:window.calls.length})),{draft:'未发送的远端草稿',scroll:145,operations},reason+': live document, draft, scroll and active resource survive');
+        assert.equal(selectCalls,selected,reason+': no new entry ticket');
+      };
+    };
     const localProject=page.getByRole('button',{name:'本机项目',exact:true});
-    for(const expanded of [true,false]){await openRemote();await localProject.click();await assertLocalRestored();assert.equal(await localProject.getAttribute('aria-expanded'),String(expanded));}
+    await openRemote();
+    await remoteProject.locator('.cmd-session').first().click();await page.waitForFunction(()=>document.querySelector('.cmd-resource-stage-status')?.hidden);
+    let assertRemoteRetained=await captureRemote();
+    // Disclosure and list visibility never navigate away from the open resource.
+    for(const expanded of [true,false]){await localProject.click();assert.equal(await localProject.getAttribute('aria-expanded'),String(expanded));await assertRemoteRetained('local project disclosure');}
+    for(const expanded of [false,true]){await folder.click();assert.equal(await folder.getAttribute('aria-expanded'),String(expanded));await assertRemoteRetained('active remote project disclosure');}
+    const deviceGroup=page.locator('.cmd-resource-group-title').filter({hasText:'开发设备'});
+    for(const expanded of [false,true]){await deviceGroup.click();assert.equal(await deviceGroup.getAttribute('aria-expanded'),String(expanded));await assertRemoteRetained('active device disclosure');}
+    for(const id of ['cmd-project-section','cmd-recent-section'])for(let i=0;i<2;i++){await page.locator('[aria-controls="'+id+'"]').click();await assertRemoteRetained('sidebar section disclosure');}
+    await page.getByRole('button',{name:'搜索对话',exact:true}).click();await page.getByRole('textbox',{name:'搜索对话内容',exact:true}).fill('没有匹配的会话');
+    assert.equal(await page.locator('.cmd-session').count(),0);await assertRemoteRetained('search hides active row');
+    await page.getByRole('button',{name:'关闭搜索',exact:true}).click();
+    for(const name of ['当前设备（工作台主机）','所有已连接设备']){await page.getByRole('button',{name:'显示范围',exact:true}).click();await page.getByRole('menuitem',{name,exact:true}).click();await assertRemoteRetained('resource scope hides active device');}
+    await page.getByText('远端项目',{exact:true}).waitFor();
     await openRemote();await page.getByRole('button',{name:'在 本机项目 新聊天',exact:true}).click();await assertLocalRestored();
     assert.deepEqual(await page.evaluate(()=>window.navigationCalls.at(-1)),{kind:'new',id:'local-project'});
     await openRemote();await page.getByRole('button',{name:'工具',exact:true}).click();await assertLocalRestored();
@@ -375,6 +403,8 @@ test('cross-device sidebar persists scope and renders device states while retain
       assert.equal(await page.evaluate(()=>window.navigationCalls.at(-1).kind),'new');
       assert.equal(await page.evaluate(()=>window.navigationCalls.at(-1).id),undefined);
     }
+    // Idle/background navigation reads must not own the live remote document.
+    await openRemote();assertRemoteRetained=await captureRemote();
     // The next scheduled refresh keeps the sidebar stable while requests are in flight.
     holdResources=true;
     const pendingResource=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/commander-devices'&&request.postDataJSON().action==='resources');
@@ -384,6 +414,7 @@ test('cross-device sidebar persists scope and renders device states while retain
     assert.equal(await page.getByText('正在读取 开发设备…',{exact:true}).count(),0,'cached navigation refreshes silently');
     assert.equal(await page.getByText('远端项目',{exact:true}).count(),1);
     await page.screenshot({path:join(screenshots,'light-background-refresh.png')});
+    await assertRemoteRetained('idle refresh is pending');
     await page.evaluate(()=>{document.dispatchEvent(new Event('visibilitychange'));document.dispatchEvent(new Event('visibilitychange'));});
     await page.clock.runFor(10_001);
     assert.equal(queries,activeQueries,'visibility and elapsed periods never overlap an active refresh');
@@ -399,11 +430,13 @@ test('cross-device sidebar persists scope and renders device states while retain
     const hiddenQueries=queries;
     await page.clock.runFor(60_001);
     assert.equal(queries,hiddenQueries,'hidden sidebar starts no polling requests');
+    await assertRemoteRetained('one minute in the background');
     mode='data';holdResources=false;
     await page.evaluate(()=>{window.sidebarHidden=false;});await refresh();
     releaseResources();await page.evaluate(()=>Promise.resolve());
     await page.locator('#cmd-recent-section').getByText('远端最近',{exact:true}).waitFor();
     assert.equal(await page.locator('.cmd-resource-connection').count(),0,'cancelled late errors cannot replace the successful visible refresh');
+    await assertRemoteRetained('returning from background');
 
     // Loaded coverage reaches the real hook and is refreshed in one bounded request.
     recentCount=95;await refresh();
@@ -444,6 +477,7 @@ test('cross-device sidebar persists scope and renders device states while retain
       if(state==='empty')await page.getByText('暂无最近对话',{exact:true}).waitFor();
       else if(state==='error'||state==='offline')await page.locator('.cmd-resource-connection[data-resource-state=connecting]').first().waitFor();
       else await page.locator('#cmd-recent-section').getByText('远端最近',{exact:true}).waitFor();
+      await assertRemoteRetained('resource list '+state);
       for(const theme of ['light','dark']){
         await page.evaluate(dark=>document.body.toggleAttribute('data-ds-dark-theme',dark),theme==='dark');
         await page.setViewportSize(theme==='dark'?{width:500,height:700}:{width:1200,height:850});
@@ -452,6 +486,7 @@ test('cross-device sidebar persists scope and renders device states while retain
     }
     // Stable authorization failures clear their own cache and never spin in the short retry loop.
     mode='revoked';await refresh();
+    await assertLocalRestored();
     await page.getByRole('button',{name:'开发设备 · 授权失效，请在设备中心重新核验',exact:true}).first().waitFor();
     assert.equal(await page.locator('#cmd-recent-section').getByText('远端最近',{exact:true}).count(),0);
     assert.equal(await page.getByText('远端项目',{exact:true}).count(),0);

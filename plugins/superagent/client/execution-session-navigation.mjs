@@ -1,3 +1,5 @@
+import { openRemoteResource } from '../../link/client/resource-navigation-store.mjs';
+
 async function refreshExecutionCatalog(sessions, sessionIds, signal) {
   signal?.throwIfAborted();
   await sessions.refresh();
@@ -20,6 +22,16 @@ export const executionSessionNavigation = {
 /** Open the same persisted execution Session in the official workspace. */
 export async function openExecutionSession(ctx, execution) {
   if (!execution?.available || !execution.sessionId) throw new Error('无法定位执行会话');
+  if (execution.remote === true) {
+    try {
+      await openRemoteResource({ device: { id: execution.deviceId, hostId: execution.hostId, authorizationId: execution.authorizationId },
+        resource: { kind: 'sessions', resourceId: execution.sessionId,
+          ownerTask: { taskId: execution.taskId, ownerHostId: execution.ownerHostId, executionId: execution.executionId } },
+        onReturn: () => document.dispatchEvent(new CustomEvent('benchgo:assistant-open-task', { detail: execution.taskId })) });
+      executionSessionNavigation.close();
+      return;
+    } catch (cause) { throw new Error(`无法打开执行会话：${cause.message || '请稍后重试'}`, { cause }); }
+  }
   if (!ctx.uiWorkspace?.openSession) throw new Error('工作台会话入口不可用');
   try {
     await refreshExecutionCatalog(ctx.sessions, [execution.sessionId]);
@@ -41,7 +53,7 @@ export function registerExecutionSessionDiscovery(ctx, loadSessions) {
       const batch = new Set(removed);
       removed.clear();
       const entries = await loadSessions(controller.signal);
-      const sessionIds = entries.filter(entry => batch.has(entry.sessionId)).map(entry => entry.sessionId);
+      const sessionIds = entries.filter(entry => entry.remote !== true && batch.has(entry.sessionId)).map(entry => entry.sessionId);
       if (!controller.signal.aborted && sessionIds.length) await refreshExecutionCatalog(ctx.sessions, sessionIds, controller.signal);
     }).catch(error => {
       if (!controller.signal.aborted) console.warn('[BenchGo] 执行会话目录刷新失败', error);

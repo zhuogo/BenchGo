@@ -5,7 +5,9 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 import { prepareMacDmgTool } from './macos-dmg-tool.mjs';
+import { serverResourceDelivery } from './payload-policy.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -57,7 +59,8 @@ export function resolveMacPackageTarget(arch, platform = process.platform, hostA
   return { name: `mac-${arch}`, arch, platform: 'darwin' };
 }
 
-export async function packageMacOS(arch) {
+export async function packageMacOS(arch, { serverResources = 'full' } = {}) {
+  serverResources = serverResourceDelivery(serverResources);
   const target = resolveMacPackageTarget(arch);
   preflightMacPackaging();
   const dmgTool = await prepareMacDmgTool(arch);
@@ -88,7 +91,7 @@ export async function packageMacOS(arch) {
   await pm(['--dir', 'native/system/packages/entry', 'pack', '--pack-destination', join(build, 'packed/landlock')]);
   for (const stage of ['runtime', 'packages', 'dsh']) await pm(['run', `prepare:${stage}`], desktop);
   await rm(join(build, 'plus-seed'), { recursive: true, force: true });
-  await run([join(root, 'scripts/desktop/plugin-bundle.mjs'), 'stage', '--runtime', join(build, 'dsh'), '--output', join(build, 'plus-seed')], root);
+  await run([join(root, 'scripts/desktop/plugin-bundle.mjs'), 'stage', '--runtime', join(build, 'dsh'), '--output', join(build, 'plus-seed'), '--server-resources', serverResources], root);
   await pm(['exec', 'tsx', join(root, 'scripts/desktop/seal-runtime.mjs'), join(build, 'dsh')], desktop);
   // NODE_OPTIONS is inherited through pnpm exec's Node child; only this build
   // subprocess gets the preload. It is never copied into the app or runtime.
@@ -100,6 +103,7 @@ export async function packageMacOS(arch) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv.length !== 3) throw new Error('Usage: node scripts/desktop/package-macos.mjs arm64|x64');
-  await packageMacOS(process.argv[2]);
+  const { values, positionals } = parseArgs({ options: { 'server-resources': { type: 'string', default: 'full' } }, allowPositionals: true });
+  if (positionals.length !== 1) throw new Error('Usage: node scripts/desktop/package-macos.mjs arm64|x64 [--server-resources full|online]');
+  await packageMacOS(positionals[0], { serverResources: values['server-resources'] });
 }

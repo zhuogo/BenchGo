@@ -59,13 +59,6 @@ export function createTaskExpression(runtime) {
         && row.source.threadId === threadId && sessionIds.includes(row.source.sessionId))
         && !current.archived && !current.sourceKey && taskCleanupNoticeKey(operationId, saved) === source.eventKey;
     }
-    if (source.remoteExecution) {
-      const owner = await taskOwnerScope(threadId), currentThread = await thread(threadId);
-      const reference = (runtime.readRemoteExecutions?.() || []).find(row => row.origin.threadId === threadId
-        && owner.sessionIds.includes(row.origin.sessionId) && row.observedEventKey === source.eventKey
-        && JSON.stringify(row.executionRef) === JSON.stringify(source.remoteExecution));
-      return Boolean(reference && !currentThread.archived && !currentThread.sourceKey);
-    }
     const task = store.orchestration?.getTask(source.taskId), trigger = store.orchestration?.getTrigger(source.triggerId);
     const input = task && store.orchestration.taskInputs(task.id).find(row => row.triggerId === source.triggerId);
     if (!task || !trigger || input?.snapshot?.executionInput?.outcome !== 'router'

@@ -2,7 +2,7 @@ import { taskExecutionBlocked, taskStopped } from './task-lifecycle.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { validateAttentionDecisions } from './attention-triage.mjs';
 
-const attentionChannels = new Set(['desktop', 'link', 'feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'webhook', 'api']);
+const attentionChannels = new Set(['desktop', 'feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'webhook', 'api']);
 const attentionText = (source, attentionId, text) => source.channel === 'desktop' ? text
   : `${text}\n\n问题编号：${attentionId}\n可引用这条消息回答，或发送 /answer ${attentionId} 你的回答`;
 
@@ -92,6 +92,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         const rows = db.prepare("SELECT * FROM sa_assignments WHERE state='waiting'").all();
         for (const row of rows) {
           const task = api.getTask(row.task_id), payload = JSON.parse(row.payload);
+          if (payload.executor === 'remote' || task.mandate?.execution) continue;
           if (taskExecutionBlocked(task) || (payload.instructionRevision ?? 1) !== task.instructionRevision || !validateMandate(task.mandate)) continue;
           const run = api.runs(row.id).find(item => item.fence === row.fence && item.state === 'waiting');
           const ids = run?.evidence?.waitingAttention?.attentionIds;
@@ -118,7 +119,10 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         const task = api.getTask(assignment.task_id);
         if ((JSON.parse(assignment.payload).instructionRevision ?? 1) !== task.instructionRevision) throw new Error('Attention requirements changed');
         const run = api.runs(assignmentId).find(item => item.fence === fence && item.sessionId === sessionId);
-        if (!run || !['submitted', 'running'].includes(run.state)) throw new Error('Attention requires the executing session');
+        const remote = JSON.parse(assignment.payload).executor === 'remote' ? api.remoteExecution(assignmentId) : null;
+        const remoteWaiting = run?.state === 'verifying' && remote?.runId === run.id
+          && remote.sessionId === sessionId && remote.fence === fence && remote.observedAt && remote.phase === 'waiting';
+        if (!run || !['submitted', 'running'].includes(run.state) && !remoteWaiting) throw new Error('Attention requires the executing session');
         if (!attentionChannels.has(task.mandate.source?.channel) || !task.mandate.actorId) throw new Error('Attention source unavailable');
         return questions.map(question => {
           const key = JSON.stringify([sessionId, callId, question.id]);
@@ -147,17 +151,14 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
       });
     },
     attentions(taskId) { return db.prepare('SELECT * FROM sa_attentions WHERE task_id=? ORDER BY created_at,rowid').all(taskId).map(value); },
-    // Authenticated desktop or device adapters enforce their own source scope before calling.
-    answerDesktopAttention({ taskId, attentionId, instructionRevision, requestId, answer, deviceSource }) {
+    // Authenticated desktop adapters enforce their own source scope before calling.
+    answerDesktopAttention({ taskId, attentionId, instructionRevision, requestId, answer }) {
       if (typeof requestId !== 'string' || !requestId.trim() || requestId.length > 512) throw new Error('Invalid Attention request id');
       return tx(() => {
         const row = db.prepare('SELECT * FROM sa_attentions WHERE id=? AND task_id=?').get(attentionId, taskId);
         if (!row) throw new Error('Attention not found');
         const task = api.getTask(taskId), origin = task.mandate.source;
-        const device = origin?.channel === 'link' && deviceSource?.channel === 'link'
-          && ['deviceId', 'sessionId', 'threadId'].every(key => origin[key] && origin[key] === deviceSource[key])
-          && task.mandate.actorId === `device:${origin.deviceId}`;
-        if (!device && (origin?.channel !== 'desktop' || task.mandate.actorId !== 'desktop-owner' || !origin.sessionId)) throw new Error('Attention source owner mismatch');
+        if (origin?.channel !== 'desktop' || task.mandate.actorId !== 'desktop-owner' || !origin.sessionId) throw new Error('Attention source owner mismatch');
         if (instructionRevision !== value(row).instructionRevision || !currentRevision(row, task)) throw new Error('Attention requirements changed');
         const question = JSON.parse(row.question), labels = (question.options || []).map(option => option.label);
         if (!answer || !Array.isArray(answer.selected) || answer.selected.some(label => typeof label !== 'string' || !labels.includes(label))
@@ -165,7 +166,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
           || (answer.custom !== undefined && (typeof answer.custom !== 'string' || answer.custom.length > 100000))
           || (!answer.selected.length && !answer.custom?.trim())) throw new Error('Invalid Attention answer');
         const structured = { selected: answer.selected, ...(answer.custom !== undefined ? { custom: answer.custom } : {}) };
-        const key = JSON.stringify(['desktop-attention', ...(device ? [origin.deviceId] : []), origin.sessionId, requestId]);
+        const key = JSON.stringify(['desktop-attention', origin.sessionId, requestId]);
         const previous = db.prepare('SELECT * FROM sa_triggers WHERE dedupe_key=?').get(key);
         if (previous) {
           const source = JSON.parse(previous.source);
@@ -175,9 +176,9 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         if ((task.status === 'completed' || taskStopped(task))) throw new Error('Attention task is terminal');
         if (row.answer_trigger_id) throw new Error('Attention already answered');
         const triggerId = randomUUID(), content = [...answer.selected, answer.custom].filter(text => text !== undefined).join('\n');
-        const source = { ...origin, messageId: device ? deviceSource.messageId : requestId, attentionId, answer: structured };
+        const source = { ...origin, messageId: requestId, attentionId, answer: structured };
         db.prepare('INSERT INTO sa_triggers(id,dedupe_key,thread_id,source,actor,content,content_hash,created_at) VALUES (?,?,?,?,?,?,?,?)')
-          .run(triggerId, key, task.threadId, JSON.stringify(source), JSON.stringify({ kind: 'human', id: device ? task.mandate.actorId : 'desktop-owner' }), content,
+          .run(triggerId, key, task.threadId, JSON.stringify(source), JSON.stringify({ kind: 'human', id: 'desktop-owner' }), content,
             createHash('sha256').update(content).digest('hex'), new Date().toISOString());
         db.prepare('UPDATE sa_attentions SET answer_trigger_id=? WHERE id=?').run(triggerId, attentionId);
         db.prepare('INSERT INTO sa_task_triggers VALUES (?,?)').run(taskId, triggerId);

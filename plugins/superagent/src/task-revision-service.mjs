@@ -16,6 +16,7 @@ const text = (value, label, max = 100000) => {
 export function createTaskRevisionService({ ctx, store, database = store.orchestration, readPolicy = () => readAssessmentPolicy(store, ctx.workspaceRegistry), requestExpansion }) {
   async function change(input, exec, options = {}, form) {
     rejectModelOverride(input);
+    if (input.deviceId !== undefined || input.executionConfig !== undefined) throw Object.assign(new Error('任务变更保留原执行设备和配置；切换执行位置请明确委派新任务'), { code: 'EXECUTION_BINDING_IMMUTABLE' });
     input = structuredClone(input);
     const task = database.getTask(input.id);
     if (!task) throw new Error('任务不存在');
@@ -40,13 +41,16 @@ export function createTaskRevisionService({ ctx, store, database = store.orchest
     const acceptance = input.acceptance ?? task.acceptance;
     if (typeof acceptance !== 'string' || acceptance.length > 100000) throw new Error('无效验收条件');
     const policy = structuredClone(await readPolicy());
+    const currentMandate = database.currentTaskMandate(task.id, task.mandate);
+    const remote = currentMandate.execution;
     if (input.projectId !== undefined) text(input.projectId, '项目标识', 512);
-    const projectId = input.projectId ?? task.mandate.project?.id;
-    const project = projectId ? policy.projects.find(row => row.id === projectId) : undefined;
+    if (remote && input.projectId !== undefined && input.projectId !== currentMandate.project?.id) throw Object.assign(new Error('远端任务变更保留原项目；切换工作区请明确委派新任务'), { code: 'EXECUTION_BINDING_IMMUTABLE' });
+    const projectId = input.projectId ?? currentMandate.project?.id;
+    const project = remote ? currentMandate.project : projectId ? policy.projects.find(row => row.id === projectId) : undefined;
     if (projectId && !project) throw new Error('任务项目不存在，请重新选择');
     const terminal = (task.status === 'completed' || task.executionControl?.stopped === true);
     // Existing Assignment.model is historical audit data, never a new override.
-    const model = terminal ? configuredWorkModel(policy) : database.assignments(task.id).at(-1)?.model || configuredWorkModel(policy);
+    const model = remote ? remote.config.models[0] : terminal ? configuredWorkModel(policy) : database.assignments(task.id).at(-1)?.model || configuredWorkModel(policy);
     // Ordinary changes are bound to the live human instruction. Only actual
     // structured authority expansion enters the trusted host approval flow.
     exec?.signal?.throwIfAborted();
@@ -56,10 +60,9 @@ export function createTaskRevisionService({ ctx, store, database = store.orchest
     const source = { channel: 'desktop', sessionId, messageId: instruction.message.id, threadId: options.threadId || 'main' };
     // A local resource change is a new desktop authorization, including when the original
     // Task came from a channel. The original channel authority remains in revision history.
-    const currentMandate = database.currentTaskMandate(task.id, task.mandate);
     const mandate = { ...currentMandate, actorId: 'desktop-owner', source, instruction: original, policyVersion: current.desktopVersion,
       admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval',
-      ...(project ? { project: { id: project.id, path: project.path } } : {}) };
+      ...(project ? { project: remote ? project : { id: project.id, path: project.path } } : {}) };
     const { trigger } = database.ingest({ dedupeKey: `task-change:${digest([sessionId, instruction.message.id])}`,
       thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source,
       actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' });

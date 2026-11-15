@@ -13,6 +13,7 @@ const packagePath = path => relative(root, path).split(sep).join('/');
 
 test('published server entries include their relative module closure and native launch resources', { timeout: 30000 }, async () => {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.deepEqual(manifest.bin, { commander: 'src/cli.mjs' }, 'only the installer CLI owns the benchgo command');
   const packed = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: root, encoding: 'utf8', shell: process.platform === 'win32', windowsHide: true, timeout: 20000,
   });

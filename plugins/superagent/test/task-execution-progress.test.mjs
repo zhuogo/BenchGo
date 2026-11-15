@@ -98,6 +98,28 @@ function catalog(parent, childId) { return parent.append('subagent/catalog', { v
 function notice(parent, childId) { return parent.append('user/message', llm.createUserMessage({ source: { kind: 'subagent-settled', form: 'notice', senderSessionId: childId,
   stopReason: 'completed', summary: 'PRIVATE SUMMARY' }, content: [{ type: 'text', text: 'PRIVATE CHILD OUTPUT' }] }), { surfaceOp: 'append' }); }
 
+test('remote Run recovery never opens a host official session under the peer session id', async t => {
+  const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+  t.after(() => database.close());
+  database.createThread({ id: 'remote-thread', source: { type: 'desktop', id: 'owner' } });
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'paired-B', config: { harness: 'official', models: [{ providerId: 'opaque', modelId: 'opaque/model' }] } };
+  const task = database.createTask({ threadId: 'remote-thread', target: 'remote task', mandate: { execution } });
+  database.createAssignment(task.id, { id: 'remote-assignment', executor: 'remote', execution });
+  const [assignment] = database.claimAssignments('observer', { validateMandate: () => true });
+  const ownership = { owner: assignment.owner, fence: assignment.fence };
+  const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'B-session', directory: 'remote:B' });
+  database.recordRemoteExecution(assignment.id, { ...ownership, patch: { ...execution, runId: run.id, executionId: 'B-execution', sessionId: run.sessionId } });
+  let reads = 0;
+  const progress = createTaskExecutionProgress({ database, ctx: { on: () => () => {},
+    sessionProjections: { register: async () => ({ stateOf() { throw new Error('No peer projection belongs to A'); }, dispose() {} }) },
+    sessionQuery: { observeSession() { reads++; throw new Error('Do not read peer session locally'); } }, agents: { list: () => [] } } });
+  t.after(() => progress.dispose());
+  await progress.ready;
+  await progress.recover(run.sessionId);
+  assert.equal(reads, 0);
+  assert.equal(database.getExecutionProjection(run.sessionId), null);
+});
+
 test('real Session events project phases and safe counters without private tool/model bodies', async t => {
   const f = await fixture(t), session = f.worker.agent.session;
   turn(session); call(session); assert.equal(f.read().worker.activity, '正在搜索网页');

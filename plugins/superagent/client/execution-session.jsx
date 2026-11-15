@@ -22,13 +22,13 @@ export function ExecutionSessionPanel({ ctx, execution, api, SessionProvider, re
     setError(''); void load();
     return () => { disposed = true; controller?.abort(); clearTimeout(timer); };
   }, [api, execution.taskId, retry]);
-  const entries = catalog?.filter(row => row.taskId === execution.taskId) || [];
+  const entries = catalog?.filter(row => row.remote !== true && execution.remote !== true && row.taskId === execution.taskId) || [];
   const current = entries.find(row => row.sessionId === execution.sessionId);
   const reason = error ? '执行状态暂未刷新，请重试后继续。' : current?.reason || '此执行会话仅供查看。需要继续工作时，请在原任务调整要求。';
   const canPrompt = !error && current?.promptable === true;
   useLayoutEffect(() => {
     const blocks = ctx.conversation?.blocks;
-    if (!blocks || canPrompt) return;
+    if (!blocks || canPrompt || execution.remote === true) return;
     const previous = blocks.storeFor(execution.sessionId).getSnapshot(), block = { reason };
     blocks.set(execution.sessionId, block);
     return () => { if (blocks.storeFor(execution.sessionId).getSnapshot() === block) blocks.set(execution.sessionId, previous); };

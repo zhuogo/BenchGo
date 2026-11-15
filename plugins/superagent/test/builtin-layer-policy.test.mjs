@@ -32,7 +32,7 @@ test('project inventory distinguishes Recent and covers outgoing devices without
 test('builtin layer speaks as the long-term assistant with concrete conversational craft', async () => {
   const prompt = await readFile(new URL('../prompts/builtin-layer.md', import.meta.url), 'utf8');
   const body = prompt.slice(prompt.search(/^# 内置层$/m));
-  assert.match(body, /^# 内置层\n\n你是用户的长期个人助手/);
+  assert.match(body, /^# 内置层\r?\n\r?\n你是用户的长期个人助手/);
   assert.match(body, /Router、Worker 和任务编号是内部说法，不用来称呼自己/);
   assert.match(body, /多数回复一两句话就够/);
   assert.match(body, /先给答案.*不复述问题/s);
@@ -47,8 +47,8 @@ test('builtin layer speaks as the long-term assistant with concrete conversation
 
 test('delegation instructions preserve the target device from the first investigation', async () => {
   const prompt = await readFile(new URL('../prompts/builtin-layer.md', import.meta.url), 'utf8');
-  assert.match(prompt, /本机用 assistant_delegate；指定远端设备或远端项目用 assistant_remote_task/);
-  assert.match(prompt, /不先建本机任务代查或中转/);
+  assert.match(prompt, /统一使用 assistant_delegate，通过 deviceId 选择本机或远端执行位置/);
+  assert.match(prompt, /业务工单始终保存在受理任务的本机/);
   assert.match(prompt, /远端不可用时如实说明，不回退本机执行/);
   assert.match(prompt, /只说项目名.*本机与全部出站设备.*唯一匹配直接沿所属设备/s);
   assert.match(prompt, /发个 hi.*默认在该项目的对话中发送 hi/s);
@@ -57,9 +57,8 @@ test('delegation instructions preserve the target device from the first investig
   assert.doesNotMatch(prompt, /从第一次探查起通过 assistant_delegate/);
   const source = await readFile(new URL('../src/router-tools.mjs', import.meta.url), 'utf8');
   const local = source.match(/register\('assistant_delegate', routerAdmissionLanguagePolicy \+ '([^']+)'/)?.[1] ?? '';
-  const remote = source.match(/register\('assistant_remote_task', '([^']+)'/)?.[1] ?? '';
-  assert.match(local, /LOCAL.*local Worker session only/);
-  assert.match(local, /remote project, use assistant_remote_task/);
-  assert.match(remote, /Use this instead of assistant_delegate whenever the user targets a remote device or its project/);
-  assert.match(remote, /exact deviceId\/projectId using assistant_devices and assistant_projects/);
+  assert.match(local, /business Task on THIS host/);
+  assert.match(local, /executionConfig selected from assistant_devices/);
+  assert.match(local, /all Task IDs, queries, controls, revisions and results remain on this host/);
+  assert.doesNotMatch(source, /register\('assistant_remote_task'/);
 });

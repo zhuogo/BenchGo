@@ -24,6 +24,7 @@ import { installExecutionFactsStore } from './execution-facts-store.mjs';
 import { installExecutionSummaryStore } from './execution-summary-store.mjs';
 import { redactExecutionText } from './execution-summary-input.mjs';
 import { hasSavedCompletion } from './execution-uncertainty.mjs';
+import { initializeOwnerHostId, installRemoteExecutionStore, initializeRemoteExecutionFacts } from './remote-execution-store.mjs';
 
 const json = value => JSON.stringify(value);
 const parse = value => JSON.parse(value);
@@ -40,7 +41,7 @@ const safeLimit = (value, fallback, max) => Number.isSafeInteger(value) && value
  * Uses a separate SQLite connection to assistant.db; all multi-record transitions are transactional.
  * Gate results and current-policy validation are supplied by the trusted host, never inferred here.
  */
-export function createAssistantOrchestrationStore({ directory, filename } = {}) {
+export function createAssistantOrchestrationStore({ directory, filename, ownerHostId } = {}) {
   if (!directory && !filename) throw new Error('Orchestration store requires a data directory');
   if (directory) mkdirSync(directory, { recursive: true });
   const path = filename || join(directory, 'assistant.db');
@@ -131,6 +132,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     try { const result = fn(); db.exec('COMMIT'); executionFacts?.flushExecutionFactChanges(); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
   };
   initializeTaskCleanup({ db });
+  let hostIdentity;
+  try { hostIdentity = initializeOwnerHostId(db, ownerHostId); } catch (error) { db.close(); throw error; }
   const executionExited = db.prepare(`SELECT ${taskExecutionExitedSql()} AS exited FROM sa_tasks WHERE id=?`);
   const taskMetadata = db.prepare('SELECT value FROM task_meta WHERE key=?');
   const threadRow = threadId => db.prepare('SELECT * FROM sa_threads WHERE id=?').get(threadId);
@@ -140,7 +143,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   const candidateValue = row => row && ({ id: row.id, triggerId: row.trigger_id, threadId: row.thread_id, policyVersion: row.policy_version, gate: parse(row.gate), status: row.status, evalId: row.eval_id, retryCount: row.retry_count, handbackTaskId: row.handback_task_id, createdAt: row.created_at, updatedAt: row.updated_at });
   const evalValue = row => row && ({ id: row.id, threadId: row.thread_id, policyVersion: row.policy_version, candidateIds: parse(row.candidate_ids), owner: row.owner, attempt: row.attempt, status: row.status, deadline: row.deadline, createdAt: row.created_at, updatedAt: row.updated_at });
   const decisionValue = row => row && ({ id: row.id, candidateId: row.candidate_id, threadId: row.thread_id, outcome: row.outcome, assessment: parse(row.assessment), policyVersion: row.policy_version, taskId: row.task_id, createdAt: row.created_at });
-  const taskValue = row => { if (!row) return row; const exited = executionExited.get(row.id).exited === 1; return ({ id: row.id, threadId: row.thread_id, title: normalizeTaskTitle(row.title, row.target), target: row.target, acceptance: row.acceptance, instructionRevision: row.instruction_revision, adjustmentOfTaskId: row.adjustment_of_task_id || null, liveSummary: taskLiveSummary(row), status: row.status, executionExited: exited, executionControl: parse(row.execution_control || '{}'), archived: taskIsArchived({ executionExited: exited, status: row.status, instructionRevision: row.instruction_revision, executionControl: parse(row.execution_control || '{}') }, parse(taskMetadata.get(taskPresentationKey(row.id))?.value || '{}')), pauseReason: row.pause_reason ? parse(row.pause_reason) : null, continuationWait: row.continuation_wait ? parse(row.continuation_wait) : null, mandate: { ...api.currentTaskMandate(row.id, parse(row.mandate)), target: row.target, acceptance: row.acceptance }, createdByDecision: row.created_by_decision, createdAt: row.created_at, updatedAt: row.updated_at, resultVersion: row.result_version }); };
+  const taskValue = row => { if (!row) return row; const exited = executionExited.get(row.id).exited === 1; return ({ id: row.id, ownerHostId: hostIdentity, threadId: row.thread_id, title: normalizeTaskTitle(row.title, row.target), target: row.target, acceptance: row.acceptance, instructionRevision: row.instruction_revision, adjustmentOfTaskId: row.adjustment_of_task_id || null, liveSummary: taskLiveSummary(row), status: row.status, executionExited: exited, executionControl: parse(row.execution_control || '{}'), archived: taskIsArchived({ executionExited: exited, status: row.status, instructionRevision: row.instruction_revision, executionControl: parse(row.execution_control || '{}') }, parse(taskMetadata.get(taskPresentationKey(row.id))?.value || '{}')), pauseReason: row.pause_reason ? parse(row.pause_reason) : null, continuationWait: row.continuation_wait ? parse(row.continuation_wait) : null, mandate: { ...api.currentTaskMandate(row.id, parse(row.mandate)), target: row.target, acceptance: row.acceptance }, createdByDecision: row.created_by_decision, createdAt: row.created_at, updatedAt: row.updated_at, resultVersion: row.result_version }); };
   function taskLiveSummary(row) {
     const result = db.prepare('SELECT payload FROM sa_results WHERE task_id=? ORDER BY version DESC LIMIT 1').get(row.id);
     const saved = result ? parse(result.payload) : null;
@@ -157,7 +160,13 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     return { goal: row.target.slice(0, 600), progress: String(blocker || executionProgress || latest?.summary || ({ running: '正在执行', waiting: '等待执行条件', completed: '已完成' })[row.status]).replace(/\s+/g, ' ').slice(0, 600),
       blocker: String(blocker).slice(0, 600), status: row.status, updatedAt: row.updated_at };
   }
-  const assignmentValue = row => row && ({ id: row.id, taskId: row.task_id, ...parse(row.payload), state: row.state, priority: row.priority, owner: row.owner, leaseUntil: row.lease_until, fence: row.fence, attempts: row.attempts, createdAt: row.created_at, updatedAt: row.updated_at });
+  const assignmentValue = row => {
+    if (!row) return row;
+    const payload = parse(row.payload), remote = payload.executor === 'remote' ? api.remoteExecution?.(row.id) : null;
+    return { id: row.id, taskId: row.task_id, ...payload, ...(remote ? { remoteExecution: remote } : {}), state: row.state,
+      priority: row.priority, owner: row.owner, leaseUntil: row.lease_until, fence: row.fence,
+      attempts: row.attempts, createdAt: row.created_at, updatedAt: row.updated_at };
+  };
   const subscriptionValue = row => row && ({ id: row.id, taskId: row.task_id, threadId: row.thread_id, state: row.state, cursorSeq: row.cursor_seq, createdAt: row.created_at, updatedAt: row.updated_at });
   function createThread(input) {
     if (!record(input) || !record(input.source)) throw new Error('Thread requires a source');
@@ -212,6 +221,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   }
   const api = {
     path,
+    ownerHostId: () => hostIdentity,
     onSentDelivery(listener) {
       if (typeof listener !== 'function') throw new TypeError('Delivery observer must be a function');
       sentDeliveryListeners.add(listener);
@@ -221,7 +231,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
     // These read-only probes avoid rebuilding policy/documents while idle. The
     // transactional claim and renewal still perform the authoritative checks.
     hasAssignmentWork: ({ now = Date.now() } = {}) => !!db.prepare("SELECT 1 FROM sa_assignments WHERE state='queued' OR (state='claimed' AND lease_until<=?) LIMIT 1").get(now),
-    hasAnsweredAttention: () => !!db.prepare("SELECT 1 FROM sa_assignments a JOIN sa_attentions q ON q.assignment_id=a.id WHERE a.state='waiting' AND q.answer_trigger_id IS NOT NULL LIMIT 1").get(),
+    hasAnsweredAttention: () => !!db.prepare("SELECT 1 FROM sa_assignments a JOIN sa_attentions q ON q.assignment_id=a.id WHERE a.state='waiting' AND COALESCE(json_extract(a.payload,'$.executor'),'')!='remote' AND q.answer_trigger_id IS NOT NULL LIMIT 1").get(),
     hasPendingResultRecovery: ({ now = Date.now() } = {}) => !!db.prepare(`SELECT 1 FROM sa_assignments a JOIN sa_runs r ON r.assignment_id=a.id AND r.fence=a.fence
       WHERE (a.state!='claimed' OR COALESCE(a.lease_until,0)<=?) AND r.state IN ('uncertain','cancelled','verifying','submitted','running','completed','failed')
       AND length(COALESCE(json_extract(r.payload,'$.evidence.summary'),''))>0
@@ -472,6 +482,10 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (!task.executionControl?.paused) return task;
         const at = new Date().toISOString();
         for (const row of db.prepare("SELECT * FROM sa_assignments WHERE task_id=? AND state='paused'").all(taskId)) {
+          if (parse(row.payload).executor === 'remote' && api.remoteExecution(row.id)) {
+            db.prepare("UPDATE sa_assignments SET state='uncertain',owner=NULL,lease_until=NULL,updated_at=? WHERE id=?").run(at, row.id);
+            continue;
+          }
           const run = api.runs(row.id).find(item => item.fence === row.fence && item.state === 'waiting' && item.evidence?.waitingPause);
           if (!run) throw fail('RUN_CONFLICT', 'Paused execution record is missing');
           const payload = { ...parse(row.payload), pauseContinuation: { runId: run.id } };
@@ -512,6 +526,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         || !db.prepare("SELECT 1 FROM sa_task_inputs WHERE task_id=? AND trigger_id=? AND kind='revision' AND instruction_revision=?").get(taskId, triggerId, expectedInstructionRevision)) throw fail('MANDATE_REVOKED', 'Continuation needs a current authorized human revision');
       const result = api.results(taskId).at(-1);
       const row = db.prepare('SELECT * FROM sa_assignments WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(taskId);
+      if (row && parse(row.payload).executor === 'remote' && api.remoteExecution(row.id))
+        return { queued: false, code: 'REMOTE_CONTINUATION_REQUIRED' };
       const run = row && api.runs(row.id).find(item => item.id === result?.runId && item.fence === row.fence);
       const saved = run?.evidence, payload = row && parse(row.payload);
       if (result?.outcome !== 'failed' || result.version !== expectedResultVersion || result.instructionRevision >= expectedInstructionRevision
@@ -525,11 +541,18 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       db.prepare("UPDATE sa_tasks SET status='running',continuation_wait=NULL,updated_at=? WHERE id=?").run(timestamp(now), taskId);
       return { queued: true, assignment: api.getAssignment(row.id), task: api.getTask(taskId) };
     },
-    confirmExecutionStopped(assignmentId, { owner, fence }) {
+    confirmExecutionStopped(assignmentId, { owner, fence, now = Date.now() }) {
       return tx(() => {
         const row = db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(assignmentId);
         if (!row) throw fail('ASSIGNMENT_NOT_FOUND', 'Assignment does not exist');
         const payload = parse(row.payload), request = payload.stopRequest;
+        if (payload.executor === 'remote') {
+          const remote = api.remoteExecution(assignmentId);
+          if (row.state !== 'claimed' || row.owner !== owner || row.fence !== fence || row.lease_until <= now)
+            throw fail('FENCING_CONFLICT', 'Remote stop confirmation belongs to another observer');
+          if (!remote?.observedAt || !['paused', 'completed', 'failed', 'cancelled'].includes(remote.phase))
+            throw fail('REMOTE_STOP_UNCONFIRMED', 'Remote execution stop requires an authenticated observation');
+        }
         if (row.fence !== fence || (row.owner !== owner && request?.owner !== owner)) throw fail('FENCING_CONFLICT', 'Execution ownership changed');
         payload.executionStopped = { owner, fence, at: new Date().toISOString() };
         db.prepare('UPDATE sa_assignments SET payload=? WHERE id=?').run(json(payload), assignmentId);
@@ -652,6 +675,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
       return tx(() => {
         const run = db.prepare("SELECT * FROM sa_runs WHERE json_extract(payload,'$.sessionId')=?").get(sessionId);
         const row = run && db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(run.assignment_id);
+        if (row && parse(row.payload).executor === 'remote' && api.remoteExecution(row.id))
+          throw fail('REMOTE_CONTINUATION_REQUIRED', 'Remote execution continues through its host-owned command channel');
         if (!row || run.fence !== row.fence) throw fail('FENCING_CONFLICT', 'Original Worker execution is no longer current');
         if (row.state === 'claimed' && row.lease_until > now) throw fail('FENCING_CONFLICT', 'Original Worker still has an active execution owner');
         const task = api.getTask(row.task_id), payload = parse(row.payload), evidence = parse(run.payload).evidence;
@@ -731,6 +756,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const row = db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(id(assignmentId, 'assignmentId'));
         if (!row || row.state !== 'uncertain' || row.fence !== fence) throw fail('FENCING_CONFLICT', 'Assignment is not awaiting this reconciliation');
         const payload = parse(row.payload);
+        if (payload.executor === 'remote' && api.remoteExecution(assignmentId))
+          throw fail('REMOTE_RECONCILIATION_REQUIRED', 'A bound remote execution requires authenticated facts under its original identity');
         payload.reconciliations = [...(payload.reconciliations || []), { fence, outcome, evidence, at: timestamp(now) }];
         db.prepare('UPDATE sa_assignments SET state=?,payload=?,updated_at=? WHERE id=?').run(outcome === 'notExecuted' ? 'queued' : outcome, json(payload), timestamp(now), assignmentId);
         if (api.getTask(row.task_id).executionControl?.stopRequested) cancelTaskInternal(row.task_id);
@@ -821,6 +848,19 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const row = db.prepare('SELECT a.*,t.mandate,t.status AS task_status FROM sa_assignments a JOIN sa_tasks t ON t.id=a.task_id WHERE a.id=?').get(id(assignmentId, 'assignmentId'));
         if (!row || row.state !== 'claimed' || row.owner !== owner || row.fence !== fence || row.lease_until <= now) throw fail('FENCING_CONFLICT', 'Assignment lease is no longer owned');
         const permitted = api.getTask(row.task_id).status !== 'completed' && !taskStopped(api.getTask(row.task_id)) && validateMandate(api.getTask(row.task_id).mandate, { taskId: row.task_id, assignmentId }) === true;
+        // Losing authority requests a remote stop. It cannot prove that B has
+        // stopped, and therefore must not revoke the observer's active lease.
+        if (parse(row.payload).executor === 'remote' && api.remoteExecution(assignmentId)) {
+          const task = api.getTask(row.task_id), payload = parse(row.payload);
+          const controlRequired = !permitted || task.executionControl?.pauseRequested === true;
+          if (!permitted) {
+            payload.authorizationRevoked = true;
+            payload.stopRequest ||= { owner, fence, at: timestamp(now) };
+          }
+          db.prepare('UPDATE sa_assignments SET lease_until=?,payload=?,updated_at=? WHERE id=?')
+            .run(now + leaseMs, json(payload), timestamp(now), assignmentId);
+          return { allowed: true, controlRequired, assignment: assignmentValue(db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(assignmentId)) };
+        }
         if (!permitted) {
           const payload = { ...parse(row.payload), revokedOwner: owner };
           db.prepare("UPDATE sa_assignments SET state='uncertain',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?").run(json(payload), timestamp(now), assignmentId);
@@ -837,6 +877,8 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const row = db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(id(assignmentId, 'assignmentId'));
         if (!row) throw fail('ASSIGNMENT_NOT_FOUND', 'Assignment does not exist');
         if (row.state !== 'claimed' || row.owner !== owner || row.fence !== fence || row.lease_until <= now) throw fail('FENCING_CONFLICT', 'Assignment lease is no longer owned');
+        if (status === 'queued' && parse(row.payload).executor === 'remote' && api.remoteExecution(assignmentId))
+          throw fail('REMOTE_REDISPATCH_DENIED', 'A bound remote execution cannot be queued as new work');
         db.prepare('UPDATE sa_assignments SET state=?,owner=NULL,lease_until=NULL,updated_at=? WHERE id=?').run(status === 'queued' ? 'queued' : status, new Date().toISOString(), assignmentId);
         if (status === 'failed') {
           const failure = parse(row.payload).firstFailure;
@@ -1039,7 +1081,9 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         if (resultRevision !== task.instructionRevision) diagnostics.push('SUPERSEDED_INSTRUCTION');
         if (assignment && (!current || current.fence !== assignment.fence || (parse(current.payload).instructionRevision ?? 1) !== resultRevision)) diagnostics.push('ASSIGNMENT_CHANGED');
         if ((draft.runId || runId) && (!activeRun || activeRun.fence !== current.fence || draft.sessionId && activeRun.sessionId !== draft.sessionId)) diagnostics.push('RUN_CHANGED');
-        if (api.pendingSubscriptionMessages(taskId, { limit: 1 }).length || api.pendingTaskInputs(taskId).some(row => ['revision', 'authorization'].includes(row.kind))) diagnostics.push('PENDING_INPUT');
+        const pendingKinds = current && parse(current.payload).executor === 'remote'
+          ? ['revision', 'authorization', 'context', 'answer'] : ['revision', 'authorization'];
+        if (api.pendingSubscriptionMessages(taskId, { limit: 1 }).length || api.pendingTaskInputs(taskId).some(row => pendingKinds.includes(row.kind))) diagnostics.push('PENDING_INPUT');
         const isCurrent = !diagnostics.some(code => code !== 'IDEMPOTENCY_CONTENT_CHANGED') && (task.status !== 'completed' || task.resultVersion === duplicate?.version);
         // A completed official turn, not tool/effect/hash diagnostics, proves the
         // execution boundary. Raw text alone never proves successful completion.
@@ -1061,7 +1105,7 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const deliveryKey = duplicate?.deliveryKey || (prior.length ? `${key}:draft:${fingerprint}` : key);
         committed.deliveryKey = deliveryKey;
         if (!duplicate) db.prepare('INSERT INTO sa_results VALUES (?,?,?,?)').run(taskId, version, json(committed), at);
-        const continueContext = normal && !!current && !!activeRun && current.fence === assignment.fence && activeRun.fence === current.fence
+        const continueContext = normal && !!current && parse(current.payload).executor !== 'remote' && !!activeRun && current.fence === assignment.fence && activeRun.fence === current.fence
           && diagnostics.includes('PENDING_INPUT') && !blocked && !draft.waitingPause && !draft.waitingAttention;
         return { task, committed, duplicate: !!duplicate, associated, completed, blocked, pending, normal, current, activeRun, draft, version, at, deliveryKey, resultRevision, continueContext };
       });
@@ -1072,8 +1116,10 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         const latest = api.getTask(taskId);
         const latestAssignment = current && db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(current.id);
         const latestRun = activeRun && api.runs(activeRun.assignmentId).find(row => row.id === activeRun.id);
+        const pendingKinds = latestAssignment && parse(latestAssignment.payload).executor === 'remote'
+          ? ['revision', 'authorization', 'context', 'answer'] : ['revision', 'authorization'];
         const newInput = api.pendingSubscriptionMessages(taskId, { limit: 1 }).length > 0
-          || api.pendingTaskInputs(taskId).some(row => ['revision', 'authorization'].includes(row.kind));
+          || api.pendingTaskInputs(taskId).some(row => pendingKinds.includes(row.kind));
         const snapshotCurrent = latest && latest.instructionRevision === task.instructionRevision && latest.resultVersion === task.resultVersion
           && latest.status === task.status && json(latest.executionControl) === json(task.executionControl)
           && (!current || latestAssignment && latestAssignment.fence === current.fence && latestAssignment.state === current.state);
@@ -1082,7 +1128,15 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
           || current && (!latestAssignment || latestAssignment.fence !== current.fence || latestAssignment.state !== current.state)) lifecycleCurrent = false;
         if (newInput) lifecycleCurrent = false;
         const continueCurrent = (continueContext || newInput && normal && !blocked && !draft.waitingPause && !draft.waitingAttention)
-          && snapshotCurrent && latestAssignment?.fence === assignment?.fence && latestRun?.fence === assignment?.fence;
+          && snapshotCurrent && latestAssignment?.fence === assignment?.fence && latestRun?.fence === assignment?.fence
+          && !!latestAssignment && parse(latestAssignment.payload).executor !== 'remote';
+        if (!lifecycleCurrent && snapshotCurrent && latestAssignment && parse(latestAssignment.payload).executor === 'remote'
+          && normal && !blocked && (newInput || resultRevision !== latest.instructionRevision)) {
+          db.prepare("UPDATE sa_tasks SET status='waiting',continuation_wait=?,updated_at=? WHERE id=?")
+            .run(json({ code: 'REMOTE_INPUT_NOT_APPLIED', sourceResultVersion: version,
+              instructionRevision: resultRevision, pendingInstructionRevision: latest.instructionRevision,
+              reason: '远端原执行结果已保存，后续输入尚未获得执行确认，需继续核实原执行' }), at, taskId);
+        }
         if (lifecycleCurrent) {
           let nextStatus = task.status, continuation = task.continuationWait;
           if (!blocked && !draft.waitingPause && !draft.waitingAttention) {
@@ -1264,7 +1318,9 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
         pending = true;
         payload.stopRequest ||= { owner: row.owner || db.prepare('SELECT owner FROM sa_runs WHERE assignment_id=? AND fence=? ORDER BY rowid DESC LIMIT 1').get(row.id, row.fence)?.owner || null, fence: row.fence, at };
       }
-      db.prepare('UPDATE sa_assignments SET state=?,owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?')
+      if (waiting && payload.executor === 'remote' && api.remoteExecution(row.id)) {
+        db.prepare('UPDATE sa_assignments SET payload=?,updated_at=? WHERE id=?').run(json(payload), at, row.id);
+      } else db.prepare('UPDATE sa_assignments SET state=?,owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?')
         .run(waiting ? 'uncertain' : 'cancelled', json(payload), at, row.id);
     }
     db.prepare("UPDATE sa_tasks SET status='waiting',execution_control=?,updated_at=? WHERE id=?").run(json({ stopRequested: pending, stopped: !pending }), at, taskId);
@@ -1338,11 +1394,13 @@ export function createAssistantOrchestrationStore({ directory, filename } = {}) 
   const directReplyStore = installDirectReplyStore({ db, tx, api });
   Object.assign(api, directReplyStore.api);
   Object.assign(api, installWorkerExecutionStore({ db, tx, api }));
+  Object.assign(api, installRemoteExecutionStore({ db, tx, api, ownedAssignment }));
   Object.assign(api, installInterruptedContinuationStore({ db, tx, api }));
   Object.assign(api, installRouterQuestionStore({ db, tx, api }));
   Object.assign(api, installLearningSourceStore({ db, tx, api }));
   Object.assign(api, installResultNotificationStore({ db, tx, api }));
   executionFacts = installExecutionFactsStore({ db, tx, api });
+  initializeRemoteExecutionFacts(db);
   Object.assign(api, executionFacts);
   Object.assign(api, installExecutionSummaryStore({ db, tx }));
   // These public writes return only after their transaction commits. Observer

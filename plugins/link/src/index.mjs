@@ -58,13 +58,16 @@ async function mountLinkHost(ctx, config) {
   const cloudAccess = await createCloudAccess(directory, { env: config.env ?? process.env, probe: config.cloudProbe });
   const dispatch = async (input, device) => {
     authorizePairedDevice(device);
+    const owner = input?.id && ctx.get?.('benchgoExecution')?.ownerOfSession?.(input.id);
+    if (owner && ['send', 'cancel', 'respond', 'sessionAction'].includes(input.action)) throw Object.assign(new Error('远端执行会话只读，请在业务宿主的原工单提交输入或控制'), { status: 403, code: 'EXECUTION_INPUT_REQUIRES_OWNER' });
     if (input?.action === 'sessionAction') return sessionActions.dispatch(input, device);
-    if (input?.action === 'collaboration') {
-      if (!['delegate','get','lookup','control','change'].includes(input.operation)) throw Object.assign(new Error('不支持的协作操作'), { status: 422, code: 'UNSUPPORTED' });
-      const assistant = ctx.get?.('assistant');
-      if (typeof assistant?.collaboration !== 'function') throw Object.assign(new Error('目标协作执行尚不可用'), { status: 422, code: 'UNSUPPORTED' });
+    if (input?.action === 'execution') {
+      if (input.version !== 1 || !['catalog','submit','get','input','control','ack'].includes(input.operation)) throw Object.assign(new Error('不支持的执行协议版本或操作'), { status: 422, code: 'UNSUPPORTED_EXECUTION_PROTOCOL' });
+      const execution = ctx.get?.('benchgoExecution');
+      if (typeof execution?.dispatch !== 'function') throw Object.assign(new Error('目标官方执行服务尚不可用'), { status: 422, code: 'UNSUPPORTED' });
       const { principal, ...safe } = input;
-      return assistant.collaboration(safe, { principal: { kind: 'device', deviceId: device.id, capabilities: [...PAIRED_DEVICE_CAPABILITIES] } });
+      const value = await execution.dispatch(safe, { hostId: 'sha256:' + identity.pin, principal: { kind: 'device', deviceId: device.id, capabilities: [...PAIRED_DEVICE_CAPABILITIES] } });
+      return { ...value, hostId: 'sha256:' + identity.pin, authorizationId: device.id };
     }
     if (input?.action === 'management') {
       if (input.operation === 'status') { const value = status(); return { enabled: value.enabled, hostName: value.hostName, error: value.error, relay: value.relay }; }
@@ -101,7 +104,7 @@ async function mountLinkHost(ctx, config) {
       const capabilities = [
         { id: 'resources', available: true, operations: ['projects','sessions','recent','models','capabilities'] },
         ...sessionActions.capabilities(device),
-        { id: 'collaboration', available: typeof ctx.get?.('assistant')?.collaboration === 'function', reason: typeof ctx.get?.('assistant')?.collaboration === 'function' ? null : '目标协作执行服务尚不可用', operations: ['delegate','get','lookup','control','change'] },
+        { id: 'execution', version: 1, available: typeof ctx.get?.('benchgoExecution')?.dispatch === 'function', reason: typeof ctx.get?.('benchgoExecution')?.dispatch === 'function' ? null : '目标官方执行服务尚不可用', operations: ['catalog','submit','get','input','control','ack'] },
         { id: 'management', available: true, reason: null, operations: ['status','relay-test','settings-read','settings-prepare','operation'] },
         { id: 'reverse', available: false, reason: '反向协作需要另一设备明确配对并建立回程目录', operations: [] },
       ];
@@ -113,7 +116,7 @@ async function mountLinkHost(ctx, config) {
       else if (page.kind === 'projects') state = { projects: ctx.workspaceRegistry.list().map(project => ({ id: project.id, name: project.title || project.id, path: project.path, sessionIds: project.sessionIds, isDefault: recent?.id ? project.id === recent.id : project.isDefault === true })) };
       else if (page.kind === 'models') state = await sessions.dispatch({ action: 'models' }, device);
       else {
-        if (page.kind === 'tasks') throw Object.assign(new Error('请使用协作执行引用查询任务'), { status: 422, code: 'UNSUPPORTED' });
+        if (page.kind === 'tasks') throw Object.assign(new Error('业务工单仅由发起宿主持有；目标设备只提供执行实例与官方会话'), { status: 422, code: 'UNSUPPORTED' });
         const availableProjects = ctx.workspaceRegistry.list();
         state = { sessions: [...await sessions.list(device, availableProjects), ...native.list(availableProjects, { includeArchived: true })] };
         if (page.kind === 'recent') {
@@ -129,6 +132,7 @@ async function mountLinkHost(ctx, config) {
     return result;
   };
   let listener, identity, workbench, error = '', closed = false, closing, changes = Promise.resolve();
+  identity = await loadIdentity(directory);
   const settingsListeners = new Set(), transportDefaults = defaultLinkTransport();
   const transportValue = () => Object.fromEntries(Object.keys(LINK_TRANSPORT_SCHEMA.properties).map(key => [key, store.state[key]]));
   const configurationSnapshot = namespace => {
@@ -168,7 +172,7 @@ async function mountLinkHost(ctx, config) {
     const selectedRelay = connectedRelay();
     return {
     enabled: Boolean(listener), host: store.state.host, port: listener?.port ?? store.state.port, publicUrl: store.state.publicUrl,
-    hostName: store.state.name, error: error || null,
+    hostName: store.state.name, hostId: 'sha256:' + identity.pin, error: error || null,
     addresses: connectionAddresses(store.state.host).map(a => `https://${authority(a, listener?.port ?? store.state.port)}`),
     devices: store.state.devices.map(({ tokenHash, alias, ...device }) => ({ ...device, capabilities: [...PAIRED_DEVICE_CAPABILITIES], name: alias || device.name, ...(alias ? { originalName: device.name } : {}) })), pending: store.pending(), pendingManagement: managementOperations.filter(row => row.state === 'pending' && row.expiresAt > Date.now()).map(managementView),
     relay: { configured: Boolean(relayPool.length || relayUrl), enabled: relayEnabled, url: selectedRelay?.url ?? relayUrl, nodes: relayPool.map((node, index) => { const runtime = relayNodes.get(node.id || `relay-${index + 1}`); const { token, instance, ...publicNode } = node; return { ...publicNode, id: node.id || `relay-${index + 1}`, ...(runtime?.instance?.status() ?? { connected: false, lastError: relayError || null }) }; }), ...(selectedRelay?.runtime.instance.status() ?? { connected: false, lastError: relayNodes.values().next().value?.instance.status().lastError || relayError || null }) },
@@ -322,7 +326,7 @@ async function mountLinkHost(ctx, config) {
     }
     if (action === 'confirm' || action === 'reject') { await store.decide(text(input.id, '设备 ID'), action === 'confirm'); return status(); }
     if (action === 'rename-device') { await store.renameDevice(text(input.id, '设备 ID'), input.name); return status(); }
-    if (action === 'revoke') { const id = text(input.id, '设备 ID'); await store.revoke(id); await Promise.all([sessions.revoke(id), workbench?.revoke(id), sessionActions.revoke(id)]); return status(); }
+    if (action === 'revoke') { const id = text(input.id, '设备 ID'); await store.revoke(id); await Promise.all([sessions.revoke(id), workbench?.revoke(id), sessionActions.revoke(id), ctx.get?.('benchgoExecution')?.revokePrincipal?.(id)]); return status(); }
     throw new Error('不支持的管理操作');
   };
   let deviceCenter, cloudCenter, cloudGateway;
@@ -405,7 +409,7 @@ async function mountLinkHost(ctx, config) {
   }));
   const service = {
     admin, status, close, configurationSnapshot,
-    devices: async () => (await getCenter()).devices(),
+    devices: async () => { const snapshot = (await getCenter()).devices(); const hostId = 'sha256:' + identity.pin; return { ...snapshot, hostId, devices: snapshot.devices.map(device => device.id === 'local' ? { ...device, hostId, authorizationId: null } : device) }; },
     resources: async input => (await getCenter()).resources(input),
     callDevice: async input => (await getCenter()).callDevice(input),
     deviceAction,

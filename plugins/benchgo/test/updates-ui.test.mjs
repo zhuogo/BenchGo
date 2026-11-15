@@ -154,6 +154,29 @@ test('unknown desktop version retains manual application checks without an updat
   } finally { await view.dispose(); }
 });
 
+test('same public release identifies a remaining component update without a duplicate version arrow', async () => {
+  for (const kind of ['app', 'plugin', 'native', 'current', 'new-release']) {
+    const pluginAvailable = kind === 'plugin', appAvailable = ['app', 'new-release'].includes(kind);
+    const state = { ...initial(), current: { release: '0.1.4', plugin: '0.1.4', app: '0.1.2' },
+      canInstall: pluginAvailable, release: { releaseVersion: kind === 'new-release' ? '0.1.5' : '0.1.4',
+        plugin: { version: pluginAvailable ? '0.1.5' : '0.1.4', available: pluginAvailable, compatible: true },
+        app: { version: appAvailable ? '0.1.3' : '0.1.2', available: appAvailable } } };
+    const view = await mount(() => state, {}, kind === 'native' ? { dshDesktop: { updates: { status: async () => ({ phase: 'available', version: '0.1.3' }), open() {} } } } : {});
+    try {
+      await view.click(kind === 'current' ? '更新' : '更新，有更新');
+      const heading = view.document.querySelector('.cmd-update-card-heading').textContent;
+      assert.doesNotMatch(heading, /v0\.1\.4 → v0\.1\.4/);
+      if (kind === 'new-release') assert.match(heading, /v0\.1\.4 → v0\.1\.5/);
+      else assert.doesNotMatch(heading, /→/);
+      assert.match(heading, kind === 'current' ? /已是最新版本/ : pluginAvailable ? /功能包有更新/ : /主机应用有更新/);
+      if (kind !== 'new-release') assert.doesNotMatch(heading, /发现新版本/);
+      await view.click('版本详情');
+      if (['app', 'native', 'new-release'].includes(kind)) assert.match(view.document.querySelector('.cmd-update-details').textContent, /主机应用v0\.1\.2 → v0\.1\.3/);
+      if (kind === 'current') assert.equal(view.document.querySelector('.cmd-update-icon i'), null);
+    } finally { await view.dispose(); }
+  }
+});
+
 test('missing release, unknown plugin and failed checks never claim the plugin is current', async () => {
   for (const [state, message] of [
     [initial(), /尚未检查更新/],
@@ -538,9 +561,85 @@ test('native ready, verification and install failure distinguish downloading fro
     assert.match(view.document.querySelector('.cmd-update-progress').textContent, /安全关闭主机/);
     await view.flush(() => receive({ phase: 'error', failure: 'stop-failed' }));
     assert.equal(view.document.querySelector('.cmd-update-progress'), null);
+    assert.equal(view.document.querySelector('[role="alert"]'), null);
+    assert.match(view.document.querySelector('.cmd-update-card-heading').textContent, /应用更新未完成/);
+    await view.click('版本详情');
     assert.match(view.document.querySelector('[role="alert"]').textContent, /主机未能安全完成关闭，更新尚未安装/);
     assert(view.button('重试应用更新'));
   } finally { await view.dispose(); }
+});
+
+test('native shutdown failures keep one main recovery state and retain diagnostics in details', async () => {
+  for (const kind of ['app', 'current', 'plugin']) {
+    let receive, opens = 0;
+    const state = kind === 'plugin' ? update() : { ...initial(), release: {
+      plugin: { version: '0.1.1', available: false, compatible: true },
+      app: { version: kind === 'app' ? '0.1.3' : '0.1.1', available: kind === 'app' },
+    } };
+    const failure = { phase: 'error', failure: 'stop-failed', version: '0.1.3' };
+    const view = await mount(() => state, {}, { dshDesktop: { updates: {
+      async status() { return failure; }, subscribe(listener) { receive = listener; return () => {}; }, async open() { opens++; },
+    } } });
+    try {
+      await view.click(kind === 'current' ? '更新' : '更新，有更新');
+      const heading = () => view.document.querySelector('.cmd-update-card-heading').textContent;
+      assert.equal(view.document.querySelector('[role="alert"]'), null, 'the native window already owns the full shutdown failure');
+      assert.equal(view.button('重试应用更新'), undefined);
+      assert.match(heading(), kind === 'plugin' ? /发现新版本/ : /应用更新未完成/);
+      if (kind === 'app') {
+        assert.equal(view.button('长按 2 秒更新'), undefined);
+        assert.equal(view.button('长按 2 秒重试').disabled, false);
+        await view.hold('长按 2 秒重试');
+        assert.equal(opens, 1, 'the main retry delegates to the native updater');
+        assert.match(heading(), /应用更新未完成/, 'opening the updater does not clear the unresolved native failure');
+      } else if (kind === 'plugin') assert(view.button('长按 2 秒更新'), 'the feature update remains the primary operation');
+      await view.click('版本详情');
+      const details = view.document.querySelector('.cmd-update-details');
+      assert.match(details.querySelector('[role="alert"]').textContent, /主机未能安全完成关闭，更新尚未安装/);
+      assert.equal(view.button('重试应用更新').disabled, false);
+      assert.equal(view.button('检查安装器更新'), undefined, 'details keep one native recovery action');
+      await view.click('重试应用更新');
+      assert.equal(opens, kind === 'app' ? 2 : 1);
+      assert(details.querySelector('[role="alert"]'), 'only a new native state can resolve the failure');
+      await view.flush(() => receive({ phase: 'idle' }));
+      assert.equal(details.querySelector('[role="alert"]'), null);
+      assert.doesNotMatch(heading(), /应用更新未完成/);
+      assert.equal(view.calls.some(call => call.action === 'install'), false);
+    } finally { await view.dispose(); }
+  }
+});
+
+test('a staged feature package moves native failures into details until restart takes effect', async () => {
+  for (const unavailable of [false, true]) {
+    let state = update(), receive, opens = 0;
+    const view = await mount(({ action }) => {
+      if (action === 'install') state = { ...state, phase: 'ready', restartRequired: true, canInstall: false };
+      return state;
+    }, {}, { dshDesktop: { updates: {
+      async status() { if (unavailable) throw Error('bridge unavailable'); return { phase: 'error', failure: 'stop-failed' }; },
+      subscribe(listener) { receive = listener; return () => {}; }, async open() { opens++; },
+    } } });
+    try {
+      await view.click('更新，有更新');
+      assert.equal(!!view.document.querySelector('[role="alert"]'), unavailable);
+      assert.equal(view.button('重试应用更新') !== undefined, unavailable);
+      assert.doesNotMatch(view.document.querySelector('.cmd-update-card-heading').textContent, /应用更新未完成/);
+      await view.hold();
+      assert.match(view.document.querySelector('.cmd-update-notice').textContent, /功能包已就绪，重启主机应用后生效/);
+      assert.equal(view.document.querySelector('[role="alert"]'), null, 'the pending restart is the primary state');
+      assert.equal(view.button('重试应用更新'), undefined, 'do not present a recovery action that cannot run before restart');
+      await view.click('关闭更新'); await view.click('更新，待重启');
+      assert.equal(view.document.querySelector('[role="alert"]'), null, 'reopening does not restore the unrelated failure banner');
+      await view.click('版本详情');
+      const details = view.document.querySelector('.cmd-update-details');
+      assert.match(details.querySelector('[role="alert"]').textContent, unavailable ? /状态暂时不可用/ : /主机未能安全完成关闭/);
+      assert.match(details.textContent, /请先重启主机应用，使功能包生效，再重试应用更新/);
+      await view.flush(() => receive({ phase: 'idle' }));
+      assert.equal(details.querySelector('[role="alert"]'), null, 'a newer native recovery clears the retained diagnostic');
+      assert.doesNotMatch(details.textContent, /再重试应用更新/);
+      assert.equal(opens, 0, 'feature installation does not authorize a native installer');
+    } finally { await view.dispose(); }
+  }
 });
 
 test('a remote page cannot operate a desktop updater even if a bridge object is present', async () => {

@@ -94,3 +94,22 @@ test('installer keeps the current BenchGo shortcut during same-version repair', 
   for (const hook of ['customInit', 'customInstall']) assert.equal(upstream.replaceAll('\r\n', '\n').split('!macro ' + hook + '\n').length, 2);
 });
 
+test('installer defers only post-commit old-tree cleanup and queues it before enrollment', async () => {
+  const source = await readFile(new URL('./package-windows.mjs', import.meta.url), 'utf8');
+  const overlay = runInNewContext(source.match(/const bootstrap = ([\s\S]+?);\nawait mkdir/)[1]);
+  const install = overlay.slice(overlay.indexOf('!macro customInstall\n'));
+  assert.match(install, /\$dshOldMoved == "1"[\s\S]*StrCpy \$benchgoRetiredDirectory \$dshOldDirectory\n\s*StrCpy \$dshOldMoved ""/);
+  assert.ok(install.indexOf('StrCpy $dshOldMoved ""') < install.indexOf('!insertmacro dshOfficialCustomInstall'));
+  assert.ok(install.indexOf('!insertmacro dshOfficialCustomInstall') < install.indexOf('nsExec::ExecToStack'));
+  assert.match(install, /--retired-directory "\$benchgoRetiredDirectory"/);
+  assert.doesNotMatch(install, /StrCpy \$dshOldMoved "1"|RMDir|dshNewMoved/);
+  const native = (await readFile(new URL('../../deepseek-harness/apps/desktop/scripts/installer-directories.nsh', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
+  const contract = runInNewContext(source.match(/const directoryCommit = ([^\n]+);/)[1]);
+  assert.equal(native.split(contract).length, 2, 'review the packaging deferral when the official commit changes');
+  const enrollment = await readFile(new URL('./plugin-bundle.mjs', import.meta.url), 'utf8');
+  const entry = enrollment.slice(enrollment.indexOf('async function main()'));
+  assert.ok(entry.indexOf('await queueRetiredInstall') < entry.indexOf('await initializePluginProfile'));
+  const cleanup = config.extraResources.find(item => item.to === 'benchgo/install-cleanup.mjs');
+  assert.ok(cleanup?.from.endsWith('/scripts/desktop/install-cleanup.mjs'));
+});
+

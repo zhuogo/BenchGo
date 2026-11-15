@@ -9,6 +9,18 @@ import { localWorkbenchPage } from '../client/local-surface.mjs';
 
 const request = overrides => ({ headers: { host: 'localhost:3000', origin: 'http://localhost:3000' }, socket: { remoteAddress: '::ffff:127.0.0.1' }, ...overrides });
 const connection = { requestRejection: () => undefined };
+test('paired workbenches never acquire the local surface through a loopback proxy', () => {
+  for (const origin of ['http://localhost:3000', 'http://127.0.0.1:43123', 'https://[::1]:43123']) {
+    const page = new URL('/s/paired-device/link/workbench/', origin);
+    assert.equal(localWorkbenchPage(page, { isLoopback: true }, {}), true);
+    for (const scope of [
+      { __DSH_LINK_WORKBENCH__: true },
+      { __DSH_TRANSPORT__: { fetch() {} } },
+      { __DSH_LINK_WORKBENCH__: true, __DSH_TRANSPORT__: { ownsHost: true } },
+    ]) assert.equal(localWorkbenchPage(page, { isLoopback: true }, scope), false, origin);
+    assert.equal(localWorkbenchPage(new URL(origin), { isLoopback: true }, { __DSH_TRANSPORT__: { ownsHost: true } }), true);
+  }
+});
 test('Desktop local surface requires the official owned-host connection', () => {
   assert.equal(localWorkbenchPage(new URL('dsh-app://app/'), { isLoopback: true }), true);
   assert.equal(localWorkbenchPage(new URL('dsh-app://app/'), { isLoopback: false }), false);

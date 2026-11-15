@@ -10,6 +10,7 @@ import { verifyTrayBundle } from './prepare-tray.mjs';
 import { verifyStartupBundle } from './prepare-startup.mjs';
 import { verifyWorkbenchLoadingBundle } from './prepare-workbench-loading.mjs';
 import { verifyBackgroundBundle } from './prepare-background.mjs';
+import { assertSidebarPayload, DESKTOP_ELECTRON_LANGUAGES, inspectPluginPayload } from './payload-policy.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -27,6 +28,7 @@ export function createMacOSConfig(arch = process.env.DSH_DESKTOP_TARGET_ARCH ?? 
     artifactName: `benchgo-${version}-mac-${arch}.\${ext}`, publish: null,
     protocols: [{ name: 'BenchGo', schemes: ['dsh'] }] });
   config.directories.output = join(root, `artifacts/macos-${arch}`);
+  config.electronLanguages = [...DESKTOP_ELECTRON_LANGUAGES];
   config.mac.icon = join(brand, 'benchgo-icon.png');
   config.mac.target = ['dmg', 'zip'];
   config.mac.extendInfo.NSMicrophoneUsageDescription = 'BenchGo uses your microphone for voice conversations and transcription.';
@@ -45,8 +47,11 @@ export function createMacOSConfig(arch = process.env.DSH_DESKTOP_TARGET_ARCH ?? 
   config.asarUnpack.push('**/dsh/**/*');
   const enrollment = [
     ['scripts/desktop/plugin-bundle.mjs', 'benchgo/plugin-bundle.mjs'],
+    ['scripts/desktop/workbench-desktop.mjs', 'benchgo/workbench-desktop.mjs'],
+    ['scripts/desktop/payload-policy.mjs', 'benchgo/payload-policy.mjs'],
     ['plugins/benchgo/shared/plugin-install.mjs', 'benchgo/shared/plugin-install.mjs'],
     ['plugins/benchgo/shared/update-feed.mjs', 'benchgo/shared/update-feed.mjs'],
+    ['plugins/benchgo/shared/workbench-installation.mjs', 'benchgo/shared/workbench-installation.mjs'],
   ];
   for (const [source, destination] of enrollment) config.extraResources.push({ from: join(root, source), to: destination });
   config.extraResources.push({ from: join(root, 'LICENSE'), to: 'benchgo/LICENSE' },
@@ -108,6 +113,8 @@ export async function verifyMacOSPackage(resources, enrollment) {
     if (isAbsolute(child) || child === '..' || child.startsWith(`..${sep}`)) throw new Error(`Packaged entry escapes plugin: ${file}`);
     await access(path);
   }
+  assertSidebarPayload(plugin);
+  inspectPluginPayload(seed);
 }
 
 export default createMacOSConfig();

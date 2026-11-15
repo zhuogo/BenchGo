@@ -8,10 +8,10 @@ const { transformSync } = createRequire(new URL('../../benchgo/package.json', im
 const code = transformSync(readFileSync(new URL('../client/artifacts.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 const walk = node => node?.children ? [node, ...node.children.flatMap(walk), ...walk(node.props.footer)] : [];
 const settle = () => new Promise(resolve => setImmediate(resolve));
-function harness({ failDelete } = {}) {
+function harness({ failDelete, onOpenFile, compact = false, verifiedPath = true } = {}) {
   let cursor = 0;
   const hooks = [], effects = [], calls = [];
-  let files = ['a.md', 'b.md'].map(name => ({ id: name, name, hash: name + '-version', bytes: 1, updatedAt: '2026-11-03', url: '/file' }));
+  let files = ['a.md', 'b.md'].map(name => ({ id: name, name, hash: name + '-version', bytes: 1, updatedAt: '2026-11-03', url: '/file', ...(verifiedPath ? { path: `E:/assistant/artifacts/${name}` } : {}) }));
   const react = {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value !== false && value != null) }),
     useId: () => 'files',
@@ -28,7 +28,7 @@ function harness({ failDelete } = {}) {
     if (action === 'artifactDelete') { if (input.file === failDelete) throw new Error('File changed'); files = files.filter(file => file.name !== input.file); }
     return {};
   };
-  const render = () => { cursor = 0; const tree = module.exports.Artifacts({ api }); effects.splice(0).forEach(effect => effect()); return walk(tree); };
+  const render = () => { cursor = 0; const tree = module.exports.Artifacts({ api, compact, onOpenFile }); effects.splice(0).forEach(effect => effect()); return walk(tree); };
   return { render, calls };
 }
 const button = (nodes, text) => nodes.find(node => node.type === 'button' && node.children.includes(text));
@@ -55,4 +55,27 @@ test('batch delete confirms selected files and reports partial failures', async 
   assert.ok(nodes.some(node => node.children.includes('已删除 1 个文件')));
   assert.ok(nodes.some(node => node.children.includes('b.md：File changed')));
   assert.equal(nodes.filter(node => node.props.type === 'checkbox').length, 1);
+});
+
+test('compact artifacts open only the verified absolute path and preserve failures for retry', async () => {
+  const opened = []; let fail = true;
+  const h = harness({ compact: true, onOpenFile: async path => { opened.push(path); if (fail) throw Error('工作区尚未就绪'); } });
+  h.render(); await settle();
+  let nodes = h.render();
+  assert.equal(nodes.filter(node => node.props.type === 'checkbox').length, 0, 'compact reuses the list without bulk-selection chrome');
+  assert(nodes.some(node => node.children.includes('当前工作台的助手产物库，不限于当前聊天。')));
+  nodes.find(node => node.type?.name === 'FileDetails').props.onOpen({ currentTarget: {} }); await settle();
+  nodes = h.render(); assert(nodes.some(node => node.children.includes('工作区尚未就绪')));
+  assert.equal(nodes.filter(node => node.props['aria-label'] === '预览 a.md').length, 0, 'failed native opens do not create a parallel preview');
+  fail = false; button(nodes, '重试打开').props.onClick(); await settle();
+  assert.deepEqual(opened, ['E:/assistant/artifacts/a.md', 'E:/assistant/artifacts/a.md']);
+  assert.equal(h.render().filter(node => node.props.role === 'alert').length, 0);
+});
+
+test('targets without a verified path retain the existing URL preview instead of inventing a filesystem path', async () => {
+  const opened = [], h = harness({ compact: true, verifiedPath: false, onOpenFile: async path => opened.push(path) });
+  h.render(); await settle();
+  h.render().find(node => node.type?.name === 'FileDetails').props.onOpen({ currentTarget: {} }); await settle();
+  assert.deepEqual(opened, []);
+  assert(h.render().some(node => node.props.role === 'region' && node.props['aria-label'] === '预览 a.md'));
 });

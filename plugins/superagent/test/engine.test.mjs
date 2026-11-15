@@ -135,9 +135,9 @@ test('Router requests include builtin layer before user context without maintain
   assert.match(request, /assistant_task_control/);
   assert.match(request, /saved request is not executor acknowledgement/);
   assert.match(request, /assistant_execution_manage resumes interrupted work, not paused work/);
-  assert.match(request, /从第一次探查起按资源所属设备委派/);
-  assert.match(request, /Use assistant_delegate for LOCAL work only/);
-  assert.match(request, /Use assistant_remote_task for a named remote device or remote project/);
+  assert.match(request, /从第一次探查起统一使用 assistant_delegate/);
+  assert.match(request, /Use assistant_delegate for all work/);
+  assert.match(request, /The peer only executes and does not need SuperAgent/);
   assert.match(request, /There is no lightweight direct-execution exception/);
 });
 

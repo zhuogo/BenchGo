@@ -47,6 +47,14 @@ export function createAssistantAssignmentWorker({
       const result = await execute(assignment, { task, signal: controller.signal, renew, onReady });
       resultReady = true;
       clearInterval(heartbeat); heartbeat = null;
+      if (result?.remotePending === true) {
+        if (assignment.executor !== 'remote' || !database.remoteExecution?.(assignment.id))
+          throw new Error('Remote handoff requires a persisted execution binding');
+        if (renewal) await renewal;
+        // Observation owns the original remote Run from here. Ending this
+        // request must neither finalize the Task nor cancel its peer session.
+        return { id: assignment.id, status: 'remote-pending' };
+      }
       const beforeCommit = async () => {
         if (renewal) await renewal;
       };

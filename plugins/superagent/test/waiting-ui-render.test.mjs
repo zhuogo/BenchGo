@@ -59,7 +59,7 @@ async function fixture() {
         }
         if(surface==='connection') {
           const ctx={sessions:{retain(){if(control.state==='error')throw Error('test connection');return {ready:control.state==='loading'?new Promise(()=>{}):Promise.resolve(),release(){window.calls.push(['release']);}}}},uiConversation:{binding(){return {activate:view=>window.calls.push(['activate',view])}}}};
-          content=<AssistantConversation ctx={ctx} sessionId='session' SessionProvider={({children})=><>{children}</>} renderSlot={()=><div data-connected=''>聊天已就绪</div>}/>;
+          content=<AssistantConversation active={false} ctx={ctx} sessionId='session' SessionProvider={({children})=><>{children}</>} renderSlot={()=><div data-connected=''>聊天已就绪</div>}/>;
         }
         const renderId=++serial;
         root.render(<div className='ba-root' key={renderId} data-fixture-render={renderId}><style>{hostCss}{css}</style><main style={{width:'100%',padding:24}}>{content}</main></div>);

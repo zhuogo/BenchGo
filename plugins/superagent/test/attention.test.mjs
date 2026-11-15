@@ -5,7 +5,49 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { ingestAssistantEvent } from '../src/intake.mjs';
-import { attentionAnswer } from '../src/worker-attention.mjs';
+import { attentionAnswer, installWorkerAttention } from '../src/worker-attention.mjs';
+import { installAttentionStore } from '../src/attention-store.mjs';
+
+test('legacy peer Task sources cannot answer or intercept business Attention', async () => {
+  const source = { channel: 'link', deviceId: 'A', sessionId: 'A-router', threadId: 'main', messageId: 'original' };
+  const task = { mandate: { source, actorId: 'device:A' } };
+  const store = installAttentionStore({ tx: run => run(), api: { getTask: () => task },
+    db: { exec() {}, prepare() { return { get: () => ({ id: 'legacy-attention' }) }; } } });
+  assert.throws(() => store.answerDesktopAttention({ taskId: 'legacy', attentionId: 'legacy-attention', requestId: 'answer',
+    instructionRevision: 1, answer: { selected: [], custom: 'continue' }, deviceSource: source }), /source owner mismatch/);
+  let handle;
+  const agent = {};
+  installWorkerAttention({ on: (_event, handler) => { handle = handler; } }, agent,
+    { database: { getTask: () => task }, assignment: { taskId: 'legacy' }, signal: new AbortController().signal });
+  assert.equal(await handle({ agent }, () => 'unhandled'), 'unhandled');
+  assert.deepEqual(attentionAnswer({ getTrigger: () => ({ source: { ...source, answer: { selected: ['untrusted structured answer'] } }, content: 'historical text' }) },
+    { answerTriggerId: 'legacy-answer', question: { id: 'q' }, id: 'legacy-attention' }), { id: 'q', selected: [], custom: 'historical text' });
+});
+
+test('answered remote Attention never schedules a host official-session continuation', t => {
+  const db = createAssistantOrchestrationStore({ filename: ':memory:' });
+  t.after(() => db.close());
+  db.createThread({ id: 'desktop', source: { type: 'desktop', id: 'owner' } });
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-pair', config: { harness: 'official', models: [{ providerId: 'exact', modelId: 'exact/model' }] } };
+  const task = db.createTask({ threadId: 'desktop', target: 'remote work', mandate: { execution,
+    actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner-session', messageId: 'original' } } });
+  db.createAssignment(task.id, { executor: 'remote', execution });
+  const [assignment] = db.claimAssignments('remote-observer', { validateMandate: () => true });
+  const ownership = { owner: assignment.owner, fence: assignment.fence };
+  const run = db.prepareRun(assignment.id, { ...ownership, sessionId: 'B-session', directory: 'remote:B' });
+  db.recordRemoteExecution(assignment.id, { ...ownership, patch: { ...execution, runId: run.id, executionId: 'B-execution', sessionId: run.sessionId, phase: 'waiting' } });
+  db.updateRun(run.id, { ...ownership, state: 'submitted' });
+  const [attention] = db.openAttention(assignment.id, { ...ownership, sessionId: run.sessionId, callId: 'call', questions: [{ id: 'q', question: '继续执行哪项？' }] });
+  const result = { runId: run.id, transcript: {}, checkpoint: {}, waitingAttention: { attentionIds: [attention.id], callIds: ['call'] } };
+  db.updateRun(run.id, { ...ownership, state: 'verifying', evidence: result });
+  db.parkAttention(assignment.id, { ...ownership, result });
+  db.answerDesktopAttention({ taskId: task.id, attentionId: attention.id, instructionRevision: 1, requestId: 'answer', answer: { selected: [], custom: '按已确认要求继续' } });
+  assert.equal(db.hasAnsweredAttention(), false);
+  assert.equal(db.queueAnsweredAttention({ validateMandate: () => true }), 0);
+  assert.equal(db.getAssignment(assignment.id).state, 'waiting');
+  assert.equal(db.getAssignment(assignment.id).attentionContinuation, undefined);
+  assert.equal(db.runs(assignment.id).length, 1);
+});
 
 test('Desktop Attention validates exact choices, revisions and idempotency and preserves answers across reopen', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-desktop-attention-'));

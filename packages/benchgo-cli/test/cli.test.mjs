@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { parseArgs, run } from '../src/cli.mjs';
 
 test('parses global CLI options without changing command arguments', () => {
@@ -17,7 +18,13 @@ test('reports the workbench help entry', async () => {
 });
 
 test('returns the CLI version without requiring a service', async () => {
-  assert.match(await run(['--version']), /^\d+\.\d+\.\d+$/);
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  const lock = JSON.parse(await readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.version, '0.1.1');
+  assert.equal(await run(['--version']), manifest.version);
+  assert.match(await run(['--help']), /^BenchGo CLI 0\.1\.1\b/);
+  assert.equal(lock.version, manifest.version);
+  assert.equal(lock.packages[''].version, manifest.version);
 });
 
 test('rejects unknown scopes', async () => {

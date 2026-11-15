@@ -1,5 +1,26 @@
 import { SUPERAGENT_ROLE_PROFILE } from './session-role-assembly.mjs';
 
+const remotePlacement = (database, task, assignment) => (assignment && database.remoteExecution?.(assignment.id))
+  || assignment?.remoteExecution || task.mandate?.execution || null;
+
+function remoteSessionProjection(database, task, assignment, run) {
+  const location = remotePlacement(database, task, assignment);
+  if (!location) return null;
+  const target = task.mandate?.execution || {};
+  const sessionId = location.sessionId || null;
+  const identity = { deviceId: location.deviceId || target.deviceId, hostId: location.hostId || target.hostId,
+    authorizationId: location.authorizationId || target.authorizationId };
+  const ownerHostId = task.ownerHostId || database.ownerHostId?.();
+  return { available: !!(sessionId && location.executionId && ownerHostId && identity.deviceId && identity.hostId && identity.authorizationId), remote: true,
+    taskId: task.id, title: task.title || task.target, ownerHostId,
+    ...identity, deviceName: target.deviceName || target.name || identity.deviceId,
+    executionId: location.executionId || null, sessionId, assignmentId: assignment?.id, runId: location.runId || run?.id,
+    status: task.status, phase: location.phase || 'prepared', observedAt: location.observedAt || null,
+    observed: location.available === true && !!location.observedAt, code: location.code,
+    reason: sessionId ? '远端执行会话只读，请在原任务补充或调整要求。' : '远端执行会话尚未就绪，请稍后重试。',
+    placement: task.mandate?.project ? 'project' : 'ungrouped', promptable: false };
+}
+
 /** Product entry ownership includes previous Router sessions, never Worker runs. */
 export function privateRouterSessionIds(state) {
   const threads = state.threads || [];
@@ -13,7 +34,7 @@ export function privateRouterSessionIds(state) {
 /** Router surfaces stay private; execution ownership never hides official sessions.
  * Only official subagents inherit execution ownership. Ordinary forks stay native. */
 export function superagentSessionInventory({ state, database, records = [] }) {
-  const owned = new Set(), executions = new Map();
+  const owned = new Set(), executions = new Map(), remoteSessions = [];
   const add = id => { if (typeof id === 'string' && id) owned.add(id); };
   add(state.mainSessionId);
   for (const thread of state.threads || []) add(thread.sessionId);
@@ -26,11 +47,20 @@ export function superagentSessionInventory({ state, database, records = [] }) {
   for (const id of projections.keys()) add(id);
   for (let offset = 0; ; offset += 100) {
     const tasks = database.listTasks({ limit: 100, offset });
-    for (const task of tasks) for (const assignment of database.assignments(task.id)) for (const run of database.runs(assignment.id)) {
-      add(run.sessionId);
-      const role = roles.get(run.sessionId);
-      if (!role || role.role === 'worker' && role.taskId === task.id && role.assignmentId === assignment.id && role.runId === run.id)
-        executions.set(run.sessionId, { task, assignment, run, role: 'worker', parentSessionId: null });
+    for (const task of tasks) for (const assignment of database.assignments(task.id)) {
+      const runs = database.runs(assignment.id);
+      if (remotePlacement(database, task, assignment)) {
+        const run = runs.findLast(item => item.fence === assignment.fence) || runs.at(-1);
+        const entry = remoteSessionProjection(database, task, assignment, run);
+        if (entry.sessionId) remoteSessions.push({ ...entry, role: 'worker', parentSessionId: null, runState: run?.state });
+        continue;
+      }
+      for (const run of runs) {
+        add(run.sessionId);
+        const role = roles.get(run.sessionId);
+        if (!role || role.role === 'worker' && role.taskId === task.id && role.assignmentId === assignment.id && role.runId === run.id)
+          executions.set(run.sessionId, { task, assignment, run, role: 'worker', parentSessionId: null });
+      }
     }
     if (tasks.length < 100) break;
   }
@@ -66,7 +96,7 @@ export function superagentSessionInventory({ state, database, records = [] }) {
       assignmentId: assignment.id, runId: run.id, role, parentSessionId, status: task.status, runState: run.state,
       placement: task.mandate?.project ? 'project' : 'ungrouped', promptable });
   }
-  return { privateSessionIds: [...privateIds], ownedSessionIds: [...owned], sessions, executions, roles, projections, headers };
+  return { privateSessionIds: [...privateIds], ownedSessionIds: [...owned], sessions: [...sessions, ...remoteSessions], executions, roles, projections, headers };
 }
 
 /** Cold owned sessions stay owned even before their first assembly audit. */
@@ -125,6 +155,7 @@ export function findExecutionSessionOwner(database, sessionId) {
   for (let offset = 0; ; offset += 100) {
     const tasks = database.listTasks({ limit: 100, offset });
     for (const task of tasks) for (const assignment of database.assignments(task.id)) {
+      if (remotePlacement(database, task, assignment)) continue;
       const run = database.runs(assignment.id).find(item => item.sessionId === sessionId);
       if (run) return { task, assignment, run };
     }
@@ -136,7 +167,14 @@ export function findExecutionSessionOwner(database, sessionId) {
 export function executionSessionProjection(database, taskId) {
   const task = database.getTask(taskId);
   if (!task) return null;
-  const runs = database.assignments(taskId).flatMap(assignment => database.runs(assignment.id).map(run => ({ assignment, run })));
+  const assignments = database.assignments(taskId);
+  const latest = assignments.at(-1);
+  if (!latest && task.mandate?.execution) return remoteSessionProjection(database, task);
+  if (latest && remotePlacement(database, task, latest)) {
+    const runs = database.runs(latest.id);
+    return remoteSessionProjection(database, task, latest, runs.findLast(run => run.fence === latest.fence) || runs.at(-1));
+  }
+  const runs = assignments.flatMap(assignment => database.runs(assignment.id).map(run => ({ assignment, run })));
   const current = runs.findLast(({ assignment, run }) => run.fence === assignment.fence) || runs.at(-1);
   if (!current) return { available: false, reason: 'execution-session-unavailable' };
   return { available: true, taskId, title: task.title || task.target, sessionId: current.run.sessionId,
@@ -147,6 +185,7 @@ export function executionSessionProjection(database, taskId) {
 /** Official membership validates the bound project's execution cwd against
  * workspace.path; the Run directory separately retains task artifacts. */
 export async function attachExecutionSession(ctx, agent, { task, run }) {
+  if (task.mandate?.execution) throw new Error('远端执行会话不能绑定到宿主的本机工作区');
   const registry = ctx.get?.('workspaceRegistry') || ctx.workspaceRegistry;
   const project = task.mandate?.project;
   let workspace;

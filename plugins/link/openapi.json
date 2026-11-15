@@ -315,9 +315,23 @@
       },
       "DirectedDeviceInput": {
         "type": "object", "required": ["action"],
-        "properties": { "action": { "enum": ["state", "models", "create", "history", "send", "cancel", "respond", "resources", "collaboration", "management", "sessionAction"] }, "id": { "type": "string", "maxLength": 256 }, "native": { "type": "boolean" }, "title": { "type": "string", "maxLength": 200 }, "operation": { "type": "string" }, "requestId": { "type": "string", "maxLength": 200 }, "operationId": { "type": "string" }, "kind": { "$ref": "#/components/schemas/ResourceKind" }, "namespace": { "enum": ["benchgo-link-relay", "benchgo-link-transport"] }, "expected": { "type": "object", "properties": { "fingerprint": { "type": "string" } } }, "ops": { "type": "array", "maxItems": 20, "items": { "$ref": "#/components/schemas/RelayManagementOp" } } },
+        "properties": { "action": { "enum": ["state", "models", "create", "history", "send", "cancel", "respond", "resources", "execution", "management", "sessionAction"] }, "id": { "type": "string", "maxLength": 256 }, "native": { "type": "boolean" }, "title": { "type": "string", "maxLength": 200 }, "operation": { "type": "string" }, "requestId": { "type": "string", "maxLength": 200 }, "operationId": { "type": "string" }, "kind": { "anyOf": [{ "$ref": "#/components/schemas/ResourceKind" }, { "enum": ["revision", "context", "answer"] }] }, "namespace": { "enum": ["benchgo-link-relay", "benchgo-link-transport"] }, "expected": { "type": "object", "properties": { "fingerprint": { "type": "string" } } }, "ops": { "type": "array", "maxItems": 20, "items": { "$ref": "#/components/schemas/RelayManagementOp" } } },
         "additionalProperties": true,
-        "description": "有限定向协议，不接受任意HTTP/SSH或owner action。确认配对即统一允许目标实际支持的BenchGo能力，不再配置二次grant；未配对或撤销token仍拒绝。collaboration只允许delegate/get/lookup/control/change；management只允许status/relay-test/settings-read/settings-prepare/operation。settings-read支持transport/relay命名空间；settings-prepare仅relay既有节点priority/enabled，返回ManagementOperation等待目标真实主人审批；operation按operationId查同设备原申请。sessionAction按显式native和原始id选择真实适配器，只支持能力声明的有限操作，requestId绑定完整意图并持久保存有界回执。目标从TLS认证绑定principal，JSON principal不能扩大权限。"
+        "description": "有限定向协议，不接受任意HTTP/SSH或owner action。确认配对统一允许目标实际支持的BenchGo能力，撤销token仍拒绝。execution使用RemoteExecutionRequest v1，业务工单留在发起宿主，目标仅持久执行与传输记录且无需SuperAgent；入口必须绑定expectedHostId/expectedAuthorizationId并验证回执身份。management只允许status/relay-test/settings-read/settings-prepare/operation。settings-prepare仅修改relay既有节点priority/enabled并等待目标主人审批。sessionAction按显式native和原始id选择适配器，只支持能力声明的有限操作，requestId绑定完整意图。目标从认证配对记录绑定principal，JSON principal不能扩大权限。"
+      },
+      "RemoteExecutionRequest": {
+        "type": "object", "required": ["action", "version", "operation"],
+        "properties": {
+          "action": { "const": "execution" }, "version": { "const": 1 },
+          "operation": { "enum": ["catalog", "submit", "get", "input", "control", "ack"] },
+          "requestId": { "type": "string", "maxLength": 512 }, "executionId": { "type": "string", "maxLength": 512 }, "sessionId": { "type": "string", "maxLength": 512 },
+          "identity": { "type": "object", "required": ["ownerHostId", "taskId", "assignmentId", "runId", "fence"], "properties": { "ownerHostId": { "type": "string" }, "taskId": { "type": "string" }, "assignmentId": { "type": "string" }, "runId": { "type": "string" }, "fence": { "type": "integer", "minimum": 1 } } },
+          "config": { "type": "object", "required": ["harness", "models"], "properties": { "harness": { "const": "official" }, "models": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "type": "object", "required": ["providerId", "modelId"], "properties": { "providerId": { "type": "string" }, "modelId": { "type": "string" }, "params": { "type": "object" } } } } } },
+          "projectId": { "type": "string" }, "text": { "type": "string", "maxLength": 100000 }, "requirements": { "type": "object" },
+          "kind": { "enum": ["revision", "context", "answer"] }, "instructionRevision": { "type": "integer", "minimum": 1 }, "questionId": { "type": "string" }, "answers": { "type": "array", "items": { "type": "object" } },
+          "control": { "enum": ["pause", "resume", "cancel"] }, "after": { "type": "integer", "minimum": 0 }, "limit": { "type": "integer", "minimum": 1, "maximum": 200 }, "through": { "type": "integer", "minimum": 0 }
+        },
+        "description": "submit由业务宿主预生成executionId/sessionId，携带完整identity、要求版本和冻结授权/模型；目标以认证principal一对一绑定ownerHostId，重复requestId只取原回执，改变命令主体冲突，after/limit不属于幂等意图。input初始received不代表应用；官方pre-step后的instruction.applied包含requestId/kind/实际instructionRevision。answer按当前questionId及逐题真实id回传。get按连续事件seq分页；result须含真实官方turn/end完成原因及transcript证据；ack仅确认已持久接收的事件水位，不重跑Worker。"
       },
       "DeviceRequest": {
         "type": "object",
@@ -335,6 +349,8 @@
               "remove",
               "sshProbe",
               "sshConnect",
+              "serverPrefetch",
+              "jobCancel",
               "job",
               "reconnect",
               "serverAction",

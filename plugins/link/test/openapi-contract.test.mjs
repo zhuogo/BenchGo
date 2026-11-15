@@ -20,7 +20,7 @@ test('cross-device OpenAPI references resolve and owner/device contracts stay se
   for (const action of ['devices','resources','resourceScope','setResourceScope','sessionAction','hostManagementDecide']) assert.ok(center.includes(action));
   assert.equal(center.includes('hostGrantDevice'),false);
   const directed = schemas.DirectedDeviceInput.properties.action.enum;
-  assert.deepEqual(directed, ['state','models','create','history','send','cancel','respond','resources','collaboration','management','sessionAction']);
+  assert.deepEqual(directed, ['state','models','create','history','send','cancel','respond','resources','execution','management','sessionAction']);
   for (const action of ['hostGrantDevice','hostManagementDecide','admin','configure','relay-pool-configure']) assert.equal(directed.includes(action), false);
   assert.equal(schemas.ResourcePage.properties.items.maxItems, 100);
   assert.equal(schemas.ResourceScope.additionalProperties, false);

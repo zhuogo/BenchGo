@@ -122,6 +122,7 @@ export function createAssistantArtifacts({ workspace, preview = documentPreview 
       const page = [];
       for (const { file, ...row } of rows.slice(offset, offset + limit)) {
         row.hash = fingerprint(file.info);
+        row.path = file.path;
         page.push(row);
       }
       const next = offset + Math.min(limit, Math.max(0, rows.length - offset));

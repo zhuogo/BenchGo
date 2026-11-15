@@ -1,7 +1,7 @@
 import { selectRoute } from './routes.mjs';
 import { remoteAgent, remoteJson } from './remote.mjs';
 const kinds = new Set(['projects', 'sessions', 'recent', 'models', 'capabilities', 'tasks']);
-const actions = new Set(['state', 'models', 'create', 'history', 'send', 'cancel', 'respond', 'resources', 'collaboration', 'management', 'sessionAction']);
+const actions = new Set(['state', 'models', 'create', 'history', 'send', 'cancel', 'respond', 'resources', 'execution', 'management', 'sessionAction']);
 const fail = (message, code, status = 400) => Object.assign(new Error(message), { code, status });
 const networkErrors = new Set(['OFFLINE', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE', 'ERR_SOCKET_CLOSED', 'ERR_STREAM_PREMATURE_CLOSE', 'ROUTES_COOLDOWN']);
 /** Reachability is separate from authorization and resource/business failures. */
@@ -31,7 +31,7 @@ export function projectResources(state, input, deviceId) {
     source = source.map((row, index) => { const time = Number(row.updatedAt) || Date.parse(row.updatedAt); return { row, index, time: Number.isFinite(time) && time > 0 && time < now ? time : 0 }; })
       .sort((a, b) => Number(!!b.row.pinned) - Number(!!a.row.pinned) || b.time - a.time || a.index - b.index).map(({ row }) => row);
   }
-  const fields = kind === 'projects' ? ['id','name','title','path','sessionIds','isDefault'] : kind === 'sessions' || kind === 'recent' ? ['id','projectId','title','running','updatedAt','archived','pinned','native','ungrouped','engine','provider','model','modelProvider','status'] : kind === 'models' ? ['id','provider','model','label','available'] : kind === 'capabilities' ? ['id','available','reason','operations'] : ['id','title','status','projectId','updatedAt','executionRef'];
+  const fields = kind === 'projects' ? ['id','name','title','path','sessionIds','isDefault'] : kind === 'sessions' || kind === 'recent' ? ['id','projectId','title','running','updatedAt','archived','pinned','native','ungrouped','engine','provider','model','modelProvider','status'] : kind === 'models' ? ['id','provider','model','label','available'] : kind === 'capabilities' ? ['id','version','available','reason','operations'] : ['id','title','status','projectId','updatedAt','executionRef'];
   const items = source.slice(offset, offset + limit).map(row => ({ ...Object.fromEntries(fields.filter(key => row[key] !== undefined).map(key => [key, row[key]])), deviceId, kind, resourceId: row.id ?? row.model }));
   return { deviceId, available: true, code: 'OK', reason: null, observedAt: Date.now(), freshness: 'fresh', items, offset, limit, total: source.length, hasMore: offset + limit < source.length };
 }
@@ -63,7 +63,8 @@ export function createDeviceResources({ registry, local, request = remoteJson, r
     if (!actions.has(input?.action)) throw fail('不支持的定向操作', 'UNSUPPORTED', 422);
     signal?.throwIfAborted();
     const assertExpected = saved => {
-      if (input.action !== 'sessionAction') return;
+      if (!['sessionAction', 'execution'].includes(input.action)) return;
+      if (input.action === 'execution' && (!expectedHostId || !expectedAuthorizationId) && deviceId !== 'local') throw fail('执行操作需要冻结的目标身份和授权', 'INVALID_EXECUTION_IDENTITY');
       if ([expectedHostId, expectedAuthorizationId].some(value => value !== null && (typeof value !== 'string' || !value || value.length > 256))) throw fail('缺少会话所属设备的身份快照，请刷新设备目录', 'INVALID_SESSION_ACTION');
       if (expectedHostId !== (saved?.hostId ?? null) || expectedAuthorizationId !== (saved?.authorizationId ?? null)) throw Object.assign(fail('会话所属设备的身份或授权已变化，请刷新后重试', 'IDENTITY_CHANGED', 409), { stale: true });
     };
@@ -103,6 +104,7 @@ export function createDeviceResources({ registry, local, request = remoteJson, r
       agent = connection.agent;
       const { value } = await request(target, '/link/api/rpc', input, { signal: bounded, agent });
       bounded.throwIfAborted(); current(deviceId, connection);
+      if (input.action === 'execution' && (value?.hostId !== saved.hostId || value?.authorizationId !== saved.authorizationId)) throw fail('执行回执的目标身份或授权不一致', 'IDENTITY_CHANGED', 403);
       if (saved.hostId && value?.hostId && saved.hostId !== value.hostId) throw fail('目标身份已变化，请重新配对', 'IDENTITY_CHANGED', 403);
       if (input.action === 'resources' && value?.available === false) throw fail('目标资源不可用', value.code || 'QUERY_FAILED');
       observe(deviceId, connection, order, 'online');

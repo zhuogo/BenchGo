@@ -48,14 +48,14 @@ async function fixture() {
       const select=value=>selector=>selector(value),noop=()=>{};
       const hooks={useSession:select(session),useConversation:select(conversation),useInput:select({phase:'plain',draft:''}),useProjection:name=>name==='inbox'?inbox:undefined,inputActions:{setDraft:noop,persistDraft:noop}};
       const renderFactorySlot=(_name,_props,children)=>{const View=children.slots.views;return <View {...hooks}/>};
-      const renderSlot=()=> <Official {...hooks} renderFactorySlot={renderFactorySlot}/>;
+      const renderSlot=name=>name==='benchgo.assistant.conversation'?<Official {...hooks} renderSlot={()=>null} renderFactorySlot={renderFactorySlot}/>:null;
       const history={sessionId:'feishu-session',threadId:inputMode?'main':'channel-thread',messages:inputMode&&stage==='history'?[{id:'human',rpcId:'human-rpc',seq:7,role:'user',text:human.content[0].text,time:1794218400100},{id:'formal',role:'assistant',kind:'final',text:'正式回复保持可见',time:1794218400200}]:mode==='history'?messages:[],hasMore:false,
         requests:inputMode?[{threadId:'main',requestId:'internal',status:'failed',text:'PRIVATE_NOTICE',error:'PRIVATE_ERROR',taskReply:{}}]:[]};
       if(ordering)history.messages=[{id:'formal',role:'assistant',kind:'final',text:'正式回复保持可见',time:1794218400200}];
       if(mode.startsWith('segments-')){history.messages=[{id:'human',role:'user',seq:1,text:'检查服务器状态'}];history.activeReply={turn:1,requestId:'human'};if(mode==='segments-history')history.messages.push(...['我先检查服务器的状态。','检查完成，服务运行正常。'].map((text,i)=>({id:'reply:human:1:'+(i+1),role:'assistant',kind:'final',requestId:'human',segment:true,text})));}
       const api=async name=>name==='petCatalog'?{}:name==='tasks'?{tasks:[]}:name==='goals'?{goals:[]}:{};
       const id=++serial;
-      root.render(<ActivityProvider><div key={mode==='history'?'data':mode.startsWith('segments-')?'segments':mode} data-render={id} className='ba-root' style={{height:720,display:'flex',flexDirection:'column',maxWidth:960,margin:'auto'}}><style>{css}</style><header style={{padding:16}}>{inputMode?'BenchGo 主聊天':'feishu · oc_exact'}</header><AssistantConversation ctx={ctx} sessionId='feishu-session' threadId={inputMode?'main':'channel-thread'} history={history} api={api} assistantName='BenchGo' assistantConfig={{cardMotion:false,cardHtml:'<b>PRIVATE_CUSTOM_CARD</b>'}} SessionProvider={({children})=>children} renderSlot={renderSlot} onRefresh={noop} onOpenResources={noop}/></div></ActivityProvider>);
+      root.render(<ActivityProvider><div key={mode==='history'?'data':mode.startsWith('segments-')?'segments':mode} data-render={id} className='ba-root' style={{height:720,display:'flex',flexDirection:'column',maxWidth:960,margin:'auto'}}><style>{css}</style><header style={{padding:16}}>{inputMode?'BenchGo 主聊天':'feishu · oc_exact'}</header><AssistantConversation active={false} ctx={ctx} sessionId='feishu-session' threadId={inputMode?'main':'channel-thread'} history={history} api={api} assistantName='BenchGo' assistantConfig={{cardMotion:false,cardHtml:'<b>PRIVATE_CUSTOM_CARD</b>'}} SessionProvider={({children})=>children} renderSlot={renderSlot} onRefresh={noop} onOpenResources={noop}/></div></ActivityProvider>);
       return id;
     };
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-channel-quiet-ui-test'), format: 'iife', jsx: 'automatic',

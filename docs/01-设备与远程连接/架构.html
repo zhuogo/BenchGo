@@ -13,8 +13,8 @@
   "id": "01",
   "title": "设备与远程连接",
   "eyebrow": "REMOTE / LINK",
-  "subtitle": "已有：可信配对、直连/中继与远程工作台；目标：统一发现资源、按所属设备执行，并通过 AI 管理连接。",
-  "boundary": "图中实线表示已有源码机制，不代表公网或真机验收通过。家庭 NAT、蜂窝网络、Android、ACME 与首次 SSH 部署仍需实测；公共中继控制面、区域调度为后续目标。当前源码仍装配 cloud-access，设计要求的默认入口收敛尚不能标为完成。 跨设备查询、目标执行、结果回传与聚合导航已接线；AI管理限已有设备及中继优先级/启停申请，首次配对与秘密仍走设备中心。双向需双方授权；本地TLS和浏览器测试不等于襄阳服务器真机验收。",
+  "subtitle": "A 宿主持有业务任务，B 只提供执行；Link 复用认证、可信路线与有限协议，不依赖 B 的 SuperAgent。",
+  "boundary": "节点状态区分已有源码与待实施设计；连线表示职责关系，不代表链路已完成或通过真机验收。家庭 NAT、蜂窝网络、Android、ACME 与首次 SSH 部署仍需实测；公共中继控制面、区域调度为后续目标。当前源码仍装配 cloud-access，设计要求的默认入口收敛尚不能标为完成。 2026-11-15 已接通 A 唯一业务 Task → Link v1 execution → B 独立 benchgoExecution → A 事实/结果回流。A coordinator 与无 SuperAgent 的 B 独立服务及官方 Agent fixture 五项通过，Link execution catalog 真实 TLS/身份测试通过；UI 39 项及四态、明暗、390px 组件验证通过。这些不等于真物理双机、安装版或实际供应商验收。旧数据离线迁移 CLI 六项测试通过，未操作真实权威库；B v1 仅 official 单模型、无二级子代理委派，执行会话只读，跨设备产物传输不支持。  统一本机 CLI 和已登记 Desktop/Web 发现已接线：交互默认浏览器，SSH/无头保留后台；同一 canonical profile 只有一个写入宿主，检测原 SSH/systemd 服务时不另建。未知旧 Harness profile 保守拒绝，三平台原生与 GUI 交接仍待实物验收；唯一契约见更新与发布板块。",
   "nodes": [
     {
       "id": "entry",
@@ -32,7 +32,7 @@
         "plugins/link/client/app.jsx",
         "plugins/link/client/device-launcher.jsx"
       ],
-      "note": "手机是客户端；主机任务和会话不迁移到手机。",
+      "note": "手机是客户端；主机任务和会话不迁移到手机。 本机工作台安装与远端设备配对是不同入口：统一安装实现及验收边界见更新与发布图 install 节点；不会把中继随工作台隐式安装。",
       "state": "implemented",
       "x": 60,
       "y": 160
@@ -231,7 +231,7 @@
         "plugins/link/src/transport/relay-protocol.mjs",
         "packages/benchgo-relay/src/cli.mjs"
       ],
-      "note": "独立 benchgo-relay 安装包；TLS 在中继终止，不宣称端到端加密。",
+      "note": "独立 benchgo-relay 安装包；TLS 在中继终止，不宣称端到端加密。 中继继续独立使用 Linux/systemd；三平台工作台安装统一不扩大中继平台承诺。",
       "state": "implemented",
       "x": 820,
       "y": 740
@@ -244,15 +244,18 @@
       "sub": "先确认指纹，再部署并验证工作台",
       "symbol": "createServerManager() · deployRelay()",
       "plain": "设备中心也能把工作台或中继部署到服务器。",
-      "role": "确认 SSH 指纹后认证；上传固定种子、安装服务、建立隧道并验证工作台；中继分支管理 TLS、部署与诊断。",
+      "role": "确认 SSH 指纹后认证；上传固定种子、安装服务、建立隧道并验证工作台；中继分支管理 TLS、部署与诊断。 上传前共用资源服务校验完整本地 seed 或固定发行/引擎/签名摘要缓存；仅缺失时下载。设备中心提供预取、资源阶段取消、进度和重试；进入远端安装后不再提供不安全取消。默认 full 保留离线资源，失败不进入已部署状态。",
       "input": "已确认 SSH 身份、认证信息、部署选项",
       "output": "服务器设备记录或自托管中继节点",
       "sources": [
         "plugins/link/src/server/manager.mjs",
         "plugins/link/src/server/relay-deployment.mjs",
-        "scripts/server/bootstrap.mjs"
+        "scripts/server/bootstrap.mjs",
+        "docs/05-更新与发布/设计.md",
+        "plugins/benchgo/shared/server-resources.mjs",
+        "plugins/link/client/device-center.jsx"
       ],
-      "note": "已有部署代码；公网签发/续期、反代复用、首次部署和 NPM 分发仍需环境验收。",
+      "note": "已有部署代码；公网签发/续期、反代复用、首次部署和 NPM 分发仍需环境验收。 本地/在线部署资源服务已有源码，真实首次 SSH 部署、离线资源和公开签名发行仍按产物验收。现有 SSH stdout 授权协议保留；三平台本机 CLI 与 Desktop/CLI 共同发现、单写入宿主契约在更新与发布板块维护。",
       "state": "partial",
       "x": 1200,
       "y": 740
@@ -262,20 +265,23 @@
       "title": "助手与聚合导航",
       "kicker": "CROSS DEVICE / IMPLEMENTED",
       "kind": "orchestration",
-      "sub": "同一入口管理多台设备",
+      "sub": "A 统一任务 · 多设备资源导航",
       "symbol": "SuperAgent / sidebar",
-      "plain": "既可点开远端资源，也能直接告诉助手要做什么。",
-      "role": "项目/最近三种范围与助手查询共用资源服务；助手处理已有设备动作及有限中继申请，首次配对、秘密和部署交接设备中心。界面筛选不限制助手已授权查询。",
-      "input": "设备范围、用户明确指令",
-      "output": "定向查询或领域操作",
+      "plain": "在 A 接受的委托，始终由 A 的 Router 和任务账负责。",
+      "role": "用户在 A 的 SuperAgent 提出委托，A 先保存唯一业务 Task、要求、Mandate、原输入与交付来源，再按项目所属设备派发执行。A 统一任务工具和列表管理本地或远端执行；显示范围、浏览设备及 Router 底层 session 变化不迁移工单。项目/最近导航及普通设备管理继续复用资源服务。",
+      "input": "真实用户要求、A 逻辑对话、目标项目与设备",
+      "output": "A 的正式 Task / 对 B 的执行委托",
       "sources": [
         "docs/01-设备与远程连接/跨设备协作.md",
         "docs/02-工作台与Agent/跨设备资源导航.md",
         "plugins/link/client/resource-navigation.jsx",
         "plugins/link/client/resource-state.mjs",
-        "plugins/benchgo/client/index.jsx"
+        "plugins/benchgo/client/index.jsx",
+        "plugins/superagent/src/remote-assignment-executor.mjs",
+        "plugins/superagent/src/remote-execution-store.mjs",
+        "plugins/superagent/test/owned-remote-execution-integration.test.mjs"
       ],
-      "note": "已接侧栏三种范围及助手查询；已有设备可由助手连接诊断，首次配对与秘密仍通过设备中心。",
+      "note": "A 的正式 Task 受理、统一管理与远端执行归属已接线；派发前同库持久保存要求与执行委托。A coordinator→B 独立执行服务的五项官方 Agent fixture 通过，真实设备和安装版仍待验。",
       "state": "implemented",
       "x": 60,
       "y": 1040,
@@ -287,18 +293,18 @@
       "title": "共享资源与操作服务",
       "kicker": "CROSS DEVICE / IMPLEMENTED",
       "kind": "orchestration",
-      "sub": "稳定身份 · 授权能力 · 查询路由",
+      "sub": "可信身份 · 执行能力 · 命令与事实",
       "symbol": "benchgoLink 领域服务扩展",
       "plain": "知道资源属于哪台机器，再把请求送到那里。",
-      "role": "合并本机与已授权出站目录；协商版本和查询/执行/管理能力。资源键包含 deviceId 与原样 resourceId，复用路线、分页、取消与有限缓存。双向互通按双方实际授权建立。",
-      "input": "可信来源与目标资源引用",
-      "output": "带设备来源的结果 / 操作回执",
+      "role": "复用配对、设备目录与可信路线。资源仍以 deviceId 与原样 resourceId 定位；执行协议绑定 ownerHostId + taskId、A 的 Assignment/Run/fence、目标 executionId 及稳定 requestId。只传当前冻结要求、必要上下文和精确执行配置，双向核验真实来源与代际；命令受理、应用与事件水位分开，不开放 owner API。",
+      "input": "A 的已持久委托 / 控制命令与目标能力",
+      "output": "B 执行受理回执 / 分页执行事实与原请求核实",
       "sources": [
         "docs/01-设备与远程连接/跨设备协作.md",
         "plugins/link/src/devices/resources.mjs",
         "plugins/link/src/session/adapter.mjs"
       ],
-      "note": "已接稳定身份、资源分页、取消、部分失败与缓存清理。双方分别配对后可双向访问；一次配对协商反向通道待实施。",
+      "note": "共享资源与独立于 B SuperAgent 的 Link v1 execution 已接线；catalog 真实 TLS、认证身份和目标绑定测试通过。双方分别配对可双向访问，一次配对反向通道仍待实施；真实物理双机部署仍需核验。",
       "state": "implemented",
       "x": 440,
       "y": 1040,
@@ -306,21 +312,23 @@
     },
     {
       "id": "cross-target",
-      "title": "目标主机资源与执行",
-      "kicker": "CROSS DEVICE / IMPLEMENTED",
+      "title": "B 的执行服务与原始记录",
+      "kicker": "EXECUTION ONLY / IMPLEMENTED",
       "kind": "orchestration",
-      "sub": "项目 · 会话 · 模型/Harness · 任务",
-      "symbol": "目标服务适配",
-      "plain": "文件和开发计算留在项目所属设备。",
-      "role": "目标工作区、会话、能力和任务服务负责真实读取及执行。目标缺少能力时明确拒绝；Link 不依赖 SuperAgent 才能查询基本资源。任务的进度、提问和结果按原 executionRef 回传。",
-      "input": "目标授权范围内的请求",
-      "output": "本地主机事实与唯一执行引用",
+      "sub": "Link + Harness · 无 B 业务 Task",
+      "symbol": "benchgoExecution / executionId",
+      "plain": "B 运行 Worker、保存过程；这张业务工单只属于 A。",
+      "role": "B 以 Link 和实际可用的 Harness 执行服务接收 A 的冻结委托，不要求启用 B SuperAgent，不进入 B 的 Router、研判、工单库或业务调度。执行配置由 A 按 B 真实 Harness/模型目录选择并冻结，B 校验精确标识、项目路径、权限和本机凭据后创建官方会话或恢复已确认暂停的同一会话。B 仅持久保存执行实例、输入应用版本、控制回执、事件水位、日志和产物，向 A 回传进度、问题、结果及退出事实；不决定业务要求或任务终态。",
+      "input": "A 的稳定任务/执行身份、冻结要求与执行配置",
+      "output": "B 的 executionId、原生会话、应用回执与执行事实",
       "sources": [
-        "docs/01-设备与远程连接/跨设备协作.md",
-        "plugins/superagent/src/device-collaboration.mjs",
-        "plugins/superagent/src/orchestration-runtime.mjs"
+        "docs/06-superagent/任务与执行.md",
+        "docs/06-superagent/服务契约.md",
+        "plugins/harness/src/remote-execution.mjs",
+        "plugins/harness/src/remote-execution-store.mjs",
+        "plugins/harness/test/remote-execution.test.mjs"
       ],
-      "note": "已接目标既有任务与Worker链，使用目标模型和项目目录；入口只保留执行引用，既有tick跟进问题/结果。正常拒绝停止观察，未知接收有限核实，不重派。真实双机与供应商请求待验。",
+      "note": "B 独立执行服务已实现，不创建业务 Task、不依赖 B SuperAgent。原目标业务 Task 链及 A 引用旁账已删除。v1 仅 official 单模型，不开放二级子代理委派/调度类工具；B 会话只读，业务输入在 A，产物留 B 且无跨设备传输。fixture 覆盖运行和控制，物理双机、安装版与真实供应商请求待验。",
       "state": "implemented",
       "x": 820,
       "y": 1040,
@@ -451,7 +459,7 @@
     {
       "a": "cross-entry",
       "b": "cross-service",
-      "label": "统一查询 / 操作",
+      "label": "A 任务派发 / 统一控制",
       "from": "r",
       "to": "l",
       "kind": "support"
@@ -459,7 +467,7 @@
     {
       "a": "cross-service",
       "b": "cross-target",
-      "label": "授权与定向调用",
+      "label": "执行委托 / 稳定身份",
       "from": "r",
       "to": "l",
       "kind": "support"
@@ -467,7 +475,7 @@
     {
       "a": "cross-target",
       "b": "cross-service",
-      "label": "事实 / 进度 / 结果",
+      "label": "应用回执 / 执行事件",
       "from": "b",
       "to": "b",
       "kind": "feedback"
@@ -495,6 +503,14 @@
       "from": "t",
       "to": "b",
       "kind": "support"
+    },
+    {
+      "a": "cross-service",
+      "b": "cross-entry",
+      "label": "事实归回 A 工单与原对话",
+      "from": "b",
+      "to": "b",
+      "kind": "feedback"
     }
   ],
   "steps": [
@@ -530,7 +546,7 @@
     {
       "node": "workbench",
       "title": "进入同一套工作台",
-      "text": "设备凭据兑换受保护 Cookie，会话、API 和 Gateway 均指向目标主机，任务继续在主机执行。",
+      "text": "进入 B 完整工作台时，会话、API 和 Gateway 指向 B；这只是浏览入口切换，不迁移先前由 A 受理的业务任务。",
       "edge": 6
     },
     {
@@ -546,13 +562,18 @@
     },
     {
       "node": "cross-target",
-      "title": "已接线：在项目所在设备完成开发",
-      "text": "入口只传任务和资源引用。目标用本地配置的模型、Harness 与目录执行，入口按原执行引用收进度和结果；断线不重派或迁移执行。"
+      "title": "已接线：A 工单，B 执行",
+      "text": "A 持有完整 Task，通过 Link v1 execution 委托 B 的独立 benchgoExecution。B 无需 SuperAgent，使用校验后的本机项目、凭据及 A 冻结的 official 单模型运行；不创建业务 Task，无二级子代理委派。"
     },
     {
       "node": "cross-admin",
       "title": "已接线：用对话管理连接与中继",
       "text": "已有设备通过共享服务连接、重连和诊断。远端中继只申请已有节点优先级/启停修改，目标主人确认具体差异后执行。首次配对、秘密、新节点和部署仍走设备中心；待确认不冒充已应用。"
+    },
+    {
+      "node": "cross-entry",
+      "title": "已接线：同一工单跟进与回流",
+      "text": "A 用原 taskId 补充、修订、答复或停止；B 回传已应用版本和真实控制结果，A 连续归入同一任务与原 inbox。原 session 暂停恢复和结果回流 fixture 通过；uncertain 只核实，不重派迁移，真实双机仍待验。"
     }
   ],
   "docs": [
@@ -575,9 +596,13 @@
     {
       "label": "跨设备资源导航",
       "path": "docs/02-工作台与Agent/跨设备资源导航.md"
+    },
+    {
+      "label": "统一安装与资源交付",
+      "path": "docs/05-更新与发布/设计.md"
     }
   ],
-  "version": "2026-11-13-cross-device-2",
+  "version": "2026-11-16-installation-implementation-1",
   "canvas": {
     "width": 1580,
     "height": 1280
@@ -588,7 +613,7 @@
       "y": 990,
       "w": 1440,
       "h": 245,
-      "label": "跨设备资源与有限操作 · 已接线 · 共用 Link 与目标服务"
+      "label": "跨设备协作 · A 唯一工单 / B 独立执行 · 源码与定向 fixture 已验证"
     }
   ]
 }</script><script src="../_assets/architecture.js"></script></body></html>

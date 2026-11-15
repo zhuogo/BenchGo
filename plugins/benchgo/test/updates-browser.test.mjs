@@ -57,9 +57,11 @@ async function fixture() {
       window.renderScenario=next=>{
         mode=next;state=initial();nativeState={phase:'idle'};finishNativeStatus=undefined;window.nativeStatusPending=false;window.updateCalls=[];window.desktopOpens=0;window.nativeStatusReads=0;
         if(mode==='empty')state={...state,current:{},release:null,phase:'unpublished',notice:'更新通道尚未发布'};
-        if(mode==='available'||mode==='restart')state={...state,canInstall:true,release:{notes:'改善任务看板、语音与更新体验。',plugin:{version:'0.1.2',available:true,compatible:true},app:{version:'0.1.0',available:false}}};
+        if(mode==='available'||mode==='restart'||mode==='feature-native-error')state={...state,canInstall:true,release:{notes:'改善任务看板、语音与更新体验。',plugin:{version:'0.1.2',available:true,compatible:true},app:{version:'0.1.0',available:false}}};
         if(mode==='restart')state={...state,phase:'ready',restartRequired:true,canInstall:false};
-        if(mode==='app')state={...state,release:{plugin:{version:'0.1.1',available:false,compatible:true},app:{version:'0.2.0',available:true,url:'https://example.test/benchgo-setup.exe'}}};
+        if(['feature-native-error','app-stop-failed','current-stop-failed'].includes(mode))nativeState={phase:'error',failure:'stop-failed',version:'0.2.0'};
+        if(mode==='app'||mode==='app-stop-failed')state={...state,release:{plugin:{version:'0.1.1',available:false,compatible:true},app:{version:'0.2.0',available:true,url:'https://example.test/benchgo-setup.exe'}}};
+        if(mode==='same-release-app')state={...state,current:{...state.current,release:'0.1.4',plugin:'0.1.4',app:'0.1.2'},release:{releaseVersion:'0.1.4',plugin:{version:'0.1.4',available:false,compatible:true},app:{version:'0.1.3',available:true}}};
         if(mode==='native-race'){state={...state,decision:{action:'blocked',available:true,enabled:false,reason:'引擎版本暂不可识别'}};nativeState={phase:'error',failure:'check-network'};}
         if(mode==='host-progress')state={...state,phase:'downloading',progress:{stage:'downloading',transferred:12*1024**2,total:48*1024**2,bytesPerSecond:1.5*1024**2,updatedAt:new Date().toISOString()}};
         if(mode==='native-progress')nativeState={phase:'downloading',percent:37.8,version:'0.2.0'};
@@ -126,8 +128,8 @@ async function fits(page, dialog) {
   }
 }
 
-async function holdUpdate(page, dialog) {
-  const button = dialog.getByRole('button', { name: '长按 2 秒更新', exact: true });
+async function holdUpdate(page, dialog, label = '长按 2 秒更新') {
+  const button = dialog.getByRole('button', { name: label, exact: true });
   const box = await button.boundingBox();
   assert(box, 'the hold action is visible');
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -140,7 +142,7 @@ test('unified updates render honest states beside the workbench in both themes a
   await mkdir(screenshots, { recursive: true });
   const browser = await chromium.launch({ headless: true, executablePath });
   try {
-    for (const dark of [false, true]) for (const width of [1280, 390]) for (const mode of ['empty', 'loading', 'error', 'available', 'restart']) {
+    for (const dark of [false, true]) for (const width of [1280, 390]) for (const mode of ['empty', 'loading', 'error', 'available', 'restart', 'same-release-app']) {
       const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
       page.setDefaultTimeout(6000);
       const errors = []; page.on('pageerror', error => errors.push(error.message));
@@ -152,7 +154,14 @@ test('unified updates render honest states beside the workbench in both themes a
         if (mode !== 'loading') assert.equal(await details.getAttribute('aria-expanded'), 'false', 'component versions start collapsed');
         else assert.equal(await details.count(), 0, 'initial loading does not fabricate component versions');
         assert.equal(await dialog.getByText('0.2.2-rc.1', { exact: false }).isVisible(), false, 'engine detail stays out of the primary card');
-        if (mode === 'available') await dialog.getByRole('button', { name: '长按 2 秒更新', exact: true }).waitFor();
+        if (mode === 'available' || mode === 'same-release-app') {
+          await dialog.getByRole('button', { name: '长按 2 秒更新', exact: true }).waitFor();
+          if (mode === 'same-release-app') {
+            const heading = await dialog.locator('.cmd-update-card-heading').innerText();
+            assert.match(heading, /v0\.1\.4 · 主机应用有更新/);
+            assert.doesNotMatch(heading, /→|发现新版本/);
+          }
+        }
         else if (mode === 'restart') await dialog.getByText(/重启.*生效/).first().waitFor();
         else if (mode === 'error') {
           await dialog.getByRole('alert').waitFor();
@@ -168,6 +177,13 @@ test('unified updates render honest states beside the workbench in both themes a
         else assert.equal(await dialog.getByRole('button', { name: '长按 2 秒更新', exact: true }).count(), 0, 'an unpublished channel cannot advertise an install');
         await fits(page, dialog);
         await page.screenshot({ path: join(screenshots, `${dark ? 'dark' : 'light'}-${width}-${mode}.png`) });
+        if (mode === 'same-release-app') {
+          await details.click();
+          const information = page.getByRole('dialog', { name: '版本详情', exact: true });
+          assert.match(await information.innerText(), /主机应用\s*v0\.1\.2 → v0\.1\.3/);
+          await fits(page, dialog);
+          await page.screenshot({ path: join(screenshots, `${dark ? 'dark' : 'light'}-${width}-${mode}-details.png`) });
+        }
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
@@ -414,6 +430,83 @@ test('native retry remains usable with a blocked plugin and cannot restore an ob
         assert.equal(await page.evaluate(() => window.updateCalls.filter(call => call.action === 'install').length), 0);
         await fits(page, dialog);
         await page.screenshot({ path: join(screenshots, `${dark ? 'dark' : 'light'}-${width}-native-recovered.png`) });
+      } finally { await page.close(); }
+    }
+  } finally { await browser.close(); }
+});
+
+test('native shutdown failure keeps the main card concise and recovery in version details', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    for (const dark of [false, true]) for (const width of [1280, 390]) for (const mode of ['app-stop-failed', 'current-stop-failed']) {
+      const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+      page.setDefaultTimeout(6000);
+      const errors = []; page.on('pageerror', error => errors.push(error.message));
+      try {
+        const { dialog } = await mount(page, mode, dark, true);
+        await dialog.locator('.cmd-update-card-heading').getByText(/应用更新未完成/).waitFor();
+        assert.equal(await dialog.getByRole('alert').count(), 0);
+        assert.equal(await dialog.getByRole('button', { name: '重试应用更新', exact: true }).count(), 0);
+        if (mode === 'app-stop-failed') {
+          assert.equal(await dialog.getByRole('button', { name: '长按 2 秒重试', exact: true }).isEnabled(), true);
+          await holdUpdate(page, dialog, '长按 2 秒重试');
+          assert.equal(await page.evaluate(() => window.desktopOpens), 1);
+        }
+        await fits(page, dialog);
+        await page.screenshot({ path: join(screenshots, `${dark ? 'dark' : 'light'}-${width}-${mode}.png`) });
+        await dialog.getByRole('button', { name: '版本详情', exact: true }).click();
+        const details = page.getByRole('dialog', { name: '版本详情', exact: true });
+        await details.getByRole('alert').getByText(/主机未能安全完成关闭，更新尚未安装/).waitFor();
+        assert.equal(await details.getByRole('button', { name: '检查安装器更新', exact: true }).count(), 0);
+        await details.getByRole('button', { name: '重试应用更新', exact: true }).click();
+        assert.equal(await page.evaluate(() => window.desktopOpens), mode === 'app-stop-failed' ? 2 : 1);
+        assert.equal(await details.getByRole('alert').count(), 1, 'opening the native window does not clear the unresolved failure');
+        assert(await details.evaluate(node => node.scrollWidth <= node.clientWidth), 'the complete diagnostic fits the details panel');
+        await fits(page, dialog);
+        await page.screenshot({ path: join(screenshots, `${dark ? 'dark' : 'light'}-${width}-${mode}-details.png`) });
+        await page.evaluate(() => window.publishNativeState({ phase: 'idle' }));
+        await details.getByRole('alert').waitFor({ state: 'detached' });
+        assert.doesNotMatch(await dialog.locator('.cmd-update-card-heading').innerText(), /应用更新未完成/);
+        assert.equal(await page.evaluate(() => window.updateCalls.filter(call => call.action === 'install').length), 0);
+        assert.deepEqual(errors, []);
+      } finally { await page.close(); }
+    }
+  } finally { await browser.close(); }
+});
+
+test('a pending feature restart keeps the native failure in details without a disabled recovery banner', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    for (const dark of [false, true]) for (const width of [1280, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+      page.setDefaultTimeout(6000);
+      const errors = []; page.on('pageerror', error => errors.push(error.message));
+      try {
+        const { dialog, launcher } = await mount(page, 'feature-native-error', dark, true);
+        assert.equal(await dialog.getByRole('alert').count(), 0);
+        assert.match(await dialog.locator('.cmd-update-card-heading').innerText(), /发现新版本/);
+        assert.equal(await dialog.getByRole('button', { name: '长按 2 秒更新', exact: true }).isEnabled(), true);
+        await holdUpdate(page, dialog);
+        await dialog.getByText('功能包已就绪，重启主机应用后生效', { exact: true }).waitFor();
+        assert.equal(await dialog.getByRole('alert').count(), 0);
+        assert.equal(await dialog.getByRole('button', { name: '重试应用更新', exact: true }).count(), 0);
+        await dialog.getByRole('button', { name: '关闭更新', exact: true }).click();
+        await launcher.click();
+        assert.equal(await dialog.getByRole('alert').count(), 0, 'reopening keeps focus on the required restart');
+        await fits(page, dialog);
+        await page.screenshot({ path: join(screenshots, `${dark ? 'dark' : 'light'}-${width}-restart-native-error.png`) });
+        await dialog.getByRole('button', { name: '版本详情', exact: true }).click();
+        const details = page.getByRole('dialog', { name: '版本详情', exact: true });
+        await details.getByRole('alert').getByText(/主机未能安全完成关闭，更新尚未安装/).waitFor();
+        await details.getByText('请先重启主机应用，使功能包生效，再重试应用更新。', { exact: true }).waitFor();
+        assert.equal(await details.getByRole('button', { name: '重试应用更新', exact: true }).count(), 0);
+        await fits(page, dialog);
+        await page.screenshot({ path: join(screenshots, `${dark ? 'dark' : 'light'}-${width}-restart-native-details.png`) });
+        await page.evaluate(() => window.publishNativeState({ phase: 'idle' }));
+        await details.getByRole('alert').waitFor({ state: 'detached' });
+        assert.equal(await details.getByText('应用更新尚未完成', { exact: true }).count(), 0);
+        assert.deepEqual(await page.evaluate(() => ({ installs: window.updateCalls.filter(call => call.action === 'install').length, opens: window.desktopOpens })), { installs: 1, opens: 0 });
+        assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
   } finally { await browser.close(); }

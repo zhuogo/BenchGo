@@ -8,7 +8,7 @@ export function deviceIcon(device) {
   return 'devices';
 }
 export function deviceKind(device) { return device?.kind === 'local' ? '本机' : ({ computer: '电脑', mobile: '移动设备', server: '服务器', devices: '设备' })[deviceIcon(device)]; }
-export function jobFinished(job) { return ['ready', 'done', 'completed', 'succeeded', 'success', 'failed', 'error'].includes(job?.state); }
+export function jobFinished(job) { return ['ready', 'done', 'completed', 'succeeded', 'success', 'failed', 'error', 'cancelled'].includes(job?.state); }
 export function jobFailed(job) { return ['failed', 'error'].includes(job?.state); }
 export function sshInput(form) {
   const port = Number(form.port);

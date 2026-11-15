@@ -24,7 +24,7 @@ test('remote resources announce late readiness, reuse a live device document and
     import React, { useState } from 'react'; import { createRoot } from 'react-dom/client';
     import { ResourceStage } from './plugins/link/client/resource-navigation.jsx';
     import css from './plugins/benchgo/client/style.css';
-    function App() { const [target,setTarget]=useState(null); window.resourceScenario=(mode,options={})=>{window.mode=mode;setTarget(mode==='empty'?null:{device:{id:options.deviceId||mode,name:'襄阳服务器'},resource:options.resource||{kind:'sessions',resourceId:'session'},requestId:options.requestId||String(Math.random())});};
+    function App() { const [target,setTarget]=useState(null); window.resourceScenario=(mode,options={})=>{window.mode=mode;setTarget(mode==='empty'?null:{device:{id:options.deviceId||mode,name:'襄阳服务器',...options.identity},resource:options.resource||{kind:'sessions',resourceId:'session'},onReturn:options.ownerReturn?()=>{window.returnedOwner=options.resource.ownerTask.taskId;}:undefined,requestId:options.requestId||String(Math.random())});};
       return <><style>{css}{'body{margin:0;font-family:Arial;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}.cmd-shell-frame{height:100vh;display:grid;grid-template-columns:180px 1fr}.cmd-shell-frame>aside{padding:16px}.fixture-centerCol{position:relative;padding:16px}html{--dsw-alias-bg-base:#fff;--dsw-alias-label-primary:#202020}html[data-theme=dark]{--dsw-alias-bg-base:#19191b;--dsw-alias-label-primary:#ededee}'}</style><div className="cmd-shell-frame"><aside><button onClick={()=>document.dispatchEvent(new CustomEvent('benchgo:workbench-selected',{detail:{deviceId:'local'}}))}>本机工作台</button></aside><main className="fixture-centerCol"><p>本机草稿</p><textarea defaultValue="保留的草稿"/></main></div><ResourceStage target={target} onClose={()=>setTarget(null)}/></>;
     } createRoot(document.getElementById('root')).render(<App/>);
   ` }, ...options });
@@ -39,7 +39,8 @@ test('remote resources announce late readiness, reuse a live device document and
     const sessionIds=['session','project-session','last-session','native:official'];
     let sessionSnapshot={phase:'ready',ids:sessionIds};const sessionListeners=new Set();
     window.setSessions=ready=>{sessionSnapshot={...sessionSnapshot,phase:ready?'ready':'pending',ids:ready?sessionIds:[]};sessionListeners.forEach(fn=>fn());};
-    const host={sessions:{list:{getSnapshot:()=>sessionSnapshot,subscribe:fn=>{sessionListeners.add(fn);return()=>sessionListeners.delete(fn);}}},uiWorkspace:{openSession:id=>run('session',id)},workspaces:{list:{getSnapshot:()=>snapshot,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn);}}}};
+    const inputBlocks=new Map();window.readInputBlock=id=>inputBlocks.get(id);
+    const host={conversation:{blocks:{storeFor:id=>({getSnapshot:()=>inputBlocks.get(id)}),set:(id,value)=>inputBlocks.set(id,value)}},sessions:{list:{getSnapshot:()=>sessionSnapshot,subscribe:fn=>{sessionListeners.add(fn);return()=>sessionListeners.delete(fn);}}},uiWorkspace:{openSession:id=>run('session',id)},workspaces:{list:{getSnapshot:()=>snapshot,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn);}}}};
     addEventListener('load',()=>setTimeout(()=>{window.installedAfterLoad=document.readyState==='complete';window.stopReceiver=installResourceReceiver(host,{open:async id=>{if(!['runtime-session','native:opaque/runtime'].includes(id))throw Error('会话不存在');run('native',id);},newSession:async id=>{window.creating=true;await new Promise(resolve=>setTimeout(resolve,100));window.creating=false;if(id==='fail')throw Error('创建失败，请重试');run('newSession',id);},addProject:()=>run('addProject')});},150));
   ` }, ...options });
   const script = built.outputFiles.find(file => file.path.endsWith('.js')).text;
@@ -54,10 +55,11 @@ test('remote resources announce late readiness, reuse a live device document and
       const request = route.request(), url = new URL(request.url());
       if (url.pathname === '/api/commander-devices') {
         selections.push(request.postDataJSON());
+        const device={id:request.postDataJSON().deviceId,hostId:'host-b',authorizationId:'auth-b'};
         const mode = await page.evaluate(() => window.mode);
-        if (mode === 'loading') return route.fulfill({ json: { url: 'http://127.0.0.1:17883/pending/' } });
+        if (mode === 'loading') return route.fulfill({ json: { device, url: 'http://127.0.0.1:17883/pending/' } });
         if (mode === 'error') return route.fulfill({ status: 503, json: { error: '服务器工作台暂不可用' } });
-        return route.fulfill({ json: { url: 'http://127.0.0.1:17883/remote/?ticket=' + selections.length } });
+        return route.fulfill({ json: { device, url: 'http://127.0.0.1:17883/remote/?ticket=' + selections.length } });
       }
       if (url.pathname === '/receiver.js') return route.fulfill({ contentType: 'text/javascript', body: receiverScript });
       if (url.pathname === '/remote/') {
@@ -184,6 +186,45 @@ test('remote resources announce late readiness, reuse a live device document and
     await page.locator('.cmd-resource-stage-status').waitFor({ state: 'hidden' });
     await page.getByRole('button', { name: '本机工作台', exact: true }).click();
     assert.equal(await page.locator('textarea').inputValue(), '保留的草稿');
+    const ownerResource={kind:'sessions',resourceId:'session',ownerTask:{taskId:'task-a',ownerHostId:'host-a',executionId:'exec-b'}};
+    for (const theme of ['light','dark']) {
+      await page.setViewportSize({width:1280,height:850});
+      await page.evaluate(theme=>document.documentElement.setAttribute('data-theme',theme),theme);
+      for (const mode of ['empty','loading','error','data']) {
+        await page.evaluate(({mode,resource})=>window.resourceScenario(mode,{deviceId:'owner-'+mode,identity:{hostId:'host-b',authorizationId:'auth-b'},resource,ownerReturn:true}),{mode,resource:ownerResource});
+        if(mode==='empty')await page.locator('.cmd-resource-stage').waitFor({state:'detached'});
+        else {
+          await page.getByRole('button',{name:'返回原任务',exact:true}).waitFor();
+          if(mode==='loading')await page.getByRole('status',{name:'正在打开远端资源…'}).waitFor();
+          else if(mode==='error')await page.getByRole('alert').filter({hasText:'服务器工作台暂不可用'}).waitFor();
+          else {
+            await page.locator('.cmd-resource-stage-status').waitFor({state:'hidden'});
+            remote=page.frames().find(frame=>frame.url().includes('/remote/'));
+            assert.match((await remote.evaluate(()=>readInputBlock('session'))).reason,/发起设备的原任务/);
+          }
+        }
+        await page.screenshot({path:join(screenshots,'owner-'+mode+'-'+theme+'.png')});
+      }
+      await page.setViewportSize({width:390,height:850});
+      assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'owner task navigation fits a narrow viewport');
+      await page.screenshot({path:join(screenshots,'owner-narrow-'+theme+'.png')});
+      await page.getByRole('button',{name:'返回原任务',exact:true}).click();
+      await page.locator('.cmd-resource-stage').waitFor({state:'detached'});
+      assert.equal(await page.evaluate(()=>returnedOwner),'task-a');
+      assert.equal(await page.locator('textarea').isEditable(),true);
+      assert.equal(await page.locator('textarea').inputValue(),'保留的草稿');
+    }
+    await page.evaluate(resource=>window.resourceScenario('data',{deviceId:'owner-policy',identity:{hostId:'host-b',authorizationId:'auth-b'},resource}),ownerResource);
+    await page.locator('.cmd-resource-stage-status').waitFor({state:'hidden'});
+    remote=page.frames().find(frame=>frame.url().includes('/remote/'));
+    assert.match((await remote.evaluate(()=>readInputBlock('session'))).reason,/原任务/);
+    await page.evaluate(()=>window.resourceScenario('data',{deviceId:'owner-policy',identity:{hostId:'host-b',authorizationId:'auth-b'},resource:{kind:'sessions',resourceId:'last-session'}}));
+    await page.locator('.cmd-resource-stage-status').waitFor({state:'hidden'});
+    assert.equal(await remote.evaluate(()=>readInputBlock('session')),undefined,'navigating away restores the previous composer policy');
+    await page.evaluate(resource=>window.resourceScenario('data',{deviceId:'identity-changed',identity:{hostId:'rebound-host',authorizationId:'auth-b'},resource}),ownerResource);
+    await page.getByRole('alert').filter({hasText:'目标设备身份或授权已变化'}).waitFor();
+    assert.equal(await page.locator('iframe').count(),0,'identity mismatch cannot mount a different workbench');
+    await page.getByRole('button',{name:'返回原任务',exact:true}).click();
     assert.deepEqual(errors, []);
   } finally { await browser.close(); if (!process.env.BENCHGO_RESOURCE_SCREENSHOTS) await rm(screenshots, { recursive: true, force: true }); }
 });

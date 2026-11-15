@@ -6,7 +6,7 @@ import { Commander } from 'benchgo-plugin/runtime';
 
 const { values } = parseArgs({ options: { 'data-dir': { type: 'string' }, config: { type: 'string' }, stdio: { type: 'boolean' }, help: { type: 'boolean' } } });
 if (values.help) {
-  console.log('benchgo [--data-dir PATH] [--config JSON_FILE] [--stdio]\nInteractive native session control. --stdio is a trusted local JSONL API, not a network server.');
+  console.log('commander [--data-dir PATH] [--config JSON_FILE] [--stdio]\nInteractive native session control. --stdio is a trusted local JSONL API, not a network server.');
   process.exit(0);
 }
 const config = values.config ? JSON.parse(await readFile(values.config, 'utf8')) : {};

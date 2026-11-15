@@ -168,7 +168,7 @@ export function Tasks({ api, onDirtyChange, onDetailChange, onSchedule, onOpenEx
         {!!row.attentions?.length && !safetyWait && !row.assignments?.some(item => item.state === 'uncertain') && <section className="ba-stack" aria-label="待处理交互">{row.attentions.map(attention => <TaskAttention key={`${attention.id}:${row.instructionRevision}`} api={api} task={row} attention={attention} onAnswered={() => refreshTasks([row.id])} />)}</section>}
         <section id={`${detailTabsId}-panel-execution`} role="tabpanel" aria-labelledby={`${detailTabsId}-execution`} hidden={detailTab !== 'execution'} tabIndex={0} className="ba-task-detail-panel">
           {!result && !waiting && detailSummary && !activity.execution?.worker && !activity.execution?.summary?.text && <section className="ba-task-result-summary"><h3>当前进展</h3><p>{detailSummary}</p></section>}
-          <TaskExecution key={row.id} execution={activity.execution} taskStatus={status} executionControl={row.executionControl} stale={!!error} sessionAvailable={row.executionSession?.available} />
+          <TaskExecution key={row.id} execution={activity.execution} executionSession={row.executionSession} taskStatus={status} executionControl={row.executionControl} stale={!!error} sessionAvailable={row.executionSession?.available} />
         </section>
         <section id={`${detailTabsId}-panel-requirements`} role="tabpanel" aria-labelledby={`${detailTabsId}-requirements`} hidden={detailTab !== 'requirements'} tabIndex={0} className="ba-task-detail-panel">
           <TaskFacts key={`requirements:${row.id}`} task={row} />

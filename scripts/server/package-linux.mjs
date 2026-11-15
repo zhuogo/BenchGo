@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { packageServerSeed } from './package-seed.mjs';
+import { isLinuxX64Elf } from '../desktop/payload-policy.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const tar = createRequire(join(root, 'plugins/benchgo/package.json'))('tar');
@@ -36,11 +37,12 @@ export async function verifyLinuxSeed(archive, { pluginVersion } = {}) {
       || !['File', 'Directory'].includes(entry.type)) errors.push(`Unsafe seed entry: ${entry.path}`);
     seen.add(name); bytes += entry.size;
     if (seen.size > 60_000 || bytes > 1024 ** 3) errors.push('Server seed exceeds unpacked limits');
-    if (name.endsWith('.node') || /\/runtime\/(?:win32-|darwin-|linux-arm64(?:\/|$))/.test(name)) errors.push(`Non-Linux-x64 payload: ${name}`);
+    if (/\.(?:dll|exe|dylib)$/i.test(name) || /\/runtime\/(?:win32-|darwin-|linux-arm64(?:\/|$))/.test(name)) errors.push(`Non-Linux-x64 payload: ${name}`);
     const metadata = ['release.json', 'node_modules/benchgo-plugin/package.json'].includes(name);
     const worker = name === required.at(-1);
+    const native = entry.type === 'File' && /\.node$|\.so(?:\.[0-9]+)*$/i.test(name);
     if (worker && !(entry.mode & 0o111)) errors.push('Linux x64 native worker has no executable permissions; build on Linux');
-    if (metadata || worker) {
+    if (metadata || worker || native) {
       const parts = []; let length = 0;
       entry.on('data', chunk => { if (length < (metadata ? 512 * 1024 : 64)) { parts.push(chunk.subarray(0, (metadata ? 512 * 1024 : 64) - length)); length += parts.at(-1).length; } });
       entry.on('end', () => captures.set(name, Buffer.concat(parts)));
@@ -54,7 +56,8 @@ export async function verifyLinuxSeed(archive, { pluginVersion } = {}) {
   if (release.schemaVersion !== 1 || release.platform !== 'linux' || release.arch !== 'x64'
     || release.version !== pluginVersion || plugin.name !== 'benchgo-plugin' || plugin.version !== pluginVersion) throw new Error('Server seed identity differs from release');
   const worker = captures.get(required.at(-1));
-  if (worker.length < 20 || worker.subarray(0, 4).toString('hex') !== '7f454c46' || worker[4] !== 2 || worker[5] !== 1 || worker.readUInt16LE(18) !== 62) throw new Error('Linux x64 native worker is not an ELF x86-64 executable');
+  if (!isLinuxX64Elf(worker)) throw new Error('Linux x64 native worker is not an ELF x86-64 executable');
+  for (const [name, header] of captures) if (/\.node$|\.so(?:\.[0-9]+)*$/i.test(name) && !isLinuxX64Elf(header)) throw new Error(`Non-Linux-x64 payload: ${name}; native bindings must be ELF x86-64`);
   return { entries: seen.size, unpackedBytes: bytes };
 }
 

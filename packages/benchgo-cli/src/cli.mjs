@@ -1,132 +1,110 @@
-import { access, readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { installWorkbench, startWorkbench, stopWorkbench, workbenchStatus, shouldOpenBrowser, openBrowser } from './installer.mjs';
+import { serverCommand } from './server.mjs';
+import { shared } from './shared.mjs';
 
-const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const bundledRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const cliVersion = '0.0.1';
+const cliVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 
-function usage() {
+export function usage() {
   return `BenchGo CLI ${cliVersion}
 
 用法:
-  benchgo install
-  benchgo update
+  benchgo install                     安装或复用工作台，交互终端默认打开浏览器
+  benchgo update                      更新受管工作台，保留配置与会话
+  benchgo <start|open|status|stop|restart>
+  benchgo prefetch                    预取匹配平台的完整工作台资源
   benchgo server <install|update|status|start|stop|restart>
 
-全局选项:
-  --json       输出机器可读 JSON
-  --root PATH  指定源码或发行资源目录
-  --source     mirror 或 github
-  --version    输出版本
-  --help       显示帮助
+选项:
+  --no-open       不打开浏览器；SSH/无头会话默认采用此方式
+  --open          显式打开浏览器
+  --json          输出机器可读 JSON
+  --home PATH     指定 Harness 用户目录（默认 DSH_HOME 或 ~/.dsh）
+  --root PATH     指定完整原生离线种子或发行资源目录
+  --runtime PATH  复用精确兼容的官方引擎目录
+  --offline       仅使用已准备的本地资源
+  --source NAME   mirror 或 github，不静默更换来源
+  --version       输出命令包版本
+  --help          显示帮助
 
-说明:
-  本命令安装和管理工作台。工作台可以连接外部中继，但不安装中继服务。
-  中继服务器使用独立包 benchgo-relay 的 benchgo-relay。`;
+工作台使用 Windows x64、macOS arm64/x64、Linux x64 的真实原生资源。
+首次安装需 Node.js 24.9+；已有兼容桌面载体可复用。
+中继独立使用 benchgo-relay；工作台不隐式安装中继。
+server 为既有 Linux/systemd SSH 服务器入口，不会另建本机副本。`;
 }
 
-function parseArgs(argv) {
-  const options = { json: false, root: process.env.BENCHGO_ROOT || packageRoot };
+export function parseArgs(argv) {
+  const options = { json: false, root: process.env.BENCHGO_ROOT };
   const positionals = [];
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--json') options.json = true;
-    else if (arg === '--help' || arg === '-h') options.help = true;
-    else if (arg === '--version' || arg === '-v') options.version = true;
-    else if (arg === '--root') options.root = argv[++i] ?? '';
-    else if (arg.startsWith('--root=')) options.root = arg.slice('--root='.length);
-    else if (arg === '--source') options.source = argv[++i] ?? '';
-    else if (arg.startsWith('--source=')) options.source = arg.slice('--source='.length);
-    else positionals.push(arg);
+  for (let index = 0; index < argv.length; index++) {
+    const argument = argv[index];
+    if (argument === '--json') options.json = true;
+    else if (argument === '--help' || argument === '-h') options.help = true;
+    else if (argument === '--version' || argument === '-v') options.version = true;
+    else if (argument === '--no-open') options.open = false;
+    else if (argument === '--open') options.open = true;
+    else if (argument === '--offline') options.offline = true;
+    else {
+      const match = argument.match(/^--(root|source|home|runtime)(?:=(.*))?$/);
+      if (match) {
+        const value = match[2] ?? argv[++index];
+        if (!value || value.startsWith('--')) throw new Error(`${match[1]} 需要参数`);
+        options[match[1]] = value;
+      } else if (argument.startsWith('-')) throw new Error(`未知选项：${argument}`);
+      else positionals.push(argument);
+    }
   }
+  if (options.source && !['mirror', 'github'].includes(options.source)) throw new Error('下载源必须是 mirror 或 github');
   return { options, positionals };
 }
 
-function xdgPath(kind, name) {
-  const base = kind === 'data'
-    ? (process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'))
-    : (process.env.XDG_CONFIG_HOME || join(homedir(), '.config'));
-  return join(base, 'benchgo', name);
-}
-
-async function exists(path) {
-  try { await access(path); return true; } catch { return false; }
-}
-
-function command(bin, args, { capture = false, allowFailure = false } = {}) {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(bin, args, { stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit', env: { ...process.env, DSH_TELEMETRY_DISABLED: '1' } });
-    let stdout = '', stderr = '';
-    if (capture) {
-      child.stdout.on('data', data => { stdout += data; });
-      child.stderr.on('data', data => { stderr += data; });
-    }
-    child.once('error', error => allowFailure ? resolvePromise({ code: null, stdout, stderr, error }) : reject(error));
-    child.once('exit', code => {
-      const result = { code: code ?? 1, stdout, stderr };
-      if (result.code !== 0 && !allowFailure) reject(new Error(stderr.trim() || `${bin} 退出码 ${result.code}`));
-      else resolvePromise(result);
-    });
-  });
-}
-
-function serviceArgs(service, operation) {
-  return ['--user', operation, service];
-}
-
-async function serviceOperation(service, operation, { json }) {
-  const result = await command('systemctl', serviceArgs(service, operation), { capture: true, allowFailure: true });
-  if (json) return { service, operation, ok: result.code === 0, output: result.stdout.trim() || result.stderr.trim() };
-  if (result.code !== 0) throw new Error(result.stderr.trim() || `服务操作失败：${operation} ${service}`);
-  return result.stdout.trim() || `${service} ${operation} 完成`;
-}
-
-async function serverStatus({ json }) {
-  const stateFile = xdgPath('data', 'server/installation.json');
-  let installation = null;
-  try { installation = JSON.parse(await readFile(stateFile, 'utf8')); } catch {}
-  const service = await command('systemctl', serviceArgs('benchgo.service', 'is-active'), { capture: true, allowFailure: true });
-  const result = { installed: Boolean(installation), service: service.stdout.trim() || 'unknown', installation: installation ? { ...installation } : null };
-  return json ? result : `工作台：${result.installed ? '已安装' : '未安装'}\n服务：${result.service}`;
-}
-
-async function serverCommand(action, options) {
-  if (action === 'status') return serverStatus(options);
-  if (['start', 'stop', 'restart'].includes(action)) return serviceOperation('benchgo.service', action, options);
-  if (!['install', 'update'].includes(action)) throw new Error(`不支持的工作台操作：${action || '(空)'}`);
-  const script = await exists(resolve(options.root, 'scripts/server/bootstrap.sh'))
-    ? resolve(options.root, 'scripts/server/bootstrap.sh')
-    : resolve(bundledRoot, 'resources/server/bootstrap.sh');
-  if (!await exists(script)) throw new Error('未找到工作台安装器；请设置 BENCHGO_ROOT 指向 BenchGo 资源目录');
-  const source = options.source || 'mirror';
-  if (!['mirror', 'github'].includes(source)) throw new Error('下载源必须是 mirror 或 github');
-  const result = await command('bash', [script, source, action === 'update' ? 'update' : 'connect']);
-  return options.json ? { ok: result.code === 0, action } : `工作台${action === 'update' ? '更新' : '安装'}完成`;
-}
-
-export async function run(argv) {
+export async function run(argv, dependencies = {}) {
+  if (argv[0] === 'relay') throw new Error('中继独立安装，请使用 benchgo-relay');
   const { options, positionals } = parseArgs(argv);
   if (options.version) return cliVersion;
   if (options.help || positionals.length === 0) return usage();
-  const [scope, action] = positionals;
-  if (scope === 'install' || scope === 'update') return serverCommand(scope, options);
-  if (scope === 'server') return serverCommand(action, options);
-  if (scope === 'relay') throw new Error('中继服务器不随工作台安装。请使用 npm install -g benchgo-relay，然后运行 benchgo-relay');
-  throw new Error(`未知命令：${scope}`);
+  const [action, subcommand, ...extra] = positionals;
+  if (extra.length || action !== 'server' && subcommand) throw new Error('命令参数过多');
+  if (action === 'relay') throw new Error('中继独立安装，请使用 benchgo-relay');
+  if (action === 'server') return (dependencies.serverCommand || serverCommand)(subcommand, options, dependencies);
+  let result;
+  if (['install', 'update'].includes(action)) result = await (dependencies.installWorkbench || installWorkbench)({ ...options, update: action === 'update' }, dependencies);
+  else if (['start', 'open'].includes(action)) result = await (dependencies.startWorkbench || startWorkbench)(options, dependencies);
+  else if (action === 'status') return (dependencies.workbenchStatus || workbenchStatus)(options);
+  else if (action === 'stop') return (dependencies.stopWorkbench || stopWorkbench)(options);
+  else if (action === 'restart') {
+    await (dependencies.stopWorkbench || stopWorkbench)(options);
+    result = await (dependencies.startWorkbench || startWorkbench)(options, dependencies);
+  } else if (action === 'prefetch') {
+    const { workbenchPaths } = await shared('workbench-installation.mjs');
+    const { acquirePayload, loadInstallMetadata } = await import('./artifacts.mjs');
+    const paths = workbenchPaths(options);
+    const payload = await (dependencies.acquirePayload || acquirePayload)({ ...options, cache: paths.cache, metadata: await loadInstallMetadata(options.root) });
+    return { prefetched: true, directory: payload.seed || payload.archive, origin: payload.origin };
+  } else throw new Error(`未知命令：${action}`);
+  if (result.url && (action === 'open' || shouldOpenBrowser(options, dependencies))) {
+    try { await (dependencies.openBrowser || openBrowser)(result.url, dependencies); result.browserOpened = true; }
+    catch (error) { result.browserOpened = false; result.warning = `工作台已启动，浏览器未能打开：${error.message}`; }
+  }
+  return result;
+}
+
+function formatResult(value) {
+  if (typeof value === 'string') return value;
+  const lines = [value.prefetched ? '工作台资源已准备' : value.installed === false ? '工作台未安装'
+    : value.stopped ? '工作台已安全停止' : value.running === false ? '工作台已安装，当前未运行'
+      : value.reused ? '已复用现有工作台' : value.kind === 'server' ? '服务器工作台操作完成' : '工作台已就绪'];
+  if (value.url) lines.push(`本机连接：${value.url}`);
+  if (value.directory) lines.push(`资源目录：${value.directory}`);
+  if (value.warning) lines.push(value.warning);
+  if (value.persistent === false) lines.push('服务器用户常驻服务尚未启用，请按服务器提示配置');
+  return lines.join('\n');
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const { options } = parseArgs(argv);
   try {
+    const { options } = parseArgs(argv);
     const result = await run(argv);
-    if (result !== undefined) process.stdout.write((options.json && typeof result !== 'string' ? JSON.stringify(result) : String(result)) + '\n');
-  } catch (error) {
-    process.stderr.write((error?.message || String(error)) + '\n');
-    process.exitCode = 1;
-  }
+    if (result !== undefined) process.stdout.write((options.json && typeof result !== 'string' ? JSON.stringify(result) : formatResult(result)) + '\n');
+  } catch (error) { process.stderr.write((error?.message || String(error)) + '\n'); process.exitCode = 1; }
 }
-
-export { parseArgs, usage, xdgPath };

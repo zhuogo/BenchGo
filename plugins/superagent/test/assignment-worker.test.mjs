@@ -163,6 +163,40 @@ test('a free slot starts new work while another execution remains busy', async t
   release(); await first;
 });
 
+test('a persisted remote handoff releases its slot without committing or finishing the Task', async t => {
+  const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+  t.after(() => database.close());
+  database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'paired-B', config: { harness: 'official', models: [{ providerId: 'opaque', modelId: 'opaque/model' }] } };
+  const remote = database.createTask({ threadId: 'thread', target: 'remote work', mandate: { execution } });
+  database.createAssignment(remote.id, { id: 'remote-assignment', executor: 'remote', execution });
+  let commits = 0, submissions = 0;
+  const worker = createAssistantAssignmentWorker({ database, concurrency: 1, readPolicy: async () => ({}), validateMandate: () => true,
+    execute: async assignment => {
+      if (assignment.executor !== 'remote') return { summary: 'local result' };
+      submissions++;
+      const ownership = { owner: assignment.owner, fence: assignment.fence };
+      const run = database.prepareRun(assignment.id, { ...ownership, sessionId: 'B-session', directory: 'remote:B' });
+      database.recordRemoteExecution(assignment.id, { ...ownership, patch: { ...execution, runId: run.id, executionId: 'B-execution', sessionId: run.sessionId, phase: 'submitted' } });
+      database.parkRemoteAssignment(assignment.id, { ...ownership, phase: 'submitted', nextAt: Date.now() + 1000 });
+      return { remotePending: true };
+    },
+    onResult: async () => { commits++; },
+  });
+  t.after(() => worker.stop());
+  const first = await worker.runOnce();
+  assert.equal(first.results[0].status, 'remote-pending');
+  assert.equal(database.getTask(remote.id).status, 'running');
+  assert.equal(database.getAssignment('remote-assignment').state, 'uncertain');
+  assert.equal(database.results(remote.id).length, 0);
+  const local = database.createTask({ threadId: 'thread', target: 'independent local work', mandate: {} });
+  database.createAssignment(local.id, { executor: 'harness' });
+  assert.equal((await worker.runOnce()).results[0].status, 'completed');
+  assert.equal(commits, 1);
+  assert.equal(submissions, 1);
+  assert.equal(database.runs('remote-assignment').length, 1);
+});
+
  test('verified ordinary execution failure terminates without reconciliation or replay', async t => {
   const { database, task, worker } = fixture(t, { execute: async () => {
     throw Object.assign(new Error('Configured project unavailable'), { code: 'ENOENT', executionEffects: { effectsVerified: true, unknownCallIds: [] } });

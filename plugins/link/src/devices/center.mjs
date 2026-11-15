@@ -139,6 +139,8 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
     if (input.action === 'relayJobDismiss') return manager.dismissRelayJob(input.jobId);
     if (input.action === 'sshProbe') return manager.probe(input);
     if (input.action === 'sshConnect') return manager.connect(input);
+    if (input.action === 'serverPrefetch') return manager.prefetch(input);
+    if (input.action === 'jobCancel') return manager.cancelJob(input.jobId || input.id);
     if (input.action === 'job') return manager.job(input.jobId || input.id);
     if (input.action === 'reconnect') return manager.reconnect({ ...input, id, device: registry.get(id) });
     if (input.action === 'serverAction') return manager.manage({ ...input, id, device: registry.get(id) });

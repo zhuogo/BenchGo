@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # The release tag pins this script; override only when intentionally testing another version.
-version=${BENCHGO_VERSION:-0.0.1}
+version=${BENCHGO_VERSION:-0.1.1}
 config=${1:-${BENCHGO_RELAY_CONFIG:-}}
 case "$(uname -s)" in Linux) ;; *) echo 'BenchGo Relay 安装脚本仅支持 Linux' >&2; exit 1;; esac
 command -v npm >/dev/null || { echo '需要先安装 Node.js 22+ 与 npm' >&2; exit 1; }

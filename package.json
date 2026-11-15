@@ -1,6 +1,6 @@
 {
   "name": "benchgo",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "bin": {
@@ -45,7 +45,7 @@
     "package:plus:mac:arm64": "node scripts/desktop/package-macos.mjs arm64",
     "package:plus:mac:x64": "node scripts/desktop/package-macos.mjs x64",
     "package:plus:linux": "node scripts/server/package-linux.mjs",
-    "benchgo": "node plugins/benchgo/src/cli.mjs",
+    "benchgo": "node bin/benchgo.mjs",
     "package:plus:plugin": "node scripts/desktop/package-plugin-update.mjs",
     "reload:plus": "node scripts/reload-plus-client.mjs",
     "release:plan": "node scripts/release/plan.mjs"

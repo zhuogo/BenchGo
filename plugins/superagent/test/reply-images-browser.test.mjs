@@ -44,7 +44,7 @@ async function fixture() {
           <div className="ba-chat-viewport"><div className="ba-chat-feed" tabIndex={0}><section className="ba-quiet-chat"><div className="ba-quiet-chat-column">
             <article className="ba-chat-message" data-role="user"><div className="ba-chat-body"><div className="ba-chat-content">帮我找几张配色不同的风景参考图。</div></div></article>
             <article className="ba-chat-message" data-role="assistant"><div className="ba-chat-body">
-              {['markdown','code','files','stream'].includes(mode)?<AssistantReply key={mode==='stream'?mode:scenario} text={markdown} labels={labels} streaming={mode==='stream'} onOpenFile={async path=>{window.openedFile=path;if(window.localFileError)throw Error('文件暂不可用，请重试。');}}/>:<><div className="ba-chat-content"><p>这里是这次整理的参考图。</p><p>你可以展开对比，再告诉我你喜欢哪一种。</p></div><ReplyDeliverables key={scenario} images={shown}/></>}
+              {['markdown','code','files','stream'].includes(mode)?<AssistantReply key={mode==='stream'?mode:scenario} text={markdown} labels={labels} streaming={mode==='stream'} fileRequestId={window.fileRequestId} onOpenFile={async (path,options)=>{window.openedFile=path;window.openedFileOptions=options;if(window.localFileError)throw Error('文件暂不可用，请重试。');}}/>:<><div className="ba-chat-content"><p>这里是这次整理的参考图。</p><p>你可以展开对比，再告诉我你喜欢哪一种。</p></div><ReplyDeliverables key={scenario} images={shown}/></>}
             </div></article>
             <article className="ba-chat-message" data-role="user"><div className="ba-chat-body"><div className="ba-chat-content">我更喜欢第一种。</div></div></article>
           </div></section></div></div>
@@ -549,7 +549,7 @@ test('file delivery cards stay outside bubbles and retain preview, download and 
     const page = await browser.newPage({ viewport: { width: 1440, height: 1200 }, reducedMotion: 'reduce' });
     await imageRoutes(page);
     await page.setContent(await fixture());
-    await page.evaluate(() => window.drawImages('files'));
+    await page.evaluate(() => { window.fileRequestId = 'reply/opaque-source'; window.drawImages('files'); });
     await page.getByRole('button', { name: '打开 研究报告.txt', exact: true }).waitFor();
     assert.equal(await page.locator('.ba-reply-files .ba-reply-file').count(), 3);
     assert.equal(await page.locator('.ba-chat-content .ba-reply-file').count(), 0);
@@ -565,9 +565,19 @@ test('file delivery cards stay outside bubbles and retain preview, download and 
     await page.getByRole('button', { name: '打开 本地说明.txt', exact: true }).click();
     await page.getByText('文件暂不可用，请重试。', { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => window.openedFile), 'E:/workspace/notes.txt');
+    assert.deepEqual(await page.evaluate(() => window.openedFileOptions), { requestId: 'reply/opaque-source' });
+    assert.equal(await page.getByText('会话文件', { exact: true }).count(), 1);
     await page.evaluate(() => { window.localFileError = false; });
     await page.getByRole('button', { name: '打开 本地说明.txt', exact: true }).click();
     assert.equal(await page.getByText('文件暂不可用，请重试。', { exact: true }).count(), 0);
+    assert.deepEqual(await page.evaluate(() => window.openedFileOptions), { requestId: 'reply/opaque-source' }, 'retry retains the original reply provenance');
+    await page.evaluate(() => window.drawImages('files', '[代码.txt](../src/example.txt#L24)'));
+    await page.getByRole('button', { name: '打开 代码.txt', exact: true }).click();
+    assert.equal(await page.evaluate(() => window.openedFile), '../src/example.txt');
+    assert.deepEqual(await page.evaluate(() => window.openedFileOptions), { requestId: 'reply/opaque-source', line: 24 });
+    await page.evaluate(() => { delete window.fileRequestId; window.drawImages('files', '[旧回复.txt](/remote/output.txt)'); });
+    await page.getByRole('button', { name: '打开 旧回复.txt', exact: true }).click();
+    assert.deepEqual(await page.evaluate(() => window.openedFileOptions), { requestId: null }, 'missing reply provenance reaches the resolver as unavailable, never as a verified local artifact');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);

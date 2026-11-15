@@ -1,19 +1,46 @@
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { initializePluginProfile, stagePluginBundle, officialSourcePackages, assertBrowserPlatformPeer } from './plugin-bundle.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { initializePluginProfile, stagePluginBundle as stageCompletePluginBundle, officialSourcePackages, assertBrowserPlatformPeer } from './plugin-bundle.mjs';
 import { getInstallState, releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
+// These tests isolate dependency/layout fixtures. Public builds retain the
+// default requirement for a validated full or explicitly online resource set.
+const stagePluginBundle = options => stageCompletePluginBundle({ ...options, includeServerResources: false });
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'benchgo-bundle-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const put = (name, value) => { const path = join(root, name); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value)); };
+  const sidebarFiles = ['sidebar-host.mjs', 'client-editor.js', 'client-mermaid.js', 'client-locale.js', 'client-terminal.js', 'SIDEBAR-RUNTIME-LICENSES.txt'];
+  for (const file of sidebarFiles) put(`plugin/lib/modules/workbench/lib/${file}`, 'fixture');
+  put('plugin/lib/modules/workbench/lib/sidebar-runtime.json', { schemaVersion: 1, vendor: { name: 'dsh-better-sidebar', version: '0.30.1' },
+    files: sidebarFiles.map(path => ({ path, bytes: 7, sha256: createHash('sha256').update('fixture').digest('hex') })) });
   return { root, put };
 }
+
+test('installer cleanup receipt survives enrollment failure without deleting either installation', t => {
+  const { root, put } = fixture(t);
+  const resources = join(root, 'BenchGo/resources');
+  const retiredDirectory = join(root, 'BenchGo.old-{11111111-1111-4111-8111-111111111111}');
+  put('BenchGo/resources/keep.txt', 'current application');
+  put('BenchGo.old-{11111111-1111-4111-8111-111111111111}/keep.txt', 'retired application');
+  // Missing app metadata deliberately makes enrollment fail after queuing the
+  // committed tree. Retrying startup must still have a durable cleanup receipt.
+  const child = spawnSync(process.execPath, [fileURLToPath(new URL('./plugin-bundle.mjs', import.meta.url)),
+    'init-profile', '--resources', resources, '--retired-directory', retiredDirectory], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(child.status, 1, child.error?.message || child.stderr);
+  assert.match(child.stderr, /ENOENT/);
+  assert.equal(readFileSync(join(resources, 'keep.txt'), 'utf8'), 'current application');
+  assert.equal(readFileSync(join(retiredDirectory, 'keep.txt'), 'utf8'), 'retired application');
+  assert.deepEqual(JSON.parse(readFileSync(`${retiredDirectory}.benchgo-cleanup.json`, 'utf8')), {
+    schemaVersion: 1, installRoot: join(root, 'BenchGo'), retiredDirectory,
+  });
+});
 
 function dependencyFixture(t, dependencies) {
   const result = fixture(t), { put } = result;
@@ -55,6 +82,21 @@ test('different sources and nested shadows retain consumer-local packages even w
   assert.equal(read('parent/node_modules/child/node_modules/common').identity, 'original');
 });
 
+test('Claude SDK JavaScript and history helpers stay while unused native optional executables are omitted', t => {
+  const sdk = '@anthropic-ai/claude-agent-sdk', native = '@anthropic-ai/claude-agent-sdk-win32-x64';
+  const { root, put } = dependencyFixture(t, { [sdk]: '0.3.300' });
+  put(`plugin/node_modules/${sdk}/package.json`, { name: sdk, version: '0.3.300', optionalDependencies: { [native]: '0.3.300' } });
+  put(`plugin/node_modules/${sdk}/sdk.mjs`, 'export function query() {}');
+  put(`plugin/node_modules/${sdk}/README.md`, 'SDK copyright and license remain.');
+  put(`plugin/node_modules/${native}/package.json`, { name: native, version: '0.3.300', os: ['win32'], cpu: ['x64'] });
+  put(`plugin/node_modules/${native}/claude.exe`, 'unused-native');
+  const staged = stagePluginBundle({ plugin: join(root, 'plugin'), output: join(root, 'seed'), platform: 'win32', arch: 'x64' });
+  assert.deepEqual(staged.dependencies, [sdk]); assert.deepEqual(staged.omittedOptionalDependencies, [native]);
+  assert(existsSync(join(staged.destination, 'node_modules', sdk, 'sdk.mjs')));
+  assert(existsSync(join(staged.destination, 'node_modules', sdk, 'README.md')));
+  assert(!existsSync(join(staged.destination, 'node_modules', native)));
+});
+
 test('ops keeps only executable target runtimes, retaining Linux for Windows WSL and all licenses', t => {
   for (const [platform, arch, kept] of [['win32', 'x64', ['win32-x64', 'linux-x64']], ['linux', 'x64', ['linux-x64']]]) {
     const { root, put } = dependencyFixture(t, { 'dsh-ops': '0.5.0' });
@@ -67,6 +109,21 @@ test('ops keeps only executable target runtimes, retaining Linux for Windows WSL
     assert.equal(readFileSync(join(ops, 'LICENSE'), 'utf8'), 'preserve');
     assert.equal(readFileSync(join(ops, 'runtime/NOTICE'), 'utf8'), 'preserve');
     for (const target of ['win32-x64', 'linux-x64', 'darwin-arm64', 'darwin-x64']) assert.equal(existsSync(join(ops, 'runtime', target)), kept.includes(target));
+  }
+});
+
+test('SSH Pageant bridge is retained on Windows and omitted only on Unix targets', t => {
+  for (const platform of ['win32', 'linux', 'darwin']) {
+    const { root, put } = dependencyFixture(t, { ssh2: '1.17.0' });
+    put('plugin/node_modules/ssh2/package.json', { name: 'ssh2', version: '1.17.0' });
+    put('plugin/node_modules/ssh2/util/pagent.exe', 'windows-agent-bridge');
+    put('plugin/node_modules/ssh2/lib/agent.js', 'unix-agent-and-pageant-source');
+    put('plugin/node_modules/ssh2/LICENSE', 'retained');
+    const staged = stagePluginBundle({ plugin: join(root, 'plugin'), output: join(root, 'seed'), platform });
+    const ssh = join(staged.destination, 'node_modules/ssh2');
+    assert.equal(existsSync(join(ssh, 'util/pagent.exe')), platform === 'win32');
+    assert.equal(readFileSync(join(ssh, 'lib/agent.js'), 'utf8'), 'unix-agent-and-pageant-source');
+    assert.equal(readFileSync(join(ssh, 'LICENSE'), 'utf8'), 'retained');
   }
 });
 
@@ -150,6 +207,7 @@ test('the bundled desktop entry loads shared helpers from packaged resources aft
   const { root, put } = fixture(t);
   const entry = join(root, 'resources/app.asar/lib/main.mjs');
   put('resources/app.asar/lib/main.mjs', readFileSync(new URL('./plugin-bundle.mjs', import.meta.url), 'utf8'));
+  put('resources/benchgo/payload-policy.mjs', readFileSync(new URL('./payload-policy.mjs', import.meta.url), 'utf8'));
   for (const name of ['plugin-install.mjs', 'update-feed.mjs']) {
     put(`resources/benchgo/shared/${name}`, readFileSync(new URL(`../../plugins/benchgo/shared/${name}`, import.meta.url), 'utf8'));
   }

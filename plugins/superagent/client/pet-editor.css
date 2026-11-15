@@ -55,5 +55,6 @@
 .ba-pet-chat-draft{display:flex;align-items:center;gap:16px;padding:12px 0;font-size:13px}.ba-pet-chat-draft p{margin:6px 0 10px;color:var(--text-secondary,#666);font-size:12px}
 /* Shared fixed heading for main and side conversations. */
 .ba-chat-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:44px}
+.ba-chat-heading-actions{display:flex;align-items:center;gap:4px;flex:none}
 @media(max-width:540px){.ba-pet-editor-preview{flex-direction:column;gap:16px;padding:20px 16px}.ba-pet-editor-summary{width:100%}.ba-pet-editor-summary strong{font-size:18px}.ba-pet-editor-actions button{min-height:40px}.ba-pet-settings>.ba-pet-editor,.ba-pet-composition{padding:16px}.ba-pet-options h4 small{display:block;margin:4px 0 0}.ba-pet-thumbnail-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.ba-pet-editor-restore{margin-left:0}.ba-pet-editor-toolbar>.ba-pet-editor-actions{flex:1}.ba-pet-editor-toolbar>span{width:100%}}
 @media(prefers-reduced-motion:reduce){.ba-root button.ba-pet-choice{transition:none}}

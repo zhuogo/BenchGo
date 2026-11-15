@@ -61,7 +61,7 @@ import { createAssistantArtifacts } from './artifacts.mjs';
 import { profileDocuments } from './profile-documents.mjs';
 import { createRouterTools } from './router-tools.mjs';
 import { createAssistantDispatch } from './assistant-dispatch.mjs';
-import { createDeviceCollaboration } from './device-collaboration.mjs';
+import { createDeviceTools } from './device-tools.mjs';
 
 /** Channel uploads require a concrete, saved HTTP/SSE ASR protocol. */
 export async function channelVoiceAvailability(voice, providers) {
@@ -167,9 +167,7 @@ export async function mountAssistant(ctx, commander, providers) {
   const externalRegistry = createExternalActionRegistry();
   ctx.provide('benchgoExternalActions', createExternalActionHost({ ctx, store: externalActionStore, registry: externalRegistry,
     onApprovalPending: input => engine?.notifyApprovalPending(input) }));
-  let collaboration;
   orchestrationRuntime = createOrchestrationRuntime({ ctx, store, feishu, channels,
-    observeRemote: () => collaboration?.tick(),
     maintainTasks: () => cleanupContinuations?.tick(),
     notifyExecutionInput: input => engine.notifyExecutionInput(input),
     notifyTaskResult: notice => engine.notifyTaskResult(notice),
@@ -326,16 +324,14 @@ export async function mountAssistant(ctx, commander, providers) {
   const management = createManagementHttp({ settings, taskManagement, profileId: store.profileId,
     readConfig: () => store.getConfig(), readConnection: channel => store.connections.read(channel), readLearning: () => store.memory.learning() });
   const deviceStatus = createAssistantDeviceStatus({ ctx, store });
-  collaboration = createDeviceCollaboration({ ctx, store, runtimeStore: database, signal: shutdown.signal,
-    onUpdate: value => engine.notifyRemoteExecution(value) });
+  const deviceTools = createDeviceTools({ ctx });
   const artifacts = createAssistantArtifacts({ workspace: store.paths.workspace });
   const auxiliary = createAuxiliaryOperations({ ctx, store, artifacts, shutdown: shutdown.signal });
   const setupTools = createRouterTools({ ctx, commander, store, database, shutdown, historySearch, readLedger, goals, orchestrationRuntime, settings, projectSchedules, pet, desktopDelegation,
-    taskChanges, desktopTasks, taskControl, taskManagement, cleanupContinuations, modelActions, capabilities, deviceStatus, auxiliary, collaboration,
+    taskChanges, desktopTasks, taskControl, taskManagement, cleanupContinuations, modelActions, capabilities, deviceStatus, auxiliary, deviceTools,
     get engine() { return engine; } });
   engine = await createAssistantEngine({ ctx, store, setupTools, scheduleBridge,
     readTaskCleanupContinuation: id => database.taskCleanupContinuations.get(id),
-    readRemoteExecutions: () => database.meta('remote-executions') || [],
     resumeExecutionSession: input => orchestrationRuntime.resumeExecutionSession(input),
     readWatchdogFacts,
     onSourceMessage: input => channelSessions.onSourceMessage(input),
@@ -347,7 +343,7 @@ export async function mountAssistant(ctx, commander, providers) {
         if (!confirmed && store.orchestration.resultNotification(signal.taskId, signal.eventKey)) throw new Error('Public Router reply confirmation unavailable');
         return confirmed || { status: 'suppressed', reason: 'task-superseded' };
       }
-      else if (!['desktop', 'link'].includes(signal.source.channel)) store.orchestration.enqueueRouterReply(input);
+      else if (signal.source.channel !== 'desktop') store.orchestration.enqueueRouterReply(input);
     },
     onClearMain: () => database.clearMainChatNotifications() });
   const watchdogTarget = ctx.get('benchgo')?.config?.watchdogTarget;
@@ -392,7 +388,7 @@ export async function mountAssistant(ctx, commander, providers) {
   const systemFiles = createAssistantSystemFiles({ directory: store.paths.directory, desktop: () => ctx.get?.('sessionController') });
   const dispatch = createAssistantDispatch({ ctx, store, shutdown, historySearch, readLedger, channelCredentials, database, goals, engine, feishu, feishuStream, channels, orchestrationRuntime,
     executionSummaries, projectSchedules, pet, restartFeishu, evaluations, taskChanges, taskManagement, projectTasks, capabilities, management, state,
-    artifacts, auxiliary, systemFiles, skillProvider, collaboration });
+    artifacts, auxiliary, systemFiles, skillProvider });
   ctx.effect(() => registerAssistantFetchRoute({ connection: ctx.connection, dispatch }));
   for (const [name, handler] of [['transcribe', media.handlers.transcribe], ['speech', media.handlers.speech], ['worklet', media.handlers.worklet]]) {
     ctx.effect(() => ctx.connection.fetch.register({ path: `/api/commander/assistant/voice/${name}`, methods: [name === 'worklet' ? 'GET' : 'POST'], requestBody: name === 'worklet' ? 'buffered' : 'streaming', async fetch(request) {
@@ -408,7 +404,7 @@ export async function mountAssistant(ctx, commander, providers) {
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/commander/assistant/pet-asset', methods: ['GET'], requestBody: 'buffered', fetch: request => pet.fetchAsset(request) }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/commander/assistant/artifact', methods: ['GET'], requestBody: 'buffered', fetch: request => artifacts.fetch(request) }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/commander/assistant/system-file', methods: ['GET'], requestBody: 'buffered', fetch: request => systemFiles.fetch(request) }));
-  return { store, engine, database, dispatch, dispose, collaboration: collaboration.receive,
+  return { store, engine, database, dispatch, dispose,
     sidebarPrivateSessionIds: async () => {
       const [snapshot, records] = await Promise.all([store.getState(), ctx.sessionQuery.listSessions()]);
       return superagentSessionInventory({ state: snapshot, database: store.orchestration, records }).privateSessionIds;

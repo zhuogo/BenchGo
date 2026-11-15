@@ -1,10 +1,12 @@
 /** Build-time Plus packaging and one-time profile enrollment using the official bundle API. */
-import { spawnSync } from 'node:child_process';
 import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, closeSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+const localPayloadPolicy = fileURLToPath(new URL('./payload-policy.mjs', import.meta.url));
+const payloadPolicy = existsSync(localPayloadPolicy) ? localPayloadPolicy : join(process.resourcesPath ?? '', 'benchgo', 'payload-policy.mjs');
+const { assertEmbeddedServerSeed, assertSidebarPayload, inspectPluginPayload, omitClaudeNative, packedPluginFiles, SERVER_PAYLOAD_FILES } = await import(pathToFileURL(payloadPolicy).href);
 const localShared = fileURLToPath(new URL('./shared', import.meta.url));
 const packagedShared = typeof process.resourcesPath === 'string' ? join(process.resourcesPath, 'benchgo', 'shared') : undefined;
 const helperRoot = existsSync(join(localShared, 'plugin-install.mjs'))
@@ -83,7 +85,7 @@ export function assertBrowserPlatformPeer(name, spec, metadata, { officialRoot =
 }
 
 /** Copy published plugin files and required JS dependencies without duplicating Cordis or official services. */
-export function stagePluginBundle({ runtime, output, plugin = resolve(import.meta.dirname, '../../plugins/benchgo'), platform = process.platform, arch = process.arch }) {
+export function stagePluginBundle({ runtime, output, plugin = resolve(import.meta.dirname, '../../plugins/benchgo'), platform = process.platform, arch = process.arch, serverResources = 'full', includeServerResources = true }) {
   runtime = runtime ? resolve(runtime) : null; plugin = resolve(plugin);
   const manifest = readJson(join(plugin, 'package.json'));
   if (!['benchgo', 'benchgo-plugin'].includes(manifest.name) || !manifest.dsh?.bundle?.patch) throw new Error('Plus bundle: expected the BenchGo bundle package');
@@ -95,14 +97,13 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
   const composition = join(output, 'node_modules', bundleName);
   if (existsSync(composition)) throw new Error(`Plus bundle: composition already exists: ${composition}`);
   if (existsSync(destination)) throw new Error(`Plus bundle: destination already exists: ${destination}`);
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
   // npm supplies the package's own files allowlist; never ship the source workspace or private config.
-  const packed = spawnSync(npm, ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: plugin, encoding: 'utf8', shell: process.platform === 'win32' });
-  if (packed.status !== 0) throw new Error(`Plus bundle: npm pack failed: ${packed.stderr}`);
-  const files = JSON.parse(packed.stdout)[0].files.map(file => file.path);
+  const files = packedPluginFiles(plugin);
   for (const required of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) {
     if (!files.includes(required) || !existsSync(join(plugin, required))) throw new Error(`Plus bundle: missing built file ${required}; run build:plus first`);
   }
+  assertSidebarPayload(plugin);
+  const serverPayload = assertEmbeddedServerSeed({ plugin, files, delivery: serverResources, required: includeServerResources });
   const shared = new Map();
   const copied = new Set();
   const omitted = new Set();
@@ -127,6 +128,9 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
     for (const [name, spec] of Object.entries({ ...metadata.dependencies, ...optional })) {
       // ssh2 falls back to JS; omit the build machine's optional Node ABI addon.
       if (metadata.name === 'ssh2' && name === 'cpu-features') { omitted.add(name); continue; }
+      // Every BenchGo query uses the separately installed, explicitly selected CLI.
+      // Keep the SDK JavaScript and history API; omit only its unused native fallback.
+      if (omitClaudeNative(metadata, name)) { omitted.add(name); continue; }
       if (sharedPackage(name)) { assertShared(name, spec); continue; }
       let dependency;
       try { dependency = findPackage(name, source); }
@@ -158,6 +162,8 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
         if (path === dependency) return true;
         const relative = path.slice(dependency.length + 1);
         if (name === 'ssh2' && (relative === join('lib', 'protocol', 'crypto', 'build') || relative.startsWith(join('lib', 'protocol', 'crypto', 'build') + sep))) return false;
+        // Pageant is a Windows-only agent bridge; Unix hosts use their native SSH agent socket.
+        if (name === 'ssh2' && platform !== 'win32' && relative === join('util', 'pagent.exe')) return false;
         if (name === 'dsh-ops') {
           const [directory, target] = relative.split(/[\\/]/u);
           // Windows' optional WSL read backend also executes the Linux worker.
@@ -181,8 +187,13 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
     mkdirSync(destination, { recursive: true });
     for (const file of files) {
       if (file.startsWith('/') || file.split(/[\\/]/u).some(part => part === '..' || part === 'node_modules')) throw new Error(`Plus bundle: invalid packed file ${file}`);
+      if (serverResources === 'online' && SERVER_PAYLOAD_FILES.some(name => file === `lib/server/${name}`)) continue;
       mkdirSync(dirname(join(destination, file)), { recursive: true });
       copyFileSync(join(plugin, file), join(destination, file));
+    }
+    if (serverPayload) {
+      const descriptor = join(destination, 'lib/server/resources.json');
+      writeJson(descriptor, { ...readJson(descriptor), delivery: serverResources });
     }
     dependencies(plugin, destination);
     for (let index = 0; index < pendingDependencies.length; index++) {
@@ -206,17 +217,20 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
     }
     const services = [...shared].sort(([a], [b]) => a.localeCompare(b)).map(([name, version]) => ({ name, version }));
     writeJson(join(output, 'release.json'), { schemaVersion: 1, version: manifest.version, platform, arch, shared: services });
-    return { name: PLUS, bundle: bundleName, version: manifest.version, directory: output, destination, dependencies: [...copied].sort(), shared: services, omittedOptionalDependencies: [...omitted].sort() };
+    const inventory = inspectPluginPayload(output);
+    writeJson(join(output, 'payload-inventory.json'), inventory);
+    return { name: PLUS, bundle: bundleName, version: manifest.version, directory: output, destination, dependencies: [...copied].sort(), shared: services, omittedOptionalDependencies: [...omitted].sort(), serverResources: includeServerResources ? serverResources : 'seed-build', serverPayload, inventory };
   } catch (error) {
     rmSync(destination, { recursive: true, force: true });
     rmSync(composition, { recursive: true, force: true });
     rmSync(join(output, 'release.json'), { force: true });
+    rmSync(join(output, 'payload-inventory.json'), { force: true });
     throw error;
   }
 }
 
 /** Enroll or upgrade Plus offline; preserve user settings and later disable/recovery choices. */
-export async function initializePluginProfile({ runtime, resources, profile, seed }) {
+export async function initializePluginProfile({ runtime, resources, profile, seed, registerInstallation = profile === undefined }) {
   if (typeof resources !== 'string' || !resources) throw new Error('BenchGo: desktop application resources are required');
   const application = readJson(join(resources, 'app.asar', 'package.json'));
   if (application.name !== 'benchgo-desktop') throw new Error('BenchGo: invalid desktop application metadata');
@@ -228,7 +242,18 @@ export async function initializePluginProfile({ runtime, resources, profile, see
   const seedMetadata = readJson(join(seed, 'release.json'));
   const boot = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js')).href);
   const home = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-home-paths/lib/index.js')).href);
-  profile = resolve(profile ?? join(home.resolveDshHome(), 'profiles', 'desktop'));
+  const dshHome = home.resolveDshHome();
+  profile = resolve(profile ?? join(dshHome, 'profiles', 'desktop'));
+  if (registerInstallation) {
+    const { assertDesktopEnrollmentAvailable, registerDesktopWorkbench } = await import('./workbench-desktop.mjs');
+    const { withWorkbenchInstallLock } = await importShared('workbench-installation.mjs');
+    return withWorkbenchInstallLock({ home: dshHome }, async () => {
+      await assertDesktopEnrollmentAvailable({ home: dshHome });
+      const result = await initializePluginProfile({ runtime, resources, profile, seed, registerInstallation: false });
+      await registerDesktopWorkbench({ resources, runtime, profile, home: dshHome });
+      return result;
+    });
+  }
   mkdirSync(profile, { recursive: true, mode: 0o700 });
   const marker = join(profile, MARKER);
   const manifestPath = join(profile, 'package.json');
@@ -279,9 +304,15 @@ export async function initializePluginProfile({ runtime, resources, profile, see
 }
 
 async function main() {
-  const { values, positionals } = parseArgs({ options: { output: { type: 'string' }, seed: { type: 'string' }, runtime: { type: 'string' }, platform: { type: 'string' }, arch: { type: 'string' }, resources: { type: 'string' }, plugin: { type: 'string' }, profile: { type: 'string' } }, allowPositionals: true });
+  const { values, positionals } = parseArgs({ options: { output: { type: 'string' }, seed: { type: 'string' }, runtime: { type: 'string' }, platform: { type: 'string' }, arch: { type: 'string' }, resources: { type: 'string' }, plugin: { type: 'string' }, profile: { type: 'string' }, 'server-resources': { type: 'string', default: 'full' }, 'retired-directory': { type: 'string' } }, allowPositionals: true });
   if (positionals.length !== 1 || !['stage', 'init-profile'].includes(positionals[0]) || (positionals[0] === 'init-profile' && !values.resources)) throw new Error('Usage: plugin-bundle.mjs stage --output <seed> [--runtime <prepared-dsh>] [--plugin <plugin>] | init-profile --resources <resources> [--runtime <dsh>] [--profile <directory>]');
-  const result = positionals[0] === 'stage' ? stagePluginBundle(values) : await initializePluginProfile(values);
+  // Persist the committed old tree before enrollment. If enrollment fails, a
+  // later successful workspace can still clean it; this command never deletes it.
+  if (positionals[0] === 'init-profile' && values['retired-directory']) {
+    const { queueRetiredInstall } = await import('./install-cleanup.mjs');
+    await queueRetiredInstall({ resources: values.resources, retiredDirectory: values['retired-directory'] });
+  }
+  const result = positionals[0] === 'stage' ? stagePluginBundle({ ...values, serverResources: values['server-resources'] }) : await initializePluginProfile(values);
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 

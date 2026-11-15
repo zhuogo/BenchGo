@@ -6,19 +6,19 @@ import { channelDefinition } from './channel-catalog.mjs';
 import { readAssessmentPolicy } from './assessment-policy.mjs';
 import { taskStopped } from './task-lifecycle.mjs';
 import { profileDocuments } from './profile-documents.mjs';
+import { resolveReplyFileSource } from './reply-file-source.mjs';
 
 /** The owner-facing HTTP action table behind POST /api/commander/assistant. */
 export function createAssistantDispatch(runtime) {
   const { ctx, store, shutdown, historySearch, readLedger, channelCredentials, database, goals, engine, feishu, feishuStream, channels, orchestrationRuntime,
     executionSummaries, projectSchedules, pet, restartFeishu, evaluations, taskChanges, taskManagement, projectTasks, capabilities, management, state,
-    artifacts, auxiliary, systemFiles, skillProvider, collaboration } = runtime;
+    artifacts, auxiliary, systemFiles, skillProvider } = runtime;
   return async function dispatch(input, peer, { signal } = {}) {
     if (shutdown.signal.aborted) throw Object.assign(new Error('SuperAgent 已停用'), { status: 503, code: 'ASSISTANT_UNAVAILABLE' });
     const queryOptions = { signal: AbortSignal.any([shutdown.signal, signal].filter(Boolean)) };
     queryOptions.signal.throwIfAborted();
     const threadId = input.threadId ?? 'main';
     switch (input.action) {
-      case 'collaboration': return collaboration.receive(input, peer, queryOptions);
       case 'state': return state();
       case 'sessionRole': return { role: await readOwnedSessionRole({ store, sessionId: input.sessionId,
         listSessions: () => ctx.sessionQuery.listSessions() }) };
@@ -27,6 +27,24 @@ export function createAssistantDispatch(runtime) {
       case 'executionSessions': {
         const [snapshot, records] = await Promise.all([store.getState(), ctx.sessionQuery.listSessions()]);
         return { sessions: superagentSessionInventory({ state: snapshot, database: store.orchestration, records, agents: ctx.agents }).sessions };
+      }
+      case 'replyFileSource': {
+        if (![input.sessionId, input.requestId].every(value => typeof value === 'string' && value.trim()
+          && value.length <= 512 && !/[\u0000-\u001f\u007f]/.test(value))) throw new Error('文件所属消息无效，请刷新聊天后重试。');
+        const snapshot = await store.getState();
+        const current = threadId === 'main' ? snapshot.mainSessionId : snapshot.threads?.find(row => row.id === threadId)?.sessionId;
+        if (!current || ![current, ...(snapshot.sessionLineage?.[threadId] || [])].includes(input.sessionId))
+          throw new Error('文件不属于当前聊天，请返回原会话打开。');
+        const request = snapshot.requests?.find(row => row.threadId === threadId && row.sessionId === input.sessionId && row.messageId === input.requestId);
+        let source = request?.message?.id === input.requestId ? request.message.source : undefined;
+        if (!source) {
+          const live = ctx.sessions?.get(input.sessionId);
+          const events = live ? live.snapshotEvents() : (await ctx.sessionQuery.readSession(input.sessionId)).events;
+          source = events.find(row => row.type === 'user/message' && row.data?.id === input.requestId)?.data.source;
+        }
+        queryOptions.signal.throwIfAborted();
+        return resolveReplyFileSource({ database: store.orchestration, state: snapshot, threadId,
+          sessionId: input.sessionId, requestId: input.requestId, requestSource: source });
       }
       case 'petCatalog': return pet.catalog();
       case 'petUpload': return pet.upload(input);

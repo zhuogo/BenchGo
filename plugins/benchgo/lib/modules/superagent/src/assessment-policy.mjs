@@ -60,13 +60,8 @@ export function authorizeAssessment({ policy, candidate, trigger, decision, task
 export function validateTaskMandate(mandate, { policy }) {
   if (!mandate || !policy) return false;
   const desktop = mandate.source?.channel === 'desktop';
-  if (mandate.source?.channel === 'link') return mandate.admission === 'link-device-delegation'
-    && typeof mandate.source.deviceId === 'string' && !!mandate.source.deviceId
-    && mandate.actorId === `device:${mandate.source.deviceId}`
-    && ['sessionId', 'threadId', 'messageId'].every(key => typeof mandate.source[key] === 'string' && !!mandate.source[key])
-    && mandate.policyVersion === policy.desktopVersion
-    && mandate.controlledActions === 'require-current-policy-and-harness-approval'
-    && (!mandate.project || policy.projects?.some(project => project.id === mandate.project.id && project.path === mandate.project.path));
+  // A peer never grants business authority or creates a second Task.
+  if (mandate.source?.channel === 'link') return false;
   if (mandate.admission === 'desktop-schedule') return isScheduledTrigger({ actor: { id: mandate.actorId, kind: mandate.actorKind }, source: mandate.source })
     && mandate.policyVersion === policy.version && mandate.desktopPolicyVersion === policy.desktopVersion
     && mandate.controlledActions === 'require-current-policy-and-harness-approval'
@@ -74,7 +69,15 @@ export function validateTaskMandate(mandate, { policy }) {
   // Desktop mandates pin the desktop policy version; channel mandates are revalidated
   // against their own adapter's current policy.
   if (desktop && mandate.policyVersion !== policy.desktopVersion) return false;
-  if (mandate.project && !policy.projects?.some(project => project.id === mandate.project.id && project.path === mandate.project.path)) return false;
+  if (mandate.execution) {
+    const { deviceId, hostId, authorizationId, config } = mandate.execution;
+    if (!desktop || [deviceId, hostId, authorizationId].some(value => typeof value !== 'string' || !value)
+      || deviceId === 'local' || config?.harness !== 'official' || !Array.isArray(config.models) || config.models.length !== 1
+      || config.models.some(model => typeof model?.providerId !== 'string' || !model.providerId || typeof model?.modelId !== 'string' || !model.modelId)
+      || mandate.project && (mandate.project.deviceId !== deviceId || mandate.project.hostId !== hostId
+        || typeof mandate.project.id !== 'string' || !mandate.project.id || typeof mandate.project.path !== 'string' || !mandate.project.path)) return false;
+  } else if (mandate.project && (!policy.projects?.some(project => project.id === mandate.project.id && project.path === mandate.project.path)
+    || mandate.project.deviceId && mandate.project.deviceId !== 'local')) return false;
   const source = mandate.source;
   if (desktop) return typeof mandate.actorId === 'string' && !!mandate.actorId && mandate.admission === 'desktop-approved-delegation'
     && typeof source.sessionId === 'string' && !!source.sessionId && typeof source.messageId === 'string' && !!source.messageId

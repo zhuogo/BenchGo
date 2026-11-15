@@ -54,6 +54,16 @@ jobs:
         run: |
           npm run build:plus
           node --import ./scripts/source-loader.mjs --test plugins/benchgo/test/package-layout.test.mjs
+      - name: Verify standalone command installation and package metadata
+        if: matrix.package != 'plugins/benchgo'
+        working-directory: ${{ matrix.package }}
+        run: |
+          npm ci
+          npm test
+          mkdir -p "$RUNNER_TEMP/benchgo-command-pack"
+          npm pack --pack-destination "$RUNNER_TEMP/benchgo-command-pack"
+          PACKAGE_TGZ=$(node -p "const p = require('./package.json'); p.name + '-' + p.version + '.tgz'")
+          node test/package-smoke.mjs "$RUNNER_TEMP/benchgo-command-pack/$PACKAGE_TGZ"
       - name: Verify package archive
         working-directory: ${{ matrix.package }}
         run: npm pack --dry-run --ignore-scripts

@@ -1,8 +1,10 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import {Menu} from '@deepseek-ai/dsh-client-ui-primitives';
+import {fileAddressFor,resolveWorkspacePath} from '@deepseek-ai/dsh-util-workspace-path';
 import {Tooltip} from '../../shared/client/ui/tooltip.jsx';
 import {Loading} from '../../shared/client/ui/loading.jsx';
+import {Button} from '../../shared/client/ui/button.jsx';
 import {UIIcon} from '../../benchgo/client/iconsax.jsx';
 import {deviceStatus,workbenchUrl} from './device-state.mjs';
 import {deviceLauncherMode} from './device-navigation.mjs';
@@ -216,7 +218,8 @@ export function ResourceStage({ target, onClose }) {
   const [entry, setEntry] = useState(null), [ready, setReady] = useState(false), [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0), [container, setContainer] = useState(null);
   const deviceId = target?.device.id;
-  const url = entry?.deviceId === deviceId && entry?.attempt === attempt ? entry.url : '';
+  const identity = JSON.stringify([deviceId, target?.device.hostId, target?.device.authorizationId]);
+  const url = entry?.identity === identity && entry?.attempt === attempt ? entry.url : '';
   useEffect(() => {
     const close = () => onClose();
     const events = ['benchgo:workbench-selected', 'benchgo:assistant-thread', 'benchgo:assistant-tab'];
@@ -232,21 +235,34 @@ export function ResourceStage({ target, onClose }) {
     const controller = new AbortController();
     void deviceRequest('select', { deviceId }, AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])).then(value => {
       if (controller.signal.aborted) return;
+      if ((target.device.hostId || target.device.authorizationId) && (!value.device || value.device.id !== deviceId
+        || value.device.hostId !== target.device.hostId || value.device.authorizationId !== target.device.authorizationId))
+        throw Error('目标设备身份或授权已变化，请返回原任务核验');
       const next = new URL(workbenchUrl(value.url, location.origin));
       next.hash = new URLSearchParams({ resourceParentOrigin: location.origin }).toString();
-      setEntry({ deviceId, attempt, url: next.href });
+      setEntry({ identity, attempt, url: next.href });
     }).catch(reason => { if (!controller.signal.aborted) setError(reason.message); });
     return () => controller.abort();
-  }, [deviceId, attempt]);
+  }, [identity, attempt]);
   useEffect(() => {
     if (!url || !target) return;
     setReady(false); setError('');
     const origin = new URL(url).origin;
-    const send = () => frame.current?.contentWindow?.postMessage({ type: 'benchgo:resource:open', resource: target.resource, requestId: target.requestId }, origin);
+    const send = () => {
+      if (target.resource.file !== undefined && receiverReady.current?.files !== true) {
+        clearTimeout(timeout); setError('目标设备尚不支持交付文件工作区，请升级目标 BenchGo 后重试'); return;
+      }
+      if (target.resource.ownerTask && receiverReady.current?.executionReadOnly !== true) {
+        clearTimeout(timeout); setError('目标设备尚不支持只读执行会话，请升级目标 BenchGo 后重试'); return;
+      }
+      frame.current?.contentWindow?.postMessage({ type: 'benchgo:resource:open', resource: target.resource, requestId: target.requestId }, origin);
+    };
     const timeout = setTimeout(() => setError('目标工作台未响应，请重试或在设备中心检查连接与版本'), 15_000);
     const receive = event => {
       if (event.source !== frame.current?.contentWindow || event.origin !== origin) return;
-      if (event.data?.type === 'benchgo:resource:ready') { receiverReady.current = true; send(); }
+      if (event.data?.type === 'benchgo:resource:ready') {
+        receiverReady.current = event.data; send();
+      }
       if (event.data?.type === 'benchgo:resource:opened' && event.data.requestId === target.requestId) {
         clearTimeout(timeout); setReady(true); setError(event.data.error || '');
       }
@@ -263,7 +279,8 @@ export function ResourceStage({ target, onClose }) {
     return () => children.forEach((node, index) => { if (!prior[index]) node.removeAttribute('inert'); });
   }, [target, container]);
   if (!target || !container) return null;
-  return createPortal(<div className="cmd-resource-stage">
+  return createPortal(<div className="cmd-resource-stage" data-owner-task={target.resource.ownerTask ? '' : undefined}>
+    {target.resource.ownerTask && <div className="cmd-resource-owner"><Button variant="ghost" type="button" onClick={() => { target.onReturn?.(); onClose(); }}>返回原任务</Button><span>{target.device.name} · 执行会话只读</span></div>}
     {url && <iframe ref={frame} src={url} title={target.device.name + '的资源'} allow="clipboard-read; clipboard-write; microphone" referrerPolicy="no-referrer" onLoad={() => {
       receiverReady.current = false;
       frame.current?.contentWindow?.postMessage({ type: 'benchgo:resource:probe' }, new URL(url).origin);
@@ -279,7 +296,22 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
     const parent = new URL(origin);
     if (!['http:', 'https:', 'dsh-app:'].includes(parent.protocol) || (parent.origin !== origin && 'dsh-app://' + parent.host !== origin)) return;
   } catch { return; }
-  let disposed = false, pending = Promise.resolve();
+  let disposed = false, pending = Promise.resolve(), latestResourceRequestId, cancelFileWait;
+  let restoreInput;
+  const clearInputPolicy = () => { restoreInput?.(); restoreInput = undefined; };
+  const applyInputPolicy = resource => {
+    clearInputPolicy();
+    if (!resource.ownerTask) return;
+    const blocks = host.conversation?.blocks;
+    if (resource.kind !== 'sessions' || resource.native || !blocks?.storeFor || !blocks?.set)
+      throw Error('目标设备不支持只读执行会话，请升级 BenchGo 后重试');
+    if (resource.intent || ![resource.resourceId, resource.ownerTask.taskId, resource.ownerTask.ownerHostId,
+      resource.ownerTask.executionId].every(value => typeof value === 'string' && value)) throw Error('原任务执行引用无效，请返回原任务核验');
+    const id = resource.resourceId, previous = blocks.storeFor(id).getSnapshot();
+    const policy = { reason: '此执行会话由发起设备的原任务管理。请返回原任务补充或调整要求。' };
+    blocks.set(id, policy);
+    restoreInput = () => { if (blocks.storeFor(id).getSnapshot() === policy) blocks.set(id, previous); };
+  };
   const requests = new Map(), projectRequests = new Map(), cancellations = new Set();
   const projectActions = typeof projectApi === 'function' ? ['browse', 'project', 'clone'] : [];
   if (typeof host.workspaces?.delete === 'function' && typeof getDefaultProjectId === 'function') projectActions.push('deleteProject');
@@ -304,11 +336,50 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
     const exists = await loadedValue(host.sessions.list, snapshot => snapshot.ids.includes(id), '会话列表');
     if (disposed) throw Error('工作台已关闭');
     if (!exists) throw Error('会话不可用，请刷新后重试');
-    host.uiWorkspace.openSession(id);
+    await host.uiWorkspace.openSession(id);
+  };
+  const fileWorkspaceAvailable = () => typeof host.sidebarRight?.openResource === 'function'
+    && typeof host.sidebarRight?.mounted?.getSnapshot === 'function' && typeof host.sidebarRight.mounted.subscribe === 'function'
+    && typeof host.sessions?.binding === 'function';
+  const validateFile = resource => {
+    if (resource.file === undefined) return;
+    const file = resource.file;
+    if (resource.kind !== 'sessions' || resource.native || resource.intent || typeof resource.resourceId !== 'string' || !resource.resourceId
+      || !file || typeof file.path !== 'string' || !file.path.trim() || file.path.length > 32768 || /[\u0000-\u001f\u007f]/.test(file.path)
+      || file.line !== undefined && (!Number.isSafeInteger(file.line) || file.line < 1)) throw Error('文件引用无效，请返回原任务重试');
+    if (!fileWorkspaceAvailable()) throw Error('目标设备尚不支持交付文件工作区，请升级目标 BenchGo 后重试');
+  };
+  const openFile = async (resource, requestId) => {
+    const mounted = host.sidebarRight.mounted, id = resource.resourceId;
+    if (mounted.getSnapshot() !== id) await new Promise((resolve, reject) => {
+      let stop = () => {}, finished = false;
+      const finish = error => {
+        if (finished) return;
+        finished = true; clearTimeout(timer); stop(); cancellations.delete(cancel);
+        if (cancelFileWait === cancel) cancelFileWait = undefined;
+        error ? reject(error) : resolve();
+      };
+      const cancel = () => finish(Error(disposed ? '工作台已关闭' : '已切换到其他资源，请重新打开文件'));
+      const timer = setTimeout(() => finish(Error('目标会话文件工作区仍在加载，请重试')), 10_000);
+      cancellations.add(cancel); cancelFileWait = cancel;
+      stop = mounted.subscribe(() => { if (mounted.getSnapshot() === id) finish(); });
+      if (finished) stop();
+      else if (mounted.getSnapshot() === id) finish();
+    });
+    if (disposed) throw Error('工作台已关闭');
+    if (latestResourceRequestId !== requestId || mounted.getSnapshot() !== id) throw Error('已切换到其他资源，请重新打开文件');
+    const binding = host.sessions.binding(id);
+    if (!binding) throw Error('目标会话尚未连接，请重试');
+    const cwd = host.sessions.list.getSnapshot().byId?.[id]?.cwd;
+    const current = binding.session.projections.faceOf('workingDirectory').getSnapshot();
+    const address = fileAddressFor(id, cwd, resolveWorkspacePath(current ?? undefined, resource.file.path));
+    if (resource.file.line === undefined) await host.sidebarRight.openResource(address);
+    else await host.sidebarRight.openResource(address, { params: { line: resource.file.line } });
   };
   const ready = () => {
     document.documentElement.setAttribute('data-resource-embedded', '');
-    window.parent.postMessage({ type: 'benchgo:resource:ready', projectActions }, origin);
+    window.parent.postMessage({ type: 'benchgo:resource:ready', projectActions,
+      executionReadOnly: !!(host.conversation?.blocks?.storeFor && host.conversation?.blocks?.set), files: fileWorkspaceAvailable() }, origin);
   };
   const receive = event => {
     if (event.source !== window.parent || event.origin !== origin) return;
@@ -350,9 +421,13 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
     const { resource, requestId } = event.data;
     if (!resource || !['projects', 'sessions'].includes(resource.kind)) return;
     if (!requests.has(requestId)) {
+      latestResourceRequestId = requestId; cancelFileWait?.();
       const operation = pending.then(async () => {
         try {
           if (disposed) throw Error('工作台已关闭');
+          validateFile(resource);
+          if (resource.file && requestId !== latestResourceRequestId) throw Error('已切换到其他资源，请重新打开文件');
+          applyInputPolicy(resource);
           if (resource.intent === 'addProject') addProject();
           else if (resource.intent === 'newSession') await newSession(resource.resourceId);
           else if (resource.kind === 'sessions') {
@@ -369,6 +444,7 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
             if (id) await openSession(id);
             else throw Error('项目暂无对话，请通过新聊天创建');
           }
+          if (resource.file) await openFile(resource, requestId);
           return { type: 'benchgo:resource:opened', requestId };
         } catch (reason) { return { type: 'benchgo:resource:opened', requestId, error: reason.message }; }
       });
@@ -382,5 +458,5 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
   // The official shell can finish loading before this async sidebar mounts.
   // Announce readiness here, so a one-shot onLoad probe cannot be lost.
   ready();
-  return () => { disposed = true; cancellations.forEach(cancel => cancel()); window.removeEventListener('message', receive); };
+  return () => { disposed = true; clearInputPolicy(); cancellations.forEach(cancel => cancel()); window.removeEventListener('message', receive); };
 }

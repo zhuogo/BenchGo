@@ -232,6 +232,7 @@ export function UpdateLauncher({ host, wide = true }) {
   const app = data?.release?.app, appAvailable = !serverDeployment && !!data?.current?.app && app?.available === true;
   const decision = hostDecision(data);
   const nativeAvailable = canOpenAppUpdates && !serverDeployment && ['available', 'ready', 'downloading', 'verifying', 'installing'].includes(nativeState?.phase);
+  const appTargetVersion = appAvailable ? app.version : nativeAvailable ? nativeState.version : null;
   const useNativeApp = nativeAvailable && !restart && ['check', 'current', 'app'].includes(decision.action);
   const action = useNativeApp ? 'app' : decision.action;
   const updateAvailable = decision.available || nativeAvailable;
@@ -240,13 +241,18 @@ export function UpdateLauncher({ host, wide = true }) {
   const enabled = useNativeApp ? !data?.busy : decision.enabled;
   const actionable = ['plugin', 'app'].includes(action);
   const preparing = ['verifying', 'extracting', 'activating'].includes(data?.progress?.stage) && data?.phase === 'downloading' || ['verifying', 'installing'].includes(nativeState?.phase);
+  const targetVersion = data?.release?.releaseVersion;
+  const sameRelease = !!targetVersion && targetVersion === data?.current?.release;
+  const nativeStopFailed = !serverDeployment && !nativeError && nativeState?.phase === 'error' && nativeState.failure === 'stop-failed';
+  const appUpdateFailed = nativeStopFailed && (action === 'app' || !updateAvailable);
   const status = restart ? '待重启' : working ? (preparing ? '准备中' : data?.phase === 'downloading' || pending === 'install' || nativeState?.phase === 'downloading' ? '下载中' : pending === 'app' ? '更新中' : '检查中') : updateAvailable ? '有更新' : '';
   const pluginStatus = restart ? '待重启' : working ? (preparing ? '正在准备更新…' : data?.phase === 'downloading' || pending === 'install' || nativeState?.phase === 'downloading' ? '正在下载…' : pending === 'app' ? '更新中…' : '正在检查…')
     : error ? (['install', 'app'].includes(retryAction.current.action) ? '更新未完成' : '暂时无法检查更新')
+      : appUpdateFailed ? '应用更新未完成'
       : !data ? '尚未读取更新信息' : unpublished ? data.notice || '更新通道尚未就绪'
       : data.phase === 'error' ? (data.lastAction === 'install' ? '更新未完成' : '暂时无法检查更新') : !data.current?.plugin ? '暂无法识别插件版本'
-        : updateAvailable ? '发现新版本' : !plugin ? '尚未检查更新' : action === 'blocked' ? '暂无法确认更新状态' : '已是最新版本';
-  const targetVersion = data?.release?.releaseVersion;
+        : updateAvailable ? action === 'app' ? '主机应用有更新' : sameRelease ? action === 'plugin' ? '功能包有更新' : '有可用更新' : '发现新版本'
+          : !plugin ? '尚未检查更新' : action === 'blocked' ? '暂无法确认更新状态' : '已是最新版本';
   const configure = async (nextSource, nextMirror = mirrorUrl) => {
     if (nextSource === 'custom' && !httpsUrl(nextMirror)) { setError('请输入有效的 HTTPS 镜像地址。'); return; }
     const saved = await run('configure', { source: nextSource, mirrorUrl: nextMirror.trim() });
@@ -275,6 +281,12 @@ export function UpdateLauncher({ host, wide = true }) {
   const close = () => setOpen(false);
   const holdKey = `${action}:${plugin?.version || ''}:${app?.version || nativeState?.version || ''}:${source}:${mirrorUrl}`;
   const retryInstall = (error ? retryAction.current.action : data?.lastAction) === 'install';
+  const nativeFailureMessage = !serverDeployment && (nativeError || (nativeState?.phase === 'error' ? nativeFailureMessages[nativeState.failure] || '应用更新未完成，请重新检查。' : ''));
+  // Native shutdown failures already have an owned error window. Retain their
+  // full diagnostic in details while the main card keeps one recovery action.
+  // A staged feature package must take effect before another update operation.
+  const nativeFailureInDetails = restart || nativeStopFailed;
+  const nativeFailure = nativeFailureMessage && <div className="cmd-update-error" role="alert"><span>{nativeFailureMessage}</span>{!restart && <button type="button" className="cmd-update-text-button" disabled={working || !!data?.busy} onClick={() => void openAppUpdates()}>重试应用更新</button>}</div>;
   return <>
     <Tooltip label={status ? `更新 · ${status}` : '更新'} side="top" gap={10} delayMs={450} portal>
       <button type="button" className={`cmd-update-launcher ${wide ? '' : 'cmd-update-launcher-rail'}`} aria-label={status ? `更新，${status}` : '更新'} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
@@ -287,25 +299,26 @@ export function UpdateLauncher({ host, wide = true }) {
       <div className="cmd-update-content">
         <section className="cmd-update-plugin" aria-labelledby={`${id}-plugin`}>
           <Dialog.Root modal={false}>
-            <div className="cmd-update-card-heading"><span className="cmd-update-plugin-mark"><img src={brandIcon} width="38" height="38" alt="" /></span><div><h3 id={`${id}-plugin`}>BenchGo</h3>{data && <p role="status">{data.current?.release && <>{`v${data.current.release}`}{targetVersion && updateAvailable && !restart && <><span aria-hidden="true"> → </span><strong>v{targetVersion}</strong></>}<span aria-hidden="true"> · </span></>}{pluginStatus}</p>}</div>{data && <BubbleTooltip label="版本详情"><Dialog.Trigger asChild><button type="button" className="cmd-update-icon-button cmd-update-info" aria-label="版本详情"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></svg></button></Dialog.Trigger></BubbleTooltip>}</div>
+            <div className="cmd-update-card-heading"><span className="cmd-update-plugin-mark"><img src={brandIcon} width="38" height="38" alt="" /></span><div><h3 id={`${id}-plugin`}>BenchGo</h3>{data && <p role="status">{data.current?.release && <>{`v${data.current.release}`}{targetVersion && !sameRelease && updateAvailable && !restart && <><span aria-hidden="true"> → </span><strong>v{targetVersion}</strong></>}<span aria-hidden="true"> · </span></>}{pluginStatus}</p>}</div>{data && <BubbleTooltip label="版本详情"><Dialog.Trigger asChild><button type="button" className="cmd-update-icon-button cmd-update-info" aria-label="版本详情"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></svg></button></Dialog.Trigger></BubbleTooltip>}</div>
             <Dialog.Content className="cmd-update-details" aria-label="版本详情" aria-describedby={undefined} onEscapeKeyDown={event => event.stopPropagation()}>
               <div className="cmd-update-details-heading"><Dialog.Title>版本详情</Dialog.Title><Dialog.Close asChild><button type="button" className="cmd-update-icon-button" aria-label="关闭版本详情"><UIIcon name="close" size={14} /></button></Dialog.Close></div>
-              <dl><div><dt>当前主机</dt><dd>{localDesktop ? '本机' : globalThis.location?.hostname || '本机'}</dd></div><div><dt>功能包</dt><dd>{data?.current?.plugin ? `v${data.current.plugin}` : '版本未知'}{pluginAvailable && ` → v${plugin.version}`}</dd></div>{!serverDeployment && <div><dt>主机应用</dt><dd>{data?.current?.app ? `v${data.current.app}` : '版本未知'}{appAvailable && ` → v${app.version}`}</dd></div>}<div><dt>引擎</dt><dd>{data?.current?.engine || '版本未知'}</dd></div></dl>
+              <dl><div><dt>当前主机</dt><dd>{localDesktop ? '本机' : globalThis.location?.hostname || '本机'}</dd></div><div><dt>功能包</dt><dd>{data?.current?.plugin ? `v${data.current.plugin}` : '版本未知'}{pluginAvailable && ` → v${plugin.version}`}</dd></div>{!serverDeployment && <div><dt>主机应用</dt><dd>{data?.current?.app ? `v${data.current.app}` : '版本未知'}{appTargetVersion && appTargetVersion !== data?.current?.app && ` → v${appTargetVersion}`}</dd></div>}<div><dt>引擎</dt><dd>{data?.current?.engine || '版本未知'}</dd></div></dl>
               {data?.release?.notes && <div className="cmd-update-notes"><strong>更新内容</strong><p>{data.release.notes}</p></div>}
-              {canOpenAppUpdates && !serverDeployment && !restart && <button type="button" className="cmd-update-text-button" disabled={working || !!data?.busy} onClick={() => void openAppUpdates()}>检查安装器更新</button>}
+              {nativeFailureInDetails && nativeFailure && <><p className="cmd-update-warning">应用更新尚未完成</p>{nativeFailure}{restart && <p className="cmd-update-warning">请先重启主机应用，使功能包生效，再重试应用更新。</p>}</>}
+              {canOpenAppUpdates && !serverDeployment && !restart && !nativeStopFailed && <button type="button" className="cmd-update-text-button" disabled={working || !!data?.busy} onClick={() => void openAppUpdates()}>检查安装器更新</button>}
             </Dialog.Content>
           </Dialog.Root>
-          {!data && !error ? <Loading label="正在读取更新信息" compact /> : restart ? <div className="cmd-update-notice" role="status"><UIIcon name="check" size={16} /><span>重启主机{serverDeployment ? '服务' : '应用'}后生效{data?.busy && '，请先结束运行中的任务'}</span></div> : <>
+          {!data && !error ? <Loading label="正在读取更新信息" compact /> : restart ? <div className="cmd-update-notice" role="status"><UIIcon name="check" size={16} /><span>功能包已就绪，重启主机{serverDeployment ? '服务' : '应用'}后生效{data?.busy && '，请先结束运行中的任务'}</span></div> : <>
             {(installBlockReason && (updateAvailable || action === 'blocked' || action === 'deployment')) && <p className="cmd-update-warning" role="status">{installBlockReason}</p>}
             {data?.managed === false && !updateAvailable && <p className="cmd-update-warning">{serverManaged ? '此主机由服务器部署管理' : '当前安装方式需要新版应用才能启用功能包更新。'}</p>}
-            <div className="cmd-update-actions"><BubbleTooltip label={actionable && (!enabled || appOnHost) ? installBlockReason || '当前暂不能更新' : undefined} portal><span className="cmd-update-action" tabIndex={actionable && (!enabled || appOnHost) ? 0 : undefined}>{actionable ? <HoldToUpdate key={holdKey} disabled={!open || working || !enabled || appOnHost} onComplete={primary} /> : <button type="button" className="cmd-update-button cmd-update-check" disabled={working} onClick={() => void primary()}>{preparing ? '准备中…' : pending === 'install' || data?.phase === 'downloading' || nativeState?.phase === 'downloading' ? '下载中…' : pending === 'app' ? '更新中…' : working ? '检查中…' : '检查更新'}</button>}</span></BubbleTooltip>{updateAvailable && <button type="button" className="cmd-update-icon-button" aria-label="重新检查" disabled={working} onClick={() => void check()}><UIIcon name="refresh" size={16} /></button>}</div>
+            <div className="cmd-update-actions"><BubbleTooltip label={actionable && (!enabled || appOnHost) ? installBlockReason || '当前暂不能更新' : undefined} portal><span className="cmd-update-action" tabIndex={actionable && (!enabled || appOnHost) ? 0 : undefined}>{actionable ? <HoldToUpdate key={holdKey} label={appUpdateFailed && enabled && !appOnHost ? '长按 2 秒重试' : undefined} disabled={!open || working || !enabled || appOnHost} onComplete={primary} /> : <button type="button" className="cmd-update-button cmd-update-check" disabled={working} onClick={() => void primary()}>{preparing ? '准备中…' : pending === 'install' || data?.phase === 'downloading' || nativeState?.phase === 'downloading' ? '下载中…' : pending === 'app' ? '更新中…' : working ? '检查中…' : '检查更新'}</button>}</span></BubbleTooltip>{updateAvailable && <button type="button" className="cmd-update-icon-button" aria-label="重新检查" disabled={working} onClick={() => void check()}><UIIcon name="refresh" size={16} /></button>}</div>
           </>}
         </section>
         {open && !restart && (data?.phase === 'downloading'
           ? <UpdateProgress phase={data.phase} progress={data.progress} />
           : !serverDeployment && ['downloading', 'verifying', 'installing', 'ready'].includes(nativeState?.phase)
             ? <UpdateProgress native phase={nativeState.phase} progress={nativeState} observedAt={nativeState.observedAt} /> : null)}
-        {!serverDeployment && (nativeError || nativeState?.phase === 'error') && <div className="cmd-update-error" role="alert"><span>{nativeError || nativeFailureMessages[nativeState?.failure] || '应用更新未完成，请重新检查。'}</span><button type="button" className="cmd-update-text-button" disabled={working || !!data?.busy || restart} onClick={() => void openAppUpdates()}>重试应用更新</button></div>}
+        {!nativeFailureInDetails && nativeFailure}
         {(error || (!unpublished && data?.error)) && <div className="cmd-update-error" role="alert"><span>{error || data.error}</span>{retryInstall ? <HoldToUpdate key={`retry:${holdKey}`} label="长按 2 秒重试" disabled={!open || working || !!data?.busy} onComplete={retry} /> : <button type="button" className="cmd-update-text-button" disabled={!!pending || (working && retryAction.current.action !== 'status')} onClick={() => void retry()}>重试</button>}</div>}
         <section className="cmd-update-source" aria-labelledby={`${id}-source`}>
           <div className="cmd-update-source-row"><label htmlFor={`${id}-source-select`} id={`${id}-source`}><LinkIconMedium kind="url" href="https://github.com" size={16} />更新来源</label><Select id={`${id}-source-select`} value={source} disabled={working || restart} onChange={event => { const value = event.target.value; setSource(value); setError(''); if (value !== 'custom') void configure(value); }}>{Object.entries(sourceNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></div>

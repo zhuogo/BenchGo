@@ -2,9 +2,13 @@ import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 import { prepareInstallerSources } from './prepare-brand.mjs';
+import { serverResourceDelivery } from './payload-policy.mjs';
 
 if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('BenchGo Windows packaging requires a native Windows x64 build host. Use the Windows installer workflow.');
+const { values } = parseArgs({ options: { 'server-resources': { type: 'string', default: 'full' } } });
+const serverResources = serverResourceDelivery(values['server-resources']);
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const engine = join(root, 'deepseek-harness');
 const desktop = join(engine, 'apps/desktop');
@@ -33,7 +37,7 @@ await pm(['run', 'prepare:runtime'], desktop);
 await pm(['run', 'prepare:packages'], desktop);
 await pm(['run', 'prepare:dsh'], desktop);
 await rm(join(target, 'plus-seed'), { recursive: true, force: true });
-await run([join(root, 'scripts/desktop/plugin-bundle.mjs'), 'stage', '--runtime', join(target, 'dsh'), '--output', join(target, 'plus-seed')], root);
+await run([join(root, 'scripts/desktop/plugin-bundle.mjs'), 'stage', '--runtime', join(target, 'dsh'), '--output', join(target, 'plus-seed'), '--server-resources', serverResources], root);
 await pm(['exec', 'tsx', join(root, 'scripts/desktop/seal-runtime.mjs'), join(target, 'dsh')], desktop);
 
 const installerSources = join(root, '.local/desktop/installer');
@@ -41,10 +45,14 @@ await prepareInstallerSources(root, installerSources);
 const include = (await readFile(join(desktop, 'scripts/installer.nsh'), 'utf8')).replaceAll('\r\n', '\n').replaceAll('${__FILEDIR__}', join(desktop, 'scripts')).replace('!define INSTALLER_SOURCE_DIR', '!define /ifndef INSTALLER_SOURCE_DIR');
 if (include.split('!macro customInstall\n').length !== 2) throw new Error('Official installer changed: customInstall hook must be reviewed');
 if (include.split('!macro customInit\n').length !== 2) throw new Error('Official installer changed: customInit hook must be reviewed');
+const directoryTransactions = (await readFile(join(desktop, 'scripts/installer-directories.nsh'), 'utf8')).replaceAll('\r\n', '\n');
+const directoryCommit = '!macro dshFinishDirectories\n  StrCpy $dshNewMoved ""\n  ${If} $dshOldMoved == "1"\n    RMDir /r "\\\\?\\$dshOldDirectory"\n    StrCpy $dshOldMoved ""\n  ${EndIf}\n!macroend';
+if (directoryTransactions.split(directoryCommit).length !== 2) throw new Error('Official installer changed: review deferred post-commit cleanup');
 const bootstrap = `
 !ifndef BUILD_UNINSTALLER
 Var dshPreviousInstallLocation
 Var dshPreviousShortcutName
+Var benchgoRetiredDirectory
 !endif
 
 !macro customInit
@@ -54,6 +62,13 @@ Var dshPreviousShortcutName
 !macroend
 
 !macro customInstall
+  ; Keep the official promotion/rollback and commit point. Only retire the
+  ; already-replaced tree for cleanup after the new workspace is visible.
+  StrCpy $benchgoRetiredDirectory ""
+  \${If} $dshOldMoved == "1"
+    StrCpy $benchgoRetiredDirectory $dshOldDirectory
+    StrCpy $dshOldMoved ""
+  \${EndIf}
   !insertmacro dshOfficialCustomInstall
   Push $R0
   Push $R1
@@ -62,7 +77,7 @@ Var dshPreviousShortcutName
   Push $1
   ReadEnvStr $R2 ELECTRON_RUN_AS_NODE
   System::Call 'Kernel32::SetEnvironmentVariable(t, t)i("ELECTRON_RUN_AS_NODE", "1").r0'
-  nsExec::ExecToStack '"$INSTDIR\\BenchGo.exe" --expose-internals "$INSTDIR\\resources\\benchgo\\plugin-bundle.mjs" init-profile --resources "$INSTDIR\\resources" --runtime "$INSTDIR\\resources\\app.asar.unpacked\\dsh"'
+  nsExec::ExecToStack '"$INSTDIR\\BenchGo.exe" --expose-internals "$INSTDIR\\resources\\benchgo\\plugin-bundle.mjs" init-profile --resources "$INSTDIR\\resources" --runtime "$INSTDIR\\resources\\app.asar.unpacked\\dsh" --retired-directory "$benchgoRetiredDirectory"'
   Pop $R0
   Pop $R1
   System::Call 'Kernel32::SetEnvironmentVariable(t, t)i("ELECTRON_RUN_AS_NODE", "$R2").r1'

@@ -17,3 +17,5 @@ node_modules/
 # Generated server seed; rebuilt before packaging
 /plugins/benchgo/lib/server/server-seed.tar.gz
 /plugins/benchgo/lib/server/manifest.json
+/plugins/benchgo/lib/server/resources.json
+/plugins/benchgo/lib/server/update-public-key.pem

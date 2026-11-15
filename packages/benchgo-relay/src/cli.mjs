@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
-export const VERSION = '0.0.1';
+export const VERSION = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const configDefault = join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'benchgo', 'relay.json');

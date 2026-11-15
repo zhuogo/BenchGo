@@ -23,7 +23,9 @@ BenchGo 基于官方 DeepSeek Harness，不修改其源码。桌面、网页和 
 
 官网提供[下载](https://benchgo.cn/download)和[使用文档](https://benchgo.cn/docs)，安装包与校验文件保存在 [Releases](https://github.com/zhuogo/BenchGo/releases)。下载页只展示实际已发布的资产。Windows x64 提供 EXE，macOS Apple Silicon / Intel 提供 DMG 和 ZIP；安装后包含 BenchGo 基础层、Harness 聚合、SuperAgent、Voice 和 Link，无需逐项安装插件。macOS 当前采用 ad-hoc 签名，未经过 Apple 公证；Windows 未宣称发行者认证。
 
-Linux 服务端使用发行版中的 `benchgo-<version>-linux-server.tar.gz`，支持 Ubuntu / Debian x64 和 systemd 用户服务。校验同页 SHA256SUMS 后解压，在解压目录执行：
+自 CLI 0.1.1 起，使用 `npx --yes benchgo@0.1.1 install` 安装统一工作台，也可全局安装 `benchgo@0.1.1` 后运行 `benchgo install`。入口支持 Windows x64、macOS arm64/x64 和 Linux x64，需要 Node.js 24.9+；Windows 已完成隔离安装、复用与启停验证，macOS/Linux CLI 仍需真机验收。本机交互终端默认打开浏览器，SSH、无头会话及 `--no-open` 保持后台运行；`status/start/stop` 管理同一工作台。CLI 与新版 Desktop 共用同一用户目录和 `profiles/desktop`，优先连接已登记实例；未知旧工作区或不兼容引擎会明确拒绝接管并保留原环境。复用运行资源不代表首次客户端安装包无需下载。安装、资源复用及平台边界见[更新与发布设计](docs/05-更新与发布/设计.md)。源码开发入口仍为 `node bin/benchgo.mjs install`。
+
+需要 SSH/systemd 常驻部署时，使用发行版中的 `benchgo-<version>-linux-server.tar.gz`，支持 Ubuntu / Debian x64 和 systemd 用户服务。校验同页 SHA256SUMS 后解压，在解压目录执行：
 
 ```sh
 (umask 077; bash install.sh github connect > connection.json)

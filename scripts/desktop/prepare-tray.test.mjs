@@ -18,11 +18,9 @@ test('packaged enrollment resources must exactly match the reviewed source', asy
   const resources = await mkdtemp(join(tmpdir(), 'benchgo-enrollment-resources-'));
   t.after(() => rm(resources, { recursive: true, force: true }));
   await mkdir(join(resources, 'benchgo/shared'), { recursive: true });
-  for (const [source, target] of [
-    ['scripts/desktop/plugin-bundle.mjs', 'benchgo/plugin-bundle.mjs'],
-    ['plugins/benchgo/shared/plugin-install.mjs', 'benchgo/shared/plugin-install.mjs'],
-    ['plugins/benchgo/shared/update-feed.mjs', 'benchgo/shared/update-feed.mjs'],
-  ]) await copyFile(join(root, source), join(resources, target));
+  for (const mapping of config.extraResources.filter(item => typeof item === 'object' && item.to?.startsWith('benchgo/') && item.to.endsWith('.mjs'))) {
+    await copyFile(mapping.from, join(resources, mapping.to));
+  }
   await verifyPackagedEnrollment(resources);
   await writeFile(join(resources, 'benchgo/shared/plugin-install.mjs'), 'old bundled registration');
   await assert.rejects(verifyPackagedEnrollment(resources), /differs from source: benchgo\/shared\/plugin-install/);

@@ -6,7 +6,7 @@ operation=${2:-connect}
 case "$source_name" in mirror|github) ;; *) echo '无效下载源' >&2; exit 1;; esac
 case "$operation" in connect|update) ;; *) echo '无效安装操作' >&2; exit 1;; esac
 case "$(uname -s)" in Linux) ;; *) echo '服务器首版仅支持 Linux' >&2; exit 1;; esac
-case "$(uname -m)" in x86_64) node_arch=x64;; aarch64|arm64) node_arch=arm64;; *) echo '仅支持 x64 和 arm64' >&2; exit 1;; esac
+case "$(uname -m)" in x86_64) node_arch=x64;; *) echo '当前服务器包仅支持 Linux x64，暂不支持 ARM64' >&2; exit 1;; esac
 if [ ! -f /etc/os-release ]; then echo '无法识别服务器发行版' >&2; exit 1; fi
 . /etc/os-release
 case " ${ID:-} ${ID_LIKE:-} " in *' debian '*|*' ubuntu '*) ;; *) echo '首版仅支持 Ubuntu / Debian 系统' >&2; exit 1;; esac

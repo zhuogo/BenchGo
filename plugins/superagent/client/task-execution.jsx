@@ -27,9 +27,11 @@ function ExecutionMark({ status, active, label }) {
 }
 
 /** One timeline of retained summaries, executor activity history and current facts. */
-export function TaskExecution({ execution, taskStatus, executionControl, stale = false, sessionAvailable = false, outcome }) {
+export function TaskExecution({ execution, executionSession, taskStatus, executionControl, stale = false, sessionAvailable = false, outcome }) {
   const titleId = useId();
-  const recentOnly = stale || execution?.observed === false || (taskStatus && taskStatus !== 'running');
+  const remote = execution?.remote || (executionSession?.remote ? executionSession : null);
+  const remoteObserved = typeof remote?.observed === 'boolean' ? remote.observed : remote?.available === true && !!remote.observedAt;
+  const recentOnly = stale || execution?.observed === false || (remote && !remoteObserved) || (taskStatus && taskStatus !== 'running');
   const inactive = recentOnly || ['preparing', 'waiting', 'unknown', 'finished'].includes(execution?.phase)
     || ['pauseRequested', 'paused', 'stopRequested', 'stopped'].some(key => executionControl?.[key]);
   const summary = execution?.summary;
@@ -74,6 +76,7 @@ export function TaskExecution({ execution, taskStatus, executionControl, stale =
     <style>{css}</style>
     <div className="ba-progress-heading"><h3 id={titleId}>全执行记录</h3><Tooltip label={scope} maxWidth={360} portal openOnClick><Button variant="ghost" size="icon" className="ba-execution-scope" aria-label="记录范围"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v6m0-10v1" /></svg></Button></Tooltip></div>
     {stale && <p className="ba-execution-notice" role="status">动态更新暂不可用，以下保留上次记录。</p>}
+    {remote && <p className="ba-execution-notice" role="status">执行设备：{remote.deviceName || remote.deviceId || '远端设备'}。{!remoteObserved ? '连接待核实，以下保留上次记录。' : '任务由发起设备统一管理。'}{remote.observedAt && <> 最近同步：<UpdatedAt value={remote.observedAt} /></>}</p>}
     {!rows.length && <ResourceState icon="schedules" title="还没有执行记录" description="执行产生进展后会在这里实时更新。" />}
     <ol className="ba-execution-timeline" aria-label="执行时间线">{rows.map(row => <li key={row.id} className="ba-execution-worker" data-worker-id={row.worker ? row.id : undefined} data-worker-status={row.worker ? row.status : undefined} data-history-worker-id={row.historyWorker}>
       <ExecutionMark status={row.markStatus || row.status} active={row.active} label={row.state || '依据公开执行内容生成的进度摘要'} />

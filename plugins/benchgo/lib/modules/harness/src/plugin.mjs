@@ -4,6 +4,8 @@ import { mountHarnessCommands } from './official-commands.mjs';
 import { mountHarnessAdapter } from './adapter.mjs';
 import { mountHarnessWeb } from './web.mjs';
 import { isFullNativePermission, nativePermissionError, officialNativePermission } from './permissions.mjs';
+import { createRemoteExecutionService } from './remote-execution.mjs';
+import { join } from 'node:path';
 
 export const name = 'benchgo-harness';
 export const inject = ['benchgo', 'benchgoTooling', 'tools'];
@@ -17,6 +19,11 @@ export async function apply(ctx, config = {}) {
   ctx.effect(() => () => commander.close());
   Object.assign(commander, { toolInstaller: tooling.installer, toolProfiles: tooling.profiles, routeService: tooling.routeService, pickerCatalog: tooling.pickerCatalog });
   ctx.provide('commander', commander);
+  ctx.inject(['llm', 'agents', 'workspaceRegistry', 'sessionQuery'], async child => {
+    const execution = await createRemoteExecutionService({ ctx: child, directory: join(base.directory, 'executions') });
+    child.provide('benchgoExecution', execution);
+    child.effect(() => () => execution.close());
+  });
   ctx.inject(['connection', 'workspaceRegistry'], async child => {
     const web = await mountHarnessWeb(child, commander, { ...base.config, ...config });
     child.provide('benchgoHarnessWeb', web);

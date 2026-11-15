@@ -1,0 +1,7 @@
+/node_modules/
+/resources/shared/
+/resources/install.json
+/resources/LICENSE
+/resources/server/resources.json
+/resources/server/update-public-key.pem
+/*.tgz

@@ -13,8 +13,8 @@
   "id": "05",
   "title": "更新与发布",
   "eyebrow": "BUILD / RELEASE",
-  "subtitle": "业务源码装配成唯一 benchgo-plugin，经签名清单分发；主机准备不可变版本，在官方 profile 锁内激活，重启后加载。",
-  "boundary": "图中机制已有实现，但构建、签名、安装、激活与公网分发必须对当前产物分别验收。插件、桌面应用、Android 与服务器是不同更新边界；源码测试或 artifact 存在不代表已正式发布。",
+  "subtitle": "统一安装先发现与复用，生产闭包保留实际依赖，部署资源校验缓存后交付；三平台原生、GUI 交接与公开发行分别验收。",
+  "boundary": "图中机制已有实现，但构建、签名、安装、激活与公网分发必须对当前产物分别验收。插件、桌面应用、Android 与服务器是不同更新边界；源码测试或 artifact 存在不代表已正式发布。  install、instance-reuse、payload-policy、sidebar-closure、deployment-resources 已有对应源码；状态仅表示所述实现范围，不表示三平台原生安装、GUI 交接、真实模型推理或公开发行通过。默认 full 保留完整离线 seed，显式 online 走固定签名资源与缓存；Office/Python/Node/dsh-ops 保留。",
   "nodes": [
     {
       "id": "version",
@@ -68,16 +68,18 @@
       "sub": "五入口 + 生产依赖 + 统一客户端",
       "symbol": "stagePluginBundle()",
       "plain": "完整包离开源码目录后仍必须能运行。",
-      "role": "按 npm files 白名单收集已构建文件，检查五入口、runtime 与资源；复用官方共享服务身份，构造可安装 composition。",
+      "role": "按 npm files 白名单收集已构建文件，检查五入口、runtime 与资源；复用官方共享服务身份，构造可安装 composition。 侧栏主机生产闭包已替代完整 npm 生产图；生成 host、真实动态资源、摘要回执与许可证，官方共享宿主服务 external，被替换的无效依赖和入口不再保留。",
       "input": "构建产物与锁定生产依赖",
       "output": "完整插件目录与 tar.gz",
       "sources": [
         "scripts/desktop/plugin-bundle.mjs",
         "scripts/desktop/package-plugin-update.mjs",
-        "plugins/benchgo/cordis.patch.yml"
+        "plugins/benchgo/cordis.patch.yml",
+        "plugins/workbench/scripts/sidebar-runtime.mjs",
+        "scripts/desktop/payload-policy.mjs"
       ],
-      "note": "唯一安装包是 benchgo-plugin；源码包不是额外安装插件。",
-      "state": "implemented",
+      "note": "唯一安装包是 benchgo-plugin；源码包不是额外安装插件。 复用真实来源去重、平台过滤及总包上限；嵌套 seed 版本/pin/输入摘要/公钥和完整性、分类逻辑体积/条目预算已有门禁。压缩收益及真实功能以当前发行产物另验。",
+      "state": "partial",
       "x": 820,
       "y": 160
     },
@@ -107,7 +109,7 @@
       "kicker": "GITHUB RELEASES",
       "kind": "finish",
       "sub": "一个公开版本，复用没有变化的组件",
-      "symbol": "v\u003creleaseVersion> · plugin-updates · app-updates",
+      "symbol": "v<releaseVersion> · plugin-updates · app-updates",
       "plain": "普通 push 保存源码，显式统一发版才通知客户端。",
       "role": "统一工作流先比较签名发行基线，按需调用功能包、Windows、Android 构建；全部验证后发布不可变资产，再推进原生及签名更新通道。默认只生成计划。",
       "input": "已签名清单、完整包、显式发布选项",
@@ -238,12 +240,139 @@
         "scripts/desktop/electron-builder.config.mjs",
         "plugins/link/mobile/android/app/build.gradle",
         "scripts/server/bootstrap.mjs",
-        "packages/benchgo-relay/src/cli.mjs"
+        "packages/benchgo-relay/src/cli.mjs",
+        "packages/benchgo-cli/src/installer.mjs",
+        "scripts/desktop/workbench-desktop.mjs"
       ],
-      "note": "桌面原生更新用配置后的官方 electron-updater；实际签名连续性与新装/升级需按产物验收。",
+      "note": "桌面原生更新用配置后的官方 electron-updater；实际签名连续性与新装/升级需按产物验收。 Windows x64、macOS arm64/x64、Linux x64 本机 CLI 与 Desktop/CLI 互认已有源码，原 SSH/systemd 路径独立管理且检测后不另建。三平台原生安装、GUI 交接和公开发行仍需对应实物验证，中继保持独立 Linux/systemd。",
       "state": "partial",
       "x": 1200,
       "y": 740
+    },
+    {
+      "id": "install",
+      "title": "统一工作台安装入口",
+      "kicker": "INSTALL / ENTRY",
+      "kind": "orchestration",
+      "x": 820,
+      "y": 740,
+      "sub": "本机浏览器 · SSH 无头 · 独立中继",
+      "symbol": "benchgo install / benchgo-relay",
+      "plain": "同一工作台命令先复用已有环境，再安装缺失部分。",
+      "role": "同一 CLI 支持 Windows x64、macOS arm64/x64、Linux x64，先读取共同登记并核验；兼容则连接或唤起，只安装缺失受管资源。本机交互默认浏览器，SSH/CI/JSON 与 Linux 无显示会话默认 no-open。Desktop 保留原生入口，Relay 独立安装；prefetch、offline、runtime 控制资源路径。",
+      "input": "平台架构、安装请求、显式选项与已有安装位置",
+      "output": "可连接的工作台、真实安装结果或可执行诊断",
+      "sources": [
+        "packages/benchgo-cli/src/cli.mjs",
+        "scripts/server/bootstrap.sh",
+        "scripts/server/bootstrap.mjs",
+        "docs/05-更新与发布/设计.md",
+        "packages/benchgo-cli/src/installer.mjs",
+        "packages/benchgo-cli/src/artifacts.mjs",
+        "packages/benchgo-cli/src/host.mjs"
+      ],
+      "state": "partial",
+      "note": "源码已接线；三平台原生实物及真实 GUI 交接分别验收。首次独立安装需 Node24.9+；可显式复用精确兼容载体。原 SSH stdout 机器协议保留且与交互文案分离，浏览器打开失败仍返回工作台连接指引。"
+    },
+    {
+      "id": "payload-policy",
+      "title": "产物新鲜度与裁剪门禁",
+      "kicker": "PAYLOAD / VALIDATION",
+      "kind": "execution",
+      "x": 60,
+      "y": 1030,
+      "sub": "输入身份 → 构成体积 → 功能回归",
+      "symbol": "staging / server seed / size",
+      "plain": "先阻止旧产物混入，再启用有实测收益的裁剪。",
+      "role": "桌面/功能包 staging 已检查嵌套 seed 的插件、引擎 pin、输入摘要、公钥、包摘要及 bootstrap，并记录分类逻辑体积/条目预算；seed 验证后原子替换。固定 SDK0.3.300 保留 JavaScript，仅排除其可选 native 包，业务继续显式外部 Claude CLI；SDK 升级拒绝沿用裁剪。Electron 保留八种产品语言。",
+      "input": "当前源码和 manifest、staging、固定 seed 与实际功能证据",
+      "output": "通过身份/体积约束的生产载荷，或阻止发行的具体错误",
+      "sources": [
+        "scripts/desktop/plugin-bundle.mjs",
+        "scripts/server/package-linux.mjs",
+        "plugins/harness/src/providers/claude.mjs",
+        "docs/05-更新与发布/设计.md",
+        "scripts/desktop/payload-policy.mjs",
+        "scripts/desktop/verify-claude-payload.mjs",
+        "scripts/server/package-seed.mjs",
+        "scripts/desktop/electron-builder.macos.config.mjs"
+      ],
+      "state": "implemented",
+      "note": "源码门禁已实现。真实 Claude CLI 隔离初始化与模型列表无付费握手通过，不能替代真实推理、权限执行或历史恢复验收；压缩收益另测。reload:plus 不重建 seed，完整包缺失/损坏不静默回退在线。"
+    },
+    {
+      "id": "instance-reuse",
+      "title": "共同发现与实例所有权",
+      "kicker": "INSTALL / REUSE",
+      "kind": "orchestration",
+      "x": 440,
+      "y": 1030,
+      "sub": "共同 registry/租约 · canonical profile 单宿主",
+      "symbol": "Desktop / CLI / official Harness",
+      "plain": "CLI 与客户端认出同一环境，避免重复创建工作台。",
+      "role": "CLI 与 Desktop 共用 workbench-installation：以 DSH_HOME 或 ~/.dsh 的 profiles/desktop 为 canonical profile，.benchgo/workbench 保存受限 registry、host 租约和安装锁，写入遵守官方 profile 锁。验证真实平台/架构、精确引擎与服务状态；Desktop 等空闲 Web 安全停止后接管，CLI 连接活跃 Desktop 而不强停。",
+      "input": "真实安装位置、受管 manifest、profile 与服务状态",
+      "output": "已核实的连接/管理归属，或无破坏的冲突诊断",
+      "sources": [
+        "scripts/desktop/plugin-bundle.mjs",
+        "scripts/server/bootstrap.mjs",
+        "deepseek-harness/packages/skill/tool-workspace-dependencies/src/index.ts",
+        "docs/05-更新与发布/设计.md",
+        "plugins/benchgo/shared/workbench-installation.mjs",
+        "scripts/desktop/workbench-desktop.mjs",
+        "packages/benchgo-cli/src/host.mjs",
+        "packages/benchgo-cli/src/installer.mjs"
+      ],
+      "state": "partial",
+      "note": "共同登记与所有权源码已实现，GUI/原生平台交接待实物验收。未知旧 Harness profile 保守拒绝并保留；显式runtime只复用精确兼容引擎。检测原SSH/systemd安装时不另建，运行/等待/已安排任务阻止接管。服务/配置、运行资源和完整包下载分别判断。"
+    },
+    {
+      "id": "sidebar-closure",
+      "title": "侧栏真实生产闭包",
+      "kicker": "PAYLOAD / SIDEBAR",
+      "kind": "execution",
+      "x": 820,
+      "y": 1030,
+      "sub": "主机产物 + lazy 资源 + 宿主共享服务",
+      "symbol": "Workbench vendor adapter",
+      "plain": "用实际部署产物替代完整构建依赖图。",
+      "role": "sidebar-runtime 随原 vendor adapter 已生成固定第三方侧栏 host、editor/mermaid/locale/terminal动态资源、实际依赖、摘要回执和许可；官方共享服务 external。完整 npm 生产图已由部署产物替代，不保留空壳或旧适配别名。",
+      "input": "固定第三方版本、已有适配构建与真实资源引用",
+      "output": "可脱离源码运行的侧栏主机、客户端资源及许可证",
+      "sources": [
+        "plugins/workbench/scripts/vendor-adapter.mjs",
+        "plugins/workbench/src/plugin.mjs",
+        "plugins/benchgo/scripts/build-client.mjs",
+        "docs/05-更新与发布/设计.md",
+        "plugins/workbench/scripts/sidebar-runtime.mjs",
+        "plugins/workbench/test/sidebar-runtime.test.mjs"
+      ],
+      "state": "implemented",
+      "note": "生产闭包源码已有，生成产物脱离源码的真实文件、编辑器、终端、Mermaid、语言、预览及SSH仍按发行物验收。生成目录不手工维护，体积收益不把声明/demo重复计算。"
+    },
+    {
+      "id": "deployment-resources",
+      "title": "部署资源取得与离线预取",
+      "kicker": "RESOURCE / DEPLOYMENT",
+      "kind": "execution",
+      "x": 1200,
+      "y": 1030,
+      "sub": "固定身份 → 校验缓存 → SSH 上传",
+      "symbol": "server seed / cache / prefetch",
+      "plain": "在线只获取缺失部署资源，离线部署仍有完整路径。",
+      "role": "server-resources 为 Link 与 CLI 共用：以固定发行/引擎/签名摘要校验完整本地资源或缓存；缺失时显示进度、临时下载并安全校验后原子缓存，再沿原SSH确认/认证上传。设备中心已有预取、资源阶段取消与重试；安装开始后不再提供不安全取消。默认 full 带完整离线seed，显式 --server-resources online 仅带描述与信任根。",
+      "input": "用户确认的部署请求、签名/摘要身份、所选来源或离线资源",
+      "output": "已核验的部署载荷与原安装协议结果",
+      "sources": [
+        "plugins/link/src/server/manager.mjs",
+        "scripts/server/package-seed.mjs",
+        "docs/05-更新与发布/设计.md",
+        "plugins/benchgo/shared/server-resources.mjs",
+        "plugins/link/client/device-center.jsx",
+        "scripts/desktop/package-plugin-update.mjs"
+      ],
+      "state": "implemented",
+      "note": "资源服务与UI源码已接线；匹配的在线资源必须真实公开发布，完整包损坏不静默回退网络。缓存命中仍校验，下载取消只清理临时内容；真实首次SSH/离线部署仍需产物验收，Office/Python/Node/dsh-ops保留。"
     }
   ],
   "edges": [
@@ -317,6 +446,54 @@
       "from": "b",
       "to": "t",
       "kind": "support"
+    },
+    {
+      "a": "build",
+      "b": "payload-policy",
+      "label": "核验输入与构成",
+      "from": "b",
+      "to": "t",
+      "kind": "support"
+    },
+    {
+      "a": "payload-policy",
+      "b": "bundle",
+      "label": "通过才封装",
+      "from": "t",
+      "to": "b",
+      "kind": "support"
+    },
+    {
+      "a": "sidebar-closure",
+      "b": "bundle",
+      "label": "实际运行闭包",
+      "from": "t",
+      "to": "b",
+      "kind": "support"
+    },
+    {
+      "a": "install",
+      "b": "instance-reuse",
+      "label": "先发现与核验",
+      "from": "b",
+      "to": "t",
+      "kind": "support"
+    },
+    {
+      "a": "platform",
+      "b": "instance-reuse",
+      "label": "Desktop 同一机制",
+      "from": "b",
+      "to": "r",
+      "kind": "support"
+    },
+    {
+      "a": "deployment-resources",
+      "b": "install",
+      "label": "按需缺失资源",
+      "from": "t",
+      "to": "b",
+      "kind": "support"
     }
   ],
   "steps": [
@@ -360,6 +537,26 @@
       "title": "重启并核对实际加载",
       "text": "启动后核对真实包、官方解析路径、五入口及客户端；仅看到下载完成或 manifest 新版本不能判定成功。",
       "edge": 8
+    },
+    {
+      "node": "install",
+      "title": "已接线：安装前先发现",
+      "text": "本机 benchgo install 与 Desktop 使用共同登记；兼容实例连接或唤起。Windows x64、macOS arm64/x64、Linux x64 使用真实原生资源，SSH/systemd 继续独立管理，中继独立安装；原生实物另验。"
+    },
+    {
+      "node": "instance-reuse",
+      "title": "已接线：确认谁拥有 profile",
+      "text": "共同 registry、host租约和官方锁保障canonical profile单宿主。Desktop只安全接管空闲Web，CLI不强停Desktop；未知旧Harness保留并保守拒绝，GUI真实交接另验。"
+    },
+    {
+      "node": "payload-policy",
+      "title": "已接线：门禁与固定闭包",
+      "text": "已检查seed身份/完整性与分类体积，生成侧栏真实部署闭包、八语言并排除固定SDK可选native。真实CLI无付费握手不等于真实模型推理，功能与压缩收益按发行物另验。"
+    },
+    {
+      "node": "deployment-resources",
+      "title": "已接线：签名缓存与离线交付",
+      "text": "默认完整离线，显式online按固定签名资源取得、校验并原子缓存。预取、进度、资源阶段取消/重试已有入口；未发布匹配资源和失败不冒称可部署。"
     }
   ],
   "docs": [
@@ -376,5 +573,9 @@
       "path": "upstream.json"
     }
   ],
-  "version": "2026-11-11-1"
+  "version": "2026-11-16-installation-implementation-1",
+  "canvas": {
+    "width": 1580,
+    "height": 1240
+  }
 }</script><script src="../_assets/architecture.js"></script></body></html>

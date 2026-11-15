@@ -32,6 +32,7 @@ async function fixture() {
           taskCanOrganize:true,createdAt:'2026-11-07T08:00:00Z',updatedAt:'2026-11-07T08:05:00Z',
           results:[{version:1,summary:'已完成检索。汇总事实，并附上来源与下一步。',evidenceRefs:[]}],
           ...(state==='progress'?{status:'running',resultVersion:0,results:[],execution:{instructionRevision:1,observed:true,worker:{id:'main',label:'主 Worker',status:'running',activitySource:'report',activity:'核对邮箱验证限制，准备重新注册',updatedAt:'2026-11-13T08:00:00Z',history:[{seq:1,status:'running',activitySource:'report',activity:'读取 ~/MEMORY.md，确认之前的注册记录',time:'2026-11-13T07:59:00Z'},{seq:2,status:'running',activitySource:'report',activity:'核对邮箱验证限制，准备重新注册',time:'2026-11-13T08:00:00Z'}]}}}:{}),
+          ...(['remote','remote-stale'].includes(state)?{status:'running',resultVersion:0,results:[],executionSession:{available:true,remote:true,taskId:'done',sessionId:'same-session',deviceId:'b',hostId:'host-b',authorizationId:'auth-b',executionId:'exec-b',ownerHostId:'host-a'},execution:{instructionRevision:1,observed:state==='remote',remote:{deviceId:'b',deviceName:'远端执行设备 B',available:state==='remote',observed:{phase:'running'},observedAt:'2026-11-15T01:00:00Z'},worker:{id:'remote-worker',status:'running',activitySource:'report',activity:'正在核验远端工作区',updatedAt:'2026-11-15T01:00:00Z'}}}:{}),
           ...(state==='waiting'?{status:'waiting',resultVersion:0,results:[],executionControl:{stopRequested:true},execution:{instructionRevision:1,summary:{text:'已请求停止，等待执行端确认',history:[]},worker:{id:'main',status:'running',activity:'执行状态待核实'}}}:{}),
           ...(state==='markdown'?{instructionRevision:2,target:${JSON.stringify(longRequirements)},acceptance:'- 验证通过\\n- 保留证据',
             revisions:[{instructionRevision:1,operation:'original',target:'# 初始要求\\n\\n- 检查基础服务',createdAt:'2026-11-07T08:00:00Z'},
@@ -106,6 +107,31 @@ test('task management opens the same action timeline without repeated executor o
     }
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
+});
+
+test('remote task execution shows its executor and retained observations without changing owner task navigation', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html=await fixture(),browser=await chromium.launch({headless:true,executablePath});
+  const screenshots=process.env.BENCHGO_TASK_HEADING_SCREENSHOTS;
+  if(screenshots)await mkdir(screenshots,{recursive:true});
+  try {
+    const page=await browser.newPage({reducedMotion:'reduce'}),errors=[];page.setDefaultTimeout(5000);page.on('pageerror',error=>errors.push(error.message));
+    await page.route('**/*',route=>route.request().url()==='http://localhost/'?route.fulfill({contentType:'text/html',body:html}):route.abort());
+    for(const width of [1440,390])for(const dark of [false,true])for(const state of ['remote','remote-stale']) {
+      await page.setViewportSize({width,height:900});await page.goto('http://localhost/');
+      await page.evaluate(({state,dark})=>{document.body.toggleAttribute('data-ds-dark-theme',dark);window.renderScenario(state);},{state,dark});
+      await page.locator('.ba-task-open').click();
+      const detail=page.getByRole('region',{name:'任务详情',exact:true});
+      await detail.getByText(/执行设备：远端执行设备 B/).waitFor();
+      assert.equal(await detail.getByText(/连接待核实，以下保留上次记录/).count(),state==='remote-stale'?1:0);
+      assert.equal(await detail.locator('.ba-execution-mark[data-active="true"]').count(),state==='remote'?1:0);
+      assert.equal(await detail.getByRole('button',{name:'查看执行会话',exact:true}).count(),1);
+      assert(await detail.evaluate(node=>node.scrollWidth<=node.clientWidth));
+      if(screenshots)await page.screenshot({path:join(screenshots,`${state}-${width}-${dark?'dark':'light'}.png`),fullPage:true});
+      await detail.getByRole('button',{name:'返回列表',exact:true}).click();
+      assert.equal(await page.locator('.ba-task-open').count(),1,'executor does not add another task row');
+    }
+    assert.deepEqual(errors,[]);
+  } finally {await browser.close();}
 });
 
 test('task heading aligns category tabs and icon tools remain usable in four resource states and narrow layouts', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {

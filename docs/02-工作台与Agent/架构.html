@@ -13,8 +13,8 @@
   "id": "02",
   "title": "工作台与 Agent",
   "eyebrow": "WORKSPACE / AGENT",
-  "subtitle": "一个客户端组织项目、官方会话与原生 Agent；Interactive、Workbench 在基础层内部装配，任务业务由 SuperAgent 负责。",
-  "boundary": "图示来自当前工作区源码。外部 Agent 能力各异；本机工作台、SSH、真实原生会话和安装版界面需分别验收，不能由构建成功推定。 跨设备查询、目标执行、结果回传与聚合导航已接线；AI管理限已有设备及中继优先级/启停申请，首次配对与秘密仍走设备中心。双向需双方授权；本地TLS和浏览器测试不等于襄阳服务器真机验收。",
+  "subtitle": "统一客户端组织项目与真实会话；业务任务归发起宿主，执行可在远端，导航切换不转移任务所有权。",
+  "boundary": "图示来自当前工作区源码。外部 Agent 能力各异；本机工作台、SSH、真实原生会话和安装版界面需分别验收，不能由构建成功推定。 2026-11-15 已接通 A 唯一业务 Task → Link v1 execution → B 独立 benchgoExecution → A 事实/结果回流。A coordinator 与无 SuperAgent 的 B 独立服务及官方 Agent fixture 五项通过，Link execution catalog 真实 TLS/身份测试通过；UI 39 项及四态、明暗、390px 组件验证通过。这些不等于真物理双机、安装版或实际供应商验收。旧数据离线迁移 CLI 六项测试通过，未操作真实权威库；B v1 仅 official 单模型、无二级子代理委派，执行会话只读，跨设备产物传输不支持。",
   "nodes": [
     {
       "id": "base",
@@ -64,7 +64,7 @@
       "sub": "项目、未分组、最近、归档与搜索",
       "symbol": "mountSidebarProjects()",
       "plain": "从不同导航入口，回到同一条真实会话。",
-      "role": "复用官方 workspaces、sessions 与 uiSession；组织项目、未分组与原生会话，保留归档和重命名入口，按公开状态组织列表。",
+      "role": "复用官方 workspaces、sessions 与 uiSession；组织项目、未分组与原生会话，保留归档和重命名入口，按公开状态组织列表。 跨设备任务的业务列表由受理宿主 A 提供，项目或会话所在设备另行标注；B 的执行会话可原生查看，但不因此生成 B 业务工单。",
       "input": "项目与官方会话快照、用户选择",
       "output": "工作区选择、会话打开与列表状态",
       "sources": [
@@ -72,7 +72,7 @@
         "plugins/benchgo/client/sidebar-state.mjs",
         "plugins/benchgo/src/web.mjs"
       ],
-      "note": "任务业务属于 SuperAgent，导航不另建执行队列。 项目/最近可选择本机、全部或指定设备，目标导航已接线，最近聚合保留原会话归属。",
+      "note": "任务业务属于 SuperAgent，导航不另建执行队列。 项目/最近可选择本机、全部或指定设备，目标导航已接线，最近聚合保留原会话归属。 A 工单与 B 执行位置的统一展示、原任务管理及只读会话入口已接线；真实安装版待验。",
       "state": "implemented",
       "x": 820,
       "y": 160
@@ -273,7 +273,7 @@
       "sub": "当前设备 · 全部 · 指定设备",
       "symbol": "共享显示设置",
       "plain": "一个设置同时控制项目和最近列表。",
-      "role": "默认当前工作台所属设备；全部包括已授权但暂时离线的设备。选择持久化并保持草稿和列表位置，筛选不改变助手能力或执行地点。",
+      "role": "默认当前工作台所属设备；全部包括已授权但暂时离线的设备。选择持久化并保持草稿和列表位置，仅影响项目/最近资源投影，不改变助手能力、任务 ownerHostId 或执行位置；切到 B 不将 A 的工单带入 B 的业务账。",
       "input": "用户选择的设备集合",
       "output": "侧栏查询范围",
       "sources": [
@@ -315,19 +315,21 @@
       "title": "同一工作台打开资源",
       "kicker": "CROSS DEVICE / IMPLEMENTED",
       "kind": "orchestration",
-      "sub": "设备标记 · 原始资源 ID · 返回路径",
+      "sub": "资源设备 · 工单宿主 · 原生执行",
       "symbol": "deviceId + project/session ID",
       "plain": "在当前工作台打开远端内容，清楚知道正在操作哪台设备。",
-      "role": "项目按设备分组，最近按活动时间近似排序并注明设备；打开与后续操作锁定所属主机，不把远端路径或 ID 当本地资源。保留当前对话、草稿及返回位置。",
-      "input": "带设备身份的项目 / 会话",
-      "output": "目标工作台内容",
+      "role": "项目与最近保留所属设备及原始 ID，打开 B 资源保留 A 的对话、草稿和原 taskId；A 任务详情统一查询、修订与控制，显示 B 执行位置和观测时间。执行会话按 hostId / authorizationId 核验后通过 Link 在 B 原生查看，当前仅只读；普通 send/respond/cancel 与菜单写入不能绕过工单所有者。补充、修订和答复回 A 原任务入口办理；尚无 B 会话直接输入回传桥，A 不可达时不能在 B 另建工单或擅自应用输入。",
+      "input": "资源 deviceId/sessionId 或 A 的 ownerHostId/taskId",
+      "output": "原生资源/执行会话与 A 的统一任务入口",
       "sources": [
         "docs/02-工作台与Agent/跨设备资源导航.md",
         "plugins/link/client/resource-navigation.jsx",
         "plugins/link/client/resource-state.mjs",
-        "plugins/benchgo/client/index.jsx"
+        "plugins/benchgo/client/index.jsx",
+        "docs/02-工作台与Agent/任务列表交互.md",
+        "docs/06-superagent/任务与执行.md"
       ],
-      "note": "内容区复用目标 Link 工作台并校验窗口来源，保留入口侧栏与草稿；目标设备操作展开原侧栏，避免复制业务菜单。",
+      "note": "统一 A 任务投影、目标身份校验、B 只读执行会话与返回原工单入口已有接线。UI 39 项与四态、明暗、390px 组件验证通过；真实安装版待验。B 会话直接输入回传和跨设备产物预览/下载尚不支持，不把可查看会话当作可写。",
       "state": "implemented",
       "x": 820,
       "y": 1040,
@@ -341,7 +343,7 @@
       "sub": "空 · 加载 · 错误 · 有数据 / 离线",
       "symbol": "observedAt / freshness",
       "plain": "查不到和没有数据，是两种状态。",
-      "role": "首次加载有文字反馈，刷新保留条目；每设备独立错误、重试和过期提示。离线保留缓存但不伪装可执行，撤销后清除受限资源；选中不改变可用状态色。",
+      "role": "首次加载有文字反馈，刷新保留条目；每设备独立错误、重试和过期提示。离线保留缓存但不伪装可执行，撤销后清除受限资源；选中不改变可用状态色。 任务不因 B 断连从 A 列表消失；保留最后已确认的进度及观测时间。取消已提交与执行已停止分别展示，控制未知只提供核实原执行入口，不能误导用户新派一份。",
       "input": "各设备真实状态与缓存事实",
       "output": "可理解且可恢复的界面",
       "sources": [
@@ -350,7 +352,7 @@
         "plugins/link/client/resource-state.mjs",
         "plugins/benchgo/client/index.jsx"
       ],
-      "note": "已接四态、离线缓存、重试和身份变化清理；已检查浏览器 fixture 的明暗与窄屏，真实双机仍待验。",
+      "note": "四态、离线保留、重试、身份变化清理及 A 任务执行新鲜度已有接线；UI 39 项及空/加载/错误/有数据、明暗、390px 组件验证通过。取消请求与执行停止仍按实际回执分别显示；真物理双机、安装版和实际供应商端到端待验。",
       "state": "implemented",
       "x": 1200,
       "y": 1040,
@@ -527,13 +529,18 @@
     },
     {
       "node": "cross-navigation",
-      "title": "已接线：打开远端项目并保持当前上下文",
-      "text": "条目始终携带所属设备；打开远端内容保留入口对话和草稿。开发在项目主机的模型、Harness 与文件环境进行。"
+      "title": "已接线：资源导航与原工单管理",
+      "text": "打开 B 资源保持 A 上下文，A 的任务详情仍使用原 taskId；B 执行会话通过身份核验后只读查看。业务补充、修订与答复只在 A 原任务入口，不支持 B 会话直接输入或跨设备产物传输。"
     },
     {
       "node": "cross-availability",
       "title": "已接线：离线和失败仍可理解",
       "text": "逐设备显示加载、空、错误和数据；保留有时间标注的离线缓存，支持单设备重试，不把未知状态当作零项目。"
+    },
+    {
+      "node": "cross-navigation",
+      "title": "已接线：四态与真实控制回执",
+      "text": "列表和详情保留 A 唯一工单，标明 B 执行位置、新鲜度和控制待确认。39 项 UI 及四态、明暗、390px 组件验证通过；安装版实际渲染及物理双机仍待用户验收。"
     }
   ],
   "docs": [
@@ -566,7 +573,7 @@
       "path": "docs/01-设备与远程连接/跨设备协作.md"
     }
   ],
-  "version": "2026-11-13-cross-device-2",
+  "version": "2026-11-15-task-ownership-2",
   "canvas": {
     "width": 1580,
     "height": 1280

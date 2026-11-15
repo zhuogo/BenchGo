@@ -115,7 +115,12 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
   const disposers = [], recovering = new Map(), shutdown = new AbortController();
   let handle, disposed = false, recoveryFailures = 0;
   const on = (name, callback) => { const stop = ctx.on(name, callback, { global: true }); if (stop) disposers.push(stop); };
-  const bindingOf = state => database.getExecutionBinding(state.parentSessionId || state.sessionId);
+  const bindingOf = state => {
+    const sessionId = state.parentSessionId || state.sessionId;
+    if (database.remoteExecutionBySession?.(sessionId)) return null;
+    const binding = database.getExecutionBinding(sessionId);
+    return binding && database.getAssignment(binding.assignmentId)?.executor === 'remote' ? null : binding;
+  };
   function save(state, cursor, { live, kind, sourceDurability = 'observed', missingReason, complete = true } = {}) {
     const binding = bindingOf(state);
     if (!binding || state.parentSessionId && state.parentSessionId !== binding.sessionId) return null;
@@ -141,6 +146,8 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
   }
   async function recover(sessionId) {
     if (disposed || shutdown.signal.aborted) return;
+    const binding = database.getExecutionBinding(sessionId);
+    if (database.remoteExecutionBySession?.(sessionId) || binding && database.getAssignment(binding.assignmentId)?.executor === 'remote') return;
     if (recovering.has(sessionId)) return recovering.get(sessionId);
     const operation = (async () => {
       let observation;
@@ -185,7 +192,7 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
           settledAt: frame.type === 'end' ? iso(now()) : null, deadline: null } }, 'request/' + frame.type);
     });
     for (const type of ['start', 'end']) on('subagent/' + type, info => {
-      if (!database.getExecutionBinding(info.parentSessionId)) return;
+      if (!bindingOf({ sessionId: info.parentSessionId })) return;
       const prior = database.getExecutionProjection(info.id), session = ctx.agents?.get?.(info.id)?.session;
       if (type === 'end' && prior?.live?.activationId && prior.live.activationId !== info.runId) return;
       const state = session ? handle.stateOf(session) : prior?.state || initialState({ id: info.id, origin: 'subagent', parentSession: info.parentSessionId }, 0);

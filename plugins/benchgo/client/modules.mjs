@@ -32,16 +32,10 @@ export function startModuleLifecycle(ctx, entries, { source = moduleSource, read
     await Promise.all(active.map(fiber => fiber.dispose()));
   };
   const refresh = async signal => {
-    let result;
-    try { result = await read(signal); }
-    catch (error) {
-      // A failed probe cannot establish that a module stopped. Keep the last
-      // confirmed UI during transport/host hiccups; an absent owner endpoint
-      // or an explicit unavailable response still releases the real fibers.
-      if (!disposed && !signal?.aborted && [401, 403, 404, 410].includes(error.status)) await disable();
-      throw error;
-    }
+    // A failed probe is not a module-stop event. Its owner disposes the base UI.
+    const result = await read(signal);
     if (disposed || signal?.aborted) return;
+    if (names.some(name => typeof result?.modules?.[name]?.available !== 'boolean')) throw new Error('Invalid BenchGo module availability response');
     const next = Object.fromEntries(names.map(name => [name, result.modules?.base?.available === true && result.modules?.[name]?.available === true]));
     // Hide entries immediately when the backing module stops, then release its resources.
     source.update(Object.fromEntries(names.map(name => [name, source.getSnapshot()[name] && next[name]])));

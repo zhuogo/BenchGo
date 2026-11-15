@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// plugins/link/scripts/ip-certificate.mjs
+// ../link/scripts/ip-certificate.mjs
 import { spawn } from "node:child_process";
 import { createHash, randomUUID, X509Certificate, createPrivateKey } from "node:crypto";
 import { access, link, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";

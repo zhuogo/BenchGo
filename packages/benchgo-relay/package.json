@@ -1,6 +1,6 @@
 {
   "name": "benchgo-relay",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/zhuogo/BenchGo.git"
@@ -20,6 +20,9 @@
     "resources",
     "README.md"
   ],
+  "dependencies": {
+    "ws": "8.19.0"
+  },
   "engines": {
     "node": ">=22"
   }

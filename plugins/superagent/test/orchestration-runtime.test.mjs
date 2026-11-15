@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { createAssistantStore } from '../src/store.mjs';
 import { readAssessmentPolicy } from '../src/assessment-policy.mjs';
 import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
@@ -36,6 +37,59 @@ async function fixture(t, { send, execute, onDelivered, notifyTaskResult, mainta
   return { runtime, db, store, task, source, original, advance, notifications: () => notifications, counts: () => ({ executions, sends }) };
 }
 
+test('stop observes an early cleanup rejection while the scheduling cycle is still draining', () => {
+  // The official Host treats unhandled rejections as fatal. Isolate that event
+  // here so a regression reports the actual rejection without killing the suite.
+  const child = spawnSync(process.execPath, ['--import', new URL('../../../scripts/source-loader.mjs', import.meta.url).href,
+    '--input-type=module', '-e', `
+      import { mkdtemp, rm } from 'node:fs/promises';
+      import { tmpdir } from 'node:os';
+      import { join } from 'node:path';
+      import { createAssistantStore } from ${JSON.stringify(new URL('../src/store.mjs', import.meta.url).href)};
+      import { createOrchestrationRuntime } from ${JSON.stringify(new URL('../src/orchestration-runtime.mjs', import.meta.url).href)};
+      const directory = await mkdtemp(join(tmpdir(), 'benchgo-stop-rejection-'));
+      const unhandled = [], handledLate = [];
+      process.on('unhandledRejection', error => unhandled.push(error.message));
+      process.on('rejectionHandled', () => handledLate.push(true));
+      const store = await createAssistantStore({ dataDirectory: directory });
+      const entered = Promise.withResolvers(), drain = Promise.withResolvers();
+      let projectionClosed = false, stopped = false;
+      const runtime = createOrchestrationRuntime({ store,
+        execute: async () => { throw Error('shutdown probe must not execute a task'); },
+        ctx: { on: () => () => {}, sessionQuery: { async observeSession() {} },
+          sessionProjections: { async register() { return {
+            async dispose() { projectionClosed = true; throw Error('projection cleanup failed'); },
+          }; } } },
+        maintainTasks: async () => { entered.resolve(); await drain.promise; },
+      });
+      try {
+        await runtime.executionFacts.ready;
+        const ticking = runtime.tick();
+        await entered.promise;
+        const stopping = runtime.stop().then(() => { stopped = true; });
+        await new Promise(resolve => setImmediate(resolve));
+        const duringDrain = { projectionClosed, stopped, unhandled: [...unhandled] };
+        drain.resolve();
+        await Promise.all([ticking, stopping]);
+        await new Promise(resolve => setImmediate(resolve));
+        console.log(JSON.stringify({ duringDrain, stopped, unhandled, handledLate }));
+      } finally {
+        drain.resolve();
+        await runtime.stop();
+        await store.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    `], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(child.status, 0, child.error?.message || child.stderr);
+  const state = JSON.parse(child.stdout.trim());
+  assert.equal(state.duringDrain.projectionClosed, true, 'cleanup starts before the scheduling cycle has drained');
+  assert.equal(state.duringDrain.stopped, false, 'stop must still await the in-flight scheduling cycle');
+  assert.deepEqual(state.duringDrain.unhandled, [], 'an early cleanup failure must already have a rejection handler');
+  assert.equal(state.stopped, true);
+  assert.deepEqual(state.unhandled, []);
+  assert.deepEqual(state.handledLate, [], 'cleanup failures are never first handled after the Host would have exited');
+});
+
 test('execution evidence remains readable before a Task has an Assignment', async t => {
   const app = await fixture(t);
   const task = app.db.createTask({ threadId: 'thread', title: '等待安排', target: '尚未开始执行', mandate: app.task.mandate });
@@ -44,6 +98,49 @@ test('execution evidence remains readable before a Task has an Assignment', asyn
   assert.equal(evidence.runtime.run, null);
   assert.equal(evidence.runtime.stop.confirmedAt, null);
   assert.equal(app.runtime.executionFacts.evidenceSnapshot().executions.find(row => row.task.id === task.id).stop.confirmedAt, null);
+});
+
+async function remoteExecutionFixture(t, phase = 'running') {
+  let localReads = 0;
+  const app = await fixture(t, { ctx: { agents: { get() { localReads++; return { status: 'running' }; } } } });
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-pair', config: { harness: 'official', models: [{ providerId: 'exact', modelId: 'exact/model' }] } };
+  const task = app.db.createTask({ threadId: 'thread', target: '在 B 执行', mandate: { ...app.task.mandate, execution } });
+  app.db.createAssignment(task.id, { id: 'remote-work', executor: 'remote', execution });
+  const assignment = app.db.claimAssignments('remote-observer', { limit: 10, validateMandate: () => true }).find(row => row.id === 'remote-work');
+  const ownership = { owner: assignment.owner, fence: assignment.fence };
+  const run = app.db.prepareRun(assignment.id, { ...ownership, sessionId: 'B-session', directory: 'remote:B' });
+  const observedAt = new Date().toISOString();
+  app.db.recordRemoteExecution(assignment.id, { ...ownership, patch: { ...execution, runId: run.id, executionId: 'B-execution', sessionId: run.sessionId,
+    phase, observedAt, available: phase !== 'uncertain', observed: {}, cursor: 3 } });
+  app.db.parkRemoteAssignment(assignment.id, { ...ownership, nextAt: Date.now() + 60000 });
+  return { ...app, remoteTask: task, assignment, run, observedAt, localReads: () => localReads };
+}
+
+test('remote execution facts use the peer observation and never the host agent with the same session id', async t => {
+  const app = await remoteExecutionFixture(t);
+  const row = app.runtime.state({ taskId: app.remoteTask.id })[0];
+  assert.equal(row.execution.remote.deviceId, 'B');
+  assert.equal(row.execution.worker.status, 'running');
+  assert.equal(row.execution.uncertainty, null, 'parked observer lease is not an interrupted remote Run');
+  const evidence = app.runtime.executionFacts.evidence({ taskId: app.remoteTask.id }).runtime;
+  assert.equal(evidence.executionAlive.status, 'running');
+  assert.equal(evidence.executionAlive.observedAt, app.observedAt);
+  assert.equal(evidence.executionAlive.bootId, null);
+  assert.equal(evidence.watermarks[0].sourceSeq, 3);
+  assert.equal(app.localReads(), 0);
+  assert.throws(() => app.runtime.resumeExecutionSession({ sessionId: app.run.sessionId }), { code: 'REMOTE_EXECUTION_SESSION' });
+  assert.equal(app.localReads(), 0);
+});
+
+test('unavailable remote observations remain unknown instead of claiming that execution is absent', async t => {
+  const app = await remoteExecutionFixture(t, 'uncertain');
+  const row = app.runtime.state({ taskId: app.remoteTask.id })[0];
+  assert.equal(row.execution.worker.status, 'unknown');
+  assert.equal(row.execution.uncertainty.reasonCode, 'remote-observation-unavailable');
+  const evidence = app.runtime.executionFacts.evidence({ taskId: app.remoteTask.id }).runtime;
+  assert.equal(evidence.executionAlive.status, 'unknown');
+  assert.equal(evidence.watermarks[0].complete, false);
+  assert.equal(app.localReads(), 0);
 });
 
 test('authorized stop-and-archive maintenance runs before queued work can be claimed', async t => {
@@ -81,6 +178,36 @@ test('missing Worker configuration is a concrete scheduling blocker that clears 
   assert.equal(app.db.getTask(task.id).continuationWait, null);
   assert.equal(app.db.assignments(task.id).length, 1);
   app.store.getConfig = getConfig;
+});
+
+test('remote admission schedules its frozen peer model even without host Worker configuration', async t => {
+  const calls = [];
+  let accepted;
+  const link = { async callDevice(input) {
+    calls.push(input);
+    if (input.input.operation === 'submit') accepted = input.input;
+    assert.ok(accepted);
+    return { version: 1, execution: { id: accepted.executionId, identity: accepted.identity, sessionId: accepted.sessionId,
+      phase: 'running', receivedInstructionRevision: 1, appliedInstructionRevision: 1 }, events: [], cursor: 0, hasMore: false };
+  } };
+  const app = await fixture(t, { ctx: { get: name => name === 'benchgoLink' ? link : undefined } });
+  const config = await app.store.getConfig();
+  app.store.getConfig = async () => ({ ...config, models: [], workerModels: [] });
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-pair', config: { harness: 'official', models: [{ providerId: 'B:opaque', modelId: 'B/opaque:model' }] } };
+  const task = app.db.createTask({ threadId: 'thread', target: '只在 B 执行', mandate: { ...app.task.mandate, execution } });
+  for (let index = 0; index < 30 && !app.db.assignments(task.id)[0]?.remoteExecution; index++) {
+    await app.runtime.tick(); await new Promise(resolve => setTimeout(resolve, 2));
+  }
+  const assignment = app.db.assignments(task.id)[0];
+  assert.equal(assignment.executor, 'remote');
+  assert.deepEqual(assignment.execution.config, execution.config);
+  assert.equal(app.db.getTask(task.id).continuationWait ?? null, null);
+  assert.equal(calls[0].deviceId, 'B');
+  assert.equal(calls[0].expectedHostId, 'B-host');
+  assert.equal(calls[0].expectedAuthorizationId, 'B-pair');
+  assert.deepEqual(accepted.config, execution.config);
+  assert.equal(app.db.results(task.id).length, 0);
+  assert.equal(app.db.runs(assignment.id).length, 1);
 });
 
 test('scheduler heartbeat advances only after a real successful control cycle, never on reads or failed/hung cycles', async t => {

@@ -1,7 +1,7 @@
 {
   "name": "benchgo-plugin",
   "displayName": "BenchGo",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": false,
   "repository": {
     "type": "git",
@@ -33,8 +33,7 @@
     "./link-plugin/icon": "./assets/icon.svg"
   },
   "bin": {
-    "commander": "src/cli.mjs",
-    "benchgo": "src/cli.mjs"
+    "commander": "src/cli.mjs"
   },
   "files": [
     "src",
@@ -76,11 +75,9 @@
   "devDependencies": {
     "@aiden0z/pptx-renderer": "1.4.0",
     "@deepseek-ai/cordis": "4.0.5-alpha.2",
-    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
     "@deepseek-ai/dsh-sandbox": "0.2.2-rc.1",
     "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
     "@deepseek-ai/dsh-session-projection": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tools": "^0.2.2-rc.1",
     "@huanlin/dsh-plugin-better-sidebar-plugin-audio": "0.1.0",
     "@jitsi/rnnoise-wasm": "0.2.1",
     "@radix-ui/react-collapsible": "1.2.1",
@@ -91,6 +88,7 @@
     "clsx": "2.1.1",
     "docx-preview": "0.4.1",
     "dompurify": "3.4.17",
+    "dsh-better-sidebar": "0.30.1",
     "dsh-video-preview": "0.1.4",
     "esbuild": "^0.27.0",
     "marked": "18.1.2",
@@ -131,6 +129,7 @@
   "dependencies": {
     "@deepseek-ai/cordis-plugin-loader": "1.1.0",
     "@deepseek-ai/cosmokit": "1.9.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
     "@deepseek-ai/dsh-agent-instructions": "0.2.2-rc.1",
     "@deepseek-ai/dsh-api-gateway": "0.2.2-rc.1",
     "@deepseek-ai/dsh-atomic-write": "0.2.2-rc.1",
@@ -144,6 +143,7 @@
     "@deepseek-ai/dsh-subagent": "0.2.2-rc.1",
     "@deepseek-ai/dsh-tool-ask-user": "0.2.2-rc.1",
     "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.2.2-rc.1",
     "@deepseek-ai/dsh-typert-protocol": "0.2.2-rc.1",
     "@deepseek-ai/dsh-user-questions": "0.2.2-rc.1",
     "@deepseek-ai/dsh-util-time": "0.2.2-rc.1",
@@ -152,7 +152,6 @@
     "@larksuiteoapi/node-sdk": "1.76.0",
     "@linxin666/dsh-ssh": "0.4.15",
     "discord.js": "14.28.0",
-    "dsh-better-sidebar": "0.30.1",
     "dsh-ops": "0.5.0",
     "imapflow": "2.10.0",
     "json5": "2.2.3",

@@ -9,6 +9,7 @@ import { verifyTrayBundle } from './prepare-tray.mjs';
 import { verifyStartupBundle } from './prepare-startup.mjs';
 import { verifyWorkbenchLoadingBundle } from './prepare-workbench-loading.mjs';
 import { verifyBackgroundBundle } from './prepare-background.mjs';
+import { assertSidebarPayload, DESKTOP_ELECTRON_LANGUAGES, inspectPluginPayload } from './payload-policy.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const version = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url))).version;
@@ -24,6 +25,7 @@ config.extraMetadata.version = version;
 config.extraMetadata.dshDesktopUpdateChannel = 'stable';
 config.extraMetadata.description = 'DeepSeek Harness with BenchGo, Voice and Link';
 config.productName = 'BenchGo';
+config.electronLanguages = [...DESKTOP_ELECTRON_LANGUAGES];
 config.executableName = 'BenchGo';
 config.protocols = [{ name: 'BenchGo', schemes: ['dsh'] }];
 config.artifactName = `benchgo-${version}-win-x64-setup.exe`;
@@ -80,8 +82,12 @@ config.files.push('!renderer/welcome.html',
 // A physical runtime also lets installation initialize a profile entirely offline.
 config.asarUnpack.push('**/dsh/**/*');
 config.extraResources.push({ from: `${root}/scripts/desktop/plugin-bundle.mjs`, to: 'benchgo/plugin-bundle.mjs' });
+config.extraResources.push({ from: `${root}/scripts/desktop/workbench-desktop.mjs`, to: 'benchgo/workbench-desktop.mjs' });
+config.extraResources.push({ from: `${root}/scripts/desktop/payload-policy.mjs`, to: 'benchgo/payload-policy.mjs' });
+config.extraResources.push({ from: `${root}/scripts/desktop/install-cleanup.mjs`, to: 'benchgo/install-cleanup.mjs' });
 config.extraResources.push({ from: `${root}/plugins/benchgo/shared/plugin-install.mjs`, to: 'benchgo/shared/plugin-install.mjs' });
 config.extraResources.push({ from: `${root}/plugins/benchgo/shared/update-feed.mjs`, to: 'benchgo/shared/update-feed.mjs' });
+config.extraResources.push({ from: `${root}/plugins/benchgo/shared/workbench-installation.mjs`, to: 'benchgo/shared/workbench-installation.mjs' });
 const pluginSeed = `${root}/deepseek-harness/apps/desktop/.desktop-build/targets/win-x64/plus-seed`;
 config.extraResources.push({ from: pluginSeed, to: 'benchgo/seed', filter: ['**/*'] });
 // Like the official runtime mapping, the seed needs an explicit node_modules
@@ -110,8 +116,12 @@ export async function verifyPackagedPluginSeed(seed) {
 export async function verifyPackagedEnrollment(resources) {
   for (const [source, target] of [
     ['scripts/desktop/plugin-bundle.mjs', 'benchgo/plugin-bundle.mjs'],
+    ['scripts/desktop/workbench-desktop.mjs', 'benchgo/workbench-desktop.mjs'],
+    ['scripts/desktop/payload-policy.mjs', 'benchgo/payload-policy.mjs'],
+    ['scripts/desktop/install-cleanup.mjs', 'benchgo/install-cleanup.mjs'],
     ['plugins/benchgo/shared/plugin-install.mjs', 'benchgo/shared/plugin-install.mjs'],
     ['plugins/benchgo/shared/update-feed.mjs', 'benchgo/shared/update-feed.mjs'],
+    ['plugins/benchgo/shared/workbench-installation.mjs', 'benchgo/shared/workbench-installation.mjs'],
   ]) {
     const expected = await readFile(join(root, source));
     const actual = await readFile(join(resources, target));
@@ -134,6 +144,8 @@ config.afterPack = async context => {
     }
   }
   await verifyPackagedPluginSeed(`${context.appOutDir}/resources/benchgo/seed`);
+  assertSidebarPayload(`${context.appOutDir}/resources/benchgo/seed/node_modules/benchgo-plugin`);
+  inspectPluginPayload(`${context.appOutDir}/resources/benchgo/seed`);
   await verifyPackagedEnrollment(`${context.appOutDir}/resources`);
 };
 config.publish = [{ provider: 'generic', url: 'https://ghfast.top/https://github.com/zhuogo/BenchGo/releases/download/app-updates/', channel: 'latest' }];

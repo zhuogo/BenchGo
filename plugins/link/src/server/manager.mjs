@@ -7,6 +7,7 @@ import ssh2 from 'ssh2';
 import { request } from 'node:https';
 import { remoteAgent, remoteJson } from '../devices/remote.mjs';
 import { deployRelay, relayManagementCommand, validateRelayDeployment } from './relay-deployment.mjs';
+import { ensureServerResources } from '../../../benchgo/shared/server-resources.mjs';
 const { Client } = ssh2;
 export const fingerprintOf = key => 'SHA256:' + createHash('sha256').update(key).digest('base64').replace(/=+$/, '');
 export const shellQuote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
@@ -104,23 +105,43 @@ export async function verifyServerWorkbench(target) {
     });
   } finally { agent.destroy(); }
 }
-export function createServerManager({ directory, onDevice = async () => {}, runtimeRoot, assetsRoot, relayAssetsRoot, onRelay = async () => { throw new Error('本机中继接入未配置'); }, clientFactory = () => new Client() } = {}) {
+export function createServerManager({ directory, onDevice = async () => {}, runtimeRoot, assetsRoot, relayAssetsRoot, resourceFetcher = ensureServerResources, onRelay = async () => { throw new Error('本机中继接入未配置'); }, clientFactory = () => new Client() } = {}) {
   if (!directory) throw new Error('服务器管理目录未配置');
   const clients = new Set();
-  const file = join(directory, 'servers.json'), records = new Map(), sessions = new Map(), jobs = new Map(), connecting = new Set();
+  const file = join(directory, 'servers.json'), records = new Map(), sessions = new Map(), jobs = new Map(), controls = new Map(), connecting = new Set();
   let writes = Promise.resolve(), closed = false;
   const assets = assetsRoot ?? (runtimeRoot ? (runtimeRoot instanceof URL ? fileURLToPath(runtimeRoot) : runtimeRoot) : fileURLToPath(new URL('../../../dist/server/', import.meta.url)));
   const ready = mkdir(directory, { recursive: true, mode: 0o700 }).then(async () => { try { for (const device of JSON.parse(await readFile(file, 'utf8'))) if (device.kind === 'ssh' && device.ssh?.host && device.id) records.set(device.id, { ...device, status: 'offline' }); } catch (e) { if (e.code !== 'ENOENT') throw e; } });
   function persist() { const data = JSON.stringify([...records.values()].map(device => ({ ...privateRecord(device), url: '', status: 'offline' }))); const task = writes.then(async () => { const tmp = file + '.' + randomUUID() + '.tmp'; try { await writeFile(tmp, data, { mode: 0o600 }); await rename(tmp, file); } finally { await rm(tmp, { force: true }); } }); writes = task.catch(() => {}); return task; }
   const ensure = () => { if (closed) throw new Error('服务器管理已关闭'); };
   const open = async (input, probe = false) => { const client = await sshConnect(input, () => { const value = clientFactory(); clients.add(value); value.once('close', () => clients.delete(value)); return value; }, probe); ensure(); return client; };
-  async function install(client, input, operation) {
+  async function resources(input, job, step, signal) {
+    const labels = { checking: '检查固定版本部署资源', downloading: '下载服务器部署资源', verifying: '校验部署资源', extracting: '准备服务器部署资源', 'verifying-offline': '校验离线部署资源', 'verifying-cache': '校验缓存部署资源', 'repairing-cache': '重新获取损坏的部署资源', ready: '部署资源已就绪' };
+    let previous;
+    job.cancellable = true;
+    try {
+      return await resourceFetcher({ assetsRoot: assets, cacheRoot: join(directory, 'server-resources'), source: input.source ?? 'mirror', signal,
+        onProgress(progress) {
+          if (progress.stage !== previous) { step(labels[progress.stage] ?? '准备服务器部署资源'); previous = progress.stage; }
+          job.progress = { ...progress };
+          if (progress.stage === 'downloading' && Number.isFinite(progress.total) && progress.total > 0 && Number.isFinite(progress.transferred))
+            job.steps.at(-1).message = `${(progress.transferred / 1_000_000).toFixed(1)} / ${(progress.total / 1_000_000).toFixed(1)} MB · ${Math.min(100, Math.floor(progress.transferred * 100 / progress.total))}%`;
+        },
+      });
+    } finally { job.cancellable = false; }
+  }
+  async function install(client, input, operation, job, step, signal) {
+    const material = await resources(input, job, step, signal);
+    signal.throwIfAborted();
+    ensure();
+    step('上传服务器安装资源');
     const nonce = randomBytes(16).toString('hex');
     const command = 'umask 077; directory="$HOME/.cache/benchgo-bootstrap-' + nonce + '"; mkdir -p -- "$directory"; printf "%s\n" "$directory"';
     const created = await execute(client, command); const path = created.stdout.trim();
     if (created.code !== 0 || !path.startsWith('/') || /[\r\n\0]/.test(path) || !path.endsWith('benchgo-bootstrap-' + nonce)) throw new Error('无法创建服务器安装目录');
     try {
-      for (const name of ['bootstrap.sh', 'bootstrap.mjs', 'manifest.json', 'server-seed.tar.gz']) await upload(client, join(assets, name), path + '/' + name);
+      for (const name of ['bootstrap.sh', 'bootstrap.mjs', 'manifest.json', 'server-seed.tar.gz']) await upload(client, join(material.directory, name), path + '/' + name);
+      step(operation === 'update' ? '升级服务器工作台' : '检查与安装工作台');
       const result = await execute(client, 'bash ' + shellQuote(path + '/bootstrap.sh') + ' ' + shellQuote(input.source ?? 'mirror') + ' ' + shellQuote(operation), { timeout: 20 * 60 * 1000 });
       if (result.code !== 0) throw new Error(redactServerLog(result.stderr || '服务器安装失败', [input.password, input.privateKey, input.passphrase]));
       let value; try { value = JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1)); } catch { throw new Error('服务器安装器未返回有效结果'); }
@@ -130,9 +151,10 @@ export function createServerManager({ directory, onDevice = async () => {}, runt
   }
   function startJob(work, kind = 'server') {
     ensure(); if (jobs.size >= 64) for (const [id, job] of jobs) { if (job.state !== 'running') jobs.delete(id); if (jobs.size < 32) break; }
-    const job = { id: randomUUID(), kind, state: 'running', steps: [{ name: '连接 SSH', state: 'running' }] }; jobs.set(job.id, job);
+    const controller = new AbortController();
+    const job = { id: randomUUID(), kind, state: 'running', cancellable: false, steps: [{ name: kind === 'server-prefetch' ? '准备部署资源' : '连接 SSH', state: 'running' }] }; jobs.set(job.id, job); controls.set(job.id, controller);
     const step = name => { for (const old of job.steps) if (old.state === 'running') old.state = 'done'; job.steps.push({ name, state: 'running' }); };
-    Promise.resolve().then(() => work(job, step)).then(device => { job.state = 'done'; for (const step of job.steps) if (step.state === 'running') step.state = 'done'; if (device?.relay) job.relay = device.relay; else job.device = publicRecord(device); }).catch(error => { job.state = 'error'; job.error = friendlyError(error); for (const step of job.steps) if (step.state === 'running') step.state = 'error'; });
+    Promise.resolve().then(() => work(job, step, controller.signal)).then(device => { controller.signal.throwIfAborted(); job.state = 'done'; for (const step of job.steps) if (step.state === 'running') step.state = 'done'; if (device?.resources) job.resources = device.resources; else if (device?.relay) job.relay = device.relay; else job.device = publicRecord(device); }).catch(error => { job.state = controller.signal.aborted ? 'cancelled' : 'error'; job.error = controller.signal.aborted ? '部署资源获取已取消，可重新尝试' : friendlyError(error); for (const step of job.steps) if (step.state === 'running') step.state = controller.signal.aborted ? 'cancelled' : 'error'; }).finally(() => { job.cancellable = false; controls.delete(job.id); });
     return { jobId: job.id };
   }
   async function attach(client, device) {
@@ -148,6 +170,21 @@ export function createServerManager({ directory, onDevice = async () => {}, runt
     return device;
   }
   return {
+    async prefetch(input = {}) {
+      ensure();
+      if (!['mirror', 'github'].includes(input.source ?? 'mirror')) throw new Error('不支持的下载源');
+      return startJob(async (job, step, signal) => {
+        const result = await resources(input, job, step, signal);
+        return { resources: { cached: true, origin: result.origin, version: result.manifest.pluginVersion } };
+      }, 'server-prefetch');
+    },
+    cancelJob(input) {
+      ensure(); const id = typeof input === 'string' ? input : input?.jobId ?? input?.id, job = jobs.get(id);
+      if (!job) throw new Error('任务已过期');
+      if (job.state !== 'running') return { ok: true };
+      if (!job.cancellable) throw new Error('当前阶段不能取消；远端安装开始后请等待安全完成');
+      controls.get(id)?.abort(); return { ok: true };
+    },
     async relayProbe(input) { return this.probe(input); },
     async deployRelay(input) {
       ensure(); validateSshInput(input, { credentials: true }); validateRelayDeployment(input);
@@ -184,7 +221,7 @@ export function createServerManager({ directory, onDevice = async () => {}, runt
       const known = [...records.values()].find(device => [device.ssh.host, device.ssh.port, device.ssh.username].join('|') === key);
       if (known) { if (known.ssh.fingerprint !== input.fingerprint) throw new Error('SSH 主机指纹已改变，已保留原连接'); return this.reconnect({ ...input, id: known.id, device: { name } }); }
       if (connecting.has(key)) throw new Error('此服务器正在连接'); connecting.add(key);
-      return startJob(async (_job, step) => { let client; try { client = await open(input); ensure(); step('检查与安装'); const result = await install(client, input, 'connect'); ensure(); step('验证安全工作台'); const previous = [...records.values()].find(device => [device.ssh.host, device.ssh.port, device.ssh.username].join('|') === key); return await attach(client, { id: previous?.id ?? randomUUID(), name, kind: 'ssh', pin: result.pin, token: result.token, ssh: { ...target, fingerprint: input.fingerprint, remotePort: result.port }, ...(result.warning ? { warning: result.warning } : {}) }); } catch (error) { client?.end(); throw error; } finally { connecting.delete(key); } });
+      return startJob(async (job, step, signal) => { let client; try { client = await open(input); ensure(); const result = await install(client, input, 'connect', job, step, signal); ensure(); step('验证安全工作台'); const previous = [...records.values()].find(device => [device.ssh.host, device.ssh.port, device.ssh.username].join('|') === key); return await attach(client, { id: previous?.id ?? randomUUID(), name, kind: 'ssh', pin: result.pin, token: result.token, ssh: { ...target, fingerprint: input.fingerprint, remotePort: result.port }, ...(result.warning ? { warning: result.warning } : {}) }); } catch (error) { client?.end(); throw error; } finally { connecting.delete(key); } });
     },
     async reconnect(input) {
       ensure(); await ready; const device = records.get(input.id); if (device && input.device?.name) device.name = input.device.name; if (!device) throw new Error('未找到此服务器');
@@ -197,7 +234,7 @@ export function createServerManager({ directory, onDevice = async () => {}, runt
     async manage(input) {
       ensure(); await ready; const device = records.get(input.id), session = sessions.get(input.id); if (device && input.device?.name) device.name = input.device.name; if (!device || !session) throw new Error('请先重新连接服务器');
       const operation = input.operation;
-      if (operation === 'update') return startJob(async (_job, step) => { step('升级 BenchGo'); const result = await install(session.client, { source: device.ssh.source }, 'update'); return attach(session.client, { ...device, pin: result.pin, token: result.token ?? device.token, ssh: { ...device.ssh, remotePort: result.port } }); });
+      if (operation === 'update') return startJob(async (job, step, signal) => { const result = await install(session.client, { source: device.ssh.source }, 'update', job, step, signal); return attach(session.client, { ...device, pin: result.pin, token: result.token ?? device.token, ssh: { ...device.ssh, remotePort: result.port } }); });
       const prefix = 'export XDG_RUNTIME_DIR="/run/user/$(id -u)"; export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"; ';
       const commands = { status: 'systemctl --user is-active benchgo.service', start: 'systemctl --user start benchgo.service', stop: 'systemctl --user stop benchgo.service', restart: 'systemctl --user restart benchgo.service', logs: 'journalctl --user -u benchgo.service --no-pager -n 80 -o cat' };
       if (!Object.hasOwn(commands, operation)) throw new Error('不支持的服务器操作');
@@ -205,6 +242,6 @@ export function createServerManager({ directory, onDevice = async () => {}, runt
       return { operation, status: operation === 'status' ? result.stdout.trim() : operation === 'stop' ? 'stopped' : undefined, ...(operation === 'logs' ? { logs: redactServerLog(result.stdout) } : {}) };
     },
     async disconnect(id) { await ready; const session = sessions.get(id); sessions.delete(id); if (session) { await session.tunnel.close(); session.client.end(); } records.delete(id); await persist(); },
-    async close() { if (closed) return; closed = true; for (const client of clients) client.destroy(); await ready; for (const session of sessions.values()) { await session.tunnel.close(); session.client.end(); } sessions.clear(); await writes; },
+    async close() { if (closed) return; closed = true; for (const controller of controls.values()) controller.abort(); for (const client of clients) client.destroy(); await ready; for (const session of sessions.values()) { await session.tunnel.close(); session.client.end(); } sessions.clear(); await writes; },
   };
 }

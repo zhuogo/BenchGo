@@ -77,6 +77,13 @@ test('Linux seed refuses native addons and a non-x64 worker rather than labellin
   await assert.rejects(verifyLinuxSeed(join(wrong.seed, 'server-seed.tar.gz'), { pluginVersion: wrong.plugin.version }), /ELF x86-64/);
 });
 
+test('Linux seed retains actual x64 ELF native bindings instead of deleting every .node file', async t => {
+  const binding = Buffer.alloc(64); binding.write('7f454c460201', 0, 'hex'); binding.writeUInt16LE(62, 18);
+  const { seed, plugin } = await fixture(t, { 'node_modules/benchgo-plugin/node_modules/@img/sharp-linux-x64/lib/sharp-linux-x64.node': binding });
+  const result = await verifyLinuxSeed(join(seed, 'server-seed.tar.gz'), { pluginVersion: plugin.version });
+  assert(result.entries > 0);
+});
+
 test('Linux release refuses occupied output and an invalid immutable source', async t => {
   const { seed, output } = await fixture(t);
   await assert.rejects(assembleLinuxServer({ seedDirectory: seed, output, sourceSha: 'main' }), /immutable source/);

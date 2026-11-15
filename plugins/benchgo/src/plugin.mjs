@@ -50,9 +50,7 @@ export async function apply(ctx, config = {}) {
   mountInteractivePrompt(ctx);
   ctx.inject(['connection', 'webServer'], async child => { await mountWorkbench(child, { directory }); });
   ctx.inject(['connection'], async child => { await mountEfficiency(child, { directory }); });
-  ctx.inject(['connection'], async child => {
-    mountSkills(child);
-    await mountPreviewAssets(child);
+  ctx.inject(['connection'], child => {
     child.effect(() => child.connection.fetch.register({
       path: '/api/benchgo/modules', methods: ['GET'], requestBody: 'buffered',
       async fetch(request) {
@@ -60,6 +58,10 @@ export async function apply(ctx, config = {}) {
         catch (error) { return Response.json({ error: error.message }, { status: error.status ?? 400 }); }
       },
     }));
+  });
+  ctx.inject(['connection'], async child => {
+    mountSkills(child);
+    await mountPreviewAssets(child);
     await mountUsage(child, undefined, { ...config.usage, directory });
     await mountUpdates(child, undefined, { directory });
   });

@@ -13,9 +13,9 @@ export function startupWindowPlugin(mainPath) {
       if (resolve(id) !== target) return null;
       let code = source.replaceAll('\r\n', '\n');
       for (const [before, after] of [
-        ['async function main() {', "async function main() {\n    benchgoStartupTiming = createStartupTiming(app.getPath('logs'));\n    closeBenchgoStartup = await openStartupWindow({ app, BrowserWindow, nativeImage, nativeTheme, page: join(app.getAppPath(), 'renderer', 'splash.html'), iconPath: join(process.resourcesPath, 'icon.png') });\n    benchgoStartupStage('splash-visible');\n    await ensureBenchgoPlugin(process.resourcesPath);\n    benchgoStartupStage('enrollment-ready');"],
+        ['async function main() {', "async function main() {\n    benchgoStartupTiming = createStartupTiming(app.getPath('logs'));\n    closeBenchgoStartup = await openStartupWindow({ app, BrowserWindow, nativeImage, nativeTheme, page: join(app.getAppPath(), 'renderer', 'splash.html'), iconPath: join(process.resourcesPath, 'icon.png') });\n    benchgoStartupStage('splash-visible');\n    benchgoWorkbench = await ensureBenchgoPlugin(process.resourcesPath);\n    app.once('will-quit', () => { void benchgoWorkbench.dispose().catch(error => console.error('BenchGo workbench ownership cleanup failed', error)); });\n    benchgoStartupStage('enrollment-ready');"],
         ['function reportFatal(error, source) {', "function reportFatal(error, source) {\n    closeBenchgoStartup?.();\n    benchgoStartupTiming?.finish('failed');"],
-        ['const ready = await host.start();', "benchgoStartupStage('host-starting');\n                const ready = await host.start();\n                benchgoStartupStage('host-ready');"],
+        ['const ready = await host.start();', "benchgoStartupStage('host-starting');\n                const ready = await host.start();\n                await benchgoWorkbench.publishReady({ url: ready.url, inspect: () => host.inspectQuit() });\n                benchgoStartupStage('host-ready');"],
         ['welcomeBackend = connectDesktopWelcome(ready.url, cookie);', "welcomeBackend = connectDesktopWelcome(ready.url, cookie);\n                benchgoStartupStage('host-connected');"],
         ['await navigateMain(applicationUrl);\n            await backend.start(async () => {', "benchgoStartupStage('shell-loading');\n            await navigateMain(applicationUrl);\n            benchgoStartupStage('shell-loaded');\n            await backend.start(async () => {"],
         ['const state = await readWelcomeState();', "const state = await readWelcomeState();\n        benchgoStartupStage('welcome-state-ready');"],
@@ -27,7 +27,41 @@ export function startupWindowPlugin(mainPath) {
       transformed++;
       // Both app startup and the installer execute the packaged enrollment
       // entry. Never freeze another copy of that implementation into main.js.
-      return { code: `import { openStartupWindow, createStartupTiming } from ${JSON.stringify(helper)};\nimport { pathToFileURL as benchgoPathToFileURL } from 'node:url';\nasync function ensureBenchgoPlugin(resourcesPath) {\n  try {\n    const enrollmentModule = benchgoPathToFileURL(join(resourcesPath, 'benchgo', 'plugin-bundle.mjs')).href;\n    const { initializePluginProfile } = await import(enrollmentModule);\n    return await initializePluginProfile({ resources: resourcesPath });\n  } catch (error) {\n    console.error('BenchGo plugin enrollment failed', error);\n    throw error;\n  }\n}\nlet closeBenchgoStartup;\nlet benchgoStartupTiming;\nfunction benchgoStartupStage(stage) { benchgoStartupTiming?.mark(stage); closeBenchgoStartup?.setStage(stage); }\n${code}`, map: null };
+      return { code: `import { openStartupWindow, createStartupTiming } from ${JSON.stringify(helper)};
+import { pathToFileURL as benchgoPathToFileURL } from 'node:url';
+async function ensureBenchgoPlugin(resourcesPath) {
+  try {
+    const enrollmentModule = benchgoPathToFileURL(join(resourcesPath, 'benchgo', 'plugin-bundle.mjs')).href;
+    const { initializePluginProfile } = await import(enrollmentModule);
+    const ownershipModule = benchgoPathToFileURL(join(resourcesPath, 'benchgo', 'workbench-desktop.mjs')).href;
+    const { beginDesktopWorkbench } = await import(ownershipModule);
+    return await beginDesktopWorkbench({ resources: resourcesPath, initialize: initializePluginProfile });
+  } catch (error) {
+    console.error('BenchGo plugin enrollment failed', error);
+    throw error;
+  }
+}
+let closeBenchgoStartup;
+let benchgoStartupTiming;
+let benchgoWorkbench;
+let benchgoCleanupScheduled = false;
+function benchgoStartupStage(stage) {
+  benchgoStartupTiming?.mark(stage);
+  closeBenchgoStartup?.setStage(stage);
+  if (process.platform !== 'win32' || stage !== 'workspace-visible' || benchgoCleanupScheduled) return;
+  benchgoCleanupScheduled = true;
+  // Show the new workspace before housekeeping; never delay launch or lower
+  // the whole Desktop's priority. The helper removes files in small batches.
+  const timer = setTimeout(() => {
+    const cleanupModule = benchgoPathToFileURL(join(process.resourcesPath, 'benchgo', 'install-cleanup.mjs')).href;
+    void import(cleanupModule)
+      .then(({ cleanupRetiredInstalls }) => cleanupRetiredInstalls({ resources: process.resourcesPath }))
+      .then(results => { for (const result of results) if (result.error) console.warn('BenchGo retired install cleanup deferred', result.error); })
+      .catch(error => { console.warn('BenchGo retired install cleanup deferred', error); });
+  }, 1500);
+  timer.unref();
+}
+${code}`, map: null };
     },
     generateBundle() {
       if (transformed !== 1) throw new Error(`Official startup changed: expected one main entry, got ${transformed}`);
@@ -43,10 +77,12 @@ export function verifyStartupBundle(source) {
   if (!/ensureBenchgoPlugin\(process\.resourcesPath\)/.test(source)) missing.push('plugin enrollment');
   // Rolldown may fold the URL variable into import(), without inlining the module.
   if (!/['"]benchgo['"],\s*['"]plugin-bundle\.mjs['"]/.test(source) || !/\{\s*initializePluginProfile\s*\}\s*=\s*await import\(/.test(source)) missing.push('packaged enrollment entry');
+  if (!source.includes('workbench-desktop.mjs') || !source.includes('beginDesktopWorkbench') || !source.includes('publishReady') || !source.includes('host.inspectQuit()')) missing.push('shared workbench ownership lifecycle');
   if (/function (?:initializePluginProfile|stagePluginBundle|attachOfficialPackages)\b/.test(source)) missing.push('inlined enrollment implementation');
   if (!/function reportFatal\(error, source\)\s*\{\s*closeBenchgoStartup\?\.\(\)/.test(source)) missing.push('fatal cleanup');
   for (const stage of ['host-starting', 'host-ready', 'host-connected', 'welcome-state-ready', 'workspace-visible']) {
     if (!source.includes(stage)) missing.push(`startup timing ${stage}`);
   }
+  if (!source.includes('install-cleanup.mjs') || !source.includes('cleanupRetiredInstalls')) missing.push('post-launch retired install cleanup');
   if (missing.length) throw new Error(`Compiled desktop is missing the startup window lifecycle: ${missing.join(', ')}`);
 }

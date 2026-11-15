@@ -4,12 +4,12 @@ import { installTaskInputStore } from './task-input-store.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const names = value => value.scope?.toolNames ?? value.toolScope;
-const scope = value => JSON.stringify([value.project ?? null, value.scope ?? null, value.toolScope ?? null]);
+const scope = value => JSON.stringify([value.project ?? null, value.scope ?? null, value.toolScope ?? null, value.execution ?? null]);
 export function taskMandateDifference(previous, requested) {
   return scope(previous) === scope(requested) ? null : { previous: JSON.parse(scope(previous)), requested: JSON.parse(scope(requested)) };
 }
 export function isTaskMandateNarrowing(previous, requested) {
-  const withoutNames = value => { const result = structuredClone(value.scope ?? null); if (result) delete result.toolNames; return JSON.stringify([value.project ?? null, result && Object.keys(result).length ? result : null]); };
+  const withoutNames = value => { const result = structuredClone(value.scope ?? null); if (result) delete result.toolNames; return JSON.stringify([value.project ?? null, result && Object.keys(result).length ? result : null, value.execution ?? null]); };
   const oldNames = names(previous), nextNames = names(requested);
   return withoutNames(requested) === withoutNames(previous) && Array.isArray(nextNames)
     && nextNames.every(name => typeof name === 'string' && (!Array.isArray(oldNames) || oldNames.includes(name)));
@@ -95,7 +95,9 @@ export function installTaskRevisions({ db, tx, api, insertTask }) {
           const at = new Date().toISOString();
           db.prepare('INSERT INTO sa_task_revisions VALUES (?,?,?,?,?)').run(next.id, 1, 'adjustment', JSON.stringify({ target, acceptance, mandate: next.mandate, reason, triggerId, adjustmentOfTaskId: taskId }), at);
           db.prepare("INSERT INTO sa_assignments(id,task_id,payload,state,priority,created_at,updated_at) VALUES (?,?,?,'queued',0,?,?)").run(randomUUID(), next.id,
-            JSON.stringify({ executor: 'harness', model, text: target, acceptance, instructionRevision: 1, adjustmentOfTaskId: taskId, sourceResultVersion: task.resultVersion }), at, at);
+            JSON.stringify({ executor: appliedMandate.execution ? 'remote' : 'harness',
+              ...(appliedMandate.execution ? { execution: structuredClone(appliedMandate.execution) } : {}),
+              model, text: target, acceptance, instructionRevision: 1, adjustmentOfTaskId: taskId, sourceResultVersion: task.resultVersion }), at, at);
           db.prepare('INSERT INTO sa_task_revision_requests(request_key,fingerprint,task_id,revision,request_payload) VALUES (?,?,?,?,?)').run(requestKey, fingerprint, next.id, 1, requestPayload ? JSON.stringify(requestPayload) : null);
           return api.getTask(next.id);
         }

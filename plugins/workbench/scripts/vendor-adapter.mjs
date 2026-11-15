@@ -1,7 +1,8 @@
 import { createRequire } from 'node:module';
-import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, copyFile, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { prepareSidebarRuntime } from './sidebar-runtime.mjs';
 
 const require = createRequire(new URL('../../benchgo/package.json', import.meta.url));
 const vendors = { '@linxin666/dsh-ssh': '0.4.15', 'dsh-better-sidebar': '0.30.1', '@huanlin/dsh-plugin-better-sidebar-plugin-audio': '0.1.0', 'dsh-video-preview': '0.1.4' };
@@ -186,21 +187,21 @@ export function workbenchClientAdapters() {
   } };
 }
 
-export async function prepareWorkbenchVendors() {
+export async function prepareWorkbenchVendors({ output = fileURLToPath(new URL('../lib/', import.meta.url)) } = {}) {
   const root = dirname(require.resolve('@linxin666/dsh-ssh/package.json'));
   const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   if (pkg.version !== vendors[pkg.name]) throw new Error('SSH package version requires integration review');
   const original = await readFile(join(root, 'lib/index.js'), 'utf8');
   const needle = 'import { Client } from "ssh2";';
   if (original.split(needle).length !== 2) throw new Error('SSH transport import changed; host key verification cannot be installed');
-  const output = fileURLToPath(new URL('../lib/', import.meta.url));
+  await prepareSidebarRuntime({ output });
   await mkdir(output, { recursive: true });
   await writeFile(join(output, 'ssh-host.mjs'), original.replace(needle, 'import { Client } from "../src/ssh-trust.mjs";').replace(/\/\/# sourceMappingURL=[^\n]*/g, ''));
   await copyFile(join(root, 'LICENSE'), join(output, 'DSH-SSH-LICENSE'));
-  const sidebarRoot = dirname(require.resolve('dsh-better-sidebar/package.json'));
-  await copyFile(join(sidebarRoot, 'LICENSE'), join(output, 'BETTER-SIDEBAR-LICENSE'));
+  // Its host/chunk/schema notices now have one verified deployment artifact.
+  await rm(join(output, 'BETTER-SIDEBAR-LICENSE'), { force: true });
   for (const [name, file] of [['@huanlin/dsh-plugin-better-sidebar-plugin-audio', 'AUDIO-LICENSE'], ['dsh-video-preview', 'VIDEO-LICENSE']]) await copyFile(join(dirname(require.resolve(`${name}/package.json`)), 'LICENSE'), join(output, file));
-  await writeFile(join(output, 'NOTICE'), 'BenchGo composes @linxin666/dsh-ssh 0.4.15 (Apache-2.0), https://github.com/zhu1090093659/dsh-web, dsh-better-sidebar 0.30.1 (MIT), https://github.com/omdsh-dev/DSH-better-sidebar, @huanlin/dsh-plugin-better-sidebar-plugin-audio 0.1.0 (MIT), https://github.com/huanlinoto/dsh-plugin-better-sidebar-plugin-audio, and dsh-video-preview 0.1.4 (MIT), https://github.com/zemul/dsh-video-preview.\nBuild-time adaptations remove the sidebar settings and installation catalog, use built-in defaults, bound audio analysis, and route media through the authenticated BenchGo workspace service. The video descriptor uses the shared BenchGo player for loading, error and retry states. SSH requires an explicitly confirmed host key; optional installation telemetry is omitted. Original installed packages and upstream Harness sources are not modified.\n');
+  await writeFile(join(output, 'NOTICE'), 'BenchGo composes @linxin666/dsh-ssh 0.4.15 (Apache-2.0), https://github.com/zhu1090093659/dsh-web, dsh-better-sidebar 0.30.1 (MIT), https://github.com/omdsh-dev/DSH-better-sidebar, @huanlin/dsh-plugin-better-sidebar-plugin-audio 0.1.0 (MIT), https://github.com/huanlinoto/dsh-plugin-better-sidebar-plugin-audio, and dsh-video-preview 0.1.4 (MIT), https://github.com/zemul/dsh-video-preview.\nThe sidebar deploys its compiled host, four lazy chunks and pinned pure schema closure; their complete notices are in SIDEBAR-RUNTIME-LICENSES.txt. Official host services, ws and yaml remain external runtime dependencies.\nBuild-time adaptations remove the sidebar settings and installation catalog, use built-in defaults, bound audio analysis, and route media through the authenticated BenchGo workspace service. The video descriptor uses the shared BenchGo player for loading, error and retry states. SSH requires an explicitly confirmed host key; optional installation telemetry is omitted. Original installed packages and upstream Harness sources are not modified.\n');
   return output;
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await prepareWorkbenchVendors();
