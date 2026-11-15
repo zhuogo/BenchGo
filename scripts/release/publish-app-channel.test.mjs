@@ -237,6 +237,9 @@ test('repair can advance an older stable alias while preserving the original lat
   assert.equal(f.mutations().filter(row => row.method === 'POST').length, 1);
 });
 
-test('normal unified publication retains its explicit workflow gate', async () => {
+test('normal unified publication retains its explicit workflow gate', async t => {
+  const previous = process.env.GITHUB_EVENT_NAME;
+  process.env.GITHUB_EVENT_NAME = 'push';
+  t.after(() => { if (previous === undefined) delete process.env.GITHUB_EVENT_NAME; else process.env.GITHUB_EVENT_NAME = previous; });
   await assert.rejects(publishRelease({ plan: { sourceSha: 'not-a-valid-github-sha' }, directory: '.' }), /restricted to explicit main-branch/);
 });
