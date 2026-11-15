@@ -4,6 +4,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { registerHooks } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import * as tar from 'tar';
 import { acquireWorkbenchLease, acquireWorkbenchProfileLock, assertWorkbenchDataAvailable, readWorkbenchLease, registerWorkbenchInstallation } from '../../../plugins/benchgo/shared/workbench-installation.mjs';
 import { createStopCoordinator } from '../src/host.mjs';
@@ -186,6 +188,25 @@ async function freshInstallFixture(t, { validSeed = false } = {}) {
     await put('node_modules/benchgo-plugin/package.json', { name: 'benchgo-plugin', version, type: 'module', exports: { '.': './src/plugin.mjs' } });
     for (const path of ['src/plugin.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'cordis.patch.yml']) await put(`node_modules/benchgo-plugin/${path}`, 'fixture');
     await put(`node_modules/${bundleName}/package.json`, { name: bundleName, version, dependencies: { 'benchgo-plugin': version } });
+    // This fake runtime is intentionally independent of repository dependencies.
+    // Activation still uses its real validation/commit path; only the official
+    // atomic service boundary is a test double with an exclusive lock and rename.
+    const atomic = join(installation.runtime, 'node_modules/@deepseek-ai/dsh-atomic-write');
+    await mkdir(join(atomic, 'lib'), { recursive: true });
+    await writeFile(join(atomic, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-atomic-write', version: installation.engineVersion, type: 'module', exports: { '.': './lib/index.js', './package.json': './package.json' } }));
+    await writeFile(join(atomic, 'lib/index.js'), `
+import { open, rename, rm, writeFile } from 'node:fs/promises';
+export const calls = { locks: 0, writes: 0 };
+export async function withFileLock(path, callback) {
+  const name = path + '.fixture-lock', lock = await open(name, 'wx'); calls.locks++;
+  try { return await callback(); } finally { await lock.close(); await rm(name); }
+}
+export async function writeFileAtomic(path, bytes, options) {
+  const name = path + '.fixture-write'; calls.writes++;
+  try { await writeFile(name, bytes, { ...options, flag: 'wx' }); await rename(name, path); }
+  finally { await rm(name, { force: true }); }
+}
+`);
   }
   const dependencies = { metadata: { schemaVersion: 1, pluginVersion: version, releaseVersion: version, engineVersion: installation.engineVersion },
     payloadLoader: async () => ({ seed }), runtimeInstaller: async () => ({ runtime: installation.runtime, engineVersion: installation.engineVersion }),
@@ -205,6 +226,11 @@ test('failed fresh preparation removes only its own unchanged initialization and
 
 test('a committed first install retains a retryable registration if startup fails; mutation lock is released before boot', async t => {
   const { home, dependencies } = await freshInstallFixture(t, { validSeed: true });
+  const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
+    if (specifier === '@deepseek-ai/dsh-atomic-write') throw Object.assign(new Error('fixture must use its explicit runtime service'), { code: 'ERR_MODULE_NOT_FOUND' });
+    return nextResolve(specifier, context);
+  } });
+  t.after(() => hooks.deregister());
   dependencies.startHost = async () => {
     await assert.rejects(() => readFile(join(home, 'profiles/desktop/lock')), { code: 'ENOENT' });
     throw new Error('fixture startup failure');
@@ -212,6 +238,8 @@ test('a committed first install retains a retryable registration if startup fail
   await assert.rejects(() => installWorkbench({ home, offline: true }, dependencies), /已安装，启动尚未成功/);
   const registered = JSON.parse(await readFile(join(home, '.benchgo/workbench/installation.json'), 'utf8'));
   assert.equal(registered.pluginVersion, '0.1.4');
+  const atomic = await import(pathToFileURL(join(home, 'official/node_modules/@deepseek-ai/dsh-atomic-write/lib/index.js')).href);
+  assert.deepEqual(atomic.calls, { locks: 1, writes: 1 });
   dependencies.startHost = async installation => ({ installation, pid: 100 });
   const retried = await installWorkbench({ home, offline: true }, dependencies);
   assert.equal(retried.reused, true); assert.equal(retried.installation.id, registered.id);
