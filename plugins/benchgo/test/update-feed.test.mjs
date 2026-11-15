@@ -4,6 +4,7 @@ import { generateKeyPairSync, sign, createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   DEFAULT_UPDATE_CONFIG, normalizeUpdateConfig, releaseDownloadUrl, resolveUpdateUrl,
   fetchVerifiedRelease, fetchUpdateBytes, validateReleaseManifest, compareVersions,
@@ -117,6 +118,88 @@ test('plugin downloads stream into a new file and verify signed size and hash be
   assert.deepEqual(await readFile(file), artifact);
   await assert.rejects(fetchUpdateArtifact(payload, { file, fetcher }), { code: 'EEXIST' });
   assert.deepEqual(await readFile(file), artifact, 'an existing download is never overwritten');
+});
+
+test('streamed artifact progress reports signed totals, real first and final bytes, and verification for small packages', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'benchgo-progress-update-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const progress = [], file = path.join(directory, 'plugin.tar.gz');
+  await fetchUpdateArtifact(manifest().plugin, { file, fetcher: async () => new Response(artifact), onProgress: value => progress.push(value) });
+  assert.equal(progress[0].stage, 'downloading'); assert.equal(progress[0].transferred, 0);
+  assert.ok(progress.some(value => value.stage === 'downloading' && value.transferred === artifact.length));
+  assert.equal(progress.at(-1).stage, 'verifying'); assert.equal(progress.at(-1).transferred, artifact.length);
+  for (const [index, value] of progress.entries()) {
+    assert.equal(value.total, artifact.length);
+    assert.ok(Number.isFinite(value.bytesPerSecond) && value.bytesPerSecond >= 0);
+    assert.ok(Number.isFinite(Date.parse(value.updatedAt)));
+    if (index) assert.ok(value.transferred >= progress[index - 1].transferred);
+  }
+  assert.ok(progress.some(value => value.bytesPerSecond > 0));
+});
+
+test('progress remains a verification stage on hash failure and never implies successful installation', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'benchgo-progress-hash-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const progress = [], file = path.join(directory, 'plugin.tar.gz');
+  await assert.rejects(fetchUpdateArtifact(manifest().plugin, { file, fetcher: async () => new Response(Buffer.alloc(artifact.length)), onProgress: value => progress.push(value) }), { code: 'UPDATE_HASH' });
+  assert.equal(progress.at(-1).stage, 'verifying');
+  assert.equal(progress.at(-1).transferred, artifact.length);
+  await assert.rejects(readFile(file), { code: 'ENOENT' });
+});
+
+test('a slow stream stays alive with real chunks while both idle and total deadlines remain bounded', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'benchgo-idle-update-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let offset = 0;
+  const progress = [], file = path.join(directory, 'plugin.tar.gz'), startedAt = performance.now();
+  await fetchUpdateArtifact(manifest().plugin, { file, timeoutMs: 2000, idleTimeoutMs: 250, onProgress: value => progress.push(value),
+    fetcher: async () => new Response(new ReadableStream({ async pull(controller) {
+      await delay(80);
+      const next = Math.min(artifact.length, offset + 6);
+      controller.enqueue(artifact.subarray(offset, next)); offset = next;
+      if (offset === artifact.length) controller.close();
+    } }, { highWaterMark: 0 })),
+  });
+  assert.ok(performance.now() - startedAt >= 250, 'ongoing data can exceed the short inactivity interval');
+  assert.deepEqual(await readFile(file), artifact);
+  assert.ok(progress.some(value => value.transferred > 0 && value.transferred < artifact.length), 'a longer stream publishes intermediate bytes');
+  let cancelled = false, bytes = 0;
+  const capped = path.join(directory, 'capped.tar.gz');
+  await assert.rejects(fetchUpdateArtifact(manifest().plugin, { file: capped, timeoutMs: 50, idleTimeoutMs: 1000,
+    fetcher: async () => new Response(new ReadableStream({ async pull(controller) {
+      await delay(15);
+      if (!cancelled) controller.enqueue(artifact.subarray(bytes, ++bytes));
+    }, cancel() { cancelled = true; } }, { highWaterMark: 0 })),
+  }), { code: 'UPDATE_TIMEOUT' });
+  assert.equal(cancelled, true);
+  await assert.rejects(readFile(capped), { code: 'ENOENT' });
+});
+
+test('idle streams and external cancellation clean partial files even when reader cancellation never settles', { timeout: 2000 }, async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'benchgo-cancel-update-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const external of [false, true]) {
+    const signal = new AbortController(), stalled = Promise.withResolvers();
+    let pulls = 0, cancelled = false;
+    const file = path.join(directory, `${external}.tar.gz`);
+    const operation = fetchUpdateArtifact(manifest().plugin, { file, signal: signal.signal, timeoutMs: 1000, idleTimeoutMs: external ? 1000 : 30,
+      fetcher: async () => new Response(new ReadableStream({ pull(controller) {
+        if (!pulls++) controller.enqueue(artifact.subarray(0, 2));
+        else stalled.resolve();
+      }, cancel() { cancelled = true; return new Promise(() => {}); } }, { highWaterMark: 0 })),
+    });
+    const rejected = assert.rejects(operation, { code: external ? 'UPDATE_CANCELLED' : 'UPDATE_TIMEOUT' });
+    await stalled.promise;
+    if (external) signal.abort();
+    await rejected;
+    assert.equal(cancelled, true);
+    await assert.rejects(readFile(file), { code: 'ENOENT' });
+  }
+  let requests = 0;
+  const signal = AbortSignal.abort(), file = path.join(directory, 'pre-cancelled.tar.gz');
+  await assert.rejects(fetchUpdateArtifact(manifest().plugin, { file, signal, fetcher: async () => { requests++; return new Response(artifact); } }), { code: 'UPDATE_CANCELLED' });
+  assert.equal(requests, 0);
+  await assert.rejects(readFile(file), { code: 'ENOENT' });
 });
 
 test('failed, oversized, corrupt or stalled streamed downloads remove partial files', async t => {

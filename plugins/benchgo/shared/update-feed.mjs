@@ -126,17 +126,30 @@ function allowedRedirect(url, initial) {
     fail('UPDATE_REDIRECT', '更新源返回了不受信任的跳转地址');
 }
 
-async function consumeUpdate(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, maxBytes, timeoutMs, consume }) {
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isFinite(timeoutMs) || timeoutMs < 1) fail('UPDATE_REQUEST', '更新请求限制无效');
+async function consumeUpdate(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, maxBytes, timeoutMs, idleTimeoutMs, signal, consume }) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isFinite(timeoutMs) || timeoutMs < 1
+    || idleTimeoutMs !== undefined && (!Number.isFinite(idleTimeoutMs) || idleTimeoutMs < 1)) fail('UPDATE_REQUEST', '更新请求限制无效');
   const initial = resolveUpdateUrl(url, config), controller = new AbortController();
   const timeout = new UpdateFeedError('UPDATE_TIMEOUT', '更新源响应超时，请重试或切换更新源');
-  const cancelled = new Promise((_, reject) => controller.signal.addEventListener('abort', () => reject(timeout), { once: true }));
+  const idleTimeout = new UpdateFeedError('UPDATE_TIMEOUT', '更新下载长时间没有进展，请重试或切换更新源');
+  const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
+  const abortFailure = () => requestSignal.reason instanceof UpdateFeedError ? requestSignal.reason : new UpdateFeedError('UPDATE_CANCELLED', '更新已取消');
+  if (requestSignal.aborted) throw abortFailure();
+  let onAbort, idleTimer;
+  const cancelled = new Promise((_, reject) => { onAbort = () => reject(abortFailure()); requestSignal.addEventListener('abort', onAbort, { once: true }); });
   const bounded = promise => Promise.race([promise, cancelled]);
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(timeout), timeoutMs);
+  const refreshIdle = () => {
+    if (idleTimeoutMs === undefined) return;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => controller.abort(idleTimeout), idleTimeoutMs);
+  };
   try {
+    refreshIdle();
     let target = initial;
     for (let redirects = 0; redirects <= 4; redirects++) {
-      const response = await bounded(fetcher(target, { signal: controller.signal, redirect: 'manual', credentials: 'omit', headers: { accept: 'application/octet-stream' } }));
+      const response = await bounded(fetcher(target, { signal: requestSignal, redirect: 'manual', credentials: 'omit', headers: { accept: 'application/octet-stream' } }));
+      refreshIdle();
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get('location');
         await bounded(response.body?.cancel());
@@ -158,10 +171,12 @@ async function consumeUpdate(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = gl
         while (true) {
           const { done, value } = await bounded(reader.read());
           if (done) { completed = true; break; }
+          if (!value.byteLength) continue;
+          refreshIdle();
           size += value.byteLength;
           if (size > maxBytes) fail('UPDATE_SIZE', '更新文件超过允许大小');
           await consume(value);
-          if (controller.signal.aborted) throw timeout;
+          if (requestSignal.aborted) throw abortFailure();
         }
       } finally {
         // Cancel stalled readers as well as oversized responses. Never wait
@@ -172,9 +187,10 @@ async function consumeUpdate(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = gl
       return size;
     }
   } catch (error) {
+    if (requestSignal.aborted) throw abortFailure();
     if (error instanceof UpdateFeedError) throw error;
     throw new UpdateFeedError('UPDATE_NETWORK', '无法连接更新源，请检查网络或切换更新源', { cause: error });
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); clearTimeout(idleTimer); requestSignal.removeEventListener('abort', onAbort); }
 }
 
 export async function fetchUpdateBytes(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, maxBytes = 256 * 1024, timeoutMs = 20_000 } = {}) {
@@ -184,16 +200,27 @@ export async function fetchUpdateBytes(url, { config = DEFAULT_UPDATE_CONFIG, fe
 }
 
 /** Large signed artifacts go straight to an exclusive temporary file, never a whole-package RAM buffer. */
-export async function fetchUpdateArtifact(artifact, { file, config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, timeoutMs = 10 * 60_000 } = {}) {
+export async function fetchUpdateArtifact(artifact, { file, config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, timeoutMs = 60 * 60_000, idleTimeoutMs = 60_000, signal, onProgress } = {}) {
   validateArtifact(artifact, { plugin: true });
   const handle = await open(file, 'wx', 0o600), hash = createHash('sha256');
-  let success = false;
+  const startedAt = performance.now();
+  let success = false, transferred = 0, reportedAt;
+  const report = stage => {
+    const now = performance.now();
+    if (stage === 'downloading' && reportedAt !== undefined && transferred < artifact.size && now - reportedAt < 250) return;
+    reportedAt = now;
+    onProgress?.({ stage, total: artifact.size, transferred, bytesPerSecond: stage === 'downloading' ? Math.round(transferred * 1000 / Math.max(1, now - startedAt)) : 0, updatedAt: new Date().toISOString() });
+  };
   try {
-    const size = await consumeUpdate(artifact.url, { config, fetcher, maxBytes: artifact.size, timeoutMs, consume: async value => {
+    report('downloading');
+    const size = await consumeUpdate(artifact.url, { config, fetcher, maxBytes: artifact.size, timeoutMs, idleTimeoutMs, signal, consume: async value => {
       try { await handle.writeFile(value); }
       catch (cause) { throw new UpdateFeedError('UPDATE_FILE', '无法写入更新文件，请检查磁盘空间与权限', { cause }); }
       hash.update(value);
+      transferred += value.byteLength;
+      report('downloading');
     } });
+    report('verifying');
     if (size !== artifact.size) fail('UPDATE_SIZE', '更新包大小与清单不一致');
     if (hash.digest('hex') !== artifact.sha256) fail('UPDATE_HASH', '更新包完整性校验失败');
     success = true;

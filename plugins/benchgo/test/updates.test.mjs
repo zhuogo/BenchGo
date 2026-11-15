@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, mkdir, writeFile, symlink, lstat } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, mkdir, writeFile, symlink, lstat, readdir } from 'node:fs/promises';
 import { createRequire, registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -20,11 +20,18 @@ async function fixture(t, options = {}) {
   if (options.releaseVersion !== undefined) manifest.releaseVersion = options.releaseVersion;
   const bytes = Buffer.from(JSON.stringify(manifest)), signature = sign(null, bytes, privateKey).toString('base64');
   const state = { managed: true, root: join(directory, 'releases'), version: '0.1.2', appVersion: '0.1.2', ...options.state };
-  let activated = 0, busy = false, downloads = 0, httpStatus = options.httpStatus;
+  let activated = 0, busy = false, downloads = 0, prepared = 0, preparedVersion, httpStatus = options.httpStatus;
   const install = {
     getInstallState: async () => ({ ...state }),
-    prepareRelease: async ({ archive, version }) => { assert.deepEqual(await readFile(archive), artifact); return { version }; },
-    activateRelease: async ({ release }) => { activated++; state.version = release.version; },
+    prepareRelease: async input => {
+      if (input.archive) assert.deepEqual(await readFile(input.archive), artifact);
+      else assert.equal(input.version, preparedVersion, 'only a previously prepared immutable release can be reused');
+      prepared++;
+      await options.beforePrepare?.(input);
+      preparedVersion = input.version;
+      return { version: input.version };
+    },
+    activateRelease: async ({ release }) => { await options.beforeActivate?.(); activated++; state.version = release.version; },
   };
   const fetcher = async url => {
     if (httpStatus) return new Response(null, { status: httpStatus });
@@ -32,11 +39,11 @@ async function fixture(t, options = {}) {
     if (url.endsWith('.json')) return new Response(bytes);
     downloads++;
     if (options.beforeDownload) await options.beforeDownload(() => { busy = true; });
-    return new Response(options.corrupt ? 'wrong bytes' : artifact);
+    return options.downloadResponse ? options.downloadResponse(artifact) : new Response(options.corrupt ? 'wrong bytes' : artifact);
   };
   const service = await createUpdates({ directory, profile: directory, runtime: directory, version: options.currentVersion || '0.1.2', releaseVersion: options.currentReleaseVersion, engineVersion: Object.hasOwn(options, 'engineVersion') ? options.engineVersion : '1.2.3', appVersion: options.appVersion, publicKey: publicKey.export({ type: 'spki', format: 'pem' }), fetcher, install, installation: options.installation || 'desktop', isBusy: () => busy });
   t.after(() => service.close());
-  return { service, directory, state, setBusy: value => { busy = value; }, setHttpStatus: value => { httpStatus = value; }, activated: () => activated, downloads: () => downloads };
+  return { service, directory, state, setBusy: value => { busy = value; }, setHttpStatus: value => { httpStatus = value; }, activated: () => activated, downloads: () => downloads, prepared: () => prepared };
 }
 
 test('signed check, verified install, persistence and restart state form one complete update path', async t => {
@@ -51,6 +58,76 @@ test('signed check, verified install, persistence and restart state form one com
   assert.equal(f.activated(), 1); assert.equal(status.restartRequired, true); assert.equal(status.current.plugin, '0.1.2'); assert.equal(status.current.app, '0.1.2');
   assert.equal(status.release.plugin.available, false, 'a staged update is waiting for restart, not another installation');
   await assert.rejects(f.service.dispatch({ action: 'install' }), /重启/);
+});
+
+test('status exposes real download, extraction and activation progress without changing the legacy active phase', async t => {
+  const observations = [];
+  let f;
+  f = await fixture(t, {
+    beforeDownload: async () => observations.push(await f.service.status()),
+    beforePrepare: async () => {
+      const first = await f.service.status(), second = await f.service.status();
+      assert.equal(second.progress.updatedAt, first.progress.updatedAt, 'polling does not invent a progress heartbeat');
+      observations.push(first);
+    },
+    beforeActivate: async () => observations.push(await f.service.status()),
+  });
+  assert.equal((await f.service.status()).progress, null);
+  await f.service.dispatch({ action: 'check' }); await f.service.settled();
+  await f.service.dispatch({ action: 'install' }); await f.service.settled();
+  assert.deepEqual(observations.map(value => value.progress.stage), ['downloading', 'extracting', 'activating']);
+  assert.ok(observations.every(value => value.phase === 'downloading'));
+  assert.equal(observations[0].progress.transferred, 0);
+  for (const value of observations) {
+    assert.ok(value.progress.total > 0 && value.progress.transferred <= value.progress.total);
+    assert.ok(Number.isFinite(Date.parse(value.progress.updatedAt)));
+  }
+  assert.equal(observations[1].progress.transferred, observations[1].progress.total);
+  assert.equal(observations[2].progress.bytesPerSecond, 0);
+  assert.equal((await f.service.status()).phase, 'ready');
+});
+
+test('a prepared release blocked by new work is revalidated and activated on retry without another download', async t => {
+  const f = await fixture(t, { beforeDownload: busy => busy() });
+  await f.service.dispatch({ action: 'check' }); await f.service.settled();
+  await f.service.dispatch({ action: 'install' }); await f.service.settled();
+  assert.equal((await f.service.status()).phase, 'error');
+  assert.equal(f.downloads(), 1); assert.equal(f.prepared(), 1); assert.equal(f.activated(), 0);
+  f.setBusy(false);
+  await f.service.dispatch({ action: 'check' }); await f.service.settled();
+  assert.equal((await f.service.status()).progress, null, 'a fresh check clears old installation progress');
+  await f.service.dispatch({ action: 'install' }); await f.service.settled();
+  assert.equal(f.downloads(), 1); assert.equal(f.prepared(), 2); assert.equal(f.activated(), 1);
+  assert.equal((await f.service.status()).restartRequired, true);
+  assert.deepEqual(await readdir(f.state.root), [], 'the completed archive is removed after staging');
+});
+
+test('reusing a staged release still refuses failed revalidation and never activates its cached result', async t => {
+  const f = await fixture(t, { beforeDownload: busy => busy(), beforePrepare: input => { if (!input.archive) throw Error('共享服务版本不兼容'); } });
+  await f.service.dispatch({ action: 'check' }); await f.service.settled();
+  await f.service.dispatch({ action: 'install' }); await f.service.settled();
+  f.setBusy(false);
+  await f.service.dispatch({ action: 'install' }); await f.service.settled();
+  assert.equal(f.downloads(), 1); assert.equal(f.prepared(), 2); assert.equal(f.activated(), 0);
+  const status = await f.service.status();
+  assert.equal(status.phase, 'error'); assert.equal(status.progress.stage, 'verifying');
+  assert.match(status.error, /版本不兼容/);
+});
+
+test('closing the update service cancels a stalled reader and removes its partial archive', { timeout: 2000 }, async t => {
+  const stalled = Promise.withResolvers();
+  let pulls = 0, cancelled = false;
+  const f = await fixture(t, { downloadResponse: artifact => new Response(new ReadableStream({ pull(controller) {
+    if (!pulls++) controller.enqueue(artifact.subarray(0, 2));
+    else stalled.resolve();
+  }, cancel() { cancelled = true; return new Promise(() => {}); } }, { highWaterMark: 0 })) });
+  await f.service.dispatch({ action: 'check' }); await f.service.settled();
+  await f.service.dispatch({ action: 'install' }); await stalled.promise;
+  await f.service.close();
+  assert.equal(cancelled, true);
+  assert.equal(f.prepared(), 0); assert.equal(f.activated(), 0);
+  assert.match((await f.service.status()).error, /取消/);
+  assert.deepEqual(await readdir(f.state.root), []);
 });
 
 test('actual app metadata takes priority over a marker containing the plugin version', async t => {
@@ -137,7 +214,7 @@ test('mounted updates identify only the official running engine manifest across 
   });
 });
 
-test('packaged mount checks a signed release and installs through the official anchor without nested boot packages', async t => {
+test('packaged mount revalidates a busy-blocked signed release and installs through the official anchor without redownloading', async t => {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-update-packaged-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const put = async (file, value) => {
@@ -168,12 +245,22 @@ test('packaged mount checks a signed release and installs through the official a
     get: name => name === 'profileContext' ? { name: 'desktop', dir: profile, installAnchor } : undefined,
     effect: fn => fn(), connection: { fetch: { register: () => () => {} } },
   };
-  const service = await mountUpdates(ctx, { store: { directory: profile }, list: () => [] }, {
+  let busy = false, downloads = 0, preparations = 0;
+  const service = await mountUpdates(ctx, { store: { directory: profile }, list: () => busy ? [{ status: 'running' }] : [] }, {
     version: '0.1.2', publicKey: publicKey.export({ type: 'spki', format: 'pem' }),
-    fetcher: async url => new Response(url.endsWith('.sig') ? signature : url.endsWith('.json') ? bytes : artifact),
+    fetcher: async url => {
+      if (url.endsWith('.sig')) return new Response(signature);
+      if (url.endsWith('.json')) return new Response(bytes);
+      downloads++; return new Response(artifact);
+    },
     install: {
       getInstallState,
-      prepareRelease: input => { assert.equal(input.runtime, dirname(installAnchor)); return prepareRelease(input); },
+      prepareRelease: async input => {
+        assert.equal(input.runtime, dirname(installAnchor));
+        const prepared = await prepareRelease(input);
+        if (++preparations === 1) busy = true;
+        return prepared;
+      },
       activateRelease: input => { assert.equal(input.runtime, dirname(installAnchor)); return activateRelease(input); },
     },
   });
@@ -185,10 +272,17 @@ test('packaged mount checks a signed release and installs through the official a
     if (specifier === '@deepseek-ai/dsh-atomic-write') throw Object.assign(new Error('no packaged bare dependency'), { code: 'ERR_MODULE_NOT_FOUND' });
     return nextResolve(specifier, context);
   } });
-  try { await service.dispatch({ action: 'install' }); await service.settled(); }
+  try {
+    await service.dispatch({ action: 'install' }); await service.settled();
+    assert.match((await service.status()).error, /新任务/);
+    assert.equal((await service.status()).restartRequired, false);
+    busy = false;
+    await service.dispatch({ action: 'install' }); await service.settled();
+  }
   finally { hooks.deregister(); }
   const status = await service.status(), state = await getInstallState(profile);
   assert.equal(status.error, ''); assert.equal(status.restartRequired, true);
+  assert.equal(downloads, 1); assert.equal(preparations, 2);
   assert.equal(state.version, version);
   assert.equal(JSON.parse(await readFile(join(profile, 'package.json'), 'utf8')).dependencies.kept, '1.0.0');
   assert.equal(await readFile(join(profile, 'cordis.patch.yml'), 'utf8'), '# keep user settings\n');

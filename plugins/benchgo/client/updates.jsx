@@ -24,11 +24,54 @@ const nativeFailureMessages = {
   'download-busy': '应用安装包文件正被占用，请关闭占用程序后重试。',
   install: '应用安装未完成，请重试。',
   'install-network': '应用安装准备时网络中断，请检查网络后重试。',
-  'stop-failed': '运行任务未能正常结束，请检查任务后重试安装。',
+  'stop-failed': '主机未能安全完成关闭，更新尚未安装。请查看原生更新窗口后重试。',
   'tasks-changed': '安装前有新任务开始，请结束任务后重试。',
   'tasks-unavailable': '暂时无法确认运行任务，请稍后重试安装。',
   'fullscreen-timeout': '暂时无法退出全屏，请退出全屏后重试安装。',
 };
+
+const progressStages = {
+  downloading: '正在下载', verifying: '正在校验安装包', extracting: '正在解包功能包',
+  activating: '正在准备功能包', installing: '正在准备安装应用', ready: '应用安装包已就绪',
+};
+const formatBytes = value => {
+  if (!Number.isFinite(value) || value < 0) return '';
+  const index = Math.min(3, Math.floor(Math.log2(Math.max(1, value)) / 10));
+  return `${(value / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${['B', 'KB', 'MB', 'GB'][index]}`;
+};
+
+/** Only real downloaded bytes or the Desktop's public percentage advance this indicator. */
+function UpdateProgress({ phase, progress, native = false, observedAt }) {
+  const [now, setNow] = useState(() => Date.now());
+  const stage = native ? phase : progress?.stage || 'downloading';
+  const firstSeen = useRef(Date.now());
+  useEffect(() => {
+    firstSeen.current = Date.now(); setNow(Date.now());
+    if (stage === 'ready') return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [stage]);
+  const total = !native && Number.isFinite(progress?.total) && progress.total > 0 ? progress.total : null;
+  const transferred = !native && Number.isFinite(progress?.transferred) && progress.transferred >= 0 ? progress.transferred : null;
+  const rawPercent = native ? progress?.percent : total !== null && transferred !== null ? transferred / total * 100 : null;
+  const percent = Number.isFinite(rawPercent) ? Math.max(0, Math.min(100, rawPercent)) : null;
+  const lastData = native ? observedAt : Date.parse(progress?.updatedAt);
+  const stale = stage === 'downloading' && now - (Number.isFinite(lastData) ? lastData : firstSeen.current) >= 30_000;
+  const speed = !native && !stale && Number.isFinite(progress?.bytesPerSecond) && progress.bytesPerSecond > 0 ? progress.bytesPerSecond : null;
+  const title = stage === 'downloading' ? `正在下载${native ? '应用' : '功能包'}` : progressStages[stage] || '正在准备更新';
+  return <div className="cmd-update-progress" data-stage={stage} data-stalled={stale}>
+    <div className="cmd-update-progress-heading"><span role="status">{title}</span>{stage === 'downloading' && percent !== null && <strong>{Math.floor(percent)}%</strong>}</div>
+    {stage === 'downloading' && <div className="cmd-update-progress-track" role="progressbar" aria-label={title} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent === null ? undefined : Math.floor(percent)} aria-valuetext={percent === null ? '等待下载进度' : `${Math.floor(percent)}%`}>
+      {percent !== null && <span style={{ transform: `scaleX(${percent / 100})` }} />}
+    </div>}
+    <p className="cmd-update-progress-detail">{stage === 'downloading'
+      ? <>{transferred !== null && total !== null ? `${formatBytes(transferred)} / ${formatBytes(total)}` : percent === null ? '正在连接下载源，等待下载数据…' : '安装包正在后台下载'}{speed !== null && <> · {formatBytes(speed)}/s</>}</>
+      : stage === 'ready' ? '等待在应用更新窗口确认安装。'
+        : stage === 'installing' ? '正在结束任务并安全关闭主机，完成后启动安装器。'
+          : '下载已完成，正在本机处理，请稍候。'}</p>
+    {stale && <p className="cmd-update-progress-stalled" role="status">30 秒未收到新的下载进度，可能是网络较慢或连接停滞。可继续等待；若持续不变，请在更新窗口重试。</p>}
+  </div>;
+}
 
 /** A deliberate press; the CSS fill and the command share the same duration. */
 function HoldToUpdate({ disabled, onComplete, label = '长按 2 秒更新' }) {
@@ -160,7 +203,7 @@ export function UpdateLauncher({ host, wide = true }) {
     const revision = ++nativeRevision.current;
     try {
       const value = await desktopUpdates.status?.();
-      if (mounted.current && value && revision === nativeRevision.current) { setNativeState(value); setNativeError(''); }
+      if (mounted.current && value && revision === nativeRevision.current) { setNativeState(previous => ({ ...value, observedAt: previous?.phase === value.phase && previous?.percent === value.percent && previous?.version === value.version ? previous.observedAt : Date.now() })); setNativeError(''); }
     } catch {
       if (mounted.current && revision === nativeRevision.current) setNativeError('应用更新状态暂时不可用，请重新检查。');
     }
@@ -168,7 +211,7 @@ export function UpdateLauncher({ host, wide = true }) {
   useEffect(() => {
     if (!canOpenAppUpdates) return;
     let active = true;
-    const apply = value => { if (active) { nativeRevision.current++; setNativeState(value); setNativeError(''); } };
+    const apply = value => { if (active && value) { nativeRevision.current++; setNativeState(previous => ({ ...value, observedAt: previous?.phase === value.phase && previous?.percent === value.percent && previous?.version === value.version ? previous.observedAt : Date.now() })); setNativeError(''); } };
     let unsubscribe;
     try {
       unsubscribe = desktopUpdates.subscribe?.(apply);
@@ -196,8 +239,9 @@ export function UpdateLauncher({ host, wide = true }) {
   const installBlockReason = appOnHost ? '请在当前连接主机上打开 BenchGo，完成应用更新。' : decision.reason || '';
   const enabled = useNativeApp ? !data?.busy : decision.enabled;
   const actionable = ['plugin', 'app'].includes(action);
-  const status = restart ? '待重启' : working ? (data?.phase === 'downloading' || pending === 'install' || ['downloading', 'verifying'].includes(nativeState?.phase) ? '下载中' : pending === 'app' ? '更新中' : '检查中') : updateAvailable ? '有更新' : '';
-  const pluginStatus = restart ? '待重启' : working ? (data?.phase === 'downloading' || pending === 'install' ? '正在下载…' : pending === 'app' ? '更新中…' : '正在检查…')
+  const preparing = ['verifying', 'extracting', 'activating'].includes(data?.progress?.stage) && data?.phase === 'downloading' || ['verifying', 'installing'].includes(nativeState?.phase);
+  const status = restart ? '待重启' : working ? (preparing ? '准备中' : data?.phase === 'downloading' || pending === 'install' || nativeState?.phase === 'downloading' ? '下载中' : pending === 'app' ? '更新中' : '检查中') : updateAvailable ? '有更新' : '';
+  const pluginStatus = restart ? '待重启' : working ? (preparing ? '正在准备更新…' : data?.phase === 'downloading' || pending === 'install' || nativeState?.phase === 'downloading' ? '正在下载…' : pending === 'app' ? '更新中…' : '正在检查…')
     : error ? (['install', 'app'].includes(retryAction.current.action) ? '更新未完成' : '暂时无法检查更新')
       : !data ? '尚未读取更新信息' : unpublished ? data.notice || '更新通道尚未就绪'
       : data.phase === 'error' ? (data.lastAction === 'install' ? '更新未完成' : '暂时无法检查更新') : !data.current?.plugin ? '暂无法识别插件版本'
@@ -254,9 +298,13 @@ export function UpdateLauncher({ host, wide = true }) {
           {!data && !error ? <Loading label="正在读取更新信息" compact /> : restart ? <div className="cmd-update-notice" role="status"><UIIcon name="check" size={16} /><span>重启主机{serverDeployment ? '服务' : '应用'}后生效{data?.busy && '，请先结束运行中的任务'}</span></div> : <>
             {(installBlockReason && (updateAvailable || action === 'blocked' || action === 'deployment')) && <p className="cmd-update-warning" role="status">{installBlockReason}</p>}
             {data?.managed === false && !updateAvailable && <p className="cmd-update-warning">{serverManaged ? '此主机由服务器部署管理' : '当前安装方式需要新版应用才能启用功能包更新。'}</p>}
-            <div className="cmd-update-actions"><BubbleTooltip label={actionable && (!enabled || appOnHost) ? installBlockReason || '当前暂不能更新' : undefined} portal><span className="cmd-update-action" tabIndex={actionable && (!enabled || appOnHost) ? 0 : undefined}>{actionable ? <HoldToUpdate key={holdKey} disabled={!open || working || !enabled || appOnHost} onComplete={primary} /> : <button type="button" className="cmd-update-button cmd-update-check" disabled={working} onClick={() => void primary()}>{pending === 'install' || data?.phase === 'downloading' ? '下载中…' : pending === 'app' ? '更新中…' : working ? '检查中…' : '检查更新'}</button>}</span></BubbleTooltip>{updateAvailable && <button type="button" className="cmd-update-icon-button" aria-label="重新检查" disabled={working} onClick={() => void check()}><UIIcon name="refresh" size={16} /></button>}</div>
+            <div className="cmd-update-actions"><BubbleTooltip label={actionable && (!enabled || appOnHost) ? installBlockReason || '当前暂不能更新' : undefined} portal><span className="cmd-update-action" tabIndex={actionable && (!enabled || appOnHost) ? 0 : undefined}>{actionable ? <HoldToUpdate key={holdKey} disabled={!open || working || !enabled || appOnHost} onComplete={primary} /> : <button type="button" className="cmd-update-button cmd-update-check" disabled={working} onClick={() => void primary()}>{preparing ? '准备中…' : pending === 'install' || data?.phase === 'downloading' || nativeState?.phase === 'downloading' ? '下载中…' : pending === 'app' ? '更新中…' : working ? '检查中…' : '检查更新'}</button>}</span></BubbleTooltip>{updateAvailable && <button type="button" className="cmd-update-icon-button" aria-label="重新检查" disabled={working} onClick={() => void check()}><UIIcon name="refresh" size={16} /></button>}</div>
           </>}
         </section>
+        {open && !restart && (data?.phase === 'downloading'
+          ? <UpdateProgress phase={data.phase} progress={data.progress} />
+          : !serverDeployment && ['downloading', 'verifying', 'installing', 'ready'].includes(nativeState?.phase)
+            ? <UpdateProgress native phase={nativeState.phase} progress={nativeState} observedAt={nativeState.observedAt} /> : null)}
         {!serverDeployment && (nativeError || nativeState?.phase === 'error') && <div className="cmd-update-error" role="alert"><span>{nativeError || nativeFailureMessages[nativeState?.failure] || '应用更新未完成，请重新检查。'}</span><button type="button" className="cmd-update-text-button" disabled={working || !!data?.busy || restart} onClick={() => void openAppUpdates()}>重试应用更新</button></div>}
         {(error || (!unpublished && data?.error)) && <div className="cmd-update-error" role="alert"><span>{error || data.error}</span>{retryInstall ? <HoldToUpdate key={`retry:${holdKey}`} label="长按 2 秒重试" disabled={!open || working || !!data?.busy} onComplete={retry} /> : <button type="button" className="cmd-update-text-button" disabled={!!pending || (working && retryAction.current.action !== 'status')} onClick={() => void retry()}>重试</button>}</div>}
         <section className="cmd-update-source" aria-labelledby={`${id}-source`}>

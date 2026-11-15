@@ -466,6 +466,83 @@ test('native failure classifications distinguish checking, downloading and insta
   }
 });
 
+test('plugin progress shows real bytes and speed, then separates local preparation from downloading', async () => {
+  let state = { ...update(), phase: 'downloading', progress: { stage: 'downloading', total: 4 * 1024 * 1024, transferred: 1024 * 1024, bytesPerSecond: 512 * 1024, updatedAt: new Date().toISOString() } };
+  const view = await mount(() => state);
+  try {
+    await view.click('更新，下载中');
+    const bar = () => view.document.querySelector('[role="progressbar"]');
+    assert.equal(bar().getAttribute('aria-valuenow'), '25');
+    assert.match(view.document.querySelector('.cmd-update-progress').textContent, /1\.0 MB \/ 4\.0 MB.*512\.0 KB\/s/);
+    state = { ...state, progress: { ...state.progress, stage: 'extracting' } };
+    await view.click('关闭更新'); await view.click('更新，下载中');
+    assert.match(view.document.querySelector('.cmd-update-progress').textContent, /正在解包功能包/);
+    assert.equal(bar(), null, 'local extraction is not a fake download percentage');
+    assert(view.button('更新，准备中'));
+    assert.equal(view.button('准备中…').disabled, true);
+  } finally { await view.dispose(); }
+});
+
+test('unknown download progress stays indeterminate and active progress timers stop on close', async () => {
+  const intervals = new Map(); let serial = 0;
+  const view = await mount(() => ({ ...update(), phase: 'downloading' }), {}, {
+    setInterval(callback, delay) { const id = ++serial; intervals.set(id, { callback, delay }); return id; }, clearInterval(id) { intervals.delete(id); },
+  });
+  try {
+    await view.click('更新，下载中');
+    const progress = view.document.querySelector('[role="progressbar"]');
+    assert.equal(progress.hasAttribute('aria-valuenow'), false);
+    assert.match(view.document.querySelector('.cmd-update-progress').textContent, /等待下载数据/);
+    assert.equal([...intervals.values()].filter(item => item.delay === 1000).length, 1);
+    await view.click('关闭更新');
+    assert.equal([...intervals.values()].filter(item => item.delay === 1000).length, 0, 'closing only disposes the display clock');
+    assert.equal(view.calls.some(call => call.action === 'install'), false);
+  } finally { await view.dispose(); }
+  assert.equal(intervals.size, 0);
+});
+
+test('stalled progress is a warning and clears only after a real native percentage change', async () => {
+  let now = 1_800_000_000_000, receive; const intervals = new Set();
+  class Clock extends Date { static now() { return now; } }
+  const view = await mount(initial, {}, { Date: Clock,
+    setInterval(callback) { intervals.add(callback); return callback; }, clearInterval(callback) { intervals.delete(callback); },
+    dshDesktop: { updates: { status: async () => ({ phase: 'downloading', percent: 12 }), subscribe(listener) { receive = listener; return () => {}; }, open() {} } },
+  });
+  try {
+    await view.click('更新，下载中');
+    const bar = () => view.document.querySelector('[role="progressbar"]');
+    assert.equal(bar().getAttribute('aria-valuenow'), '12');
+    await view.flush(() => { now += 31_000; for (const tick of intervals) tick(); });
+    assert.match(view.document.querySelector('.cmd-update-progress-stalled').textContent, /30 秒未收到新的下载进度/);
+    await view.flush(() => receive({ phase: 'downloading', percent: 12 }));
+    assert(view.document.querySelector('.cmd-update-progress-stalled'), 'repeated snapshots do not invent download activity');
+    await view.flush(() => receive({ phase: 'downloading', percent: 13 }));
+    assert.equal(view.document.querySelector('.cmd-update-progress-stalled'), null);
+    assert.equal(bar().getAttribute('aria-valuenow'), '13');
+    assert.doesNotMatch(view.document.querySelector('.cmd-update-progress-detail').textContent, /KB|MB|\/s/, 'the public native API does not provide byte or speed measurements');
+  } finally { await view.dispose(); }
+});
+
+test('native ready, verification and install failure distinguish downloading from safe shutdown', async () => {
+  let receive;
+  const view = await mount(initial, {}, { dshDesktop: { updates: {
+    status: async () => ({ phase: 'verifying', percent: 100 }), subscribe(listener) { receive = listener; return () => {}; }, open() {},
+  } } });
+  try {
+    await view.click('更新，准备中');
+    assert.match(view.document.querySelector('.cmd-update-progress').textContent, /正在校验安装包/);
+    assert.equal(view.document.querySelector('[role="progressbar"]'), null);
+    await view.flush(() => receive({ phase: 'ready', version: '0.1.3' }));
+    assert.match(view.document.querySelector('.cmd-update-progress').textContent, /应用安装包已就绪.*等待.*确认安装/);
+    await view.flush(() => receive({ phase: 'installing', version: '0.1.3' }));
+    assert.match(view.document.querySelector('.cmd-update-progress').textContent, /安全关闭主机/);
+    await view.flush(() => receive({ phase: 'error', failure: 'stop-failed' }));
+    assert.equal(view.document.querySelector('.cmd-update-progress'), null);
+    assert.match(view.document.querySelector('[role="alert"]').textContent, /主机未能安全完成关闭，更新尚未安装/);
+    assert(view.button('重试应用更新'));
+  } finally { await view.dispose(); }
+});
+
 test('a remote page cannot operate a desktop updater even if a bridge object is present', async () => {
   let nativeCalls = 0;
   const state = { ...initial(), release: { app: { version: '0.2.0', available: true } } };

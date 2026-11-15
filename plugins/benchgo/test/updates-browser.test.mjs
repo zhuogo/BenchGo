@@ -13,6 +13,7 @@ const require = createRequire(new URL('../../../deepseek-harness/apps/web/packag
 const { chromium } = require('playwright');
 const executablePath = [process.env.CHROMIUM_EXECUTABLE_PATH, chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(value => value && existsSync(value));
 const screenshots = join(root, 'artifacts/unified-updates');
+const progressScreenshots = join(root, 'artifacts/update-progress-browser-20261115');
 let fixturePromise;
 
 // Only the host boundary is synthetic. Modal, tooltip, picker, information dialog and
@@ -36,6 +37,7 @@ async function fixture() {
         installation:'desktop',phase:'idle',release:{plugin:{version:'0.1.1',available:false,compatible:true},app:{version:'0.1.0',available:false}},
         managed:true,canInstall:false,restartRequired:false,busy:false});
       let mode='current',state=initial(),nativeState={phase:'idle'},nativeListener,finishNativeStatus;window.updateCalls=[];window.desktopOpens=0;window.nativeStatusReads=0;
+      window.publishHostState=value=>{state={...state,...value};};
       window.publishNativeState=value=>{nativeState=value;nativeListener?.(value);};
       window.finishNativeStatus=()=>{finishNativeStatus?.();};
       window.dshDesktop={updates:{open:async()=>{window.desktopOpens++;},status:async()=>{
@@ -59,6 +61,8 @@ async function fixture() {
         if(mode==='restart')state={...state,phase:'ready',restartRequired:true,canInstall:false};
         if(mode==='app')state={...state,release:{plugin:{version:'0.1.1',available:false,compatible:true},app:{version:'0.2.0',available:true,url:'https://example.test/benchgo-setup.exe'}}};
         if(mode==='native-race'){state={...state,decision:{action:'blocked',available:true,enabled:false,reason:'引擎版本暂不可识别'}};nativeState={phase:'error',failure:'check-network'};}
+        if(mode==='host-progress')state={...state,phase:'downloading',progress:{stage:'downloading',transferred:12*1024**2,total:48*1024**2,bytesPerSecond:1.5*1024**2,updatedAt:new Date().toISOString()}};
+        if(mode==='native-progress')nativeState={phase:'downloading',percent:37.8,version:'0.2.0'};
         root.render(<React.Fragment key={++serial}><style>{tokens}{themeBase}{hostCss}</style>
           <aside className="cmd-shell-sidebar fixture-sidebar"><div className="fixture-brand">BenchGo</div><nav aria-label="工作区"><button type="button">最近对话</button><button type="button">项目</button></nav>
             <div className="fixture-sidebar-bottom"><UpdateLauncher host={{}} wide={false}/></div></aside>
@@ -164,6 +168,153 @@ test('unified updates render honest states beside the workbench in both themes a
         else assert.equal(await dialog.getByRole('button', { name: '长按 2 秒更新', exact: true }).count(), 0, 'an unpublished channel cannot advertise an install');
         await fits(page, dialog);
         await page.screenshot({ path: join(screenshots, `${dark ? 'dark' : 'light'}-${width}-${mode}.png`) });
+        assert.deepEqual(errors, []);
+      } finally { await page.close(); }
+    }
+  } finally { await browser.close(); }
+});
+
+test('host progress shows real bytes and speed, honest unknown totals and stalled downloads before local preparation', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  await mkdir(progressScreenshots, { recursive: true });
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    for (const dark of [false, true]) for (const width of [1280, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+      page.setDefaultTimeout(6000);
+      const errors = []; page.on('pageerror', error => errors.push(error.message));
+      try {
+        await page.clock.install();
+        const { dialog } = await mount(page, 'host-progress', dark);
+        const progress = dialog.locator('.cmd-update-progress');
+        const bar = dialog.getByRole('progressbar', { name: '正在下载功能包', exact: true });
+        const capture = async stage => {
+          await fits(page, dialog);
+          assert(await page.getByRole('heading', { name: '工作台', exact: true }).isVisible(), 'the real modal retains its neighboring workbench');
+          await page.screenshot({ path: join(progressScreenshots, `${dark ? 'dark' : 'light'}-${width}-host-${stage}.png`) });
+        };
+        // Host changes still reach the production component through its normal status poll.
+        const publish = async value => {
+          await page.evaluate(value => window.publishHostState({ ...value, progress: { ...value.progress, updatedAt: new Date().toISOString() } }), value);
+          await page.clock.runFor(2001);
+        };
+        await bar.waitFor();
+        assert.equal(await bar.getAttribute('aria-valuenow'), '25');
+        assert.equal(await bar.getAttribute('aria-valuetext'), '25%');
+        assert.equal(await progress.locator('strong').innerText(), '25%');
+        assert.equal(await progress.locator('.cmd-update-progress-detail').innerText(), '12.0 MB / 48.0 MB · 1.5 MB/s');
+        assert.equal(await bar.locator('span').evaluate(node => getComputedStyle(node).transform), 'matrix(0.25, 0, 0, 1, 0, 0)', 'the visible fill matches downloaded bytes');
+        assert(await dialog.locator('.dowork-select').isDisabled(), 'download source changes are disabled during an active transfer');
+        await capture('downloading');
+
+        const current = { stage: 'downloading', transferred: 24 * 1024 ** 2, total: 48 * 1024 ** 2, bytesPerSecond: 2 * 1024 ** 2 };
+        await publish({ progress: current });
+        assert.equal(await bar.getAttribute('aria-valuenow'), '50', 'a newer host poll advances the actual progress');
+        assert.match(await progress.innerText(), /24\.0 MB \/ 48\.0 MB · 2\.0 MB\/s/);
+
+        await publish({ progress: { ...current, total: null, bytesPerSecond: null } });
+        assert.equal(await bar.getAttribute('aria-valuenow'), null, 'an unknown content length never implies a percentage');
+        assert.equal(await bar.getAttribute('aria-valuetext'), '等待下载进度');
+        assert.equal(await bar.locator('span').count(), 0, 'unknown progress has no fabricated fill');
+        assert.doesNotMatch(await progress.innerText(), /%|MB\/s/);
+        await progress.getByText('正在连接下载源，等待下载数据…', { exact: true }).waitFor();
+        await capture('unknown');
+
+        await publish({ progress: current });
+        await page.clock.runFor(26_000);
+        assert.equal(await progress.getAttribute('data-stalled'), 'false', 'a download younger than thirty seconds is not reported stalled');
+        await page.clock.runFor(4001);
+        assert.equal(await progress.getAttribute('data-stalled'), 'true');
+        await progress.getByText(/30 秒未收到新的下载进度/).waitFor();
+        assert.equal(await bar.getAttribute('aria-valuenow'), '50', 'elapsed time never advances downloaded bytes');
+        assert.doesNotMatch(await progress.innerText(), /MB\/s/, 'a stalled download does not keep advertising an obsolete transfer speed');
+        await capture('stalled');
+
+        for (const [stage, title] of [['verifying', '正在校验安装包'], ['extracting', '正在解包功能包'], ['activating', '正在准备功能包']]) {
+          await publish({ progress: { ...current, stage, transferred: current.total, bytesPerSecond: 0 } });
+          await progress.getByRole('status').getByText(title, { exact: true }).waitFor();
+          assert.equal(await progress.getAttribute('data-stage'), stage);
+          assert.equal(await dialog.getByRole('progressbar').count(), 0, 'local processing is a stage, not a fake byte percentage');
+          assert.equal(await progress.locator('.cmd-update-progress-stalled').count(), 0, 'download stalling does not bleed into local preparation');
+          assert.doesNotMatch(await progress.innerText(), /%/);
+          assert.match(await dialog.locator('.cmd-update-card-heading').innerText(), /正在准备更新/);
+          assert.equal(await dialog.getByRole('button', { name: '准备中…', exact: true }).isDisabled(), true);
+          await capture(stage);
+        }
+        await publish({ phase: 'ready', progress: { stage: 'ready' }, restartRequired: true, canInstall: false });
+        await dialog.getByText(/重启主机应用后生效/).waitFor();
+        assert.equal(await progress.count(), 0, 'a completed feature package gives the actual restart instruction');
+        assert.equal(await dialog.getByRole('progressbar').count(), 0);
+        assert.deepEqual(await page.evaluate(() => ({ installs: window.updateCalls.filter(call => call.action === 'install').length, opens: window.desktopOpens })), { installs: 0, opens: 0 });
+        await capture('ready');
+        assert.deepEqual(errors, []);
+      } finally { await page.close(); }
+    }
+  } finally { await browser.close(); }
+});
+
+test('native progress follows public percentages and stages while repeated events cannot conceal a thirty-second stall', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  await mkdir(progressScreenshots, { recursive: true });
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    for (const dark of [false, true]) for (const width of [1280, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+      page.setDefaultTimeout(6000);
+      const errors = []; page.on('pageerror', error => errors.push(error.message));
+      try {
+        await page.clock.install();
+        const { dialog } = await mount(page, 'native-progress', dark, true);
+        const progress = dialog.locator('.cmd-update-progress');
+        const bar = dialog.getByRole('progressbar', { name: '正在下载应用', exact: true });
+        const publish = value => page.evaluate(value => window.publishNativeState(value), { version: '0.2.0', ...value });
+        const capture = async stage => {
+          await fits(page, dialog);
+          assert(await page.getByRole('heading', { name: '工作台', exact: true }).isVisible());
+          await page.screenshot({ path: join(progressScreenshots, `${dark ? 'dark' : 'light'}-${width}-native-${stage}.png`) });
+        };
+        await bar.waitFor();
+        assert.equal(await bar.getAttribute('aria-valuenow'), '37');
+        assert.equal(await progress.locator('strong').innerText(), '37%');
+        assert.equal(await progress.locator('.cmd-update-progress-detail').innerText(), '安装包正在后台下载');
+        assert.doesNotMatch(await progress.innerText(), /MB|\/s/, 'the public native bridge does not expose byte counts or transfer speed');
+        assert(await dialog.getByRole('button', { name: '长按 2 秒更新', exact: true }).isDisabled());
+        await capture('downloading');
+
+        await publish({ phase: 'downloading', percent: null });
+        await page.waitForFunction(() => document.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow') === null);
+        assert.equal(await bar.getAttribute('aria-valuetext'), '等待下载进度');
+        assert.equal(await bar.locator('span').count(), 0);
+        assert.doesNotMatch(await progress.innerText(), /%/);
+        await capture('unknown');
+
+        await publish({ phase: 'downloading', percent: 37.8 });
+        await page.waitForFunction(() => document.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow') === '37');
+        await page.clock.runFor(28_000);
+        assert.equal(await progress.getAttribute('data-stalled'), 'false');
+        await publish({ phase: 'downloading', percent: 37.8 });
+        await page.clock.runFor(3001);
+        assert.equal(await progress.getAttribute('data-stalled'), 'true', 'repeated identical bridge events do not restart the no-progress timer');
+        await progress.getByText(/30 秒未收到新的下载进度/).waitFor();
+        assert.equal(await bar.getAttribute('aria-valuenow'), '37', 'waiting never fabricates native progress');
+        await capture('stalled');
+
+        await publish({ phase: 'downloading', percent: 42.3 });
+        await page.waitForFunction(() => document.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow') === '42');
+        assert.equal(await progress.getAttribute('data-stalled'), 'false', 'actual progress clears the stalled notice');
+        assert.equal(await progress.locator('.cmd-update-progress-stalled').count(), 0);
+        for (const [stage, title] of [['verifying', '正在校验安装包'], ['installing', '正在准备安装应用'], ['ready', '应用安装包已就绪']]) {
+          await publish({ phase: stage, percent: 100 });
+          await progress.getByRole('status').getByText(title, { exact: true }).waitFor();
+          assert.equal(await progress.getAttribute('data-stage'), stage);
+          assert.equal(await dialog.getByRole('progressbar').count(), 0);
+          assert.equal(await progress.locator('.cmd-update-progress-stalled').count(), 0);
+          assert.doesNotMatch(await progress.innerText(), /%/);
+          if (stage === 'ready') {
+            await progress.getByText('等待在应用更新窗口确认安装。', { exact: true }).waitFor();
+            assert.doesNotMatch(await dialog.innerText(), /重启.*生效|已安装成功/, 'a ready native installer is not represented as an installed application');
+          } else assert.match(await dialog.locator('.cmd-update-card-heading').innerText(), /正在准备更新/);
+          await capture(stage);
+        }
+        assert.deepEqual(await page.evaluate(() => ({ installs: window.updateCalls.filter(call => call.action === 'install').length, opens: window.desktopOpens })), { installs: 0, opens: 0 });
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }

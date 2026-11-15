@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { publishAppChannel, publishRelease, repairAppChannel } from './publish.mjs';
+import { publishAppChannel, publishRelease, repairAppChannel, stagePreviousAppBlockmap } from './publish.mjs';
 import { releaseKind, sha256 } from './github.mjs';
 
 const json = value => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
@@ -20,7 +20,8 @@ function fixture(t) {
     releases.set(tag, value); return value;
   };
   const setAsset = (release, name, bytes) => {
-    const asset = { id: serial++, name, size: bytes.length, digest: `sha256:${sha256(bytes)}` };
+    const asset = { id: serial++, name, size: bytes.length, digest: `sha256:${sha256(bytes)}`,
+      browser_download_url: `https://github.com/zhuogo/BenchGo/releases/download/${release.tag_name}/${name}` };
     release.assets = [...release.assets.filter(row => row.name !== name), asset]; bytesById.set(asset.id, bytes); return asset;
   };
   const installer = Buffer.from('MZ-verified-native-installer');
@@ -73,6 +74,81 @@ function fixture(t) {
     repair: () => repairAppChannel({ releaseVersion: '1.1.0', publicKey: keys.publicKey }),
     mutations: () => calls.filter(row => row.method !== 'GET') };
 }
+
+async function blockmapFixture(t) {
+  const f = fixture(t), directory = await mkdtemp(resolve(tmpdir(), 'benchgo-previous-blockmap-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const bytes = Buffer.from('original immutable blockmap bytes');
+  const name = 'benchgo-1.0.0-win-x64-setup.exe.blockmap', asset = f.setAsset(f.original, name, bytes);
+  const plan = { builds: { windows: true }, previous: { tag: 'v1.1.0', manifest: f.currentManifest } };
+  const manifest = { ...f.currentManifest, app: { version: '1.1.0', url: 'https://github.com/zhuogo/BenchGo/releases/download/v1.2.0/benchgo-1.1.0-win-x64-setup.exe', size: 100, sha256: 'd'.repeat(64) } };
+  return { ...f, directory, bytes, name, asset, plan, manifest,
+    stage: () => stagePreviousAppBlockmap({ plan, manifest, directory, publicKey: f.publicKey }) };
+}
+
+test('a new Windows release stages the previous app owner blockmap unchanged in the derived current directory', async t => {
+  const f = await blockmapFixture(t);
+  assert.deepEqual(await f.stage(), { status: 'staged', name: f.name, size: f.bytes.length, sha256: sha256(f.bytes) });
+  assert.deepEqual(await readFile(resolve(f.directory, f.name)), f.bytes);
+  assert.deepEqual(await readdir(f.directory), [f.name]);
+  assert.ok(f.calls.some(row => row.path === '/releases/tags/v1.0.0'), 'the app owner predates the previous unified v1.1.0 release');
+  assert.equal(f.calls.some(row => row.path === '/releases/tags/v1.1.0'), false);
+  const originalAssets = JSON.stringify(f.original.assets);
+  assert.equal((await f.stage()).status, 'staged', 'a publication retry accepts the same bytes');
+  assert.equal(JSON.stringify(f.original.assets), originalAssets);
+  assert.deepEqual(f.mutations(), [], 'staging never modifies a release or channel');
+});
+
+test('reused applications and first releases do not invent previous blockmap assets or issue requests', async t => {
+  const f = await blockmapFixture(t);
+  f.plan.builds.windows = false;
+  assert.equal(await f.stage(), null);
+  f.plan.builds.windows = true; f.plan.previous = null;
+  assert.equal(await f.stage(), null);
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(await readdir(f.directory), []);
+});
+
+test('GenericProvider tag substitution outside the new directory retains full-download fallback', async t => {
+  const f = await blockmapFixture(t);
+  f.manifest.app.version = '1.2.0';
+  f.manifest.app.url = 'https://github.com/zhuogo/BenchGo/releases/download/v1.2.0/benchgo-1.2.0-win-x64-setup.exe';
+  assert.deepEqual(await f.stage(), { status: 'fallback', reason: 'old-blockmap-is-in-another-directory' });
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(await readdir(f.directory), []);
+});
+
+test('missing previous blockmaps explicitly retain native fallback without modifying historical assets', async t => {
+  const f = await blockmapFixture(t);
+  f.original.assets = f.original.assets.filter(row => row.id !== f.asset.id);
+  assert.deepEqual(await f.stage(), { status: 'fallback', reason: 'previous-blockmap-is-unavailable' });
+  assert.deepEqual(await readdir(f.directory), []);
+  assert.deepEqual(f.mutations(), []);
+});
+
+for (const mode of ['digest', 'bytes', 'missing-digest', 'url', 'duplicate', 'oversized', 'owner-signature', 'owner-app', 'installer-digest']) test(`previous blockmap ${mode} errors fail before staging or publication`, async t => {
+  const f = await blockmapFixture(t);
+  if (mode === 'digest') f.asset.digest = `sha256:${'f'.repeat(64)}`;
+  if (mode === 'bytes') f.bytesById.set(f.asset.id, Buffer.alloc(f.bytes.length));
+  if (mode === 'missing-digest') delete f.asset.digest;
+  if (mode === 'url') f.asset.browser_download_url = f.asset.browser_download_url.replace('v1.0.0/', 'v1.1.0/');
+  if (mode === 'duplicate') f.original.assets.push({ ...f.asset, id: 999 });
+  if (mode === 'oversized') f.asset.size = 8 * 1024 * 1024 + 1;
+  if (mode === 'owner-signature') f.setAsset(f.original, 'benchgo-update.json.sig', Buffer.from('invalid-signature'));
+  if (mode === 'owner-app') { f.originalManifest.app.sha256 = 'f'.repeat(64); f.seal(f.original, f.originalManifest); }
+  if (mode === 'installer-digest') f.exe.digest = `sha256:${'f'.repeat(64)}`;
+  await assert.rejects(f.stage());
+  assert.deepEqual(await readdir(f.directory), []);
+  assert.deepEqual(f.mutations(), []);
+});
+
+test('publication never overwrites different previously staged blockmap bytes', async t => {
+  const f = await blockmapFixture(t), existing = Buffer.from('preserved unexpected content');
+  await writeFile(resolve(f.directory, f.name), existing);
+  await assert.rejects(f.stage(), /Refusing to replace/);
+  assert.deepEqual(await readFile(resolve(f.directory, f.name)), existing);
+  assert.deepEqual(f.mutations(), []);
+});
 
 test('repair copies original native-release bytes for a reused EXE, preserves latest and is idempotent', async t => {
   const f = fixture(t), latestId = f.apps.assets.find(row => row.name === 'latest.yml').id;

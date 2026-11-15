@@ -127,6 +127,34 @@ export async function repairAppChannel({ releaseVersion, publicKey }) {
   return publishAppChannel({ manifest: signed.manifest, repairOnly: true, publicKey });
 }
 
+/** Supply the pinned GenericProvider's old-map URL only within this new Windows release. */
+export async function stagePreviousAppBlockmap({ plan, manifest, directory, publicKey }) {
+  if (!plan.builds.windows || !plan.previous?.manifest.app) return null;
+  const previous = immutableArtifact(plan.previous.manifest.app), app = immutableArtifact(manifest.app);
+  if (compareVersions(app.version, previous.version) <= 0) throw new Error('New Windows builds must increase the application version');
+  const current = new URL(app.url), oldName = `${basename(new URL(previous.url).pathname)}.blockmap`;
+  if (basename(current.pathname) !== `benchgo-${app.version}-win-x64-setup.exe` || oldName !== `benchgo-${previous.version}-win-x64-setup.exe.blockmap`) throw new Error('Previous Windows blockmap requires canonical installer names');
+  const derived = `${current.pathname.replaceAll(app.version, previous.version)}.blockmap`;
+  if (derived !== new URL(oldName, current).pathname) return { status: 'fallback', reason: 'old-blockmap-is-in-another-directory' };
+  const tag = new URL(previous.url).pathname.split('/').at(-2);
+  const owner = await readPublicStableRelease(tag.slice(1), { publicKey });
+  if (['version', 'url', 'size', 'sha256'].some(key => owner.manifest.app?.[key] !== previous[key])) throw new Error('Previous Windows artifact differs from its signed owner release');
+  const installers = owner.release.assets.filter(row => row.name === basename(new URL(previous.url).pathname));
+  if (installers.length !== 1 || installers[0].size !== previous.size || installers[0].digest !== `sha256:${previous.sha256}`) throw new Error('Previous Windows asset digest or size differs from its signed manifest');
+  const maps = owner.release.assets.filter(row => row.name === oldName);
+  if (!maps.length) return { status: 'fallback', reason: 'previous-blockmap-is-unavailable' };
+  const asset = maps[0];
+  if (maps.length !== 1 || asset.browser_download_url !== `${previous.url}.blockmap` || !/^sha256:[a-f0-9]{64}$/.test(asset.digest)) throw new Error('Previous Windows blockmap identity or digest is invalid');
+  const bytes = await assetBytes(asset, { maxBytes: 8 * 1024 * 1024 });
+  if (`sha256:${sha256(bytes)}` !== asset.digest) throw new Error('Previous Windows blockmap checksum mismatch');
+  const destination = resolve(directory, oldName);
+  let existing;
+  try { existing = await readFile(destination); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (existing && !existing.equals(bytes)) throw new Error('Refusing to replace different previous Windows blockmap bytes');
+  if (!existing) await writeFile(destination, bytes, { flag: 'wx' });
+  return { status: 'staged', name: oldName, size: bytes.length, sha256: sha256(bytes) };
+}
+
 async function remoteDigest(asset) {
   if (/^sha256:[a-f0-9]{64}$/.test(asset.digest)) return asset.digest.slice(7);
   const response = await github(`/releases/assets/${asset.id}`, { headers: { accept: 'application/octet-stream' }, signal: AbortSignal.timeout(600_000) });
@@ -202,6 +230,8 @@ export async function publishRelease({ plan, directory }) {
   const channel = await readChannelForPublication(channelRelease, plan, raw, signatureBytes, publicKey);
   validateChannelAdvance(channel, manifest);
   await validateAppChannels(await getRelease('app-updates'), manifest);
+  const previousBlockmap = await stagePreviousAppBlockmap({ plan, manifest, directory: output, publicKey });
+  if (previousBlockmap?.status === 'fallback') console.log(`Previous Windows blockmap: ${previousBlockmap.reason}; native full-download fallback remains available.`);
   if (channel?.releaseVersion === manifest.releaseVersion && channel.sourceSha === manifest.sourceSha
     && JSON.stringify(channel) !== JSON.stringify(manifest)) throw new Error('Published unified metadata differs from this retry');
   const tag = plan.tag;

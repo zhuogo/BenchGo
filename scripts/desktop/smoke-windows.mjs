@@ -109,5 +109,9 @@ try {
   if (await readFile(join(dataDir, 'sessions.json'), 'utf8') !== saved) throw new Error('Crash recovery rewrote saved sessions');
   if (!(await sidebarCall({ action: 'ensureRecent' })).workspaceId) throw new Error('Packaged sidebar recent workspace failed after crash recovery');
   console.log('Packaged Host forced-exit recovery with legacy owner.lock, default user dataDir and preserved sessions passed.');
+  if (await host.updateTasks('lock')) throw new Error('Packaged Host unexpectedly has active work before the update shutdown probe');
+  await host.stop(true);
+  host = undefined;
+  console.log('Packaged Host update admission lock, graceful exit and shutdown acknowledgement passed.');
   console.log('Packaged DSH runtime, offline Plus enrollment and authenticated Link management passed.');
 } finally { try { await host?.stop(); } finally { await rm(temporary, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); } }

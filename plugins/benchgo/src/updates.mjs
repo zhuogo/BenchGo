@@ -27,7 +27,7 @@ export async function createUpdates({ directory, profile, runtime, version, rele
   const configFile = join(directory, 'updates.json');
   const lifetime = new AbortController();
   const updateFetch = (url, options = {}) => fetcher(url, { ...options, signal: AbortSignal.any([lifetime.signal, ...(options.signal ? [options.signal] : [])]) });
-  let config = { ...DEFAULT_UPDATE_CONFIG }, phase = 'idle', release = null, error = '', checkedAt = null, task = null, lastAction = null, closed = false;
+  let config = { ...DEFAULT_UPDATE_CONFIG }, phase = 'idle', release = null, error = '', checkedAt = null, task = null, lastAction = null, closed = false, progress = null, staged = null;
   let confirmedReleaseVersion = releaseVersion;
   try { config = normalizeUpdateConfig(await json(configFile)); } catch (failure) { if (failure.code !== 'ENOENT') error = '更新源配置读取失败，请重新选择更新来源'; }
   const installed = async () => profile ? await install.getInstallState(profile) : { managed: false };
@@ -92,7 +92,7 @@ export async function createUpdates({ directory, profile, runtime, version, rele
       // A check can publish its release before the task's finalizer releases admission.
       // Keep that intermediate response active so clients continue polling readiness.
       phase: restartRequired ? 'ready' : task && phase === 'idle' ? 'checking' : phase, lastAction, installation, notice: phase === 'unpublished' ? '更新通道尚未就绪' : '', config, current: { plugin: version, engine: engineVersion, app: currentApp, ...(confirmedReleaseVersion ? { release: confirmedReleaseVersion } : {}) },
-      managed: !!state.managed, busy, restartRequired, checkedAt, error,
+      managed: !!state.managed, busy, restartRequired, checkedAt, error, progress,
       decision,
       canInstall: decision.action === 'plugin' && decision.enabled,
       release: release ? { ...release, plugin: { ...release.plugin, available: pluginAvailable, compatible, engineCompatible, appCompatible, reason: compatible ? undefined : reason },
@@ -134,11 +134,11 @@ export async function createUpdates({ directory, profile, runtime, version, rele
           const temporary = `${configFile}.${randomUUID()}.tmp`;
           try { await writeFile(temporary, JSON.stringify(next), { mode: 0o600 }); await rename(temporary, configFile); }
           finally { await rm(temporary, { force: true }); }
-          config = next; release = null; error = ''; phase = 'idle'; checkedAt = null;
+          config = next; release = null; error = ''; phase = 'idle'; checkedAt = null; progress = null;
           break;
         }
         case 'check': {
-          phase = 'checking';
+          phase = 'checking'; progress = null;
           start('check', async () => {
             const next = await fetchVerifiedRelease({ config, fetcher: updateFetch, publicKey });
             release = next;
@@ -153,16 +153,27 @@ export async function createUpdates({ directory, profile, runtime, version, rele
           if (!release || !compatible.compatible) throw conflict(compatible.reason);
           if (!isNewerVersion(release.plugin.version, version)) throw conflict('插件已是最新版本');
           const selected = release;
-          phase = 'downloading';
+          phase = 'downloading'; progress = null;
           start('install', async () => {
             const archive = join(state.root, `.download-${randomUUID()}.tar.gz`);
+            const stage = name => { progress = { stage: name, total: selected.plugin.size, transferred: selected.plugin.size, bytesPerSecond: 0, updatedAt: new Date().toISOString() }; };
             try {
               await mkdir(state.root, { recursive: true, mode: 0o700 });
-              await fetchUpdateArtifact(selected.plugin, { file: archive, config, fetcher: updateFetch });
-              if (closed) throw new Error('更新已取消');
-              const prepared = await install.prepareRelease({ archive, root: state.root, version: selected.plugin.version, runtime });
+              let prepared;
+              if (staged?.root === state.root && staged.version === selected.plugin.version && staged.sha256 === selected.plugin.sha256 && staged.size === selected.plugin.size) {
+                stage('verifying');
+                try { prepared = await install.prepareRelease({ root: state.root, version: selected.plugin.version, runtime }); }
+                catch (failure) { staged = null; throw failure; }
+              } else {
+                await fetchUpdateArtifact(selected.plugin, { file: archive, config, fetcher: updateFetch, signal: lifetime.signal, onProgress: value => { progress = value; } });
+                if (closed) throw new Error('更新已取消');
+                stage('extracting');
+                prepared = await install.prepareRelease({ archive, root: state.root, version: selected.plugin.version, runtime });
+                staged = { root: state.root, version: selected.plugin.version, sha256: selected.plugin.sha256, size: selected.plugin.size };
+              }
               if (closed) throw new Error('更新已取消');
               if (await isBusy()) throw conflict('下载期间有新任务开始，结束后再点更新');
+              stage('activating');
               await install.activateRelease({ profile, runtime, release: prepared });
               phase = 'ready';
             } finally { await rm(archive, { force: true }); }
