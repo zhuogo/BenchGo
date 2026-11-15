@@ -13,7 +13,7 @@ import { getInstallState, releaseBundleName } from '../../plugins/benchgo/shared
 const stagePluginBundle = options => stageCompletePluginBundle({ ...options, includeServerResources: false });
 
 function fixture(t) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'benchgo-bundle-')));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'benchgo-bundle-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const put = (name, value) => { const path = join(root, name); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value)); };
   const sidebarFiles = ['sidebar-host.mjs', 'client-editor.js', 'client-mermaid.js', 'client-locale.js', 'client-terminal.js', 'SIDEBAR-RUNTIME-LICENSES.txt'];
