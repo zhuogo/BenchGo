@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, verify } from 'node:crypto';
+import { createHash, createPublicKey, KeyObject, verify } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { validateReleaseManifest, compareVersions } from '../../plugins/benchgo/shared/update-feed.mjs';
 
@@ -36,7 +36,8 @@ export async function readSignedRelease(release, { publicKey } = {}) {
   const byName = name => release.assets?.find(asset => asset.name === name);
   const raw = await assetBytes(byName('benchgo-update.json'));
   const signature = await assetBytes(byName('benchgo-update.json.sig'), { maxBytes: 4096 });
-  const trusted = createPublicKey(publicKey ?? await readFile(new URL('../../plugins/benchgo/shared/update-public-key.pem', import.meta.url)));
+  const supplied = publicKey ?? await readFile(new URL('../../plugins/benchgo/shared/update-public-key.pem', import.meta.url));
+  const trusted = supplied instanceof KeyObject && supplied.type === 'public' ? supplied : createPublicKey(supplied);
   if (!verify(null, raw, trusted, Buffer.from(signature.toString('utf8').trim(), 'base64'))) throw new Error('Previous release signature is invalid');
   const manifest = validateReleaseManifest(JSON.parse(raw.toString('utf8')));
   return { manifest, raw, signature, manifestSha256: sha256(raw) };

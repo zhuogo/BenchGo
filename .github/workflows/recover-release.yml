@@ -1,0 +1,50 @@
+name: Recover BenchGo verified release
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Original unified release run with successful builds and a failed final publisher
+        required: true
+        type: string
+      source_sha:
+        description: Exact original product source SHA (not this recovery publisher commit)
+        required: true
+        type: string
+      version:
+        description: Original unified release version
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: benchgo-unified-release
+  cancel-in-progress: false
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RECOVERY_RUN_ID: ${{ inputs.run_id }}
+      RECOVERY_SOURCE_SHA: ${{ inputs.source_sha }}
+      RECOVERY_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify publisher boundaries and recovery refusals
+        run: node --test scripts/release/release.test.mjs scripts/release/downloads.test.mjs scripts/release/publish-web-catalog.test.mjs scripts/release/publish-app-channel.test.mjs scripts/release/publish-recovery.test.mjs
+      - name: Verify original artifacts and recover the same immutable product release
+        run: node scripts/release/recover-release.mjs --run "$RECOVERY_RUN_ID" --source "$RECOVERY_SOURCE_SHA" --version "$RECOVERY_VERSION"
+      - name: Retain recovery verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchgo-recovery-verification
+          path: artifacts/recovery/recovery-verification.json
+          if-no-files-found: warn

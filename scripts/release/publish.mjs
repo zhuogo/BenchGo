@@ -11,6 +11,7 @@ import { fileDigest } from './record-artifact.mjs';
 import { immutableArtifact } from './assemble.mjs';
 import { verifyDownloads } from './downloads.mjs';
 import { publishWebCatalog } from './publish-web-catalog.mjs';
+import { verifyRecoveryPublication } from './recover-release.mjs';
 
 const sendJson = (path, method, body) => githubJson(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const getRelease = tag => githubJson(`/releases/tags/${encodeURIComponent(tag)}`, { missing: true });
@@ -61,7 +62,7 @@ async function validateAppChannels(release, manifest) {
   return channels;
 }
 
-function validateNativeFeed(bytes, manifest) {
+export function validateNativeFeed(bytes, manifest) {
   const feed = JSON.parse(bytes.toString('utf8')), app = immutableArtifact(manifest.app);
   const file = feed.files?.[0], checksum = file?.sha512;
   if (feed.version !== app.version || basename(new URL(app.url).pathname) !== `benchgo-${app.version}-win-x64-setup.exe`
@@ -213,9 +214,11 @@ async function readChannelForPublication(release, plan, nextRaw, nextSignature, 
   }
 }
 
-export async function publishRelease({ plan, directory }) {
+export async function publishRelease({ plan, directory, recovery }) {
   if (process.env.GITHUB_ACTIONS !== 'true' || process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch'
-    || process.env.GITHUB_REF !== 'refs/heads/main' || process.env.GITHUB_SHA !== plan.sourceSha) throw new Error('Publishing is restricted to explicit main-branch release workflow dispatch');
+    || process.env.GITHUB_REF !== 'refs/heads/main') throw new Error('Publishing is restricted to explicit main-branch release workflow dispatch');
+  if (recovery) await verifyRecoveryPublication({ plan, directory, recovery });
+  else if (process.env.GITHUB_SHA !== plan.sourceSha) throw new Error('Publishing checkout differs from the planned product source');
   const output = resolve(directory), raw = await readFile(resolve(output, 'benchgo-update.json'));
   const signatureBytes = await readFile(resolve(output, 'benchgo-update.json.sig'));
   const signature = signatureBytes.toString('utf8');
