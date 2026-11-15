@@ -19,7 +19,7 @@ test('exposes relay help and version', async () => {
   assert.match(await run(['--help']), /^BenchGo relay 0\.1\.1\b/);
   assert.equal(lock.version, version);
   assert.equal(lock.packages[''].version, version);
-  assert.equal(dependencies.ws, '8.19.0');
+  assert.equal(dependencies.ws, '8.22.2');
   assert.equal(lock.packages[''].dependencies.ws, dependencies.ws);
   assert.equal(lock.packages['node_modules/ws'].version, dependencies.ws);
   const script = await readFile(new URL('../../../install-relay.sh', import.meta.url), 'utf8');

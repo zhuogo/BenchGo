@@ -16,7 +16,7 @@ try {
   assert.equal(installed.status, 0, installed.stderr || installed.error?.message);
   const packageRoot = join(temporary, 'node_modules/benchgo-relay');
   const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '0.1.1'); assert.equal(manifest.dependencies.ws, '8.19.0');
+  assert.equal(manifest.version, '0.1.1'); assert.equal(manifest.dependencies.ws, '8.22.2');
   const cli = args => {
     const result = spawnSync(process.execPath, [join(packageRoot, 'bin/benchgo-relay.mjs'), ...args], { cwd: temporary, encoding: 'utf8', windowsHide: true, timeout: 15_000 });
     assert.equal(result.status, 0, result.stderr); return result.stdout.trim();

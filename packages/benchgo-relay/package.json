@@ -20,8 +20,11 @@
     "resources",
     "README.md"
   ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "dependencies": {
-    "ws": "8.19.0"
+    "ws": "8.22.2"
   },
   "engines": {
     "node": ">=22"
