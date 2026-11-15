@@ -1,10 +1,11 @@
 import { createReadStream } from 'node:fs';
 import { createHash, createPublicKey, verify } from 'node:crypto';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { compareVersions, validateReleaseManifest } from '../../plugins/benchgo/shared/update-feed.mjs';
+import { compareVersions, resolveUpdateUrl, validateReleaseManifest } from '../../plugins/benchgo/shared/update-feed.mjs';
 import { github, githubJson, assetBytes, findPreviousRelease, readSignedRelease, releaseKind, sha256 } from './github.mjs';
 import { fileDigest } from './record-artifact.mjs';
 import { immutableArtifact } from './assemble.mjs';
@@ -37,11 +38,93 @@ export function validateAppChannelAdvance(feed, manifest) {
   if (!Array.isArray(feed.files) || !feed.files.length || typeof feed.files[0].sha512 !== 'string') throw new Error('Existing Windows feed is invalid');
 }
 
-async function readAppChannel(release) {
-  const asset = release?.assets?.find(row => row.name === 'latest.yml');
+export const appChannelNames = ['latest.yml', 'stable.yml'];
+
+async function readAppChannel(release, name = 'latest.yml') {
+  const matches = release?.assets?.filter(row => row.name === name) ?? [], asset = matches[0];
   if (!asset) return null;
-  try { return JSON.parse((await assetBytes(asset)).toString('utf8')); }
+  if (matches.length !== 1) throw new Error(`Application channel has duplicate metadata: ${name}`);
+  try {
+    const bytes = await assetBytes(asset);
+    if (asset.digest && asset.digest !== `sha256:${sha256(bytes)}`) throw new Error('metadata digest mismatch');
+    return { feed: JSON.parse(bytes.toString('utf8')), bytes };
+  }
   catch { throw new Error('Existing application feed must be valid JSON/YAML-compatible metadata before it can be advanced safely'); }
+}
+
+async function validateAppChannels(release, manifest) {
+  const channels = {};
+  for (const name of appChannelNames) {
+    channels[name] = await readAppChannel(release, name);
+    validateAppChannelAdvance(channels[name]?.feed, manifest);
+  }
+  return channels;
+}
+
+function validateNativeFeed(bytes, manifest) {
+  const feed = JSON.parse(bytes.toString('utf8')), app = immutableArtifact(manifest.app);
+  const file = feed.files?.[0], checksum = file?.sha512;
+  if (feed.version !== app.version || basename(new URL(app.url).pathname) !== `benchgo-${app.version}-win-x64-setup.exe`
+    || !Array.isArray(feed.files) || feed.files.length !== 1 || file.size !== app.size
+    || ![app.url, resolveUpdateUrl(app.url)].includes(file.url) || feed.path !== file.url
+    || typeof checksum !== 'string' || Buffer.from(checksum, 'base64').length !== 64
+    || Buffer.from(checksum, 'base64').toString('base64') !== checksum || feed.sha512 !== checksum) throw new Error('Native application feed does not match the verified immutable Windows artifact');
+  return feed;
+}
+
+async function readPublicStableRelease(releaseVersion, { publicKey } = {}) {
+  if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(releaseVersion)) throw new Error('A public stable release version is required');
+  const tag = `v${releaseVersion}`, release = await getRelease(tag);
+  if (!release || release.draft || release.prerelease || release.tag_name !== tag) throw new Error('Application channel source must be a public stable release');
+  const signed = await readSignedRelease(release, { publicKey });
+  const sources = release.assets?.filter(row => row.name === 'release-source.json') ?? [];
+  if (sources.length !== 1) throw new Error('Application channel release source receipt is missing or ambiguous');
+  const source = JSON.parse((await assetBytes(sources[0])).toString('utf8'));
+  if (source.schemaVersion !== 1 || source.kind !== releaseKind || source.releaseVersion !== releaseVersion
+    || signed.manifest.releaseVersion !== releaseVersion || source.sourceSha !== signed.manifest.sourceSha
+    || !/^[a-f0-9]{40}$/.test(source.sourceSha)
+    || source.manifestSha256 !== signed.manifestSha256 || release.target_commitish !== source.sourceSha
+    || (await githubJson(`/commits/${tag}`)).sha !== source.sourceSha) throw new Error('Application channel release source does not match its signed manifest');
+  return { release, ...signed };
+}
+
+async function readImmutableAppFeed(manifest, { publicKey } = {}) {
+  const app = immutableArtifact(manifest.app), tag = new URL(app.url).pathname.split('/').at(-2);
+  const owner = await readPublicStableRelease(tag.slice(1), { publicKey });
+  if (['version', 'url', 'size', 'sha256'].some(key => owner.manifest.app?.[key] !== app[key])) throw new Error('Windows artifact differs between the signed unified and native releases');
+  const names = owner.release.assets?.filter(row => row.name === basename(new URL(app.url).pathname)) ?? [];
+  if (names.length !== 1 || names[0].size !== app.size || names[0].digest !== `sha256:${app.sha256}`) throw new Error('Immutable Windows asset digest or size differs from the signed manifest');
+  const original = await readAppChannel(owner.release);
+  if (!original) throw new Error('Immutable Windows release is missing latest.yml');
+  if (owner.release.assets.find(row => row.name === 'latest.yml').digest !== `sha256:${sha256(original.bytes)}`) throw new Error('Immutable native feed is missing its verified asset digest');
+  validateNativeFeed(original.bytes, manifest);
+  return original.bytes;
+}
+
+/** Copy verified native metadata without rebuilding or rewriting immutable assets. */
+export async function publishAppChannel({ manifest, directory, windowsBuilt = false, repairOnly = false, publicKey }) {
+  const bytes = windowsBuilt ? await readFile(resolve(directory, 'latest.yml')) : await readImmutableAppFeed(manifest, { publicKey });
+  const feed = validateNativeFeed(bytes, manifest);
+  let apps = await getRelease('app-updates');
+  const channels = await validateAppChannels(apps, manifest);
+  for (const [name, previous] of Object.entries(channels)) if (previous?.feed.version === feed.version && !previous.bytes.equals(bytes)) throw new Error(`Refusing to replace different ${name} bytes for the same application version`);
+  if (repairOnly && !channels['latest.yml']?.bytes.equals(bytes)) throw new Error('Repair requires the existing latest.yml to match the verified immutable native feed');
+  if (!apps) apps = await sendJson('/releases', 'POST', { tag_name: 'app-updates', target_commitish: manifest.sourceSha,
+    name: 'BenchGo application update channel', body: 'Windows feed referencing immutable verified release assets.', draft: false, make_latest: 'false' });
+  const temporary = await mkdtemp(resolve(tmpdir(), 'benchgo-app-channel-')), changed = [];
+  try {
+    for (const name of repairOnly ? ['stable.yml'] : appChannelNames) {
+      const path = resolve(temporary, name); await writeFile(path, bytes);
+      if (await upload(apps, path, { replace: true })) changed.push(name);
+    }
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+  return { releaseVersion: manifest.releaseVersion, appVersion: manifest.app.version, changed };
+}
+
+/** Explicit maintenance: recover only stable.yml from an already public signed release. */
+export async function repairAppChannel({ releaseVersion, publicKey }) {
+  const signed = await readPublicStableRelease(releaseVersion, { publicKey });
+  return publishAppChannel({ manifest: signed.manifest, repairOnly: true, publicKey });
 }
 
 async function remoteDigest(asset) {
@@ -56,7 +139,7 @@ async function upload(release, path, { replace = false } = {}) {
   const name = basename(path), metadata = await stat(path), digest = await fileDigest(path);
   const existing = release.assets.find(asset => asset.name === name);
   if (existing) {
-    if (existing.size === metadata.size && await remoteDigest(existing) === digest) return;
+    if (existing.size === metadata.size && await remoteDigest(existing) === digest) return false;
     if (!replace) throw new Error(`Immutable release asset already exists with different content: ${name}`);
     await github(`/releases/assets/${existing.id}`, { method: 'DELETE' });
   }
@@ -67,6 +150,7 @@ async function upload(release, path, { replace = false } = {}) {
   const asset = await response.json();
   if (asset.size !== metadata.size || await remoteDigest(asset) !== digest) throw new Error(`Uploaded asset verification failed: ${name}`);
   release.assets = [...release.assets.filter(item => item.name !== name), asset];
+  return true;
 }
 
 async function verifyReferencedArtifacts(manifest, downloads) {
@@ -117,7 +201,7 @@ export async function publishRelease({ plan, directory }) {
   const channelRelease = await getRelease('plugin-updates');
   const channel = await readChannelForPublication(channelRelease, plan, raw, signatureBytes, publicKey);
   validateChannelAdvance(channel, manifest);
-  validateAppChannelAdvance(await readAppChannel(await getRelease('app-updates')), manifest);
+  await validateAppChannels(await getRelease('app-updates'), manifest);
   if (channel?.releaseVersion === manifest.releaseVersion && channel.sourceSha === manifest.sourceSha
     && JSON.stringify(channel) !== JSON.stringify(manifest)) throw new Error('Published unified metadata differs from this retry');
   const tag = plan.tag;
@@ -150,12 +234,8 @@ export async function publishRelease({ plan, directory }) {
   // All immutable components exist and are verified before either mutable channel is advanced.
   // Advance the native app feed first, so the unified visible point can never demand
   // a new application while native updaters still observe the previous feed.
-  if (plan.builds.windows) {
-    const apps = await getRelease('app-updates') ?? await sendJson('/releases', 'POST', { tag_name: 'app-updates', target_commitish: plan.sourceSha,
-      name: 'BenchGo application update channel', body: 'Windows feed referencing immutable verified release assets.', draft: false, make_latest: 'false' });
-    validateAppChannelAdvance(await readAppChannel(apps), manifest);
-    await upload(apps, resolve(output, 'latest.yml'), { replace: true });
-  }
+  // Reused Windows binaries still need their native channel contract repaired.
+  await publishAppChannel({ manifest, directory: output, windowsBuilt: plan.builds.windows });
   // The signature/JSON pair fails closed during the short two-asset replacement window.
   // Its JSON is the final unified-version visible point after the native feed is ready.
   await upload(plugins, resolve(output, 'benchgo-update.json.sig'), { replace: true });
@@ -165,7 +245,12 @@ export async function publishRelease({ plan, directory }) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { values } = parseArgs({ options: { plan: { type: 'string' }, directory: { type: 'string' } } });
-  publishRelease({ plan: JSON.parse(await readFile(values.plan, 'utf8')), directory: values.directory })
+  const { values } = parseArgs({ options: { plan: { type: 'string' }, directory: { type: 'string' }, 'repair-app-channel': { type: 'boolean' }, 'release-version': { type: 'string' } } });
+  if (values['repair-app-channel'] && (values.plan || values.directory)) throw new Error('Application channel repair cannot publish a local release');
+  if (values['release-version'] && !values['repair-app-channel']) throw new Error('--release-version is only valid for application channel repair');
+  const operation = values['repair-app-channel']
+    ? repairAppChannel({ releaseVersion: values['release-version'] })
+    : publishRelease({ plan: JSON.parse(await readFile(values.plan, 'utf8')), directory: values.directory });
+  operation.then(result => { if (result) console.log(JSON.stringify(result)); })
     .catch(error => { console.error(error.message); process.exitCode = 1; });
 }

@@ -4,8 +4,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runInNewContext } from 'node:vm';
+import { createRequire } from 'node:module';
 import config, { verifyPackagedPluginSeed } from './electron-builder.config.mjs';
 import { desktopUpdateChannel } from '../../deepseek-harness/apps/desktop/src/update-channel.ts';
+import { selectUpdateChannel } from '../../deepseek-harness/apps/desktop/src/updates/electron-updater/channel.ts';
+import { appChannelNames } from '../release/publish.mjs';
 
 test('external seed explicitly includes root node_modules with the official packaging convention', () => {
   const seed = config.extraResources.find(item => item.to === 'benchgo/seed');
@@ -60,6 +63,25 @@ test('BenchGo display naming preserves installed application identity and update
   assert.equal(desktopUpdateChannel(config.extraMetadata), 'stable');
   assert.deepEqual(config.protocols[0].schemes, ['dsh']);
   assert.match(config.publish[0].url, /releases\/download\/app-updates\/$/);
+});
+
+test('the official stable selection and pinned provider request a feed published by BenchGo', async () => {
+  const require = createRequire(new URL('../../deepseek-harness/apps/desktop/package.json', import.meta.url));
+  const { GenericProvider } = require('electron-updater/out/providers/GenericProvider.js');
+  const updater = { isAddNoCacheQuery: false };
+  selectUpdateChannel(updater, desktopUpdateChannel(config.extraMetadata));
+  const feed = { version: '1.0.0', files: [{ url: 'fixture.exe', size: 10, sha512: Buffer.alloc(64).toString('base64') }] };
+  const published = new Map(appChannelNames.map(name => [name, JSON.stringify(feed)]));
+  let requested;
+  const provider = new GenericProvider(config.publish[0], updater, { platform: 'win32', executor: { request: async options => {
+    requested = options.path.split('/').at(-1);
+    assert(published.has(requested), 'the actual provider request must have a published metadata name');
+    return published.get(requested);
+  } } });
+  assert.deepEqual(await provider.getLatestVersion(), feed);
+  assert.equal(requested, 'stable.yml');
+  assert.equal(updater.allowDowngrade, false);
+  assert.equal(updater.allowPrerelease, true);
 });
 
 test('installer keeps the current BenchGo shortcut during same-version repair', async () => {
