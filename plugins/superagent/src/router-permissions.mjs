@@ -1,3 +1,5 @@
+import { hostRootContext } from '../../base/shared/host-root-context.mjs';
+
 // Exact upstream contracts, never guessed prefixes, annotations or tool arguments.
 // Interaction and Schedule tools remain the Router's own coordination operations.
 const coordination = new Set(['ask_user_question', 'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete']);
@@ -58,7 +60,7 @@ export function installRouterPermissionGate(scope, { agent, inherited, controlle
       }),
     };
   });
-  const restrictionOwner = scope.root ?? scope;
+  const restrictionOwner = hostRootContext(scope);
   let restriction, disposed = false;
   // Cordis clears uid before unloading effects; state 5 also covers restart
   // teardown. Sibling cleanup can emit tools/change before our listener leaves.

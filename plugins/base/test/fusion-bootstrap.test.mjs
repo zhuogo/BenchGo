@@ -1,9 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { transformSync } from 'esbuild';
 import { Context } from '@deepseek-ai/cordis';
+import { hostScope } from '../shared/host-scope.mjs';
+
+test('Cordis loads the BenchGo package and sibling contexts reuse its startup scope', async t => {
+  const [{ Context: HostContext }, base] = await Promise.all([
+    import('../../../deepseek-harness/vendor/cordis/lib/index.js'),
+    import('benchgo-plugin'),
+  ]);
+  for (const [label, CordisContext] of [['official Host', HostContext], ['npm package', Context]]) {
+    await t.test(label, async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'benchgo-cordis-'));
+      const host = new CordisContext(), transaction = new AsyncLocalStorage();
+      try {
+        const fiber = host.plugin(base, { dataDir: directory });
+        await fiber.await();
+        assert.equal(host.get('benchgo')?.directory, directory);
+        await transaction.run('reload', () => host.plugin({ apply(ctx) {
+          assert.equal(hostScope(ctx)(() => transaction.getStore()), undefined);
+        } }).await());
+        await fiber.dispose();
+        assert.equal(host.get('benchgo'), undefined);
+      } finally {
+        try { await host.fiber.dispose(); }
+        finally { await rm(directory, { recursive: true, force: true }); }
+      }
+    });
+  }
+});
 
 test('base composition keeps optional service objects out of Cordis disposer collection', async () => {
   const ctx = new Context(), live = new Set(), errors = [];
@@ -18,7 +49,7 @@ test('base composition keeps optional service objects out of Cordis disposer col
   };
   const noop = () => {};
   const imports = {
-    mkdir: async () => {}, mountInteractivePrompt: noop, hostScope: noop,
+    mkdir: async () => {}, mountInteractivePrompt: noop, mountLiveReasoning: noop, hostScope: noop,
     createSettingsManagement: () => ({ register: () => () => {}, close: async () => { managementClosed++; } }),
     mountWorkbench: mockMount('benchgoWorkbench'), mountEfficiency: mockMount('benchgoEfficiency'),
     mountSkills: noop, mountPreviewAssets: noop, mountUsage: noop, mountUpdates: noop,
