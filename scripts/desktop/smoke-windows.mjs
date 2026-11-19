@@ -50,11 +50,9 @@ try {
   let ready;
   try { ready = await Promise.race([host.start(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Packaged Plus Host startup exceeded 120 seconds')), 120_000); })]); }
   finally { clearTimeout(deadline); }
-  const login = await fetch(ready.url, { redirect: 'manual' });
-  let cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
-  if (!cookie) throw new Error('Packaged owner login did not issue an authentication cookie');
+  if (!ready.authenticationCookie) throw new Error('Packaged Host did not provide an authentication cookie');
   const call = async (path, input) => {
-    const result = await fetch(new URL(path, ready.url), { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(15_000) });
+    const result = await fetch(new URL(path, ready.url), { method: 'POST', headers: { cookie: ready.authenticationCookie, 'content-type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(15_000) });
     const body = await result.text();
     if (!result.ok || !result.headers.get('content-type')?.includes('application/json')) throw new Error(`Packaged ${path} ${input.action ?? ''} returned HTTP ${result.status}: ${body.slice(0, 500)}`);
     return JSON.parse(body);
@@ -77,7 +75,7 @@ try {
   const recent = await sidebarCall({ action: 'ensureRecent' });
   if (!recent.workspaceId || !recent.path || !(await sidebarCall({ action: 'state' })).projects.some(project => project.id === recent.workspaceId)) throw new Error('Packaged sidebar could not recover its recent workspace');
   const fontManifest = JSON.parse(await readFile(join(state.directory, 'node_modules/benchgo-plugin/assets/fonts/manifest.json')));
-  const font = await fetch(new URL('/api/commander-fonts/' + fontManifest[0].file, ready.url), { headers: { cookie } });
+  const font = await fetch(new URL('/api/commander-fonts/' + fontManifest[0].file, ready.url), { headers: { cookie: ready.authenticationCookie } });
   if (!font.ok || Buffer.from(await font.arrayBuffer()).subarray(0, 4).toString() !== 'wOF2') throw new Error('Packaged sidebar font could not be loaded');
   console.log('Packaged authenticated sidebar state, recent workspace recovery and font asset passed.');
   const lockPath = join(dataDir, 'owner.lock');
@@ -100,9 +98,7 @@ try {
   host = makeHost();
   try { ready = await Promise.race([host.start(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Packaged Host crash recovery exceeded 120 seconds')), 120_000); })]); }
   finally { clearTimeout(deadline); }
-  const recoveredLogin = await fetch(ready.url, { redirect: 'manual' });
-  cookie = recoveredLogin.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
-  if (!cookie) throw new Error('Recovered packaged owner login did not issue an authentication cookie');
+  if (!ready.authenticationCookie) throw new Error('Recovered packaged Host did not provide an authentication cookie');
   await assertProfile();
   const recovered = await sidebarCall({ action: 'state' });
   if (!recovered.sessions.some(session => session.id === 'crash-recovery-check' && session.nativeId === 'preserved-native-handle')) throw new Error('Packaged Host lost sessions after crash recovery');

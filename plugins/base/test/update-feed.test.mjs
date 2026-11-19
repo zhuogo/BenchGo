@@ -4,7 +4,6 @@ import { generateKeyPairSync, sign, createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import {
   DEFAULT_UPDATE_CONFIG, normalizeUpdateConfig, releaseDownloadUrl, resolveUpdateUrl,
   fetchVerifiedRelease, fetchUpdateBytes, validateReleaseManifest, compareVersions,
@@ -147,31 +146,60 @@ test('progress remains a verification stage on hash failure and never implies su
   await assert.rejects(readFile(file), { code: 'ENOENT' });
 });
 
-test('a slow stream stays alive with real chunks while both idle and total deadlines remain bounded', async t => {
+test('a slow stream stays alive with real chunks while both idle and total deadlines remain bounded', { timeout: 5000 }, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'benchgo-idle-update-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  let offset = 0;
-  const progress = [], file = path.join(directory, 'plugin.tar.gz'), startedAt = performance.now();
-  await fetchUpdateArtifact(manifest().plugin, { file, timeoutMs: 2000, idleTimeoutMs: 250, onProgress: value => progress.push(value),
-    fetcher: async () => new Response(new ReadableStream({ async pull(controller) {
-      await delay(80);
-      const next = Math.min(artifact.length, offset + 6);
-      controller.enqueue(artifact.subarray(offset, next)); offset = next;
-      if (offset === artifact.length) controller.close();
-    } }, { highWaterMark: 0 })),
-  });
-  assert.ok(performance.now() - startedAt >= 250, 'ongoing data can exceed the short inactivity interval');
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+
+  function startDownload(file, options) {
+    let pendingPull = Promise.withResolvers();
+    const cancel = t.mock.fn();
+    const stream = new ReadableStream({
+      pull(controller) { pendingPull.resolve(controller); },
+      cancel,
+    }, { highWaterMark: 0 });
+    const result = fetchUpdateArtifact(manifest().plugin, { file, ...options, fetcher: async () => new Response(stream) });
+    return {
+      result,
+      cancel,
+      async nextPull() {
+        // Wait for the reader to finish writing the previous chunk before advancing time.
+        const controller = await Promise.race([pendingPull.promise, result.then(() => {
+          throw new Error('Download finished before the next chunk was requested');
+        })]);
+        pendingPull = Promise.withResolvers();
+        return controller;
+      },
+    };
+  }
+
+  const progress = [], file = path.join(directory, 'plugin.tar.gz');
+  const slow = startDownload(file, { timeoutMs: 2000, idleTimeoutMs: 250, onProgress: value => progress.push(value) });
+  for (let offset = 0; offset < artifact.length; offset += 6) {
+    const controller = await slow.nextPull();
+    t.mock.timers.tick(80);
+    const end = Math.min(artifact.length, offset + 6);
+    controller.enqueue(artifact.subarray(offset, end));
+    if (end === artifact.length) controller.close();
+  }
+  await slow.result;
+  assert.ok(Date.now() > 250, 'ongoing data can exceed the short inactivity interval');
   assert.deepEqual(await readFile(file), artifact);
   assert.ok(progress.some(value => value.transferred > 0 && value.transferred < artifact.length), 'a longer stream publishes intermediate bytes');
-  let cancelled = false, bytes = 0;
   const capped = path.join(directory, 'capped.tar.gz');
-  await assert.rejects(fetchUpdateArtifact(manifest().plugin, { file: capped, timeoutMs: 50, idleTimeoutMs: 1000,
-    fetcher: async () => new Response(new ReadableStream({ async pull(controller) {
-      await delay(15);
-      if (!cancelled) controller.enqueue(artifact.subarray(bytes, ++bytes));
-    }, cancel() { cancelled = true; } }, { highWaterMark: 0 })),
-  }), { code: 'UPDATE_TIMEOUT' });
-  assert.equal(cancelled, true);
+  const limited = startDownload(capped, { timeoutMs: 50, idleTimeoutMs: 1000 });
+  for (let offset = 0; offset < 3; offset++) {
+    const controller = await limited.nextPull();
+    t.mock.timers.tick(15);
+    controller.enqueue(artifact.subarray(offset, offset + 1));
+  }
+  await limited.nextPull();
+  assert.deepEqual(await readFile(capped), artifact.subarray(0, 3));
+  const rejected = assert.rejects(limited.result, { code: 'UPDATE_TIMEOUT' });
+  t.mock.timers.tick(5);
+  await rejected;
+  assert.equal(limited.cancel.mock.callCount(), 1);
   await assert.rejects(readFile(capped), { code: 'ENOENT' });
 });
 
