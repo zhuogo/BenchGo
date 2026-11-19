@@ -5,7 +5,20 @@ import { tmpdir } from 'node:os';
 import { build as esbuild } from 'esbuild';
 import { catalogModels, catalogProviderIds } from '../../../deepseek-harness/packages/llm/llm-pi-ai/src/catalog.ts';
 import { getSupportedThinkingLevels } from '../../../deepseek-harness/packages/llm/llm-pi-ai/src/models.ts';
-import { modelInfo as deepSeekModelInfo } from '../../../deepseek-harness/packages/llm/llm-deepseek/src/model-info.ts';
+
+// Read the pinned catalog on clean checkouts before Harness libraries are built.
+const harness = new URL('../../../deepseek-harness/', import.meta.url);
+let deepSeekCatalog;
+function loadDeepSeekCatalog() {
+  return deepSeekCatalog ??= esbuild({
+    entryPoints: [fileURLToPath(new URL('packages/llm/llm-deepseek/src/model-info.ts', harness))],
+    alias: { '@deepseek-ai/dsh-brand': fileURLToPath(new URL('packages/util/brand/src/index.ts', harness)) },
+    bundle: true,
+    write: false,
+    platform: 'node',
+    format: 'esm',
+  }).then(({ outputFiles: [catalog] }) => import(`data:text/javascript;base64,${Buffer.from(catalog.contents).toString('base64')}`));
+}
 
 const selector = fileURLToPath(new URL('../client/provider-settings.jsx', import.meta.url));
 const deepSeekProvider = fileURLToPath(new URL('../client/deepseek-provider.mjs', import.meta.url));
@@ -280,7 +293,8 @@ export function officialModelsUi() {
         "    }",
       ].join('\n'), 'resolve model defaults at save');
       source = once(source, '<DeepSeekModelsEditor\n', '<DeepSeekModelsEditor providerId={props.provider}\n', 'deepseek model capability provider');
-      const deepSeekReasoning = deepSeekModelInfo({ models: [], defaults: {} }, 'deepseek-official', '').reasoning;
+      const { modelInfo } = await loadDeepSeekCatalog();
+      const deepSeekReasoning = modelInfo({ models: [], defaults: {} }, 'deepseek-official', '').reasoning;
       source = once(source, '    const catalogProps = {', `    const deepSeekLevel = (key: string) => schema.hasPath(draft, [key])
       ? stringAt(draft, key) : stringAt(fallback, key)
     const deepSeekEfforts = ${JSON.stringify(deepSeekReasoning.efforts.map(({ id }) => id))}
